@@ -4572,6 +4572,8 @@ export function installApplication(hooks: Hooks) {
             {
               active: activeBlocks.get(id) ?? false,
               presentation: blockPresentation(id),
+              motion: experienceMotion,
+              viewId: id,
             },
           ),
         );
@@ -5241,6 +5243,8 @@ export function installApplication(hooks: Hooks) {
       // Retain editors and their drafts when their cards are outside the view.
       // The coordinator still advances their poses without repainting hidden DOM.
       for (const [id, view] of chatViews)
+        if (blockPresentations.get(id)?.visible) view.frame();
+      for (const [id, view] of eventViews)
         if (blockPresentations.get(id)?.visible) view.frame();
       frameBlockViews(timelineViews);
       frameBlockViews(agentBlockViews);

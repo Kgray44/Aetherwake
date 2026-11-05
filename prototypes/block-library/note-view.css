@@ -177,3 +177,15 @@
 [data-document-kind="reference"] .aw-note-sources code {
   font-size: 1em;
 }
+
+/* Native disclosure keeps hierarchy keyboard operable without a motion loop. */
+.aw-note-section { margin:.65em 0; border-left:1px solid #9ab9d640; padding-left:.7em; }
+.aw-note-section > .aw-note-section-heading { cursor:pointer; padding:.3em 0; }
+.aw-note-section-heading > :is(h1,h2,h3,h4,h5,h6) { display:inline; margin:0; line-height:1.4; }
+.aw-note-section-heading:focus-visible { outline:2px solid #d4eaff; outline-offset:3px; border-radius:.2rem; }
+.aw-note-section-body > :first-child { margin-top:.4em; }
+.aw-note-section:not([open]) { border-left-style:dashed; }
+.aw-note-section:not([open]) > .aw-note-section-body { display:none; }
+.aw-note-section[data-heading-level="1"] { border-left-color:#a9d7df8a; }
+.aw-note-section .aw-note-section { margin-left:.1em; }
+@media (prefers-reduced-motion:reduce) { .aw-note-section { animation:none; transition:none; } }

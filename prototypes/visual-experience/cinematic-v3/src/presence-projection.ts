@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { velaCenter, type VelaShape } from './vela-shape.ts';
 
 export interface PresenceRect {
   x: number;
@@ -11,6 +12,7 @@ export interface RibbonPose {
   ambient: number;
   expression: { x: number; y: number; z: number; w: number };
   thinking?: number;
+  shape?: VelaShape;
 }
 interface Samples {
   along: number[];
@@ -69,19 +71,20 @@ export class PresenceProjection {
       const sin = Math.sin(t), cos = Math.cos(t);
       const sinDouble = Math.sin(2 * t), cosDouble = Math.cos(2 * t);
       const radius = 0.93 + 0.23 * cos, radiusDerivative = -0.23 * sin;
-      const cx = morph(1.13 * sinDouble * (0.88 + 0.12 * cos), radius * sinDouble) * ex;
-      const cy = morph(1.18 * cos + 0.12 * Math.sin(3 * t), radius * cosDouble) * ey;
+      const shaped = pose.shape ? velaCenter(t, pose.shape) : null;
+      const cx = (shaped?.[0] ?? morph(1.13 * sinDouble * (0.88 + 0.12 * cos), radius * sinDouble)) * ex;
+      const cy = (shaped?.[1] ?? morph(1.18 * cos + 0.12 * Math.sin(3 * t), radius * cosDouble)) * ey;
       const cz =
-        morph(0.5 * sin, 0.52 * sin) * ez +
+        (shaped?.[2] ?? morph(0.5 * sin, 0.52 * sin)) * ez +
         0.012 * Math.sin(3 * t) +
         0.065 * Math.sin(3 * t + time * 0.62) * gain;
       let tx =
-        morph(2.26 * cosDouble * (0.88 + 0.12 * cos) - 0.1356 * sinDouble * sin,
-          radiusDerivative * sinDouble + 2 * radius * cosDouble) * ex;
-      let ty = morph(-1.18 * sin + 0.36 * Math.cos(3 * t),
-        radiusDerivative * cosDouble - 2 * radius * sinDouble) * ey;
+        (shaped?.[3] ?? morph(2.26 * cosDouble * (0.88 + 0.12 * cos) - 0.1356 * sinDouble * sin,
+          radiusDerivative * sinDouble + 2 * radius * cosDouble)) * ex;
+      let ty = (shaped?.[4] ?? morph(-1.18 * sin + 0.36 * Math.cos(3 * t),
+        radiusDerivative * cosDouble - 2 * radius * sinDouble)) * ey;
       let tz =
-        morph(0.5 * cos, 0.52 * cos) * ez +
+        (shaped?.[5] ?? morph(0.5 * cos, 0.52 * cos)) * ez +
         0.036 * Math.cos(3 * t) +
         0.195 * Math.cos(3 * t + time * 0.62) * gain;
       const length = Math.hypot(tx, ty, tz);
@@ -113,8 +116,9 @@ export class PresenceProjection {
       sx /= skin;
       sy /= skin;
       sz /= skin;
+      const baseWidth = pose.shape?.opacity ?? .235;
       const width =
-        (0.235 + 0.095 * Math.cos(2 * t - 0.6)) *
+        (baseWidth + (pose.shape ? baseWidth * .4 : .095) * Math.cos(2 * t - 0.6)) *
         (1 + Math.sin(time * 0.64 + 2 * t) * 0.1 * gain) *
         (1 - e.y * 0.045 + e.x * 0.025 + e.w * 0.04);
       s.frames[f] = cx;

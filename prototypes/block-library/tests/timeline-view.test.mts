@@ -170,3 +170,48 @@ test('competing saved view requires explicit review before keeping local setting
   evidence.value = ''; evidence.onchange(); button(s.dom.root, 'Save view').onclick(); await until(() => s.document!.resource.version === 6 && s.settled());
   assert.deepEqual(s.document!.view.sources.classifications, ['observed', 'reported', 'inferred', 'simulated']); assert.equal(s.window!.items.length, 1);
 });
+
+test('LI-05/LI-16: temporal default, cluster keyboard inspection, orientation and forensic disclosure preserve event identity', async t => {
+  const s = await setup(t, f => { f.add(); f.add({ receivedAt: '2026-11-02T06:00:00.000Z', providerId: 'another-source' }); return {}; });
+  await s.ready(); s.frame();
+  const list = s.dom.root.querySelector('.aw-timeline-items');
+  assert.equal(list.hidden, true, 'Chronology is the primary presentation');
+  assert.ok(s.dom.root.querySelectorAll('.aw-timeline-tick').length > 1);
+  const dots = s.dom.root.querySelectorAll('.aw-timeline-dot');
+  assert.equal(dots.filter((value: any) => !value.hidden).length, 2, 'Coincident events cluster');
+  const first = dots.find((value: any) => value.tabIndex === 0)!;
+  first.onkeydown({ key: 'End', preventDefault() {} }); s.frame();
+  const selected = dots.find((value: any) => value.getAttribute('aria-pressed') === 'true')!;
+  assert.equal(selected.hidden, false, 'Every clustered event can become the visible anchor');
+  const version = s.document!.resource.version;
+  const orientation = s.dom.root.querySelectorAll('select').find((value: any) => value.getAttribute('aria-label') === 'Orientation');
+  orientation.value = 'vertical'; orientation.onchange(); s.frame();
+  assert.equal(s.dom.root.querySelector('.aw-timeline').dataset.orientation, 'vertical');
+  assert.equal(selected.getAttribute('aria-pressed'), 'true');
+  orientation.value = 'multilane'; orientation.onchange();
+  assert.equal(s.dom.root.querySelectorAll('.aw-timeline-lane-label').length, 2);
+  assert.equal(s.document!.resource.version, version, 'Presentation does not mutate canonical history');
+  button(s.dom.root, 'Forensic event list').onclick(); assert.equal(list.hidden, false);
+  button(s.dom.root, 'Save view').onclick(); await until(() => s.document!.resource.version === version + 1 && s.settled());
+  const saved = s.f.service.read(s.f.created.resourceId).view.selection;
+  assert.equal(saved!.eventId, selected.dataset.eventId);
+});
+
+test('LI-06 partial: scrubbing uses exact retained timestamps without writes and stops on current-access refresh', async t => {
+  const s = await setup(t, f => { f.add({ receivedAt: '2026-11-02T13:00:00.000Z' }); return {}; });
+  await s.ready();
+  const scrub = s.dom.root.querySelectorAll('input').find((value: any) => value.getAttribute('aria-label') === 'Recorded time position');
+  const version = s.document!.resource.version;
+  scrub.value = String(Date.parse('2026-11-02T12:30:00Z')); scrub.oninput(); s.controller.frame();
+  assert.equal(s.dom.root.querySelector('.aw-timeline-playhead').hidden, false);
+  assert.equal(s.dom.root.querySelectorAll('.aw-timeline-dot').filter((value: any) => value.dataset.reviewState === 'reached').length, 1);
+  assert.equal(s.document!.resource.version, version);
+  assert.equal(s.f.events.length, 1, 'Only the original canonical creation receipt exists');
+  button(s.dom.root, 'Play recorded time').onclick();
+  assert.ok(button(s.dom.root, 'Pause recorded time'));
+  s.controller.setActive(false); s.controller.frame();
+  assert.ok(button(s.dom.root, 'Play recorded time'));
+  s.f.setDenied(true); s.controller.setActive(true); await until(() => s.dom.root.querySelector('.aw-timeline-status').textContent.includes('could not be read'));
+  assert.equal(s.dom.root.querySelectorAll('.aw-timeline-dot').length, 0);
+  assert.equal(s.dom.root.querySelector('.aw-timeline-playhead').hidden, true);
+});

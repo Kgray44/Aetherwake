@@ -1,7 +1,6 @@
 import type {
   BlockLibraryHostPort,
   BlockKind,
-  BlockCategory,
   CreatedBlock,
   LibraryCapabilities,
   TemplateMountOptions,
@@ -27,7 +26,6 @@ import {
   blockDefinition,
   blockAvailability,
   blockCapabilities,
-  searchBlockCatalog,
   catalogDefinition,
   isSubjectBlockKind,
   subjectBlockKind,
@@ -39,6 +37,8 @@ import {
 } from "./registry.ts";
 import { captureWorkspaceTemplate } from "./model.ts";
 import { blockPreview } from "./preview.ts";
+import { instrumentDescriptor, instrumentIntents, type InstrumentIntent } from './instrument.ts';
+import { instrumentMiniature, instrumentRequirements, searchShowroom, type ShowroomReplay } from './showroom.ts';
 import type { Geometry } from '../workspace-engine/contracts.mts';
 import { mountLibraryDrop, type LibraryDropOptions } from './placement-drop.ts';
 import type { MediaImportPort } from '../application-contract/media.ts';
@@ -174,15 +174,7 @@ export function mountBlockLibrary(
   ui.panel.className += ' aw-library--blocks';
   search.placeholder = "Find a block…";
   search.setAttribute("aria-label", "Search blocks");
-  for (const [value, label] of [
-    ["", "All categories"],
-    ["conversation", "Conversation"],
-    ["knowledge", "Knowledge"],
-    ["planning", "Planning"],
-    ['intelligence', 'Intelligence'],
-    ["observability", "Observability"],
-    ["organization", "Organization"],
-  ]) {
+  for (const [value, label] of [['', 'All intents'], ...instrumentIntents.map(intent => [intent, intent[0].toUpperCase() + intent.slice(1)])]) {
     const option = node("option", "", label);
     option.value = value;
     category.append(option);
@@ -201,7 +193,8 @@ export function mountBlockLibrary(
   category.setAttribute("aria-label", "Block category");
   discovery.setAttribute("aria-label", "Block discovery");
   filterFields.append(category, discovery);
-  toolbar.append(node('summary', '', 'Browse filters'), filterFields);
+  toolbar.append(node('summary', '', 'Browse by intent'), filterFields);
+  toolbar.open = true;
   columns.append(list, detail);
   ui.body.append(search, toolbar, columns);
   let capabilities: LibraryCapabilities | null = null,
@@ -210,6 +203,18 @@ export function mountBlockLibrary(
     selectedMedia: MediaImportChoice | null = null,
     pending = false,
     detailSequence = 0;
+  let replay: ShowroomReplay | null = null;
+  const preview = (kind: BlockInstanceKind) => blockPreview(kind, {
+    motion: options.drop?.motion,
+    key: 'library-showroom:' + (options.drop?.viewId ?? options.workspaceId),
+    register: value => { replay = value; },
+    active: () => {
+      if (ui.disposed || ui.panel.hidden || ui.panel.inert) return false;
+      const panel = ui.panel.getBoundingClientRect(), sample = detail.querySelector('.aw-showroom-demo')?.getBoundingClientRect();
+      return !!sample && sample.bottom > Math.max(0, panel.top) && sample.top < Math.min(window.innerHeight || Infinity, panel.bottom)
+        && sample.right > Math.max(0, panel.left) && sample.left < Math.min(window.innerWidth || Infinity, panel.right);
+    },
+  });
   const placementBounds = () => {
     const bounds = options.bounds?.();
     return bounds ? { bounds } : {};
@@ -290,6 +295,7 @@ export function mountBlockLibrary(
     performResult(work, result => options.onCreated(result, point ? 'drop' : undefined));
   const showDetail = () => {
     const generation = ++detailSequence;
+    replay?.dispose(); replay = null;
     detail.replaceChildren();
     if (!capabilities) return;
     if (selectedMedia) selected = selectedMedia.kind;
@@ -682,10 +688,10 @@ export function mountBlockLibrary(
         ),
       );
     const notes = node('details', 'aw-library__capabilities');
-    notes.append(node('summary', '', 'Preview and capabilities'), blockPreview(kind), node('p', 'aw-library__hint', definition.preview), controls);
+    notes.append(node('summary', '', 'Capabilities and restrictions'), node('p', 'aw-library__hint', definition.preview), controls);
     const detailHeader = node('header', 'aw-library__detail-heading');
     detailHeader.append(heading, favorite);
-    detail.append(detailHeader, description, form, attach, notes);
+    detail.append(detailHeader, description, instrumentRequirements(kind, capabilities), preview(kind), form, attach, notes);
     if (definition.creation === 'reference-only') {
       form.onsubmit = event => { event.preventDefault(); };
       create.disabled = true; form.remove(); attach.open = true;
@@ -863,10 +869,10 @@ export function mountBlockLibrary(
       );
     form.append(create, settings, status);
     const notes = node('details', 'aw-library__capabilities');
-    notes.append(node('summary', '', 'Preview and capabilities'), blockPreview(kind), controls);
+    notes.append(node('summary', '', 'Capabilities and restrictions'), controls);
     const detailHeader = node('header', 'aw-library__detail-heading');
     detailHeader.append(node('h3', '', definition.title), favorite);
-    detail.append(detailHeader, node('p', '', definition.description), form, notes);
+    detail.append(detailHeader, node('p', '', definition.description), instrumentRequirements(kind, capabilities!), preview(kind), form, notes);
     const connected =
       !!port.subjectTargets &&
       !!port.createSubjectBlock &&
@@ -981,10 +987,10 @@ export function mountBlockLibrary(
   const renderList = () => {
     if (!capabilities) return;
     list.replaceChildren();
-    const results = searchBlockCatalog(
+    const results = searchShowroom(
       search.value,
       capabilities,
-      (category.value || undefined) as BlockCategory | undefined,
+      category.value as InstrumentIntent | '',
     );
     const recommendations = recommendBlocks(
         options.context?.() ?? null,
@@ -1006,7 +1012,7 @@ export function mountBlockLibrary(
     );
     const terms = search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean).slice(0, 16);
     const mediaChoices = !['favorites', 'recent', 'recommended'].includes(discovery.value) && (!category.value || category.value === 'knowledge')
-      ? MEDIA_IMPORT_CHOICES.filter(choice => terms.every(term => (choice.title + ' ' + choice.kind + ' ' + choice.description).toLocaleLowerCase().includes(term))
+      ? MEDIA_IMPORT_CHOICES.filter(choice => (results.some(definition => definition.kind === choice.kind) || terms.every(term => (choice.title + ' ' + choice.kind + ' ' + choice.description).toLocaleLowerCase().includes(term)))
         && (discovery.value !== 'compatible' || capabilities?.kinds[choice.kind]?.state === 'available'))
       : [];
     if (discovery.value === "recommended")
@@ -1034,7 +1040,7 @@ export function mountBlockLibrary(
         ),
       );
     const groups = new Map<string, HTMLElement>();
-    const groupFor = (category: BlockCategory) => {
+    const groupFor = (category: InstrumentIntent) => {
       const recent = discovery.value === 'recent';
       const key = recent ? 'recent' : category;
       const existing = groups.get(key);
@@ -1064,6 +1070,13 @@ export function mountBlockLibrary(
       item.setAttribute("aria-pressed", String(!selectedMedia && definition.kind === selected));
       item.dataset.blockKind = definition.kind;
       item.dataset.blockType = definition.id;
+      item.className += ' aw-showroom-card';
+      const descriptor = instrumentDescriptor(definition.kind, capabilities);
+      item.append(instrumentMiniature(definition.kind), node('small', 'aw-library__hint', 'Synthetic miniature'),
+        node('span', 'aw-showroom-purpose', descriptor.purpose),
+        node('small', 'aw-library__hint', definition.availability.state.replaceAll('_', ' ') +
+          (definition.availability.reason ? ' · ' + definition.availability.reason : '') +
+          (descriptor.creation === 'reference-only' ? ' · attach saved resource' : '')));
       if (discovery.value === "recommended")
         item.append(
           node(
@@ -1084,12 +1097,15 @@ export function mountBlockLibrary(
           }), point);
         } });
       }
-      groupFor(catalogDefinition(kind).category).append(item);
+      groupFor((category.value || descriptor.intents[0]) as InstrumentIntent).append(item);
     }
     for (const choice of mediaChoices) {
       const item = button(choice.title, () => { if (pending) return; selectedMedia = choice; renderList(); showDetail(); });
       item.dataset.mediaImport = choice.id; item.setAttribute('aria-pressed', String(selectedMedia?.id === choice.id));
-      item.append(node('small', 'aw-library__hint', choice.description)); list.append(item);
+      item.className += ' aw-showroom-card';
+      const available = blockAvailability(choice.kind, capabilities);
+      item.append(instrumentMiniature(choice.kind), node('small', 'aw-library__hint', 'Synthetic miniature'), node('span', 'aw-showroom-purpose', choice.description),
+        node('small', 'aw-library__hint', available.state.replaceAll('_', ' ') + (available.reason ? ' · ' + available.reason : ''))); list.append(item);
     }
   };
   search.oninput = renderList;
@@ -1113,8 +1129,8 @@ export function mountBlockLibrary(
       if (!ui.disposed) ui.status.textContent = errorText(error);
     });
   return {
-    frame: () => drop?.frame(),
-    dispose() { drop?.dispose(); ui.dispose(); },
+    frame: () => { drop?.frame(); replay?.frame(); },
+    dispose() { replay?.dispose(); replay = null; drop?.dispose(); ui.dispose(); },
     refreshCapabilities: async () => {
       const value = await port.capabilities();
       if (!ui.disposed) {

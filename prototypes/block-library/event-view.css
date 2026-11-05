@@ -125,3 +125,32 @@
 .aw-event-view > ol > li[data-evidence-class="inferred"]::before { background: transparent; }
 .aw-event-view .aw-event-entry::after { content: "Details ›"; grid-column: 2; font-size: 0.75em; color: #b6b8c6; }
 .aw-event-view details[open] > .aw-event-entry::after { content: "Details ⌄"; }
+
+/* Causal current: the graph is primary; the precise list belongs to Forensic. */
+.aw-stream-modes, .aw-stream-controls { display:flex; flex-wrap:wrap; gap:.35rem; margin:.5rem 0; }
+.aw-stream-modes button[aria-pressed="true"] { border-color:#9cded5; background:#89d8d52b; }
+.aw-stream-viewport { height:340px; overflow:auto; position:relative; border:1px solid #a7c8cb33; border-radius:1rem; background:radial-gradient(ellipse at 30% 40%,#24535a30,transparent 65%),#0d182430; }
+.aw-stream-scene { position:relative; transform-origin:0 0; }
+.aw-stream-links { position:absolute; inset:0; overflow:visible; pointer-events:none; }
+.aw-stream-edge { fill:none; stroke:#7fbec177; stroke-width:2; }
+.aw-stream-edge[data-path="true"] { stroke:#c1fff0; stroke-width:3; }
+.aw-event-view .aw-stream-node { position:absolute; width:176px; min-height:60px; padding:.45rem .6rem; border-radius:.8rem; border:1px solid #98c9d477; background:#152c39; display:grid; grid-template-columns:1.2rem minmax(0,1fr); gap:.2rem .4rem; text-align:left; box-shadow:0 4px 18px #0003; }
+.aw-stream-node > span { grid-row:1/3; font-size:1.1rem; color:#b6e1dc; }
+.aw-stream-node strong { font-size:.85em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.aw-stream-node small { font-size:.7em; color:#c0cbdb; }
+.aw-stream-node[data-family="failure"] { border-color:#ed9c9c; border-radius:.2rem; }
+.aw-stream-node[data-family="uncertain"] { border-style:dashed; }
+.aw-stream-node[data-family="gate"] { border-color:#dbc79a; border-inline-width:3px; }
+.aw-stream-node[data-family="verification"] { border-color:#9de1ba; }
+.aw-stream-node[data-evidence-class="simulated"] { border-style:dotted; }
+.aw-stream-node[data-path="true"] { box-shadow:0 0 0 2px #b7f4e280; }
+.aw-stream-node[aria-pressed="true"] { background:#284b59; outline:2px solid #d2fff4; }
+.aw-stream-inspector { border-top:1px solid #a7c8cb33; margin-top:.7rem; }
+.aw-stream-coverage { font-size:.8em; color:#b6c9d1; }
+.aw-stream[data-mode="glimpse"] .aw-stream-viewport { height:190px; }
+.aw-stream[data-mode="glimpse"] .aw-stream-node { width:176px; min-height:45px; }
+.aw-stream[data-mode="glimpse"] .aw-stream-node strong { font-size:.72em; }
+.aw-stream[data-mode="glimpse"] .aw-stream-node small { display:none; }
+.aw-stream-viewport:focus-visible { outline:2px solid #c4e2e5; outline-offset:2px; }
+.aw-event-view [hidden] { display:none !important; }
+@media (prefers-reduced-motion:reduce) { .aw-stream * { animation:none !important; transition:none !important; } }

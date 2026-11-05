@@ -1,3 +1,4 @@
+import { temporalProjection, temporalTicks, temporalZoom, recordedReviewTime, type TemporalOrientation } from './temporal-projection.ts';
 import type { TimelineDocument, TimelineView, TimelineSelection, SaveTimeline } from '../timeline-product/contracts.ts';
 import type { ExperienceMotionPort, ExperiencePose } from '../application-contract/motion.ts';
 import { timelineItemTime, timelineItemTitle, type TimelineExternalOpen, type TimelinePresentationGapReason, type TimelinePresentationItem, type TimelinePresentationPort, type TimelinePresentationWindow } from './timeline-presentation.ts';
@@ -47,6 +48,12 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   const mode = node('select'), from = node('input'), to = node('input'), provider = node('select'), eventType = node('select'), classification = node('select');
   const track = node('div', '', 'aw-timeline-track'), legend = node('p', '', 'aw-timeline-legend'), items = node('ol', '', 'aw-timeline-items');
   const selection = node('section', '', 'aw-timeline-selection'), gaps = node('ul', '', 'aw-timeline-gaps'), coverage = node('p', '', 'aw-timeline-coverage');
+  const scale = node('div', '', 'aw-timeline-scale'), laneLabels = node('div', '', 'aw-timeline-lanes');
+  const presentationTools = node('div', '', 'aw-timeline-tools'), orientation = node('select'), detail = node('select');
+  const reviewTools = node('div', '', 'aw-timeline-review-time'), scrub = node('input'), speed = node('select'), reviewTime = node('output'), playhead = node('div', '', 'aw-timeline-playhead');
+  let display: TemporalOrientation = 'horizontal', density = options.presentation === 'workspace' ? 'compact' : 'expanded', forensic = false, densityChosen = false;
+  let playing = false, reviewPosition: number | null = null, reviewStarted = 0, reviewOrigin = 0;
+  let orderedKeys: string[] = [];
   const sourceCoverage = node('p', '', 'aw-timeline-source-coverage');
   const status = node('p', '', 'aw-timeline-status'), review = node('div', '', 'aw-timeline-review');
   let current: TimelineDocument | null = null, window: TimelinePresentationWindow | null = null, active = options.active ?? true, disposed = false, busy = false, sequence = 0, unavailable = false;
@@ -81,13 +88,20 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   const apply = action('Save view', () => { if (canEdit()) return save(collect()); });
   const pan = (direction: number) => {
     if (!canEdit()) return; const view = collect(), start = Date.parse(view.viewport.from), end = Date.parse(view.viewport.to), shift = (end - start) * direction;
-    view.viewport = { ...view.viewport, from: new Date(start + shift).toISOString(), to: new Date(end + shift).toISOString() }; view.selection = null; return save(view);
+    view.viewport = { ...view.viewport, from: new Date(start + shift).toISOString(), to: new Date(end + shift).toISOString() }; return save(view);
   };
   const zoom = (factor: number) => {
-    if (!canEdit()) return; const view = collect(), start = Date.parse(view.viewport.from), end = Date.parse(view.viewport.to), half = Math.max(500, Math.min(315360000000, (end - start) * factor / 2)), center = (start + end) / 2;
-    view.viewport = { ...view.viewport, from: new Date(center - half).toISOString(), to: new Date(center + half).toISOString() }; return save(view);
+    if (!canEdit()) return; const view = collect(), start = Date.parse(view.viewport.from), end = Date.parse(view.viewport.to), selectedItem = window?.items.find(item => sameSelection(selected, { eventId: item.event.eventId, cursor: item.event.cursor })), selectedTime = selectedItem && timelineItemTime(selectedItem, axis()), bounds = temporalZoom(start, end, factor, selectedTime ? Date.parse(selectedTime) : undefined);
+    view.viewport = { ...view.viewport, from: new Date(bounds.from).toISOString(), to: new Date(bounds.to).toISOString() }; return save(view);
   };
   const earlier = action('Earlier', () => pan(-1)), later = action('Later', () => pan(1)), closer = action('Zoom in', () => zoom(.5)), wider = action('Zoom out', () => zoom(2));
+  const forensicButton = action('Forensic event list', () => { forensic = !forensic; forensicButton.setAttribute('aria-pressed', String(forensic)); items.hidden = !forensic; reflow(); });
+  const play = action('Play recorded time', () => {
+    if (!window?.items.length || busy) return;
+    playing = !playing; reviewStarted = performance.now();
+    const bounds = reviewBounds(); reviewOrigin = reviewPosition === null || reviewPosition >= bounds.end ? bounds.start : reviewPosition; reviewPosition = reviewOrigin;
+    play.textContent = playing ? 'Pause recorded time' : 'Play recorded time'; motion.wake();
+  });
   const back = action('Previous view', () => { if (canEdit() && previousViews.length) return save(structuredClone(previousViews.at(-1)!), false); });
   const refreshButton = action('Refresh timeline', () => load(false)), more = action('Next events', () => load(true));
   const retry = action('Retry save', () => send()), filterButton = action('Filters', () => {
@@ -131,6 +145,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
     more.hidden = !window?.next; retry.hidden = !request; retry.disabled = busy || current?.canEdit !== true;
     review.hidden = !needsReview; section.setAttribute('aria-busy', String(busy));
     useSaved.disabled = keepMine.disabled = busy || !current || !!request || needsReview && baseVersion === current.resource.version;
+    play.disabled = busy || !window?.items.some(item => timelineItemTime(item, axis())); scrub.disabled = play.disabled; speed.disabled = busy;
     for (const row of rows.values()) row.core.disabled = row.dot.disabled = busy;
   }
   function inspectSelection() {
@@ -141,7 +156,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
     selection.append(node('h4', timelineItemTitle(item)));
     if (external) {
       const timeSource = external.timeSource === 'github-committer' ? 'GitHub committer time' : external.timeSource === 'github-author' ? 'GitHub author time' : 'Source unspecified';
-      values.append(node('dt', 'Reported time'), node('dd', reportedAt ? `${formatTime(reportedAt)} · ${timeSource}` : 'Unavailable'));
+      values.append(node('dt', 'Reported time'), node('dd', reportedAt ? `${formatTime(reportedAt)} Â· ${timeSource}` : 'Unavailable'));
       if (reportedAt) values.append(node('dt', 'Original timestamp'), node('dd', reportedAt));
     }
     for (const [name, value] of [['Captured', formatTime(event.receivedAt)], ['Evidence', item.evidenceClass], ['Source', external?.source.label ?? event.providerId], ['Source status', event.status ?? 'Not provided'], ['Event type', event.type], ['Event reference', event.eventId], ['Capture cursor', String(event.cursor)]]) values.append(node('dt', name), node('dd', value));
@@ -161,18 +176,19 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   }
   function paint() {
     if (disposed) return;
-    title.textContent = current?.resource.title ?? (unavailable ? 'Timeline unavailable' : 'Loading timeline…');
+    title.textContent = current?.resource.title ?? (unavailable ? 'Timeline unavailable' : 'Loading timelineâ€¦');
     title.hidden = options.showTitle === false;
     const basis = axis() === 'reportedAt' ? 'reported time' : 'capture time';
-    range.textContent = current ? `${formatTime(current.view.viewport.from)} — ${formatTime(current.view.viewport.to)} · ${basis} (${current.view.viewport.displayTimeZone})` : '';
+    range.textContent = current ? `${formatTime(current.view.viewport.from)} â€” ${formatTime(current.view.viewport.to)} Â· ${basis} (${current.view.viewport.displayTimeZone})` : '';
     const live = new Set(window?.items.map(keyOf) ?? []);
     for (const [id, row] of rows) if (!live.has(id)) { row.row.remove(); row.dot.remove(); motion.remove(row.key); motion.remove(row.key + ':dot'); owned.delete(row.key); owned.delete(row.key + ':dot'); rows.delete(id); }
     for (const item of window?.items ?? []) {
       const id = keyOf(item), selectedNow = sameSelection(selected, { eventId: item.event.eventId, cursor: item.event.cursor }); let row = rows.get(id);
       if (!row) {
         const element = node('li'), core = action('', () => selectEvent(id)), dot = action('', () => selectEvent(id)), key = prefix + ':event:' + id;
-        element.dataset.eventId = item.event.eventId; element.dataset.eventCursor = String(item.event.cursor); dot.className = 'aw-timeline-dot';
-        element.append(core); items.append(element); track.append(dot); addMotion(key, pose({ opacity: 0 })); addMotion(key + ':dot', pose({ opacity: 0 })); row = { item, row: element, core, dot, key, height: 72 }; rows.set(id, row);
+        element.dataset.eventId = item.event.eventId; element.dataset.eventCursor = String(item.event.cursor); dot.className = 'aw-timeline-dot'; dot.dataset.eventId = item.event.eventId; dot.dataset.eventCursor = String(item.event.cursor);
+        element.append(core); items.append(element); track.append(dot);
+        dot.onkeydown = event => navigateEvent(event, id); addMotion(key, pose({ opacity: 0 })); addMotion(key + ':dot', pose({ opacity: 0 })); row = { item, row: element, core, dot, key, height: 72 }; rows.set(id, row);
       }
       const time = timelineItemTime(item, axis());
       const when = time ? node('time', formatTime(time)) : node('span', 'Reported time unavailable', 'aw-timeline-event-time');
@@ -180,45 +196,91 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
       row.item = item;
       row.dot.hidden = !time;
       row.dot.setAttribute('aria-label', timelineItemTitle(item) + (time ? ', ' + formatTime(time) : ''));
-      row.core.replaceChildren(when, node('strong', timelineItemTitle(item)), node('small', item.evidenceClass + ' · ' + (item.externalEvidence?.source.label ?? item.event.providerId)));
-      row.core.setAttribute('aria-pressed', String(selectedNow)); row.dot.setAttribute('aria-pressed', String(selectedNow)); row.row.dataset.evidenceClass = item.evidenceClass;
+      row.core.replaceChildren(when, node('strong', timelineItemTitle(item)), node('small', item.evidenceClass + ' Â· ' + (item.externalEvidence?.source.label ?? item.event.providerId)));
+      row.core.setAttribute('aria-pressed', String(selectedNow)); row.dot.setAttribute('aria-pressed', String(selectedNow)); row.row.dataset.evidenceClass = item.evidenceClass; row.dot.dataset.evidenceClass = item.evidenceClass;
+      row.dot.title = row.dot.getAttribute('aria-label') ?? '';
     }
     gaps.replaceChildren(...[...new Set(window?.gaps.map(value => value.reason) ?? [])].map(reason => node('li', gapLabels[reason])));
     coverage.textContent = !window ? 'No retained window loaded.' : window.source.state === 'unavailable' ? 'Retained history is unavailable.'
-      : `${window.items.length} events shown · ${window.coverage.matchingItems === 'bounded' ? 'bounded retained page' : 'retained page scanned'}. Only currently authorized retained evidence is shown.`;
+      : `${window.items.length} events shown Â· ${window.coverage.matchingItems === 'bounded' ? 'bounded retained page' : 'retained page scanned'}. Only currently authorized retained evidence is shown.`;
     if (window?.hasNewEvents) coverage.textContent += ' New captures are available; refresh to open a new window.';
     if (current?.selectionUnavailable || window?.selectionUnavailable) coverage.textContent += ' The saved selection is unavailable.';
     if (current?.canEdit !== true) coverage.textContent += ' This view is read-only in this surface.';
     const imported = window?.sourceCoverage;
     sourceCoverage.hidden = !imported;
     sourceCoverage.textContent = imported ? [
-      imported.sourceLabel + ' · ' + imported.status + ' source coverage',
-      `${formatTime(imported.requestedFrom)} — ${formatTime(imported.requestedTo)}`,
+      imported.sourceLabel + ' Â· ' + imported.status + ' source coverage',
+      `${formatTime(imported.requestedFrom)} â€” ${formatTime(imported.requestedTo)}`,
       imported.fetchedAt ? 'Fetched ' + formatTime(imported.fetchedAt) : '',
       imported.omissionReason ?? '',
-    ].filter(Boolean).join(' · ') : '';
+    ].filter(Boolean).join(' Â· ') : '';
     inspectSelection(); setDisabled(); reflow();
   }
   function selectEvent(key: string) {
     const item = rows.get(key)?.item; if (!item || !active || disposed || busy) return;
     markDirty(); selected = { eventId: item.event.eventId, cursor: item.event.cursor }; paint();
   }
+  function navigateEvent(event: KeyboardEvent, key: string) {
+    const index = orderedKeys.indexOf(key); let next = index;
+    if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = orderedKeys.length - 1;
+    else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = Math.min(orderedKeys.length - 1, index + 1);
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = Math.max(0, index - 1);
+    else return;
+    event.preventDefault(); const id = orderedKeys[next]; if (!id) return; selectEvent(id); rows.get(id)?.dot.focus();
+  }
+  function reviewBounds() {
+    const times = (window?.items ?? []).flatMap(item => { const time = timelineItemTime(item, axis()); return time ? [Date.parse(time)] : []; }).filter(Number.isFinite);
+    return { start: times.length ? Math.min(...times) : 0, end: times.length ? Math.max(...times) : 0 };
+  }
+  function stopReview() { playing = false; reviewPosition = null; play.textContent = 'Play recorded time'; playhead.hidden = true; reviewTime.textContent = ''; for (const row of rows.values()) delete row.dot.dataset.reviewState; }
   function reflow() {
-    if (disposed || !active) return; let y = 0; const width = track.clientWidth || 640, view = current?.view, start = view ? Date.parse(view.viewport.from) : 0, span = view ? Date.parse(view.viewport.to) - start : 1;
-    const providers = [...new Set(window?.items.map(item => item.event.providerId) ?? [])];
+    if (disposed || !active) return;
+    let y = 0; const width = Math.max(80, (track.clientWidth || 640) - 28), view = current?.view;
+    const start = view ? Date.parse(view.viewport.from) : 0, end = view ? Date.parse(view.viewport.to) : 1;
+    const vertical = display === 'vertical', extent = vertical ? (density === 'compact' ? 220 : 420) : width;
+    const selectedKey = selected ? selected.cursor + ':' + selected.eventId : undefined;
+    const projection = temporalProjection(window?.items ?? [], axis(), start, end, extent, display === 'multilane', selectedKey);
+    orderedKeys = projection.timed.map(value => value.key);
+    section.dataset.orientation = display; section.dataset.density = density; selection.hidden = density === 'compact' && !selected;
+    track.style.setProperty?.('--aw-timeline-spine', Math.min(width - 10, 160) + 7 + 'px');
     const positions = axis() === 'reportedAt' ? 'Reported event positions' : 'Capture positions';
-    legend.textContent = providers.length ? positions + ' · ' + providers.slice(0, 4).join(' · ') + (providers.length > 4 ? ' · Other sources' : '') : positions;
-    track.style.height = 16 + Math.max(1, Math.min(5, providers.length)) * 20 + 'px';
-    for (const row of rows.values()) { row.height = Math.max(64, row.core.scrollHeight || 72); const chosen = sameSelection(selected, { eventId: row.item.event.eventId, cursor: row.item.event.cursor });
-      target(row.key, pose({ y, h: row.height, opacity: 1 }), 'timeline-event-layout'); y += row.height + 6;
-      const time = timelineItemTime(row.item, axis());
-      if (time) target(row.key + ':dot', pose({ x: Math.max(0, Math.min(width - 14, (Date.parse(time) - start) / span * (width - 14))), y: 8 + Math.min(4, providers.indexOf(row.item.event.providerId)) * 20, lift: chosen ? 1 : 0 }), 'timeline-event-position');
+    legend.textContent = positions + ' · ' + (view?.viewport.displayTimeZone ?? 'UTC') + ' · Arrow keys move through time; Home/End reach endpoints.';
+    const laneSize = density === 'compact' ? 56 : 88;
+    track.style.height = (vertical ? extent + 56 : 64 + Math.max(1, projection.lanes.length) * laneSize) + 'px';
+    scale.replaceChildren(); laneLabels.replaceChildren();
+    for (const tick of temporalTicks(start, end, extent, view?.viewport.displayTimeZone ?? 'UTC')) {
+      const label = node('span', tick.label, 'aw-timeline-tick');
+      label.style[vertical ? 'top' : 'left'] = tick.position + 14 + 'px'; scale.append(label);
     }
+    for (const [index, lane] of projection.lanes.entries()) {
+      const label = node('span', lane, 'aw-timeline-lane-label'); label.style.top = 40 + index * laneSize + 'px'; laneLabels.append(label);
+    }
+    for (const row of rows.values()) {
+      row.height = Math.max(64, row.core.scrollHeight || 72);
+      target(row.key, pose({ y, h: row.height, opacity: 1 }), 'timeline-event-layout'); y += row.height + 6;
+      row.dot.hidden = true; row.dot.tabIndex = -1;
+      const entry = projection.timed.find(value => value.key === keyOf(row.item));
+      if (entry) target(row.key + ':dot', pose({ x: vertical ? Math.min(width - 10, 160) : entry.position + 7, y: vertical ? entry.position + 20 : 58 + entry.lane * laneSize }), 'timeline-cluster-position');
+    }
+    for (const cluster of projection.clusters) {
+      const row = rows.get(cluster.representative.key)!;
+      const chosen = cluster.members.some(value => value.key === selectedKey);
+      row.dot.hidden = false; row.dot.tabIndex = chosen || !projection.timed.some(value => value.key === selectedKey) && cluster === projection.clusters[0] ? 0 : -1;
+      row.dot.dataset.clusterCount = String(cluster.members.length);
+      row.dot.textContent = cluster.members.length > 1 ? String(cluster.members.length) : '';
+      row.dot.setAttribute('aria-label', timelineItemTitle(row.item) + ', ' + formatTime(new Date(cluster.representative.time).toISOString()) + (cluster.members.length > 1 ? `, cluster of ${cluster.members.length} events. Arrow keys inspect every event.` : ''));
+      row.dot.title = row.dot.getAttribute('aria-label') ?? '';
+      row.dot.dataset.caption = timelineItemTitle(row.item);
+      target(row.key + ':dot', pose({ x: vertical ? Math.min(width - 10, 160) : cluster.position + 7, y: vertical ? cluster.position + 20 : 58 + cluster.lane * laneSize, lift: chosen ? 1 : 0 }), 'timeline-event-position');
+    }
+    const bounds = reviewBounds(); scrub.min = String(bounds.start); scrub.max = String(bounds.end); scrub.step = '1'; scrub.value = String(reviewPosition ?? bounds.start);
+    items.hidden = !forensic;
     target(prefix + ':list', pose({ h: y }), 'timeline-list-layout'); target(prefix + ':filters', pose({ h: filtersOpen ? filterPanel.scrollHeight || 240 : 0, opacity: filtersOpen ? 1 : 0 }), 'timeline-filter-disclosure');
   }
   async function load(append: boolean): Promise<void> {
     if (disposed || !active || append && (!current || !window?.next)) return;
-    const token = ++sequence, prior = window; busy = true; setDisabled();
+    stopReview(); const token = ++sequence, prior = window; busy = true; setDisabled();
     try {
       const document = await port.read(resourceId);
       if (disposed || !active || token !== sequence) return;
@@ -275,15 +337,39 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   filterPanel.append(label('Timeline mode', mode), label('From (UTC)', from), label('To (UTC)', to), label('Source', provider), label('Event type', eventType), label('Evidence class', classification), apply);
   filterPanel.onsubmit = event => { event.preventDefault(); if (canEdit()) { try { void save(collect()); } catch { status.textContent = 'Enter a valid capture-time interval.'; } } };
   filterPanel.hidden = true; filterPanel.inert = true; filterButton.setAttribute('aria-expanded', 'false');
+  for (const [value, text] of [['horizontal', 'Horizontal'], ['vertical', 'Vertical'], ['multilane', 'Multiple source lanes']]) { const option = node('option', text); option.value = value; orientation.append(option); }
+  for (const value of ['expanded', 'compact']) { const option = node('option', value); option.value = value; detail.append(option); }
+  for (const value of ['1', '10', '60']) { const option = node('option', value + '× recorded time'); option.value = value; speed.append(option); }
+  speed.value = '1'; orientation.value = 'horizontal'; detail.value = density;
+  orientation.onchange = () => { display = orientation.value as TemporalOrientation; reflow(); };
+  detail.onchange = () => { densityChosen = true; density = detail.value; reflow(); };
+  speed.onchange = () => { reviewOrigin = reviewPosition ?? reviewBounds().start; reviewStarted = performance.now(); };
+  scrub.type = 'range'; scrub.setAttribute('aria-label', 'Recorded time position');
+  scrub.oninput = () => { playing = false; play.textContent = 'Play recorded time'; reviewPosition = Number(scrub.value); motion.wake(); };
+  reviewTime.setAttribute('aria-live', 'off');
+  playhead.setAttribute('aria-hidden', 'true'); playhead.hidden = true;
+  reviewTools.append(node('span', 'Recorded-time review · headers only, no state reconstruction'), play, label('Review speed', speed), scrub, reviewTime);
+  presentationTools.append(label('Orientation', orientation), label('Detail', detail), forensicButton);
+  track.append(scale, laneLabels, playhead);
   toolbar.append(earlier, later, closer, wider, back, filterButton, refreshButton, retry);
-  section.append(title, range, toolbar, filterPanel, review, legend, track, items, selection, gaps, sourceCoverage, coverage, more, status); root.append(section);
+  section.append(title, range, toolbar, filterPanel, review, presentationTools, legend, track, reviewTools, items, selection, gaps, sourceCoverage, coverage, more, status); root.append(section);
   section.inert = !active; section.hidden = !active; section.style.opacity = '0'; items.style.height = '0px'; paint(); if (active) void load(false);
   return {
     refresh: () => load(false),
-    setActive(value) { if (disposed || active === value) return; active = value; section.inert = !value; if (value) { section.hidden = false; void load(false); } else { sequence++; busy = false; } target(prefix, pose({ opacity: value ? 1 : 0, y: value ? 0 : 6 }), 'timeline-visibility'); setDisabled(); },
-    setPresentation(value) { if (!disposed) { section.dataset.presentation = value; reflow(); } },
+    setActive(value) { if (disposed || active === value) return; active = value; section.inert = !value; if (value) { section.hidden = false; void load(false); } else { stopReview(); sequence++; busy = false; } target(prefix, pose({ opacity: value ? 1 : 0, y: value ? 0 : 6 }), 'timeline-visibility'); setDisabled(); },
+    setPresentation(value) { if (!disposed) { section.dataset.presentation = value; if (!densityChosen) { density = value === 'workspace' ? 'compact' : 'expanded'; detail.value = density; } reflow(); } },
     reflow,
-    frame() { if (disposed) return; const value = motion.pose(prefix), filters = motion.pose(prefix + ':filters'); section.style.opacity = String(value.opacity); section.style.transform = `translateY(${value.y}px)`; if (!active && value.opacity < .001) section.hidden = true;
+    frame() { if (disposed) return;
+      if (active && window && reviewPosition !== null && current) {
+        const bounds = reviewBounds();
+        if (playing) { reviewPosition = recordedReviewTime(reviewOrigin, performance.now() - reviewStarted, Number(speed.value) || 1, bounds.end); if (reviewPosition >= bounds.end) { playing = false; play.textContent = 'Play recorded time'; } else motion.wake(); }
+        scrub.value = String(reviewPosition); reviewTime.textContent = formatTime(new Date(reviewPosition).toISOString());
+        for (const row of rows.values()) { const time = timelineItemTime(row.item, axis()); row.dot.dataset.reviewState = time && Date.parse(time) <= reviewPosition ? 'reached' : 'upcoming'; }
+        const start = Date.parse(current.view.viewport.from), end = Date.parse(current.view.viewport.to), fraction = (reviewPosition - start) / Math.max(1, end - start);
+        playhead.hidden = fraction < 0 || fraction > 1;
+        const extent = display === 'vertical' ? (density === 'compact' ? 220 : 420) : Math.max(80, (track.clientWidth || 640) - 28);
+        playhead.style.transform = display === 'vertical' ? `translateY(${fraction * extent + 27}px)` : `translateX(${fraction * extent + 14}px)`;
+      } const value = motion.pose(prefix), filters = motion.pose(prefix + ':filters'); section.style.opacity = String(value.opacity); section.style.transform = `translateY(${value.y}px)`; if (!active && value.opacity < .001) section.hidden = true;
       items.style.height = Math.max(0, motion.pose(prefix + ':list').h) + 'px'; filterPanel.style.height = Math.max(0, filters.h) + 'px'; filterPanel.style.opacity = String(filters.opacity); if (!filtersOpen && filters.h < .5) filterPanel.hidden = true;
       for (const row of rows.values()) { const position = motion.pose(row.key), dot = motion.pose(row.key + ':dot'); row.row.style.transform = `translateY(${position.y}px)`; row.row.style.height = Math.max(0, position.h) + 'px'; row.row.style.opacity = String(position.opacity); row.dot.style.transform = `translate(${dot.x}px,${dot.y}px) scale(${1 + dot.lift * .2})`; row.dot.style.opacity = String(dot.opacity); }
     },

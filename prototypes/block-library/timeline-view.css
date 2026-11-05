@@ -29,3 +29,31 @@
 .aw-timeline-selection h4 { overflow-wrap:anywhere; }
 .aw-timeline-selection { padding:.65rem; border:1px solid #b6c7d825; border-radius:.75rem; font-size:.8rem; }.aw-timeline-selection dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:.3rem .6rem; }.aw-timeline-selection dd { margin:0; overflow-wrap:anywhere; }.aw-timeline-selection p { font-size:.75rem; line-height:1.5; margin-bottom:.5rem; }
 .aw-timeline-gaps { margin:0; padding-left:1.2rem; }.aw-timeline-review > p { width:100%; font-size:.8rem; }.aw-timeline [hidden] { display:none; }
+/* A continuous temporal surface; the event list is an explicit forensic view. */
+.aw-timeline-track { isolation:isolate; overflow:hidden; min-height:120px; border:1px solid #b6c7d829; border-radius:12px; background:linear-gradient(145deg,#9cb3c50a,transparent 70%); }
+.aw-timeline-track::before { content:''; position:absolute; left:14px; right:14px; top:65px; height:1px; background:linear-gradient(90deg,#b6c7d830,#cadbe79a,#b6c7d830); }
+.aw-timeline-scale,.aw-timeline-lanes { position:absolute; inset:0; pointer-events:none; }
+.aw-timeline-tick { position:absolute; top:5px; max-width:140px; padding-top:8px; font-size:.62rem; white-space:nowrap; color:#c2cfda; font-variant-numeric:tabular-nums; }
+.aw-timeline-tick::before { content:''; position:absolute; top:0; left:0; width:1px; height:400px; background:#b6c7d813; }
+.aw-timeline-lane-label { position:absolute; left:14px; font-size:.65rem; opacity:.65; }
+.aw-timeline .aw-timeline-dot { z-index:2; min-width:18px; width:18px; height:18px; min-height:18px; background:#a9c6db; color:#112331; font-size:.62rem; font-weight:600; overflow:visible; }
+.aw-timeline .aw-timeline-dot::before { content:''; position:absolute; inset:-7px; }
+.aw-timeline .aw-timeline-dot::after { content:attr(data-caption); position:absolute; top:24px; left:0; color:#c8d8e5; font-size:.7rem; font-weight:400; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; pointer-events:none; }
+.aw-timeline .aw-timeline-dot[data-evidence-class=reported] { border-radius:3px; background:#b6c7d859; color:inherit; }
+.aw-timeline .aw-timeline-dot[data-evidence-class=inferred] { border-style:dashed; background:transparent; color:inherit; }
+.aw-timeline .aw-timeline-dot[data-evidence-class=simulated] { border-style:dotted; border-radius:0; background:transparent; color:inherit; }
+.aw-timeline .aw-timeline-dot[aria-pressed=true] { box-shadow:0 0 0 5px #e4d5b720; background:#e4d5b7; }
+.aw-timeline[data-orientation=vertical] .aw-timeline-track::before { left:167px; top:27px; bottom:27px; height:auto; width:1px; }
+.aw-timeline[data-orientation=vertical] .aw-timeline-tick { left:10px; padding:0; max-width:145px; white-space:normal; }
+.aw-timeline[data-orientation=vertical] .aw-timeline-tick::before { left:155px; top:7px; height:1px; width:600px; }
+.aw-timeline[data-orientation=vertical] .aw-timeline-lanes { display:none; }
+.aw-timeline[data-orientation=vertical] .aw-timeline-dot::after { top:0; left:26px; max-width:220px; }
+.aw-timeline[data-density=compact] .aw-timeline-dot::after { display:none; }
+.aw-timeline-review-time { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; font-size:.7rem; }
+.aw-timeline-review-time > span { flex-basis:100%; opacity:.7; }.aw-timeline-review-time label { display:flex; align-items:center; gap:.3rem; }
+.aw-timeline-review-time input { flex:1; min-width:90px; }.aw-timeline-review-time output { flex-basis:100%; font-variant-numeric:tabular-nums; }
+.aw-timeline-playhead { position:absolute; top:30px; bottom:8px; left:0; width:1px; background:#f1d9ab; pointer-events:none; z-index:1; }
+.aw-timeline[data-orientation=vertical] .aw-timeline-playhead { left:150px; right:8px; top:0; bottom:auto; height:1px; width:auto; }
+.aw-timeline [hidden] { display:none; }
+.aw-timeline[data-orientation=vertical] .aw-timeline-track::before { left:var(--aw-timeline-spine,167px); }
+.aw-timeline .aw-timeline-dot[data-review-state=upcoming] { opacity:.35 !important; }

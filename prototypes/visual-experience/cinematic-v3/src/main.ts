@@ -1919,7 +1919,7 @@ if (desktopMode)
     vela: setVela,
   });
 try {
-  environment = new Environment($<HTMLCanvasElement>("#world"));
+  environment = new Environment($<HTMLCanvasElement>("#world"), motion);
 } catch (error) {
   graphicsFailed = true;
   metrics.errors.push(String(error));
@@ -1937,7 +1937,7 @@ $("#world").addEventListener("webglcontextlost", (e) => {
 $("#world").addEventListener("webglcontextrestored", () => {
   try {
     environment?.dispose();
-    environment = new Environment($<HTMLCanvasElement>("#world"));
+    environment = new Environment($<HTMLCanvasElement>("#world"), motion);
     graphicsFailed = false;
     document.body.classList.remove("graphics-fallback");
     status("Graphics restored. Workspace state retained.");

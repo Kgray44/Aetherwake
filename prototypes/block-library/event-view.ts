@@ -1,3 +1,5 @@
+import type { ExperienceMotionPort } from "../application-contract/motion.ts";
+import { mountStreamGraph } from "./stream-view.ts";
 import type { StreamEvent } from "../integrated-backend/src/contracts.mts";
 
 export type EventWindow = {
@@ -197,7 +199,7 @@ export function mountEventExperience(
     openResource?(resourceId: string): void;
     openMission?(missionId: string): void;
   },
-  options: { active?: boolean; presentation?: "workspace" | "focused" } = {},
+  options: { active?: boolean; presentation?: "workspace" | "focused"; motion?: ExperienceMotionPort; viewId?: string } = {},
 ) {
   const section = node("section"),
     filters = node("div"),
@@ -326,7 +328,37 @@ export function mountEventExperience(
     ),
   );
   tools.append(query, advanced, refresh);
-  section.append(tools, status, list, about);
+  const modes = node("div");
+  modes.className = "aw-stream-modes";
+  modes.setAttribute("aria-label", "Stream representation");
+  let streamMode = "flow";
+  const modeButtons = ["glimpse", "flow", "forensic"].map(value => {
+    const action = button(value[0].toUpperCase() + value.slice(1), () => changeMode(value));
+    action.setAttribute("aria-pressed", String(value === "flow"));
+    modes.append(action);
+    return action;
+  });
+  function changeMode(value: string) {
+    streamMode = value;
+    graph.setMode(value);
+    list.hidden = value !== "forensic";
+    for (const mode of modeButtons) mode.setAttribute("aria-pressed", String(mode.textContent?.toLowerCase() === value));
+    update();
+  }
+  section.append(modes, tools, status);
+  const graph = mountStreamGraph(section, {
+    motion: options.motion, viewId: options.viewId, active,
+    title: recordedEventTitle, metadata: eventMetadata,
+    inspectOlder: () => changeMode("forensic"),
+    open(event) {
+      if (disposed || !active) return;
+      if (event.mission) port.openMission?.(event.mission.id);
+      else if (event.resourceId) port.openResource?.(event.resourceId);
+    },
+  });
+  graph.setMode(streamMode);
+  list.hidden = true;
+  section.append(list, about);
   root.append(section);
   for (const input of [
     scope,
@@ -374,6 +406,10 @@ export function mountEventExperience(
     );
     const selectedSince = since.value ? Date.parse(since.value) : undefined;
     if (selectedSince !== undefined && !Number.isFinite(selectedSince)) {
+      // An invalid filter must not retain previously authorized inspection data.
+      graph.update([]);
+      for (const row of rows.values()) row.retire();
+      rows.clear(); list.replaceChildren();
       status.textContent = "Choose a valid received-after time.";
       return;
     }
@@ -386,6 +422,7 @@ export function mountEventExperience(
       query: query.value,
       ...(selectedSince !== undefined ? { since: selectedSince } : {}),
     });
+    graph.update(result);
     const first = window.events.length
       ? Math.min(...window.events.map((event) => event.cursor))
       : null;
@@ -510,17 +547,20 @@ export function mountEventExperience(
   update();
   return {
     update,
+    frame: graph.frame,
     setPresentation(value: "workspace" | "focused") {
       section.dataset.presentation = value;
     },
     setActive(value: boolean) {
       if (disposed || active === value) return;
       active = value;
+      graph.setActive(value);
       if (active) update();
       for (const row of rows.values()) row.syncDetails();
     },
     dispose() {
       disposed = true;
+      graph.dispose();
       for (const row of rows.values()) row.retire();
       rows.clear();
       section.remove();
