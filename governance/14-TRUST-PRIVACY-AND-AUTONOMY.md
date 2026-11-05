@@ -1,11 +1,13 @@
 # 14 — Trust, Privacy, and Autonomy
 ## Permission Boundaries, Informed Control, Secure Execution, Monitoring, and Recovery Charter for Aerynth
 
+> **Owner acceptance (2026-11-05):** This charter and both relevant design amendments are approved as binding product standards; no implementation, security, benchmark or release certification is implied.
+
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-014 |
-| Version | 1.0.0-draft |
-| Status | **Published proposed subsystem charter — awaiting repository-owner acceptance** |
+| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Status | **Owner-accepted and ratified governing charter; implementation verification separate** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem charter subordinate to [The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Primary domain | Trust policy, permissions, data confidentiality, autonomy boundaries, monitoring consent, risk classification, approval execution, credential isolation, revocation, deletion, and recoverability |
@@ -663,3 +665,38 @@ Changes to normative IDs, privacy guarantees, model/provider access assumptions,
 ---
 
 **Final governing standard:** Aerynth must be extraordinary in capability, fluid in interaction, proactive in service, and unmistakably accountable to the user. **Vela may anticipate needs, organize complexity, and delegate work, but every authority she exercises must remain bounded, understandable, revocable where possible, and verifiable.** Trust is what allows intelligent autonomy to feel effortless rather than dangerous.
+
+---
+
+## Ratified amendment CF-2026-11-05: API agents and capability-first trust
+
+> **Status: proposed, pending owner acceptance.** More capable tools increase the importance of existing least-privilege boundaries; they do not create exceptions.
+
+**AW-TRUST-141 — Permission independence.** AI inference, route classification, tool discovery and agent delegation MUST NOT grant authority. The application enforces effect-specific authorization at execution time for every direct, nested, programmatic, MCP or managed tool call.
+
+**AW-TRUST-142 — Principal inheritance.** All delegated workers MUST inherit a no-broader authority set than the initiating task, with bound scopes, resources, environment, budget, lifetime and consent provenance. A hosted subagent may not self-enroll a privileged MCP endpoint.
+
+**AW-TRUST-143 — Data transfer classification.** Before external inference or file/screenshot/audio transfer, the runtime MUST evaluate source data class, selected scope, provider region, retention terms, user intent and redaction. Tool discovery and stored retrieval do not authorize uploading an entire local repository or private history.
+
+**AW-TRUST-144 — Backend credential integrity.** OpenAI API credentials and third-party secrets MUST remain in OS-protected or backend-only storage, never model prompts, frontend bundles, source control, screenshots, public telemetry or rich client error output. Temporary session credentials MUST be bounded.
+
+**AW-TRUST-145 — Managed-environment distinction.** A cloud or self-hosted sandbox MUST have documented trust boundaries; a managed Agents API session MAY persist data and may not qualify for Zero Data Retention. A self-hosted executor does not by itself change provider-side retention guarantees.
+
+**AW-TRUST-146 — Effect claim before action.** Potentially irreversible or externally visible actions MUST use reviewed scope and a durable idempotency/effect claim where feasible. Unknown execution results MUST be reconciled using real evidence, not automatic retries.
+
+**AW-TRUST-147 — Safe computer use.** Screen interaction MUST be authorized by selected device/window and action class. Screen observation, screenshot processing and computer-control capability are distinct; a visual button match does not authorize clicking it.
+
+**AW-TRUST-148 — Guard against source instructions.** Retrieved web pages, repository files, MCP descriptions, tool outputs, voice transcripts and visual content MUST be treated as untrusted task data unless explicitly designated governing user/system instruction by a trusted path.
+
+**AW-TRUST-149 — Spend consent.** Subscription grants and purchased credits are separate resources. Vela MUST respect account/org spending ceilings and user-defined task limits, with explicit paused/blocked states rather than unannounced purchases or hidden capability reduction.
+
+**AW-TRUST-150 — Voice microphone and replay.** Microphone access and transcript persistence MUST require visible controls and appropriate consent. Restart/reconnection MUST not play previously delivered speech or reactivate recording without qualifying current permission.
+
+**AW-TRUST-151 — Revocation while active.** Removing an agent, tool, connector, screen or workspace permission MUST invalidate cached capability exposure and block future effects; in-flight and already completed external work requires separately communicated uncertainty and containment.
+
+**AW-TRUST-152 — User-readable action receipts.** Consequential actions MUST be attributable to the canonical request, actual principal and approved scope, with safe redacted records of result and readback. Reasoning confidence cannot replace this evidence.
+
+**AW-TRUST-153 — Safe fallback.** An unavailable or privacy-ineligible high-capability provider MUST produce an explicit denied/unavailable state or an independently authorized fallback, never a covert provider transfer or false completed result.
+
+**Mandatory negative tests:** injected MCP instruction tries to widen privileges; subagent attempts forbidden tool; tool allowed at discovery is revoked before call; ambiguous external write is re-requested; private screenshot tries to upload without scope consent; subscription credits exhausted and auto-recharge off; voice wake without consent. See [contract](../docs/specifications/VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md).
+
