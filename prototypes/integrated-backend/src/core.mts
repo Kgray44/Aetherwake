@@ -98,7 +98,8 @@ import { compareVelaCalibration, type VelaRoutingSample } from '../../vela-core/
 import type { AgentProfile, AgentProviderCatalog } from '../../agent-product/contracts.ts';
 import { matchOrdinaryClockQuestion } from './ordinary-clock-questions.mts';
 import { pureCourtesyReply } from './vela-courtesy.mts';
-import {VelaToolWorkflows,type VelaToolOwner,type ToolWorkflowBinding,type ToolOwnerDispatchFence} from './vela-tool-workflows.mts';
+import {VelaToolWorkflows,type VelaToolOwner,type ToolWorkflowBinding,type ToolOwnerDispatchFence,type ToolOwnerNegativeProof} from './vela-tool-workflows.mts';
+import {confirmedVelaPlan,projectVelaManifestation} from '../../vela-core/src/manifestation-state.ts';
 import {toolDescriptor,derivedToolCatalog,exactToolArguments} from './vela-tool-registry.mts';
 import {validWindowsMemorySnapshot,validWindowsProcessInspection} from '../../application-contract/windows-maintenance.ts';
 import type {VelaToolPort,VelaToolReceipt} from '../../application-contract/vela-tools.ts';
@@ -270,6 +271,7 @@ export class BackendCore {
   private missionPublication: MissionPublication;
   private missionPublicationTimer?: NodeJS.Timeout;
   private missionPublicationRetryMs = 250;
+  private readonly missionSpeechBacklog = new Set<string>();
   private missionWorkrooms: MissionWorkrooms;
   private missionExecutors: Readonly<Record<string, MissionExecutor>>;
   private missionSpecialistsInFlight = 0;
@@ -427,7 +429,7 @@ export class BackendCore {
           },
         } });
       this.initializeMissionFileEdits();
-      this.toolWorkflows=new VelaToolWorkflows({db:this.db,atomic:work=>this.atomic(work),allowed:binding=>this.toolWorkflowAllowed(binding),ownerCurrent:binding=>this.toolOwnerCurrent(binding),observe:event=>this.record('vela.tools/'+event.phase,'observed',undefined,randomUUID(),{providerId:'aerynth-native',correlationId:event.requestId,detached:true,payload:{redacted:true,tools:{workflowId:event.workflowId,...(event.receiptId?{receiptId:event.receiptId}:{})}}})});
+      this.toolWorkflows=new VelaToolWorkflows({db:this.db,atomic:work=>this.atomic(work),allowed:binding=>this.toolWorkflowAllowed(binding),ownerCurrent:binding=>this.toolOwnerCurrent(binding),ownerNegativeCurrent:(binding,proof)=>this.toolOwnerNegativeProof(binding,proof.kind)?.sourceDigest===proof.sourceDigest,observe:event=>this.record('vela.tools/'+event.phase,'observed',undefined,randomUUID(),{providerId:'aerynth-native',correlationId:event.requestId,detached:true,payload:{redacted:true,tools:{workflowId:event.workflowId,...(event.receiptId?{receiptId:event.receiptId}:{})}}})});
       this.velaVoiceRuntime = new VelaVoiceRuntime({ db:this.db,atomic:work=>this.atomic(work),storageAllowed:()=>this.missionStorageAdmitted,connection:this.velaApiConnection,api:this.velaApiRuntime,media:this.nativeHostServices?.liveMedia,
         ...(velaApiTest?{test:velaApiTest.voice??{fetch:velaApiTest.fetch}}:{}),host:{
           context:input=>this.voiceContext(input.conversationId),validateContext:async(ref,digest)=>this.validateVoiceContext(ref,digest),
@@ -437,7 +439,7 @@ export class BackendCore {
           seal:(messageId,sessionId)=>{const meta=this.state.vela!.messages[messageId];ensure(meta?.voice?.sessionId===sessionId,'live_canonical_intent_unavailable');meta.voice.sealed=true;},
           acceptIntent:(intent,attemptId)=>this.atomic(()=>this.once('voice-intent:'+attemptId,{intent},()=>{const id=this.ensureVelaConversation();return this.appendVelaMessage(id,{role:'user',content:intent,source:'user',classification:'observed'}).id;})),
           delegate:(binding,intent,messageId)=>this.delegateVoice(binding,intent,messageId),observe:(type,details)=>{
-            if(type==='start'||type==='reconnect'||type==='audition'||type==='voice-create')this.providerActivity.providerRequests++;
+            if(type==='start'||type==='reconnect'||type==='audition'||type==='speak'||type==='voice-create')this.providerActivity.providerRequests++;
             this.record('vela.voice/'+type,type==='transcript'||details.usageSeconds!==undefined?'reported':'observed',undefined,randomUUID(),{
               providerId:'gpt-live-1',detached:true,...(details.sessionId?{correlationId:details.sessionId}:{}),payload:{redacted:true,voice:details}});
           },
@@ -481,6 +483,8 @@ export class BackendCore {
       this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
         onChange: () => this.missions?.capacityChanged() });
       this.missionPublication = new MissionPublication(this.db);
+      // Persisted publication is recovery, even when its first message is appended later.
+      for(const row of this.db.prepare('SELECT mission_id FROM vela_mission_report_outbox').all())this.missionSpeechBacklog.add(String(row.mission_id));
       this.missions = new MissionService({
         db: this.db, atomic: work => this.kernel.withTransaction(work),
         authorized: scope => this.missionScopeAllowed(scope),
@@ -703,7 +707,7 @@ export class BackendCore {
       const message = this.appendVelaMessage(origin, {
         role: 'assistant', source: 'vela-native', classification: 'observed', content, responseKind: 'answer',
         missionReport: { missionId: id, workspaceId: scope.workspaceId, projectId: scope.projectId, jobsDone },
-      });
+      }, !this.missionSpeechBacklog.has(id));
       this.db.prepare('INSERT INTO vela_mission_report_links VALUES(?,?)').run(id, message.id);
       this.record('vela.mission/report-posted', 'observed', undefined, 'mission:report:' + id, {
         providerId: 'aerynth-native', detached: true, correlationId: id,
@@ -1903,7 +1907,7 @@ export class BackendCore {
       return {state:request.state==='unknown'?'unknown':'failed',content:request.state==='awaiting-review'?'Review the proposed action in Vela.':'The requested action has no verified result.'};
     }finally{this.pendingVoiceInput=undefined;}
   }
-  private appendVelaMessage(id:string,message:Omit<VelaMessage,'id'>):VelaMessage {
+  private appendVelaMessage(id:string,message:Omit<VelaMessage,'id'>,observeSpeech=true):VelaMessage {
     this.requireVelaConversation(id);
     if (message.role==='user' && this.pendingVoiceInput && message.content===this.pendingVoiceInput.intent) {
       const input=this.pendingVoiceInput,entry=this.state.graph.messages.find(value=>value.id===input.messageId&&value.conversationId===this.gid(id)),meta=this.state.vela!.messages[input.messageId];
@@ -1926,12 +1930,26 @@ export class BackendCore {
     }
     const {role:_role,content:_content,...metadata}=message;
     this.state.vela!.messages[entry.id]=metadata;this.state.revisions[id]++;
-    if(message.role==='assistant'&&message.requestId&&!message.missionReport&&!message.planId)setImmediate(()=>{if(!this.closed)void this.velaVoiceRuntime?.observeReply(entry.id).catch(()=>{});});
+    const observe=observeSpeech&&message.role==='assistant'?this.velaVoiceRuntime?.captureReplyObserver():undefined;
+    if(observe)setImmediate(()=>{if(!this.closed)void observe(entry.id).catch(()=>{});});
     return {...message,id:entry.id};
   }
   private readVoicePrimaryReply(messageId:string,contentDigest?:string){
-    ensure(!this.closed&&identifier(messageId),'voice_reply_unavailable');const conversationId=this.state.vela?.conversationId;ensure(conversationId&&this.velaHost.resolve({id:conversationId,kind:'resource'},this.velaHost.scope()),'voice_reply_unavailable');const messages=this.readVelaConversation(conversationId).messages,message=messages.find(item=>item.id===messageId),request=message?.requestId&&this.vela.state().requests.find(item=>item.id===message.requestId);
-    ensure(message?.role==='assistant'&&!message.missionReport&&!message.planId&&request&&['responded','completed'].includes(request.state)&&request.response?.messageId===messageId&&request.response.contentDigest===planningDigest(message.content)&&messages.filter(item=>item.role==='assistant'&&!item.missionReport&&!item.planId&&item.responseKind).at(-1)?.id===messageId,'voice_reply_unavailable');const digest=this.missionEditHash(message.content);ensure(contentDigest===undefined||contentDigest===digest,'voice_reply_changed');return {id:messageId,conversationId,content:message.content,contentDigest:digest};
+    ensure(!this.closed&&identifier(messageId),'voice_reply_unavailable');const scope=this.velaHost.scope(),state=this.vela.state(),conversationId=state.conversation?.resourceId;ensure(conversationId&&state.presentation?.view==='current'&&this.velaHost.resolve({id:conversationId,kind:'resource'},scope),'voice_reply_unavailable');
+    const projection=projectVelaManifestation(state,state.presentation),message=state.conversation!.messages.find(message=>message.id===messageId);ensure(projection.kind!=='none'&&projection.kind!=='action'&&projection.currentMessageId===messageId&&message?.role==='assistant','voice_reply_unavailable');
+    if(message.missionReport){
+      const link=message.missionReport,record=this.db.prepare('SELECT message_id FROM vela_mission_report_links WHERE mission_id=?').get(link.missionId);ensure(record?.message_id===message.id,'voice_reply_unavailable');const mission=this.missions.read(link.missionId,{workspaceId:link.workspaceId,projectId:link.projectId}),expected=missionCompletion(mission);ensure(missionResultAvailable(mission)&&mission.originConversationId===conversationId&&message.content===expected.content&&link.jobsDone===expected.jobsDone,'voice_reply_unavailable');
+    }else{
+      const request=state.requests.find(request=>request.id===projection.currentRequestId);ensure(request&&request.conversationId===conversationId,'voice_reply_unavailable');
+      if(message.planId){
+        const plan=state.plans.find(plan=>plan.id===message.planId);ensure(plan&&confirmedVelaPlan(state,request,plan)&&plan.scope.principalId===scope.principalId&&plan.scope.policyVersion===scope.policyVersion,'voice_reply_unavailable');
+        for(const step of plan.steps){const receipt=state.receipts.find(receipt=>receipt.planId===plan.id&&receipt.requestId===request.id&&receipt.stepId===step.id&&receipt.state==='applied'),result=receipt&&this.state.receipts[receipt.commandId]?.result as HostActionResult|undefined;ensure(receipt&&result?.status==='applied'&&result.receiptId===receipt.hostReceiptId,'voice_reply_unavailable');
+          for(const [key,kind] of [['createdResourceId','resource'],['createdWorkspaceId','workspace'],['createdProjectId','project'],['createdCollectionId','collection']] as const){ensure(receipt[key]===result[key],'voice_reply_unavailable');if(result[key])ensure(this.velaHost.resolve({id:result[key]!,kind},scope),'voice_reply_unavailable');}
+          if(result.clockTimer?.resourceId)ensure(this.velaHost.resolve({id:result.clockTimer.resourceId,kind:'resource'},scope),'voice_reply_unavailable');
+        }
+      }else ensure(request.state==='responded'&&request.response?.messageId===messageId&&request.response.contentDigest===planningDigest(message.content),'voice_reply_unavailable');
+    }
+    const digest=this.missionEditHash(message.content);ensure(contentDigest===undefined||contentDigest===digest,'voice_reply_changed');return {id:messageId,conversationId,content:message.content,contentDigest:digest};
   }
   /** Trusted targeted facts and the SAME canonical graph. No general scope,
    * metadata projection, selected resources, provider port or context builder. */
@@ -2167,7 +2185,7 @@ export class BackendCore {
       availability: () => ({ available: this.velaApiRuntime?.authorized() === true, busy: !!this.active || this.velaApiRuntime?.availability().busy === true }),
       propose: (input, signal) => this.planWithVelaApi(input, signal),
     };
-    this.vela=new VelaService({db:this.db,transaction:work=>this.atomic(work),readTransaction:work=>this.kernel.withTransaction(work),host:this.velaHost,local:this.localVelaHost(),providerContextAdvance:requestId=>this.toolCompletionContext(requestId),planner:this.velaPlanner,history:{snapshot:(id,limit,query)=>this.velaHistorySnapshot(id,limit,query),tail:id=>this.velaHistoryTail(id),message:(id,messageId,maxBytes)=>this.velaHistoryMessage(id,messageId,maxBytes),content:(ref,maxBytes)=>this.velaHistoryContent(ref,maxBytes),messageMetadata:(id,messageId)=>this.velaHistoryMessageMetadata(id,messageId),verifyProviderContribution:(contribution,message,request)=>this.verifyVelaHistoryContribution(contribution,message,request)}});
+    this.vela=new VelaService({db:this.db,transaction:work=>this.atomic(work),readTransaction:work=>this.kernel.withTransaction(work),host:this.velaHost,local:this.localVelaHost(),providerContextAdvance:requestId=>this.toolCompletionContext(requestId),onPlanRejected:plan=>this.settleToolOwnerNegative(plan.requestId,'application-plan',{id:plan.id,digest:plan.fingerprint},'plan-rejected'),planner:this.velaPlanner,history:{snapshot:(id,limit,query)=>this.velaHistorySnapshot(id,limit,query),tail:id=>this.velaHistoryTail(id),message:(id,messageId,maxBytes)=>this.velaHistoryMessage(id,messageId,maxBytes),content:(ref,maxBytes)=>this.velaHistoryContent(ref,maxBytes),messageMetadata:(id,messageId)=>this.velaHistoryMessageMetadata(id,messageId),verifyProviderContribution:(contribution,message,request)=>this.verifyVelaHistoryContribution(contribution,message,request)}});
   }
   private velaCapability(id:string) {
     if(id==='adjustWorkspace'||id==='recoverCreation')return this.missionStorageAdmitted;
@@ -3058,6 +3076,31 @@ export class BackendCore {
       return false;
     }catch{return false;}
   }
+  private toolOwnerNegativeProof(binding:VelaOwnerReviewBinding,kind:ToolOwnerNegativeProof['kind']):ToolOwnerNegativeProof|null {
+    try{
+      if(binding.owner==='application-plan'&&kind==='plan-rejected'){
+        const plan=this.vela.state().plans.find(plan=>plan.id===binding.ownerRef.id);if(!plan||plan.requestId!==binding.requestId||plan.fingerprint!==binding.ownerRef.digest||plan.state!=='rejected'||!plan.reviewedAt)return null;
+        return {kind,sourceDigest:planningDigest({id:plan.id,requestId:plan.requestId,fingerprint:plan.fingerprint,state:plan.state,reviewedAt:plan.reviewedAt,scope:plan.scope,targets:plan.targets})};
+      }
+      if(binding.owner!=='selected-file-edit'||!['patch-native-no','check-native-no'].includes(kind)||binding.ownerRef.action!==(kind==='patch-native-no'?'apply':'verify'))return null;
+      const row=this.db.prepare('SELECT json FROM mission_file_operations WHERE id=?').get(binding.ownerRef.id);if(!row)return null;const op=JSON.parse(String(row.json)),owner=op.inspection?.owner,review=kind==='patch-native-no'?op.review:op.check?.review,event=op.events?.at(-1);
+      if(owner?.kind!=='api-selected-file-intent'||owner.requestId!==binding.requestId||op.patchDigest!==binding.ownerRef.digest||event?.kind!=='native-choice-no'||!review?.id||!review.digest||review.purpose!==(kind==='patch-native-no'?'patch':'check')||!(kind==='patch-native-no'?op.phase==='cancelled':op.phase==='applied'&&op.check.state==='blocked'&&op.check.reason==='native-check-denied'))return null;
+      return {kind,sourceDigest:planningDigest({id:op.id,owner,patchDigest:op.patchDigest,phase:op.phase,review,event,...(kind==='check-native-no'?{checkState:op.check.state,checkReason:op.check.reason,afterSource:op.afterSource}:{})})};
+    }catch{return null;}
+  }
+  private settleToolOwnerNegative(requestId:string,owner:'application-plan'|'selected-file-edit',ref:{id:string;digest:string;action?:string},kind:ToolOwnerNegativeProof['kind']):void {
+    for(const op of this.toolWorkflows.ownerOperations(owner)){
+      if(op.binding.requestId!==requestId||op.binding.ownerRef.id!==ref.id||op.binding.ownerRef.digest!==ref.digest||op.view.state!=='awaiting-review'||ref.action&&(!('action'in op.binding.ownerRef)||op.binding.ownerRef.action!==ref.action))continue;
+      const proof=this.toolOwnerNegativeProof(op.binding,kind);ensure(proof,'host_operation_source_denial_required');this.toolWorkflows.recordOwnerNegative(op.binding,proof);
+    }
+  }
+  private async resumeToolOwnerNegative(requestId:string,owner:'application-plan'|'selected-file-edit',ref:{id:string;digest:string;action?:string}):Promise<void>{
+    const run=this.toolWorkflowRuns.get(requestId),request=this.vela.state().requests.find(request=>request.id===requestId);if(!run||!request||!['awaiting-review','native-ready'].includes(request.state))return;
+    const op=this.toolWorkflows.ownerOperations(owner).find(op=>op.binding.requestId===requestId&&op.binding.ownerRef.id===ref.id&&op.binding.ownerRef.digest===ref.digest&&op.view.state==='denied'&&(!ref.action||'action'in op.binding.ownerRef&&op.binding.ownerRef.action===ref.action));if(!op)return;
+    const receipt=this.toolWorkflows.receipts(op.binding.workflowId).find(receipt=>receipt.id===op.view.receiptId&&receipt.state==='denied'&&receipt.pause==='none');ensure(receipt,'host_operation_receipt_unavailable');
+    try{run.port.validate();this.toolConversationFence(requestId);}catch{run.port.checkpoint('blocked','source-denial-continuation-not-authorized');this.vela.checkpointToolRequest(requestId,run.port.workflowId,'blocked','source-denial-continuation-not-authorized');return;}
+    await this.resumeToolReceipt(requestId,receipt);
+  }
   private recordToolHostOperation(input:VelaHostOperationNativeResult):{view:import('../../application-contract/vela-tools.ts').VelaHostOperationView;receipt:VelaToolReceipt} {
     if(input?.binding?.contract==='aerynth.windows.maintenance-review@1'&&input.receipt?.contract==='aerynth.windows.reclaim-receipt@1')return this.toolWorkflows.recordHostOperation({binding:input.binding,receipt:input.receipt});
     if(input?.binding?.contract==='aerynth.windows.computer-review@1'&&input.receipt?.contract==='aerynth.windows.computer-receipt@1')return this.toolWorkflows.recordComputerOperation({binding:input.binding,receipt:input.receipt});
@@ -3235,7 +3278,7 @@ export class BackendCore {
   }
   private async resumeToolReceipt(requestId:string,receipt:VelaToolReceipt):Promise<void> {
     const run=this.toolWorkflowRuns.get(requestId),workflow=this.toolWorkflows.stateForRequest(requestId);
-    if(!run||!workflow?.continuation||this.closed||this.active)return;
+    const request=this.vela.state().requests.find(request=>request.id===requestId);if(!run||!workflow?.continuation||this.closed||this.active||!request||!['awaiting-review','native-ready'].includes(request.state))return;
     const ref=workflow.continuation as import('./vela-api-runtime.mts').VelaApiToolContinuationRef;
     await this.vela.resumeToolRequest(requestId,()=>this.planWithVelaApi(run.input,new AbortController().signal,{ref,receipt}));
   }
@@ -4023,7 +4066,9 @@ export class BackendCore {
         return (cap.selectableModels ?? cap.models).map(id => ({ id, label: id, reasoningEfforts: cap.modelEfforts?.[id]?.filter(e => ['none', 'low', 'medium', 'high', 'xhigh', 'max'].includes(e)) }));
       }
       case 'hostOperation':ensure(input&&Object.keys(input).length===1&&identifier(input.operationId),'invalid_host_operation');throw new ServiceError('host_operation_native_review_required');
-      case 'native':return this.vela.native(input);case 'review':return this.vela.review(input);case 'cancel':{const result=this.vela.cancel(input),entry=this.velaCatalogLeases.get(input);if(entry){entry.revoked=true;entry.lease.close();entry.resolveReady();}return result;}
+      case 'native':return this.vela.native(input);
+      case 'review':{const plan=this.vela.review(input);if(input.decision==='reject')await this.resumeToolOwnerNegative(plan.requestId,'application-plan',{id:plan.id,digest:plan.fingerprint});return plan;}
+      case 'cancel':{const result=this.vela.cancel(input),entry=this.velaCatalogLeases.get(input);if(entry){entry.revoked=true;entry.lease.close();entry.resolveReady();}return result;}
       case 'apply': {
         ensure(typeof input==='string'&&input.length>0&&input.length<=200,'invalid_vela_plan');
         ensure(!this.velaPresentations.has(input),'vela_apply_in_progress');
@@ -5297,8 +5342,10 @@ export class BackendCore {
       if(name==='missionFileEditReviewNative')return this.missionFileEdits.review(p.operationId) as any;
       if(name==='missionFileEditChoiceNative'){
         ensure(['patch','check'].includes(p.purpose)&&['yes','no'].includes(p.decision)&&typeof p.nativeChoiceId==='string'&&/^[a-f0-9-]{36}$/u.test(p.nativeChoiceId)&&typeof p.reviewDigest==='string'&&/^[a-f0-9]{64}$/u.test(p.reviewDigest),'mission_edit_native_choice_required');
-        this.atomic(()=>{ensure(Number(this.db.prepare('SELECT count(*) AS n FROM mission_file_native_choices').get()!.n)<128,'mission_edit_capacity');this.db.prepare('INSERT INTO mission_file_native_choices VALUES(?,?,?,?,?)').run(p.nativeChoiceId,p.reviewId,p.reviewDigest,p.purpose,p.decision);});
-        return (p.purpose==='patch'?this.missionFileEdits.acceptNativePatchChoice(p.operationId,p.reviewId,p.nativeChoiceId):this.missionFileEdits.acceptNativeCheckChoice(p.operationId,p.reviewId,p.nativeChoiceId)) as any;
+        const before=this.missionFileEdits.view(p.operationId),ref={id:before.id,digest:before.patchDigest,action:p.purpose==='patch'?'apply':'verify'};
+        const authority=this.atomic(()=>{ensure(Number(this.db.prepare('SELECT count(*) AS n FROM mission_file_native_choices').get()!.n)<128,'mission_edit_capacity');this.db.prepare('INSERT INTO mission_file_native_choices VALUES(?,?,?,?,?)').run(p.nativeChoiceId,p.reviewId,p.reviewDigest,p.purpose,p.decision);const value=p.purpose==='patch'?this.missionFileEdits.acceptNativePatchChoice(p.operationId,p.reviewId,p.nativeChoiceId):this.missionFileEdits.acceptNativeCheckChoice(p.operationId,p.reviewId,p.nativeChoiceId);if(p.decision==='no'&&before.owner.kind==='api-selected-file-intent')this.settleToolOwnerNegative(before.owner.requestId,'selected-file-edit',ref,p.purpose==='patch'?'patch-native-no':'check-native-no');return value;});
+        if(p.decision==='no'&&before.owner.kind==='api-selected-file-intent')await this.resumeToolOwnerNegative(before.owner.requestId,'selected-file-edit',ref);
+        return authority as any;
       }
       if(name==='missionFileEditCheckReviewNative'){ensure(!this.missionEditQuarantined(),'mission_edit_check_reconciliation_required');return this.missionFileEdits.reviewRequiredCheck(p.operationId,p.selectedTestPath) as any;}
       const prior=this.missionFileEdits.view(p.operationId),semantic=prior.owner.kind==='api-selected-file-intent'&&!!this.toolWorkflows.stateForRequest(prior.owner.requestId);
@@ -5678,6 +5725,7 @@ export class BackendCore {
         return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
       }
       case 'close': {
+        this.velaVoiceRuntime.closeSpeechAdmission();
         let cleanupError: unknown, cleanupFailed = false;
         const cleanup = async (work: () => unknown | Promise<unknown>) => {
           try { await work(); } catch (error) { if (!cleanupFailed) { cleanupFailed = true; cleanupError = error; } }

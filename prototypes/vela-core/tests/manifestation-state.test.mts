@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectVelaManifestation, type VelaManifestationSelection, type VelaManifestationSource } from '../src/manifestation-state.ts';
+import { confirmedVelaPlan, projectVelaManifestation, type VelaManifestationSelection, type VelaManifestationSource } from '../src/manifestation-state.ts';
 import type { PlanState, VelaMessage, VelaPlan, VelaRequest } from '../src/contracts.ts';
 
 const selection = (patch: Partial<VelaManifestationSelection> = {}): VelaManifestationSelection => ({ selectedRequestId: null, dismissedRequestIds: [], pinnedRequestIds: [], ...patch });
@@ -93,6 +93,13 @@ test('completed plans surface the observed result only when every native effect 
   s.receipts[0].requestId = r.id;
   plan.steps[0].action = { type: 'delegateTask', title: 'Delegation', objective: 'Run an investigation', providerId: 'codex-app-server', resourceIds: [], constraints: [] };
   assert.equal(projectVelaManifestation(s).kind, 'action', 'Dispatch is not verified delegated work');
+});
+test('the final same-request API answer follows receipted effects without losing details or promoting reported completion',()=>{
+  const {r,message}=reply('synthetic:tool-result'),s=source(r);r.providerId='openai-api-vela';r.toolWorkflow={id:'synthetic:workflow',phase:'partial'};message.providerId='openai-api-vela';message.providerContribution!.providerId='openai-api-vela';const plan=addPlan(s,r,'applied');s.conversation!.messages.push({id:'synthetic:native-step',role:'assistant',requestId:r.id,planId:plan.id,source:'vela-native',classification:'observed',content:'Created the project.'},message);
+  assert.equal(projectVelaManifestation(s).kind,'action','reported response alone cannot verify an unreceipted effect');s.receipts.push({id:'synthetic:receipt',requestId:r.id,planId:plan.id,stepId:plan.steps[0].id,commandId:'synthetic:command',source:'vela',providerId:null,state:'applied',hostReceiptId:'synthetic:host',startedAt:context.createdAt,taskVerified:false});
+  const projected=projectVelaManifestation(s);assert.equal(projected.kind,'insight');assert.equal(projected.currentMessageId,message.id);assert.equal(projected.currentPlanId,plan.id);assert.equal(confirmedVelaPlan(s,r,plan),false);assert.equal(message.classification,'reported');assert.equal(r.toolWorkflow.phase,'partial');assert.equal(projectVelaManifestation(s,selection({dismissedRequestIds:[r.id]})).kind,'none');
+  plan.steps[0].action={type:'delegateTask',title:'Report',objective:'Investigate',providerId:'codex-app-server',resourceIds:[],constraints:[]};assert.equal(projectVelaManifestation(s).currentMessageId,message.id);assert.equal(confirmedVelaPlan(s,r,plan),false,'a reported dispatch stays unverified');s.receipts[0].state='unknown';assert.equal(projectVelaManifestation(s).kind,'action');
+  s.receipts=[];plan.state='rejected';plan.reviewedAt=context.createdAt;assert.equal(projectVelaManifestation(s).currentMessageId,message.id,'a canonical refusal can be reconciled without inventing an effect');delete plan.reviewedAt;assert.equal(projectVelaManifestation(s).kind,'action');
 });
 test('dismiss/latest stays quiet without rewinding history; pin does not force selection, and explicit reopen preserves the canonical identity', () => {
   const a = reply('synthetic:old', true), b = reply('synthetic:new'), s = source(a.r, b.r); s.conversation!.messages.push(a.message, b.message); const before = structuredClone(s);

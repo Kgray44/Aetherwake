@@ -136,16 +136,49 @@ test('offline streamed done versus terminal items accepts key order and monotoni
   assert.equal((retainedResult.api!.outputItems[0] as any).encrypted_content,'opaque-encrypted-state');
 });
 
-test('offline terminal enrichment cannot change observed reasoning, message text, encrypted state or function arguments', async () => {
+test('offline terminal enrichment cannot change observed reasoning summaries, message text or function arguments', async () => {
   const reasoning={type:'reasoning',id:'reasoning-fixture',summary:[{type:'summary_text',text:'Observed summary.'}],encrypted_content:'opaque-original'};
   for(const [prior,next,code] of [
-    [reasoning,{...reasoning,encrypted_content:'opaque-substitute'},'api_response_item_changed_reasoning_encrypted'],
     [reasoning,{...reasoning,summary:[{type:'summary_text',text:'Substituted summary.'}]},'api_response_item_changed_reasoning_summary'],
     [message,{...message,content:[{type:'output_text',text:'Substituted answer.',annotations:[]}]},'api_response_item_changed_message_content'],
     [call,{...call,arguments:'{"timerId":"other"}'},'api_response_item_changed_function_call'],
   ] as const) {
     const f=fixture(async()=>stream([created,{type:'response.output_item.done',output_index:0,item:prior},completed([next as any])]));
     const result=await f.transport.turn(input()); assert.equal(result.outcome,'unknown'); assert.equal(result.errorCode,code);
+  }
+});
+
+test('offline reasoning continuation keeps authoritative item-done ciphertext across added and terminal snapshots', async () => {
+  const added = { type:'reasoning',id:'reasoning-fixture',summary:[],encrypted_content:'opaque-in-progress' };
+  const done = { ...added,encrypted_content:'opaque-item-done',content:[{type:'reasoning_text',text:'RAW_PRIVATE_REASONING_MARKER'}] };
+  const terminal = { ...done,encrypted_content:'opaque-response-snapshot' };
+  const firstFixture=fixture(async()=>stream([created,{type:'response.output_item.added',output_index:0,item:added},
+    {type:'response.output_item.done',output_index:0,item:done},
+    {type:'response.output_item.done',output_index:1,item:call},completed([terminal as any,call])],7));
+  const first=await firstFixture.transport.turn(input());
+  assert.equal(first.outcome,'completed');assert.equal(firstFixture.requests.length,1);assert.equal(first.api!.toolCalls.length,1);
+  assert.deepEqual(first.api!.outputItems[0],{type:'reasoning',id:done.id,summary:[],encrypted_content:done.encrypted_content});
+  assert.equal(first.usage!.totalTokens,50);
+  const items=first.api!.outputItems,turn:TurnInput={...input(),executionId:'execution-api-2',requestId:'request-api-2',api:{...input().api!,continuation:{
+    sourceExecutionId:input().executionId,responseId:first.responseId!,configurationVersion:3,contextDigest,sourceOutcome:'completed',itemsDigest:digest(JSON.stringify(items)),items,
+    toolOutputs:[{callId:call.call_id,name:call.name,argumentsDigest:digest(call.arguments),output:'{"secondsLeft":30}',receiptId:'canonical-read-receipt'}]}}};
+  const secondFixture=fixture(async()=>stream([created,completed([message])])),second=await secondFixture.transport.turn(turn);
+  assert.equal(second.outcome,'completed');assert.equal(secondFixture.requests.length,1);
+  const body=String(secondFixture.requests[0].init!.body),wire=JSON.parse(body);
+  assert.deepEqual(wire.input.find((item:ApiResponseItem)=>item.type==='reasoning'),items[0]);
+  for(const excluded of ['opaque-in-progress','opaque-response-snapshot','RAW_PRIVATE_REASONING_MARKER'])assert.equal(body.includes(excluded),false);
+  assert.equal(prepareResponsesTurn(turn).review.api!.continuation!.itemsDigest,digest(JSON.stringify(items)));
+});
+
+test('offline conflicting item-done ciphertext and changed terminal identity remain unknown without a callable result', async () => {
+  const done={type:'reasoning',id:'reasoning-fixture',summary:[],encrypted_content:'opaque-item-done'};
+  for(const [events,code] of [
+    [[created,{type:'response.output_item.done',output_index:0,item:done},{type:'response.output_item.done',output_index:0,item:{...done,encrypted_content:'opaque-other-done'}},completed([done as any])],'api_response_item_changed_reasoning_encrypted'],
+    [[created,{type:'response.output_item.done',output_index:0,item:done},completed([{...done,id:'foreign-reasoning'} as any])],'api_terminal_items_mismatch'],
+    [[created,{type:'response.output_item.done',output_index:0,item:done},completed([{...message,id:done.id}])],'api_response_item_changed_identity'],
+  ] as const){
+    const f=fixture(async()=>stream([...events])),result=await f.transport.turn(input());
+    assert.equal(result.outcome,'unknown');assert.equal(result.errorCode,code);assert.equal(result.taskVerified,false);assert.equal(f.requests.length,1);assert.deepEqual(result.api!.toolCalls,[]);
   }
 });
 

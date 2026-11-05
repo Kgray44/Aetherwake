@@ -17,6 +17,7 @@ addEventListener(
     document
       .getElementById("approve")
       .addEventListener("click", () => decide("approve"));
+    document.getElementById("reject")?.addEventListener("click", () => decide("reject"));
     document.getElementById("cancel").focus({ preventScroll: true });
     addEventListener("keydown", (event) => {
       if (event.key === "Escape") {

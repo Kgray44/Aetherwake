@@ -596,13 +596,14 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const missionReport = message?.missionReport;
     const hostOperations=current?.hostOperations?.filter(operation=>operation.requestId===selectedRequest?.id)??[];
     const completedPlan = selectedRequest && current?.plans.find(plan => plan.id === projection.currentPlanId && confirmedVelaPlan(current!, selectedRequest, plan));
+    const speakable=message&&view()==='current'&&projection.kind!=='action'&&(missionReport||completedPlan||selectedRequest?.state==='responded'&&selectedRequest.response?.messageId===message.id)?message:undefined;
     const actionPlan = current?.plans.find(plan => plan.id === projection.currentPlanId);
     const reviewPlan = actionPlan?.state === 'prepared' && !actionPlan.steps.some(step=>step.action.type==='delegateTask') ? actionPlan : null;
     const fileProposal = current?.fileProposals?.find(item => item.requestId === selectedRequest?.id && item.state === 'proposed' && item.count === item.files.length && item.count > 0);
     const completedFiles = current?.fileProposals?.find(item => item.requestId === selectedRequest?.id && item.state === 'applied' && item.result?.verified && item.result.workspaceId === item.target.workspaceId && item.result.importedCount + item.result.reusedCount === item.count);
     const fileDetails=fileProposal||completedFiles;
     const actionMessage = projection.kind === 'action' && actionPlan ? ({ prepared: 'Ready for your review.', approved: 'Ready to apply.', applying: 'Working…', applied: 'The result needs checking.', failed: 'That couldn’t be completed. Open details to review.', cancelled: 'Cancelled.', rejected: 'No changes made.', unknown: 'The outcome needs checking. Open details before trying again.' }[actionPlan.state]) : '';
-    const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind, content, actionMessage, missionReport, completedPlan: completedPlan?.id, fileProposal, completedFiles,hostOperations,replySpeech });
+    const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind,view:view(), content, actionMessage, missionReport, completedPlan: completedPlan?.id, fileProposal, completedFiles,hostOperations,replySpeech });
     manifestationBody.dataset.density = facts && ['time','date','calculator'].includes(facts.kind) && content.length <= 80 ? 'signal' : 'reading';
     shell.dataset.manifestationKind = projection.kind; shell.dataset.presentationView = view(); manifestation.dataset.requestId = projection.currentRequestId ?? ''; manifestation.dataset.currentMessageId = projection.currentMessageId ?? '';
     manifestation.hidden = projection.kind === 'none' || view() === 'history' && !projection.requiredPlanIds.length;
@@ -627,9 +628,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       else if (reviewPlan) manifestationBody.append(planProposalView.element,responseFooter());
       else if (actionMessage) manifestationBody.append(el('p', undefined, actionMessage), responseFooter());
       else if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content));
-      if (missionReport) manifestationBody.append(missionReplyFooter(missionReport));
+      if (missionReport) manifestationBody.append(missionReplyFooter(missionReport,speakable));
       else if (message && projection.kind !== 'action') {
-        const speakable=message.role==='assistant'&&!message.missionReport&&!message.planId&&message.responseKind&&selectedRequest&&['responded','completed'].includes(selectedRequest.state)?message:undefined;
         const footer=responseFooter(completedPlan || undefined,hostOperations,completedFiles&&!completedPlan?1:0,speakable);
         manifestationBody.append(footer);
       }
@@ -907,7 +907,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     developmentTimeline.disabled = activityTimeline.disabled || !githubRepository(repositoryInput.value);
   }
   function renderStatus(state: Pick<VelaState, 'requests' | 'plans' | 'receipts'>) { const recorded = velaPanelStatus(state); status.dataset.requestState = recorded.requestState; if (recorded.requestId) status.dataset.requestId = recorded.requestId; else delete status.dataset.requestId; if (recorded.planState) status.dataset.planState = recorded.planState; else delete status.dataset.planState; delete status.dataset.actionState; delete status.dataset.refreshState; status.textContent = recorded.message; status.hidden = recorded.requestState === 'idle'; }
-  function missionReplyFooter(link: NonNullable<VelaMessage['missionReport']>) {
+  function missionReplyFooter(link: NonNullable<VelaMessage['missionReport']>,message?:VelaMessage) {
     const footer = el('div', 'vela-mission-reply-footer');
     if (link.jobsDone !== undefined) footer.append(el('span', 'vela-mission-jobs-done', `${link.jobsDone} ${link.jobsDone === 1 ? 'job' : 'jobs'} done`));
     if (options.missions?.openReport) {
@@ -920,13 +920,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       openPlan.dataset.missionReportLink = link.missionId;
       footer.append(openPlan);
     }
-    return footer;
+    appendSpeechAction(footer,message);return footer;
   }
-  function responseFooter(plan?: VelaPlan,hostOperations:NonNullable<VelaState['hostOperations']>=[],additionalJobs=0,message?:VelaMessage) {
-    const footer = el('div', 'vela-mission-reply-footer');
-    const hostJobs=new Map(hostOperations.filter(operation=>operation.state==='observed'&&operation.receiptId&&Number.isSafeInteger(operation.jobsDone)&&operation.jobsDone!>0).map(operation=>[operation.receiptId,operation.jobsDone!]));
-    const jobs=(plan?.steps.length??0)+additionalJobs+[...hostJobs.values()].reduce((total,count)=>total+count,0);
-    if (jobs) footer.append(el('span', 'vela-mission-jobs-done', `${jobs} ${jobs === 1 ? 'job' : 'jobs'} done`));
+  function appendSpeechAction(footer:HTMLElement,message?:VelaMessage){
     if(message&&options.voice?.speak){
       const speech=replySpeech,stopping=!!speech?.attemptId&&speech.messageId===message.id&&['starting','speaking'].includes(speech.state);
       const speak=icon(stopping?'Stop speaking':'Speak response',stopping?'■':'♩','speak',()=>void run(async()=>{
@@ -936,6 +932,13 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       }));
       speak.dataset.speechMessageId=message.id;footer.append(speak);
     }
+  }
+  function responseFooter(plan?: VelaPlan,hostOperations:NonNullable<VelaState['hostOperations']>=[],additionalJobs=0,message?:VelaMessage) {
+    const footer = el('div', 'vela-mission-reply-footer');
+    const hostJobs=new Map(hostOperations.filter(operation=>operation.state==='observed'&&operation.receiptId&&Number.isSafeInteger(operation.jobsDone)&&operation.jobsDone!>0).map(operation=>[operation.receiptId,operation.jobsDone!]));
+    const jobs=(plan?.steps.length??0)+additionalJobs+[...hostJobs.values()].reduce((total,count)=>total+count,0);
+    if (jobs) footer.append(el('span', 'vela-mission-jobs-done', `${jobs} ${jobs === 1 ? 'job' : 'jobs'} done`));
+    appendSpeechAction(footer,message);
     const pending=hostOperations.find(operation=>operation.state==='awaiting-review'&&operation.reviewAvailable);
     if(pending&&client.hostOperation){
       const review=button('Review options',()=>void run(async()=>{

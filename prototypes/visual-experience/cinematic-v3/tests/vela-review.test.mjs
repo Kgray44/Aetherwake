@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
+import vm from 'node:vm';
+import {readFileSync} from 'node:fs';
 const { validateReview, reviewPage, showVelaReview, isOwnedVelaReviewWindow } =
   createRequire(import.meta.url)("../native/vela-review.cjs");
 const digest = (text) =>
@@ -191,7 +193,7 @@ function runtime({ autoReady = true, autoPaint = true } = {}) {
       this.destroyed = false;
       this.shown = false;
       this.webContents = new EventEmitter();
-      this.webContents.mainFrame = { url: "" };
+      this.webContents.mainFrame = { url: "",executeJavaScript:async script=>{assert.equal(script,'navigator.userActivation.isActive && document.hasFocus()');return true;} };
       this.webContents.isDestroyed = () => this.destroyed;
       this.webContents.getURL = () => this.url;
       this.webContents.setWindowOpenHandler = (handler) => {
@@ -202,6 +204,7 @@ function runtime({ autoReady = true, autoPaint = true } = {}) {
     isDestroyed() {
       return this.destroyed;
     }
+    isFocused(){return this.shown&&!this.destroyed;}
     getParentWindow() {
       return this.options.parent;
     }
@@ -300,6 +303,49 @@ const open = (f) =>
     expiresAt: new Date(Date.now() + 30000).toISOString(),
     runtime: f.runtime,
   });
+const fileDisclosure=()=>({files:[{path:'C:\\Synthetic\\sample.mjs',before:'old',after:'new',beforeDigest:'a'.repeat(64),afterDigest:'b'.repeat(64)}]});
+const openThree=f=>showVelaReview({parent:f.parent,review:fileDisclosure(),expiresAt:new Date(Date.now()+30000).toISOString(),runtime:f.runtime,experience:'file-edit',decisionMode:'three-way'});
+
+test('optional three-way review has a genuine No while legacy HTML and boolean semantics remain unchanged',async()=>{
+  const review=fileDisclosure();assert(!reviewPage(review,'','file-edit').includes('id="reject"'));
+  assert(reviewPage(review,'','file-edit',undefined,'three-way').includes('id="reject" type="button">No</button>'));
+  for(const mode of ['boolean',true,{},null])assert.throws(()=>reviewPage(review,'','file-edit',undefined,mode),/invalid_native_review_decision_mode/);
+  for(const [decision,expected]of [['approve','yes'],['reject','no'],['cancel','cancel']]){
+    const f=runtime(),pending=openThree(f);await Promise.resolve();f.decide(f.children[0],decision);assert.equal(await pending,expected);assert.equal(f.ipcMain.eventNames().length,0);
+  }
+  const legacy=runtime(),pending=open(legacy);await Promise.resolve();legacy.decide(legacy.children[0],'reject');assert.equal(legacy.children[0].destroyed,false);legacy.decide(legacy.children[0],'approve');assert.equal(await pending,true);
+});
+
+test('explicit rejection needs exact child token/frame/readiness and fresh focused Blink activation',async()=>{
+  const f=runtime({autoReady:false}),pending=openThree(f),child=f.children[0];await Promise.resolve();f.decide(child,'reject');assert.equal(child.destroyed,false);
+  f.preloadReady(child);
+  f.decide(child,'reject',{sender:f.parent.webContents});f.decide(child,'reject',{senderFrame:{url:child.url}});
+  f.ipcMain.emit('vela-review-decision',{sender:child.webContents,senderFrame:child.webContents.mainFrame},{token:'wrong',decision:'reject'});
+  f.ipcMain.emit('vela-review-decision',{sender:child.webContents,senderFrame:child.webContents.mainFrame},{token:child.options.webPreferences.additionalArguments[0].slice(20),decision:'reject',observedGesture:true});
+  assert.equal(child.destroyed,false);f.decide(child,'reject');f.decide(child,'approve');assert.equal(await pending,'no');
+  const inactive=runtime(),notApproved=openThree(inactive);await Promise.resolve();inactive.children[0].webContents.mainFrame.executeJavaScript=async()=>false;inactive.decide(inactive.children[0],'reject');assert.equal(await notApproved,'cancel');
+  for(const fault of ['frame','focus','close']){
+    const stale=runtime(),waiting=openThree(stale);await Promise.resolve();const window=stale.children[0];let release;
+    window.webContents.mainFrame.executeJavaScript=()=>new Promise(resolve=>{release=resolve;});stale.decide(window,'reject');
+    if(fault==='frame')window.webContents.mainFrame={url:window.url};if(fault==='focus')window.isFocused=()=>false;if(fault==='close')window.destroy();release(true);
+    assert.equal(await waiting,'cancel',fault);assert.equal(stale.ipcMain.eventNames().length,0);
+  }
+});
+
+test('three-way expiry during activation cannot become an explicit No',async t=>{
+  t.mock.timers.enable({apis:['Date','setTimeout']});const f=runtime(),pending=openThree(f);await Promise.resolve();const child=f.children[0];let release;
+  child.webContents.mainFrame.executeJavaScript=()=>new Promise(resolve=>{release=resolve;});f.decide(child,'reject');t.mock.timers.tick(30001);release(true);
+  assert.equal(await pending,'cancel');assert.equal(f.ipcMain.eventNames().length,0);
+});
+
+test('isolated preload exposes only fixed button decisions; Escape is Cancel and legacy has no No button',()=>{
+  const source=readFileSync(new URL('../native/vela-review-preload.cjs',import.meta.url),'utf8');
+  const create=withNo=>{const listeners={},sent=[],buttons={};for(const id of ['cancel','approve',...(withNo?['reject']:[])])buttons[id]={addEventListener(_name,handler){this.click=handler;},focus(){}};
+    vm.runInNewContext(source,{process:{argv:['--vela-review-token=owned-token']},require:()=>({ipcRenderer:{send:(...packet)=>sent.push(packet)}}),addEventListener:(name,fn)=>{listeners[name]=fn;},document:{getElementById:id=>buttons[id]??null}});listeners.DOMContentLoaded();return {listeners,sent,buttons};};
+  const no=create(true);no.buttons.reject.click();no.buttons.approve.click();assert.equal(no.sent.filter(packet=>packet[0]==='vela-review-decision').length,1);assert.equal(no.sent.at(-1)[1].decision,'reject');
+  const escape=create(true);let prevented=false;escape.listeners.keydown({key:'Escape',preventDefault(){prevented=true;}});assert.equal(prevented,true);assert.equal(escape.sent.at(-1)[1].decision,'cancel');
+  const legacy=create(false);legacy.buttons.cancel.click();assert.equal(legacy.sent.at(-1)[1].decision,'cancel');
+});
 
 test("only the exact child main frame can approve; a parent renderer, foreign frame or navigation cannot grant", async () => {
   const f = runtime(),

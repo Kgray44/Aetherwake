@@ -29,7 +29,7 @@ function fixture({ auto = 'approve', ready = true } = {}) {
     source: { resourceId: 'file-1', version: 1 }, title: 'source.mjs', phase: 'awaiting-native-review', patchDigest: 'c'.repeat(64),
     verification: { state: 'not-run', criterion: 'reviewed-selected-node-test' },
     barrier: { kind: 'native-patch-review', operationId, patchDigest: 'c'.repeat(64) }, updatedAt: new Date().toISOString() };
-  const token = randomUUID(); let selected = { canceled: false, filePaths: ['C:\\Synthetic\\M3\\source.test.mjs'] }, response = 1;
+  const token = randomUUID(); let selected = { canceled: false, filePaths: ['C:\\Synthetic\\M3\\source.test.mjs'] }, response = 2,gesture=true,onGesture=async()=>{};
   const requestId=randomUUID(),prompt=JSON.stringify({intent:'Fix the selected file',source:raw.before}),signature='d'.repeat(64);
   const egress={requestId,reviewId:randomUUID(),expiresAt:new Date(raw.expiresAt).toISOString(),preview:{id:requestId,signature,providerId:'openai-api-vela'},
     review:{previewId:requestId,signature,providerId:'openai-api-vela',prompt,promptDigest:sha(JSON.stringify(prompt)),reviewDigest:'e'.repeat(64),context:{included:[{id:'file-1',kind:'resource',title:'source.mjs',content:raw.before}]},historyOmissions:[]}};
@@ -43,10 +43,11 @@ function fixture({ auto = 'approve', ready = true } = {}) {
   class BrowserWindow extends EventEmitter {
     constructor(options) {
       super(); this.options = options; this.destroyed = false; this.shown = false; this.webContents = new EventEmitter();
-      this.webContents.mainFrame = { url: '' }; this.webContents.isDestroyed = () => this.destroyed;
+      this.webContents.mainFrame = { url: '',executeJavaScript:async script=>{assert.equal(script,'navigator.userActivation.isActive && document.hasFocus()');await onGesture();return gesture;} }; this.webContents.isDestroyed = () => this.destroyed;
       this.webContents.getURL = () => this.url; this.webContents.setWindowOpenHandler = handler => { this.openHandler = handler; }; children.push(this);
     }
     isDestroyed() { return this.destroyed; }
+    isFocused() { return this.shown&&!this.destroyed; }
     getParentWindow() { return this.options.parent; }
     destroy() { this.destroyed = true; this.emit('closed'); }
     show() { this.shown = true; if (auto) queueMicrotask(() => decide(this, auto)); }
@@ -85,6 +86,7 @@ function fixture({ auto = 'approve', ready = true } = {}) {
     set alive(value) { alive = value; }, set documentUrl(value) { documentUrl = value; }, set selected(value) { selected = value; },
     set response(value) { response = value; }, set onCall(value) { onCall = value; }, set onPicker(value) { onPicker = value; },
     set onMessageBox(value) { onMessageBox = value; }, set returnExtra(value) { returnExtra = value; }, set runnerState(value) { runnerState = value; },
+    set gesture(value){gesture=value;},set onGesture(value){onGesture=value;},
   };
 }
 
@@ -116,7 +118,7 @@ test('renderer Yes, grants, native paths, review IDs, alternate commands and mal
   const f = fixture();
   for (const input of [{ type: 'apply', operationId, approved: true }, { type: 'apply', operationId, authority: f.token },
     { type: 'verify', operationId, selectedTestPath: 'C:\\FORGED.test.mjs' }, { type: 'apply', operationId, reviewId: f.raw.reviewId },
-    { type: 'applyNative', operationId }, { type: 'apply', operationId: 'not-a-canonical-operation' }, { type: 'apply', operationId, nativeChoiceId: randomUUID() }])
+    { type: 'applyNative', operationId }, { type: 'apply', operationId: 'not-a-canonical-operation' }, { type: 'apply', operationId, nativeChoiceId: randomUUID() },{type:'apply',operationId,decision:'no'}])
     await assert.rejects(f.broker.command(f.event, input), /invalid_mission_file_edit_command/);
   assert.equal(f.calls.length, 0);
 });
@@ -137,10 +139,30 @@ test('actual isolated review code requires ready owned primary-frame/token event
   assert.equal(child.destroyed, true); assert.equal(f.runtime.ipcMain.eventNames().length, 0);
 });
 
-test('native Cancel remains unapproved because the existing review API cannot attest an explicit No', async () => {
+test('native Cancel preserves waiting without recording a native No', async () => {
   const f = fixture({ auto: 'cancel' }), result = await f.command();
   assert.equal(result.phase, 'awaiting-native-review'); assert.deepEqual(f.calls.map(item => item.name), ['missionFileEditReviewNative', 'missionFileEditRead']);
   assert.equal(f.calls.filter(item => item.name === 'missionFileEditChoiceNative').length, 0); assert.equal(f.children[0].destroyed, true);
+});
+
+test('genuine isolated native No records one patch denial then reads canonical state, with no apply authority/effect',async()=>{
+  const f=fixture({auto:'reject'}),result=await f.command();assert.equal(result.phase,'cancelled');assert.equal(result.barrier,null);
+  assert.deepEqual(f.calls.map(item=>item.name),['missionFileEditReviewNative','missionFileEditChoiceNative','missionFileEditRead']);
+  assert.equal(f.calls[1].input.decision,'no');assert.equal(f.calls[1].input.purpose,'patch');assert.equal(f.calls[1].input.reviewDigest,f.raw.reviewDigest);
+  assert.equal(f.calls.filter(item=>item.name==='missionFileEditChoiceNative').length,1);assert(!JSON.stringify(result).includes(f.token));
+});
+
+test('rejected or stale activation and expired review never record native No or apply',async t=>{
+  const inactive=fixture({auto:'reject'});inactive.gesture=false;assert.equal((await inactive.command()).phase,'awaiting-native-review');assert.deepEqual(inactive.calls.map(item=>item.name),['missionFileEditReviewNative','missionFileEditRead']);
+  const changed=fixture({auto:'reject'});changed.onGesture=async()=>{changed.contents.mainFrame={url:localUrl};};await assert.rejects(changed.command(),/owner_unavailable/);assert.equal(changed.calls.length,1);
+  t.mock.timers.enable({apis:['Date','setTimeout']});const expired=fixture({auto:null}),waiting=expired.command();await tick();t.mock.timers.tick(120001);expired.decide(expired.children[0],'reject');
+  assert.equal((await waiting).phase,'awaiting-native-review');assert.deepEqual(expired.calls.map(item=>item.name),['missionFileEditReviewNative','missionFileEditRead']);
+});
+
+test('stale canonical No acknowledgment fails closed without a retry, apply or invented decline',async()=>{
+  const f=fixture({auto:'reject'});f.onCall=async name=>{if(name==='missionFileEditChoiceNative')throw Error('mission_edit_review_changed');};
+  await assert.rejects(f.command(),/mission_edit_review_changed/);assert.equal(f.view.phase,'awaiting-native-review');
+  assert.deepEqual(f.calls.map(item=>item.name),['missionFileEditReviewNative','missionFileEditChoiceNative']);assert.equal(f.calls[1].input.decision,'no');
 });
 
 test('unapproved patch review close cannot fabricate a native No receipt, token, apply or completed decline', async () => {
@@ -222,10 +244,12 @@ test('verification selects one real native path, reviews exact fixed argv, issue
   assert.equal(result.verification.state, 'passed'); assert.ok(!JSON.stringify(result).includes(f.token)); assert.ok(!JSON.stringify(result).includes(f.checkRaw.cwd));
 });
 
-test('native picker cancellation and native check No do not execute a project check', async () => {
+test('native picker cancellation, check Cancel and explicit check No remain distinct without executing', async () => {
   const cancelled = fixture(); cancelled.selected = { canceled: true, filePaths: [] }; await cancelled.command('verify');
   assert.deepEqual(cancelled.calls.map(item => item.name), ['missionFileEditRead']); assert.equal(cancelled.dialogs.length, 1);
-  const denied = fixture(); denied.response = 0; const result = await denied.command('verify');
+  const cancelledReview=fixture();cancelledReview.response=0;const pending=await cancelledReview.command('verify');assert.equal(pending.verification.state,'awaiting-native-review');
+  assert.deepEqual(cancelledReview.calls.map(item=>item.name),['missionFileEditCheckReviewNative','missionFileEditRead']);
+  const denied = fixture(); denied.response = 1; const result = await denied.command('verify');
   assert.equal(result.verification.state, 'blocked'); assert.deepEqual(denied.calls.map(item => item.name), ['missionFileEditCheckReviewNative', 'missionFileEditChoiceNative', 'missionFileEditRead']);
   assert.equal(denied.calls[1].input.decision, 'no');
 });

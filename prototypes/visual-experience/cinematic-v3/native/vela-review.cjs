@@ -142,7 +142,8 @@ function presentation(experience) {
         htmlBytes: 524288,
       };
 }
-function reviewPage(review, intent = "", experience = "vela", workflow) {
+function reviewPage(review, intent = "", experience = "vela", workflow, decisionMode) {
+  if(decisionMode!==undefined&&(decisionMode!=='three-way'||experience!=='file-edit'))throw Error('invalid_native_review_decision_mode');
   const view = presentation(experience);
   if (experience === "file-edit") {
     const styleHash = createHash("sha256").update(css).digest("base64");
@@ -163,7 +164,7 @@ function reviewPage(review, intent = "", experience = "vela", workflow) {
     const count = review.files.length;
     const changes = creates ? (count === 1 ? "one new file" : count + " file changes")
       : (count === 1 ? "one replacement" : count + " replacements");
-    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">Apply ${changes}?</h1><p>Aerynth keeps backups of replaced files and checks each write. If one fails, the batch stops and shows each file outcome.</p></header><div class="content" tabindex="0" aria-label="Review before and after contents">${files}</div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">Apply reviewed files</button></footer></main></body></html>`;
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">Apply ${changes}?</h1><p>Aerynth keeps backups of replaced files and checks each write. If one fails, the batch stops and shows each file outcome.</p></header><div class="content" tabindex="0" aria-label="Review before and after contents">${files}</div><footer><button id="cancel" type="button" autofocus>Cancel</button>${decisionMode==='three-way'?'<button id="reject" type="button">No</button>':''}<button id="approve" type="button">Apply reviewed files</button></footer></main></body></html>`;
     if (Buffer.byteLength(html) > view.htmlBytes) throw Error("native_vela_review_capacity_exceeded");
     return html;
   }
@@ -245,14 +246,16 @@ function ownerCanReview(parent) {
 }
 /** A finite, parent-owned native approval surface. It has no application bridge,
  * scripts, network access, credentials, grant, canonical writes or provider port. */
-async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela", workflow }) {
+async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela", workflow, decisionMode }) {
+  if(decisionMode!==undefined&&(decisionMode!=='three-way'||experience!=='file-edit'))throw Error('invalid_native_review_decision_mode');
+  const cancelled=decisionMode==='three-way'?'cancel':false;
   const view = presentation(experience);
-  if (!ownerCanReview(parent)) return false;
+  if (!ownerCanReview(parent)) return cancelled;
   const remaining = Date.parse(expiresAt) - Date.now();
-  if (!Number.isFinite(remaining) || remaining <= 0) return false;
+  if (!Number.isFinite(remaining) || remaining <= 0) return cancelled;
   const url =
     "data:text/html;charset=utf-8," +
-    encodeURIComponent(reviewPage(review, intent, experience, workflow));
+    encodeURIComponent(reviewPage(review, intent, experience, workflow, decisionMode));
   const { BrowserWindow, ipcMain, session } = runtime ?? require("electron");
   const token = randomUUID(),
     channel = "vela-review-decision",
@@ -296,7 +299,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
   ownedReviews.set(child, ownership);
   return new Promise((resolve) => {
     let done = false,
-      painted = false;
+      painted = false, decisionChecking=false;
     const listeners = [];
     const listen = (emitter, name, handler) => {
       emitter.on(name, handler);
@@ -314,7 +317,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
       } catch {
         approved = false;
       }
-      resolve(approved);
+      resolve(decisionMode==='three-way'?(approved===true?'yes':approved==='no'?'no':'cancel'):approved===true);
     };
     const timer = setTimeout(() => finish(false), Math.min(remaining, 180000));
     timer.unref?.();
@@ -333,6 +336,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
       event.senderFrame === child.webContents.mainFrame &&
       event.senderFrame.url === url &&
       value?.token === token;
+    const focusedChild=()=>{try{return ownerAlive(child)&&child.isFocused()===true;}catch{return false;}};
     const showWhenReady = () => {
       if (done || ownership.shown || !painted || !ownership.ready) return;
       if (!ownerCanReview(parent))
@@ -349,18 +353,26 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
       ownership.ready = true;
       showWhenReady();
     });
-    listen(ipcMain, channel, (event, value) => {
+    listen(ipcMain, channel, async (event, value) => {
       if (
         !validChildEvent(event, value) ||
         !ownership.ready ||
         !ownership.shown ||
-        !["approve", "cancel"].includes(value?.decision)
+        !["approve", "cancel",...(decisionMode==='three-way'?["reject"]:[])].includes(value?.decision) ||
+        Object.keys(value).sort().join(',')!=='decision,token'
       )
         return;
+      if(decisionMode==='three-way'&&value.decision!=='cancel'){
+        if(decisionChecking)return;decisionChecking=true;
+        let active=false;
+        try{active=focusedChild()&&await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()',false)===true;}catch{}
+        if(!validChildEvent(event,value)||!ownership.ready||!ownership.shown||!ownerAlive(parent)||
+          !active||!focusedChild()||Date.now()>=Date.parse(expiresAt))return finish(false);
+      }
       finish(
-        value.decision === "approve" &&
-          ownerAlive(parent) &&
-          Date.now() < Date.parse(expiresAt),
+        ownerAlive(parent) && Date.now() < Date.parse(expiresAt)
+          ? value.decision==='reject'?'no':value.decision==='approve'
+          : false,
       );
     });
     listen(child, "ready-to-show", () => {

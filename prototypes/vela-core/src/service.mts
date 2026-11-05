@@ -48,6 +48,8 @@ export interface VelaServiceOptions {
   /** Host-certified same-request completion context after exact owner effects.
    * The original accepted snapshot remains immutable historical evidence. */
   providerContextAdvance?(requestId:string):{context:ContextManifest;historyFence?:HistoryFence;navigation:{currentProjectId:string|null;currentWorkspaceId:string|null};validate():void}|undefined;
+  /** Source-owned negative observation inside the same plan-rejection transaction; never starts a provider. */
+  onPlanRejected?(plan:VelaPlan):void;
   /** Explicit bounded canonical projections. Absent means no implicit conversational history. */
   history?: {
     snapshot(conversationId: string, limit: number, query?: string): HistorySnapshot | null;
@@ -876,15 +878,15 @@ export class VelaService {
     if(result.state==='applied')this.atomic(()=>{const request=this.getRequest(requestId);request.state='planning';request.updatedAt=this.now();});return result;
   }
   checkpointToolRequest(requestId:string,workflowId:string,phase:import('../../application-contract/vela-tools.ts').VelaWorkflowPhase,reason?:string):void {
-    this.atomic(()=>{const r=this.getRequest(requestId);check(r.providerId==='openai-api-vela','vela_tool_request_unavailable');r.toolWorkflow={id:workflowId,phase,...(reason?{reason}:{})};
+    this.atomic(()=>{const r=this.getRequest(requestId);check(r.providerId==='openai-api-vela','vela_tool_request_unavailable');if(['cancelled','completed','responded'].includes(r.state))return;r.toolWorkflow={id:workflowId,phase,...(reason?{reason}:{})};
       if(['awaiting-review','waiting-job','budget-exhausted','blocked','clarification','unknown'].includes(phase)){r.state=phase==='unknown'?'unknown':phase==='awaiting-review'?'awaiting-review':'native-ready';r.updatedAt=this.now();}});
   }
   async resumeToolRequest(requestId:string,work:()=>Promise<unknown>):Promise<VelaRequest> {
-    const request=this.getRequest(requestId);check(request.providerId==='openai-api-vela'&&request.toolWorkflow&&['awaiting-review','waiting-job','budget-exhausted','partial'].includes(request.toolWorkflow.phase),'vela_tool_resume_unavailable');
+    const request=this.getRequest(requestId);check(request.providerId==='openai-api-vela'&&['awaiting-review','native-ready'].includes(request.state)&&request.toolWorkflow&&['awaiting-review','waiting-job','budget-exhausted','partial'].includes(request.toolWorkflow.phase),'vela_tool_resume_unavailable');
     this.atomic(()=>{request.state='planning';request.updatedAt=this.now();});
     try{const output=await work();if(this.getRequest(requestId).state!=='planning')return structuredClone(this.getRequest(requestId));
       return this.atomic(()=>{const parsed=validateProviderResult(output,'openai-api-vela');check(parsed.kind!=='plan','vela_tool_resume_plan_unavailable');const message=this.append(parsed.content,requestId,'provider',undefined,parsed);request.response={kind:parsed.kind,messageId:message.id,contentDigest:historyDigest(parsed.content)};request.state='responded';request.updatedAt=this.now();return structuredClone(request);});
-    }catch(error){this.atomic(()=>{request.state=error instanceof VelaError&&error.outcome==='unknown'?'unknown':'failed';request.errorCode=errorCode(error,'vela_tool_resume_failed');request.updatedAt=this.now();});return structuredClone(request);}
+    }catch(error){if(this.getRequest(requestId).state!=='planning')return structuredClone(this.getRequest(requestId));this.atomic(()=>{request.state=error instanceof VelaError&&error.outcome==='unknown'?'unknown':'failed';request.errorCode=errorCode(error,'vela_tool_resume_failed');request.updatedAt=this.now();});return structuredClone(request);}
   }
   native(input: { intent: string; action: VelaNativeAction }): VelaPlan {
     check(text(input.intent, 16000), 'invalid_request'); const action = validateAction(input.action);
@@ -916,7 +918,7 @@ export class VelaService {
     return this.atomic(() => {
       const plan = this.getPlan(input.planId); check(plan.state === 'prepared', 'plan_not_reviewable');
       check(plan.fingerprint === input.fingerprint, 'review_fingerprint_mismatch');
-      if (input.decision === 'reject') { plan.state = 'rejected'; plan.reviewedAt = this.now(); return structuredClone(plan); }
+      if (input.decision === 'reject') { plan.state = 'rejected'; plan.reviewedAt = this.now();this.opts.onPlanRejected?.(structuredClone(plan));return structuredClone(plan); }
       this.validatePlan(plan);
       plan.authorizationRef = this.authorize(this.authInput(plan, 'review')); plan.reviewedAt = this.now(); plan.state = 'approved';
       return structuredClone(plan);
