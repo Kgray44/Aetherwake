@@ -612,7 +612,66 @@ These fixture scenarios are testing requirements, not assertions that a selected
 | AW-CON-069–073 | AW-OBS-111–120, 121 |
 | AW-CON-080–083, 086–089 | AW-OBS-128–137 and OBS-A01–A42 |
 
-## 20. Owner-directed 2026-11-04 addendum: project Intelligence Stream V2 as a living execution landscape
+## 19. Open decisions requiring research
+
+These are **open decisions**, not implied concessions or implementation approvals:
+
+1. Durable event store and index architecture: local append log, relational DB, embedded search, or combinations.
+2. Source-specific event capability matrices for current Codex App Server versions and future adapters.
+3. Transport strategy for local desktop, background helper, remote workers, and multiple windows.
+4. Exact trace/span ID generation and reconciliation with provider IDs.
+5. A rigorous cross-source causal-link model and how inferred links will be represented.
+6. Snapshot frequency, materialization strategy, and recovery/checkpoint format.
+7. Safe output retention defaults and large-payload capture thresholds.
+8. Data sensitivity detection, credential redaction, authorization inheritance, and retention UX.
+9. Source timestamp trust calibration and source sequence/cursor recovery guarantees.
+10. Deduplication rules when upstream providers omit stable event IDs.
+11. Local-first indexing and search performance for very long streams and encrypted data.
+12. Correlation and export formats; whether OpenTelemetry interoperability is desirable.
+13. Spatial constellation scale limits, graph clustering, visual metaphors, and reduced-motion equivalents.
+14. Human readability testing for four evidence classes across compact stream, chart, and constellation surfaces.
+15. The appropriate division between deterministic stream summarization and Vela's optional model-generated interpretation.
+16. What event classes require lossless capture versus permitted sampling under pressure.
+17. Cross-device event synchronization, if enabled later, and conflict/version ordering behavior.
+18. Exact live-stream latency, event-store throughput, retention/storage, and frame-time budgets on representative hardware.
+19. How approved background capture persists while UI windows close or systems sleep.
+20. Which external tool actions can be independently verified rather than merely provider-reported.
+
+Research, prototypes, and architecture decisions MUST resolve these within the Constitution's constraints. An unavailable vendor feature MUST be represented transparently, not silently removed from the vision.
+
+## 20. Change control, readiness gates, and acceptance
+
+This document is a **published proposed governing charter**, not a claim of implementation, completion, or owner ratification.
+
+- The [Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) remains the higher authority.
+- Requirement identifiers SHOULD stay stable where their meaning is unchanged. Material changes require impact assessment, updated tests, and repository history.
+- Changes to privacy, reasoning-truthfulness, event coverage, delegation, irreversible action audit, or retention MUST receive explicit constitutional/trust impact review.
+- New integrations MUST prove capability-mapped event behavior rather than assume Codex/other provider parity.
+- Replacing one event technology with another MUST preserve identity, source attribution, recovery, permission boundaries, and recorded history or use a reviewed migration.
+- The [governance registry](README.md) MUST reflect publication versus formal acceptance accurately.
+- The repository owner MAY accept, amend, or reject this proposed charter under the Constitution's procedure.
+
+### Readiness gates
+
+**Gate A — Contract credibility:** Typed event schema, four evidence classes, stable IDs, lifecycle transitions, privacy model, and representative adapter tests exist.
+
+**Gate B — Real observation:** One real Codex-backed chat and one real tool/agent operation appear live, with source-attributed states and no fabricated reasoning.
+
+**Gate C — Multiscope coordination:** One set of canonical events appears consistently in chat, agent, task, Vela, and project views with correct permissions and delegation links.
+
+**Gate D — Resilience:** Disconnect, restart, duplicate, missing-completion, redaction, and large-output tests pass; any gaps are disclosed.
+
+**Gate E — Cinematic integrity:** Live and spatial presentation are meaningfully animated through Motion Coordinator integration, meet measured performance criteria, and remain fully usable in reduced-motion mode.
+
+**Gate F — Historical accountability:** A captured execution can be inspected and reconstructed from actual evidence, with reliable source references, coverage indicators, and safe export.
+
+**Gate G — User usefulness:** A person can quickly answer what an agent is doing, why it paused if known, which changes it made, what remains unverified, what a team accomplished, and what attention is required, without being overwhelmed by raw logs.
+
+**Final governing standard:** Aerynth must make intelligent work **visible, understandable, useful, and beautiful**, without sacrificing epistemic honesty, performance, user agency, security, or historical integrity. The Intelligence Stream is a window into **observable work**, never a fabricated window into private thought.
+
+---
+
+## 21. Owner-directed 2026-11-04 addendum: project Intelligence Stream V2 as a living execution landscape
 
 > **Status:** Proposed normative extension to the existing Charter 09, for explicit owner acceptance under the charter lifecycle. It supersedes any *design assumption* that the primary Intelligence Stream is a narrow block, a chronological list, or a small static node diagram. It does not remove the underlying global, chat, task, agent, workspace or forensic scopes governed elsewhere in this charter.
 >
@@ -693,60 +752,3 @@ These fixture scenarios are testing requirements, not assertions that a selected
 Further implementation detail is in [Stream V2 specification](../docs/specifications/INTELLIGENCE-STREAM-V2-EXPERIENCE-AND-ACCEPTANCE.md), [shared runtime/navigation](../docs/architecture/UNIFIED-SPATIAL-INTELLIGENCE-RUNTIME-AND-NAVIGATION.md) and [acceptance plan](../docs/engineering/SPATIAL-INTELLIGENCE-PROTOTYPE-AND-ACCEPTANCE-PLAN.md). The governing owner status of this proposed charter does not become accepted merely because those files are checked in.
 
 ---
-
-## 19. Open decisions requiring research
-
-These are **open decisions**, not implied concessions or implementation approvals:
-
-1. Durable event store and index architecture: local append log, relational DB, embedded search, or combinations.
-2. Source-specific event capability matrices for current Codex App Server versions and future adapters.
-3. Transport strategy for local desktop, background helper, remote workers, and multiple windows.
-4. Exact trace/span ID generation and reconciliation with provider IDs.
-5. A rigorous cross-source causal-link model and how inferred links will be represented.
-6. Snapshot frequency, materialization strategy, and recovery/checkpoint format.
-7. Safe output retention defaults and large-payload capture thresholds.
-8. Data sensitivity detection, credential redaction, authorization inheritance, and retention UX.
-9. Source timestamp trust calibration and source sequence/cursor recovery guarantees.
-10. Deduplication rules when upstream providers omit stable event IDs.
-11. Local-first indexing and search performance for very long streams and encrypted data.
-12. Correlation and export formats; whether OpenTelemetry interoperability is desirable.
-13. Spatial constellation scale limits, graph clustering, visual metaphors, and reduced-motion equivalents.
-14. Human readability testing for four evidence classes across compact stream, chart, and constellation surfaces.
-15. The appropriate division between deterministic stream summarization and Vela's optional model-generated interpretation.
-16. What event classes require lossless capture versus permitted sampling under pressure.
-17. Cross-device event synchronization, if enabled later, and conflict/version ordering behavior.
-18. Exact live-stream latency, event-store throughput, retention/storage, and frame-time budgets on representative hardware.
-19. How approved background capture persists while UI windows close or systems sleep.
-20. Which external tool actions can be independently verified rather than merely provider-reported.
-
-Research, prototypes, and architecture decisions MUST resolve these within the Constitution's constraints. An unavailable vendor feature MUST be represented transparently, not silently removed from the vision.
-
-## 20. Change control, readiness gates, and acceptance
-
-This document is a **published proposed governing charter**, not a claim of implementation, completion, or owner ratification.
-
-- The [Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) remains the higher authority.
-- Requirement identifiers SHOULD stay stable where their meaning is unchanged. Material changes require impact assessment, updated tests, and repository history.
-- Changes to privacy, reasoning-truthfulness, event coverage, delegation, irreversible action audit, or retention MUST receive explicit constitutional/trust impact review.
-- New integrations MUST prove capability-mapped event behavior rather than assume Codex/other provider parity.
-- Replacing one event technology with another MUST preserve identity, source attribution, recovery, permission boundaries, and recorded history or use a reviewed migration.
-- The [governance registry](README.md) MUST reflect publication versus formal acceptance accurately.
-- The repository owner MAY accept, amend, or reject this proposed charter under the Constitution's procedure.
-
-### Readiness gates
-
-**Gate A — Contract credibility:** Typed event schema, four evidence classes, stable IDs, lifecycle transitions, privacy model, and representative adapter tests exist.
-
-**Gate B — Real observation:** One real Codex-backed chat and one real tool/agent operation appear live, with source-attributed states and no fabricated reasoning.
-
-**Gate C — Multiscope coordination:** One set of canonical events appears consistently in chat, agent, task, Vela, and project views with correct permissions and delegation links.
-
-**Gate D — Resilience:** Disconnect, restart, duplicate, missing-completion, redaction, and large-output tests pass; any gaps are disclosed.
-
-**Gate E — Cinematic integrity:** Live and spatial presentation are meaningfully animated through Motion Coordinator integration, meet measured performance criteria, and remain fully usable in reduced-motion mode.
-
-**Gate F — Historical accountability:** A captured execution can be inspected and reconstructed from actual evidence, with reliable source references, coverage indicators, and safe export.
-
-**Gate G — User usefulness:** A person can quickly answer what an agent is doing, why it paused if known, which changes it made, what remains unverified, what a team accomplished, and what attention is required, without being overwhelmed by raw logs.
-
-**Final governing standard:** Aerynth must make intelligent work **visible, understandable, useful, and beautiful**, without sacrificing epistemic honesty, performance, user agency, security, or historical integrity. The Intelligence Stream is a window into **observable work**, never a fabricated window into private thought.
