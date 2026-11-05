@@ -1,9 +1,13 @@
 # Aerynth: Living Instruments & Expressive Presence
 ## Unified visual language for intelligence, time, knowledge, interaction, and Vela
 
+> **Owner-accepted design direction (2026-11-05).** This visual, interaction and product experience is approved as the Aerynth target and is no longer merely an exploratory proposal. Actual implementation, accessibility, graphics fidelity, provider capabilities and release acceptance require independent evidence. Any earlier 'proposed' or 'awaiting owner approval' labels in historical narrative are superseded by this explicit acceptance.
+
 > **Aerynth must be extraordinary from the inside out.** It is not a conventional productivity application decorated with glass and glowing rectangles. Its objects should behave as meaningful, interactive, spatial instruments, and its assistant should visibly transform as her real operational state changes.
 >
 > **Every meaningful animation communicates something. Every beautiful component accomplishes something.**
+
+> **2026-11-04 OWNER-DIRECTED SCOPE UPDATE:** This prior Living Instruments document remains a useful design reference for Timeline, Blocks and Stream *Glimpse* or *Forensic* projections. **Its old small block-based Stream and Vela expressive-shape proposals are superseded as the product's primary full-screen experiences** by [Spatial Intelligence systems index](SPATIAL-INTELLIGENCE-SYSTEMS-INDEX.md), the corresponding governing addenda in 01/02/06/09/15, and their detailed GPU/runtime/acceptance specifications. Do not report a compact branching block or decorative Vela shape as completion of the newly required per-project immersive Stream or global 3D Intelligence Nebula.
 
 | Field | Value |
 | --- | --- |
@@ -11,7 +15,7 @@
 | Application | Aerynth |
 | Assistant | Vela |
 | Document type | Product experience and detailed interaction design reference |
-| Status | **Proposed design, v1.0; not a governing charter and not proof of implementation** |
+| Status | **Owner-accepted design 2026-11-05; implementation verification pending** |
 | Date | 2026-11-04 |
 | Scope | Living Instruments, Intelligence Stream, Timeline, Block Library, Vela's manifestation, shared Motion Coordinator |
 | Implementation baseline | Review against the latest applicable Aerynth integration; design branch initially based on draft PR #19 |
