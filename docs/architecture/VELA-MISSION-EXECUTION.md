@@ -1,5 +1,7 @@
 # Vela mission execution
 
+> **Owner-approved architecture (2026-11-05).** The capability-first mission design and accepted task-continuity requirements are governing design targets. The documented historical implementation state and unverified areas remain evidence-based, not automatically complete.
+
 This records the integrated mission slice. The [traceability matrix](../engineering/VELA-MISSION-TRACEABILITY.md)
 tracks work and acceptance beyond this slice. The [AIR specification](../specifications/VELA-ADAPTIVE-INTELLIGENCE-ROUTING.md)
 records the earlier routing design. The AI-first consolidation below implements
