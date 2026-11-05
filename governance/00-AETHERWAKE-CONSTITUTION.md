@@ -412,7 +412,7 @@ The governing standard is not whether Aerynth resembles science fiction in scree
 
 ## Ratified constitutional amendment CF-2026-11-05: capability-first completeness
 
-> **Amendment status: PROPOSED, awaiting explicit repository-owner acceptance.** This section is an amendment proposal, not a claim that the established Constitution was automatically ratified anew. Existing authority hierarchy and accepted constitutional protections remain in force. If approved, register the change and update implementation/evidence; until then implementers MUST treat these proposed norms as design intent under review. This section does not grant Vela new permissions.
+> **Amendment status: OWNER-RATIFIED 2026-11-05.** This section is an amendment proposal, not a claim that the established Constitution was automatically ratified anew. Existing authority hierarchy and accepted constitutional protections remain in force. If approved, register the change and update implementation/evidence; until then implementers MUST treat these proposed norms as design intent under review. This section does not grant Vela new permissions.
 
 **AW-CON-092 — Capability-first product standard.** Aerynth and Vela MUST be designed for the complete user-intended capability, including reasoning, authentic tool execution, coordination, verification, memory, and meaningful interaction. Engineering effort, latency, token economy, and operational cost MUST be optimized *around* those required outcomes rather than used as unannounced reasons to delete or fake them.
 
