@@ -635,7 +635,7 @@ None of these open questions permits bypassing this charter's invariants in the 
 
 ## 20. Change control, publication, and owner acceptance
 
-This document is a **published proposed charter**, not yet ratified merely because it appears on the default branch. It becomes an accepted governing charter only through the repository owner's explicit acceptance recorded according to [governance/README.md](README.md) and the Constitution.
+This is an **owner-ratified governing charter (2026-11-05)**. Publication alone had not provided approval; that separate owner decision is now recorded. Implementation and release evidence remain outstanding.
 
 Changes to normative IDs, privacy guarantees, model/provider access assumptions, permissions, audit semantics, or deletion behavior MUST receive an impact review covering affected charters, data migrations, regression tests, user-visible policy changes, and rollback or remediation.
 
@@ -670,7 +670,7 @@ Changes to normative IDs, privacy guarantees, model/provider access assumptions,
 
 ## Ratified amendment CF-2026-11-05: API agents and capability-first trust
 
-> **Status: proposed, pending owner acceptance.** More capable tools increase the importance of existing least-privilege boundaries; they do not create exceptions.
+> **Status: Owner-ratified 2026-11-05; implementation acceptance is a separate gate.** More capable tools increase the importance of existing least-privilege boundaries; they do not create exceptions.
 
 **AW-TRUST-141 — Permission independence.** AI inference, route classification, tool discovery and agent delegation MUST NOT grant authority. The application enforces effect-specific authorization at execution time for every direct, nested, programmatic, MCP or managed tool call.
 
