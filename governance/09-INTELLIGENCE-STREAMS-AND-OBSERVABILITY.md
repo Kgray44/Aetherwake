@@ -1,11 +1,13 @@
 # 09 — Intelligence Streams and Observability
 ## Live Intelligence, Evidence, Execution Visibility, and Event Integrity Charter for Aerynth
 
+> **Owner acceptance recorded 2026-11-05:** This charter and reconciled amendments are binding product/design requirements. This does not imply implementation, verified model capabilities, security certification or release acceptance.
+
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-009 |
-| Version | 1.0.0-draft |
-| Status | **Published proposed subsystem charter — awaiting repository-owner acceptance** |
+| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Status | **Owner-accepted and ratified governing charter (binding requirements; implementation separately verified)** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem charter subordinate to [The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Primary domain | Live and historical intelligence streams; event capture and integrity; agent/chat/task/Vela/project observability; provenance; correlation; trustworthy activity visualizations; event-based diagnostics and replay evidence |
@@ -668,3 +670,105 @@ This document is a **published proposed governing charter**, not a claim of impl
 **Gate G — User usefulness:** A person can quickly answer what an agent is doing, why it paused if known, which changes it made, what remains unverified, what a team accomplished, and what attention is required, without being overwhelmed by raw logs.
 
 **Final governing standard:** Aerynth must make intelligent work **visible, understandable, useful, and beautiful**, without sacrificing epistemic honesty, performance, user agency, security, or historical integrity. The Intelligence Stream is a window into **observable work**, never a fabricated window into private thought.
+
+---
+
+## 21. Owner-directed 2026-11-04 addendum: project Intelligence Stream V2 as a living execution landscape
+
+> **Status:** Proposed normative extension to the existing Charter 09, for explicit owner acceptance under the charter lifecycle. It supersedes any *design assumption* that the primary Intelligence Stream is a narrow block, a chronological list, or a small static node diagram. It does not remove the underlying global, chat, task, agent, workspace or forensic scopes governed elsewhere in this charter.
+>
+> **North star:** A project's Intelligence Stream is a full-viewport navigable execution landscape built from the plan Vela actually uses and the execution events Aerynth actually observes. Future plan work stays visibly inactive. A luminous front travels smoothly through executed paths, splits among parallel branches and joins only at real dependencies. Every active operation can be inspected, including in an animated bottom-right Activity Theater.
+
+### 20.1 Identity, scope and plan topology
+
+**AW-OBS-200 — Full-screen canonical project projection.** Aerynth MUST provide an immersive, full-application-viewport Intelligence Stream for a selected project. This is an app-level perspective, NOT a workspace block, dashboard card, or popover. Existing Stream Glimpse/Flow/Forensic block-level projections MAY remain as subordinate previews and inspections; they cannot substitute for the immersive view.
+
+**AW-OBS-201 — Project and execution identity.** A Stream MUST bind a real project ID and include authorized relevant executions, tasks, plans, agents and events without conflating multiple runs. Shared resources and unassigned events MUST preserve source ownership and explicit scope.
+
+**AW-OBS-202 — Plan-first initial graph.** When an explicit user-visible execution plan exists, all known reachable operations and dependencies MUST be projected before their execution begins, including parallel paths. Not-started operations MUST remain visibly subdued; the graph MUST NOT derive its initial plan solely from after-the-fact event arrivals.
+
+**AW-OBS-203 — Dynamic plan revision.** The graph MUST accept attributable plan revisions, including newly discovered operations, removed/invalidated branches, new attempts, conditional work and updated dependencies. Revisions MUST preserve historical versions and stable event IDs, avoiding disruptive global layout resets where feasible.
+
+**AW-OBS-204 — No invented causality.** Branches and joins MUST come from explicit plan dependencies, tool/agent relationships, or other evidence with disclosed confidence. Unlinked events MUST be packed separately rather than connected for aesthetics. A join MUST NOT imply verified prerequisites if only temporal adjacency exists.
+
+**AW-OBS-205 — Missing plan handling.** A stream with no available plan MUST remain truthful and useful using observed activity, open plan-coverage disclosure and an explicit 'no plan available' state. The UI MUST NOT hallucinate a planned task graph or coerce an ordinary chat into needless task creation.
+
+**AW-OBS-206 — Status-specific geometry.** Proposed, queued, running, waiting on dependency, waiting for approval, blocked, failed, cancelled, unknown, reported complete, independently verified complete and skipped outcomes MUST remain distinguishable without relying solely on hue or animation.
+
+**AW-OBS-207 — Exact evidence transitions.** A visual operation may enter verified complete only upon canonical verification evidence; agent report, a UI gesture, timeout, predicted duration or animation endpoint alone is insufficient. Unknown and interrupted operations MUST not be silently retried or declared complete.
+
+### 20.2 Luminous execution fronts and honest time behavior
+
+**AW-OBS-208 — Multiple live fronts.** Each independently executing branch MUST have its own progress front. The fronts MAY split, travel at different rates, pause, and converge at evidenced joins; one vertical screen-wide 'progress wipe' is not an accurate substitute for parallel work.
+
+**AW-OBS-209 — Completed/active/future semantics.** Confirmed traversed work SHOULD acquire its full semantic color and residual glow; active sections SHOULD feature a localized luminous advancing front; unreached work SHOULD remain subdued/desaturated. These states must map to the canonical reducer, not a visual timer.
+
+**AW-OBS-210 — Smooth estimates, not fake measurements.** The renderer MAY estimate operation duration from historical and observed evidence, but MUST disclose estimated status when shown numerically, adapt velocity smoothly, and never imply an exact percentage unsupported by real measurable completion. The front MUST NOT cross a successful terminal gate until a genuine success condition is recorded.
+
+**AW-OBS-211 — Nonjarring velocity.** Re-estimation, early completion, slow work, pause and recovery MUST use bounded smooth transition behavior coordinated by Charter 02's motion system. Sudden teleportation, unjustified completion bursts and multi-second blocking of verified result visibility are forbidden.
+
+**AW-OBS-212 — Wait behavior.** If an estimated front reaches the current operation's waiting boundary before an event arrives, it MUST remain contained or circulate within that operation without advancing through downstream dependencies. Display the age of last observed evidence when useful.
+
+**AW-OBS-213 — Flow semantics.** Particles moving along paths MUST be distinguishable as real observed data transfer / event activity versus ambient metaphor. Rendering density and direction may express source-backed activity, but no decorative effect may claim that an unseen tool call occurred.
+
+### 20.3 Activity Theater, focus, and live inspection
+
+**AW-OBS-214 — Activity Theater.** The immersive view MUST include a context-sensitive, default bottom-right Activity Theater for inspecting the selected or automatically focused active operation. It MUST be an integrated morphing visual instrument, not an unrelated ordinary workspace block.
+
+**AW-OBS-215 — Real adapter family.** Supported Theater adaptations MUST cover actual document/read activity; file creation and diffs; terminal command output; tests/verification; planning/agent delegation; response streaming; approvals/blocked state; errors and unknown results. If source content is absent or authorization restricted, render an honest source-attributed generic adapter rather than invented footage.
+
+**AW-OBS-216 — Real content and safe truncation.** Any highlighted document text, code diff, log, test count or filename MUST come from authorized source-backed data. Show coverage/truncation/redaction and attach source references. Previewing untrusted content MUST NOT execute it.
+
+**AW-OBS-217 — Focus without thrash.** With multiple running activities, the Theater MUST not rapidly auto-switch among all events. It SHOULD select a meaningful primary activity, show compact awareness of other running operations and support manual pin/unpin and history inspection.
+
+**AW-OBS-218 — Coordinated morphing.** When focus shifts between operation types, Theater geometry, content hierarchy and scene focal relationship SHOULD transition through Motion Coordinator choreography. Animation cannot hide a pending approval or impede interaction.
+
+**AW-OBS-219 — Direct graph interaction.** Pan, zoom, select, inspect, follow selected branch, search/filter, move to live, pause follow, replay, keyboard navigation and forensic evidence disclosure MUST be available without requiring a permanent toolbar-heavy form. Precision tools can reside in a context/overflow menu.
+
+**AW-OBS-220 — Persistent inspection and provenance.** A selected node reveals source, agent, run, relevant times, status, dependencies, safe input/output, permission state and evidence class, as available. Selection MUST resolve through stable IDs and never become a new synthetic execution entity.
+
+### 20.4 Multi-project, replay and lifecycle
+
+**AW-OBS-221 — Per-project session views.** Each project Stream SHOULD retain its own viewport focus, camera, scale, selected run/node, filters, follow-live setting, Theater pin and replay cursor separately from backend execution. Switching projects MUST NOT cancel, restart or mutate ongoing work.
+
+**AW-OBS-222 — Project selector.** If more than one relevant project has active/waiting execution, entering the primary Stream MUST provide a compact animated selector that identifies each project, its real state and elapsed-time meaning. With one eligible project, open directly; with none, show honest empty/recent-state navigation.
+
+**AW-OBS-223 — In-stream switching.** A user MUST be able to select a different project Stream while already in another without returning to workspace or restarting execution; the transition SHOULD honor spatial continuity requirements of 01/02.
+
+**AW-OBS-224 — Honest replay.** Replaying a Stream MUST use recorded plan revisions, activity transitions, evidence and source times rather than a newly simulated success path. Interpolation during replay MAY reconstruct a plausible *visual trajectory* but MUST disclose missing event coverage and cannot manufacture source operations.
+
+**AW-OBS-225 — Scalable observed structure.** Large graphs MUST support grouping, semantic zoom, incremental layout and rendering virtualization. Actual recorded evidence MUST remain reachable even when visual clusters collapse. Dynamic insertion should avoid moving selected or pinned content unexpectedly.
+
+**AW-OBS-226 — Isolation and capture.** Project filtering MUST enforce authorization and privacy; a shared window, tool process or chat context is not enough to claim project attribution. Consent, permissions, timestamps, redaction and source gaps remain governed by 14/09 and must survive navigation.
+
+**AW-OBS-227 — Graceful recovery.** Reconnect, duplicate/out-of-order events, abandoned attempts, expired plans and restart MUST reconcile canonical state before presenting new completion claims. The project view MUST identify missing coverage and maintain stable selected identities where authorized.
+
+### 20.5 Hard nonacceptance, evidence and coordination
+
+**AW-OBS-228 — Rejection of current presentation as completion.** A neatly laid-out column of blocks, static flowchart, simplified branching graph inside a small workspace card, decorative animated edges with no real data, or busy permanent control bar cannot be declared full Stream V2 compliance. The existing PR #20 renderer may be reused as Glimpse/Forensic infrastructure but does not establish that the V2 primary experience is finished.
+
+**AW-OBS-229 — Live vertical-slice evidence.** Acceptance requires real sequential and concurrent provider/tool activity, user-visible plan-before-run, gated joins, dynamic revision, waiting/failed/unknown cases, working Theater content adapters, and actual direct project switching. Synthetic fixtures may test failure branches but must be identified as fixtures.
+
+**AW-OBS-230 — Coordinated view truth.** Vela Presence, project Stream, project dock, agent/task/chat scoped views and replay MUST share canonical events and stable identity. No projection can create a completion, causal link, tool action, transcript or hidden-model-reasoning claim absent source authorization and evidence.
+
+Further implementation detail is in [Stream V2 specification](../docs/specifications/INTELLIGENCE-STREAM-V2-EXPERIENCE-AND-ACCEPTANCE.md), [shared runtime/navigation](../docs/architecture/UNIFIED-SPATIAL-INTELLIGENCE-RUNTIME-AND-NAVIGATION.md) and [acceptance plan](../docs/engineering/SPATIAL-INTELLIGENCE-PROTOTYPE-AND-ACCEPTANCE-PLAN.md). The owner ratified these requirements on 2026-11-05; repository publication alone does not qualify the implementation.
+
+---
+
+---
+
+## Ratified amendment CF-2026-11-05: truthful shared execution stream
+> **OWNER-RATIFIED 2026-11-05.** Existing immutable event and privacy rules remain.
+
+**AW-OBS-138 — Unified observable event.** Events from Vela, native calls, agents, models, voice, blocks and GPU Mind MUST be correlated by stable task/attempt/agent/provider IDs, causality, revision, provenance and visibility class.
+**AW-OBS-139 — Stage distinctions.** Tool discovery, requested call, actual execution, external receipt, postcondition verification, user delivery and owner acceptance MUST remain different events/states.
+**AW-OBS-140 — Delegation lineage.** Parent/child agents, concurrent branches, joins and messages MUST be reconstructible from observable provider and application events without revealing or inventing hidden chain-of-thought.
+**AW-OBS-141 — Replay-safe reconciliation.** Duplicate, reordered, partial or late tool and webhook events MUST be deduplicated and reconciled; conflicting completions require explicit unknown/error state, not winner-by-arrival.
+**AW-OBS-142 — Demo honesty.** Synthetic examples, animations and offline fixtures MUST remain labeled and separated from live progress.
+**AW-OBS-143 — Read-only render projections.** Vela Mind, timelines and Living Instruments MAY consume canonical events but MUST NOT originate evidence of actions that did not occur.
+**AW-OBS-144 — Privacy boundaries.** Events MUST support redaction, protected data scopes and stable private-artifact references, not public leakage of transcripts and secrets.
+**AW-OBS-145 — Actionable progress.** The user MUST be able to identify running, awaiting permission, blocked, cancelled, unknown and verified work, linked to next steps and evidence.
+**AW-OBS-146 — Usage provenance.** Token/audio/tool/sandbox charges MUST distinguish reported amounts from estimates/missing, and API credit benefits from signed-in plan usage.
+**AW-OBS-147 — Non-executing replay.** Historical replay MUST restore only recorded representation and MUST NEVER re-trigger tools or billed model/agent effects.
+
+**Acceptance:** Real concurrent agent activity in Mind and timeline; duplicate webhook, crash and failed tool retain correct truth; demo fixtures cannot masquerade as execution.
