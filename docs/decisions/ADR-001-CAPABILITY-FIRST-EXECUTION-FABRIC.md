@@ -1,5 +1,5 @@
 # ADR-001: Capability-first Vela execution fabric
-**Status:** PROPOSED for owner review · **Date:** 2026-11-05  
+**Status:** ACCEPTED BY OWNER · **Ratified:** 2026-11-05  
 **Decision owners:** Aetherwake repository owner; Vela runtime and trust maintainers  
 **Scope:** Vela Intelligence, AI routing, agent integration, API capabilities and the Aerynth experience  
 **Supersedes:** no existing governing charter; updates require explicit review
@@ -8,7 +8,7 @@
 
 ## Context
 
-Aetherwake's objective is a coherent cinematic AI desktop in which Vela can answer, reason, coordinate, act, verify, remember and present real work. Current Vela Rebirth PR #19 and Living Instruments PR #20 are open draft stacked branches with partial verified acceptance, not fully completed releases. A simple ChatGPT-versus-Codex router, narrow budget-optimized prompt loop or unverified block appearance cannot fulfill the intent. OpenAI currently documents multiple distinct execution surfaces, including Responses, Decisions, Agents SDK, managed Agents API, Multi-agent beta, tool search, programmatic tool calling and GPT-Live. These are *candidate mechanisms*, not evidence they're configured in the app or permitted for the account.
+Aetherwake's objective is a coherent cinematic AI desktop in which Vela can answer, reason, coordinate, act, verify, remember and present real work. Vela Rebirth PR #19 and Living Instruments PR #20 were merged on 2026-11-05, but their integration and implementation acceptance remains bounded by evidence and is not fully qualified. A simple ChatGPT-versus-Codex router, narrow budget-optimized prompt loop or unverified block appearance cannot fulfill the intent. OpenAI currently documents multiple distinct execution surfaces, including Responses, Decisions, Agents SDK, managed Agents API, Multi-agent beta, tool search, programmatic tool calling and GPT-Live. These are *candidate mechanisms*, not evidence they're configured in the app or permitted for the account.
 
 ## Decision proposed
 
