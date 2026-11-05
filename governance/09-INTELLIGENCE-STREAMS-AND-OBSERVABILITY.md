@@ -1,13 +1,13 @@
 # 09 — Intelligence Streams and Observability
 ## Live Intelligence, Evidence, Execution Visibility, and Event Integrity Charter for Aerynth
 
-> **Owner acceptance recorded 2026-11-05:** This charter and reconciled amendments are binding product/design requirements. This does not imply implementation, verified model capabilities, security certification or release acceptance.
+> **Owner acceptance (2026-11-05):** Charter 09, its Spatial Intelligence V2 extension and the capability-first requirements are accepted product standards, not completed or verified features.
 
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-009 |
 | Version | 1.1.0 — owner-ratified 2026-11-05 |
-| Status | **Owner-accepted and ratified governing charter (binding requirements; implementation separately verified)** |
+| Status | **Owner-accepted and ratified governing charter; implementation separate** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem charter subordinate to [The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Primary domain | Live and historical intelligence streams; event capture and integrity; agent/chat/task/Vela/project observability; provenance; correlation; trustworthy activity visualizations; event-based diagnostics and replay evidence |
@@ -751,14 +751,15 @@ This document is a **published proposed governing charter**, not a claim of impl
 
 **AW-OBS-230 — Coordinated view truth.** Vela Presence, project Stream, project dock, agent/task/chat scoped views and replay MUST share canonical events and stable identity. No projection can create a completion, causal link, tool action, transcript or hidden-model-reasoning claim absent source authorization and evidence.
 
-Further implementation detail is in [Stream V2 specification](../docs/specifications/INTELLIGENCE-STREAM-V2-EXPERIENCE-AND-ACCEPTANCE.md), [shared runtime/navigation](../docs/architecture/UNIFIED-SPATIAL-INTELLIGENCE-RUNTIME-AND-NAVIGATION.md) and [acceptance plan](../docs/engineering/SPATIAL-INTELLIGENCE-PROTOTYPE-AND-ACCEPTANCE-PLAN.md). The owner ratified these requirements on 2026-11-05; repository publication alone does not qualify the implementation.
+Further implementation detail is in [Stream V2 specification](../docs/specifications/INTELLIGENCE-STREAM-V2-EXPERIENCE-AND-ACCEPTANCE.md), [shared runtime/navigation](../docs/architecture/UNIFIED-SPATIAL-INTELLIGENCE-RUNTIME-AND-NAVIGATION.md) and [acceptance plan](../docs/engineering/SPATIAL-INTELLIGENCE-PROTOTYPE-AND-ACCEPTANCE-PLAN.md). Owner ratification was recorded 2026-11-05; publication alone does not qualify the implementation.
 
 ---
+
 
 ---
 
 ## Ratified amendment CF-2026-11-05: truthful shared execution stream
-> **OWNER-RATIFIED 2026-11-05.** Existing immutable event and privacy rules remain.
+> **Owner-ratified 2026-11-05.** Existing immutable event and privacy rules remain.
 
 **AW-OBS-138 — Unified observable event.** Events from Vela, native calls, agents, models, voice, blocks and GPU Mind MUST be correlated by stable task/attempt/agent/provider IDs, causality, revision, provenance and visibility class.
 **AW-OBS-139 — Stage distinctions.** Tool discovery, requested call, actual execution, external receipt, postcondition verification, user delivery and owner acceptance MUST remain different events/states.
