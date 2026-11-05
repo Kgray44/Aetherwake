@@ -74,7 +74,7 @@ test("context source identities, hashes and authority are stable across repeated
  const b=context({task:"Native Codex approval handling",paths:["src/codex/approvals.ts"]});
  assert.deepEqual(a,b);
  assert.ok(a.selected.every(s=>s.reason.length && s.sha256 && s.range));
- assert.ok(a.selected.filter(s=>s.id!=="00").every(s=>s.authority==="advisory"));
+ assert.ok(a.selected.filter(s=>s.id!=="00").every(s=>s.authority==="binding"));
  assert.equal(a.coverage.incompleteContext,false);
 });
 
@@ -104,7 +104,7 @@ test("every context includes full binding Constitution, with source hash and aut
  assert.equal(constitution.mode,"full");
  assert.equal(constitution.authority,"binding");
  assert.equal(constitution.text,index.documents.find(d=>d.id==="00").fullText);
- assert.ok(r.selected.filter(s=>s.id!=="00").every(s=>s.authority==="advisory"));
+ assert.ok(r.selected.filter(s=>s.id!=="00").every(s=>s.authority==="binding"));
  assert.equal(r.coverage.missingRequired.length,0);
  assert.match(formatContext(r),/Source fingerprint:/);
 });
@@ -146,10 +146,10 @@ test("explicit full option includes every routed charter in full",()=>{
  assert.ok(r.selected.every(s=>s.mode==="full"));
  assert.equal(r.metrics.characterReductionPercent,0);
 });
-test("sensitive actions add the Trust charter without increasing its authority",()=>{
+test("sensitive actions include the ratified binding Trust charter",()=>{
  const r=context({task:"Overwrite server configuration",paths:["src/workspaces/file-browser.ts"]});
  assert.ok(ids(r).includes("14"));
- assert.ok(r.selected.filter(s=>s.id==="14").every(s=>s.authority==="advisory"));
+ assert.ok(r.selected.filter(s=>s.id==="14").every(s=>s.authority==="binding"));
 });
 test("normative references can expand into one-hop traceable requirements",()=>{
  const copy={...index,requirements:new Map(index.requirements)};
