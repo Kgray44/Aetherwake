@@ -1,13 +1,13 @@
 # 10 — AI Execution Profiler
 ## Governing Charter for Aerynth's Execution Timing, Token Accounting, Efficiency, and Diagnostic Intelligence
 
-> **Owner acceptance recorded 2026-11-05:** This charter and reconciled amendments are binding product/design requirements. This does not imply implementation, verified model capabilities, security certification or release acceptance.
+> **Owner acceptance (2026-11-05):** This charter and the reconciled capability-first requirements govern the Aerynth design. Acceptance does not certify that these product capabilities are implemented or independently tested.
 
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-010 |
 | Version | 1.1.0 — owner-ratified 2026-11-05 |
-| Status | **Owner-accepted and ratified governing charter (binding requirements; implementation separately verified)** |
+| Status | **Owner-accepted and ratified governing charter; implementation evidence separate** |
 | Prepared | 2026-11-01 |
 | Authority | Specialized subsystem charter, subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Primary domain | AI execution measurement, temporal profiling, token accounting, context utilization indicators, usage budgets, efficiency analysis, and profiler presentation |
@@ -548,7 +548,7 @@ Aerynth's profiler is not a decorative token counter. **It is an accountable ins
 ---
 
 ## Ratified amendment CF-2026-11-05: capability-first multi-provider measurements
-> **OWNER-RATIFIED 2026-11-05.** Profiler observes decisions; it does not lower authorized capability itself.
+> **Owner-ratified 2026-11-05.** Profiler observes decisions; it does not lower authorized capability itself.
 
 **AW-AEP-129 — Success-first metrics.** Optimization MUST report verified task completion, accuracy, safety, robustness and user experience before cost; cost savings with reduced quality MUST be identified as regressions.
 **AW-AEP-130 — Cost family separation.** Metering MUST distinguish Responses/Decisions inference, managed agents/sandboxes, tools, image, audio duration, retrieval/indexing, local hardware and signed-in Codex where evidence exists.
