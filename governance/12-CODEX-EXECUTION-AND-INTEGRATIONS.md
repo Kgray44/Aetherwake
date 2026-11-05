@@ -1,11 +1,13 @@
 # 12 — Codex Execution and Integrations
 ## Governing Charter for Aerynth's Agent Execution Boundary, Codex App Server, and External Capabilities
 
+> **Owner acceptance (2026-11-05):** This charter and the reconciled capability-first requirements govern the Aerynth design. Acceptance does not certify that these product capabilities are implemented or independently tested.
+
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-012 |
-| Version | 1.0.0-draft |
-| Status | **Published proposed subsystem charter — pending repository-owner acceptance** |
+| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Status | **Owner-accepted and ratified governing charter; implementation evidence separate** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem governance, subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Primary domain | Execution backends; Codex integration; session and turn control; tools; skills; MCP; approval transport; host/remote execution; interoperability; provider capability truth |
@@ -644,3 +646,38 @@ The following summarize requirements already defined above; they do not create c
 12. **The execution boundary supports intelligent orchestration without surrendering human control.**
 
 > **Governing conclusion:** Aerynth MUST expose the strength of Codex through a reliable, inspectable, version-aware, policy-enforced execution boundary. Vela and specialized agents should be able to coordinate sophisticated work across chats, projects, devices, and tools; however, the user remains in control, the implementation remains truthful, and no integration becomes an unbounded authority simply because it is powerful.
+
+---
+
+## Ratified amendment CF-2026-11-05: OpenAI API and heterogeneous execution adapters
+
+> **Status: proposed, pending owner acceptance.** Charter 12 remains authoritative for transport, provider capability discovery and actual integration boundaries. It does not supersede agent task ownership (05), Vela behavior (06), or trust policy (14).
+
+**AW-CEX-132 — Provider identity separation.** The integration layer MUST model Responses API, Decisions API, Agents SDK-controlled execution, managed Agents API, GPT-Live, Realtime, native services and existing Codex sign-in/API-key modes as potentially distinct providers and billing/credential scopes.
+
+**AW-CEX-133 — Live capability catalog.** Each adapter MUST expose account- and environment-scoped eligibility, supported models/efforts/modalities/tools, region, retention, rate-limits where known, version, operational health and qualified test state with explicit `unknown` values and refresh triggers.
+
+**AW-CEX-134 — Provider-neutral request contract.** Canonical requests MUST retain task ID, source selection, data class, user pins, permissions, context provenance, tool/effect requirements, current attempt and output evidence requirements across adapter boundaries. Provider IDs MUST be namespaced attachments.
+
+**AW-CEX-135 — Function/tool boundary.** Requested tool calls MUST be parsed as complete typed operations and routed through the same trusted gateway whether issued by Responses, managed agent, SDK, programmatic JavaScript, MCP or direct user command.
+
+**AW-CEX-136 — Tool discovery safety.** Deferred tool search and automatic MCP discovery MUST reveal only appropriately scoped candidate tools and MUST revalidate authorization, schema and capability freshness at execution time.
+
+**AW-CEX-137 — Hosted action semantics.** Native hosted Multi-agent collaboration events MUST NOT be re-executed as application tool calls. Developer-supplied function calls from any participating agent MUST be authorized and replied to using their correct provider call identities.
+
+**AW-CEX-138 — Environment integrity.** Shell, apply-patch and computer-use adapters MUST document whether execution occurs in a provider sandbox, local machine or remote host, and MUST enforce actual boundaries. The presence of an API feature MUST NOT be represented as permission to control an arbitrary Windows process.
+
+**AW-CEX-139 — Managed agent policy.** Managed Agents API integrations MUST explicitly declare sandbox ownership, session recovery, rate/cost model, provider data residency/retention and lack of implicit signed-in Codex quota parity. Ineligible tasks MUST use another authorized path or be blocked truthfully.
+
+**AW-CEX-140 — Voice delegation contracts.** GPT-Live and other voice routes MUST expose session controls, interruption handling and a tested delegation path to canonical Vela tasks; they MUST NOT create an alternative ungoverned action executor.
+
+**AW-CEX-141 — Streaming/recovery fidelity.** The adapter MUST preserve provider item identity, complete tool arguments, event ordering constraints, partial-versus-final status, resumption cursor and conflict detection as supported; ambiguous tool outputs MUST not be inferred as success.
+
+**AW-CEX-142 — Authentication and credits.** Provider adapters MUST distinguish API project/org keys, ChatGPT/Codex signed-in credentials and managed Agents API charging; subscription API credit eligibility MUST be checked against the linked API organization, not assumed from possession of an API key.
+
+**AW-CEX-143 — Capability withdrawal.** When a model, voice, endpoint, beta feature, permission or provider connection changes, the registry MUST invalidate dependent routes and safely pause, requalify or reroute future work without duplicating prior effects.
+
+**AW-CEX-144 — No provider fiction.** Integration status MUST distinguish documented capability, configured connector, reachable service, live response, real authorized effect and fully verified acceptance. APIs may be deprecated or changed; documentation must have a dated evidence owner and drift review.
+
+**Qualification suites:** unsupported model/effort and tool invocation; beta multi-agent event parsing; stale tool-search capability; permission revocation after discovery; voice session reconnect; API credits versus Codex quota; managed session crash and webhook replay. See [provider contracts](../docs/specifications/VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md) and [dated evidence](../docs/research/OPENAI-PLATFORM-CAPABILITY-EVIDENCE-2026-11-05.md).
+
