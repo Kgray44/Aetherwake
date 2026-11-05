@@ -7,7 +7,11 @@ charters remain advisory according to the governance registry.
 
 ## Integration and ownership
 
-The isolated visual branch includes PR #19's committed `cfc64a4` baseline. Vela Redo
+The isolated visual branch first included PR #19's committed `cfc64a4` baseline.
+After the visual checkpoint `1f5b545`, Vela Redo explicitly released `956bf2e` for
+isolated integration. It merged cleanly as `c4e9c73`; the workflow dependency fix
+was already identical. Both renderer/backend typechecks and the combined build pass.
+Vela Redo
 retains backend/native runtime, capability contracts, timer services, Vela panel,
 client, voice and operational-state mapping. Explicit handoffs cover Block Library
 visuals, Timeline/Stream/Note views, renderer geometry and its CPU projection,
@@ -18,6 +22,22 @@ timer visuals, thirteen-state visual observation, product-client passthrough,
 contextual Stream motion wiring, task/agent/subject presentations and the
 mission workroom presentation wrapper. Later
 PR #19 commits require fresh reconciliation; this receipt is not a protected merge.
+
+Combined-checkpoint validation is still incomplete. The eight changed-owner test
+files passed 165/166 cases concurrently with the build. The selected-code case
+missed its expected fifth continuation after 62.604 seconds; the unchanged case
+then passed alone in 32.444 seconds with its full assertions and policy limits.
+This is evidence of load/deadline sensitivity, not an all-pass batch claim.
+The first combined native repeat passed Stream, Graph inspection, restart and GPU
+checks (4/6), but its Timeline/navigation interactions encountered observed inactive
+state. The app correctly made those views inert. Both owned processes exited and
+the failure-time DOM/PNG receipt is preserved. Vela Redo then explicitly cleared
+a foreground slot. The coordinated repeat passed **6/6 in 10.675 seconds** against
+combined asset `index-BqPu3oEh.js`, without activity loss or refocusing. Stream
+branches/join, inspection/Forensic/Glimpse, Timeline/menu/idle Escape, navigation,
+restart and GPU checks passed; owned-process cleanup completed. The foreground
+slot was released immediately. This scoped current result does not erase either
+the failed native receipt or the load-sensitive test batch described above.
 
 ## Registered inventory
 
