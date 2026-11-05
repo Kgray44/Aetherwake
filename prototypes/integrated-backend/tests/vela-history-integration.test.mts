@@ -18,6 +18,10 @@ import type { VelaRequest } from "../../vela-core/src/contracts.ts";
 import { planningDigest } from "../../vela-core/src/codex-planning-adapter.mts";
 import { admitVelaFileEdit, parseVelaFileEdit, upgradeVelaFileEdit } from "../src/vela-file-edit.mts";
 
+// These protocol fixtures deliberately exercise the Codex owner; ordinary user
+// questions use the primary API unless the user selects this destination.
+const explicitCodex = { mode: "codex" as const, providerId: "codex-app-server" as const };
+
 test("Check my logs, fix the code, and keep the original file until I approve", {
   skip: process.platform !== "win32",
 }, async () => {
@@ -34,7 +38,7 @@ test("Check my logs, fix the code, and keep the original file until I approve", 
     git("add", "--", "sample.json");
     git("-c", "user.name=AIR fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Fixture");
     const intent = "Edit sample.json to set the count to two";
-    const input = { intent, resourceIds: [], adaptive: true as const };
+    const input = { intent, resourceIds: [], adaptive: true as const, ...explicitCodex };
     await assert.rejects(f.core.command("velaRequestPreview", input), /vela_codex_edit_target_required/);
     linkSync(file, alias);
     await assert.rejects(f.core.command("velaRequestPreview", { ...input, editTargetPaths: [file] }), /vela_edit_file_ineligible/);
@@ -63,6 +67,7 @@ test("Check my logs, fix the code, and keep the original file until I approve", 
     };
     const first = await proposal();
     assert.equal(first.state, "responded", first.errorCode);
+    assert.equal(first.providerId, "codex-app-server");
     assert.equal(readFileSync(file, "utf8"), '{"count":1}\n');
     const stale = await f.core.command("velaFileEditReview", { requestId: first.id });
     writeFileSync(file, '{"count":3}\n');
@@ -132,7 +137,7 @@ test("Edit this file, create the other one, and run the tests", {
   const f = fixture(false, "air-file-edit", false);
   const git = (...args: string[]) => execFileSync("git.exe", ["-C", dir, "-c", "core.hooksPath=NUL", ...args],
     { windowsHide: true, timeout: 6000, stdio: "pipe" });
-  const input = { intent: "Create created.json with a count of two", resourceIds: [], adaptive: true as const };
+  const input = { intent: "Create created.json with a count of two", resourceIds: [], adaptive: true as const, ...explicitCodex };
   const editCreatePaths = [created];
   const approvedBytes = '{"count":2}\n';
   const testFile = join(dir, "sample.test.mjs"), failureFile = join(dir, "failure.test.mjs");
@@ -178,6 +183,7 @@ console.log(JSON.stringify({ samples: times.length, medianMs: times[5], p95Ms: t
       assert.match(native.prompt, /"path":"created.json","operation":"create","content":null/u);
       const request = await f.vela("request", await f.approve({ preview, native })) as VelaRequest;
       assert.equal(request.state, "responded", request.errorCode);
+      assert.equal(request.providerId, "codex-app-server");
       assert.equal(existsSync(created), false);
       const review = await f.core.command("velaFileEditReview", { requestId: request.id });
       assert.deepEqual(review.files.map(file => file.before), mixed ? ['{"count":1}\n', null] : [null]);
@@ -266,13 +272,14 @@ test("AIR file batch detects a stale later file and reports an actual partial wr
     for (const file of paths) writeFileSync(file, '{"count":1}\n');
     git("add", "--", ...names);
     git("-c", "user.name=AIR fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Fixture");
-    const input = { intent: "Edit the source files to set the counts to two", resourceIds: [], adaptive: true as const, editTargetPaths: paths };
+    const input = { intent: "Edit the source files to set the counts to two", resourceIds: [], adaptive: true as const, editTargetPaths: paths, ...explicitCodex };
     const proposal = async (editTargetPaths = paths) => {
       const preview = await f.core.command("velaRequestPreview", { ...input, editTargetPaths });
       const native = await f.core.command("velaNativeReview", { previewId: preview.id, signature: preview.signature });
       assert.deepEqual(native.editPaths, editTargetPaths);
       const request = await f.vela("request", await f.approve({ preview, native })) as VelaRequest;
       assert.equal(request.state, "responded", request.errorCode);
+      assert.equal(request.providerId, "codex-app-server");
       return f.core.command("velaFileEditReview", { requestId: request.id });
     };
     await assert.rejects(f.core.command("velaRequestPreview", { ...input, editTargetPaths: [paths[0], paths[0]] }), /vela_edit_repository_mismatch/);
@@ -446,10 +453,10 @@ test("AIR sends authorized inspection through native Codex protocol with discove
     assert.deepEqual(await f.vela("routingOptions", { providerId: "codex-app-server" }),
       [{ id: "fixture-model", label: "fixture-model", reasoningEfforts: ["high"] }]);
     await assert.rejects(f.core.command("velaRequestPreview", {
-      intent, resourceIds: [], adaptive: true, model: "hidden-fixture-model",
+      intent, resourceIds: [], adaptive: true, model: "hidden-fixture-model", ...explicitCodex,
     }), /unsupported_model/);
     const preview = await f.core.command("velaRequestPreview", {
-      intent, resourceIds: [], adaptive: true, model: "fixture-model", reasoningEffort: "high",
+      intent, resourceIds: [], adaptive: true, model: "fixture-model", reasoningEffort: "high", ...explicitCodex,
     });
     assert.deepEqual(preview.route, {
       kind: "agentic", reason: "local-tools-required", environment: "local-read-only",
@@ -470,7 +477,7 @@ test("AIR sends authorized inspection through native Codex protocol with discove
     assert.equal(execution?.taskVerified, false);
     const mixed = await f.core.command("velaRequestPreview", {
       intent: "Check CPU usage, then inspect the repository logs", resourceIds: [], adaptive: true,
-      model: "fixture-model", reasoningEffort: "high", includeRecentHistory: true,
+      model: "fixture-model", reasoningEffort: "high", includeRecentHistory: true, ...explicitCodex,
     });
     assert(mixed.route?.kind === "composite");
     assert.equal(mixed.route.metric, "system.cpu");
@@ -492,7 +499,7 @@ test("Inspect the repository I picked and ask again if its revision changed", { 
   const git = (...args: string[]) => execFileSync("git.exe", ["-C", root, "-c", "core.hooksPath=NUL", ...args],
     { windowsHide: true, timeout: 6000, stdio: "pipe" });
   const f = fixture(false, "air-inspection", false);
-  const command = { intent: "Inspect the repository logs for errors", resourceIds: [], adaptive: true as const, requireInspectionDirectory: true as const };
+  const command = { intent: "Inspect the repository logs for errors", resourceIds: [], adaptive: true as const, requireInspectionDirectory: true as const, ...explicitCodex };
   const commit = (title: string) => git("-c", "user.name=AIR fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "--allow-empty", "-m", title);
   try {
     git("init", "--quiet", "--template=");
@@ -518,6 +525,7 @@ test("Inspect the repository I picked and ask again if its revision changed", { 
     port.open = options => { assert.equal(options?.cwd, root); return open(options); };
     const accepted = await f.vela("request", await prepare()) as VelaRequest;
     assert.equal(accepted.state, "responded", accepted.errorCode);
+    assert.equal(accepted.providerId, "codex-app-server");
     assert.equal((await f.core.command("providerActivity", {})).providerRequests, 1);
   } finally { await f.close(); }
 });
@@ -532,10 +540,11 @@ test("Can you check whether Codex finished without running it again?", async () 
       throw Error("Simulated lost completion");
     };
     const preview = await f.core.command("velaRequestPreview", { intent: "Inspect the repository logs for build errors",
-      resourceIds: [], adaptive: true, model: "fixture-model", reasoningEffort: "high" });
+      resourceIds: [], adaptive: true, model: "fixture-model", reasoningEffort: "high", ...explicitCodex });
     const native = await f.core.command("velaNativeReview", { previewId: preview.id, signature: preview.signature });
     const request = await f.vela("request", await f.approve({ preview, native })) as VelaRequest;
     assert.equal(request.state, "unknown");
+    assert.equal(request.providerId, "codex-app-server");
     const execution = Object.values((await f.core.command("snapshot", {})).executions)
       .find(item => item.commandId === "vela-inspection:" + request.id)!;
     assert(execution.binding && execution.turnId);

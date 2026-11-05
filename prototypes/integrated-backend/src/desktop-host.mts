@@ -30,7 +30,7 @@ const backend = new Backend({
 let closeTask:Promise<void>|null=null;
 const closeBackend=()=>{
   if(closeTask)return closeTask;
-  const task=backend.close().finally(()=>{computerClient?.close();maintenanceClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();});closeTask=task;
+  const task=backend.close().then(()=>{computerClient?.close();maintenanceClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();});closeTask=task;
   void task.catch(()=>{if(closeTask===task)closeTask=null;});
   return task;
 };
@@ -159,5 +159,5 @@ lines.on(
   () =>
     {void closeBackend()
       .then(()=>process.exit())
-      .catch(async()=>{wakeClient?.dispose();liveClient?.close();nativeClient?.close();await backend.terminate().catch(()=>{});process.exit(1);});},
+      .catch(async()=>{computerClient?.close();maintenanceClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();await backend.terminate().catch(()=>{});process.exit(1);});},
 );

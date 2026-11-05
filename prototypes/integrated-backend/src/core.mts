@@ -3452,7 +3452,11 @@ export class BackendCore {
     ensure(input.budgetLimit === undefined || Number.isSafeInteger(input.budgetLimit) && input.budgetLimit >= 0, 'invalid_vela_budget');
     ensure(input.budgetLimit === undefined, 'vela_budget_unverifiable');
     ensure(!this.active, 'vela_planner_busy');
-    const workflow = input.mode==='codex'||input.providerId==='codex-app-server'?nativeConversationalWorkflow(input.intent):undefined;
+    const codex = input.mode === 'codex' || input.providerId === 'codex-app-server';
+    const api = !codex&&(input.providerId === VELA_API_PROVIDER || !input.providerId && !input.model && !input.reasoningEffort && this.velaApiRuntime.authorized());
+    // Retain the reviewed legacy analysis/handoff only for hosts without an
+    // authorized primary API. Explicit Codex goes directly to its scoped owner.
+    const workflow = !codex&&!this.velaApiRuntime.authorized()?nativeConversationalWorkflow(input.intent):undefined;
     if (workflow) {
       ensure((!input.mode || input.mode === 'auto') && !input.providerId && !input.model && !input.reasoningEffort,
         'vela_workflow_auto_required');
@@ -3461,7 +3465,7 @@ export class BackendCore {
         workflow.nativeLog ? 'vela_edit_log_source_required' : 'vela_workflow_context_conflict');
     }
     const intent = workflow ? (classifyVelaRoutingIntent(workflow.analysisIntent) === 'deep' ? 'deep' : 'quick') : classifyVelaRoutingIntent(input.intent);
-    ensure(intent !== 'project-check'||input.providerId===VELA_API_PROVIDER||!input.providerId&&this.velaApiRuntime.authorized(), input.routingAgentId ? 'vela_project_check_agent_conflict'
+    ensure(intent !== 'project-check'||api, input.routingAgentId ? 'vela_project_check_agent_conflict'
       : input.handoffSourceRequestId ? 'vela_project_check_handoff_conflict'
       : input.resourceIds?.length ? 'vela_project_check_attached_sources' : 'vela_project_check_native_review_required');
     const fileSelection = intent === 'local-write' ? velaFileEditSelection(input.intent) : undefined;
@@ -3469,7 +3473,6 @@ export class BackendCore {
     const metric = intent === 'local-read' ? nativeInspectionStage(input.intent) : undefined;
     // The primary API chooses source-owned tools semantically. Only an explicit
     // Codex destination enters its existing inspected/sandboxed preparation path.
-    const codex = input.mode === 'codex' || input.providerId === 'codex-app-server';
     if (codex) {
       ensure(input.providerId !== CHATGPT_PLAN_PROVIDER && input.providerId !== VELA_API_PROVIDER, 'vela_pinned_provider_cannot_execute');
       if (intent === 'local-write') {
@@ -3497,7 +3500,6 @@ export class BackendCore {
         ? { kind: 'composite', reason: 'native-fact-and-local-inspection', metric, ...selection }
         : { kind: 'agentic', reason: intent === 'local-read' ? 'local-tools-required' : 'explicit-codex', ...selection } };
     }
-    const api = input.providerId === VELA_API_PROVIDER || !input.providerId && !input.model && !input.reasoningEffort && this.velaApiRuntime.authorized();
     if (api) {
       const version = this.velaApiRuntime.configurationVersion();
       ensure(version !== null && this.velaApiRuntime.authorized(version), 'vela_api_usage_authorization_required');
