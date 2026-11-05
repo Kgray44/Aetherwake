@@ -1,0 +1,72 @@
+{
+  "fixtureSeed": 20261101,
+  "fixtureCounts": {
+    "messages": 2000,
+    "events": 1000,
+    "blocks": 12,
+    "particles": 200,
+    "filaments": 8
+  },
+  "records": [
+    {
+      "scenario": "animated-cinematic",
+      "source": "measured-renderer",
+      "stats": {
+        "count": 363,
+        "medianMs": 6.1,
+        "p95Ms": 6.2,
+        "p99Ms": 6.2,
+        "missedFrames": 0,
+        "targetIntervalMs": 16.67,
+        "elapsedMs": 2204,
+        "visibility": "visible"
+      }
+    },
+    {
+      "scenario": "animated-efficient",
+      "source": "measured-renderer",
+      "stats": {
+        "count": 27,
+        "medianMs": 78.8,
+        "p95Ms": 78.9,
+        "p99Ms": 78.9,
+        "missedFrames": 0,
+        "targetIntervalMs": 83.33,
+        "elapsedMs": 2214,
+        "visibility": "visible"
+      }
+    },
+    {
+      "scenario": "idle-still",
+      "source": "measured-renderer",
+      "stats": {
+        "count": 0,
+        "medianMs": null,
+        "p95Ms": null,
+        "p99Ms": null,
+        "missedFrames": 0,
+        "targetIntervalMs": 16.67,
+        "elapsedMs": 2211,
+        "visibility": "visible"
+      }
+    },
+    {
+      "scenario": "reduced-motion",
+      "source": "measured-renderer",
+      "stats": {
+        "count": 0,
+        "medianMs": null,
+        "p95Ms": null,
+        "p99Ms": null,
+        "missedFrames": 0,
+        "targetIntervalMs": 16.67,
+        "elapsedMs": 2210,
+        "visibility": "visible"
+      }
+    }
+  ],
+  "limits": [
+    "Missed frames are estimated against each quality tier target, not measured display presents.",
+    "Process CPU/GPU and hidden/minimized measurements require separate host observation."
+  ]
+}
