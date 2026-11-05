@@ -5,7 +5,7 @@ const {randomUUID}=require('node:crypto');
 const {createLiveMediaBroker,CHANNEL,validRequest,isSyntheticLiveMediaWindow}=require('../native/live-media-broker.cjs');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const request=(operation,payload={})=>({nativeLiveHost:{version:1,kind:'request',id:randomUUID(),operation,payload}});
-function fixture({syntheticInput=false,answer=true,wakeSource,wakeAck=true,loadError=false}={}){
+function fixture({syntheticInput=false,answer=true,wakeSource,wakeAck=true,loadError=false,authorizeOutputOnlyPrepare}={}){
   const ipcMain=new EventEmitter(),windows=[],sent=[],backend=[],pcm=[];
   class Window{
     constructor(options){this.options=options;this.dead=false;windows.push(this);const wc=new EventEmitter();this.webContents=wc;wc.mainFrame={url:''};wc.getURL=()=>wc.mainFrame.url;wc.isDestroyed=()=>this.dead;wc.setWindowOpenHandler=handler=>{wc.windowOpen=handler;};
@@ -20,7 +20,7 @@ function fixture({syntheticInput=false,answer=true,wakeSource,wakeAck=true,loadE
     destroy(){this.dead=true;this.webContents.emit('destroyed');}
     async loadURL(url){if(loadError)throw Error('PRIVATE_LOAD_ERROR');this.webContents.mainFrame.url=url;queueMicrotask(()=>ipcMain.emit(CHANNEL+'-ready',this.event(),{token:this.token()}));}
   }
-  const broker=createLiveMediaBroker({BrowserWindow:Window,ipcMain,send:wire=>backend.push(wire),preloadPath:'C:\\app\\dist\\vela-live-media-preload.cjs',htmlPath:'C:\\app\\native\\voice-media.html',syntheticInput,wakeSource});
+  const broker=createLiveMediaBroker({BrowserWindow:Window,ipcMain,send:wire=>backend.push(wire),preloadPath:'C:\\app\\dist\\vela-live-media-preload.cjs',htmlPath:'C:\\app\\native\\voice-media.html',syntheticInput,wakeSource,authorizeOutputOnlyPrepare});
   return{broker,ipcMain,windows,sent,backend,pcm,setAnswer(value){answer=value;}};
 }
 test('native media requires an owned one-use attempt and creates an isolated memory-partition window',async()=>{
@@ -31,6 +31,17 @@ test('native media requires an owned one-use attempt and creates an isolated mem
     assert.equal(f.backend.at(-1).nativeLiveHost.result.offerId,'offer-fixture');assert.equal(isSyntheticLiveMediaWindow(w),false);
     f.broker.handle(request('prepare',{attemptId}));await tick();assert.equal(f.backend.at(-1).nativeLiveHost.error,'live_media_protocol');
   }finally{f.broker.close();}assert.equal(f.ipcMain.listenerCount(CHANNEL+'-reply'),0);
+});
+
+test('standing speech media admission is private output-only, one-use, and rechecks close/generation after asynchronous approval',async()=>{
+ let admissions=0;const f=fixture({authorizeOutputOnlyPrepare:async input=>{admissions++;assert.equal(input.outputOnly,true);return true;}});try{
+  f.broker.handle(request('prepare',{attemptId:randomUUID()}));await tick();assert.equal(admissions,0);assert.equal(f.windows.length,0);
+  const attemptId=randomUUID();f.broker.handle(request('prepare',{attemptId,outputOnly:true}));await tick();assert.equal(admissions,1);assert.equal(f.windows.length,1);assert.equal(f.backend.at(-1).nativeLiveHost.error,undefined);
+  f.broker.handle(request('prepare',{attemptId,outputOnly:true}));await tick();assert.equal(admissions,1);assert.equal(f.backend.at(-1).nativeLiveHost.error,'live_media_protocol');
+ }finally{f.broker.close();}
+ const declined=fixture({authorizeOutputOnlyPrepare:async()=>false});try{declined.broker.handle(request('prepare',{attemptId:randomUUID(),outputOnly:true}));await tick();assert.equal(declined.windows.length,0);assert.equal(declined.backend.at(-1).nativeLiveHost.error,'live_media_protocol');}finally{declined.broker.close();}
+ for(const close of [true,false]){let release;const pending=fixture({authorizeOutputOnlyPrepare:()=>new Promise(resolve=>{release=resolve;})});try{pending.broker.handle(request('prepare',{attemptId:randomUUID(),outputOnly:true}));await tick();if(close)pending.broker.close();else pending.broker.handle(request('dispose'));await tick();release(true);await tick();assert.equal(pending.windows.length,0);}finally{pending.broker.close();}}
+ const normal=fixture({authorizeOutputOnlyPrepare:async()=>{throw Error('must not call standing grant');}});try{const attemptId=randomUUID();normal.broker.authorizeAttempt(attemptId);normal.broker.handle(request('prepare',{attemptId,outputOnly:true}));await tick();assert.equal(normal.windows.length,1);}finally{normal.broker.close();}
 });
 
 test('native master quiesce creates no window and bypasses8 normal requests while preserving provider finalization',async()=>{
@@ -80,6 +91,20 @@ test('session event provenance and crash cleanup are native-owned, with bounded 
 test('synthetic QA never grants ambient audio and private protocol rejects credentials/oversized input',async()=>{
   const f=fixture({syntheticInput:true,answer:false});try{const attemptId=randomUUID();f.broker.authorizeAttempt(attemptId);f.broker.handle(request('prepare',{attemptId}));await tick();const w=f.windows[0];let allowed;w.webContents.permissionRequest(w.webContents,'media',value=>{allowed=value;},{mediaTypes:['audio']});assert.equal(allowed,false);assert.ok(w.options.webPreferences.additionalArguments.includes('--aerynth-live-media-synthetic'));assert.equal(w.webContents.isAudioMuted(),true);assert.equal(isSyntheticLiveMediaWindow(w),true);}finally{f.broker.close();await tick();}
   for(const value of [request('prepare',{attemptId:'x',apiKey:'PRIVATE'}),request('connect',{sessionId:'s',sdpAnswer:'x'.repeat(65537)}),request('send',{sessionId:'s',command:{type:'session.update',event_id:'x'}}),request('state',{nativeGrant:true})])assert.equal(validRequest(value),false);
+});
+
+test('output-only preparation has no microphone permission window and rejects input switching',async()=>{
+  const f=fixture({answer:false});try{
+    const attemptId=randomUUID();f.broker.authorizeAttempt(attemptId);const prepare=request('prepare',{attemptId,outputOnly:true});
+    assert.equal(validRequest(prepare),true);f.broker.handle(prepare);await tick();const w=f.windows[0],wc=w.webContents;
+    let allowed;wc.permissionRequest(wc,'media',value=>{allowed=value;},{mediaTypes:['audio'],isMainFrame:true,requestingUrl:wc.getURL()});assert.equal(allowed,false);
+    assert.equal(wc.permissionCheck(wc,'media','file://',{mediaType:'audio',isMainFrame:true,requestingUrl:wc.getURL()}),false);
+    assert.equal(w.options.webPreferences.autoplayPolicy,'no-user-gesture-required');
+    const before=f.sent.length;f.broker.handle(request('setInputDevice',{deviceId:'mic-A'}));await tick();
+    assert.equal(f.sent.length,before);assert.equal(f.backend.at(-1).nativeLiveHost.error,'live_media_protocol');
+    assert.equal(f.sent[0].message.nativeLiveHost.payload.outputOnly,true);
+    for(const payload of [{attemptId,outputOnly:false},{attemptId,outputOnly:true,inputDeviceId:'mic'},{attemptId,outputOnly:true,bufferLeaseRef:'lease'}])assert.equal(validRequest(request('prepare',payload)),false);
+  }finally{f.broker.close();await tick();}
 });
 
 test('private state events reject extra diagnostics and invalid media, and provider events must be objects',async()=>{

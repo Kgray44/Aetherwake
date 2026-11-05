@@ -7,7 +7,8 @@ function loadWindowsSystem(root){
  if(process.platform!=='win32'||process.type!=='browser')throw Error('location_native_unavailable');
  const asset='aerynth-windows-system.node',metadata=JSON.parse(fs.readFileSync(path.join(root,'dist/aerynth-windows-system.sources.json'),'utf8'));
  const digest=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
- if(!record(metadata)||!exact(metadata,['contract','asset','sha256','inputs'])||metadata.contract!=='aerynth.private-windows-system-build@1'||metadata.asset!==asset||!record(metadata.inputs)||!exact(metadata.inputs,['native/windows-system.cpp'])||metadata.sha256!==digest(path.join(root,'dist',asset))||metadata.inputs['native/windows-system.cpp']!==digest(path.join(root,'native/windows-system.cpp')))throw Error('location_native_source_changed');
+ const sources=['native/windows-system.cpp','native/windows-computer.inc'];
+ if(!record(metadata)||!exact(metadata,['contract','asset','sha256','inputs'])||metadata.contract!=='aerynth.private-windows-system-build@1'||metadata.asset!==asset||!record(metadata.inputs)||!exact(metadata.inputs,sources)||metadata.sha256!==digest(path.join(root,'dist',asset))||sources.some(source=>metadata.inputs[source]!==digest(path.join(root,source))))throw Error('location_native_source_changed');
  return require(path.join(root,'dist',asset));
 }
 function createWindowsSystemBroker({root,getOwner,dialog,send,addon,now=Date.now}){

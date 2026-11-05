@@ -17,7 +17,7 @@ export function validNativeMediaRequest(value:any):value is Wire {
   if(!exact(value,['nativeLiveHost'])||!bounded(value))return false;
   const h=value.nativeLiveHost,p=h?.payload;
   if(!exact(h,['version','kind','id','operation','payload'])||h.version!==1||h.kind!=='request'||!uuid(h.id)||!operations.has(h.operation))return false;
-  if(h.operation==='prepare')return exact(p,['attemptId',...['inputDeviceId','outputDeviceId','bufferLeaseRef'].filter(key=>Object.hasOwn(p??{},key))])&&identifier(p.attemptId)&&['inputDeviceId','outputDeviceId','bufferLeaseRef'].every(key=>p[key]===undefined||identifier(p[key]));
+  if(h.operation==='prepare')return exact(p,['attemptId',...['inputDeviceId','outputDeviceId','bufferLeaseRef','outputOnly'].filter(key=>Object.hasOwn(p??{},key))])&&identifier(p.attemptId)&&['inputDeviceId','outputDeviceId','bufferLeaseRef'].every(key=>p[key]===undefined||identifier(p[key]))&&(!Object.hasOwn(p,'outputOnly')||p.outputOnly===true&&!Object.hasOwn(p,'inputDeviceId')&&!Object.hasOwn(p,'bufferLeaseRef'));
   if(h.operation==='quiesceCapture')return exact(p,['attemptId',...(Object.hasOwn(p??{},'sessionId')?['sessionId']:[])])&&identifier(p.attemptId)&&(p.sessionId===undefined||identifier(p.sessionId));
   if(h.operation==='connect')return exact(p,['sessionId','sdpAnswer'])&&identifier(p.sessionId)&&sdp(p.sdpAnswer);
   if(h.operation==='send')return exact(p,['sessionId','command'])&&identifier(p.sessionId)&&
@@ -75,7 +75,7 @@ export function createNativeMediaRuntime(send:(message:Wire)=>void, options:{med
           case 'prepare':if(offer||live||preparing||p.bufferLeaseRef&&!options.wakeInputEnabled)throw Error();attemptId=p.attemptId;preparing=true;
             try{
               if(p.bufferLeaseRef){wakeSelected=!!p.inputDeviceId;wakeInput=(options.wakeFactory??(()=>new WakeLiveInput()))();await wakeInput.ready();}
-              offer=await media.prepare({...(!wakeInput&&'inputDeviceId'in p?{inputDeviceId:p.inputDeviceId}:{}),...('outputDeviceId'in p?{outputDeviceId:p.outputDeviceId}:{})});result=offer;
+              offer=await media.prepare({...(!wakeInput&&'inputDeviceId'in p?{inputDeviceId:p.inputDeviceId}:{}),...('outputDeviceId'in p?{outputDeviceId:p.outputDeviceId}:{}),...(p.outputOnly===true?{outputOnly:true}:{})});result=offer;
             }finally{preparing=false;}break;
           case 'connect':{
             if(!offer||sessionId||live)throw Error();sessionId=p.sessionId;const boundSession=sessionId;

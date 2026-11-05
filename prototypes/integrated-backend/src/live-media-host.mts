@@ -3,7 +3,7 @@ import type { LiveChannel, LiveClientCommand, LiveMediaAdapter } from '../../ope
 import type { GptLiveAudioDevice, GptLiveMediaState } from '../../visual-experience/cinematic-v3/src/gpt-live-media.ts';
 export type { GptLiveAudioDevice, GptLiveMediaState };
 export interface NativeLiveMediaServices extends LiveMediaAdapter {
-  prepare(input: { attemptId: string; inputDeviceId?: string; outputDeviceId?: string; bufferLeaseRef?:string }): Promise<{ offerId: string; sdpOffer: string }>;
+  prepare(input: { attemptId: string; inputDeviceId?: string; outputDeviceId?: string; bufferLeaseRef?:string; outputOnly?:true }): Promise<{ offerId: string; sdpOffer: string }>;
   quiesceCapture?(input:{attemptId:string;sessionId?:string}):Promise<void>;
   devices(): Promise<GptLiveAudioDevice[]>;
   setInputDevice(deviceId: string): Promise<void>;
@@ -32,7 +32,7 @@ const command = (value: unknown) => exact(value,['type','event_id']) && ['sessio
 export const isNativeLiveHostEnvelope = (value: unknown): value is {nativeLiveHost: Record<string,any>} => !!value && (typeof value==='object'||typeof value==='function') && Object.hasOwn(value,'nativeLiveHost');
 export type NativeLiveHostMessage = { nativeLiveHost: { version: 1; kind: 'request'|'response'|'event'; id: string; operation: string; payload?: any; result?: any; error?: string } };
 function payloadValid(operation: Operation,p: unknown): boolean {
-  if (operation==='prepare') return exact(p,['attemptId',...['inputDeviceId','outputDeviceId','bufferLeaseRef'].filter(key=>Object.hasOwn(p??{},key))]) && id(p.attemptId) && ['inputDeviceId','outputDeviceId','bufferLeaseRef'].every(key=>p[key]===undefined||id(p[key]));
+  if (operation==='prepare') return exact(p,['attemptId',...['inputDeviceId','outputDeviceId','bufferLeaseRef','outputOnly'].filter(key=>Object.hasOwn(p??{},key))]) && id(p.attemptId) && ['inputDeviceId','outputDeviceId','bufferLeaseRef'].every(key=>p[key]===undefined||id(p[key])) && (!Object.hasOwn(p,'outputOnly')||p.outputOnly===true&&!Object.hasOwn(p,'inputDeviceId')&&!Object.hasOwn(p,'bufferLeaseRef'));
   if (operation==='quiesceCapture') return exact(p,['attemptId',...(Object.hasOwn(p??{},'sessionId')?['sessionId']:[])])&&id(p.attemptId)&&(p.sessionId===undefined||id(p.sessionId));
   if (operation==='connect') return exact(p,['sessionId','sdpAnswer']) && id(p.sessionId) && sdp(p.sdpAnswer);
   if (operation==='send') return exact(p,['sessionId','command']) && id(p.sessionId) && command(p.command);

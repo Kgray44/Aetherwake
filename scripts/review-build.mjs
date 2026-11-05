@@ -22,7 +22,7 @@ export const JOSE_RUNTIME = Object.freeze({name:'jose',version:'6.2.15',integrit
 export const NATIVE_RUNTIME_ENTRIES = Object.freeze([APP+'/native/desktop-main.cjs', APP+'/native/desktop-preload.cjs', APP+'/native/vela-review-preload.cjs', APP+'/native/voice-media.html',
   APP+'/native/document-text.html',APP+'/native/document-extraction-broker.cjs',
   APP+'/native/wake-media-broker.cjs',APP+'/native/wake-media.html',APP+'/native/wake-pcm-worklet.js',
-  APP+'/native/windows-system-broker.cjs',APP+'/native/windows-system.cpp',
+  APP+'/native/windows-system-broker.cjs',APP+'/native/windows-system.cpp',APP+'/native/windows-computer.inc',
   'prototypes/integrated-backend/src/desktop-host.mts', 'prototypes/integrated-backend/src/worker.mts',JOSE_RUNTIME.importer]);
 const REQUIRED_FOLDERS = ['prototypes/integrated-backend/src','prototypes/connected-conversations/src','prototypes/codex-bridge/src','prototypes/workspace-kernel','prototypes/workspace-engine','prototypes/constellation','prototypes/application-contract','prototypes/vela-core/src','prototypes/conversation-product/src','prototypes/block-library','prototypes/agent-product','prototypes/checklist-product','prototypes/timer-product','prototypes/timeline-product','prototypes/task-product',OPENAI,APP+'/src',APP+'/native'];
 const OMITTED = /(?:^|\/)(?:node_modules|\.runtime|\.local-data|profiles?|test|tests|fixtures?|demo|evidence[^/]*|protocol-generated)(?:\/|$)/i;
@@ -158,11 +158,11 @@ export async function validateWakeCapturePreload(root,dist,tracked,assets){
   return new Set([preload,metadata,worklet]);
 }
 export async function validateWindowsSystemNative(root,dist,tracked,assets){
-  const asset='aerynth-windows-system.node',metadata='aerynth-windows-system.sources.json',source='native/windows-system.cpp';
+  const asset='aerynth-windows-system.node',metadata='aerynth-windows-system.sources.json',sources=['native/windows-system.cpp','native/windows-computer.inc'];
   check([asset,metadata].every(name=>Object.hasOwn(assets,name)),'windows_system_receipt_missing');
   const raw=await fs.readFile(path.join(dist,metadata));check(raw.length<=16384,'windows_system_metadata_bound');const value=JSON.parse(raw);
-  check(value?.contract==='aerynth.private-windows-system-build@1'&&value.asset===asset&&value.sha256===assets[asset]&&Object.keys(value).sort().join('|')==='asset|contract|inputs|sha256'&&value.inputs&&Object.keys(value.inputs).join('|')===source,'windows_system_source_binding_invalid');
-  check(tracked.has(APP+'/'+source)&&value.inputs[source]===await hashFile(path.join(root,APP,source)),'windows_system_source_changed');
+  check(value?.contract==='aerynth.private-windows-system-build@1'&&value.asset===asset&&value.sha256===assets[asset]&&Object.keys(value).sort().join('|')==='asset|contract|inputs|sha256'&&value.inputs&&Object.keys(value.inputs).sort().join('|')===[...sources].sort().join('|'),'windows_system_source_binding_invalid');
+  for(const source of sources)check(tracked.has(APP+'/'+source)&&value.inputs[source]===await hashFile(path.join(root,APP,source)),'windows_system_source_changed');
   check((await fs.stat(path.join(dist,asset))).size<=4*1024*1024,'windows_system_binary_capacity');
   return new Set([asset,metadata]);
 }

@@ -33,7 +33,8 @@ export interface VelaPanelOptions {
   onManifestation?: (value: VelaPanelManifestation | null) => void;
   listTimelineRepositories?: () => Promise<string[]>;
   voice?: { element: HTMLElement; setVisible(visible: boolean): void; start(intent?: string): Promise<void>;
-    subscribe?(listener: (value: { active: boolean; microphoneOn: boolean; speaking: boolean }) => void): () => void };
+    speak?(message:{id:string;content:string}):Promise<void>;stopSpeech?(attemptId:string):Promise<void>;
+    subscribe?(listener: (value: { active: boolean; microphoneOn: boolean; speaking: boolean; speech?:{state:string;messageId:string|null;attemptId:string|null;contentDigest:string|null} }) => void): () => void };
   permissions?: { element: HTMLElement; setVisible(visible: boolean): void };
   missions?: {
     element: HTMLElement;
@@ -56,7 +57,6 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   let activeContext: string | null = null, contextTrigger: HTMLButtonElement | null = null, chosenProviderId: string | null = null, presentationSignature = '';
   let handoffSelection: { requestId: string; sourceProviderId: string } | null = null;
   let routingAgentSelection: ResourceRef | null = null;
-  let pendingMissionReplyId: string | null = null;
   let manifestationSignature = '', manifestationBaseline = true, observing = true, presentationBusy = false, readSequence = 0, viewRevision = 0, transientView: 'current' | 'history' | null = null;
   const instanceId = 'vela-context-' + ++panelSequence;
   const selected = new Map<string, ResourceRef>(), sourceControls = new Map<string, HTMLInputElement>();
@@ -89,6 +89,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   fileEditActions.hidden = true;
   let fileEditBusy = false;
   let responseSignature = '';
+  let replySpeech:{state:string;messageId:string|null;attemptId:string|null;contentDigest:string|null}|undefined;
   const conversation = el('div', 'vela-core-conversation'); conversation.setAttribute('aria-label', 'Vela conversation');
   const plans = el('section', 'vela-core-plans'); plans.setAttribute('aria-label', 'Plans to review');
   const planHistory = disclosure('Earlier plans', 'vela-core-plan-history');
@@ -413,9 +414,11 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const voiceControl = icon('Voice', '♩', 'voice', () => reveal('voice'));
   const localFilesControl=icon('Add files or folders','▤','files',()=>reveal('files'));
   const releaseVoice = options.voice?.subscribe?.(value => {
+    replySpeech=value.speech;
     voiceControl.dataset.voiceActive = String(value.active); voiceControl.setAttribute('aria-pressed', String(value.active));
     const description = value.microphoneOn ? 'Microphone on' : value.active ? 'Voice connected; microphone off' : 'Voice off';
     voiceControl.setAttribute('aria-description', description); voiceControl.title = value.speaking ? 'Vela is speaking' : description;
+    if(current&&observing)renderReading();
   });
   const contextPanels = new Map([
     ['result', { panel: resultPanel, trigger: resultControl }],
@@ -453,35 +456,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     ...(connected && routingAgentSelection ? { routingAgentId: routingAgentSelection.id } : {}),
     ...(connected && (useAutomaticOnce || handoffSelection && !routingAgentSelection) ? { overrideDefaults: true as const } : {}),
   }, revision = draftRevision, submittedView = ++viewRevision;
-    const defaults = useAutomaticOnce ? undefined : current?.routingSettings?.effective;
-    const agentProfileId = routingAgentSelection?.id;
-    const couldBeMission = /^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you)\s+)*(?:run|start|plan|create|investigate|profile|measure|sample|check|research)\s/iu.test(submitted.intent);
-    const checkMission = couldBeMission && options.missions && !selected.size && !chosenProviderId && !allowProvider.checked &&
-      (!routeMode.value || routeMode.value === 'auto') && !routeModel.value && !routeEffort.value && !routeHistory.checked && !routeEscalation.checked &&
-      !handoffSelection && !defaults?.providerId && !defaults?.model && !defaults?.reasoningEffort &&
-      (!defaults?.mode || defaults.mode === 'auto');
     transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
       try {
-        if (checkMission && options.missions) {
-          stop.hidden = true;
-          const preview = await options.missions.preview(submitted.intent, agentProfileId);
-          if (preview) {
-            renderStatus(current ?? { requests: [], plans: [], receipts: [] });
-            if (!disposed && observing && draftRevision === revision && intent.value === submitted.intent) {
-              options.missions.review(preview, missionId => {
-                if (draftRevision !== revision || intent.value !== submitted.intent) return;
-                pendingMissionReplyId = missionId;
-                intent.value = ''; send.disabled = true;
-                if (agentProfileId && routingAgentSelection?.id === agentProfileId) { routingAgentSelection = null; renderSelection(); }
-                void run(() => settleSubmittedView(submittedView));
-              }, agentProfileId);
-              reveal('missions');
-            }
-            return;
-          }
-          stop.hidden = false;
-        }
         const recorded = await client.request(submitted);
         if (disposed) return;
         if (recorded.handoff?.sourceRequestId === handoffSelection?.requestId && recorded.handoff &&
@@ -617,6 +594,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const facts = selectedRequest?.local?.facts;
     const content = conciseObservedAnswer(message?.content,facts);
     const missionReport = message?.missionReport;
+    const hostOperations=current?.hostOperations?.filter(operation=>operation.requestId===selectedRequest?.id)??[];
     const completedPlan = selectedRequest && current?.plans.find(plan => plan.id === projection.currentPlanId && confirmedVelaPlan(current!, selectedRequest, plan));
     const actionPlan = current?.plans.find(plan => plan.id === projection.currentPlanId);
     const reviewPlan = actionPlan?.state === 'prepared' && !actionPlan.steps.some(step=>step.action.type==='delegateTask') ? actionPlan : null;
@@ -624,7 +602,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const completedFiles = current?.fileProposals?.find(item => item.requestId === selectedRequest?.id && item.state === 'applied' && item.result?.verified && item.result.workspaceId === item.target.workspaceId && item.result.importedCount + item.result.reusedCount === item.count);
     const fileDetails=fileProposal||completedFiles;
     const actionMessage = projection.kind === 'action' && actionPlan ? ({ prepared: 'Ready for your review.', approved: 'Ready to apply.', applying: 'Working…', applied: 'The result needs checking.', failed: 'That couldn’t be completed. Open details to review.', cancelled: 'Cancelled.', rejected: 'No changes made.', unknown: 'The outcome needs checking. Open details before trying again.' }[actionPlan.state]) : '';
-    const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind, content, actionMessage, missionReport, completedPlan: completedPlan?.id, fileProposal, completedFiles });
+    const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind, content, actionMessage, missionReport, completedPlan: completedPlan?.id, fileProposal, completedFiles,hostOperations,replySpeech });
     manifestationBody.dataset.density = facts && ['time','date','calculator'].includes(facts.kind) && content.length <= 80 ? 'signal' : 'reading';
     shell.dataset.manifestationKind = projection.kind; shell.dataset.presentationView = view(); manifestation.dataset.requestId = projection.currentRequestId ?? ''; manifestation.dataset.currentMessageId = projection.currentMessageId ?? '';
     manifestation.hidden = projection.kind === 'none' || view() === 'history' && !projection.requiredPlanIds.length;
@@ -651,8 +629,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       else if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content));
       if (missionReport) manifestationBody.append(missionReplyFooter(missionReport));
       else if (message && projection.kind !== 'action') {
-        const footer=responseFooter(completedPlan || undefined);
-        if(completedFiles&&!completedPlan)footer.prepend(el('span','vela-mission-jobs-done','1 job done'));
+        const speakable=message.role==='assistant'&&!message.missionReport&&!message.planId&&message.responseKind&&selectedRequest&&['responded','completed'].includes(selectedRequest.state)?message:undefined;
+        const footer=responseFooter(completedPlan || undefined,hostOperations,completedFiles&&!completedPlan?1:0,speakable);
         manifestationBody.append(footer);
       }
     }
@@ -773,7 +751,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       route, routingSettings: selectedRequest?.routingSettings, routingAgent: selectedRequest?.routingAgent,
       budget: route?.kind === 'project-check' ? 'No model usage' : route ? 'Cost and remaining allowance unknown' : undefined,
       ...(route?.kind === 'agentic' || route?.kind === 'composite' ? { verification: 'unverified' } : {}), edit,apiEdit,
-      projectCheck: standaloneCheck, providerRecovery, handoff: selectedRequest?.handoff, local: selectedRequest?.local, response: selectedRequest?.response,
+      projectCheck: standaloneCheck, providerRecovery, hostOperations, handoff: selectedRequest?.handoff, local: selectedRequest?.local, response: selectedRequest?.response,
       provider: message?.providerContribution ?? selectedRequest?.providerId }, null, 2);
     if (manifestationDetails.body.firstElementChild?.textContent !== details) manifestationDetails.body.replaceChildren(el('pre', undefined, details)); manifestationDetails.node.hidden = !!missionReport || projection.kind === 'none' || projection.kind === 'action';
     const sources = selectedRequest?.context.included ?? [], sourceSignature = JSON.stringify(sources.map(ref => [ref.id, ref.kind, ref.version, ref.title]));
@@ -816,17 +794,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     if (!busy && (selectedRequest || current)) { renderStatus({ requests: selectedRequest ? [selectedRequest] : current!.requests, plans: current?.plans ?? [], receipts: current?.receipts ?? [] }); if (selectedRequest?.state === 'responded' && projection.kind === 'insight' && !projection.currentMessageId) { status.textContent = 'This response is unavailable or its attribution could not be verified. Review history before using it.'; status.hidden = false; } if (projection.kind === 'none' && current?.requests.at(-1) && presentation().dismissedRequestIds.includes(current.requests.at(-1)!.id)) status.hidden = true; }
     if (projection.kind !== 'action' && projection.currentMessageId && !busy) status.hidden = true;
     if (actionMessage && !busy) status.hidden = true;
-    if (missionReport) {
-      status.hidden = true;
-      if (missionReport.missionId === pendingMissionReplyId) {
-        pendingMissionReplyId = null;
-        if (activeContext === 'missions' && !manifestation.hidden) {
-          const focusWasInPlan = more.contains(doc.activeElement);
-          closeContext(false);
-          if (focusWasInPlan) manifestation.focus();
-        }
-      }
-    }
+    if (missionReport) status.hidden = true;
     updatePresence(); emitManifestation();
   }
   function present() {
@@ -944,7 +912,6 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     if (link.jobsDone !== undefined) footer.append(el('span', 'vela-mission-jobs-done', `${link.jobsDone} ${link.jobsDone === 1 ? 'job' : 'jobs'} done`));
     if (options.missions?.openReport) {
       const openPlan = icon('Open mission plan', '▤', 'missions', () => {
-        pendingMissionReplyId = null;
         reveal('missions');
         contextTrigger = openPlan;
         options.missions?.openReport?.(link.missionId);
@@ -955,9 +922,28 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     }
     return footer;
   }
-  function responseFooter(plan?: VelaPlan) {
+  function responseFooter(plan?: VelaPlan,hostOperations:NonNullable<VelaState['hostOperations']>=[],additionalJobs=0,message?:VelaMessage) {
     const footer = el('div', 'vela-mission-reply-footer');
-    if (plan) footer.append(el('span', 'vela-mission-jobs-done', `${plan.steps.length} ${plan.steps.length === 1 ? 'job' : 'jobs'} done`));
+    const hostJobs=new Map(hostOperations.filter(operation=>operation.state==='observed'&&operation.receiptId&&Number.isSafeInteger(operation.jobsDone)&&operation.jobsDone!>0).map(operation=>[operation.receiptId,operation.jobsDone!]));
+    const jobs=(plan?.steps.length??0)+additionalJobs+[...hostJobs.values()].reduce((total,count)=>total+count,0);
+    if (jobs) footer.append(el('span', 'vela-mission-jobs-done', `${jobs} ${jobs === 1 ? 'job' : 'jobs'} done`));
+    if(message&&options.voice?.speak){
+      const speech=replySpeech,stopping=!!speech?.attemptId&&speech.messageId===message.id&&['starting','speaking'].includes(speech.state);
+      const speak=icon(stopping?'Stop speaking':'Speak response',stopping?'■':'♩','speak',()=>void run(async()=>{
+        speak.disabled=true;
+        try{if(stopping&&speech?.attemptId&&options.voice?.stopSpeech)await options.voice.stopSpeech(speech.attemptId);else await options.voice!.speak!({id:message.id,content:message.content});}
+        finally{speak.disabled=false;}
+      }));
+      speak.dataset.speechMessageId=message.id;footer.append(speak);
+    }
+    const pending=hostOperations.find(operation=>operation.state==='awaiting-review'&&operation.reviewAvailable);
+    if(pending&&client.hostOperation){
+      const review=button('Review options',()=>void run(async()=>{
+        if(fileEditBusy)return;fileEditBusy=review.disabled=true;
+        try{await client.hostOperation!({operationId:pending.id});}
+        finally{fileEditBusy=review.disabled=false;await refresh();}
+      }));review.dataset.hostOperationId=pending.id;footer.append(review);
+    }
     const open = icon(plan ? 'Open completed plan' : 'Open response details', '▤', 'result', () => {
       reveal('result'); contextTrigger = open;
     });

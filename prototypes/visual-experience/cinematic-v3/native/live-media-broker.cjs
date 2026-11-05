@@ -30,7 +30,7 @@ function validRequest(value) {
   const h=value.nativeLiveHost;
   if(!exact(h,['version','kind','id','operation','payload'])||h.version!==1||h.kind!=='request'||!uuid(h.id)||!operations.has(h.operation))return false;
   const p=h.payload;
-  if(h.operation==='prepare')return exact(p,['attemptId',...['inputDeviceId','outputDeviceId','bufferLeaseRef'].filter(key=>Object.hasOwn(p??{},key))])&&id(p.attemptId)&&['inputDeviceId','outputDeviceId','bufferLeaseRef'].every(key=>p[key]===undefined||id(p[key]));
+  if(h.operation==='prepare')return exact(p,['attemptId',...['inputDeviceId','outputDeviceId','bufferLeaseRef','outputOnly'].filter(key=>Object.hasOwn(p??{},key))])&&id(p.attemptId)&&['inputDeviceId','outputDeviceId','bufferLeaseRef'].every(key=>p[key]===undefined||id(p[key]))&&(!Object.hasOwn(p,'outputOnly')||p.outputOnly===true&&!Object.hasOwn(p,'inputDeviceId')&&!Object.hasOwn(p,'bufferLeaseRef'));
   if(h.operation==='quiesceCapture')return exact(p,['attemptId',...(Object.hasOwn(p??{},'sessionId')?['sessionId']:[])])&&id(p.attemptId)&&(p.sessionId===undefined||id(p.sessionId));
   if(h.operation==='connect')return exact(p,['sessionId','sdpAnswer'])&&id(p.sessionId)&&sdp(p.sdpAnswer);
   if(h.operation==='send')return exact(p,['sessionId','command'])&&id(p.sessionId)&&command(p.command);
@@ -40,8 +40,8 @@ function validRequest(value) {
   return exact(p,[]);
 }
 /** Private transport: neither this channel nor its token is exposed by a contextBridge. */
-function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, htmlPath, syntheticInput=false, now=Date.now,wakeSource }) {
-  let win=null, token=null, ready=null, readyResolve, readyReject, readyTimer, closed=false, currentSession=null, currentAttempt=null, permissionDepth=0,quiesceFlight=null;
+function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, htmlPath, syntheticInput=false, now=Date.now,wakeSource,authorizeOutputOnlyPrepare }) {
+  let win=null, token=null, ready=null, readyResolve, readyReject, readyTimer, closed=false, currentSession=null, currentAttempt=null, permissionDepth=0,quiesceFlight=null,outputOnly=false;
   let lastState={contract:'aerynth.gpt-live-media@1',connection:'idle',microphoneAccess:'not-requested',localTrackEnabled:false,localSourceMuted:null,providerInputMute:'unknown',playback:'idle',playbackObserved:false,humanAudibility:'unverified',inputDevice:'default',outputDevice:'default',localSpeech:'unavailable',remoteSignal:'unavailable',interruption:'none'};
   let rateAt=now(), rate=0, activeRequests=0, generation=0;
   const attempts=new Map(), pending=new Map(), seen=new Set();
@@ -64,7 +64,7 @@ function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, html
   function reset(code='live_media_closed',disposed=false) {
     releaseWake(currentAttempt??undefined);
     generation++;
-    const prior=win;win=null;token=null;permissionDepth=0;currentSession=null;currentAttempt=null;
+    const prior=win;win=null;token=null;permissionDepth=0;currentSession=null;currentAttempt=null;outputOnly=false;
     lastState={...lastState,connection:disposed?'disposed':code==='live_media_closed'?'closed':'failed',microphoneAccess:lastState.microphoneAccess==='active'?'released':lastState.microphoneAccess,localTrackEnabled:false,localSourceMuted:null,providerInputMute:'unknown',playback:'idle',localSpeech:'unavailable',remoteSignal:'unavailable',interruption:'none'};
     if(disposed)delete lastState.errorCode;
     else if(code!=='live_media_closed')lastState.errorCode=code;
@@ -117,7 +117,7 @@ function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, html
       !(exact(h,['version','kind','id','operation','result'])||exact(h,['version','kind','id','operation','error'])&&errors.has(h.error)))return;
     pending.delete(h.id);clearTimeout(p.timer);
     if(h.error)p.reject(Error(h.error));
-    else if(!resultValid(h.operation,h.result))p.reject(Error('live_media_protocol'));
+    else if(!resultValid(h.operation,h.result)||h.operation==='state'&&outputOnly&&(h.result.microphoneAccess!=='not-requested'||h.result.localTrackEnabled))p.reject(Error('live_media_protocol'));
     else {if(h.operation==='state')lastState=structuredClone(h.result);p.resolve(h.result);}
   };
   const onEvent=(event,value)=>{
@@ -125,7 +125,7 @@ function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, html
     const m=value.message,h=m?.nativeLiveHost,p=h?.payload;
     if(!exact(m,['nativeLiveHost'])||!exact(h,['version','kind','id','operation','payload'])||h.version!==1||h.kind!=='event'||!uuid(h.id))return;
     if(now()-rateAt>=1000){rateAt=now();rate=0;}if(++rate>LIMITS.eventsPerSecond){failed();return;}
-    if(h.operation==='state'){if(!exact(p,['sessionId','state'])||(p.sessionId!==null&&p.sessionId!==currentSession)||!resultValid('state',p.state))return;lastState=structuredClone(p.state);}
+    if(h.operation==='state'){if(!exact(p,['sessionId','state'])||(p.sessionId!==null&&p.sessionId!==currentSession)||!resultValid('state',p.state)||outputOnly&&(p.state.microphoneAccess!=='not-requested'||p.state.localTrackEnabled))return;lastState=structuredClone(p.state);}
     else if(h.operation==='provider-event'){if(!exact(p,['sessionId','event'])||p.sessionId!==currentSession||!p.event||typeof p.event!=='object'||Array.isArray(p.event)||Buffer.byteLength(JSON.stringify(p.event))>65536)return;}
     else if(h.operation==='connection-lost'){if(!exact(p,['sessionId'])||p.sessionId!==currentSession)return;reset();}
     else return;
@@ -150,22 +150,29 @@ function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, html
       if(currentAttempt)throw Error('live_media_protocol');
       const expiry=attempts.get(h.payload.attemptId);attempts.delete(h.payload.attemptId);
       if(h.payload.bufferLeaseRef){if(!wakeRelay||currentAttempt)throw Error('live_media_protocol');wakeRelay.bind(h.payload);}
-      else if(!expiry||expiry<now())throw Error('live_media_protocol');
+      else if(!expiry||expiry<now()){
+        if(h.payload.outputOnly!==true||typeof authorizeOutputOnlyPrepare!=='function')throw Error('live_media_protocol');
+        const admitted=await authorizeOutputOnlyPrepare(h.payload);
+        if(closed||generation!==startedGeneration||currentAttempt)throw Error('live_media_closed');
+        if(admitted!==true)throw Error('live_media_protocol');
+      }
       currentAttempt=h.payload.attemptId;
+      outputOnly=h.payload.outputOnly===true;
     }
+    if(h.operation==='setInputDevice'&&outputOnly)throw Error('live_media_protocol');
     if(h.operation==='connect'){if(!currentAttempt||currentSession)throw Error('live_media_backpressure');currentSession=h.payload.sessionId;}
     if(['send','close'].includes(h.operation)&&h.payload.sessionId!==currentSession)throw Error('live_media_protocol');
     await ensureWindow();
     if(['prepare','connect','setInputDevice'].includes(h.operation)&&startedGeneration!==generation)throw Error('live_media_closed');
     if(h.operation==='prepare'&&!syntheticInput)win.webContents.setAudioMuted(false);
-    const microphoneOperation=['prepare','setInputDevice'].includes(h.operation);if(microphoneOperation)permissionDepth++;
+    const microphoneOperation=!outputOnly&&['prepare','setInputDevice'].includes(h.operation);if(microphoneOperation)permissionDepth++;
     try{const result=await new Promise((resolve,reject)=>{
       if(pending.size>=(h.operation==='quiesceAll'?12:cleanup(h)?11:LIMITS.inFlight))return reject(Error('live_media_backpressure'));
       const timer=setTimeout(()=>{pending.delete(h.id);reject(Error('live_media_timeout'));failed();},quiesce?500:LIMITS.timeoutMs);
       pending.set(h.id,{operation:h.operation,resolve,reject,timer});
       try{win.webContents.send(CHANNEL+'-command',{token,message:{nativeLiveHost:h}});}catch{clearTimeout(timer);pending.delete(h.id);reject(Error('live_media_closed'));}
     });if(h.operation==='prepare'&&h.payload.bufferLeaseRef)await wakeRelay.ready(h.payload.attemptId);return result;
-    }finally{if(microphoneOperation)permissionDepth=Math.max(0,permissionDepth-1);if(h.operation==='close'){releaseWake(currentAttempt??undefined);currentSession=null;currentAttempt=null;}}
+    }finally{if(microphoneOperation)permissionDepth=Math.max(0,permissionDepth-1);if(h.operation==='close'){releaseWake(currentAttempt??undefined);currentSession=null;currentAttempt=null;outputOnly=false;}}
   }
   return {
     wakeSourceLost(attemptId){if(wakeRelay?.state()?.attemptId===attemptId)failed();},

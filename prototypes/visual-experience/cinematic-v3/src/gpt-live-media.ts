@@ -134,6 +134,8 @@ type Resources = {
   captureAbort: AbortController;
   captureQuiesced: boolean;
   inputListeners: (() => void)[];
+  outputOnly: boolean;
+  silenceContext?: AudioContext;
 };
 
 /** Browser WebRTC/media only. SDP stays in the prepared/native negotiation path;
@@ -306,6 +308,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
   }
   async devices(): Promise<GptLiveAudioDevice[]> {
     check(!this.disposed, "live_media_disposed");
+    if (this.resources?.outputOnly) return [];
     const devices = await this.bounded(
       () => this.environment.enumerateDevices(),
       "live_media_devices_unavailable",
@@ -336,7 +339,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
   }
   /** Explicit user-start boundary. Microphone permission is never requested on construction. */
   async prepare(
-    input: { inputDeviceId?: string; outputDeviceId?: string } = {},
+    input: { inputDeviceId?: string; outputDeviceId?: string; outputOnly?:true } = {},
   ): Promise<PrivateGptLiveOffer> {
     check(
       !this.disposed && !this.resources && !this.cleaning,
@@ -345,12 +348,13 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
     check(
       object(input) &&
         Object.keys(input).every(
-          (key) => key === "inputDeviceId" || key === "outputDeviceId",
+          (key) => key === "inputDeviceId" || key === "outputDeviceId" || key === "outputOnly",
         ) &&
         (input.inputDeviceId === undefined ||
           identifier(input.inputDeviceId)) &&
         (input.outputDeviceId === undefined ||
-          identifier(input.outputDeviceId)),
+          identifier(input.outputDeviceId)) &&
+        (!Object.hasOwn(input,"outputOnly") || input.outputOnly===true && !Object.hasOwn(input,"inputDeviceId")),
       "live_media_invalid_device",
     );
     let peer: RTCPeerConnection | undefined,
@@ -385,6 +389,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
         captureAbort: new AbortController(),
         captureQuiesced: false,
         inputListeners: [],
+        outputOnly: input.outputOnly===true,
       };
     } catch {
       try {
@@ -418,15 +423,24 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
     try {
       this.bindEvents(resources);
       if (resources.outputId) await this.sink(resources, resources.outputId);
-      resources.local = await this.microphone(resources, resources.inputId);
+      if(resources.outputOnly){
+        check(this.environment.createAudioContext,"live_media_environment_unavailable");
+        resources.silenceContext=this.environment.createAudioContext();
+        resources.local=resources.silenceContext.createMediaStreamDestination().stream;
+        resources.localAllocations.add(resources.local);
+        const tracks=resources.local.getAudioTracks();
+        check(tracks.length===1&&tracks[0].readyState==='live',"live_media_environment_unavailable");
+        // Disabled zero-source track negotiates receive audio without a microphone.
+        for(const track of resources.local.getTracks())track.enabled=false;
+      }else resources.local = await this.microphone(resources, resources.inputId);
       this.active(resources);
-      this.inputTrack(resources);
+      if(!resources.outputOnly)this.inputTrack(resources);
       this.applyMute(resources);
       resources.sender = peer.addTrack(
         resources.local.getAudioTracks()[0],
         resources.local,
       );
-      this.publish({ microphoneAccess: "active" });
+      this.publish({ microphoneAccess: resources.outputOnly?"not-requested":"active",localSourceMuted:resources.outputOnly?null:this.stateValue.localSourceMuted });
       await this.analysis(resources);
       check(!resources.captureQuiesced,'live_media_replaced');
       const offer = await this.bounded(
@@ -635,7 +649,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
   }
   private applyMute(resources: Resources) {
     const enabled =
-      !resources.captureQuiesced && !resources.localMuted && this.stateValue.providerInputMute === "unmuted";
+      !resources.outputOnly && !resources.captureQuiesced && !resources.localMuted && this.stateValue.providerInputMute === "unmuted";
     for (const track of resources.local?.getAudioTracks() ?? [])
       track.enabled = enabled;
     this.publish({
@@ -972,7 +986,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
   async setInputDevice(deviceId: string): Promise<void> {
     const resources = this.resources;
     check(
-      resources?.sender && !resources.captureQuiesced && identifier(deviceId),
+      resources?.sender && !resources.outputOnly && !resources.captureQuiesced && identifier(deviceId),
       "live_media_invalid_device",
     );
     check(!this.inputChanging, "live_media_device_change_busy");
@@ -1120,7 +1134,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
         resources.abort.signal,
       );
       this.active(resources);
-      resources.localAnalysis = this.analyse(
+      if(!resources.outputOnly)resources.localAnalysis = this.analyse(
         resources.context,
         resources.local!,
       );
@@ -1166,7 +1180,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
       this.energy(resources.localAnalysis) >= 0.025;
     resources.loudFrames = loud ? Math.min(3, resources.loudFrames + 1) : 0;
     resources.quietFrames = loud ? 0 : Math.min(5, resources.quietFrames + 1);
-    const localSpeech =
+    const localSpeech = resources.outputOnly ? "unavailable" :
       resources.loudFrames >= 3
         ? "detected"
         : resources.quietFrames >= 5
@@ -1241,7 +1255,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
     }
     this.publish({
       connection: this.disposed ? "disposed" : connection,
-      microphoneAccess: resources.local
+      microphoneAccess: resources.outputOnly ? "not-requested" : resources.local
         ? "released"
         : this.stateValue.microphoneAccess,
       localTrackEnabled: false,
@@ -1252,6 +1266,9 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
       remoteSignal: "unavailable",
       interruption: "none",
     });
+    if (resources.silenceContext) {
+      try { await this.bounded(()=>resources.silenceContext!.close(),"live_media_analysis_unavailable"); } catch {}
+    }
     if (resources.context) {
       try {
         await this.bounded(
@@ -1274,7 +1291,9 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
     try{resources.audio.pause();resources.audio.srcObject=null;resources.audio.removeAttribute('src');resources.audio.load();}catch{/* Continue physical release. */}
     for(const analysis of [resources.localAnalysis,resources.remoteAnalysis]){try{analysis?.source.disconnect();analysis?.analyser.disconnect();}catch{/* No audio analysis is retained. */}}
     resources.localAnalysis=resources.remoteAnalysis=undefined;
-    this.publish({microphoneAccess:'released',localTrackEnabled:false,localSourceMuted:null,playback:'interrupted',localSpeech:'unavailable',remoteSignal:'unavailable',interruption:'explicit-user'});
+    this.publish({microphoneAccess:resources.outputOnly?'not-requested':'released',localTrackEnabled:false,localSourceMuted:null,playback:'interrupted',localSpeech:'unavailable',remoteSignal:'unavailable',interruption:'explicit-user'});
+    const silenceContext=resources.silenceContext;resources.silenceContext=undefined;
+    if(silenceContext)try{await this.bounded(()=>silenceContext.close(),'live_media_analysis_unavailable');}catch{/* Every synthetic track is already ended. */}
     const context=resources.context;resources.context=undefined;
     if(context)try{await this.bounded(()=>context.close(),'live_media_analysis_unavailable');}catch{/* Physical tracks and playback are already released. */}
     // Preserve peer, channel and provider event listeners to drain session.closed/usage.

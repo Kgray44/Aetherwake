@@ -85,7 +85,7 @@ contextBridge.exposeInMainWorld(
       if (name === 'velaApiConnection' && !['status','usageStatus'].includes(input?.type) &&
           navigator.userActivation?.isActive !== true)
         throw new Error('api_user_gesture_required');
-      if (name === 'velaVoice' && ['start','reconnect','audition','createVoice','saveVoice'].includes(input?.name) &&
+      if (name === 'velaVoice' && (['start','reconnect','audition','speak','createVoice','saveVoice'].includes(input?.name)||input?.name==='setSpeakReplies'&&input?.input?.enabled===true) &&
           navigator.userActivation?.isActive !== true)
         throw new Error('voice_user_gesture_required');
       if (name === 'weatherPermission' && input?.type !== 'status' &&
@@ -100,7 +100,7 @@ contextBridge.exposeInMainWorld(
         throw new Error("github_user_gesture_required");
       if (name === "workspaceRecovery" && input?.name === "apply" && navigator.userActivation?.isActive !== true)
         throw new Error("workspace_recovery_user_gesture_required");
-      if (name === "vela" && ["request", "native", "apply", "pickSources", "fileProposal"].includes(input?.name) && navigator.userActivation?.isActive !== true)
+      if (name === "vela" && ["request", "native", "apply", "pickSources", "fileProposal", "hostOperation"].includes(input?.name) && navigator.userActivation?.isActive !== true)
         throw new Error("vela_user_gesture_required");
       if (name === "reconcileConversationTurn" &&
           navigator.userActivation?.isActive !== true)

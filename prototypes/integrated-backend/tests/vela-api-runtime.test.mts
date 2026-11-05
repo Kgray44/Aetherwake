@@ -6,6 +6,9 @@ import {VelaApiRuntime} from '../src/vela-api-runtime.mts';
 import {apiRunDiagnostics} from '../src/api-run-diagnostics.mts';
 import {WEATHER_TOOL_NAME,WEATHER_TOOL,type WeatherQuery} from '../src/weather-tool.mts';
 import {readWeatherData} from '../src/weather-data.mts';
+import {VELA_TOOL_SCHEMAS,VELA_TOOL_INVOKE} from '../src/vela-semantic-tools.mts';
+import {createCapabilityCatalog} from '../../vela-core/src/capability-catalog.mts';
+import {CAPABILITIES} from '../../vela-core/src/capabilities.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -153,7 +156,7 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     assert.equal(f.requests.length,0); await f.authorize();
     f.replies.push(()=>response('Mass measures inertia; weight is gravitational force.'));
     const first=await f.send('Explain the difference between mass and weight'); assert.equal(first.state,'responded'); assert.equal(first.providerId,'openai-api-vela');
-    const wire=f.requests[0]; assert.equal(wire.model,'gpt-6-luna'); assert.deepEqual(wire.reasoning,{effort:'none'}); assert.equal(wire.max_output_tokens,2048); assert.equal(wire.store,false); assert.equal(wire.tools,undefined); assert.ok(wire.instructions.includes('Vela is Aerynth'));
+    const wire=f.requests[0]; assert.equal(wire.model,'gpt-6-luna'); assert.deepEqual(wire.reasoning,{effort:'none'}); assert.equal(wire.max_output_tokens,2048); assert.equal(wire.store,false); assert(wire.tools.some((tool:any)=>tool.name===VELA_TOOL_INVOKE)); assert.ok(wire.instructions.includes('Vela is Aerynth'));
     const snapshot=await f.core.command('snapshot',{}); assert.equal(snapshot.conversations.length,1); assert.equal(snapshot.graph.messages.length,2);
     const output=snapshot.graph.messages.find(message=>message.role==='assistant')!;
     assert.equal(output.content,'Mass measures inertia; weight is gravitational force.'); assert.equal(snapshot.messageEvidence[output.id].providerId,'openai-api-vela');
@@ -166,20 +169,22 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
   } finally { await f.close(); }
 });
 
-test('actual Core schema tool loop returns receipt-bound continuation then validates and applies a bounded create request', async () => {
+test('actual Core semantic application action uses standing source policy and continues with its real canonical receipt and fresh context', async () => {
   const f=fixture();
   try {
     await f.configure(); await f.authorize();
     f.replies.push(body=>{
-      const envelope=JSON.parse(body.input[0].content); assert.equal(body.tools.length,1); assert.equal(body.parallel_tool_calls,false);
-      return response('','resp-discovery',[{type:'function_call',id:'fc-fixture',call_id:'call-fixture',name:'aerynth_capability_schemas',arguments:JSON.stringify({catalogDigest:envelope.capabilityCatalog.digest,ids:['createWorkspace']}),status:'completed'}] as any);
+      const envelope=JSON.parse(/Pinned host tools: ([^\n]+)/u.exec(body.instructions)![1]);assert(body.tools.some((tool:any)=>tool.name===VELA_TOOL_SCHEMAS));assert.equal(body.parallel_tool_calls,true);
+      return response('','resp-discovery',[{type:'function_call',id:'fc-fixture',call_id:'call-fixture',name:VELA_TOOL_SCHEMAS,arguments:JSON.stringify({catalogDigest:envelope.catalogDigest,ids:['application.createWorkspace']}),status:'completed'}] as any);
     },body=>{
-      const tool=body.input.find((item:any)=>item.type==='function_call_output'); assert.ok(tool); assert.ok(JSON.parse(tool.output).descriptors.some((item:any)=>item.id==='createWorkspace'));
-      return response(JSON.stringify({schemaVersion:2,kind:'plan',summary:'Create the requested workspace.',steps:[{id:'create',explanation:'Create the requested workspace.',action:{type:'createWorkspace',title:'Research',projectId:null}}]}),'resp-plan');
+      const tool=body.input.find((item:any)=>item.type==='function_call_output'); assert.ok(tool);const discovery=JSON.parse(tool.output),descriptor=discovery.descriptors.find((item:any)=>item.id==='application.createWorkspace');assert(descriptor);
+      assert.equal(descriptor.effect,'mutate');assert.equal(descriptor.authorization,'host-policy');return response('','resp-prepare',[{type:'function_call',id:'fc-prepare',call_id:'call-prepare',name:VELA_TOOL_INVOKE,arguments:JSON.stringify({catalogDigest:discovery.catalogDigest,capabilityId:descriptor.id,schemaDigest:descriptor.schemaDigest,invocationId:'synthetic-workspace-review',argumentsJson:JSON.stringify({type:'createWorkspace',title:'Research',projectId:null})}),status:'completed'}]as any);
+    },async body=>{
+      const desktop=await f.core.command('desktop',{type:'snapshot'}),workspace=desktop.workspaces.find(item=>item.title==='Research');assert(workspace);assert(String(body.input[0].content).includes(workspace.id));const receipt=body.input.filter((item:any)=>item.type==='function_call_output').map((item:any)=>JSON.parse(item.output)).find((item:any)=>item.contract==='aerynth.vela.tool-receipt@1');assert.equal(receipt.state,'observed');assert.equal(receipt.verification.kind,'owner-observed');return response('The Research workspace is ready.','resp-confirmation');
     });
     const result=await f.send('Create a workspace called Research');
-    assert.equal(result.state,'completed'); const desktop=await f.core.command('desktop',{type:'snapshot'}); assert.ok(desktop.workspaces.some(workspace=>workspace.title==='Research'));
-    assert.equal(f.requests.length,2); assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,2);
+    const state=await f.core.command('vela',{name:'state',input:{}}) as any,plan=state.plans.find((item:any)=>item.requestId===result.id);assert.equal(result.state,'responded',JSON.stringify({state:result.state,workflow:result.toolWorkflow,planState:plan?.state,requests:f.requests.length}));assert.equal(plan?.state,'applied');assert.equal(plan.steps[0].action.title,'Research'); const desktop=await f.core.command('desktop',{type:'snapshot'});assert.equal(desktop.workspaces.filter(item=>item.title==='Research').length,1);
+    assert.equal(f.requests.length,3); assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,3);assert.equal(state.requests.length,1);assert.equal(state.conversation.messages.filter((item:any)=>item.role==='user').length,1);
     assert.equal((await f.core.command('snapshot',{})).conversations.length,1);
   } finally { await f.close(); }
 });
@@ -190,7 +195,7 @@ test('API model pins and usage revocation fail closed and incomplete output neve
     await f.configure(); await f.authorize();
     await assert.rejects(f.send('Hello',{providerId:'openai-api-vela',model:'unavailable-model'}),/unsupported_model/); assert.equal(f.requests.length,0);
     f.replies.push(()=>response('Partial answer','resp-incomplete',[message('Partial answer')],'incomplete'));
-    const result=await f.send('Explain rainfall'); assert.equal(result.state,'failed'); assert.equal(f.requests.length,1);
+    const result=await f.send('Explain rainfall'); assert.equal(result.toolWorkflow?.phase,'blocked');assert.equal(result.response,undefined); assert.equal(f.requests.length,1);
     const snapshot=await f.core.command('snapshot',{}); assert.equal(Object.values(snapshot.executions)[0].state,'failed');
     await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:false});
     await assert.rejects(f.send('Hello',{providerId:'openai-api-vela'}),/vela_api_usage_authorization_required/); assert.equal(f.requests.length,1);
@@ -226,7 +231,7 @@ test('unavailable transport remains unknown and never retries; undiscovered acti
     const unknown=await f.send('Explain inertia'); assert.equal(unknown.state,'unknown'); assert.equal(f.requests.length,1);
     assert.equal(Object.values((await f.core.command('snapshot',{})).executions)[0].state,'unknown');
     f.replies.push(()=>response(JSON.stringify({schemaVersion:2,kind:'plan',summary:'Create an unauthorized workspace.',steps:[{id:'create',explanation:'Unfetched action.',action:{type:'createWorkspace',title:'Must not exist',projectId:null}}]}),'resp-unfetched'));
-    const invalid=await f.send('Create a workspace for research'); assert.equal(invalid.state,'failed'); assert.equal(invalid.errorCode,'planning_failed');
+    const invalid=await f.send('Describe possible ways to organize research.'); assert.equal(invalid.state,'responded');assert.equal(invalid.response?.kind,'answer');
     assert.equal((await f.core.command('desktop',{type:'snapshot'})).workspaces.length,0);
     assert.equal(f.requests.length,2);
   } finally { await f.close(); }
@@ -236,11 +241,12 @@ test('bounded discovery stops after four HTTP stages and three metadata reads wi
   const f=fixture();
   try {
     await f.configure(); await f.authorize();
+    const runtime=(f.core as any).velaApiRuntime as VelaApiRuntime,catalog=createCapabilityCatalog(CAPABILITIES);await runtime.models(1);
     for(let i=0;i<4;i++) f.replies.push(body=>{
       const envelope=JSON.parse(body.input[0].content);
       return response('','resp-loop-'+i,[{type:'function_call',id:'fc-'+i,call_id:'call-'+i,name:'aerynth_capability_schemas',arguments:JSON.stringify({catalogDigest:envelope.capabilityCatalog.digest,ids:['createWorkspace']}),status:'completed'}] as any);
     });
-    const result=await f.send('Create a workspace for research'); assert.equal(result.state,'failed'); assert.equal(result.errorCode,'api_tool_call_limit');
+    await assert.rejects(runtime.run({requestId:'synthetic-legacy-discovery',version:1,model:'gpt-6-luna',prompt:JSON.stringify({capabilityCatalog:catalog.projection}),contextDigest:'d'.repeat(64),catalog,validate(){}},new AbortController().signal),/api_tool_call_limit/);
     assert.equal(f.requests.length,4); assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,4);
     assert.equal((await f.core.command('desktop',{type:'snapshot'})).workspaces.length,0);
   } finally { await f.close(); }
@@ -291,15 +297,12 @@ test('explicit API model and reasoning pins reach the reviewed HTTP body while u
   } finally { await f.close(); }
 });
 
-test('a typed API plan outside the requested object family stays reviewable without mutation', async () => {
+test('ordinary API plan-shaped text outside the requested object family is only a report and cannot mutate', async () => {
   const f=fixture();
   try {
     await f.configure(); await f.authorize();
-    f.replies.push(body=>{
-      const envelope=JSON.parse(body.input[0].content);
-      return response('','resp-discovery-project',[{type:'function_call',id:'fc-project',call_id:'call-project',name:'aerynth_capability_schemas',arguments:JSON.stringify({catalogDigest:envelope.capabilityCatalog.digest,ids:['createProject']}),status:'completed'}] as any);
-    },()=>response(JSON.stringify({schemaVersion:2,kind:'plan',summary:'Create a project instead.',steps:[{id:'project',explanation:'A different object family.',action:{type:'createProject',title:'Must need review'}}]}),'resp-project'));
-    const result=await f.send('Create a workspace for research'); assert.equal(result.state,'awaiting-review');
+    f.replies.push(()=>response(JSON.stringify({schemaVersion:2,kind:'plan',summary:'Create a project instead.',steps:[{id:'project',explanation:'A different object family.',action:{type:'createProject',title:'Must need review'}}]}),'resp-project'));
+    const result=await f.send('Describe a workspace for research'); assert.equal(result.state,'responded');assert.equal(result.response?.kind,'answer');
     const desktop=await f.core.command('desktop',{type:'snapshot'}); assert.equal(desktop.projects.length,0); assert.equal(desktop.workspaces.length,0);
   } finally { await f.close(); }
 });

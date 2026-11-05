@@ -2,7 +2,8 @@
 
 This records the integrated mission slice. The [traceability matrix](../engineering/VELA-MISSION-TRACEABILITY.md)
 tracks work and acceptance beyond this slice. The [AIR specification](../specifications/VELA-ADAPTIVE-INTELLIGENCE-ROUTING.md)
-continues to govern the ordinary routing design; this change does not ratify it.
+records the earlier routing design. The AI-first consolidation below implements
+the owner's subsequent correction; neither document ratifies specialist charters.
 
 ## Canonical Vela continuity
 
@@ -59,12 +60,14 @@ require their exact native authorization and current policy checks.
 
 ```mermaid
 flowchart LR
-  Send["Vela Send"] --> Check{"Supported mission objective<br/>and no turn-level provider pin?"}
-  Check -- No --> AIR["Existing AIR and ordinary/Codex paths"]
-  Check -- Yes --> Preview["Canonical graph preview"]
-  Check -- "Explicit mission beyond a native route" --> PlanningReview["Native review of one planning request"]
-  PlanningReview --> Compiler["Validate proposal against host capability catalog"]
-  Compiler --> Preview
+  Send["Canonical Vela request"] --> Runtime["VelaApiRuntime model/tool loop"]
+  Runtime --> Registry["Scoped source-owned tool discovery"]
+  Registry --> Runtime
+  Runtime --> Owners["Validated native and application owners"]
+  Owners --> Results["Structured results and verification evidence"]
+  Results --> Runtime
+  Runtime --> Reply["Concise canonical reply"]
+  Owners --> Preview["Existing mission graph preview"]
   Preview --> Consent["Explicit Start<br/>native review for provider calls"]
   Consent --> Journal["Mission journal in canonical SQLite"]
   Journal --> Scheduler["Fair bounded admission"]
@@ -84,6 +87,55 @@ flowchart LR
   Layout --> Apply["Preview, validate and apply via TemplateService"]
   Apply --> Workroom["Linked workroom and canonical mission journal"]
 ```
+
+## AI-first runtime consolidation
+
+Ordinary free text reaches the dedicated API with a compact capability index.
+The renderer no longer classifies investigation verbs into a separate mission
+planning flow. Source owners supply capability schemas, availability, scope,
+effect and permission requirements. The model retrieves the needed schemas and
+selects typed calls; arguments, schema digests and current authority are checked
+again by the host. Explicit provider choices and trivial safe native shortcuts
+remain supported.
+
+`VelaApiRuntime` owns the complete model/tool loop. `vela-semantic-tools.mts`
+validates discovery and calls inside that loop. `vela-tool-registry.mts` derives
+descriptors from actual source adapters. `vela-tool-workflows.mts` persists only
+request references, budgets, once claims, pause references and verification
+metadata in the existing canonical database. It owns no second transcript,
+planner or job scheduler. Specialist work uses the existing mission scheduler;
+native and file operations retain their existing execution owners.
+
+Independent owner-declared reads with disjoint resource claims may overlap,
+with a maximum of two at once. Other calls execute in order. Workflow limits
+cover provider stages and delegated workers together (at most 12 requests and
+16 tool calls, subject to lower existing policies). Native review pauses the
+same request. Resume consumes the recorded result without replaying effects or
+creating a second user message. Context advances require an actual owner
+witness; an unrelated layout change invalidates the continuation.
+
+Windows memory diagnostics distinguish physical availability, system commit,
+cache and process working sets. Native maintenance and computer controls use
+exact target identity, genuine native review, a durable dispatch claim and
+post-operation evidence. Window/UI Automation data is untrusted, scoped and
+bounded. No API tool receives arbitrary shell, process termination or privilege
+escalation authority. A successful invoke acknowledgement alone is unverified.
+Codex repository inspection requires an enforced read boundary; the installed
+adapter currently lacks that capability, so selection produces an explicit
+unavailable result before provider dispatch. A working directory is not a read
+boundary.
+
+Completed primary replies have a Speak/Stop control. A saved opt-in permits
+automatic speech for newly completed replies only. Readback binds the canonical
+message and content digest, uses the selected Vela voice through GPT-Live, and
+creates output-only media without opening a microphone. Playback observation,
+idle cost control and human audibility are separate facts. Startup and unknown
+attempts never replay speech automatically.
+
+The new Core and broker regressions use synthetic provider/native ports and
+owned temporary files. They prove orchestration and authority boundaries, not
+live model selection, successful control of arbitrary applications or audible
+speech. Those require separate exact-candidate Windows desktop acceptance.
 
 The deterministic planner recognizes explicit host sampling and Aerynth backend
 performance objectives. Performance work

@@ -1,7 +1,7 @@
 import type { VelaVoiceRequest, VelaVoiceState } from '../../../integrated-backend/src/vela-voice-runtime.mts';
 import type { GptLiveAudioDevice } from './gpt-live-media.ts';
 import { estimateLiveUsage } from '../../../openai-provider/live-usage.mts';
-export interface VelaVoicePresence { active: boolean; microphoneOn: boolean; speaking: boolean }
+export interface VelaVoicePresence { active: boolean; microphoneOn: boolean; speaking: boolean;speech?:{state:string;messageId:string|null;attemptId:string|null;contentDigest:string|null} }
 
 /** A view of the native voice session. It owns neither media nor conversation history. */
 export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceRequest) => Promise<unknown>) {
@@ -18,7 +18,7 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
   const listeners = new Set<(presence: VelaVoicePresence) => void>();
   const active = () => !!state && ['starting', 'awaiting-start', 'running', 'closing'].includes(state.session.state);
   function presence(): VelaVoicePresence { return { active: active(), microphoneOn: state?.media?.microphoneAccess === 'active' && state.media.localTrackEnabled,
-    speaking: state?.media?.playback === 'playing' && state.media.playbackObserved }; }
+    speaking: state?.media?.playback === 'playing' && state.media.playbackObserved,...(state?.speech?{speech:{state:state.speech.state,messageId:state.speech.messageId,attemptId:state.speech.attemptId,contentDigest:state.speech.contentDigest}}:{}) }; }
   const act = (text: string, work: () => Promise<unknown>) => {
     const button = make('button', text); button.type = 'button'; button.className = 'vela-core-button';
     button.addEventListener('click', () => { void run(work).catch(() => {}); }); return button;
@@ -26,6 +26,8 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
   function failure(value: unknown) {
     const code = value instanceof Error ? value.message : '';
     error.textContent = /settings_changed/.test(code) ? 'Voice settings changed. Reopen voice settings before saving.' :
+      /reply_too_long|reply_capacity/.test(code)?'This reply is too long to read aloud in one session. No voice session started.':
+      /reply_changed|reply_unavailable/.test(code)?'This reply is no longer available for readback. No voice session started.':
       /usage|configuration|credential/.test(code) ? 'Check Vela API usage in Connections.' :
       /permission|capture/.test(code) ? 'Microphone access is unavailable. Check your device permissions.' :
       /busy/.test(code) ? 'A voice operation is already running.' : 'Voice could not complete that action. Your conversation is saved.';
@@ -55,6 +57,9 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
   });
   const reload = act('Reload saved settings', async () => { dirty = false; settingsVersion = -1; await refresh(); });
   const catalogStatus=make('p','Vela 3 is the default. Voice changes apply to the next session.');catalogStatus.className='vela-core-meta';
+  const speakReplies=make('input');speakReplies.type='checkbox';
+  speakReplies.addEventListener('change',()=>{const enabled=speakReplies.checked;void run(()=>command({name:'setSpeakReplies',input:{enabled,expectedSettingsVersion:state?.settings.version??0}})).catch(()=>{});});
+  const speechHelp=make('p','Speak new completed replies with the selected voice. Uses the Vela API without opening the microphone. Audio pauses automatically after observed speech becomes quiet.');speechHelp.className='vela-core-meta';
   const refreshVoices=act('Refresh saved voices',()=>command({name:'refreshVoices',input:{}}));
   advanced.addEventListener('toggle',()=>{if(advanced.open&&visible&&!pending)void run(()=>command({name:'refreshVoices',input:{}})).catch(()=>{});});
   const audition = act('Preview voice', () => command({ name: 'audition', input: { ...(voice.value ? { voiceId: voice.value } : {}), sample: 'Hello. I’m Vela. What shall we work on together?' } }));
@@ -79,7 +84,7 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
   });
   const billing = make('p', 'Starting or previewing voice uses the Vela API: up to 5 minutes per session, including 15 seconds of initial exposure. Creating a prompt voice is free.'); billing.className = 'vela-core-meta';
   const usage = make('p'); usage.className = 'vela-core-meta';
-  settings.append(field('Voice', voice),catalogStatus,refreshVoices, field('Speaking style', personality), save, reload, audition,
+  settings.append(field('Voice', voice),catalogStatus,refreshVoices,field('Speak replies',speakReplies),speechHelp, field('Speaking style', personality), save, reload, audition,
     field('New voice name', name), field('Describe the voice', prompt), create,
     field('Microphone', input), field('Speaker', output), deviceButton, billing, usage);
   advanced.append(summary, settings); element.append(status, caption, error, controls, advanced);
@@ -88,6 +93,7 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
   function render() {
     const session = state?.session, active = !!session && ['starting', 'awaiting-start', 'running', 'closing'].includes(session.state);
     status.textContent = !state ? 'Voice is off.' : !state.available ? state.reason || 'Voice is unavailable.' :
+      state.speech?.attemptId===session?.attemptId&&state.speech?.state==='speaking'?'Reading reply. Microphone off.':
       session?.state === 'running' ? state.media?.localTrackEnabled === false ? 'Microphone muted.' : state.media?.microphoneAccess === 'active' ? 'Voice is on.' : 'Voice is connected.' :
       session?.state === 'starting' || session?.state === 'awaiting-start' ? 'Connecting…' : session?.state === 'unknown' ? 'Connection interrupted. Reconnect to continue.' : session?.state === 'failed' ? 'Voice could not connect.' : 'Voice is off.';
     element.dataset.state = session?.state || 'idle';
@@ -101,7 +107,7 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
     const last = state?.captions.filter(item => item.role === 'assistant').at(-1); caption.textContent = last?.content || ''; caption.hidden = !last;
     startButton.hidden = active; startButton.disabled = pending || !state?.available; startButton.textContent = session?.state === 'unknown' ? 'Reconnect' : 'Start voice';
     stopButton.hidden = !active && session?.state !== 'unknown'; stopButton.disabled = pending;
-    muteButton.hidden = !active; muteButton.disabled = pending || session?.state !== 'running'; muteButton.textContent = state?.media?.localTrackEnabled === false ? 'Unmute' : 'Mute';
+    muteButton.hidden = !active||state?.speech?.attemptId===session?.attemptId; muteButton.disabled = pending || session?.state !== 'running'; muteButton.textContent = state?.media?.localTrackEnabled === false ? 'Unmute' : 'Mute';
     muteButton.setAttribute('aria-pressed', String(state?.media?.localTrackEnabled === false));
     resumeButton.hidden = state?.media?.playback !== 'blocked'; resumeButton.disabled = pending;
     interruptButton.hidden = !active; interruptButton.disabled = pending || session?.state !== 'running';
@@ -109,6 +115,7 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
     save.disabled=pending||!state?.available||!voice.value||[...voice.options].find(option=>option.value===voice.value)?.disabled===true;
     refreshVoices.disabled=pending||!state?.usage.enabled;voice.disabled=pending;personality.disabled=pending||active;
     input.disabled = output.disabled = pending;
+    speakReplies.checked=state?.settings.speakReplies===true;speakReplies.disabled=pending||!state?.usage.enabled;
     if (state && !dirty && settingsVersion !== state.settings.version) {
       settingsVersion = state.settings.version; personality.value = state.settings.speechPersonality;
       voice.replaceChildren();
@@ -134,8 +141,10 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
   return {
     element,
     setVisible(value: boolean) { visible = value; if (value) void refresh(); else schedule(); },
-    observe() { if ((visible || active()) && !reading) schedule(); },
+    observe() { if(!disposed&&!reading)void refresh(); },
     subscribe(listener: (value: VelaVoicePresence) => void) { listeners.add(listener); listener(presence()); return () => { listeners.delete(listener); }; },
+    async speak(message:{id:string;content:string}){const bytes=new TextEncoder().encode(message.content),digest=await doc.defaultView!.crypto.subtle.digest('SHA-256',bytes),contentDigest=[...new Uint8Array(digest)].map(value=>value.toString(16).padStart(2,'0')).join('');await run(async()=>{const value=await command({name:'speak',input:{messageId:message.id,contentDigest}});if(!isState(value)||value.speech?.messageId!==message.id||value.speech.contentDigest!==contentDigest||!['starting','awaiting-start','running'].includes(value.session.state))throw Error('live_speech_start_unconfirmed');return value;});},
+    async stopSpeech(attemptId:string){await run(()=>command({name:'stopSpeech',input:{attemptId}}));},
     async start(intent?: string) { await run(async () => { const value = await command({ name: 'start', input: { ...(intent ? { intent } : {}) } });
       if (!isState(value) || !['starting', 'awaiting-start', 'running'].includes(value.session.state)) throw new Error('live_start_unconfirmed'); return value; }); },
     dispose() { disposed = true; clearTimeout(timer); listeners.clear(); doc.removeEventListener('visibilitychange', visibility); element.remove(); },

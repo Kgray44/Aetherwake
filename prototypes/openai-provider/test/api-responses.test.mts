@@ -83,7 +83,7 @@ test('offline fragmented API function arguments remain distinct from assistant t
 
 test('offline stateless continuation sends actual function_call_output bound to observed call and native result receipt', async () => {
   const first = await fixture().transport.turn(input()), items = first.api!.outputItems;
-  const turn: TurnInput = { ...input(), executionId: 'execution-api-2', requestId: 'request-api-2', contextDigest: 'd'.repeat(64), api: { ...input().api!, continuation: { sourceExecutionId: input().executionId, responseId: first.responseId!, configurationVersion: 3, contextDigest, sourceOutcome: 'completed', itemsDigest: digest(JSON.stringify(items)), items, toolOutputs: [{ callId: call.call_id, name: call.name, argumentsDigest: digest(call.arguments), output: '{"secondsLeft":30}', receiptId: 'canonical-read-receipt' }] } } };
+  const turn: TurnInput = { ...input(), executionId: 'execution-api-2', requestId: 'request-api-2', contextDigest, api: { ...input().api!, continuation: { sourceExecutionId: input().executionId, responseId: first.responseId!, configurationVersion: 3, contextDigest, sourceOutcome: 'completed', itemsDigest: digest(JSON.stringify(items)), items, toolOutputs: [{ callId: call.call_id, name: call.name, argumentsDigest: digest(call.arguments), output: '{"secondsLeft":30}', receiptId: 'canonical-read-receipt' }] } } };
   let review: DispatchReview | undefined;
   const f = fixture(async () => stream([created, { type: 'response.output_text.delta', delta: 'The timer has 30 seconds left.' }, completed([message])]), native({ authorize: async value => { review = value; } }));
   const result = await f.transport.turn(turn), body = JSON.parse(String(f.requests[0].init?.body));

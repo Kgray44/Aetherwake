@@ -5,15 +5,19 @@ import {createNativeLiveHostClient,isNativeLiveHostEnvelope} from './live-media-
 import {createSystemFactsClient,isSystemFactsEnvelope} from './system-facts-host.mts';
 import {createDocumentTextClient,isDocumentTextEnvelope} from './document-text-host.mts';
 import {createNativeWakeCaptureClient,isNativeWakeCaptureMessage} from './wake-capture-host.mts';
+import {createWindowsMaintenanceClient,isWindowsMaintenanceEnvelope} from './windows-maintenance-host.mts';
+import {createWindowsComputerClient,isWindowsComputerEnvelope} from './windows-computer-host.mts';
 const [path, privateRoot, cwd,...flags] = process.argv.slice(2);
 const write = (v: unknown) => process.stdout.write(JSON.stringify(v) + "\n");
-if (flags.some(flag => !["--native-secrets", "--native-media", "--native-system-facts", "--native-wake-capture","--native-documents"].includes(flag)) || new Set(flags).size !== flags.length)
+if (flags.some(flag => !["--native-secrets", "--native-media", "--native-system-facts", "--native-wake-capture","--native-documents","--native-maintenance","--native-computer"].includes(flag)) || new Set(flags).size !== flags.length)
   throw Error("invalid_native_host_flags");
 const nativeClient=flags.includes('--native-secrets')?createNativeHostClient(write):undefined;
 const liveClient=flags.includes('--native-media')?createNativeLiveHostClient(write):undefined;
 const systemClient=flags.includes('--native-system-facts')?createSystemFactsClient(write):undefined;
 const documentClient=flags.includes('--native-documents')?createDocumentTextClient(write):undefined;
 const wakeClient=flags.includes('--native-wake-capture')?createNativeWakeCaptureClient(write):undefined;
+const maintenanceClient=flags.includes('--native-maintenance')?createWindowsMaintenanceClient(write):undefined;
+const computerClient=flags.includes('--native-computer')?createWindowsComputerClient(write):undefined;
 const backend = new Backend({
   path,
   privateRoot,
@@ -22,11 +26,11 @@ const backend = new Backend({
   provider: "codex",
   nativeMedia: flags.includes("--native-media"),
   retention: { maxEvents: 10000 },
-},nativeClient?{...nativeClient.services,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{})}:undefined);
+},nativeClient?{...nativeClient.services,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{}),...(maintenanceClient?{maintenance:maintenanceClient.services}:{}),...(computerClient?{computer:computerClient.services}:{})}:undefined);
 let closeTask:Promise<void>|null=null;
 const closeBackend=()=>{
   if(closeTask)return closeTask;
-  const task=backend.close().then(()=>{documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();});closeTask=task;
+  const task=backend.close().finally(()=>{computerClient?.close();maintenanceClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();});closeTask=task;
   void task.catch(()=>{if(closeTask===task)closeTask=null;});
   return task;
 };
@@ -38,6 +42,8 @@ lines.on("line", async (line) => {
     if (Buffer.byteLength(line) > 2 * 1024 * 1024 + 2048)
       throw new Error("command_too_large");
     const request = JSON.parse(line);
+    if(isWindowsMaintenanceEnvelope(request)){maintenanceClient?.handle(request);return;}
+    if(isWindowsComputerEnvelope(request)){computerClient?.handle(request);return;}
     if(isNativeWakeCaptureMessage(request)){wakeClient?.handle(request);return;}
     if(isSystemFactsEnvelope(request)){systemClient?.handle(request);return;}
     if(isDocumentTextEnvelope(request)){documentClient?.handle(request);return;}
@@ -50,6 +56,7 @@ lines.on("line", async (line) => {
     }
     id = request.id;
     if (['velaApiConfigure', 'velaApiUsageAuthorize', 'velaApiUsageStatus','velaVoiceNative','velaWeatherPermissionNative','velaWakeNative','velaWakeFrame','velaWakeCaptureState','velaFileProposalPrepareNative','velaSourcesPickNative','folderOpenNative',
+      'hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative',
       'missionFileEditPrepareNative','missionFileEditRunNative','missionFileEditReviewNative','missionFileEditChoiceNative','missionFileEditApplyNative','missionFileEditCheckReviewNative','missionFileEditCheckRunNative','missionFileEditRead'].includes(request.command)) {
       if (!nativeClient || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
         throw new Error('native_api_configuration_required');

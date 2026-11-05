@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash,webcrypto} from 'node:crypto';
 import { blockDocument } from '../../../block-library/tests/component-dom.mts';
 import { until } from '../../../conversation-product/test/component-dom.mts';
 import { createVelaVoiceView } from '../src/vela-voice-view.ts';
@@ -57,4 +58,16 @@ test('raw provider errors never appear in the voice surface', async () => {
   const { view, dom } = harness(async () => { throw new Error('PRIVATE_KEY_MARKER'); });
   try { await assert.rejects(view.start()); assert.equal(dom.root.textContent.includes('PRIVATE_KEY_MARKER'), false); }
   finally { view.dispose(); }
+});
+test('reply speech hashes exact canonical UTF8 content and forwards only identity; scoped stop and safe presence expose no text',async()=>{
+ const calls=[],value=snapshot(),message={id:'canonical-reply',content:'Exact reply — preserved spacing.\nTwo lines.'},contentDigest=createHash('sha256').update(message.content).digest('hex'),{view,dom}=harness(async request=>{calls.push(request);if(request.name==='speak'){value.session={state:'awaiting-start',attemptId:'speech-attempt'};value.speech={state:'starting',messageId:message.id,attemptId:'speech-attempt',contentDigest};}return value;});dom.doc.defaultView={crypto:webcrypto};let presence;const unsubscribe=view.subscribe(value=>{presence=value;});
+ try{await view.speak(message);assert.deepEqual(calls[0],{name:'speak',input:{messageId:message.id,contentDigest}});assert.equal(JSON.stringify(calls).includes(message.content),false);assert.deepEqual(presence.speech,{state:'starting',messageId:message.id,attemptId:'speech-attempt',contentDigest});assert.equal(presence.microphoneOn,false);await view.stopSpeech('speech-attempt');assert.deepEqual(calls.at(-1),{name:'stopSpeech',input:{attemptId:'speech-attempt'}});}finally{unsubscribe();view.dispose();}
+});
+test('speak-replies preference is opt-in and binds the current displayed settings version',async()=>{
+ const calls=[],value=snapshot(),{view,dom}=harness(async request=>{calls.push(request);return value;});try{view.setVisible(true);await new Promise(resolve=>setImmediate(resolve));const checkbox=dom.root.querySelectorAll('input').find(node=>node.type==='checkbox');assert.equal(checkbox.checked,false);assert.equal(calls.some(request=>request.name==='setSpeakReplies'),false);checkbox.checked=true;checkbox.fire('change');await until(()=>calls.some(request=>request.name==='setSpeakReplies'));assert.deepEqual(calls.find(request=>request.name==='setSpeakReplies'),{name:'setSpeakReplies',input:{enabled:true,expectedSettingsVersion:0}});}finally{view.dispose();}
+});
+test('a genuine voice event refreshes a hidden idle view once and exposes automatic reply Stop presence',async()=>{
+ const calls=[],value=snapshot(),{view}=harness(async request=>{calls.push(request);return value;});let presence;const unsubscribe=view.subscribe(next=>{presence=next;});try{assert.equal(calls.length,0);view.observe();view.observe();await new Promise(resolve=>setImmediate(resolve));assert.equal(calls.length,1);assert.equal(presence.active,false);
+  value.session={state:'running',attemptId:'automatic-speech'};value.media={localTrackEnabled:false,microphoneAccess:'not-requested',playback:'playing',playbackObserved:true};value.speech={state:'speaking',messageId:'new-primary',attemptId:'automatic-speech',contentDigest:'a'.repeat(64)};view.observe();await new Promise(resolve=>setImmediate(resolve));assert.equal(calls.length,2);assert.equal(presence.active,true);assert.equal(presence.microphoneOn,false);assert.equal(presence.speech.attemptId,'automatic-speech');assert.equal(presence.speech.messageId,'new-primary');assert(calls.every(request=>request.name==='state'));
+ }finally{unsubscribe();view.dispose();}
 });

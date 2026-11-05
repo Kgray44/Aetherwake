@@ -31,7 +31,7 @@ export interface ImportedCustomVoice {
 }
 export type SavedCustomVoice=SavedPromptVoice|ImportedCustomVoice;
 export interface CanonicalVelaRuntimePort {
-  context(input: { conversationId: string; purpose: 'conversation' | 'audition' | 'delegation'; sessionId?: string; signal: AbortSignal }): Promise<LiveCanonicalContext>;
+  context(input: { conversationId: string; purpose: 'conversation' | 'audition' | 'delegation' | 'readback'; sessionId?: string; signal: AbortSignal }): Promise<LiveCanonicalContext>;
   validateContext(contextRef: string, contextDigest: string): Promise<void>;
   /** Must durably deduplicate by sessionId/eventId; this module retains no transcript. */
   receiveFragment(fragment: LiveTranscriptFragment): Promise<void>;
@@ -51,11 +51,13 @@ export interface LiveStartInput {
   sdpOffer: string; voice?: LiveVoice;
   /** Native wake coordinator only. No separate greeting model call. */
   wake?: { greeting: 'dynamic' | 'none'; pronunciation: 'VAY-luh' };
+  /** Native canonical reply only; never accepted as arbitrary renderer text. */
+  readback?: { messageId:string;contentDigest:string;content:string };
   authorizationRef: string;
   budget: { ref: string; maximumVoiceSeconds: number; initializationExposureSeconds: 15 };
 }
 export interface LiveNativeReview {
-  operation: 'start' | 'audition' | 'reconnect' | 'delegate' | 'append' | 'mute' | 'voice-create' | 'voice-save';
+  operation: 'start' | 'audition' | 'speak' | 'reconnect' | 'delegate' | 'append' | 'mute' | 'voice-create' | 'voice-save';
   attemptId: string; configurationId: string; configurationVersion: number;
   authorizationRef: string; bodyDigest: string; bodyBytes: number;
   conversationId?: string; contextRef?: string; contextDigest?: string;

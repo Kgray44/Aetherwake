@@ -39,6 +39,12 @@
   outline: 2px solid var(--control-focus-color, #dbe5f3);
   outline-offset: 2px;
 }
+/* Header navigation floats over the scene; retain the shared keyboard outline. */
+:root body.application-ready .topbar .place [data-aerynth-motion-control].aw-control-motion {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
 @media (forced-colors: active) {
   :is(
     [data-native-copy-control],

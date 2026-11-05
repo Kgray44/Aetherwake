@@ -177,6 +177,7 @@ export interface StreamEvent {
     clockTimer?: Pick<TimerDomainEvent, 'resourceVersion' | 'commandId' | 'timerIds' | 'expiryIds' | 'operations'>;
     api?: { maxOutputTokens?: number; callId?: string; elapsedMs?: number; enabled?: boolean; executionId?: string; bodyDigest?: string; contextDigest?: string };
     voice?: {sessionId?:string;attemptId?:string;state?:string;usageSeconds?:number;messageId?:string;delegationId?:string;catalogCount?:number;errorCode?:string};
+    tools?:{workflowId:string;receiptId?:string};
     wake?: {phase:string;enabled:boolean;microphone:string;voice:string;detector:string;owner:string|null;sessionId:string|null;settingsVersion:number;errorCode:string|null};files?:{count:number;state:string} };
   mission?: MissionStreamEvent;
 }
@@ -220,6 +221,9 @@ export interface Options {
   syntheticTimerClock?: TimerClockReading;
 }
 export interface CommandMap {
+  hostOperationReviewNative:{input:{operationId:string;selection?:{kind:'codex-directory';directory:string}};output:import('../../application-contract/vela-host-operations.ts').VelaHostReviewBinding};
+  hostOperationDispatchNative:{input:{binding:import('../../application-contract/vela-host-operations.ts').VelaHostReviewBinding;identityDigest:string;approvalDigest:string};output:import('../../application-contract/windows-maintenance.ts').WindowsMaintenanceDispatchClaim};
+  hostOperationResultNative:{input:import('../../application-contract/vela-host-operations.ts').VelaHostOperationNativeResult;output:import('../../application-contract/vela-tools.ts').VelaHostOperationView};
   /** Native-owned purpose permission; never a renderer/model command. */
   velaWeatherPermissionNative:{input:{type:'status'}|{type:'set';expectedVersion:number;decision:'allow'|'deny'};output:import('./weather-permission.mts').WeatherPermission};
   velaVoice: {input:VelaVoiceControlRequest;output:VelaVoiceState|GptLiveAudioDevice[]};

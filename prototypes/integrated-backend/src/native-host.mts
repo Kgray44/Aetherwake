@@ -4,6 +4,8 @@ import type { NativeWakeCaptureServices } from './wake-capture-host.mts';
 
 /** Private native-process injection. Never renderer RPC or serialized workerData. */
 export interface NativeHostServices {
+  maintenance?:import('./windows-maintenance-host.mts').NativeHostMaintenanceServices;
+  computer?:import('./windows-computer-host.mts').NativeWindowsComputerServices;
   documents?:import('./document-text-host.mts').NativeDocumentTextServices;
   wakeCapture?: NativeWakeCaptureServices;
   systemFacts?: import('./system-facts-host.mts').NativeSystemFactsServices;
