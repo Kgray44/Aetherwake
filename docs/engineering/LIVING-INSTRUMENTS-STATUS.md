@@ -76,17 +76,17 @@ category accurately remains empty; no measurements or unsupported kinds are inve
 
 | Scenarios | Current status / proof still required |
 | --- | --- |
-| LI-01, LI-02 | Source/component verified; native showroom and replay review pending |
+| LI-01, LI-02 | Source/component verified; native finite synthetic replay and real Add Note/Clock paths verified. Complete showroom visual review remains open |
 | LI-03 | Existing canonical Add/drop paths retained and tested; new native drag/restart proof pending |
-| LI-04 | Canonical planning CRUD/undo, explicit-offset timestamps, elapsed durations and drag/snap tested; final native verification pending |
-| LI-05 | Source/component verified for orientation, selected-anchor zoom and pan; presentation preference persistence/native motion pending |
+| LI-04 | Canonical planning CRUD/undo verified natively; explicit offsets, elapsed durations, drag/snap/CAS/cancel behavior tested at component/service level. Native drag/duration demonstration remains open |
+| LI-05 | Native orientation, selected event and canonical zoom verified; presentation preference persistence and complete motion review remain open |
 | LI-06 | Partial: exact recorded-header time review, not historical state reconstruction or reexecution |
 | LI-07, LI-08 | Explicit causal event edges plus real current-plan task dependencies/joins implemented; current-plan edges are not historical event causation. Native mission-flow journey pending |
 | LI-09 | Metadata allowlist and authorization filtering tested; native inspection pending |
-| LI-10, LI-11 | Thirteen source-driven target states and continuous geometric coefficients tested; native shape/motion and live backend/voice acceptance pending |
-| LI-12 | Native countdown/stopwatch/world-clock service and visual tests pass; final native revalidation pending. Focus preset is not a separate session domain |
+| LI-10, LI-11 | Thirteen target crops and a six-frame native morph sequence captured with explicit simulation label and unchanged canonical resources. Live backend/voice coverage and artistic acceptance remain open |
+| LI-12 | Trusted native countdown creation/start/pause/resume, world dials and restart verified. Stopwatch service/view tests pass; complete native family review remains open. Focus preset is not a separate session domain |
 | LI-13 | Notes/task-group/objective/agent/subject presentations upgraded; comprehensive family and native two-size acceptance remains open |
-| LI-14, LI-15 | First native checkpoint verified canonical Timeline viewport/selection/resource restart and real Add Note; later planning/timer candidate needs fresh native revalidation |
+| LI-14, LI-15 | Native restart preserves Timeline viewport/selection/plans, paused timer duration and world zone; canonical Add Note/Clock verified. Full layout/drag recovery review remains open |
 | LI-16 | Keyboard/static fallbacks and reduced-motion lifecycle tested at component level; native accessibility review pending |
 | LI-17 | Not accepted: realistic sustained load, CPU/GPU/RAM/frame-time and latency measurements required |
 | LI-18 | Authorization/revocation/fallback regressions covered; native degradation review pending |
@@ -105,6 +105,36 @@ geometry and GPU diagnostics. It observed zero canonical executions and no
 renderer errors/context loss. Native image review caught Timeline punctuation
 encoding defects, which were fixed. Those captures bind the earlier built
 candidate and do not verify later planning, clock or thirteen-state additions.
+
+The later combined native candidate passed **9/9 checks in 34.268 seconds**:
+Timeline orientation/selection/zoom; canonical planning create/edit/delete/undo;
+Stream modes; finite Library replay and canonical Add; trusted-pointer countdown
+and world-clock controls; bounded renderer observations; explicit thirteen-state
+geometry and morph fixture; canonical Timeline/planning/timer restart; GPU diagnostics.
+It recorded zero canonical executions, zero renderer errors/context loss and an
+18,661,334-byte owned profile. The private evidence includes target crops, a labeled
+empty-workspace study and six actual morph frames. It does not prove live voice
+mapping, current mission joins, artistic approval, sustained load or multimonitor use.
+
+The bounded callback sample observed p50 6.1 ms, p95/p99 6.2 ms and no intervals
+above 16.67 ms within its 240-callback cap. These are renderer callback observations,
+**not monitor presentation, input latency, whole-host CPU/GPU/RAM or acceptance targets**.
+Earlier timer attempts correctly failed the gesture gate or rejected a hidden legacy
+pointer target; their receipts remain preserved. The final verifier uses real
+software pointer events on visible controls and leaves the gate intact.
+
+Reproduce from the repository root with
+`node --experimental-strip-types scripts/verify-living-instruments-native.mjs`.
+The optional `--timer-only` mode records skipped scenarios and validates just native
+timer controls/restart/GPU diagnostics. Every run creates a fresh private synthetic
+profile, binds source/build hashes, enforces byte/runtime limits and cleans up only
+its owned processes. It never operates an existing review or sends provider work.
+
+Checkpoint regression: **346/346** combined Block Library, Timeline service and
+backend-domain tests; **683 passed, 1 skipped, 0 failed** desktop tests; final focused
+direct-resource wrapper **10/10**; backend and renderer TypeScript checks and the
+production build passed. Source changes after this checkpoint require targeted
+revalidation rather than reusing these results unchanged.
 
 Focused and broader verification receipts are recorded with each implementation
 checkpoint. Private profiles, raw local evidence, logs and recordings stay outside
