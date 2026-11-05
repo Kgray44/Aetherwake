@@ -675,3 +675,36 @@ test("fresh service on every dispatch rejects future/partial Timeline schema and
     !clean.tables().some((row) => String(row.name).startsWith("timeline_")),
   );
 });
+
+test('planning dispatch shares canonical transaction, exact read classification and authorization', t => {
+  const f = fixture(t), made = f.create();
+  const values = { title: 'Synthetic plan', startAt: '2026-11-05T12:00:00.000Z', durationMs: 60000, timeZone: 'UTC', laneId: '' };
+  const command = { name: 'planning' as const, input: { op: 'create' as const, resourceId: made.resourceId, expectedVersion: 1, commandId: 'boundary-plan', values } };
+  assert.equal(isTimelineRead(command), false);
+  assert.equal(isTimelineRead({ name: 'planning', input: { op: 'list', resourceId: made.resourceId, expectedVersion: 1 } }), true);
+  f.failEvent(); assert.throws(() => f.domain.dispatch(command), /synthetic/);
+  assert.equal(f.db.prepare('SELECT version FROM timeline_schema').get()!.version, 1);
+  f.failEvent(false);
+  const result = f.domain.dispatch(command) as import('../../timeline-product/contracts.ts').TimelinePlanningMutationResult;
+  assert.equal(result.version, 2);
+  const listed = f.domain.dispatch({ name: 'planning', input: { op: 'list', resourceId: made.resourceId, expectedVersion: 2 } }) as import('../../timeline-product/contracts.ts').TimelinePlanningDocument;
+  assert.equal(listed.items[0]!.id, result.item!.id);
+  f.deniedResources.add(made.resourceId); assert.throws(() => f.domain.dispatch(command), /timeline_unavailable/);
+});
+
+import { createRequire } from 'node:module';
+test('native planning list is read-only admission and canonical planning writes use the existing product transport', async () => {
+  const { isProductRead, productCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/product-commands.cjs');
+  const calls: unknown[] = [];
+  const call = async (...args: unknown[]) => { calls.push(args); return 'canonical-ack'; };
+  const listing = { name: 'planning', input: { op: 'list', resourceId: 'fixture', expectedVersion: 1 } };
+  assert.equal(isProductRead('timelines', listing), true);
+  assert.equal(await productCommand({ family: 'timelines', input: listing, call }), 'canonical-ack');
+  for (const op of ['create', 'update', 'delete', 'undo']) {
+    const input = { name: 'planning', input: { op } };
+    assert.equal(isProductRead('timelines', input), false);
+    await productCommand({ family: 'timelines', input, call });
+  }
+  assert.equal(calls.length, 5);
+  assert.equal(isProductRead('timelines', { name: 'planning', input: { op: 'List' } }), false);
+});

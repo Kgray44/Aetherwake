@@ -44,3 +44,20 @@ export function temporalZoom(from: number, to: number, factor: number, anchor = 
 export function recordedReviewTime(start: number, elapsed: number, rate: number, end: number) {
   return Math.min(end, start + Math.max(0, elapsed) * rate);
 }
+/** An explicit UTC/offset instant avoids guessing either side of a DST overlap. */
+export function planningInstant(value: string, zone: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) throw Error('Enter ISO date/time with seconds and an explicit Z or UTC offset.');
+  if (!zone.trim() || /^[+-]/.test(zone)) throw Error('Enter a named IANA timezone.');
+  try { new Intl.DateTimeFormat('en', { timeZone: zone }).format(0); } catch { throw Error('Enter a valid named IANA timezone.'); }
+  const time = Date.parse(value); if (!Number.isFinite(time)) throw Error('Enter a valid exact timestamp.');
+  const offset = /([+-])(\d{2}):(\d{2})$/.exec(value);
+  const offsetMinutes = offset ? (offset[1] === '+' ? 1 : -1) * (Number(offset[2]) * 60 + Number(offset[3])) : 0;
+  const local = new Date(time + offsetMinutes * 60000), civil = value.slice(0, 19);
+  if (local.toISOString().slice(0, 19) !== civil) throw Error('The date or UTC offset is invalid.');
+  return new Date(time).toISOString();
+}
+export function planningSnap(value: number, interval: number) { return Math.round(value / interval) * interval; }
+export function planningInterval(start: number, duration: number, from: number, to: number, extent: number) {
+  const end = start + duration, span = Math.max(1, to - from);
+  return { visible: end >= from && start <= to, position: Math.max(0, (start - from) / span * extent), length: Math.max(8, (Math.min(to, end) - Math.max(from, start)) / span * extent) };
+}

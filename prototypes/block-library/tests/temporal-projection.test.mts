@@ -47,3 +47,14 @@ test('LI-06 partial: recorded-time review advances by source milliseconds and se
   assert.equal(recordedReviewTime(1000, 2000, 10, 10000), 10000);
   assert.equal(recordedReviewTime(1000, -1, 10, 10000), 1000);
 });
+
+test('LI04: explicit offsets resolve both DST instants, naive dates are rejected and durations clip to viewport', async () => {
+  const {planningInstant,planningInterval,planningSnap} = await import('../temporal-projection.ts');
+  assert.equal(planningInstant('2026-11-01T01:30:00-04:00','America/New_York'),'2026-11-01T05:30:00.000Z');
+  assert.equal(planningInstant('2026-11-01T01:30:00-05:00','America/New_York'),'2026-11-01T06:30:00.000Z');
+  assert.throws(()=>planningInstant('2026-11-01T01:30:00','America/New_York'),/explicit/);
+  assert.throws(()=>planningInstant('2026-02-30T01:30:00Z','UTC'),/invalid/);
+  assert.throws(()=>planningInstant('2026-11-01T01:30:00Z','unknown zone'),/IANA/);
+  assert.deepEqual(planningInterval(-1000,3000,0,10000,100),{visible:true,position:0,length:20});
+  assert.equal(planningSnap(76000,60000),60000);
+});

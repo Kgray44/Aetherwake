@@ -47,11 +47,44 @@
 .aw-clock-timer-world-list time { font:400 1.15rem/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; font-variant-numeric:tabular-nums; }
 .aw-clock-timer-world-list small { grid-column:1/-1; color:#cfc4dc; }
 .aw-clock-timer-world-list button { font-size:.75rem; }
+.aw-clock-timer-dial { position:relative; isolation:isolate; align-self:center; flex:none; width:156px; height:156px; border:1px solid #dfc6fa65; border-radius:50%; background:repeating-conic-gradient(from -1deg,#dfc6fa80 0deg 2deg,transparent 2deg 30deg); box-shadow:inset 0 0 22px #dfc6fa13; }
+.aw-clock-timer-dial::before { content:""; position:absolute; inset:8px; border-radius:50%; background:#201c2a; z-index:-1; }
+.aw-clock-timer-dial-noon { position:absolute; top:10%; left:50%; transform:translateX(-50%); font:10px/1 system-ui; color:#cfc4dc; }
+.aw-clock-timer-hand { position:absolute; bottom:50%; left:calc(50% - 1px); width:2px; transform-origin:50% 100%; border-radius:2px; background:#e8def2; }
+.aw-clock-timer-hand--hour { height:25%; width:4px; left:calc(50% - 2px); }
+.aw-clock-timer-hand--minute { height:35%; }
+.aw-clock-timer-hand--second { height:39%; width:1px; background:#d3afea; }
+.aw-clock-timer-dial-hub { position:absolute; width:7px; height:7px; top:calc(50% - 3.5px); left:calc(50% - 3.5px); border-radius:50%; background:#e8def2; }
+.aw-clock-timer-dial--world { width:64px; height:64px; grid-row:span 2; }
+.aw-clock-timer-dial--world::before { inset:5px; }
+.aw-clock-timer-dial--world .aw-clock-timer-dial-noon { display:none; }
+.aw-clock-timer-world-list li { grid-template-columns:64px minmax(0,1fr) auto; }
+.aw-clock-timer-world-list li>small { grid-column:2/-1; }
+.aw-clock-timer-world-list li>button { grid-column:auto; }
+.aw-clock-timer-watch-face { position:relative; display:grid; place-items:center; align-self:center; min-height:210px; width:min(100%,240px); }
+.aw-clock-timer-watch-orbit { position:absolute; width:190px; height:190px; border-radius:50%; background:conic-gradient(var(--aw-clock-accent) var(--aw-watch-phase,0%),#cfc0e225 0); }
+.aw-clock-timer-watch-orbit::before { content:""; position:absolute; inset:3px; border-radius:50%; background:#201c2a; }
+.aw-clock-timer-watch-needle { position:absolute; left:calc(50% - 1px); bottom:50%; width:2px; height:46%; background:#dfc6fa; transform-origin:50% 100%; }
+.aw-clock-timer-watch-face .aw-clock-timer-stopwatch-value { position:relative; width:100%; padding:.4rem; background:#201c2ad9; border-radius:.5rem; font-size:clamp(1.5rem,9cqw,2.5rem); }
+.aw-clock-timer-cycle-label { text-align:center; color:#cfc4dc; font-size:.75rem; }
+.aw-clock-timer-presets { display:flex; flex-wrap:wrap; gap:.4rem; }
+.aw-clock-timer-presets button { font-size:.8rem; }
+.aw-clock-timer-preset-note { color:#cfc4dc; font-size:.75rem; }
+.aw-clock-timer[data-compact=true] .aw-clock-timer-dial:not(.aw-clock-timer-dial--world) { width:120px; height:120px; }
+.aw-clock-timer[data-compact=true] .aw-clock-timer-watch-face { min-height:180px; }
+.aw-clock-timer[data-compact=true] .aw-clock-timer-watch-orbit { width:160px; height:160px; }
 .aw-clock-timer[data-compact=true] { gap:.5rem; }
 .aw-clock-timer[data-compact=true] .aw-clock-timer-countdown { min-height:188px; padding-top:.5rem; }
 .aw-clock-timer[data-compact=true] .aw-clock-timer-ring { width:155px; height:155px; }
 .aw-clock-timer[data-compact=true] .aw-clock-timer-face { min-height:115px; width:145px; }
 .aw-clock-timer[data-compact=true] .aw-clock-timer-value { font-size:1.8rem; }
 .aw-clock-timer[data-compact=true] :is(button,input,select) { font-size:.8rem; padding:.35rem .5rem; }
-@container (max-width:300px) { .aw-clock-timer-world-list li { grid-template-columns:minmax(0,1fr); }.aw-clock-timer-world-list time { grid-row:1; }.aw-clock-timer-refresh { font-size:.75rem; } }
+@container (max-width:300px) {
+  .aw-clock-timer-world-list li { grid-template-columns:64px minmax(0,1fr); }
+  .aw-clock-timer-world-list li>.aw-clock-timer-field { grid-column:2; grid-row:1; }
+  .aw-clock-timer-world-list time { grid-column:2; grid-row:2; }
+  .aw-clock-timer-world-list li>small { grid-column:1/-1; }
+  .aw-clock-timer-world-list li>button { grid-column:1/-1; }
+  .aw-clock-timer-refresh { font-size:.75rem; }
+}
 @media (prefers-reduced-motion:reduce) { .aw-clock-timer * { scroll-behavior:auto; transition:none!important; animation:none!important; } }

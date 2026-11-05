@@ -20,6 +20,7 @@ export function mountStreamGraph(root: HTMLElement, options: {
   inspector.className = "aw-stream-inspector"; inspector.hidden = true; inspector.setAttribute("aria-label", "Selected event evidence");
   note.className = "aw-stream-coverage"; note.setAttribute("role", "status");
   viewport.tabIndex = 0; viewport.setAttribute("aria-label", "Causal graph. Arrow keys pan, plus and minus zoom, Home resets. Tab selects recorded nodes.");
+  let available = true;
   let mode = "flow", zoom = 1, panX = 20, panY = 20, selected = "", active = options.active ?? true;
   let layout: StreamLayout = { nodes: [], edges: [], omitted: 0, unresolved: 0 };
   const keys = new Set<string>();
@@ -102,7 +103,7 @@ export function mountStreamGraph(root: HTMLElement, options: {
       if (fresh) b.append(make("span", glyphs[family]), make("strong", options.title(event)), make("small", `${event.classification} · ${event.status ?? "unavailable"}`));
       b.onclick = () => { if (!active) return; selected = event.eventId; inspect(); };
       b.style.left = `${x}px`; b.style.top = `${y}px`; if (fresh) scene.append(b); elements.set(event.eventId, b);
-      if (options.motion) {
+      if (options.motion && active && available && mode !== "forensic") {
         const pose = { x, y, w: 176, h: 60, lift: 0, yaw: 0, opacity: 1 };
         if (!keys.has(key)) options.motion.add(key, { ...pose, opacity: options.motion.reduced ? 1 : .3 });
         options.motion.target(key, pose, "canonical-stream-event"); nextKeys.add(key);
@@ -118,10 +119,11 @@ export function mountStreamGraph(root: HTMLElement, options: {
   }
   return {
     update(events: readonly StreamEvent[]) { layout = layoutStream(events, mode === "glimpse" ? 24 : 80); if (!layout.nodes.some(n => n.event.eventId === selected)) selected = ""; render(); },
-    setMode(value: string) { mode = value; host.dataset.mode = value; host.hidden = value === "forensic"; },
+    setMode(value: string) { mode = value; host.dataset.mode = value; host.hidden = !available || value === "forensic"; },
+    setAvailable(value: boolean) { available = value; host.hidden = !value || mode === "forensic"; },
     setActive(value: boolean) { active = value; inspect(); },
     frame() {
-      if (!active || !options.motion) return;
+      if (!active || !available || mode === "forensic" || !options.motion) return;
       for (const [id, element] of elements) { const pose = options.motion.pose(prefix + id); element.style.left = `${pose.x}px`; element.style.top = `${pose.y}px`; element.style.opacity = String(pose.opacity); }
       for (const edge of Array.from(scene.querySelectorAll(".aw-stream-edge"))) {
         const el = edge as SVGElement;
@@ -132,4 +134,3 @@ export function mountStreamGraph(root: HTMLElement, options: {
     dispose() { active = false; inspect(); for (const key of keys) options.motion?.remove(key); keys.clear(); elements.clear(); layout = { nodes: [], edges: [], omitted: 0, unresolved: 0 }; scene.replaceChildren(); host.remove(); },
   };
 }
-

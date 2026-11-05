@@ -49,9 +49,12 @@ export interface DirectResourcePorts {
   copyText?(text: string): Promise<void>;
   openRelated?(resourceId: string, anchor: HTMLElement): void;
   events?: {
+    motion?: ExperienceMotionPort;
+    viewId?: string;
     snapshot(): EventWindow;
     refresh(): Promise<void>;
     openResource?(resourceId: string): void;
+    openMission?(missionId: string): void;
   };
 }
 
@@ -264,7 +267,8 @@ export function mountDirectResourceExperience(
         snapshot: () => ({ ...ports.events!.snapshot(), workspaceResourceIds: [], projectId: resource.project_id ?? null }),
         refresh: () => ports.events!.refresh(),
         openResource: ports.events.openResource ?? ports.openResource,
-      }, { active, presentation: 'focused' });
+        openMission: ports.events.openMission,
+      }, { active, presentation: 'focused', motion: ports.events.motion, viewId: ports.events.viewId });
       mounted = true;
     } else {
       status.textContent = kind === 'file' || kind === 'link' ? 'Native media access is unavailable in this surface.' : kind === 'stream'
@@ -359,7 +363,7 @@ export function mountDirectResourceExperience(
       if (!available(resource)) throw new Error('Resource is unavailable. Pending text remains in its canonical editor session.');
       await session.flushEdits();
     },
-    frame() { if (!disposed) { clockTimer?.frame(); checklist?.frame(); timeline?.frame(); taskObjective?.frame(); } },
+    frame() { if (!disposed) { clockTimer?.frame(); checklist?.frame(); timeline?.frame(); taskObjective?.frame(); events?.frame(); } },
     reflow() { if (!disposed) { clockTimer?.reflow(); checklist?.reflow(); timeline?.reflow(); taskObjective?.reflow(); } },
     async refresh() { if (!disposed && active && available(resource)) { if (clockTimer) await clockTimer.refresh(); else if (taskObjective) await taskObjective.refresh(); else if (timeline) await timeline.refresh(); else if (checklist) await checklist.refresh(); else if (session) await session.refresh(); else if (events) await ports.events?.refresh(); } },
     ...(kind === 'task_objective' ? { hasUnsavedChanges: () => taskObjective?.hasUnsavedChanges() ?? false } : {}),

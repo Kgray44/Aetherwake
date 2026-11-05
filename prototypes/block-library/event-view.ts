@@ -1,8 +1,11 @@
+import type { MissionProjection } from "../integrated-backend/src/mission-contracts.mts";
+import { mountMissionFlow, missionFlowInScope } from "./mission-flow.ts";
 import type { ExperienceMotionPort } from "../application-contract/motion.ts";
 import { mountStreamGraph } from "./stream-view.ts";
 import type { StreamEvent } from "../integrated-backend/src/contracts.mts";
 
 export type EventWindow = {
+  mission?: MissionProjection | null;
   events: readonly StreamEvent[];
   earliest: number | null;
   latest: number;
@@ -356,6 +359,7 @@ export function mountEventExperience(
       else if (event.resourceId) port.openResource?.(event.resourceId);
     },
   });
+  const missionFlow = mountMissionFlow(section, { motion: options.motion, viewId: options.viewId, active, openMission: port.openMission });
   graph.setMode(streamMode);
   list.hidden = true;
   section.append(list, about);
@@ -407,7 +411,7 @@ export function mountEventExperience(
     const selectedSince = since.value ? Date.parse(since.value) : undefined;
     if (selectedSince !== undefined && !Number.isFinite(selectedSince)) {
       // An invalid filter must not retain previously authorized inspection data.
-      graph.update([]);
+      graph.update([]); missionFlow.update(null); graph.setAvailable(true);
       for (const row of rows.values()) row.retire();
       rows.clear(); list.replaceChildren();
       status.textContent = "Choose a valid received-after time.";
@@ -422,6 +426,9 @@ export function mountEventExperience(
       query: query.value,
       ...(selectedSince !== undefined ? { since: selectedSince } : {}),
     });
+    const mission = missionFlowInScope(raw.mission, raw) ? raw.mission : null;
+    missionFlow.update(mission, streamMode);
+    graph.setAvailable(!mission);
     graph.update(result);
     const first = window.events.length
       ? Math.min(...window.events.map((event) => event.cursor))
@@ -547,7 +554,7 @@ export function mountEventExperience(
   update();
   return {
     update,
-    frame: graph.frame,
+    frame() { graph.frame(); missionFlow.frame(); },
     setPresentation(value: "workspace" | "focused") {
       section.dataset.presentation = value;
     },
@@ -555,12 +562,14 @@ export function mountEventExperience(
       if (disposed || active === value) return;
       active = value;
       graph.setActive(value);
+      missionFlow.setActive(value);
       if (active) update();
       for (const row of rows.values()) row.syncDetails();
     },
     dispose() {
       disposed = true;
       graph.dispose();
+      missionFlow.dispose();
       for (const row of rows.values()) row.retire();
       rows.clear();
       section.remove();

@@ -64,10 +64,11 @@ import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
 import type { VelaPlan, VelaRequest, VelaState } from "../../../vela-core/src/contracts.ts";
 import { createVelaExperience } from "./vela-experience";
+import { velaVisualState, velaVisualLabels, type VelaVisualEvidence } from './vela-visual-state.ts';
 import { createVelaManifestation } from "./vela-manifestation.ts";
 import { createVelaMissionView } from "./vela-missions.ts";
 import { mountMissionWorkroomView, type MissionWorkroomView } from "./mission-workroom-view.ts";
-import type { MissionResponse } from "../../../integrated-backend/src/mission-contracts.mts";
+import type { MissionResponse, MissionProjection } from "../../../integrated-backend/src/mission-contracts.mts";
 import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
 import { returnFocusAfterDialogClose } from "./focus-return";
@@ -241,6 +242,8 @@ const escape = (s: string) =>
 
 export function installApplication(hooks: Hooks) {
   const host = window.aerynthHost!;
+  const visualEvidence: VelaVisualEvidence = {};
+  let visualMission: MissionProjection | null = null;
   const controlMotion = createControlMotion({
     motion: hooks.motion,
     wake: hooks.wake,
@@ -288,11 +291,24 @@ export function installApplication(hooks: Hooks) {
   addEventListener("resize", surfaces.viewportChanged);
   const velaVoice = createVelaVoiceView(document, request => host.command!("velaVoice", request));
   const velaPermissions = createVelaPermissionsView(document, request => host.command!("weatherPermission", request));
-  const velaWake = createVelaWakeView(document, request => host.command!("velaWake", request), () => host.command!("velaVoice",{name:'devices',input:{}}));
+  const velaWake = createVelaWakeView(document, async request => {
+    const value = await host.command!("velaWake", request);
+    const wake = value as VelaVisualEvidence['wake'];
+    if (wake && typeof wake.phase === 'string' && typeof wake.detector === 'string' && typeof wake.microphone === 'string') visualEvidence.wake = { phase: wake.phase, detector: wake.detector, microphone: wake.microphone, actualPlaybackActive: wake.actualPlaybackActive, backendWorking: wake.backendWorking };
+    hooks.wake();
+    return value;
+  }, () => host.command!("velaVoice",{name:'devices',input:{}}));
+  const stopVisualVoiceObservation = velaVoice.subscribe(value => { visualEvidence.voice = { active: value.active, microphoneOn: value.microphoneOn, speaking: value.speaking }; hooks.wake(); });
   velaVoice.element.append(velaWake.element);
   let velaPanel: ReturnType<typeof mountVelaPanel> | null = null;
-  const velaMissions = createVelaMissionView(document, async (request) =>
-    (await host.command!("missions", request)) as MissionResponse,
+  const velaMissions = createVelaMissionView(document, async (request) => {
+    try {
+      const value = (await host.command!("missions", request)) as MissionResponse;
+      if (value && typeof value === 'object' && 'outcome' in value && 'tasks' in value && 'scope' in value) { visualMission = value as MissionProjection; scheduleStreamRefresh(); }
+      hooks.wake();
+      return value;
+    } catch (error) { visualMission = null; throw error; }
+  },
     async workspaceId => {
       await run({ type: "navigate", target: { kind: "workspace", workspaceId } });
       if (state?.activeWorkspaceId === workspaceId) surfaces.close("vela");
@@ -322,6 +338,7 @@ export function installApplication(hooks: Hooks) {
     "pagehide",
     () => {
       velaVoice.dispose();
+      stopVisualVoiceObservation();
       velaPermissions.dispose();
       velaWake.dispose();
       velaManifestation.dispose();
@@ -412,6 +429,10 @@ export function installApplication(hooks: Hooks) {
       }
     },
     observed: (value) => {
+      visualEvidence.planning = value.requests.some(request => request.state === 'planning');
+      visualEvidence.pendingRequest = value.requests.some(request => request.state === 'checking');
+      visualEvidence.applying = value.receipts.some(receipt => receipt.state === 'started');
+      visualEvidence.needsInput = value.requests.some(request => request.state === 'awaiting-review');
       if (velaOpen) velaPanel?.observeLiveAnswer(value.activeAnswer);
       if (
         value.requests.some((r) => r.state === "planning") ||
@@ -789,9 +810,11 @@ export function installApplication(hooks: Hooks) {
         openResource: openCanonicalResource,
         openRelated: openRelatedResources,
         events: {
+          motion: experienceMotion,
           snapshot: eventWindow,
           refresh: refreshEvents,
           openResource: openCanonicalResource,
+          openMission: openStreamMission,
         },
       }),
   });
@@ -2500,7 +2523,7 @@ export function installApplication(hooks: Hooks) {
         missions: velaMissions,
         voice: {...velaVoice,setVisible(visible){velaVoice.setVisible(visible);velaWake.setVisible(visible);}},
         permissions: velaPermissions,
-        onPresentation: (value) => velaExperience.observe(value),
+        onPresentation: (value) => { visualEvidence.panelPhase = value.phase; velaExperience.observe(value); },
         onManifestation: (value) => velaManifestation.observe(value),
         onConnectProvider: () => host.command!("capabilities", {}),
         onOpenConnections: () => { surfaces.close("vela"); connections(); },
@@ -4702,6 +4725,7 @@ export function installApplication(hooks: Hooks) {
   function eventWindow(): EventWindow {
     return {
       ...streamScope(),
+      mission: visualMission,
       events: localEvents,
       earliest: retainedEarliest,
       latest: retainedLatest,
@@ -4803,13 +4827,13 @@ export function installApplication(hooks: Hooks) {
   function showStream(restoring = false) {
     const content = document.createElement("div");
     const anchor = el("#application-stream");
+    const viewId = "context-stream:" + ++streamSerial;
     const view = mountContextualStream(content, {
       snapshot: eventWindow,
       refresh: refreshEvents,
       openResource: openCanonicalResource,
       openMission: openStreamMission,
-    });
-    const viewId = "context-stream:" + ++streamSerial;
+    }, { motion: experienceMotion, viewId });
     const motion = conversationDisclosures(content, { motion: experienceMotion, viewId });
     const pickers = [...content.querySelectorAll<HTMLSelectElement>("select")]
       .map((select, i) => enhanceConversationSelect(select, {
@@ -4866,6 +4890,9 @@ export function installApplication(hooks: Hooks) {
     };
     if (/^vela[./]voice[./]/.test(e.type)) velaVoice.observe();
     const accessChanged = /^policy[./]/.test(e.type);
+    const observedWake = (event as StreamEvent).payload?.wake;
+    if (observedWake) visualEvidence.wake = { phase: observedWake.phase, detector: observedWake.detector, microphone: observedWake.microphone };
+    if (accessChanged) { visualMission = null; visualEvidence.panelPhase = undefined; visualEvidence.planning = visualEvidence.pendingRequest = visualEvidence.applying = visualEvidence.needsInput = false; }
     if (e.type.startsWith('clock_timer.') && e.resourceId) {
       for (const [id, entry] of clockTimerViews) {
         if (state?.blocks.find(block => block.id === id)?.resource_id === e.resourceId) void entry.view.refresh().catch(report);
@@ -5198,6 +5225,17 @@ export function installApplication(hooks: Hooks) {
   }
   return {
     ribbonThinking: velaExperience.ribbonThinking,
+    visualVelaState() {
+      const scope = streamScope();
+      const mission = visualMission?.scope.workspaceId === scope.workspaceId && visualMission?.scope.projectId === scope.projectId && (!visualMission?.originConversationId || state?.resources.some(resource => resource.id === visualMission?.originConversationId && resource.available !== false && resource.visible !== false)) ? visualMission : null;
+      const value = velaVisualState({ ...visualEvidence, panelPhase: velaOpen ? visualEvidence.panelPhase : undefined,
+        mission: mission ? { outcome: mission.outcome, runningTasks: mission.tasks.filter(task => task.state === 'running').length, waits: Object.keys(mission.waits).length } : undefined });
+      const anchor = el('#vela');
+      if (anchor.dataset.operationalState !== value) { anchor.dataset.operationalState = value; anchor.setAttribute('aria-label', 'Vela: ' + velaVisualLabels[value]); }
+      const label = el('#vela-state');
+      if (label.textContent !== velaVisualLabels[value]) label.textContent = velaVisualLabels[value];
+      return value;
+    },
     frame(now: number, policy: Policy) {
       paintStreamRefresh();
       if (
@@ -5233,6 +5271,7 @@ export function installApplication(hooks: Hooks) {
       surfaces.frame(now);
       resourcesMotion?.frame();
       streamMotion?.frame();
+      streamView?.frame();
       for (const picker of streamPickers) picker.frame();
       blockLibrary?.view.frame();
       environmentNavigator?.frame();

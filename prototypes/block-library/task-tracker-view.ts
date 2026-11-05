@@ -16,6 +16,16 @@ const definitionOf = (draft: Draft): TaskDefinition | null => [...draft.assignee
   objective: draft.objective, requirements: structuredClone(draft.requirements), assignees: draft.assignees.map(value => value.reference!), dependencies: draft.dependencies.map(value => value.reference!), sources: draft.sources.map(value => value.reference!),
 });
 
+/** Criterion-level reading aid over the last authorized projection. The native
+ * service remains the authority for whole-object verification and acceptance. */
+export function requirementReviewState(document: TaskObjectiveDocument, id: string): 'verified' | 'needs-work' | 'stale' | 'unavailable' | 'unreviewed' {
+  const review = document.reviews.findLast(value => value.definitionVersion === document.definitionVersion && value.definitionDigest === document.definitionDigest && (!value.requirementIds.length || value.requirementIds.includes(id)));
+  if (!review) return 'unreviewed';
+  if (review.decision !== 'verified') return 'needs-work';
+  const freshness = [review.freshness, ...document.sources.map(source => source.freshness)];
+  return freshness.includes('unavailable') ? 'unavailable' : freshness.includes('changed') ? 'stale' : 'verified';
+}
+
 export interface TaskTrackerExperience {
   refresh(): Promise<void>;
   setActive(active: boolean): void;
@@ -47,6 +57,8 @@ export function mountTaskTrackerExperience(root: HTMLElement, resourceId: string
   };
   const section = node('section', '', 'aw-task-tracker'), title = node('h3'), states = node('dl', '', 'aw-task-outcome-states');
   const objective = node('p', '', 'aw-task-objective'), criteria = node('ol', '', 'aw-task-requirements'), bindings = node('div', '', 'aw-task-bindings');
+  const proofMap = node('section', '', 'aw-task-proof-map'), proofCounts = node('dl'), proofNote = node('p');
+  proofMap.setAttribute('aria-label', 'Objective review and relationship coverage'); proofMap.append(proofCounts, proofNote);
   const actions = node('div', '', 'aw-task-actions'), attempts = node('section', '', 'aw-task-attempts'), reviews = node('section', '', 'aw-task-reviews');
   const status = node('p', '', 'aw-task-status'), caveat = node('p', 'States reflect the last authorized read. Execution records do not establish verification or acceptance.', 'aw-task-caveat');
   let current: TaskObjectiveDocument | null = null, active = options.active ?? true, disposed = false, pending = false, loading = false, sequence = 0, unavailable = false, needsRefresh = false;
@@ -231,17 +243,35 @@ export function mountTaskTrackerExperience(root: HTMLElement, resourceId: string
     if (disposed) return; title.textContent = current?.resource.title ?? (unavailable ? 'Task objective unavailable' : 'Loading task objective…'); title.hidden = options.showTitle === false;
     states.replaceChildren(); attempts.replaceChildren(); reviews.replaceChildren();
     if (!current) { objective.textContent = ''; for (const value of panels) { value.element.hidden = true; value.element.inert = true; }
+      proofCounts.replaceChildren(); proofNote.textContent = ''; proofMap.hidden = true;
       objectiveInput.value = reviewNoteInput.value = ''; criteria.replaceChildren(); bindings.replaceChildren(); criteriaSignature = bindingSignature = '';
       criteriaEditor.replaceChildren(); editorBindings.replaceChildren(); reviewRequirements.replaceChildren(); reviewEvidenceList.replaceChildren(); reviewAttemptInput.replaceChildren(); acceptanceList.replaceChildren(); historyItems.replaceChildren(); historyStatus.textContent = ''; history = null; setDisabled(); return; }
     for (const [label, text] of [['Objective', current.disposition], ['Manual verification', current.verification], ['Acceptance', current.acceptance.state]]) { const group = node('div'); group.append(node('dt', label), node('dd', text.replaceAll('-', ' '))); states.append(group); }
+    proofMap.hidden = false; proofCounts.replaceChildren();
+    const verified = current.definition.requirements.filter(item => requirementReviewState(current!, item.id) === 'verified').length;
+    for (const [label, value] of [['Criteria with current verified reviews', `${verified} of ${current.definition.requirements.length}`],
+      ['Current accepted dependencies', `${current.dependencies.filter(value => value.freshness === 'current' && value.acceptance === 'valid').length} of ${current.dependencies.length}`],
+      ['Current assignee references', `${current.assignees.filter(value => value.freshness === 'current' && value.reference).length} of ${current.assignees.length}`]]) {
+      const cell = node('div'); cell.append(node('dt', label), node('dd', value)); proofCounts.append(cell);
+    }
+    proofNote.textContent = current.proofCoverage === 'bounded' ? 'Loaded proof is bounded. Counts do not establish complete verification or acceptance.' : 'Manual review coverage and saved relationships. Execution completion and acceptance remain separate.';
     if (objective.textContent !== current.definition.objective) objective.textContent = current.definition.objective;
     const nextCriteria = JSON.stringify(current.definition.requirements);
     if (criteriaSignature !== nextCriteria) { criteriaSignature = nextCriteria; criteria.replaceChildren();
       for (const item of current.definition.requirements) { const row = node('li', item.text); row.dataset.requirementId = item.id; criteria.append(row); }
       if (!current.definition.requirements.length) criteria.append(node('li', 'No separate criteria recorded. General outcome review still requires actual evidence.')); }
+    for (const row of criteria.children as unknown as HTMLElement[]) {
+      if (!row.dataset.requirementId) continue;
+      const state = requirementReviewState(current, row.dataset.requirementId);
+      row.dataset.reviewState = state;
+      let badge = row.querySelector<HTMLElement>('.aw-task-requirement-state');
+      if (!badge) { badge = node('small', '', 'aw-task-requirement-state'); row.append(badge); }
+      const label = ({ verified: 'Current verified review', 'needs-work': 'Needs work', stale: 'Review stale', unavailable: 'Review unavailable', unreviewed: 'Unreviewed' } as const)[state];
+      if (badge.textContent !== label) badge.textContent = label;
+    }
     const nextBindings = JSON.stringify([current.assignees, current.dependencies, current.sources]);
     if (bindingSignature !== nextBindings) { bindingSignature = nextBindings; bindings.replaceChildren();
-      for (const type of ['assignees', 'dependencies', 'sources'] as const) for (const value of current[type]) { const row = node('div', '', 'aw-task-binding'); row.append(node('span', referenceName(type, value.reference)), node('small', value.freshness + (type === 'dependencies' ? ' · acceptance ' + ('acceptance' in value ? value.acceptance : '') : '')));
+      for (const type of ['assignees', 'dependencies', 'sources'] as const) for (const value of current[type]) { const row = node('div', '', 'aw-task-binding'); row.dataset.bindingKind = type; row.append(node('strong', type === 'assignees' ? 'Assignee' : type === 'dependencies' ? 'Dependency' : 'Source'), node('span', referenceName(type, value.reference)), node('small', value.freshness + (type === 'dependencies' ? ' · acceptance ' + ('acceptance' in value ? value.acceptance : '') : '')));
         if (value.reference && value.freshness !== 'unavailable' && options.openResource && 'resourceId' in value.reference) row.append(action('Open reference', () => openReference(value.reference))); bindings.append(row); } }
     attempts.append(node('h4', 'Existing execution references'));
     if (!current.attempts.length) attempts.append(node('p', 'No execution references linked. This tracker does not start execution.'));
@@ -283,7 +313,7 @@ export function mountTaskTrackerExperience(root: HTMLElement, resourceId: string
   }
   section.dataset.resourceId = resourceId; section.dataset.noCardDrag = 'true'; section.dataset.presentation = options.presentation ?? 'focused'; section.setAttribute('aria-label', 'Task Tracker');
   status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
-  section.append(title, states, node('h4', 'Objective'), objective, node('h4', 'Requirements'), criteria, bindings, actions, editor.element, attempts, review.element, acceptance.element, closePanel.element, reviews, historyPanel.element, caveat, status);
+  section.append(title, states, node('h4', 'Objective'), objective, proofMap, node('h4', 'Requirements'), criteria, bindings, actions, editor.element, attempts, review.element, acceptance.element, closePanel.element, reviews, historyPanel.element, caveat, status);
   root.append(section); section.inert = !active; section.hidden = !active; section.style.opacity = '0'; paint(); if (active) void refresh();
   return {
     refresh,

@@ -2,6 +2,7 @@ import {
   mountEventExperience,
   type EventWindow,
 } from "../../../block-library/event-view.ts";
+import type { ExperienceMotionPort } from '../../../application-contract/motion.ts';
 
 export type ContextualResource = Readonly<{
   id: string;
@@ -406,7 +407,7 @@ export interface ContextualStreamPort {
 export function mountContextualStream(
   root: HTMLElement,
   port: ContextualStreamPort,
-  options: { active?: boolean } = {},
+  options: { active?: boolean; motion?: ExperienceMotionPort; viewId?: string } = {},
 ) {
   const { node, surface, motionControl } = createNodes(root);
   const section = node("div", "aw-contextual-stream"),
@@ -434,7 +435,7 @@ export function mountContextualStream(
         : {}),
       ...(port.openMission ? { openMission: (id: string) => port.openMission!(id) } : {}),
     },
-    { active: options.active, presentation: "focused" },
+    { active: options.active, presentation: "focused", motion: options.motion, viewId: options.viewId },
   );
   // Bounded chrome only; recorded rows retain the shared view's native details.
   const search = section.querySelector<HTMLInputElement>(
@@ -463,6 +464,7 @@ export function mountContextualStream(
   }
   present();
   return {
+    frame() { view.frame(); },
     update() {
       view.update();
       present();

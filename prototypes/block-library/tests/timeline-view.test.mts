@@ -215,3 +215,63 @@ test('LI-06 partial: scrubbing uses exact retained timestamps without writes and
   assert.equal(s.dom.root.querySelectorAll('.aw-timeline-dot').length, 0);
   assert.equal(s.dom.root.querySelector('.aw-timeline-playhead').hidden, true);
 });
+
+const planField = (root:any,name:string) => root.querySelectorAll('input').find((n:any)=>n.getAttribute('aria-label')===name);
+function fillPlan(root:any,title='SYNTHETIC planning intention') {
+  planField(root,'Plan title').value=title;
+  planField(root,'Plan start (ISO with UTC offset)').value='2026-11-02T01:30:00-05:00';
+  planField(root,'Plan duration (milliseconds)').value='120000';
+  planField(root,'Plan timezone (IANA)').value='America/New_York';
+  planField(root,'Plan lane').value='Review';
+}
+
+test('LI04 actual canonical planning UI create/update/delete/undo preserves exact time, duration and immutable history', async t => {
+  const s=await setup(t,f=>({port:{...f.port,planning:async req=>f.service.planning(req)}}));await s.ready();
+  const original=s.f.db.prepare('SELECT json FROM intelligence_events ORDER BY cursor').all();
+  button(s.dom.root,'New planning item').onclick();fillPlan(s.dom.root);
+  button(s.dom.root,'Create planning item').onclick();await until(()=>s.document!.resource.version===2&&s.settled()&&!button(s.dom.root,'Update planning item')?.disabled);
+  let plans:any=s.f.service.planning({op:'list',resourceId:s.f.created.resourceId,expectedVersion:2});assert.equal(plans.items.length,1);assert.equal(plans.items[0].startAt,'2026-11-02T06:30:00.000Z');assert.equal(plans.items[0].durationMs,120000);
+  s.frame();const band=s.dom.root.querySelector('.aw-timeline-plan-band');assert.equal(band.hidden,false);assert.match(band.textContent,/Planned:.*Review/);
+  planField(s.dom.root,'Plan title').value='SYNTHETIC amended intention';button(s.dom.root,'Update planning item').onclick();await until(()=>s.document!.resource.version===3&&s.settled()&&!button(s.dom.root,'Delete planning item').disabled);
+  button(s.dom.root,'Delete planning item').onclick();await until(()=>s.document!.resource.version===4&&s.settled()&&!button(s.dom.root,'Undo planning change').disabled);
+  assert.equal(s.dom.root.querySelectorAll('.aw-timeline-plan-band').length,0);
+  button(s.dom.root,'Undo planning change').onclick();await until(()=>s.document!.resource.version===5&&s.settled()&&!button(s.dom.root,'Undo planning change').disabled);
+  plans=s.f.service.planning({op:'list',resourceId:s.f.created.resourceId,expectedVersion:5});assert.equal(plans.items[0].title,'SYNTHETIC amended intention');
+  assert.deepEqual(s.f.db.prepare('SELECT json FROM intelligence_events ORDER BY cursor').all(),original,'Planning never rewrites retained evidence');
+});
+
+test('LI04 planning rejects ambiguous entry and lost acknowledgment retries the exact command before flush', async t => {
+  let lost=true;const attempts:any[]=[];
+  const s=await setup(t,f=>({port:{...f.port,planning:async req=>{if(req.op!=='list')attempts.push(structuredClone(req));const result=f.service.planning(req);if(req.op!=='list'&&lost){lost=false;throw Error('synthetic transport interruption');}return result;}}}));await s.ready();
+  button(s.dom.root,'New planning item').onclick();fillPlan(s.dom.root);planField(s.dom.root,'Plan start (ISO with UTC offset)').value='2026-11-02T01:30:00';button(s.dom.root,'Create planning item').onclick();
+  assert.equal(attempts.length,0);assert.match(s.dom.root.querySelector('.aw-timeline-planning').textContent,/explicit Z or UTC offset/);
+  fillPlan(s.dom.root);button(s.dom.root,'Create planning item').onclick();await until(()=>s.dom.root.querySelector('.aw-timeline-planning').textContent.includes('unconfirmed'));
+  await assert.rejects(s.controller.flush(),/Planning change needs confirmation/);button(s.dom.root,'Retry planning change').onclick();await until(()=>s.document!.resource.version===2&&s.settled()&&attempts.length===2);await s.controller.flush();assert.deepEqual(attempts[0],attempts[1]);
+});
+
+test('LI04 planning keyboard and duration drag use canonical snap commands; access denial clears planned source data', async t => {
+  const s=await setup(t,f=>({port:{...f.port,planning:async req=>f.service.planning(req)}}));await s.ready();button(s.dom.root,'New planning item').onclick();fillPlan(s.dom.root);button(s.dom.root,'Create planning item').onclick();await until(()=>s.document!.resource.version===2&&s.settled()&&!button(s.dom.root,'Update planning item')?.disabled);
+  let band=s.dom.root.querySelector('.aw-timeline-plan-band');band.querySelector('button').onkeydown({key:'ArrowRight',altKey:false,preventDefault(){}});await until(()=>s.document!.resource.version===3&&s.settled()&&!button(s.dom.root,'Update planning item')?.disabled);
+  let plans:any=s.f.service.planning({op:'list',resourceId:s.f.created.resourceId,expectedVersion:3});assert.equal(plans.items[0].startAt,'2026-11-02T06:31:00.000Z');
+  band=s.dom.root.querySelector('.aw-timeline-plan-band');const handle=band.querySelectorAll('button')[1];handle.onpointerdown({button:0,clientX:0,pointerId:1,stopPropagation(){}});handle.onpointermove({clientX:1});handle.onpointerup({pointerId:1});await until(()=>s.document!.resource.version===4&&s.settled());
+  plans=s.f.service.planning({op:'list',resourceId:s.f.created.resourceId,expectedVersion:4});assert.ok(plans.items[0].durationMs>120000);
+  s.f.setDenied(true);await s.controller.refresh();assert.equal(s.dom.root.querySelectorAll('.aw-timeline-plan-band').length,0);assert.equal(planField(s.dom.root,'Plan title').value,'');
+});
+
+test('LI04 planning version conflicts are explicit and fresh read-only access disables mutations', async t => {
+  const s=await setup(t,f=>({port:{...f.port,planning:async req=>f.service.planning(req)}}));await s.ready();button(s.dom.root,'New planning item').onclick();fillPlan(s.dom.root);
+  s.f.service.save({commandId:crypto.randomUUID(),resourceId:s.f.created.resourceId,expectedVersion:1,view:s.f.view});
+  button(s.dom.root,'Create planning item').onclick();await until(()=>s.document!.resource.version===2&&s.settled()&&s.dom.root.querySelector('.aw-timeline-planning').textContent.includes('rejected'));
+  assert.equal(button(s.dom.root,'Retry planning change').hidden,true);await s.controller.flush();
+  s.f.setWritable(false);await s.controller.refresh();assert.equal(button(s.dom.root,'Create planning item').disabled,true);assert.equal(button(s.dom.root,'New planning item').disabled,true);
+});
+
+test('LI04 cancelled or stale planning pointer previews restore canonical geometry without mutation',async t=>{
+  const s=await setup(t,f=>({port:{...f.port,planning:async req=>f.service.planning(req)}}));await s.ready();button(s.dom.root,'New planning item').onclick();fillPlan(s.dom.root);button(s.dom.root,'Create planning item').onclick();await until(()=>s.document!.resource.version===2&&s.settled()&&!button(s.dom.root,'Update planning item')?.disabled);s.frame();
+  const control=s.dom.root.querySelector('.aw-timeline-plan-band').querySelector('button'), band=s.dom.root.querySelector('.aw-timeline-plan-band'), original=band.style.transform;
+  const begin=()=>{control.onpointerdown({button:0,clientX:0,pointerId:1,stopPropagation(){}});control.onpointermove({clientX:30});s.frame();assert.notEqual(band.style.transform,original);};
+  begin();control.onpointercancel({pointerId:1});s.frame();assert.equal(band.style.transform,original);
+  begin();control.onlostpointercapture();s.frame();assert.equal(band.style.transform,original);
+  begin();control.onkeydown({key:'Escape',preventDefault(){},stopPropagation(){}});s.frame();assert.equal(band.style.transform,original);
+  begin();s.f.setWritable(false);await s.controller.refresh();control.onpointerup({pointerId:1});s.frame();assert.equal(band.style.transform,original);assert.equal(s.document!.resource.version,2);
+});

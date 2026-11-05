@@ -1,3 +1,4 @@
+import { mountTemporalPlanning } from './temporal-planning.ts';
 import { temporalProjection, temporalTicks, temporalZoom, recordedReviewTime, type TemporalOrientation } from './temporal-projection.ts';
 import type { TimelineDocument, TimelineView, TimelineSelection, SaveTimeline } from '../timeline-product/contracts.ts';
 import type { ExperienceMotionPort, ExperiencePose } from '../application-contract/motion.ts';
@@ -65,7 +66,9 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   const addMotion = (key: string, value: ExperiencePose) => { motion.add(key, value); owned.add(key); };
   const target = (key: string, value: ExperiencePose, cause: string) => { motion.target(key, value, cause); motion.wake(); };
   addMotion(prefix, pose({ opacity: 0, y: 6 })); addMotion(prefix + ':list', pose({ h: 0 })); addMotion(prefix + ':filters', pose({ h: 0, opacity: 0 }));
-  const canEdit = () => active && !disposed && current?.canEdit === true && !busy && !request && !needsRefresh && !needsReview;
+  let planning: ReturnType<typeof mountTemporalPlanning> | undefined;
+  const hostEditable = () => active && !disposed && current?.canEdit === true && !busy && !request && !needsRefresh && !needsReview;
+  const canEdit = () => hostEditable() && !planning?.busy();
   const formatTime = (value: string) => { try { return new Intl.DateTimeFormat(undefined, { timeZone: current?.view.viewport.displayTimeZone ?? 'UTC', dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value)); } catch { return value; } };
   const label = (text: string, control: HTMLElement) => { const value = node('label', text); control.setAttribute('aria-label', text); value.append(control); return value; };
   const action = (text: string, work: () => void | Promise<void>) => {
@@ -156,7 +159,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
     selection.append(node('h4', timelineItemTitle(item)));
     if (external) {
       const timeSource = external.timeSource === 'github-committer' ? 'GitHub committer time' : external.timeSource === 'github-author' ? 'GitHub author time' : 'Source unspecified';
-      values.append(node('dt', 'Reported time'), node('dd', reportedAt ? `${formatTime(reportedAt)} Â· ${timeSource}` : 'Unavailable'));
+      values.append(node('dt', 'Reported time'), node('dd', reportedAt ? `${formatTime(reportedAt)} · ${timeSource}` : 'Unavailable'));
       if (reportedAt) values.append(node('dt', 'Original timestamp'), node('dd', reportedAt));
     }
     for (const [name, value] of [['Captured', formatTime(event.receivedAt)], ['Evidence', item.evidenceClass], ['Source', external?.source.label ?? event.providerId], ['Source status', event.status ?? 'Not provided'], ['Event type', event.type], ['Event reference', event.eventId], ['Capture cursor', String(event.cursor)]]) values.append(node('dt', name), node('dd', value));
@@ -176,10 +179,10 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   }
   function paint() {
     if (disposed) return;
-    title.textContent = current?.resource.title ?? (unavailable ? 'Timeline unavailable' : 'Loading timelineâ€¦');
+    title.textContent = current?.resource.title ?? (unavailable ? 'Timeline unavailable' : 'Loading timeline…');
     title.hidden = options.showTitle === false;
     const basis = axis() === 'reportedAt' ? 'reported time' : 'capture time';
-    range.textContent = current ? `${formatTime(current.view.viewport.from)} â€” ${formatTime(current.view.viewport.to)} Â· ${basis} (${current.view.viewport.displayTimeZone})` : '';
+    range.textContent = current ? `${formatTime(current.view.viewport.from)} — ${formatTime(current.view.viewport.to)} · ${basis} (${current.view.viewport.displayTimeZone})` : '';
     const live = new Set(window?.items.map(keyOf) ?? []);
     for (const [id, row] of rows) if (!live.has(id)) { row.row.remove(); row.dot.remove(); motion.remove(row.key); motion.remove(row.key + ':dot'); owned.delete(row.key); owned.delete(row.key + ':dot'); rows.delete(id); }
     for (const item of window?.items ?? []) {
@@ -196,25 +199,25 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
       row.item = item;
       row.dot.hidden = !time;
       row.dot.setAttribute('aria-label', timelineItemTitle(item) + (time ? ', ' + formatTime(time) : ''));
-      row.core.replaceChildren(when, node('strong', timelineItemTitle(item)), node('small', item.evidenceClass + ' Â· ' + (item.externalEvidence?.source.label ?? item.event.providerId)));
+      row.core.replaceChildren(when, node('strong', timelineItemTitle(item)), node('small', item.evidenceClass + ' · ' + (item.externalEvidence?.source.label ?? item.event.providerId)));
       row.core.setAttribute('aria-pressed', String(selectedNow)); row.dot.setAttribute('aria-pressed', String(selectedNow)); row.row.dataset.evidenceClass = item.evidenceClass; row.dot.dataset.evidenceClass = item.evidenceClass;
       row.dot.title = row.dot.getAttribute('aria-label') ?? '';
     }
     gaps.replaceChildren(...[...new Set(window?.gaps.map(value => value.reason) ?? [])].map(reason => node('li', gapLabels[reason])));
     coverage.textContent = !window ? 'No retained window loaded.' : window.source.state === 'unavailable' ? 'Retained history is unavailable.'
-      : `${window.items.length} events shown Â· ${window.coverage.matchingItems === 'bounded' ? 'bounded retained page' : 'retained page scanned'}. Only currently authorized retained evidence is shown.`;
+      : `${window.items.length} events shown · ${window.coverage.matchingItems === 'bounded' ? 'bounded retained page' : 'retained page scanned'}. Only currently authorized retained evidence is shown.`;
     if (window?.hasNewEvents) coverage.textContent += ' New captures are available; refresh to open a new window.';
     if (current?.selectionUnavailable || window?.selectionUnavailable) coverage.textContent += ' The saved selection is unavailable.';
     if (current?.canEdit !== true) coverage.textContent += ' This view is read-only in this surface.';
     const imported = window?.sourceCoverage;
     sourceCoverage.hidden = !imported;
     sourceCoverage.textContent = imported ? [
-      imported.sourceLabel + ' Â· ' + imported.status + ' source coverage',
-      `${formatTime(imported.requestedFrom)} â€” ${formatTime(imported.requestedTo)}`,
+      imported.sourceLabel + ' · ' + imported.status + ' source coverage',
+      `${formatTime(imported.requestedFrom)} — ${formatTime(imported.requestedTo)}`,
       imported.fetchedAt ? 'Fetched ' + formatTime(imported.fetchedAt) : '',
       imported.omissionReason ?? '',
-    ].filter(Boolean).join(' Â· ') : '';
-    inspectSelection(); setDisabled(); reflow();
+    ].filter(Boolean).join(' · ') : '';
+    inspectSelection(); setDisabled(); reflow(); planning?.controls();
   }
   function selectEvent(key: string) {
     const item = rows.get(key)?.item; if (!item || !active || disposed || busy) return;
@@ -276,6 +279,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
     }
     const bounds = reviewBounds(); scrub.min = String(bounds.start); scrub.max = String(bounds.end); scrub.step = '1'; scrub.value = String(reviewPosition ?? bounds.start);
     items.hidden = !forensic;
+    planning?.layout();
     target(prefix + ':list', pose({ h: y }), 'timeline-list-layout'); target(prefix + ':filters', pose({ h: filtersOpen ? filterPanel.scrollHeight || 240 : 0, opacity: filtersOpen ? 1 : 0 }), 'timeline-filter-disclosure');
   }
   async function load(append: boolean): Promise<void> {
@@ -293,11 +297,11 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
       // pages here would retain headers that policy may revoke between queries.
       current = document; unavailable = false; window = next;
       if (!dirty) selected = document.view.selection; else if (baseVersion !== document.resource.version) needsReview = true;
-      needsRefresh = false; paintFields(); restoreFields(); paint(); options.onProjection?.(document, window);
+      needsRefresh = false; await planning?.reload(document); if (disposed || !active || token !== sequence) return; paintFields(); restoreFields(); paint(); options.onProjection?.(document, window);
       status.textContent = request ? 'An earlier save is unconfirmed. Retry save checks the same attempt.' : needsReview ? 'View settings changed elsewhere. Your local settings are retained.' : '';
     } catch {
       if (disposed || !active || token !== sequence) return;
-      current = null; window = null; unavailable = true; redactFields(); paint(); options.onProjection?.(null, null); status.textContent = 'Timeline history could not be read or is no longer accessible. Your local view settings are retained.';
+      current = null; window = null; planning?.clear(); unavailable = true; redactFields(); paint(); options.onProjection?.(null, null); status.textContent = 'Timeline history could not be read or is no longer accessible. Your local view settings are retained.';
     } finally { if (!disposed && active && token === sequence) { busy = false; paint(); target(prefix, pose(), 'timeline-read'); } }
   }
   function save(view: TimelineView, remember = true) {
@@ -321,7 +325,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
         if (!disposed && active) {
           if (code === 'timeline_read_only' && current) current = { ...current, canEdit: false };
           if (['timeline_unavailable', 'timeline_scope_unavailable', 'timeline_identity_unavailable'].includes(code ?? '')) {
-            current = null; window = null; unavailable = true; redactFields(); paint(); options.onProjection?.(null, null);
+            current = null; window = null; planning?.clear(); unavailable = true; redactFields(); paint(); options.onProjection?.(null, null);
           }
           if (code === 'timeline_version_conflict') needsReview = true;
           status.textContent = acknowledged ? 'View saved. Refresh to read its updated history.' : rejected ? 'The view could not be saved. Refresh to review current access or competing changes; your local settings are retained.' : 'The save could not be confirmed. Retry save checks the same attempt.';
@@ -353,13 +357,14 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   track.append(scale, laneLabels, playhead);
   toolbar.append(earlier, later, closer, wider, back, filterButton, refreshButton, retry);
   section.append(title, range, toolbar, filterPanel, review, presentationTools, legend, track, reviewTools, items, selection, gaps, sourceCoverage, coverage, more, status); root.append(section);
+  planning = mountTemporalPlanning(section, track, port, { document: () => current, enabled: () => hostEditable() && !dirty, refresh: () => load(false), onBusy: () => setDisabled(), motion, prefix, layout: () => ({ orientation: display, extent: display === 'vertical' ? (density === 'compact' ? 220 : 420) : Math.max(80, (track.clientWidth || 640) - 28), historyHeight: 64 + Math.max(1, display === 'multilane' ? new Set(window?.items.map(item => item.event.providerId) ?? []).size : 1) * (density === 'compact' ? 56 : 88) }) });
   section.inert = !active; section.hidden = !active; section.style.opacity = '0'; items.style.height = '0px'; paint(); if (active) void load(false);
   return {
     refresh: () => load(false),
-    setActive(value) { if (disposed || active === value) return; active = value; section.inert = !value; if (value) { section.hidden = false; void load(false); } else { stopReview(); sequence++; busy = false; } target(prefix, pose({ opacity: value ? 1 : 0, y: value ? 0 : 6 }), 'timeline-visibility'); setDisabled(); },
+    setActive(value) { if (disposed || active === value) return; active = value; section.inert = !value; if (value) { section.hidden = false; void load(false); } else { planning?.clear(); stopReview(); sequence++; busy = false; } target(prefix, pose({ opacity: value ? 1 : 0, y: value ? 0 : 6 }), 'timeline-visibility'); setDisabled(); },
     setPresentation(value) { if (!disposed) { section.dataset.presentation = value; if (!densityChosen) { density = value === 'workspace' ? 'compact' : 'expanded'; detail.value = density; } reflow(); } },
     reflow,
-    frame() { if (disposed) return;
+    frame() { if (disposed) return; planning?.frame();
       if (active && window && reviewPosition !== null && current) {
         const bounds = reviewBounds();
         if (playing) { reviewPosition = recordedReviewTime(reviewOrigin, performance.now() - reviewStarted, Number(speed.value) || 1, bounds.end); if (reviewPosition >= bounds.end) { playing = false; play.textContent = 'Play recorded time'; } else motion.wake(); }
@@ -373,7 +378,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
       items.style.height = Math.max(0, motion.pose(prefix + ':list').h) + 'px'; filterPanel.style.height = Math.max(0, filters.h) + 'px'; filterPanel.style.opacity = String(filters.opacity); if (!filtersOpen && filters.h < .5) filterPanel.hidden = true;
       for (const row of rows.values()) { const position = motion.pose(row.key), dot = motion.pose(row.key + ':dot'); row.row.style.transform = `translateY(${position.y}px)`; row.row.style.height = Math.max(0, position.h) + 'px'; row.row.style.opacity = String(position.opacity); row.dot.style.transform = `translate(${dot.x}px,${dot.y}px) scale(${1 + dot.lift * .2})`; row.dot.style.opacity = String(dot.opacity); }
     },
-    async flush() { if (operation) await operation; if (request || needsRefresh) throw new Error('Timeline view save needs confirmation before leaving.'); },
-    dispose() { if (disposed) return; disposed = true; sequence++; section.inert = true; section.remove(); for (const key of owned) motion.remove(key); owned.clear(); rows.clear(); },
+    async flush() { await planning?.flush(); if (operation) await operation; if (request || needsRefresh) throw new Error('Timeline view save needs confirmation before leaving.'); },
+    dispose() { if (disposed) return; disposed = true; planning?.dispose(); sequence++; section.inert = true; section.remove(); for (const key of owned) motion.remove(key); owned.clear(); rows.clear(); },
   };
 }

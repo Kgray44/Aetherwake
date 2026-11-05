@@ -23,7 +23,7 @@ const writes = Object.freeze({
   ]),
   checklists: Object.freeze(["create", "mutate"]),
   clockTimers: Object.freeze(["create", "mutate"]),
-  timelines: Object.freeze(["create", "save"]),
+  timelines: Object.freeze(["create", "save", "planning"]),
   taskObjectives: Object.freeze(["create", "mutate"]),
 });
 function validEnvelope(family, value) {
@@ -42,7 +42,7 @@ function validEnvelope(family, value) {
   );
 }
 function isProductRead(family, input) {
-  return !!(validEnvelope(family, input) && reads[family].includes(input.name));
+  return !!(validEnvelope(family, input) && (reads[family].includes(input.name) || (family === "timelines" && input.name === "planning" && input.input.op === "list")));
 }
 async function productCommand({ family, input, call }) {
   if (

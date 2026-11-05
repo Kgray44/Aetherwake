@@ -1,4 +1,5 @@
 import type { Pose } from './motion.ts';
+import type { VelaVisualState } from './vela-visual-state.ts';
 
 /** Seven harmonic coefficients borrowed from the existing coordinator. These
  * are visual geometry, never measurements of work or new operational states. */
@@ -13,6 +14,22 @@ export const VELA_SHAPES: Readonly<Record<VelaShapeState, Readonly<VelaShape>>> 
   reported: Object.freeze({ x: 0, y: 1.15, w: .5, h: 0, lift: 0, yaw: .3, opacity: .13 }),
   verified: Object.freeze({ x: .85, y: .28, w: .85, h: .28, lift: 0, yaw: .28, opacity: .17 }),
   unavailable: Object.freeze({ x: .3, y: .15, w: .65, h: 0, lift: .08, yaw: .3, opacity: .08 }),
+});
+
+export const OPERATIONAL_VELA_SHAPES: Readonly<Record<VelaVisualState, Readonly<VelaShape>>> = Object.freeze({
+  idle: VELA_SHAPES.idle,
+  aware: Object.freeze({ x: .28, y: .9, w: .98, h: .16, lift: -.08, yaw: .42, opacity: .19 }),
+  'wake-armed': Object.freeze({ x: .72, y: .12, w: .72, h: 0, lift: .04, yaw: .18, opacity: .08 }),
+  listening: VELA_SHAPES.receiving,
+  interpreting: VELA_SHAPES.working,
+  planning: Object.freeze({ x: .75, y: .75, w: .95, h: -.12, lift: .22, yaw: .38, opacity: .11 }),
+  acting: Object.freeze({ x: 1.2, y: .4, w: .6, h: .32, lift: -.1, yaw: .3, opacity: .14 }),
+  coordinating: VELA_SHAPES.coordinating,
+  speaking: Object.freeze({ x: .9, y: .22, w: .65, h: .25, lift: -.15, yaw: .46, opacity: .18 }),
+  waiting: Object.freeze({ x: .15, y: .55, w: 1.1, h: 0, lift: 0, yaw: .2, opacity: .09 }),
+  'needs-input': VELA_SHAPES.attention,
+  verified: VELA_SHAPES.verified,
+  blocked: VELA_SHAPES.unavailable,
 });
 
 /** Identical analytic centerline/derivative in CPU bounds and GPU ribbon. */

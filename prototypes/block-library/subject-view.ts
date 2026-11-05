@@ -46,6 +46,9 @@ export function mountSubjectExperience(
   },
 ) {
   const section = node("section", "", "aw-subject-view"),
+    route = node('h3', subject.kind === 'project' ? 'Project hub' : subject.kind === 'collection' ? 'Collection shelf' : 'Resource index', 'aw-subject-route'),
+    inventory = node('p', '', 'aw-subject-inventory'),
+    facets = node('nav', '', 'aw-subject-kind-navigation'),
     status = node("p", "", "aw-subject-status"),
     body = node("div"),
     refresh = button("Refresh", () => {
@@ -63,7 +66,8 @@ export function mountSubjectExperience(
         ? "Resource Explorer — Collection"
         : "Resource Explorer — Resources",
   );
-  section.append(refresh, status, body);
+  facets.setAttribute('aria-label', subject.kind === 'project' ? 'Project resource structure' : 'Resource kinds in loaded results');
+  section.append(route, refresh, inventory, facets, status, body);
   root.append(section);
   let disposed = false,
     active = options.active ?? true,
@@ -137,7 +141,7 @@ export function mountSubjectExperience(
       metadata: HTMLElement;
       address: HTMLElement;
       kind: HTMLElement;
-      resource: ResourceCandidate;
+      resource: BrowseResourcesPage['resources'][number];
       attach?: HTMLButtonElement;
       related?: HTMLButtonElement;
     }
@@ -146,6 +150,24 @@ export function mountSubjectExperience(
     string,
     { row: HTMLLIElement; title: HTMLElement; workspaceId: string }
   >();
+  const facetNodes = new Map<string, HTMLElement>();
+  const allKinds = button('All kinds', () => { if (active && !disposed) { kind.value = ''; void load(false); } });
+  allKinds.className += ' aw-subject-facet';
+  const paintFacets = (counts: [string, number][], project = false) => {
+    if (!project && allKinds.parentElement !== facets) facets.prepend(allKinds);
+    allKinds.setAttribute('aria-pressed', String(!kind.value));
+    const live = new Set(counts.map(([key]) => key));
+    for (const [key, element] of facetNodes) if (!live.has(key)) { element.remove(); facetNodes.delete(key); }
+    for (const [key, count] of counts) {
+      let element = facetNodes.get(key);
+      if (!element) {
+        element = project ? node('span', '', 'aw-subject-facet') : button('', () => { if (active && !disposed) { kind.value = key; void load(false); } });
+        element.className = 'aw-subject-action aw-subject-facet'; element.dataset.facetKind = key; facetNodes.set(key, element); facets.append(element);
+      }
+      element.textContent = (BUILTIN_BLOCKS.find(definition => definition.kind === key)?.title ?? key) + ' · ' + count;
+      if (!project) element.setAttribute('aria-pressed', String(kind.value === key));
+    }
+  };
   const projectMetrics = node("dl", "", "aw-project-metrics"),
     workspaceCount = node("dd"), resourceCount = node("dd"),
     projectSummary = node("p", "", "aw-project-summary"),
@@ -191,6 +213,7 @@ export function mountSubjectExperience(
       latestPage = null;
       rows.clear();
       results.replaceChildren();
+      inventory.textContent = ''; facets.replaceChildren(); facetNodes.clear();
       if (subject.kind === "project") {
         workspaceRows.clear();
         workspaces.replaceChildren();
@@ -317,6 +340,14 @@ export function mountSubjectExperience(
     if (!rows.size)
       results.append(node("li", "No matching resources.", "aw-subject-empty"));
     scopeTitle.textContent = page.scopeTitle ?? "";
+    if (subject.kind !== 'project') {
+      const resources = [...rows.values()].map(row => row.resource), counts = new Map<string, number>();
+      for (const resource of resources) counts.set(resource.kind, (counts.get(resource.kind) ?? 0) + 1);
+      paintFacets([...counts]);
+      inventory.textContent = resources.length + (subject.kind === 'collection' ? ' loaded members' : ' loaded resources') +
+        ' · ' + resources.filter(resource => resource.placementCount === 0 && resource.placementCountComplete).length + ' with no visible placements' +
+        (page.nextCursor ? ' · more available' : '') + (resources.some(resource => !resource.placementCountComplete) ? ' · some placement counts are bounded' : '');
+    }
     cursor = page.nextCursor;
     more.hidden = !cursor;
     status.textContent = cursor
@@ -354,6 +385,8 @@ export function mountSubjectExperience(
           overview.tasks.done +
           " done" +
           (overview.resourceCountsComplete ? "" : " · partial counts");
+        inventory.textContent = 'Project → ' + overview.workspaces.length + (overview.workspaceListComplete ? '' : '+') + ' accessible workspaces → resources. Task counts are manual states.';
+        paintFacets(Object.entries(overview.resourcesByKind).map(([key, count]) => [key, count ?? 0]), true);
         projectCounts.textContent =
           Object.entries(overview.resourcesByKind)
             .map(([kind, count]) => count + " " + kind.replaceAll("_", " "))

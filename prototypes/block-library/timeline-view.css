@@ -57,3 +57,12 @@
 .aw-timeline [hidden] { display:none; }
 .aw-timeline[data-orientation=vertical] .aw-timeline-track::before { left:var(--aw-timeline-spine,167px); }
 .aw-timeline .aw-timeline-dot[data-review-state=upcoming] { opacity:.35 !important; }
+.aw-timeline-planning { border:1px dashed #e4c5a44d; border-radius:10px; padding:10px; font-size:.8rem; }
+.aw-timeline-planning summary { cursor:pointer; color:#e4c5a4; }.aw-timeline-planning p { margin:.5rem 0; font-size:.75rem; }
+.aw-timeline-planning form { display:flex; flex-wrap:wrap; align-items:end; gap:.5rem; margin-top:.5rem; }
+.aw-timeline-planning label { display:flex; flex-direction:column; gap:.2rem; min-width:0; flex:1 1 170px; font-size:.72rem; }
+.aw-timeline-planning input,.aw-timeline-planning select { width:100%; }.aw-timeline-planning > button { margin-right:.4rem; }
+.aw-timeline-plan-band { position:absolute; left:0; top:0; z-index:3; display:flex; border:1px dashed #e4c5a4; border-radius:5px; background:#302b29e6; min-width:12px; box-sizing:border-box; }
+.aw-timeline .aw-timeline-plan-band > button { touch-action:none; border:0; background:transparent; color:#f1dbbf; min-height:24px; border-radius:0; padding:3px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.aw-timeline-plan-band > button:first-child { flex:1; cursor:grab; text-align:left; }.aw-timeline-plan-band > button:last-child { width:15px; min-width:15px; cursor:ew-resize; padding:0; border-left:1px dashed #e4c5a4; font-size:0; }
+.aw-timeline-plan-band > button:last-child::after { content:'|'; font-size:12px; }.aw-timeline[data-orientation=vertical] .aw-timeline-plan-band { flex-direction:column; }.aw-timeline[data-orientation=vertical] .aw-timeline-plan-band > button:last-child { height:15px; width:100%; cursor:ns-resize; }

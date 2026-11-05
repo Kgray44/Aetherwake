@@ -6,6 +6,8 @@ import {
   type TimelineHostPort,
 } from "../../timeline-product/service.mts";
 import type {
+  TimelinePlanningRequest,
+  TimelinePlanningResponse,
   CreateTimeline,
   SaveTimeline,
   QueryTimeline,
@@ -17,6 +19,7 @@ import type {
 
 type Command<I, O> = { input: I; output: O };
 export interface TimelineCommandMap {
+  planning: Command<TimelinePlanningRequest, TimelinePlanningResponse>;
   create: Command<CreateTimeline, TimelineMutationResult>;
   read: Command<{ resourceId: string }, TimelineDocument>;
   save: Command<SaveTimeline, TimelineMutationResult>;
@@ -83,7 +86,7 @@ const permit = (work: () => boolean) => {
 
 /** Exact-case public storage/admission classification. Unknown commands fail closed. */
 export function isTimelineRead(value: unknown): boolean {
-  return envelope(value) && (value.name === "read" || value.name === "query");
+  return envelope(value) && (value.name === "read" || value.name === "query" || (value.name === "planning" && fields(value.input, ["op", "resourceId", "expectedVersion"]) && value.input.op === "list"));
 }
 
 /** Local-owner adapter only. SAME canonical SQLite/resource/event identities;
@@ -237,7 +240,7 @@ export function compositeTimelineDomain(
   function dispatch(request: TimelineRequest): TimelineResponse {
     check(
       envelope(request) &&
-        ["create", "read", "save", "query", "openGitHubCommit"].includes(request.name),
+        ["create", "read", "save", "query", "openGitHubCommit", "planning"].includes(request.name),
       "invalid_timeline_request",
     );
     if (request.name === "read")
@@ -248,6 +251,8 @@ export function compositeTimelineDomain(
     return tx(() => {
       const service = new TimelineService(kernel, host);
       switch (request.name) {
+        case "planning":
+          return service.planning(request.input);
         case "create":
           return service.create(request.input);
         case "read":

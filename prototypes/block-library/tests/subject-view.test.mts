@@ -27,6 +27,25 @@ const page = (): BrowseResourcesPage => ({
   nextCursor: null,
 });
 
+test('collection kind navigation uses loaded authorized metadata and existing read filters without replacing retained rows', async t => {
+  const view = blockDocument(); t.after(view.install()); const reads: BrowseResourcesInput[] = [];
+  const current = page(); current.nextCursor = 'synthetic:more';
+  current.resources.push({ ...current.resources[0], id: 'resource:task', title: 'Actual manual task', kind: 'task', placementCount: 2, placementCountComplete: false });
+  const controller = mountSubjectExperience(view.root, { kind: 'collection', collectionId: 'collection:actual' }, {
+    async projectOverview() { throw Error('Unexpected project read'); },
+    async browseResources(input) { reads.push(input); return structuredClone(current); },
+  }, { active: true }); t.after(() => controller.dispose());
+  await until(() => !!view.root.querySelector('[data-facet-kind="note"]'));
+  const note = view.root.querySelector('[data-resource-id="resource:actual"]');
+  assert.equal(view.root.querySelector('.aw-subject-route').textContent, 'Collection shelf');
+  assert.match(view.root.querySelector('.aw-subject-inventory').textContent, /2 loaded members · 1 with no visible placements · more available · some placement counts are bounded/);
+  view.root.querySelector('[data-facet-kind="note"]').onclick(); await until(() => reads.length === 2);
+  assert.equal(reads[1].kind, 'note'); assert.equal(reads[1].subject.kind, 'collection');
+  assert.equal(view.root.querySelector('[data-resource-id="resource:actual"]'), note);
+  assert.equal(view.root.querySelector('[data-facet-kind="note"]').getAttribute('aria-pressed'), 'true');
+  controller.setActive(false); const count = reads.length; view.root.querySelector('[data-facet-kind="task"]').onclick(); assert.equal(reads.length, count);
+});
+
 test("normal browser search and same-ID actions stay mounted across pose, refresh and filtering", async (t) => {
   const view = blockDocument();
   t.after(view.install());

@@ -31,6 +31,21 @@ export function formatClockTimerDuration(milliseconds: number, tenths = false): 
   return base + (tenths ? '.' + Math.floor(value % 1000 / 100) : '');
 }
 
+const handFormatters = new Map<string, Intl.DateTimeFormat>();
+/** Geometry projects the host's sampled epoch in the named zone, including DST.
+ * It never reads the renderer wall clock or owns canonical time. */
+export function clockHandAngles(epochMs: number, timeZone: string) {
+  let formatter = handFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-GB-u-nu-latn', { timeZone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    if (handFormatters.size >= 32) handFormatters.delete(handFormatters.keys().next().value!);
+    handFormatters.set(timeZone, formatter);
+  }
+  const parts = formatter.formatToParts(epochMs), value = (name: string) => Number(parts.find(part => part.type === name)?.value ?? 0);
+  const second = value('second'), minute = value('minute') + second / 60, hour = value('hour') % 12 + minute / 60;
+  return { hour: hour * 30, minute: minute * 6, second: second * 6 };
+}
+
 const stateLabel = { ready: 'Ready', running: 'Running', paused: 'Paused', completed: 'Completed', cancelled: 'Cancelled' };
 const modes = ['timer', 'stopwatch', 'clock'] as const;
 const errorMessage = (error: unknown): string => {
@@ -58,6 +73,18 @@ export function mountClockTimerExperience(
     const element = doc.createElement(tag); element.textContent = text; element.className = className;
     if (['button', 'input', 'select'].includes(tag)) element.dataset.aerynthMotionControl = 'true';
     return element;
+  };
+  const dial = (className = '') => {
+    const face = node('div', '', 'aw-clock-timer-dial ' + className); face.setAttribute('aria-hidden', 'true');
+    const hour = node('span', '', 'aw-clock-timer-hand aw-clock-timer-hand--hour'), minute = node('span', '', 'aw-clock-timer-hand aw-clock-timer-hand--minute'),
+      second = node('span', '', 'aw-clock-timer-hand aw-clock-timer-hand--second');
+    face.append(node('span', '12', 'aw-clock-timer-dial-noon'), hour, minute, second, node('span', '', 'aw-clock-timer-dial-hub'));
+    return { face, hour, minute, second };
+  };
+  const paintDial = (face: ReturnType<typeof dial>, epochMs: number, timeZone: string) => {
+    const angles = clockHandAngles(epochMs, timeZone);
+    for (const hand of ['hour', 'minute', 'second'] as const) face[hand].style.transform = `rotate(${angles[hand]}deg)`;
+    face.face.dataset.clockZone = timeZone;
   };
   const section = node('section', '', 'aw-clock-timer');
   section.dataset.noCardDrag = 'true'; section.dataset.clockTimerResource = resourceId;
@@ -173,6 +200,14 @@ export function mountClockTimerExperience(
   };
   createForm.append(field('New timer name', newName), newDuration.label,
     button('Add timer', 'createTimer', () => createTimer(false)), button('Start new timer', 'createAndStartTimer', () => createTimer(true)));
+  const presets = node('div', '', 'aw-clock-timer-presets'); presets.setAttribute('role', 'group'); presets.setAttribute('aria-label', 'Named countdown presets');
+  for (const [label, name, minutes] of [['Focus · 25 min', 'Focus', 25], ['Short break · 5 min', 'Short break', 5]] as const) {
+    presets.append(button(label, minutes === 25 ? 'presetFocus' : 'presetBreak', () => {
+      newName.value = name; newDuration.input.value = String(minutes);
+      status.textContent = `${name} preset selected. This is a normal named countdown; choose Add timer or Start new timer to save it.`;
+    }));
+  }
+  createForm.prepend(presets, node('small', 'Presets fill the form only. Focus uses a normal countdown, without session tracking.', 'aw-clock-timer-preset-note'));
   createForm.onsubmit = event => { event.preventDefault(); if (canEdit()) createTimer(false); };
   addDetails.append(createForm);
   const expiryList = node('ul', '', 'aw-clock-timer-expiries'); expiryList.setAttribute('aria-label', 'Unacknowledged timer completions');
@@ -188,12 +223,16 @@ export function mountClockTimerExperience(
     const control = button(label, type, () => { void mutate([{ type }]); }); watchActions.append(control); watchButtons.set(type, control);
   }
   const laps = node('ol', '', 'aw-clock-timer-laps'); laps.setAttribute('aria-label', 'Stopwatch laps');
-  watchPanel.append(watchValue, watchState, watchUncertainty, watchActions, laps);
+  const watchOrbit = node('div', '', 'aw-clock-timer-watch-orbit'); watchOrbit.setAttribute('aria-hidden', 'true'); watchOrbit.dataset.clockWatchOrbit = 'true';
+  const watchNeedle = node('span', '', 'aw-clock-timer-watch-needle'); watchOrbit.append(watchNeedle);
+  const watchFace = node('div', '', 'aw-clock-timer-watch-face'); watchFace.append(watchOrbit, watchValue);
+  watchPanel.append(watchFace, node('small', 'Minute cycle · one orbit per 60 elapsed seconds', 'aw-clock-timer-cycle-label'), watchState, watchUncertainty, watchActions, laps);
 
   const localTime = node('time', '', 'aw-clock-timer-local-time'), localDate = node('p'), localZone = node('small');
+  const localDial = dial(); localDial.face.dataset.clockLocalDial = 'true';
   localTime.dataset.clockLocal = 'true'; localTime.setAttribute('aria-live', 'off');
   const worldList = node('ul', '', 'aw-clock-timer-world-list'); worldList.setAttribute('aria-label', 'World clocks');
-  const worldRows = new Map<string, { row: HTMLLIElement; time: HTMLTimeElement; name: HTMLInputElement; dirty: boolean }>();
+  const worldRows = new Map<string, { row: HTMLLIElement; time: HTMLTimeElement; name: HTMLInputElement; dirty: boolean; dial: ReturnType<typeof dial> }>();
   const worldDetails = node('details', '', 'aw-clock-timer-details'); worldDetails.append(node('summary', 'Add a world clock'));
   const worldForm = node('form'), zoneName = writable(node('input')), zoneInput = writable(node('input'));
   zoneName.type = 'text'; zoneName.maxLength = 256; zoneInput.type = 'text'; zoneInput.maxLength = 256; zoneInput.placeholder = 'Europe/London';
@@ -201,7 +240,7 @@ export function mountClockTimerExperience(
     void mutate([{ type: 'addWorldClock', key: 'clock', timeZone: zoneInput.value, label: zoneName.value }]);
   }));
   worldForm.onsubmit = event => { event.preventDefault(); if (canEdit()) void mutate([{ type: 'addWorldClock', key: 'clock', timeZone: zoneInput.value, label: zoneName.value }]); };
-  worldDetails.append(worldForm); clockPanel.append(localTime, localDate, localZone, worldList, worldDetails);
+  worldDetails.append(worldForm); clockPanel.append(localDial.face, localTime, localDate, localZone, worldList, worldDetails);
   let formatterLocale = '';
   const formatters = new Map<string, Intl.DateTimeFormat>();
   const format = (epochMs: number, timeZone: string, date = false) => {
@@ -239,6 +278,9 @@ export function mountClockTimerExperience(
       heading.textContent = 'Clock & timers'; timerSelect.replaceChildren(); expiryList.replaceChildren(); expiryRows.clear();
       laps.replaceChildren(); worldList.replaceChildren(); worldRows.clear(); formatters.clear();
       timerName.textContent = ''; timerState.textContent = ''; remaining.textContent = ''; watchValue.textContent = '';
+      delete localDial.face.dataset.clockZone;
+      for (const hand of ['hour', 'minute', 'second'] as const) localDial[hand].style.transform = '';
+      watchOrbit.style.setProperty('--aw-watch-phase', '0%'); watchNeedle.style.transform = '';
       localTime.textContent = ''; localDate.textContent = ''; localZone.textContent = ''; deleteMessage.textContent = '';
       if (!renameDirty) rename.value = '';
       delete section.dataset.timerId; delete section.dataset.timerRunId; delete section.dataset.timerState; return;
@@ -290,10 +332,11 @@ export function mountClockTimerExperience(
       if (!saved) {
         const row = node('li'), time = node('time'), name = writable(node('input'));
         name.type = 'text'; name.maxLength = 256; name.setAttribute('aria-label', 'World clock label');
-        saved = { row, time, name, dirty: false }; const reference = saved;
+        const worldDial = dial('aw-clock-timer-dial--world');
+        saved = { row, time, name, dirty: false, dial: worldDial }; const reference = saved;
         name.oninput = () => { reference.dirty = true; };
         row.dataset.clockWorld = clock.id; time.setAttribute('aria-live', 'off');
-        row.append(field('World clock label', name), time, node('small', clock.timeZone),
+        row.append(worldDial.face, field('World clock label', name), time, node('small', clock.timeZone),
           button('Save label', 'renameWorldClock', () => { void mutate([{ type: 'renameWorldClock', clockId: clock.id, label: name.value }], () => { reference.dirty = false; }); }),
           button('Remove world clock', 'removeWorldClock', () => { void mutate([{ type: 'removeWorldClock', clockId: clock.id }]); }));
         worldRows.set(clock.id, saved); worldList.append(row);
@@ -315,14 +358,19 @@ export function mountClockTimerExperience(
       timerState.textContent = timer.state === 'running' && value === 0 ? 'Awaiting host completion confirmation' : stateLabel[timer.state];
     }
     if (view.mode === 'stopwatch') {
-      const watch = current.stopwatch; watchValue.textContent = formatClockTimerDuration(watch.elapsedMs + (watch.state === 'running' ? elapsed : 0), true);
+      const watch = current.stopwatch, elapsedMs = watch.elapsedMs + (watch.state === 'running' ? elapsed : 0);
+      watchValue.textContent = formatClockTimerDuration(elapsedMs, true);
+      const phase = (elapsedMs % 60000) / 60000;
+      watchOrbit.style.setProperty('--aw-watch-phase', String(phase * 100) + '%');
+      watchNeedle.style.transform = `rotate(${phase * 360}deg)`;
     }
     if (view.mode === 'clock') {
       const epochMs = current.localClock.epochMs + elapsed;
       localTime.dateTime = new Date(epochMs).toISOString(); localTime.textContent = format(epochMs, current.localClock.timeZone);
+      paintDial(localDial, epochMs, current.localClock.timeZone);
       localDate.textContent = format(epochMs, current.localClock.timeZone, true); localZone.textContent = current.localClock.timeZone;
       for (const clock of current.worldClocks) {
-        const row = worldRows.get(clock.id); if (row) { row.time.dateTime = localTime.dateTime; row.time.textContent = format(epochMs, clock.timeZone); }
+        const row = worldRows.get(clock.id); if (row) { row.time.dateTime = localTime.dateTime; row.time.textContent = format(epochMs, clock.timeZone); paintDial(row.dial, epochMs, clock.timeZone); }
       }
     }
     lastPaint = now();

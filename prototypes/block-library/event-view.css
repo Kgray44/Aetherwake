@@ -154,3 +154,12 @@
 .aw-stream-viewport:focus-visible { outline:2px solid #c4e2e5; outline-offset:2px; }
 .aw-event-view [hidden] { display:none !important; }
 @media (prefers-reduced-motion:reduce) { .aw-stream * { animation:none !important; transition:none !important; } }
+
+.aw-mission-flow > h3 { margin:.5rem 0; font-size:1.05em; }
+.aw-event-view .aw-mission-task { width:190px; min-height:70px; grid-template-columns:minmax(0,1fr); }
+.aw-mission-task[data-join="true"] { border-inline-width:4px; border-radius:1.3rem; }
+.aw-mission-task[data-task-state="running"] { border-color:#a2dfff; background:#1c3a49; }
+.aw-mission-task[data-task-state="verified"] { border-color:#9de1ba; }
+.aw-mission-task[data-task-state="blocked"], .aw-mission-task[data-task-state="failed"] { border-color:#ed9c9c; border-radius:.3rem; }
+.aw-mission-task[data-task-state="uncertain"] { border-style:dashed; }
+.aw-mission-task[data-task-state="cancelled"] { opacity:.65; }

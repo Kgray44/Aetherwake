@@ -32,6 +32,25 @@ async function setup(t: any, configure?: (f: ReturnType<typeof taskTrackerFixtur
   return { f, dom, coordinator, controller, opened, settled, ready, changed, click, frame, get document() { return document; } };
 }
 
+test('requirement coverage follows latest real manual review and retains requirement rows without implying acceptance', async t => {
+  const s = await setup(t); await s.ready();
+  const requirement = s.dom.root.querySelector('.aw-task-requirements [data-requirement-id]');
+  assert.equal(requirement.dataset.reviewState, 'unreviewed');
+  const review = (decision: 'verified' | 'needs-work') => {
+    const current = s.f.service.read(s.f.created.resourceId);
+    s.f.service.mutate({ resourceId: current.resource.id, expectedVersion: current.resource.version, commandId: randomUUID(), operation: {
+      type: 'review', attemptId: null, decision, requirementIds: ['criterion:one'], evidence: [s.f.ref(s.f.source.id)], note: 'Explicit synthetic manual review',
+    } });
+  };
+  review('verified'); await s.controller.refresh();
+  assert.equal(s.dom.root.querySelector('.aw-task-requirements [data-requirement-id]'), requirement);
+  assert.equal(requirement.dataset.reviewState, 'verified'); assert.match(s.dom.root.querySelector('.aw-task-proof-map').textContent, /Criteria with current verified reviews1 of 1/);
+  assert.equal(s.document!.acceptance.state, 'not-accepted');
+  review('needs-work'); await s.controller.refresh();
+  assert.equal(requirement.dataset.reviewState, 'needs-work'); assert.match(s.dom.root.querySelector('.aw-task-proof-map').textContent, /Criteria with current verified reviews0 of 1/);
+  assert.equal(s.document!.verification, 'needs-work'); assert.equal(s.document!.acceptance.state, 'not-accepted');
+});
+
 test('Task Tracker keeps existing execution, manual verification and explicit acceptance separate on the actual canonical service', async t => {
   const s = await setup(t); await s.ready(); s.frame();
   s.f.desktop.apply({ type: 'createResource', kind: 'task', title: 'Existing manual Task', workspaceId: null }, () => { throw new Error('No conversation creation'); });

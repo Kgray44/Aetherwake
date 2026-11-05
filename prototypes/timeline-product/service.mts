@@ -1,10 +1,14 @@
-import { createHash } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { WorkspaceKernel } from "../workspace-kernel/kernel.mts";
 import {
   TIMELINE_CONTRACT,
   TIMELINE_LIMITS,
   timelineCapabilities,
+  type TimelinePlanningRequest,
+  type TimelinePlanningResponse,
+  type TimelinePlanningMutationResult,
+  type TimelinePlanningItem,
   type CreateTimeline,
   type SaveTimeline,
   type QueryTimeline,
@@ -46,7 +50,7 @@ export interface TimelineHostPort {
   }): TimelineResource;
   /** Same-transaction metadata only; Root owns post-commit stream delivery. */
   recordEvent(event: {
-    type: "timeline.created" | "timeline.view-saved";
+    type: "timeline.created" | "timeline.view-saved" | "timeline.planning-created" | "timeline.planning-updated" | "timeline.planning-deleted" | "timeline.planning-undone";
     resourceId: string;
     resourceVersion: number;
     commandId: string;
@@ -289,8 +293,9 @@ export class TimelineService {
       CREATE TABLE timeline_receipts(owner_id TEXT NOT NULL,command_id TEXT NOT NULL,fingerprint TEXT NOT NULL,resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,result_json TEXT NOT NULL,PRIMARY KEY(owner_id,command_id));`);
     else
       check(
-        names.length === tableNames.length &&
-          tableNames.every((name) => names.includes(name)),
+        (names.length === tableNames.length || names.length === tableNames.length + 2) &&
+          tableNames.every((name) => names.includes(name)) &&
+          names.every(name => [...tableNames, "timeline_planning_items", "timeline_planning_operations"].includes(name)),
         "timeline_partial_schema",
       );
     for (const [table, expected] of [
@@ -322,10 +327,18 @@ export class TimelineService {
       );
     const rows = db.prepare("SELECT version FROM timeline_schema").all();
     check(
-      rows.length === 1 && rows[0]!.version === 1,
+      rows.length === 1 && [1, 2].includes(Number(rows[0]!.version)),
       "timeline_unsupported_schema",
     );
-    for (const table of ["timeline_views", "timeline_receipts"]) {
+    const schemaVersion = Number(rows[0]!.version);
+    check(schemaVersion === 1 ? names.length === 3 || !names.length : names.length === 5, "timeline_partial_schema");
+    if (schemaVersion === 2) {
+      for (const [table, columns] of [
+        ["timeline_planning_items", ["resource_id", "item_id", "state_json"]],
+        ["timeline_planning_operations", ["resource_id", "command_id", "item_id", "before_json", "after_json"]],
+      ] as const) check(stable(db.prepare("PRAGMA table_info(" + table + ")").all().map(row => row.name)) === stable(columns), "timeline_invalid_schema");
+    }
+    for (const table of ["timeline_views", "timeline_receipts", ...(schemaVersion === 2 ? ["timeline_planning_items", "timeline_planning_operations"] : [])]) {
       const refs = db.prepare("PRAGMA foreign_key_list(" + table + ")").all();
       check(
         refs.length === 1 &&
@@ -710,10 +723,11 @@ export class TimelineService {
       };
     });
   }
-  private once(
+  private once<T extends TimelineMutationResult = TimelineMutationResult>(
     commandId: string,
     request: unknown,
-    work: () => TimelineMutationResult,
+    work: () => T,
+    validate?: (value: unknown) => boolean,
   ) {
     check(id(commandId, 200), "timeline_invalid_command");
     const owner = this.identity().principalId,
@@ -738,14 +752,14 @@ export class TimelineService {
         throw new TimelineError("timeline_receipt_corrupt");
       }
       check(
-        fields(result, ["resourceId", "version", "viewDigest"]) &&
+        (validate ? validate(result) : fields(result, ["resourceId", "version", "viewDigest"])) &&
           result.resourceId === row.resource_id &&
           version(result.version) &&
           typeof result.viewDigest === "string" &&
           /^[a-f0-9]{64}$/.test(result.viewDigest),
         "timeline_receipt_corrupt",
       );
-      return result as TimelineMutationResult;
+      return result as T;
     }
     check(
       Number(
@@ -921,6 +935,106 @@ export class TimelineService {
         return { resourceId: resource.id, version: actual.version, viewDigest };
       });
     });
+  }
+  /** User-authored planning authority. Retained event tables are never written. */
+  planning(input: TimelinePlanningRequest): TimelinePlanningResponse {
+    const base = ["op", "resourceId", "expectedVersion"];
+    const extra: Record<string, string[]> = { list: [], create: ["commandId", "values"], update: ["commandId", "itemId", "values"], delete: ["commandId", "itemId"], undo: ["commandId", "targetCommandId"] };
+    check(record(input) && typeof input.op === "string" && Object.hasOwn(extra, input.op) &&
+      fields(input, [...base, ...extra[input.op]!]) && id(input.resourceId) && version(input.expectedVersion), "timeline_invalid_planning_request");
+    if (input.op !== "list") check(id(input.commandId, 200), "timeline_invalid_command");
+    if (input.op === "update" || input.op === "delete") check(id(input.itemId, 200), "timeline_invalid_planning_item");
+    if (input.op === "undo") check(id(input.targetCommandId, 200) && input.targetCommandId !== input.commandId, "timeline_invalid_undo");
+    const values = input.op === "create" || input.op === "update" ? this.planningValues(input.values) : null;
+    return this.tx(() => {
+      const current = this.stored(input.resourceId);
+      const db = this.host.db;
+      if (input.op === "list") {
+        check(current.resource.version === input.expectedVersion, "timeline_version_conflict");
+        const exists = Number(db.prepare("SELECT version FROM timeline_schema").get()!.version) === 2;
+        const items = exists ? db.prepare("SELECT state_json FROM timeline_planning_items WHERE resource_id=? ORDER BY item_id LIMIT ?").all(input.resourceId, TIMELINE_LIMITS.planningItems + 1)
+          .map(row => this.planningState(String(row.state_json))).filter(state => !state.deleted).map(state => state.item) : [];
+        check(items.length <= TIMELINE_LIMITS.planningItems, "timeline_planning_capacity");
+        return { resourceId: input.resourceId, resourceVersion: current.resource.version, canEdit: current.canEdit, items };
+      }
+      check(current.canEdit, "timeline_read_only");
+      return this.once<TimelinePlanningMutationResult>(input.commandId, { operation: "planning", input }, () => {
+        check(current.resource.version === input.expectedVersion, "timeline_version_conflict");
+        this.planningSchema();
+        check(Number(db.prepare("SELECT count(*) AS n FROM timeline_planning_operations").get()!.n) < TIMELINE_LIMITS.planningOperations, "timeline_planning_operation_capacity");
+        let itemId: string, before: string | null = null, next: { item: TimelinePlanningItem; deleted: boolean };
+        const read = (id: string) => {
+          const row = db.prepare("SELECT state_json FROM timeline_planning_items WHERE resource_id=? AND item_id=?").get(input.resourceId, id);
+          check(row && typeof row.state_json === "string", "timeline_planning_item_unavailable");
+          const state = this.planningState(row.state_json);
+          check(state.item.id === id, "timeline_planning_corrupt");
+          return { json: String(row.state_json), state };
+        };
+        const nextVersion = current.resource.version + 1;
+        if (input.op === "create") {
+          check(Number(db.prepare("SELECT count(*) AS n FROM timeline_planning_items WHERE resource_id=?").get(input.resourceId)!.n) < TIMELINE_LIMITS.planningItems, "timeline_planning_capacity");
+          itemId = randomUUID();
+          next = { item: { ...values!, id: itemId, temporalClass: "planned", version: nextVersion }, deleted: false };
+        } else if (input.op === "undo") {
+          const operation = db.prepare("SELECT * FROM timeline_planning_operations WHERE resource_id=? AND command_id=?").get(input.resourceId, input.targetCommandId);
+          check(operation, "timeline_undo_unavailable");
+          itemId = String(operation.item_id);
+          const previous = read(itemId); before = previous.json;
+          check(previous.json === operation.after_json, "timeline_undo_conflict");
+          const restore = operation.before_json === null ? { ...previous.state, deleted: true } : this.planningState(String(operation.before_json));
+          check(restore.item.id === itemId && restore.item.version <= current.resource.version, "timeline_planning_corrupt");
+          next = { ...restore, item: { ...restore.item, version: nextVersion } };
+        } else {
+          itemId = input.itemId;
+          const previous = read(itemId); before = previous.json;
+          check(!previous.state.deleted, "timeline_planning_item_unavailable");
+          next = { item: { ...previous.state.item, ...(values ?? {}), version: nextVersion }, deleted: input.op === "delete" };
+        }
+        const touched = this.host.touchResource({ resourceId: input.resourceId, expectedVersion: current.resource.version, commandId: input.commandId });
+        const actual = this.resource(input.resourceId, true);
+        check(touched.id === actual.id && actual.id === current.resource.id && touched.version === nextVersion && actual.version === nextVersion &&
+          touched.title === current.resource.title && actual.title === current.resource.title && touched.projectId === current.resource.projectId && actual.projectId === current.resource.projectId,
+          "timeline_canonical_version_required");
+        const after = stable(next);
+        db.prepare("INSERT INTO timeline_planning_items VALUES(?,?,?) ON CONFLICT(resource_id,item_id) DO UPDATE SET state_json=excluded.state_json").run(input.resourceId, itemId, after);
+        db.prepare("INSERT INTO timeline_planning_operations VALUES(?,?,?,?,?)").run(input.resourceId, input.commandId, itemId, before, after);
+        const who = this.identity();
+        this.host.recordEvent({ type: input.op === "create" ? "timeline.planning-created" : input.op === "update" ? "timeline.planning-updated" : input.op === "delete" ? "timeline.planning-deleted" : "timeline.planning-undone", resourceId: input.resourceId, resourceVersion: nextVersion, commandId: input.commandId,
+          detail: { actorKind: "user", authority: "manual", principalId: who.principalId, policyVersion: who.policyVersion, mode: current.view.mode,
+            scopeKind: current.view.scope.resourceIds.length ? "resources" : current.view.scope.projectId ? "project" : "application", resourceCount: current.view.scope.resourceIds.length } });
+        db.prepare("UPDATE timeline_views SET updated_at=? WHERE resource_id=?").run(new Date().toISOString(), input.resourceId);
+        return { resourceId: input.resourceId, version: nextVersion, viewDigest: current.viewDigest, operationId: input.commandId, item: next.deleted ? null : next.item };
+      }, value => {
+        if (!fields(value, ["resourceId", "version", "viewDigest", "operationId", "item"]) || value.operationId !== input.commandId) return false;
+        if (value.item !== null) { try { const state = this.planningState(stable({ item: value.item, deleted: false })); if (state.item.version !== value.version) return false; } catch { return false; } }
+        return true;
+      });
+    });
+  }
+  private planningValues(value: unknown) {
+    check(fields(value, ["title", "startAt", "durationMs", "timeZone", "laneId"]) && id(value.title, 200) &&
+      typeof value.laneId === "string" && value.laneId.length <= 80 && !/[\x00-\x1f]/.test(value.laneId), "timeline_invalid_planning_values");
+    check(iso(value.startAt) && value.startAt.endsWith("Z"), "timeline_planning_utc_instant_required");
+    check(Number.isSafeInteger(value.durationMs) && value.durationMs >= 0 && Number.isFinite(new Date(Date.parse(value.startAt) + value.durationMs).getTime()), "timeline_invalid_planning_duration");
+    check(id(value.timeZone, 100) && !/^[+-]/.test(value.timeZone), "timeline_invalid_timezone");
+    try { new Intl.DateTimeFormat("en", { timeZone: value.timeZone }).format(0); } catch { throw new TimelineError("timeline_invalid_timezone"); }
+    return structuredClone(value) as import("./contracts.ts").TimelinePlanningValues;
+  }
+  private planningState(json: string): { item: TimelinePlanningItem; deleted: boolean } {
+    check(Buffer.byteLength(json) <= 2048, "timeline_planning_corrupt");
+    let value: any;
+    try { value = JSON.parse(json); } catch { throw new TimelineError("timeline_planning_corrupt"); }
+    check(fields(value, ["item", "deleted"]) && typeof value.deleted === "boolean" && fields(value.item, ["id", "temporalClass", "version", "title", "startAt", "durationMs", "timeZone", "laneId"]) &&
+      id(value.item.id, 200) && value.item.temporalClass === "planned" && version(value.item.version), "timeline_planning_corrupt");
+    const { id: ignored, temporalClass, version: itemVersion, ...values } = value.item;
+    this.planningValues(values);
+    return value as { item: TimelinePlanningItem; deleted: boolean };
+  }
+  private planningSchema() {
+    if (Number(this.host.db.prepare("SELECT version FROM timeline_schema").get()!.version) === 2) return;
+    this.host.db.exec(`CREATE TABLE timeline_planning_items(resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,item_id TEXT NOT NULL,state_json TEXT NOT NULL,PRIMARY KEY(resource_id,item_id));
+      CREATE TABLE timeline_planning_operations(resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,command_id TEXT NOT NULL,item_id TEXT NOT NULL,before_json TEXT,after_json TEXT NOT NULL,PRIMARY KEY(resource_id,command_id));
+      UPDATE timeline_schema SET version=2;`);
   }
   query(input: QueryTimeline): TimelineWindow {
     check(

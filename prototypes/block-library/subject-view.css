@@ -5,6 +5,16 @@
   min-height: 0;
   color: inherit;
 }
+.aw-subject-route { font:500 1.15rem/1.4 Georgia,serif; border-left:3px solid #bcb2dc; padding-left:.6rem; }
+.aw-subject-view[data-subject-kind=project] .aw-subject-route { border-left-color:#a8c7dc; }
+.aw-subject-view[data-subject-kind=collection] .aw-subject-route { border-left-color:#d2c3a6; }
+.aw-subject-inventory { font-size:.73rem; color:#c9c2d7; line-height:1.5; }
+.aw-subject-kind-navigation { display:flex; gap:.35rem; flex-wrap:wrap; padding:.25rem 0 .5rem; }
+.aw-subject-kind-navigation:empty { display:none; }
+.aw-subject-kind-navigation .aw-subject-facet { font-size:.7rem; min-height:28px; padding:.3rem .5rem; border-radius:1rem; }
+.aw-subject-kind-navigation [aria-pressed=true] { border-color:#d2c3ed9e; background:#bcb2dc23; }
+.aw-subject-view[data-subject-kind=collection] .aw-subject-kind-navigation { border-bottom:1px solid #d2c3a632; }
+.aw-subject-view[data-subject-kind=project] .aw-subject-kind-navigation .aw-subject-facet { border-radius:.35rem; background:#a8c7dc0b; }
 .aw-subject-view :is(h3, h4, p) {
   margin: 0;
 }

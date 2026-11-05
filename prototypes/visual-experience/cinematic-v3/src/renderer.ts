@@ -2,7 +2,8 @@ import * as THREE from "three";
 import { WorkspaceGridField } from "./workspace-grid-field.ts";
 import type { WorkspaceGridFrame } from "./workspace-grid.ts";
 import { PresenceProjection } from "./presence-projection.ts";
-import { VELA_SHAPES, velaCenterGLSL } from './vela-shape.ts';
+import { VELA_SHAPES, OPERATIONAL_VELA_SHAPES, velaCenterGLSL } from './vela-shape.ts';
+import type { VelaVisualState } from './vela-visual-state.ts';
 import type { MotionCoordinator } from './motion.ts';
 import {
   contourRing,
@@ -85,6 +86,7 @@ export interface EnvironmentFrame {
   interaction?: number;
   vela: VelaState;
   velaThinking?: number;
+  velaVisualState?: VelaVisualState;
   study: Study;
   sceneWeights?: SceneWeights;
   architectureConcept?: ArchitectureConcept;
@@ -1794,7 +1796,7 @@ export class Environment {
         ? 0
         : THREE.MathUtils.clamp(frame.ambientStrength ?? 1, 0, 1.5);
     const thinking = THREE.MathUtils.clamp(frame.velaThinking ?? 0, 0, 1);
-    const shapeTarget = VELA_SHAPES[frame.vela];
+    const shapeTarget = frame.velaVisualState ? OPERATIONAL_VELA_SHAPES[frame.velaVisualState] : VELA_SHAPES[frame.vela];
     if (this.motion && !this.motion.bodies.has(this.shapeKey)) this.motion.add(this.shapeKey, { ...shapeTarget });
     this.motion?.target(this.shapeKey, { ...shapeTarget }, 'Vela observed state geometry');
     if (frame.reduced || frame.quiet) this.motion?.snap(this.shapeKey);

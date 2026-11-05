@@ -99,3 +99,11 @@
 .aw-task-group-status:empty {
   display: none;
 }
+.aw-task-group-segments { display:grid; gap:3px; margin:-.65rem 0 .45rem; }
+.aw-task-group-segments[hidden] { display:none; }
+.aw-task-group-segments span { height:9px; border-radius:2px; border:1px solid #acc3d74a; background:linear-gradient(90deg,#b3cfca var(--aw-manual-segment),#acc3d70a var(--aw-manual-segment)); }
+.aw-task-group-manual-note { margin:.25rem 0 .8rem; font-size:.75em; color:#b8c8cf; }
+.aw-task-group-title { flex:1; }
+.aw-task-group-item-state { flex:none; font-size:.65em; color:#b8c8cf; border-left:1px solid #acc3d738; padding-left:.5rem; }
+.aw-task-group-list [data-status=done] .aw-task-group-item-state { color:#b3cfca; }
+.aw-task-group[data-presentation=workspace] .aw-task-group-item-state { max-width:5rem; }
