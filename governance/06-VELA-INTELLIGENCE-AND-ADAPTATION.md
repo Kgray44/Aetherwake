@@ -704,7 +704,7 @@ References: [Vela Presence art direction](../docs/design/VELA-PRESENCE-INTELLIGE
 
 ## Ratified amendment CF-2026-11-05: Vela as enduring intelligence, not a single provider
 
-> **Status: proposed, pending owner acceptance.** This defines Vela's behavior and intent; charter 05 continues to own task execution, charter 12 provider integration and charter 14 permission policy.
+> **Status: Owner-ratified 2026-11-05; implementation validation remains separate.** This defines Vela's behavior and intent; charter 05 continues to own task execution, charter 12 provider integration and charter 14 permission policy.
 
 **AW-VELA-149 — Capability-first intent understanding.** Vela MUST determine whether a request asks for information, physical/local inspection, modification, research, software work, workspace organization, multimodal interpretation, scheduling, or a composite of these, and pursue a complete authorized outcome rather than reflexively return generic conversational advice.
 
