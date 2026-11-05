@@ -25,6 +25,14 @@ test('isolated media authenticates the cached offer/session/answer and forwards 
   }finally{await f.runtime.dispose();}assert.equal(f.disposed,1);
 });
 
+test('private output-only prepare is forwarded exactly and cannot combine microphone or wake capture authority',async()=>{
+  const f=fixture();try{
+    const attemptId=randomUUID();await f.runtime.handle(request('prepare',{attemptId,outputOnly:true,outputDeviceId:'speaker'}));
+    assert.deepEqual(f.calls,[{outputDeviceId:'speaker',outputOnly:true}]);
+    for(const payload of [{attemptId,outputOnly:false},{attemptId,outputOnly:true,inputDeviceId:'mic'},{attemptId,outputOnly:true,bufferLeaseRef:'lease'}])assert.equal(validNativeMediaRequest(request('prepare',payload)),false);
+  }finally{await f.runtime.dispose();}
+});
+
 test('wake input uses one already-owned stream, preserves command audio until matching session start and erases rejected PCM',async()=>{
   const stream={nativeOwned:true},queued=[],calls=[];let next=0;
   const f=fixture({wakeInputEnabled:true,readStream:true,wakeFactory:()=>({stream,ready:async()=>calls.push('ready'),

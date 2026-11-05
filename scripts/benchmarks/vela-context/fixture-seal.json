@@ -1,0 +1,10 @@
+{
+  "contract":"aerynth.context-benchmark-seal@1",
+  "optimizerBaseline":"91fbf64f124aaab9789844ec56b65cf6f6f8279d",
+  "compilerSha256":"511c7b20fa677f9f63884abad4112d7035f18c1acb1a6e06a4fdd163b3720c0f",
+  "files":{
+    "fixtures.public.json":"b4733634497e82f0c973abd12f1ca04de00fe014be90f49ab0133987256872ca",
+    "fixtures.held-out.json":"478020e7cdb5682abb42a274315c76946cdffda76d43527e31db5a9d958aa05b"
+  },
+  "meaning":"New fixtures and hidden behavioral expectations fixed after compiler development and before any benchmark model output. This does not assert absence from model training data."
+}

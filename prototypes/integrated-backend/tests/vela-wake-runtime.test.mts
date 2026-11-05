@@ -13,11 +13,12 @@ import type { StreamEvent } from '../src/contracts.mts';
 import { LIVE_ENDPOINT } from '../../openai-provider/live.mts';
 
 const marker='SYNTHETIC_ONLY_WAKE_RUNTIME_CREDENTIAL';
+const savedVela3Id='voice_synthetic_wake_vela3';
 const off=():WakeCaptureState=>({contract:'aerynth.wake-audio-capture@1',generation:null,phase:'off',microphone:'off',sampleRate:null,inputDevice:'default',frames:0,pendingFrames:0,signalActivity:'unavailable',activitySource:'local-rms-only'});
 const mediaOff=():GptLiveMediaState=>({contract:'aerynth.gpt-live-media@1',connection:'idle',microphoneAccess:'not-requested',localTrackEnabled:false,localSourceMuted:null,providerInputMute:'unknown',playback:'idle',playbackObserved:false,humanAudibility:'unverified',inputDevice:'default',outputDevice:'default',localSpeech:'unavailable',remoteSignal:'unavailable',interruption:'none'});
 function fixture(){
   const base=resolve(tmpdir()),dir=mkdtempSync(join(base,'aerynth-wake-core-')),path=join(dir,'canonical.sqlite'),key=randomBytes(32),events:StreamEvent[]=[],requests:any[]=[],prepared:any[]=[];
-  let capture=off(),media=mediaOff(),arms=0,disposals=0,engines=0,engineDisposals=0,liveSerial=0,detect=false,postWakeSpeech:'present'|'absent'|'unknown'='absent';
+  let capture=off(),media=mediaOff(),arms=0,disposals=0,engines=0,engineDisposals=0,liveSerial=0,catalogGets=0,modelGets=0,detect=false,postWakeSpeech:'present'|'absent'|'unknown'='absent';
   let nativePeer:Parameters<NativeLiveMediaServices['connect']>[0]|null=null,releaseEngine:(()=>void)|null=null,holdEngine=false;
   const samplesSeen:Float32Array[]=[],releasedLeases:string[]=[];
   let time=1000,serial=0;const scheduled=new Map<number,{at:number;callback:()=>void}>();
@@ -36,12 +37,15 @@ function fixture(){
     pause:async input=>{assert.equal(input.generation,capture.generation);capture.phase='handoff';return {...capture};},stop:async input=>{if(input.generation!==undefined&&capture.generation!==input.generation)return {...capture};capture={...off(),generation:capture.generation,phase:'stopped',microphone:'released'};return {...capture};},state:async()=>({...capture}),
     lease:async input=>{assert.equal(input.generation,capture.generation);assert.equal(input.keywordEndSample,480);return {leaseRef:'synthetic-main-lease-'+input.generation,postWakeSpeech};},releaseLease:async input=>{releasedLeases.push(input.leaseRef);return {released:true};}},
     secrets:{available:async()=>true,seal:async text=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);return Buffer.concat([iv,cipher.update(text),cipher.final(),cipher.getAuthTag()]);},open:async bytes=>{const data=Buffer.from(bytes),cipher=createDecipheriv('aes-256-gcm',key,data.subarray(0,12));cipher.setAuthTag(data.subarray(-16));return Buffer.concat([cipher.update(data.subarray(12,-16)),cipher.final()]).toString();}}};
-  const fetchFixture=(async(url,init)=>{if(String(url).endsWith('/models'))return Response.json({data:[{id:'gpt-6-luna'}]});assert.equal(String(url),LIVE_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);requests.push(JSON.parse(String(init?.body)));
+  const fetchFixture=(async(url,init)=>{if(String(url).endsWith('/models')){modelGets++;return Response.json({data:[{id:'gpt-6-luna'}]});}
+    if(String(url)==='https://api.openai.com/v1/audio/voices'){assert.equal(init?.method??'GET','GET');assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);assert.equal(init?.body,undefined);catalogGets++;
+      return Response.json({data:[{id:'voice_synthetic_wake_vela2',name:'Vela 2',type:'prompt',prompt:'Synthetic fixture voice two.',created_at:1700000000},{id:savedVela3Id,name:'Vela 3',type:'prompt',prompt:'Synthetic fixture voice three.',created_at:1700000001}],has_more:false});}
+    assert.equal(String(url),LIVE_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);requests.push(JSON.parse(String(init?.body)));
     return Response.json({session:{id:'synthetic-wake-live-'+ ++liveSerial},transport:{type:'webrtc',sdp:'v=0\r\no=SYNTHETIC_WAKE_ANSWER\r\n'}},{status:201});}) as typeof fetch;
   const create=()=>new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only'},event=>events.push(event),native,undefined,{fetch:fetchFixture,voice:{fetch:fetchFixture,acknowledgementMs:100},wake:{engineFactory,clock,limits:{cooldownMs:10,cleanupTimeoutMs:1000,startTimeoutMs:1000}}});
   let core=create();
   const state=async()=>await core.command('velaWake',{name:'state',input:{}});
-  return {get core(){return core;},events,requests,prepared,releasedLeases,samplesSeen,get arms(){return arms;},get engines(){return engines;},get engineDisposals(){return engineDisposals;},get disposals(){return disposals;},get capture(){return capture;},get media(){return media;},state,
+  return {get core(){return core;},events,requests,prepared,releasedLeases,samplesSeen,get catalogGets(){return catalogGets;},get modelGets(){return modelGets;},get arms(){return arms;},get engines(){return engines;},get engineDisposals(){return engineDisposals;},get disposals(){return disposals;},get capture(){return capture;},get media(){return media;},state,
     async ready(){await core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:marker},expectedVersion:null});await core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true});},
     async enable(preferences={}){const previous=await state();return core.command('velaWakeNative',{name:'enable',input:{expectedVersion:previous.settings.version,preferences}});},
     async frame(sequence=0,generation=capture.generation!){return core.command('velaWakeFrame',encodeNativeWakeFrame({generation,sequence,startSample:sequence*640,sampleRate:16000,samples:new Float32Array(640).fill(.1),signalActivity:'signal',rms:.1,mode:'detector'}));},
@@ -62,22 +66,22 @@ test('actual Core starts OFF, requires native opt-in and persists local-only con
     assert.equal((await f.core.command('snapshot',{})).conversations.length,0);const generation=f.capture.generation!;
     await f.reopen();assert.equal((await f.state()).phase,'OFF');assert.equal(f.arms,1);assert.equal((await f.state()).settings.preferences.idleTimeoutMs,25000);
     await f.core.command('velaWakeNative',{name:'ready',input:{}});assert.equal((await f.state()).phase,'ARMED');assert.equal(f.arms,2);assert.ok(f.capture.generation!>generation);assert.equal(f.requests.length,0);
-    await assert.rejects(f.frame(0,generation),/wake_frame_not_admitted/);
+    await assert.rejects(f.frame(0,generation),/wake_frame_not_admitted/);assert.equal(f.catalogGets,0,'local-only restoration never reads the remote voice catalog');assert.equal(f.modelGets,0);
   }finally{await f.close();}
 });
 test('actual wake uses canonical GPT-Live once, dynamic in-session greeting and confirmed idle close before returning to local arm',async()=>{
   const f=fixture();try{await f.ready();await f.enable();f.detection();await f.frame();const listening=await until(f,view=>view.phase==='LISTENING');assert.equal(listening.owner,'wake');assert.equal(f.requests.length,1);
-    const body=f.requests[0];assert.match(JSON.stringify(body.session.input),/VAY-luh/);assert.ok(body.session.input.some((item:any)=>item.role==='developer'&&/brief|greet/iu.test(item.content[0].text)));assert.match(f.prepared[0].bufferLeaseRef,/synthetic-main-lease/);
+    const body=f.requests[0];assert.deepEqual(body.session.audio.output.voice,{id:savedVela3Id});assert.equal(f.catalogGets,1);assert.equal(f.modelGets,0);assert.match(JSON.stringify(body.session.input),/VAY-luh/);assert.ok(body.session.input.some((item:any)=>item.role==='developer'&&/brief|greet/iu.test(item.content[0].text)));assert.match(f.prepared[0].bufferLeaseRef,/synthetic-main-lease/);
     assert.equal((await f.core.command('snapshot',{})).conversations.length,1);assert.ok(f.samplesSeen.every(samples=>samples.every(value=>value===0)));
     await f.advance(20001);const cooled=await until(f,view=>view.phase==='COOLDOWN');assert.equal(cooled.voice,'inactive');assert.equal(f.media.microphoneAccess,'released');
     const voice=await f.core.command('velaVoice',{name:'state',input:{}}) as any;assert.equal(voice.session.finalization,'confirmed');assert.equal(voice.session.usage.seconds,2);
-    await f.advance(11);assert.equal((await f.state()).phase,'ARMED');assert.equal(f.requests.length,1,'idle return must not reconnect paid voice');
+    await f.advance(11);assert.equal((await f.state()).phase,'ARMED');assert.equal(f.requests.length,1,'idle return must not reconnect paid voice');assert.equal(f.catalogGets,1,'local rearm cannot refresh the saved voice catalog');
   }finally{await f.close();}
 });
 test('post-wake command uses an opaque Main lease and suppresses the greeting without uploading ambient detector PCM',async()=>{
   const f=fixture();try{await f.ready();await f.enable();f.commandAudio('present');f.detection();await f.frame();await until(f,view=>view.phase==='LISTENING');
     assert.match(f.prepared[0].bufferLeaseRef,/synthetic-main-lease/);assert.ok(f.requests[0].session.input.some((item:any)=>item.role==='developer'&&/Do not add an opening greeting/u.test(item.content[0].text)));
-    assert.equal(f.requests.length,1);assert.ok(f.releasedLeases.length===1);assert.ok(!JSON.stringify(f.events).includes('pcmBase64'));assert.ok(!JSON.stringify(await f.state()).includes('samples'));
+    assert.equal(f.requests.length,1);assert.deepEqual(f.requests[0].session.audio.output.voice,{id:savedVela3Id});assert.equal(f.catalogGets,1);assert.ok(f.releasedLeases.length===1);assert.ok(!JSON.stringify(f.events).includes('pcmBase64'));assert.ok(!JSON.stringify(await f.state()).includes('samples'));
   }finally{await f.close();}
 });
 
@@ -97,7 +101,7 @@ test('native capture loss is generation-fenced, clears ARMED and emits metadata 
 test('usage revocation and key rotation invalidate standing wake spend authority before any paid request',async()=>{
   for(const change of ['usage','rotation'] as const){const f=fixture();try{await f.ready();await f.enable();
     if(change==='usage')await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:false});else{await f.core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:marker},expectedVersion:1});await f.core.command('velaApiUsageAuthorize',{expectedVersion:2,enabled:true});}
-    f.detection();await f.frame();await until(f,view=>view.phase==='ERROR');assert.equal(f.requests.length,0);assert.notEqual(f.media.microphoneAccess,'active');assert.notEqual(f.capture.microphone,'active');
+    f.detection();await f.frame();await until(f,view=>view.phase==='ERROR');assert.equal(f.requests.length,0);assert.equal(f.catalogGets,0);assert.notEqual(f.media.microphoneAccess,'active');assert.notEqual(f.capture.microphone,'active');
   }finally{await f.close();}}
 });
 test('frame admission rejects wrong sequence/generation and bounded concurrency; processed PCM is zeroed and never journaled',async()=>{
@@ -116,7 +120,7 @@ test('late wake-owned cleanup cannot quiesce or close a newer manual session; ma
     const old=(await f.core.command('velaVoice',{name:'state',input:{}}) as any).session;
     await f.core.command('velaWake',{name:'masterOff',input:{}});
     const attemptId=randomUUID(),grant=await f.core.command('velaVoiceNative',{name:'authorize',input:{attemptId,operation:'start'}}) as any;
-    await f.core.command('velaVoiceNative',{name:'start',input:{attemptId,authorizationRef:grant.authorizationRef}});await new Promise(resolve=>setTimeout(resolve,10));
+    await f.core.command('velaVoiceNative',{name:'start',input:{attemptId,authorizationRef:grant.authorizationRef}});await new Promise(resolve=>setTimeout(resolve,10));assert.equal(f.requests.length,2);assert.deepEqual(f.requests[1].session.audio.output.voice,{id:savedVela3Id});assert.equal(f.catalogGets,1,'the next manual session reuses the bounded canonical saved-voice catalog');
     const voice=(f.core as any).velaVoiceRuntime,before=f.disposals;
     await voice.quiesceOwned({activationId:old.attemptId,sessionId:old.sessionId});await voice.stopOwned({activationId:old.attemptId,sessionId:old.sessionId});await voice.releaseOwned({activationId:old.attemptId,sessionId:old.sessionId});
     assert.equal(f.disposals,before);assert.equal(f.media.microphoneAccess,'active');assert.equal((await f.core.command('velaVoice',{name:'state',input:{}}) as any).session.state,'running');

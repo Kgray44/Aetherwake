@@ -4,11 +4,15 @@ const id=value=>typeof value==='string'&&value.length>0&&value.length<=512&&!/[\
 const text=(value,max)=>typeof value==='string'&&value.length<=max&&!/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(value);
 const version=value=>Number.isSafeInteger(value)&&value>=1;
 const settingsVersion=value=>Number.isSafeInteger(value)&&value>=0;
-const codes=new Set(['voice_invalid_request','voice_user_gesture_required','voice_busy','voice_closed','voice_unavailable','voice_state_invalid','storage_reserve_admission_denied']);
-const attempts=new Set(['start','reconnect','audition','createVoice','saveVoice']);
+const codes=new Set(['voice_invalid_request','voice_user_gesture_required','voice_busy','voice_closed','voice_unavailable','voice_state_invalid','voice_reply_too_long','voice_reply_changed','voice_session_busy','storage_reserve_admission_denied']);
+const catalogCodes=new Set(['live_voice_catalog_unavailable','live_voice_catalog_access_unavailable','live_voice_catalog_invalid','live_voice_catalog_incomplete','live_voice_catalog_ambiguous','live_voice_catalog_credential']);
+const attempts=new Set(['start','reconnect','audition','speak','createVoice','saveVoice']);
 function validVoiceRequest(dto){
   if(!exact(dto,['name','input']))return false;const {name,input:p}=dto;
-  if(['state','devices','stop','resumePlayback','interruptPlayback'].includes(name))return exact(p,[]);
+  if(['state','refreshVoices','devices','stop','resumePlayback','interruptPlayback'].includes(name))return exact(p,[]);
+  if(name==='speak')return exact(p,['messageId','contentDigest'])&&id(p.messageId)&&typeof p.contentDigest==='string'&&/^[a-f0-9]{64}$/.test(p.contentDigest);
+  if(name==='stopSpeech')return exact(p,['attemptId'])&&id(p.attemptId);
+  if(name==='setSpeakReplies')return exact(p,['enabled','expectedSettingsVersion'])&&typeof p.enabled==='boolean'&&settingsVersion(p.expectedSettingsVersion);
   if(name==='mute')return exact(p,['muted'])&&typeof p.muted==='boolean';
   if(['setInputDevice','setOutputDevice'].includes(name))return exact(p,['deviceId'])&&id(p.deviceId);
   if(name==='start'||name==='reconnect')return exact(p,[...(Object.hasOwn(p??{},'inputDeviceId')?['inputDeviceId']:[]),...(Object.hasOwn(p??{},'outputDeviceId')?['outputDeviceId']:[]),...(Object.hasOwn(p??{},'intent')?['intent']:[])])&&(p.inputDeviceId===undefined||id(p.inputDeviceId))&&(p.outputDeviceId===undefined||id(p.outputDeviceId))&&(p.intent===undefined||text(p.intent,8000)&&p.intent.length>0);
@@ -30,11 +34,15 @@ function safeMedia(value){
 }
 function safeVoice(value){
   if(value===null)return null;
+  if(value?.type==='existing'){
+    if(!exact(value,['configurationId','configurationVersion','id','name','createdAt','type','sourceType'])||!id(value.configurationId)||!version(value.configurationVersion)||!id(value.id)||!text(value.name,100)||!['prompt','audio_sample','unknown'].includes(value.sourceType)||!(value.createdAt===null||Number.isSafeInteger(value.createdAt)&&value.createdAt>=0))throw Error('voice_state_invalid');
+    return structuredClone(value);
+  }
   if(!exact(value,['configurationId','configurationVersion','id','name','prompt','createdAt','type'])||!id(value.configurationId)||!version(value.configurationVersion)||!id(value.id)||!text(value.name,100)||!text(value.prompt,4000)||!Number.isSafeInteger(value.createdAt)||value.createdAt<0||value.type!=='prompt')throw Error('voice_state_invalid');
   return structuredClone(value);
 }
 function safeVoiceState(value){
-  if(!exact(value,['available',...(Object.hasOwn(value??{},'reason')?['reason']:[]),'session','media','settings','captions','usage'])||typeof value.available!=='boolean'||
+  if(!exact(value,['available',...(Object.hasOwn(value??{},'reason')?['reason']:[]),'session','media','settings','captions','usage',...(Object.hasOwn(value??{},'speech')?['speech']:[])])||typeof value.available!=='boolean'||
     value.reason!==undefined&&!['Native voice media is unavailable.','Enable Vela API usage in Connections before starting voice.'].includes(value.reason)||
     !exact(value.usage,['enabled','maximumVoiceSeconds','initializationExposureSeconds'])||typeof value.usage.enabled!=='boolean'||value.usage.maximumVoiceSeconds!==300||value.usage.initializationExposureSeconds!==15||
     !Array.isArray(value.captions)||value.captions.length>12||!value.captions.every(c=>exact(c,['messageId','role','content','startMs','endMs','completedTurn'])&&id(c.messageId)&&['user','assistant'].includes(c.role)&&text(c.content,65536)&&Number.isFinite(c.startMs)&&c.startMs>=0&&Number.isFinite(c.endMs)&&c.endMs>=c.startMs&&c.completedTurn===false))throw Error('voice_state_invalid');
@@ -45,8 +53,11 @@ function safeVoiceState(value){
     !Number.isSafeInteger(s.transcriptFragments)||s.transcriptFragments<0||!['idle','running','unknown'].includes(s.backend)||!exact(s.usage,['seconds','source','final'])||!(s.usage.seconds===null||Number.isFinite(s.usage.seconds)&&s.usage.seconds>=0)||!['provider-reported','unavailable'].includes(s.usage.source)||typeof s.usage.final!=='boolean'||
     s.errorCode!==undefined&&(typeof s.errorCode!=='string'||!/^live_[a-z_]{1,80}$/u.test(s.errorCode)))throw Error('voice_state_invalid');
   const settings=value.settings;
-  if(!exact(settings,['version','speechPersonality','selectedVoice','candidates'])||!settingsVersion(settings.version)||!text(settings.speechPersonality,2000)||!Array.isArray(settings.candidates)||settings.candidates.length>64||settings.candidates.some(candidate=>candidate===null))throw Error('voice_state_invalid');
-  return {available:value.available,...(value.reason===undefined?{}:{reason:value.reason}),session:structuredClone(s),media:safeMedia(value.media),settings:{version:settings.version,speechPersonality:settings.speechPersonality,selectedVoice:safeVoice(settings.selectedVoice),candidates:settings.candidates.map(safeVoice)},captions:structuredClone(value.captions),usage:structuredClone(value.usage)};
+  if(!exact(settings,['version','speechPersonality','selectedVoice','candidates',...(Object.hasOwn(settings??{},'catalog')?['catalog']:[]),...(Object.hasOwn(settings??{},'speakReplies')?['speakReplies']:[])])||!settingsVersion(settings.version)||!text(settings.speechPersonality,2000)||!Array.isArray(settings.candidates)||settings.candidates.length>64||settings.candidates.some(candidate=>candidate===null))throw Error('voice_state_invalid');
+  if(settings.speakReplies!==undefined&&typeof settings.speakReplies!=='boolean')throw Error('voice_state_invalid');
+  const speech=value.speech;if(speech!==undefined&&(!exact(speech,['state','messageId','attemptId','contentDigest',...['errorCode','endReason'].filter(key=>Object.hasOwn(speech??{},key))])||!['idle','starting','speaking','closed','unknown','failed'].includes(speech.state)||!['messageId','attemptId'].every(key=>speech[key]===null||id(speech[key]))||!(speech.contentDigest===null||typeof speech.contentDigest==='string'&&/^[a-f0-9]{64}$/.test(speech.contentDigest))||speech.errorCode!==undefined&&(typeof speech.errorCode!=='string'||!/^live_[a-z_]{1,80}$/.test(speech.errorCode))||speech.endReason!==undefined&&!['user-stop','audio-idle','voice-cap','provider-close','unknown'].includes(speech.endReason)))throw Error('voice_state_invalid');
+  const c=settings.catalog;if(c!==undefined&&(!exact(c,['state','configurationVersion','observedAt','expiresAt',...(Object.hasOwn(c??{},'errorCode')?['errorCode']:[])])||!['unresolved','ready','unavailable','stale'].includes(c.state)||!(c.configurationVersion===null||version(c.configurationVersion))||!['observedAt','expiresAt'].every(key=>c[key]===null||Number.isSafeInteger(c[key])&&c[key]>=0)||c.errorCode!==undefined&&!catalogCodes.has(c.errorCode)))throw Error('voice_state_invalid');
+  return {available:value.available,...(value.reason===undefined?{}:{reason:value.reason}),session:structuredClone(s),media:safeMedia(value.media),...(speech===undefined?{}:{speech:structuredClone(speech)}),settings:{version:settings.version,...(settings.speakReplies===undefined?{}:{speakReplies:settings.speakReplies}),speechPersonality:settings.speechPersonality,selectedVoice:safeVoice(settings.selectedVoice),candidates:settings.candidates.map(safeVoice),...(c===undefined?{}:{catalog:structuredClone(c)})},captions:structuredClone(value.captions),usage:structuredClone(value.usage)};
 }
 function safeDevices(value){
   if(!Array.isArray(value)||value.length>64||!value.every(d=>exact(d,['kind','id','label','labelAvailable'])&&['audioinput','audiooutput'].includes(d.kind)&&id(d.id)&&text(d.label,200)&&typeof d.labelAvailable==='boolean'))throw Error('voice_state_invalid');
@@ -64,19 +75,20 @@ function createVelaVoiceBroker({call,mediaBroker,authorize,storageAllowed=async(
       try{
         if(closed)throw Error('voice_closed');if(!validVoiceRequest(dto))throw Error('voice_invalid_request');
         const {name,input}=dto;
+        if(name==='setSpeakReplies'){if(input.enabled&&await authorize(context)!==true||closed)throw Error('voice_user_gesture_required');const storage=await storageAllowed();if(input.enabled&&!storage)throw Error('storage_reserve_admission_denied');return safeVoiceState(await call('velaVoiceNative',dto));}
         if(!attempts.has(name))return name==='devices'?safeDevices(await call('velaVoice',dto)):safeVoiceState(await call('velaVoice',dto));
         if(busy)throw Error('voice_busy');busy=true;
         try{
           if(await authorize(context)!==true||closed)throw Error('voice_user_gesture_required');
           if(!await storageAllowed())throw Error('storage_reserve_admission_denied');
           const attemptId=randomUUID(),operation=name==='createVoice'?'voice-create':name==='saveVoice'?'voice-save':name;
-          const grant=await call('velaVoiceNative',{name:'authorize',input:{attemptId,operation,maximumVoiceSeconds,...(input.intent===undefined?{}:{intent:input.intent})}});
+          const grant=await call('velaVoiceNative',{name:'authorize',input:{attemptId,operation,maximumVoiceSeconds,...(input.intent===undefined?{}:{intent:input.intent}),...(name==='speak'?{messageId:input.messageId,contentDigest:input.contentDigest}:{})}});
           if(closed||!exact(grant,['authorizationRef','attemptId','configurationVersion','expiresAt'])||grant.attemptId!==attemptId||!id(grant.authorizationRef)||!version(grant.configurationVersion)||typeof grant.expiresAt!=='string'||!Number.isFinite(Date.parse(grant.expiresAt))||Date.parse(grant.expiresAt)<=Date.now())throw Error('voice_unavailable');
-          if(['start','reconnect','audition'].includes(name))mediaBroker.authorizeAttempt(attemptId);
+          if(['start','reconnect','audition','speak'].includes(name))mediaBroker.authorizeAttempt(attemptId);
           const result=await call('velaVoiceNative',{name:operation,input:{...input,...(name==='audition'&&input.sample===undefined?{sample:'Hello. I am Vela. I will speak clearly, warmly, and briefly.'}:{}),attemptId,authorizationRef:grant.authorizationRef}});
           return name==='createVoice'?safeVoiceCreation(result):safeVoiceState(result);
         }finally{busy=false;}
-      }catch(error){throw Error(codes.has(error?.message)?error.message:'voice_unavailable');}
+      }catch(error){throw Error(error?.message==='live_reply_capacity'?'voice_reply_too_long':error?.message==='live_reply_changed'?'voice_reply_changed':error?.message==='live_session_busy'?'voice_session_busy':codes.has(error?.message)?error.message:'voice_unavailable');}
     },close(){closed=true;},
   };
 }

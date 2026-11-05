@@ -24,8 +24,14 @@ export interface SavedPromptVoice {
   configurationId: string; configurationVersion: number;
   id: string; name: string; prompt: string; createdAt: number; type: 'prompt';
 }
+/** Existing provider voice metadata may omit its original design prompt. */
+export interface ImportedCustomVoice {
+  configurationId:string;configurationVersion:number;
+  id:string;name:string;createdAt:number|null;type:'existing';sourceType:'prompt'|'audio_sample'|'unknown';
+}
+export type SavedCustomVoice=SavedPromptVoice|ImportedCustomVoice;
 export interface CanonicalVelaRuntimePort {
-  context(input: { conversationId: string; purpose: 'conversation' | 'audition' | 'delegation'; sessionId?: string; signal: AbortSignal }): Promise<LiveCanonicalContext>;
+  context(input: { conversationId: string; purpose: 'conversation' | 'audition' | 'delegation' | 'readback'; sessionId?: string; signal: AbortSignal }): Promise<LiveCanonicalContext>;
   validateContext(contextRef: string, contextDigest: string): Promise<void>;
   /** Must durably deduplicate by sessionId/eventId; this module retains no transcript. */
   receiveFragment(fragment: LiveTranscriptFragment): Promise<void>;
@@ -37,7 +43,7 @@ export interface CanonicalVelaRuntimePort {
   delegate(input: LiveDelegationBinding & { signal: AbortSignal }): Promise<{ state: 'verified' | 'failed' | 'unknown'; content?: string; receiptRef?: string }>;
   reconcile(input: { conversationId: string; previousAttemptId: string; previousSessionId?: string; signal: AbortSignal }): Promise<{ state: 'reconciled' | 'unknown'; reconciliationRef?: string }>;
   recordVoiceCandidate(voice: SavedPromptVoice): Promise<void>;
-  saveVoiceSelection(input: { voice: SavedPromptVoice; expectedSettingsVersion: number; speechPersonality: string; authorizationRef: string }): Promise<{ settingsVersion: number }>;
+  saveVoiceSelection(input: { voice: SavedCustomVoice; expectedSettingsVersion: number; speechPersonality: string; authorizationRef: string }): Promise<{ settingsVersion: number }>;
 }
 export interface LiveStartInput {
   attemptId: string; configurationId: string; configurationVersion: number; conversationId: string;
@@ -45,11 +51,13 @@ export interface LiveStartInput {
   sdpOffer: string; voice?: LiveVoice;
   /** Native wake coordinator only. No separate greeting model call. */
   wake?: { greeting: 'dynamic' | 'none'; pronunciation: 'VAY-luh' };
+  /** Native canonical reply only; never accepted as arbitrary renderer text. */
+  readback?: { messageId:string;contentDigest:string;content:string };
   authorizationRef: string;
   budget: { ref: string; maximumVoiceSeconds: number; initializationExposureSeconds: 15 };
 }
 export interface LiveNativeReview {
-  operation: 'start' | 'audition' | 'reconnect' | 'delegate' | 'append' | 'mute' | 'voice-create' | 'voice-save';
+  operation: 'start' | 'audition' | 'speak' | 'reconnect' | 'delegate' | 'append' | 'mute' | 'voice-create' | 'voice-save';
   attemptId: string; configurationId: string; configurationVersion: number;
   authorizationRef: string; bodyDigest: string; bodyBytes: number;
   conversationId?: string; contextRef?: string; contextDigest?: string;

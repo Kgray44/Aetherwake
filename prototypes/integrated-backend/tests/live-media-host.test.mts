@@ -55,6 +55,15 @@ test('native media wire rejects unknown keys, response types, commands, session 
   }
 });
 
+test('output-only host preparation retains the closed private contract and rejects combined input authority',async()=>{
+  const prepared:unknown[]=[],f=fixture({prepare:async input=>{prepared.push(input);return{offerId:'output-offer',sdpOffer:'v=0'};}});
+  try{
+    await f.client.services.prepare({attemptId:'output-attempt',outputOnly:true,outputDeviceId:'speaker'});
+    assert.deepEqual(prepared,[{attemptId:'output-attempt',outputOnly:true,outputDeviceId:'speaker'}]);
+    for(const payload of [{attemptId:'attempt',outputOnly:false},{attemptId:'attempt',outputOnly:true,inputDeviceId:'mic'},{attemptId:'attempt',outputOnly:true,bufferLeaseRef:'lease'},{attemptId:'attempt',outputOnly:undefined}])assert.equal(validateNativeLiveHostMessage(request('prepare',payload)),false);
+  }finally{f.close();}
+});
+
 test('native media host unavailable and thrown native failures return only bounded public error codes',async()=>{
   let client:ReturnType<typeof createNativeLiveHostClient>;const wire:NativeLiveHostMessage[]=[];
   const server=createNativeLiveHostServer(undefined,message=>{wire.push(message);client.handle(message);});client=createNativeLiveHostClient(message=>server.handle(message));

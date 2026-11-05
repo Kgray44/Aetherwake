@@ -35,6 +35,8 @@ const {
   isConversationRead,
 } = require("./conversation-broker.cjs");
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
+const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
+const {showVelaReview}=require('./vela-review.cjs');
 const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
@@ -47,6 +49,10 @@ const { createVelaApiSetup } = require('./vela-api-setup.cjs');
 const { createVelaApiConnectionBroker, safeApiStatus } = require('./vela-api-connections.cjs');
 const { createLiveMediaBroker } = require('./live-media-broker.cjs');
 const {createWindowsSystemBroker}=require('./windows-system-broker.cjs');
+const {createWindowsMaintenanceBroker}=require('./windows-maintenance-broker.cjs');
+const {createWindowsComputerBroker}=require('./windows-computer-broker.cjs');
+const {reviewVelaOwner}=require('./vela-owner-review.cjs');
+const {startReviewedMission}=require('./mission-start-broker.cjs');
 const { createVelaVoiceBroker } = require('./vela-voice-broker.cjs');
 const { createWakeMediaBroker } = require('./wake-media-broker.cjs');
 const { loadWakeController } = require('./wake-controller-loader.cjs');
@@ -247,6 +253,9 @@ const pending = new Map();
 let backendFailed = false;
 let nativeSecretBroker;
 let windowsSystemBroker;
+let windowsMaintenanceBroker;
+let windowsComputerBroker;
+const maintenanceReviewFrames=new Map();
 let documentTextBroker;
 let providerConnections;
 let velaApiSetup;
@@ -267,6 +276,7 @@ const storage = createStorageAdmission({
       classification: "observed",
     });
     if (admitted) return;
+    windowsMaintenanceBroker?.revoke();windowsComputerBroker?.revoke();maintenanceReviewFrames.clear();
     call("snapshot", {}).then((snapshot) => {
       for (const execution of Object.values(snapshot.executions))
         if (execution.state === "running" && execution.turnId)
@@ -278,6 +288,8 @@ function failBackend() {
   if (backendFailed) return;
   backendFailed = true;
   windowsSystemBroker?.close();
+  windowsMaintenanceBroker?.close();maintenanceReviewFrames.clear();
+  windowsComputerBroker?.close();
   nativeSecretBroker?.close();
   providerConnections?.close();
   velaApiSetup?.close();
@@ -312,7 +324,7 @@ function writeBackend(line) {
 function call(command, input) {
   if (!backendWritable())
     return Promise.reject(new Error("backend_disconnected"));
-  const cleanup=command==='close'||command==='velaWakeCaptureState'||command==='velaWake'&&['masterOff','disableWake'].includes(input?.name)||command==='velaVoice'&&input?.name==='stop';
+  const cleanup=command==='close'||command==='velaWakeCaptureState'||command==='velaWake'&&['masterOff','disableWake'].includes(input?.name)||command==='velaVoice'&&(['stop','stopSpeech'].includes(input?.name)||input?.name==='setSpeakReplies'&&input?.input?.enabled===false);
   if (pending.size >= (cleanup?68:64)) return Promise.reject(new Error("backpressure"));
   const id = ++serial;
   return new Promise((resolve, reject) => {
@@ -354,6 +366,8 @@ app.whenReady().then(async () => {
       "--native-secrets",
       "--native-media",
       "--native-system-facts",
+      "--native-maintenance",
+      "--native-computer",
       "--native-documents",
     ],
     { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
@@ -386,6 +400,11 @@ app.whenReady().then(async () => {
         htmlPath:path.join(__dirname,'wake-media.html'),workletPath:path.join(root,'dist/vela-wake-pcm-worklet.js')})});
   } catch { wakeController = null; }
   liveMediaBroker = createLiveMediaBroker({ BrowserWindow, ipcMain,
+    authorizeOutputOnlyPrepare:async input=>{
+      if(closing||backendFailed||input?.outputOnly!==true||!await storage.allowWrite())return false;
+      const ack=await call('velaVoiceNative',{name:'authorizeSpeechMedia',input:{attemptId:input.attemptId}});
+      return !closing&&!backendFailed&&await storage.allowWrite()&&ack?.authorized===true&&Object.keys(ack).length===1;
+    },
     ...(wakeController?{wakeSource:{claimLive:(ref,attempt,feed)=>wakeController.claimLive(ref,attempt,feed),releaseLive:attempt=>wakeController.releaseLive(attempt)}}:{}),
     send: wire => writeBackend(JSON.stringify(wire) + '\n'),
     preloadPath: path.join(root, 'dist/vela-live-media-preload.cjs'),
@@ -410,6 +429,8 @@ app.whenReady().then(async () => {
       if (wakeController?.handle(m)) return;
       if (m.nativeWakeHost) { const h=m.nativeWakeHost; writeBackend(JSON.stringify({nativeWakeHost:{version:1,kind:'response',id:h.id,operation:h.operation,error:'wake_host_unavailable'}})+'\n'); return; }
       if(windowsSystemBroker.handle(m))return;
+      if(windowsMaintenanceBroker?.handle(m))return;
+      if(windowsComputerBroker?.handle(m))return;
       if(documentTextBroker.handle(m))return;
       if (nativeSecretBroker.handle(m)) return;
       if (liveMediaBroker.handle(m)) return;
@@ -480,6 +501,7 @@ app.whenReady().then(async () => {
   });
   owner.on("render-process-gone", playback.clear);
   owner.on('render-process-gone', () => {
+    windowsMaintenanceBroker?.revoke();windowsComputerBroker?.revoke();maintenanceReviewFrames.clear();
     // Stop local capture immediately even when the application renderer cannot send End.
     documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); velaVoiceBroker?.close(); liveMediaBroker?.close();
     void call('velaWake', {name:'masterOff',input:{}}).catch(() => {});
@@ -487,6 +509,7 @@ app.whenReady().then(async () => {
   });
   owner.on("destroyed", playback.clear);
   owner.on("did-start-loading", playback.clear);
+  owner.on('did-start-loading',()=>{windowsMaintenanceBroker?.revoke();windowsComputerBroker?.revoke();maintenanceReviewFrames.clear();});
   const mediaCommand = require("./media-broker.cjs").createMediaBroker({ win, dialog, shell, call, playback });
   const startupErrors = [];
   if (verify) win.on("page-title-updated", (event) => event.preventDefault());
@@ -523,6 +546,23 @@ app.whenReady().then(async () => {
     win.isVisible() &&
     !win.isMinimized() &&
     win.isFocused();
+  let nativeReviewBusy=false;
+  const nativeReviewGate=async work=>{if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
+  const reviewProvider=args=>nativeReviewGate(()=>showVelaReview(args));
+  const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
+  const validateHostOperation=async(binding,{phase='before-dispatch'}={})=>{
+      const frame=maintenanceReviewFrames.get(binding.operationId);
+      const trusted=()=>!closing&&!backendFailed&&!!frame&&maintenanceReviewFrames.get(binding.operationId)===frame&&(phase==='after-dispatch'?trustedApplicationFrame:trustedActiveFrame)({sender:win.webContents,senderFrame:frame});
+      if(!trusted()||!await storage.allowWrite()||!trusted())return false;
+      const current=await call('hostOperationReviewNative',{operationId:binding.operationId});
+      return trusted()&&await storage.allowWrite()&&trusted()&&JSON.stringify(current)===JSON.stringify(binding);
+  };
+  const protectedPids=()=>[process.pid,child?.pid,...app.getAppMetrics().map(metric=>metric.pid)].filter(Number.isSafeInteger);
+  windowsMaintenanceBroker=createWindowsMaintenanceBroker({root,getOwner:()=>win,dialog:reviewDialogs,call,
+    send:wire=>writeBackend(JSON.stringify(wire)+'\n'),getProtectedPids:protectedPids,canReclaim:validateHostOperation});
+  windowsComputerBroker=createWindowsComputerBroker({root,getOwner:()=>win,dialog:reviewDialogs,call,
+    send:wire=>writeBackend(JSON.stringify(wire)+'\n'),getProtectedPids:protectedPids,canAct:validateHostOperation});
+  const missionFileEditBroker=createMissionFileEditBroker({win,trustedDocumentUrl:localURL,call,nodeExecutable:backendExecutable(process.env.AERYNTH_NODE_BIN),runtime:{BrowserWindow,ipcMain,session,dialog},reviewGate:nativeReviewGate});
   velaVoiceBroker = createVelaVoiceBroker({call,mediaBroker:liveMediaBroker,
     maximumVoiceSeconds: process.argv.includes('--missions-voice-live-only') && process.argv.includes('--voice-synthetic-input') ? 30 : 300,
     storageAllowed: () => storage.allowWrite(),
@@ -552,9 +592,10 @@ app.whenReady().then(async () => {
   ipcMain.handle("application-copy-text", (event, input) =>
     nativeClipboard.copy(event, input),
   );
-  win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
+  win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
+      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative'].includes(command))throw Error('unauthorized_private_command');
       if (
         event.sender !== win.webContents ||
         event.senderFrame !== win.webContents.mainFrame ||
@@ -587,7 +628,7 @@ app.whenReady().then(async () => {
             await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()', false).catch(() => false) !== true ||
             !trustedActiveFrame(event)) throw Error('weather_user_gesture_required');
       }
-      if (command === 'velaVoice' && ['start','reconnect','audition','createVoice','saveVoice'].includes(input?.name)) {
+      if (command === 'velaVoice' && (['start','reconnect','audition','speak','createVoice','saveVoice'].includes(input?.name)||input?.name==='setSpeakReplies'&&input?.input?.enabled===true)) {
         if (!trustedActiveFrame(event) ||
             await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()', false).catch(() => false) !== true ||
             !trustedActiveFrame(event)) throw Error('voice_user_gesture_required');
@@ -619,7 +660,7 @@ app.whenReady().then(async () => {
             await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
             !trustedActiveFrame(event)) throw Error("workspace_recovery_user_gesture_required");
       }
-      if (command === "vela" && ["request", "native", "apply", "pickSources", "fileProposal"].includes(input?.name)) {
+      if (command === "vela" && ["request", "native", "apply", "pickSources", "fileProposal", "missionFileEdit", "hostOperation"].includes(input?.name)) {
         if (!trustedActiveFrame(event) ||
             await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
             !trustedActiveFrame(event)) throw Error("vela_user_gesture_required");
@@ -646,7 +687,7 @@ app.whenReady().then(async () => {
         !(command === 'velaApiConnection' && ['status', 'usageStatus', 'catalog'].includes(input?.type)) &&
         !(command === 'weatherPermission' && ['status', 'windows-settings'].includes(input?.type)) &&
         !(command === 'velaWake' && ['state','disableWake','masterOff','reconcile'].includes(input?.name)) &&
-        !(command === 'velaVoice' && ['state','devices','stop','mute','setInputDevice','setOutputDevice','resumePlayback','interruptPlayback'].includes(input?.name)) &&
+        !(command === 'velaVoice' && (['state','devices','refreshVoices','stop','stopSpeech','mute','setInputDevice','setOutputDevice','resumePlayback','interruptPlayback'].includes(input?.name)||input?.name==='setSpeakReplies'&&input?.input?.enabled===false)) &&
         !(
           command === "library" &&
           [
@@ -726,13 +767,30 @@ app.whenReady().then(async () => {
           openExternal: (url) => shell.openExternal(url),
         });
       } else if (command === "conversation") {
-        result = await conversationCommand({ win, call, input, openExternal: (url) => shell.openExternal(url) });
+        result = await conversationCommand({ win, call, input,reviewSources:reviewProvider, openExternal: (url) => shell.openExternal(url) });
       } else if (command === "vela") {
-        result = await velaCommand({
+        if(input?.name==='hostOperation'){
+          const request=input.input;
+          if(!request||typeof request!=='object'||Array.isArray(request)||Object.keys(request).length!==1||
+            typeof request.operationId!=='string'||!/^[a-z0-9][a-z0-9_.:-]{0,127}$/iu.test(request.operationId))throw Error('invalid_host_operation');
+          if(maintenanceReviewFrames.has(request.operationId))throw Error('native_review_busy');
+          maintenanceReviewFrames.set(request.operationId,event.senderFrame);
+          try{
+            const binding=await call('hostOperationReviewNative',{operationId:request.operationId});
+            if(binding?.contract==='aerynth.windows.maintenance-review@1')result=await windowsMaintenanceBroker.review(request.operationId);
+            else if(binding?.contract==='aerynth.windows.computer-review@1')result=await windowsComputerBroker.review(request.operationId);
+            else if(binding?.contract==='aerynth.vela.owner-review@1')result=await reviewVelaOwner({binding,win,event,localURL,call,dialog:reviewDialogs,storage,
+              canAct:validateHostOperation,reviewGate:nativeReviewGate,runtime:{BrowserWindow,ipcMain,session,dialog},nodeExecutable:backendExecutable(process.env.AERYNTH_NODE_BIN)});
+            else throw Error('invalid_host_operation');
+          }
+          finally{maintenanceReviewFrames.delete(request.operationId);}
+        }else result = input?.name==='missionFileEdit'?await missionFileEditBroker.command(event,input.input):await velaCommand({
           win,
-          dialog,
+          dialog:reviewDialogs,
           call,
           input,
+          reviewProvider,
+          missionFileEditRequest:request=>missionFileEditBroker.prepare(event,request),
           observeNativeRequest: observeVelaRequest,
           offerPlanningByDefault: !verify || verifyAirLocal,
           directMessageSend: !verify || verifyAirLocal || verifyMissions && (process.argv.includes('--missions-api-live-only')||process.argv.includes('--missions-persistence-live-only')),
@@ -763,7 +821,7 @@ app.whenReady().then(async () => {
             throw Error("mission_preview_changed");
           if (!offer.planner) throw Error("mission_planner_unavailable");
           const { model, effort, capabilities, provider } = offer.planner;
-          const choice = await dialog.showMessageBox(win, {
+          const choice = await reviewDialogs.showMessageBox(win, {
             type: "question", buttons: ["Cancel", "Request plan"], defaultId: 0, cancelId: 0,
             title: "Review mission planning request", message: `Send one planning request to ${provider==='openai-api-vela'?'Vela’s dedicated API':'ChatGPT plan'}?`,
             detail: `Model: ${model}${effort ? " · " + effort : ""}\n\nObjective:\n${offer.objective}\n\nCapability descriptions:\n${capabilities.join("\n")}\n\nReview the resulting tasks before starting the mission.`,
@@ -782,7 +840,7 @@ app.whenReady().then(async () => {
           if (!trustedActiveFrame(event)) throw Error("unauthorized_sender");
           if (preview.externalReview) {
             const { provider, model, effort, objective, instructions, webSearch } = preview.externalReview;
-            const choice = await dialog.showMessageBox(win, {
+            const choice = await reviewDialogs.showMessageBox(win, {
               type: "question", buttons: ["Cancel", "Approve reassignment"], defaultId: 0, cancelId: 0,
               title: "Review mission specialist reassignment",
               message: "Apply this reassignment to the paused mission?",
@@ -801,51 +859,7 @@ app.whenReady().then(async () => {
           if (!trustedApplicationFrame(event)) throw Error("unauthorized_sender");
           result = await call("missionRevisionReviewed", { ...revisionInput, fingerprint });
         } else if (input?.name === "start") {
-          const preview = await call("missions", { name: "preview", input: {
-            objective: input.input?.objective, ...(input.input?.agentProfileId ? { agentProfileId: input.input.agentProfileId } : {}),
-            ...(input.input?.proposalId ? { proposalId: input.input.proposalId } : {}),
-            ...(input.input?.teamId ? { teamId: input.input.teamId } : {}),
-          } });
-          if (!preview?.plan || preview.fingerprint !== input.input?.fingerprint) throw Error("mission_preview_changed");
-          let approvedProjectCheck;
-          if (preview.externalReview) {
-            if (preview.executors.some(executor => !executor.available)) throw Error("mission_specialist_unavailable");
-            const { provider, calls } = preview.externalReview;
-            const assignments = preview.plan.tasks.filter(task => task.specialist).map(({ id, objective, criterion, dependencies, specialist }) =>
-              `${id}: ${specialist.role} — ${specialist.provider} · ${specialist.model}${specialist.effort ? " · " + specialist.effort : ""}${specialist.webSearch ? " · public web search" : ""}\nTask: ${objective}\nCriterion: ${criterion}\nVerified prerequisite receipts: ${dependencies.join(', ') || 'none'}\n${specialist.instructions}`);
-            const apiWorkers = preview.plan.tasks.some(task => task.specialist?.provider === 'openai-api-vela');
-            const choice = await dialog.showMessageBox(win, {
-              type: "question", buttons: ["Cancel", preview.localReview ? "Approve specialists" : "Start mission"], defaultId: 0, cancelId: 0,
-              title: "Review specialist mission", message: `Send ${calls} separate requests to ${provider}?`,
-              detail: `Objective sent to each specialist:\n${preview.plan.objective}\n\nInstructions and reviewed inputs:\n${assignments.join("\n\n")}\n\n${apiWorkers ? `API workers receive this objective, task objectives, mission criteria (${preview.plan.criteria.join(', ')}), project/workspace scope identifiers and whole verified receipts from only their named prerequisites. Those future receipt bodies are compiled when prerequisites finish. Each exact request body and context digest is bound to one use and revalidated before dispatch. API workers have no web search, file, notes or chat-history tools. API calls use the dedicated key and authorized usage limits.` : 'The provider may count these requests against your plan. No files, chat history or local measurements are sent.'}`,
-            });
-            if (choice.response !== 1) throw Error("mission_review_declined");
-          }
-          if (preview.localReview) {
-            if (preview.executors.some(executor => !executor.available)) throw Error("mission_project_check_unavailable");
-            const selected = await dialog.showOpenDialog(win, {
-              title: "Choose tracked Node test files in one Git checkout",
-              properties: ["openFile", "multiSelections"],
-              filters: [{ name: "Node test sources", extensions: ["js", "cjs", "mjs", "ts", "mts"] }],
-            });
-            if (selected.canceled || !selected.filePaths.length) throw Error("mission_review_declined");
-            const paths = selected.filePaths;
-            if (paths.length > preview.localReview.maxFiles) throw Error("mission_project_check_selection_limit");
-            const review = await call("missionCheckReview", { paths });
-            const choice = await dialog.showMessageBox(win, {
-              type: "question", buttons: ["Cancel", "Run reviewed mission"], defaultId: 0, cancelId: 0,
-              title: "Review read-only project tests", message: "Run the selected Node tests alongside native measurements?",
-              detail: `Checkout: ${review.cwd}\nCommit: ${review.head}\nArguments: ${JSON.stringify(review.argv)}\n\nCodex runs the selected command in a read-only sandbox with zero model requests. The sandbox requests restricted networking. Effective isolation depends on the installed Windows sandbox mode.`,
-            });
-            if (choice.response !== 1) throw Error("mission_review_declined");
-            approvedProjectCheck = { paths, digest: review.digest };
-          }
-          if (preview.externalReview || approvedProjectCheck) {
-            if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
-              throw Error("unauthorized_sender");
-            if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
-            result = await call("missionStartReviewed", { ...input.input, ...(approvedProjectCheck ? { approvedProjectCheck } : {}) });
-          } else result = await call("missions", input);
+          result = await startReviewedMission({win,event,localURL,storage,call,dialog:reviewDialogs,input});
         } else result = await call("missions", input);
       } else if (
         command === "agents" ||

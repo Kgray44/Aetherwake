@@ -171,6 +171,9 @@ class AudioContextFixture {
   async close() {
     this.state = "closed";
   }
+  createMediaStreamDestination() {
+    return { stream: new Stream([new Track("owned-zero-source")]) };
+  }
   createMediaStreamSource(stream) {
     const source = {
       stream,
@@ -834,4 +837,40 @@ test("offline browser disposal cancels ICE waits promptly and constructor/device
   } finally {
     await unsupported.adapter.dispose();
   }
+});
+
+test('output-only speech never requests or enumerates microphone input, even after provider unmute/device change',async()=>{
+  let micCalls=0,deviceCalls=0;
+  const f=fixture({analysis:true,environment:{getUserMedia:async()=>{micCalls++;throw Error('MIC_FORBIDDEN');},enumerateDevices:async()=>{deviceCalls++;throw Error('ENUM_FORBIDDEN');}}});
+  try{
+    await f.adapter.prepare({outputOnly:true,outputDeviceId:'speaker-A'});
+    const local=f.peers[0].sender.track;
+    assert.equal(local.readyState,'live');assert.equal(local.enabled,false);
+    assert.equal(f.adapter.state().microphoneAccess,'not-requested');assert.equal(f.adapter.state().localSourceMuted,null);
+    assert.deepEqual(await f.adapter.devices(),[]);
+    await assert.rejects(f.adapter.setInputDevice('mic-B'),/invalid_device/);
+    const channel=await f.connect();
+    f.peers[0].channel.receive({type:'session.started',event_id:'started',session:{id:'live-fixture-1'}});await flush();
+    f.adapter.setLocalMute(false);await channel.send({type:'session.input_audio.unmute',event_id:'unmute-output'});
+    f.peers[0].channel.receive({type:'session.input_audio.unmuted',event_id:'unmuted',client_event_id:'unmute-output'});await flush();
+    assert.equal(local.enabled,false);assert.equal(f.adapter.state().localTrackEnabled,false);
+    f.timers.forEach(timer=>timer.callback());assert.equal(f.adapter.state().localSpeech,'unavailable');
+    const remote=new Track('synthetic-remote');f.audios[0].blocked=true;f.peers[0].remote(remote);await flush();
+    assert.equal(f.adapter.state().playback,'blocked');f.audios[0].blocked=false;await f.adapter.resumePlayback();
+    assert.equal(f.adapter.state().humanAudibility,'unverified');
+    await f.adapter.quiesceCapture('live-fixture-1');assert.equal(local.readyState,'ended');assert.equal(remote.readyState,'ended');
+    assert.equal(f.adapter.state().microphoneAccess,'not-requested');await channel.close();
+    assert.equal(f.adapter.state().microphoneAccess,'not-requested');assert(f.contexts.every(context=>context.state==='closed'));
+    assert.equal(micCalls,0);assert.equal(deviceCalls,0);assert(f.states.every(state=>state.microphoneAccess==='not-requested'&&!state.localTrackEnabled));
+  }finally{await f.adapter.dispose();}
+});
+
+test('output-only rejects input options and disposes an outstanding synthetic offer without microphone fallback',async()=>{
+  for(const invalid of [{outputOnly:false},{outputOnly:true,inputDeviceId:'mic-A'},{outputOnly:true,bufferLeaseRef:'lease'}]){
+    const f=fixture({analysis:true});try{await assert.rejects(f.adapter.prepare(invalid),/invalid_device/);assert.equal(f.peers.length,0);assert.equal(f.constraints.length,0);}finally{await f.adapter.dispose();}
+  }
+  let peer;const f=fixture({analysis:true,environment:{createPeer:()=>{peer=new Peer();peer.iceGatheringState='gathering';return peer;}}});
+  const preparing=f.adapter.prepare({outputOnly:true});await flush();const local=peer.sender.track;
+  await f.adapter.dispose();await assert.rejects(preparing,/replaced/);assert.equal(local.readyState,'ended');
+  assert.equal(f.constraints.length,0);assert.equal(f.adapter.state().microphoneAccess,'not-requested');assert(f.contexts.every(context=>context.state==='closed'));
 });

@@ -1,0 +1,32 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';
+import {createWindowsMaintenanceClient,createWindowsMaintenanceServer,validWindowsMaintenanceRequest} from '../src/windows-maintenance-host.mts';
+import {validWindowsMemorySnapshot,validWindowsProcessInspection,validWindowsReclaimReceipt,validWindowsMaintenanceNativeResult,WINDOWS_MEMORY_POLICY,type WindowsMemorySnapshot} from '../../application-contract/windows-maintenance.ts';
+const snapshot=():WindowsMemorySnapshot=>({contract:'aerynth.windows.memory@1',snapshotId:randomUUID(),observedAt:new Date().toISOString(),sampleDurationMs:1,physicalTotalBytes:16*2**30,physicalAvailableBytes:8*2**30,systemCommitBytes:8*2**30,systemCommitLimitBytes:32*2**30,systemCommitHeadroomBytes:24*2**30,systemCacheBytes:4*2**30,lowMemoryNotification:false,pressure:'healthy',policyVersion:WINDOWS_MEMORY_POLICY,source:'windows-native'});
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+test('private maintenance protocol carries verified memory observations and redacted process refs only',async()=>{
+ const seen:string[]=[];let client:ReturnType<typeof createWindowsMaintenanceClient>;const server=createWindowsMaintenanceServer({diagnose:async()=>{seen.push('diagnose');return snapshot();},inspect:async input=>({contract:'aerynth.windows.processes@1',snapshotId:input.snapshotId,observedAt:new Date().toISOString(),scanned:1,unavailable:0,partial:false,processes:[{ref:randomUUID(),workingSetBytes:64*2**20,privateCommitBytes:128*2**20,eligibility:'native-selection-required'}]})},message=>client.handle(message));client=createWindowsMaintenanceClient(message=>server.handle(message));
+ try{const memory=await client.services.diagnose({});assert(validWindowsMemorySnapshot(memory));const processes=await client.services.inspect({snapshotId:memory.snapshotId,limit:16});assert(validWindowsProcessInspection(processes));assert.equal(processes.processes.length,1);assert.equal(seen.length,1);assert(!/pid|name|image|sid|handle/iu.test(JSON.stringify(processes)));}finally{client.close();server.close();}
+});
+test('closed schemas reject mutation operations, forged authority and private names in source observations',()=>{
+ const id=randomUUID();for(const operation of ['prepare','apply','reclaim','review'])assert.equal(validWindowsMaintenanceRequest({memoryHost:{version:1,kind:'request',id,operation,input:{}}}),false);
+ assert.equal(validWindowsMaintenanceRequest({memoryHost:{version:1,kind:'request',id,operation:'diagnose',input:{allow:true}}}),false);
+ assert.equal(validWindowsMaintenanceRequest({memoryHost:{version:1,kind:'request',id,operation:'inspect',input:{snapshotId:id,limit:17}}}),false);
+ const value=snapshot();assert(validWindowsMemorySnapshot(value));for(const changed of [{...value,pid:42},{...value,pressure:'pressured'},{...value,source:'model-reported'},{...value,physicalAvailableBytes:-1},{...value,systemCommitHeadroomBytes:1}])assert.equal(validWindowsMemorySnapshot(changed),false);
+ let reads=0;assert.equal(validWindowsMemorySnapshot({...value,get private(){reads++;return 'secret';}}),false);assert.equal(reads,0);
+});
+test('client abort cancels private work, late results cannot settle again and errors never expose private details',async()=>{
+ const messages:any[]=[];const client=createWindowsMaintenanceClient(message=>messages.push(message));try{const controller=new AbortController(),pending=client.services.diagnose({},controller.signal);controller.abort();await assert.rejects(pending,/memory_cancelled/);assert.equal(messages[1].memoryHost.kind,'cancel');client.handle({memoryHost:{...messages[0].memoryHost,kind:'response',result:snapshot()}});
+ const next=client.services.diagnose({});const h=messages.at(-1).memoryHost;client.handle({memoryHost:{version:1,kind:'response',id:h.id,operation:h.operation,error:'C:\\private\\secret'}});await assert.rejects(next,{message:'memory_native_unavailable'});
+ }finally{client.close();}
+});
+test('bounded concurrent requests and server cancellation never create a mutation path',async()=>{
+ let resolve!:(v:WindowsMemorySnapshot)=>void,aborted=false,calls=0;let client:ReturnType<typeof createWindowsMaintenanceClient>;const server=createWindowsMaintenanceServer({diagnose:async(_input,signal)=>{calls++;signal?.addEventListener('abort',()=>{aborted=true;});return await new Promise(r=>{resolve=r;});},inspect:async()=>{throw Error('unexpected');}},value=>client.handle(value));client=createWindowsMaintenanceClient(value=>server.handle(value));
+ try{const controller=new AbortController(),one=client.services.diagnose({},controller.signal);await tick();controller.abort();await assert.rejects(one,/memory_cancelled/);assert(aborted);resolve(snapshot());await tick();assert.equal(calls,1);
+ const a=client.services.diagnose({}),b=client.services.diagnose({});void a.catch(()=>{});void b.catch(()=>{});await assert.rejects(client.services.diagnose({}),/memory_native_capacity/);client.close();await assert.rejects(a);await assert.rejects(b);
+ }finally{client.close();server.close();}
+});
+test('receipt verification refuses invented benefit, identity disclosure and operation rebinding',()=>{
+ const before=snapshot(),operationId=randomUUID(),binding={contract:'aerynth.windows.maintenance-review@1' as const,operationId,expectedVersion:1,requestId:randomUUID(),workflowId:randomUUID(),snapshotId:before.snapshotId,scopeDigest:'a'.repeat(64),operationDigest:'b'.repeat(64),policyVersion:WINDOWS_MEMORY_POLICY};
+ const receipt={contract:'aerynth.windows.reclaim-receipt@1' as const,id:randomUUID(),operationId,operationDigest:binding.operationDigest,snapshotId:before.snapshotId,claimId:null,approvalDigest:null,observedAt:new Date().toISOString(),state:'no-op' as const,reason:'memory-healthy' as const,targetCount:0 as const,identityDigest:null,nativeCallSucceeded:null,before,after:null,workingSetBeforeBytes:null,workingSetAfterBytes:null,privateCommitBeforeBytes:null,privateCommitAfterBytes:null,workingSetReductionBytes:null,physicalAvailableDeltaBytes:null,verificationSource:'windows-native' as const};
+ assert(validWindowsReclaimReceipt(receipt));assert(validWindowsMaintenanceNativeResult({binding,receipt}));assert.equal(validWindowsReclaimReceipt({...receipt,state:'observed',reason:'working-set-reduced'}),false);assert.equal(validWindowsReclaimReceipt({...receipt,processName:'private'}),false);assert.equal(validWindowsMaintenanceNativeResult({binding,receipt:{...receipt,operationId:randomUUID()}}),false);
+});

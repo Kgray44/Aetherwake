@@ -33,6 +33,12 @@ export interface ApiContinuation {
     readonly sourceOutcome: 'completed'; readonly itemsDigest: string;
     readonly items: readonly ApiResponseItem[];
     readonly toolOutputs: readonly ApiToolOutput[];
+    /** Native-approved owner receipt; changes current context without rewriting source provenance. */
+    readonly contextTransition?: ApiContextTransition;
+}
+export interface ApiContextTransition {
+    readonly priorContextDigest: string; readonly nextContextDigest: string;
+    readonly ownerReceiptId: string; readonly sourceProofDigest: string;
 }
 export interface VelaApiTurnOptions {
     readonly configurationVersion: number;
@@ -42,6 +48,8 @@ export interface VelaApiTurnOptions {
     /** Explicit host-configured controls. Native authorize must verify this model/configuration policy. */
     readonly reasoningEfforts?: readonly ReasoningEffort[];
     readonly tools?: readonly ReviewedApiFunction[];
+    /** Native workflow opt-in. Multiple proposals grant no parallel execution authority. */
+    readonly parallelToolCalls?: true;
     readonly outputFormat?: { readonly type: 'json_schema'; readonly name: string; readonly schema: ApiJsonSchema; readonly strict: true };
     readonly continuation?: ApiContinuation;
     /** Reusable prompt references are legacy compatibility only. Prefer code-versioned instructions. */
@@ -54,10 +62,12 @@ export interface ApiDispatchBinding {
     readonly configurationVersion: number; readonly instructionVersion: string;
     readonly reasoningEfforts?: readonly ReasoningEffort[];
     readonly tools: readonly { readonly name: string; readonly schemaDigest: string; readonly authorizationRef: string }[];
+    readonly parallelToolCalls?: true;
     readonly retention?: VelaApiTurnOptions['retention'];
     readonly continuation?: {
         readonly sourceExecutionId: string; readonly responseId: string; readonly contextDigest: string; readonly itemsDigest: string;
         readonly toolOutputs: readonly { readonly callId: string; readonly name: string; readonly argumentsDigest: string; readonly outputDigest: string; readonly receiptId: string }[];
+        readonly contextTransition?: ApiContextTransition;
     };
 }
 export interface ApiFunctionCall {

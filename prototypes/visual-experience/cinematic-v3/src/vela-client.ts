@@ -34,6 +34,8 @@ export function createVelaClient(options: {
         "fileProposal",
         "pickSources",
         "applyFileEdit",
+        "missionFileEdit",
+        "hostOperation",
         "verifyFileEdit",
         "reconcileFileEdit",
         "reconcileProviderTurn",
@@ -51,6 +53,8 @@ export function createVelaClient(options: {
     return result as T;
   };
   return {
+    hostOperation:input=>invoke('hostOperation',input),
+    missionFileEdit:input=>invoke('missionFileEdit',input),
     state: () => invoke("state", {}),
     open: () => invoke("open", {}),
     search: (input) => invoke("search", input),

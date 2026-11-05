@@ -86,6 +86,42 @@ test('a verified result is concise, counts only this request and opens its canon
   panel.dispose();
 });
 
+test('native review uses only its operation reference and counts verified jobs only for the current request',async()=>{
+  const doc=new Document(),root=doc.createElement('main'),canonical=state(),calls:unknown[]=[];
+  canonical.requests=[request({state:'responded',providerId:null,nativeResponse:{schemaVersion:1,classification:'observed'},response:{kind:'answer',messageId:'message:host'}})];
+  canonical.conversation!.messages=[{id:'message:host',requestId:'request:synthetic',role:'assistant',content:'Review the selected window before I change it.',source:'vela-native',classification:'observed',responseKind:'answer'}];
+  const pending:NonNullable<VelaState['hostOperations']>[number]={id:'operation:current',requestId:'request:synthetic',workflowId:'workflow:current',capabilityId:'windows.computer.prepare',state:'awaiting-review',title:'Window control',summary:'Review options',reviewAvailable:true};
+  canonical.hostOperations=[{...pending,id:'operation:older',requestId:'request:older',state:'observed',reviewAvailable:false,receiptId:'receipt:older',jobsDone:50},pending];
+  const panel=mountVelaPanel(root as unknown as HTMLElement,clientFor(async()=>canonical,{hostOperation:async input=>{
+    calls.push(input);pending.state='observed';pending.reviewAvailable=false;pending.receiptId='receipt:current';pending.jobsDone=1;
+    canonical.hostOperations!.push({...pending,id:'operation:duplicate'}, {...pending,id:'operation:scope-only',receiptId:'receipt:scope',jobsDone:0});
+    canonical.conversation!.messages[0].content='Moved the selected window.';return pending;
+  }}));
+  await settles(()=>!!named(root,'Review options'));assert.equal(root.find(node=>node.className==='vela-mission-jobs-done'),undefined);
+  named(root,'Review options').fire('click');await settles(()=>calls.length===1&&!!root.find(node=>node.className==='vela-mission-jobs-done'));
+  assert.deepEqual(calls,[{operationId:'operation:current'}]);assert.equal(root.find(node=>node.className==='vela-mission-jobs-done')!.textContent,'1 job done');
+  assert.equal(named(root,'Review options'),undefined);
+  canonical.requests.push(request({id:'request:new',state:'responded',providerId:null,nativeResponse:{schemaVersion:1,classification:'observed'},response:{kind:'answer',messageId:'message:new'}}));
+  canonical.conversation!.messages.push({id:'message:new',requestId:'request:new',role:'assistant',content:'Hello.',source:'vela-native',classification:'observed',responseKind:'answer'});
+  await panel.refresh();assert.equal(root.find(node=>node.className==='vela-mission-jobs-done'),undefined,'previous request jobs cannot carry into a new response');panel.dispose();
+});
+
+test('completed typed replies expose one speak icon and stop only the same speech attempt without resending text',async()=>{
+ const doc=new Document(),root=doc.createElement('main'),canonical=state(),spoken:unknown[]=[],stopped:string[]=[];let turns=0;
+ const message={id:'message:reply',role:'assistant' as const,requestId:'request:synthetic',content:'Here is your answer.',source:'provider' as const,providerId:'openai-api-vela',classification:'reported' as const,responseKind:'answer' as const,providerContribution:{providerId:'openai-api-vela',classification:'reported' as const,executionId:'execution:synthetic'}};
+ canonical.requests=[request({state:'responded',providerId:'openai-api-vela',response:{kind:'answer',messageId:message.id}})];canonical.conversation!.messages=[message];
+ let listener:((value:{active:boolean;microphoneOn:boolean;speaking:boolean;speech?:{state:string;messageId:string|null;attemptId:string|null;contentDigest:string|null}})=>void)|undefined;
+ const panel=mountVelaPanel(root as unknown as HTMLElement,clientFor(async()=>canonical,{request:async()=>{turns++;return request();}}),{
+  voice:{element:doc.createElement('section') as unknown as HTMLElement,setVisible(){},start:async()=>{},speak:async value=>{spoken.push(value);listener?.({active:true,microphoneOn:false,speaking:true,speech:{state:'speaking',messageId:message.id,attemptId:'speech:exact',contentDigest:'a'.repeat(64)}});},stopSpeech:async id=>{stopped.push(id);},subscribe:fn=>{listener=fn;return ()=>{listener=undefined;};}}
+ });
+ await settles(()=>!!named(root,'Speak response'));assert.equal(spoken.length,0,'hydration never speaks automatically');
+ named(root,'Speak response').fire('click');await settles(()=>!!named(root,'Stop speaking'));
+ assert.deepEqual(spoken,[{id:message.id,content:message.content}]);named(root,'Stop speaking').fire('click');await settles(()=>stopped.length===1);
+ assert.deepEqual(stopped,['speech:exact']);assert.equal(turns,0);assert.equal(canonical.conversation!.messages.length,1);
+ listener?.({active:true,microphoneOn:false,speaking:true,speech:{state:'speaking',messageId:'message:other',attemptId:'speech:other',contentDigest:'b'.repeat(64)}});
+ assert.ok(named(root,'Speak response'));assert.equal(named(root,'Stop speaking'),undefined,'another session cannot be stopped by this reply icon');panel.dispose();
+});
+
 test('voice remains behind its icon and typed talk starts once through the native port without a parallel text turn', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(), calls: string[] = [], visibility: boolean[] = [];
   let textTurns = 0, release!: () => void;
@@ -134,7 +170,7 @@ test('dedicated file icon selects a whole folder once for the next message witho
   await settles(()=>turns.length===1);assert.deepEqual(turns[0].resourceIds,['folder:one']);assert.deepEqual(turns[0].resourceRefs,[{id:'folder:one',kind:'resource',resourceKind:'folder',title:'Project docs',version:2,projectId:null}]);panel.dispose();
 });
 
-test('a polite investigation uses mission admission while a simple greeting stays an ordinary turn', async () => {
+test('ordinary investigations reach the canonical intelligence request without a pre-model mission classifier', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(), previews: string[] = [], turns: string[] = [];
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, { request: async input => { turns.push(input.intent); return request(); } }), {
     missions: { element: doc.createElement('section') as unknown as HTMLElement, preview: async intent => { previews.push(intent); return null; }, review() { throw Error('No mission was proposed'); }, setVisible() {} },
@@ -143,9 +179,12 @@ test('a polite investigation uses mission admission while a simple greeting stay
   const composer = root.find(node => node.tagName === 'textarea')!;
   composer.value = 'Can you investigate why the Minecraft server is lagging?'; composer.fire('input'); composer.fire('keydown', { key: 'Enter' });
   await settles(() => turns.length === 1 && root.find(node => node.className === 'vela-core-status')!.dataset.requestState !== 'submitting');
-  assert.deepEqual(previews, ['Can you investigate why the Minecraft server is lagging?']);
+  assert.deepEqual(previews, []);
   composer.value = 'Hello Vela'; composer.fire('input'); composer.fire('keydown', { key: 'Enter' });
-  await settles(() => turns.length === 2); assert.equal(previews.length, 1); panel.dispose();
+  await settles(() => turns.length === 2 && root.find(node => node.className === 'vela-core-status')!.dataset.requestState !== 'submitting'); assert.equal(previews.length, 0);
+  const unfamiliar='My computer feels like it is wading through mud; work out what is going on.';
+  composer.value=unfamiliar;composer.fire('input');composer.fire('keydown',{key:'Enter'});
+  await settles(()=>turns.length===3);assert.deepEqual(previews,[]);assert.equal(turns[2],unfamiliar);panel.dispose();
 });
 
 test('saved routing controls show origins, preserve preferences when editing limits and offer one-send Auto', async () => {
@@ -268,6 +307,29 @@ test('terminal status survives request completion and refresh; connection probe 
   form.fire('submit'); await settles(() => status.dataset.actionState === 'failed' && status.dataset.requestState === 'unknown');
   await panel.refresh(); assert.match(status.textContent, /outcome is unknown/); assert.equal(status.dataset.actionState, undefined);
   panel.dispose(); assert.equal(root.children.length, 0);
+});
+
+test('a timed-out API reply stays unknown with concise visible text and no fabricated completion', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.requests = [request({state:'unknown',errorCode:'provider_timeout',providerId:'openai-api-vela',
+    route:{kind:'conversational',depth:'quick',reason:'routine-answer',model:'gpt-6-luna'}})];
+  const before=structuredClone(canonical);
+  const panel=mountVelaPanel(root as unknown as HTMLElement,clientFor(async()=>canonical));
+  await settles(()=>root.find(node=>node.className==='vela-core-status')!.dataset.requestState==='unknown');
+  assert.equal(root.find(node=>node.className==='vela-core-status')!.textContent,'That reply timed out.');
+  assert.equal(root.find(node=>node.className==='vela-manifestation-kicker')!.hidden,true,'routing metadata stays behind details even when a reply fails');
+  assert.equal(root.find(node=>node.className==='vela-mission-jobs-done'),undefined);
+  assert.deepEqual(canonical,before,'presentation cannot rewrite the durable unknown request');
+  panel.dispose();
+  for(const patch of [{planId:'unresolved-plan'},{route:{kind:'app-planning',reason:'reviewed-app-action'}},
+    {errorCode:'provider_transport_unavailable'},{providerId:'codex-app-server'}] as Partial<VelaRequest>[]){
+    canonical.requests=[{...before.requests[0],...patch}];
+    assert.match(velaPanelStatus(canonical).message,/outcome is unknown/);
+  }
+  canonical.requests=before.requests;
+  canonical.receipts=[{id:'receipt:prior',requestId:before.requests[0].id,planId:'plan:prior',stepId:'step:prior',
+    commandId:'command:prior',source:'vela',providerId:'synthetic',state:'applied',startedAt:manifest.createdAt,hostReceiptId:'host:prior',taskVerified:false}];
+  assert.match(velaPanelStatus(canonical).message,/outcome is unknown/,'effect-bearing requests retain the cautious outcome message');
 });
 
 test('status distinguishes review, applied receipts, partial failure and unknown outcomes without asserting delegated task completion', () => {

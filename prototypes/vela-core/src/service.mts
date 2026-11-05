@@ -45,6 +45,9 @@ export interface VelaServiceOptions {
   host: VelaHostPort; planner?: VelaPlanningPort;
   /** Cheap trusted local metadata/system clock and one-message recovery. Never provider context or model access. */
   local?: VelaLocalHost;
+  /** Host-certified same-request completion context after exact owner effects.
+   * The original accepted snapshot remains immutable historical evidence. */
+  providerContextAdvance?(requestId:string):{context:ContextManifest;historyFence?:HistoryFence;navigation:{currentProjectId:string|null;currentWorkspaceId:string|null};validate():void}|undefined;
   /** Explicit bounded canonical projections. Absent means no implicit conversational history. */
   history?: {
     snapshot(conversationId: string, limit: number, query?: string): HistorySnapshot | null;
@@ -680,7 +683,10 @@ export class VelaService {
     if (routed?.handoff) check(identifier(routed.handoff.taskId) && reviewed?.historyFence?.historyDigest === routed.handoff.contextDigest &&
       routed.handoff.destinationProviderId === planner?.providerId, 'invalid_vela_handoff');
     let acceptedAppend: AcceptedHistoryAppend | undefined;
+    let completionContext:ReturnType<NonNullable<VelaServiceOptions['providerContextAdvance']>>;
     const validate = (phase: 'before-append' | 'before-provider' | 'before-response') => {
+      if(phase==='before-response')completionContext=this.opts.providerContextAdvance?.(request.id);
+      if(completionContext){completionContext.validate();this.validateProviderHistory(completionContext);return;}
       if (reviewed) { this.validateProviderHistory(reviewed, { ...(acceptedAppend ? { acceptedAppend } : {}) }); frozen!.validate(phase, acceptedAppend); }
     };
     let providerContext!: ContextManifest;
@@ -736,11 +742,12 @@ export class VelaService {
         const active = this.getRequest(request.id); if (controller.signal.aborted || active.state !== 'planning') return;
         validate('before-response');
         // Never retain a rejected provider body from a request whose reviewed scope has changed.
-        check(digest(this.contextIdentity()) === digest(navigation), 'stale_context_scope');
+        check(digest(this.contextIdentity()) === digest(completionContext?.navigation??navigation), 'stale_context_scope');
         // This transaction fences the actual canonical message/plan and request together after inference.
         const currentScope = this.scope();
         check(currentScope.policyVersion === scope.policyVersion && currentScope.principalId === scope.principalId, 'stale_policy_version');
-        for (const ref of active.context.included) check(this.resolve(ref.id, ref.kind, currentScope).version === ref.version, 'stale_context_version');
+        const responseContext=completionContext?.context??active.context;
+        for (const ref of responseContext.included) check(this.resolve(ref.id, ref.kind, currentScope).version === ref.version, 'stale_context_version');
         let parsed;
         try { parsed = validateProviderResult(proposal, planner.providerId); }
         catch (e) {
@@ -761,8 +768,8 @@ export class VelaService {
             this.append('Proposed plan from ' + planner.providerId + ': ' + parsed.summary + '\nReview the typed actions before applying them.', active.id, 'provider', plan);
           }
         } else {
-          for (const ref of active.context.discovered) check(this.resolve(ref.id, ref.kind, currentScope).version === ref.version, 'stale_context_version');
-          for (const entry of active.context.included) {
+          for (const ref of responseContext.discovered) check(this.resolve(ref.id, ref.kind, currentScope).version === ref.version, 'stale_context_version');
+          for (const entry of responseContext.included) {
             const content = this.opts.host.readContent(entry.id, currentScope);
             check(content, 'context_content_unavailable');
             check(content.ref.id === entry.id && content.ref.kind === entry.kind && content.ref.version === entry.version && content.source === entry.source && digest(content.content) === entry.contentDigest, 'stale_context_version');
@@ -846,6 +853,38 @@ export class VelaService {
     if(!receipt||receipt.state!=='applied'||!proof||receipt.createdWorkspaceId!==proof.workspaceId||plan?.steps.length!==1||
       !proof.verification.workspaceExists||!proof.verification.bindingsMatch||!proof.verification.geometryValid)return null;
     return {receiptId:receipt.id,workspaceId:proof.workspaceId,projectId:proof.projectId};
+  }
+  /** Host-only typed proposal on the existing canonical user request. */
+  prepareToolAction(requestId:string,action:VelaNativeAction,summary:string):VelaPlan {
+    return this.prepareToolActions(requestId,[action],summary);
+  }
+  prepareToolActions(requestId:string,actions:unknown[],summary:string):VelaPlan {
+    check(Array.isArray(actions)&&actions.length>0&&actions.length<=6&&text(summary,1000),'invalid_vela_tool_actions');const parsed=actions.map(validateAction);
+    return this.atomic(()=>{const request=this.getRequest(requestId);check(request.providerId==='openai-api-vela'&&request.state==='planning','vela_tool_request_unavailable');
+      check(!request.planId||this.getPlan(request.planId).state!=='prepared','vela_tool_review_pending');
+      const phase=request.state,plan=this.prepare(request,summary,parsed.map((action,index)=>({id:'tool-'+(index+1),explanation:'Typed source-owned capability proposal',action})),null);request.state=phase;return structuredClone(plan);});
+  }
+  /** Existing standing host policy, not a model-supplied permission or native approval. */
+  canExecuteToolActions(actions:unknown[]):boolean {
+    try{return actions.length>0&&actions.length<=6&&actions.map(validateAction).every(action=>{
+      const descriptor=CAPABILITIES.find(c=>c.id===action.type);return descriptor?.authorization==='host-policy'&&descriptor.effect!=='provider-execution'&&!(action.type==='clockTimer'&&clockTimerRequiresReview(action));
+    });}catch{return false;}
+  }
+  async executeToolActions(requestId:string,actions:unknown[],summary:string):Promise<VelaPlan> {
+    check(this.canExecuteToolActions(actions),'vela_tool_action_review_required');const plan=this.prepareToolActions(requestId,actions,summary);
+    this.review({planId:plan.id,fingerprint:plan.fingerprint,decision:'approve'});const result=await this.apply(plan.id);
+    if(result.state==='applied')this.atomic(()=>{const request=this.getRequest(requestId);request.state='planning';request.updatedAt=this.now();});return result;
+  }
+  checkpointToolRequest(requestId:string,workflowId:string,phase:import('../../application-contract/vela-tools.ts').VelaWorkflowPhase,reason?:string):void {
+    this.atomic(()=>{const r=this.getRequest(requestId);check(r.providerId==='openai-api-vela','vela_tool_request_unavailable');r.toolWorkflow={id:workflowId,phase,...(reason?{reason}:{})};
+      if(['awaiting-review','waiting-job','budget-exhausted','blocked','clarification','unknown'].includes(phase)){r.state=phase==='unknown'?'unknown':phase==='awaiting-review'?'awaiting-review':'native-ready';r.updatedAt=this.now();}});
+  }
+  async resumeToolRequest(requestId:string,work:()=>Promise<unknown>):Promise<VelaRequest> {
+    const request=this.getRequest(requestId);check(request.providerId==='openai-api-vela'&&request.toolWorkflow&&['awaiting-review','waiting-job','budget-exhausted','partial'].includes(request.toolWorkflow.phase),'vela_tool_resume_unavailable');
+    this.atomic(()=>{request.state='planning';request.updatedAt=this.now();});
+    try{const output=await work();if(this.getRequest(requestId).state!=='planning')return structuredClone(this.getRequest(requestId));
+      return this.atomic(()=>{const parsed=validateProviderResult(output,'openai-api-vela');check(parsed.kind!=='plan','vela_tool_resume_plan_unavailable');const message=this.append(parsed.content,requestId,'provider',undefined,parsed);request.response={kind:parsed.kind,messageId:message.id,contentDigest:historyDigest(parsed.content)};request.state='responded';request.updatedAt=this.now();return structuredClone(request);});
+    }catch(error){this.atomic(()=>{request.state=error instanceof VelaError&&error.outcome==='unknown'?'unknown':'failed';request.errorCode=errorCode(error,'vela_tool_resume_failed');request.updatedAt=this.now();});return structuredClone(request);}
   }
   native(input: { intent: string; action: VelaNativeAction }): VelaPlan {
     check(text(input.intent, 16000), 'invalid_request'); const action = validateAction(input.action);

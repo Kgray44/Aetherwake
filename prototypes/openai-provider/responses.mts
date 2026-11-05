@@ -109,7 +109,7 @@ function apiToolCall(item: Extract<ApiResponseItem, { type: 'function_call' }>, 
 function prepareApi(input: TurnInput): { wire: Record<string, unknown>; binding: ApiDispatchBinding } | undefined {
     if (!Object.hasOwn(input, 'api')) return;
     const api = input.api;
-    requireValue(input.providerId === 'openai-api-vela' && input.assistant === 'vela' && fields(api, ['configurationVersion', 'instructionVersion', 'maxOutputTokens'], ['reasoningEfforts', 'tools', 'outputFormat', 'continuation', 'prompt', 'cache', 'retention']), 'invalid_api_turn');
+    requireValue(input.providerId === 'openai-api-vela' && input.assistant === 'vela' && fields(api, ['configurationVersion', 'instructionVersion', 'maxOutputTokens'], ['reasoningEfforts', 'tools', 'parallelToolCalls', 'outputFormat', 'continuation', 'prompt', 'cache', 'retention']), 'invalid_api_turn');
     boundedJsonValue(api, RESPONSES_REQUEST_BYTES);
     requireValue(Number.isSafeInteger(api.configurationVersion) && api.configurationVersion > 0 && text(api.instructionVersion) && Number.isSafeInteger(api.maxOutputTokens) && api.maxOutputTokens > 0 && api.maxOutputTokens <= VELA_API_MAX_OUTPUT_TOKENS, 'invalid_api_turn');
     if (api.reasoningEfforts !== undefined) requireValue(Array.isArray(api.reasoningEfforts) && api.reasoningEfforts.length <= 6 && new Set(api.reasoningEfforts).size === api.reasoningEfforts.length && api.reasoningEfforts.every(effort => ['none', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort)), 'unsupported_reasoning_effort');
@@ -121,12 +121,14 @@ function prepareApi(input: TurnInput): { wire: Record<string, unknown>; binding:
         requireValue(tool.schemaDigest === digest(JSON.stringify(tool.definition)), 'api_tool_schema_changed');
     }
     requireValue(new Set(tools.map(tool => tool.definition.name)).size === tools.length, 'invalid_api_tools');
+    if(api.parallelToolCalls!==undefined)requireValue(api.parallelToolCalls===true&&tools.length>0,'invalid_api_tools');
     let binding: ApiDispatchBinding = { configurationVersion: api.configurationVersion, instructionVersion: api.instructionVersion,
         ...(api.reasoningEfforts === undefined ? {} : { reasoningEfforts: [...api.reasoningEfforts] }),
         tools: tools.map(tool => ({ name: tool.definition.name, schemaDigest: tool.schemaDigest, authorizationRef: tool.authorizationRef })),
+        ...(api.parallelToolCalls?{parallelToolCalls:true as const}:{}),
         ...(api.retention === undefined ? {} : { retention: structuredClone(api.retention) }) };
     const wire: Record<string, unknown> = { max_output_tokens: api.maxOutputTokens,
-        ...(tools.length ? { tools: tools.map(tool => tool.definition), tool_choice: 'auto', parallel_tool_calls: false } : {}) };
+        ...(tools.length ? { tools: tools.map(tool => tool.definition), tool_choice: 'auto', parallel_tool_calls: api.parallelToolCalls===true } : {}) };
     if (api.outputFormat !== undefined) {
         requireValue(fields(api.outputFormat, ['type', 'name', 'schema', 'strict']) && api.outputFormat.type === 'json_schema' && functionName(api.outputFormat.name) && api.outputFormat.strict === true, 'invalid_api_output_format');
         strictSchema(api.outputFormat.schema); wire.text = { format: api.outputFormat };
@@ -150,7 +152,10 @@ function prepareApi(input: TurnInput): { wire: Record<string, unknown>; binding:
     }
     if (api.continuation !== undefined) {
         const continuation = api.continuation;
-        requireValue(fields(continuation, ['sourceExecutionId', 'responseId', 'configurationVersion', 'contextDigest', 'sourceOutcome', 'itemsDigest', 'items', 'toolOutputs']) && text(continuation.sourceExecutionId) && continuation.sourceExecutionId !== input.executionId && text(continuation.responseId, 256) && continuation.configurationVersion === api.configurationVersion && sha(continuation.contextDigest) && continuation.sourceOutcome === 'completed' && sha(continuation.itemsDigest) && Array.isArray(continuation.items) && continuation.items.length > 0 && Array.isArray(continuation.toolOutputs) && continuation.toolOutputs.length <= 16 && input.messages.length + continuation.items.length + continuation.toolOutputs.length <= RESPONSES_MESSAGE_LIMIT, 'invalid_api_continuation');
+        requireValue(fields(continuation, ['sourceExecutionId', 'responseId', 'configurationVersion', 'contextDigest', 'sourceOutcome', 'itemsDigest', 'items', 'toolOutputs'], ['contextTransition']) && text(continuation.sourceExecutionId) && continuation.sourceExecutionId !== input.executionId && text(continuation.responseId, 256) && continuation.configurationVersion === api.configurationVersion && sha(continuation.contextDigest) && continuation.sourceOutcome === 'completed' && sha(continuation.itemsDigest) && Array.isArray(continuation.items) && continuation.items.length > 0 && Array.isArray(continuation.toolOutputs) && continuation.toolOutputs.length <= 16 && input.messages.length + continuation.items.length + continuation.toolOutputs.length <= RESPONSES_MESSAGE_LIMIT, 'invalid_api_continuation');
+        const transition=continuation.contextTransition;
+        if(continuation.contextDigest!==input.contextDigest)requireValue(fields(transition,['priorContextDigest','nextContextDigest','ownerReceiptId','sourceProofDigest'])&&transition.priorContextDigest===continuation.contextDigest&&transition.nextContextDigest===input.contextDigest&&sha(transition.priorContextDigest)&&sha(transition.nextContextDigest)&&sha(transition.sourceProofDigest)&&typeof transition.ownerReceiptId==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(transition.ownerReceiptId),'api_context_transition_required');
+        else requireValue(transition===undefined,'invalid_api_context_transition');
         requireValue(digest(JSON.stringify(continuation.items)) === continuation.itemsDigest, 'api_continuation_changed');
         const items = continuation.items.map(item => apiItem(item, binding.tools));
         const calls = items.filter((item): item is Extract<ApiResponseItem, { type: 'function_call' }> => item.type === 'function_call');
@@ -162,7 +167,7 @@ function prepareApi(input: TurnInput): { wire: Record<string, unknown>; binding:
         }
         wire.input = [...input.messages.map(({ role, content }) => ({ role, content })), ...items, ...continuation.toolOutputs.map(output => ({ type: 'function_call_output', call_id: output.callId, output: output.output }))];
         binding = { ...binding, continuation: { sourceExecutionId: continuation.sourceExecutionId, responseId: continuation.responseId, contextDigest: continuation.contextDigest, itemsDigest: continuation.itemsDigest,
-            toolOutputs: continuation.toolOutputs.map(output => ({ callId: output.callId, name: output.name, argumentsDigest: output.argumentsDigest, outputDigest: digest(output.output), receiptId: output.receiptId })) } };
+            toolOutputs: continuation.toolOutputs.map(output => ({ callId: output.callId, name: output.name, argumentsDigest: output.argumentsDigest, outputDigest: digest(output.output), receiptId: output.receiptId })),...(transition?{contextTransition:structuredClone(transition)}:{}) } };
     }
     return { wire, binding };
 }

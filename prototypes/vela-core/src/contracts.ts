@@ -188,6 +188,7 @@ export interface VelaPlanningPort {
 export type RequestState = 'planning' | 'checking' | 'awaiting-review' | 'native-ready' | 'provider-unavailable' | 'invalid-plan' | 'failed' | 'cancelled' | 'unknown' | 'completed' | 'responded';
 export type VelaProviderRecovery = { state: 'provider_completed' | 'failed' | 'interrupted'; observedAt: string };
 export interface VelaRequest {
+  toolWorkflow?:{id:string;phase:import('../../application-contract/vela-tools.ts').VelaWorkflowPhase;reason?:string};
   id: string; conversationId: string; intent: string; state: RequestState;
   createdAt: string; updatedAt: string; providerId: string | null;
   nativeAttachment?:{id:string;workspaceId:string;layoutBefore:number;layoutAfter:number;resources:ResourceRef[];addedCount:number;existingCount:number;verified:true;searchReceiptId?:string};
@@ -389,12 +390,14 @@ export interface VelaPickedSource {id:string;kind:'file'|'folder';title:string;v
 export interface VelaPickedSources {resources:VelaPickedSource[];desktop?:unknown}
 export interface VelaPickSourcesInput {kind:'files'|'folder';destination:'context'|'workspace'}
 export interface VelaState {
+  hostOperations?:import('../../application-contract/vela-tools.ts').VelaHostOperationView[];
   contract: typeof VELA_CONTRACT; identity: { id: 'system:vela'; name: 'Vela'; role: 'application-assistant' };
   conversation: CanonicalConversation | null;
   planner: { providerId: string | null; available: boolean; busy: boolean; reason?: string };
   planningProviders?: { providerId: string; available: boolean }[];
   routingSettings?: import('./routing-settings.ts').VelaRoutingSettingsView;
   fileEdits?: VelaFileEditView[];
+  missionFileEdits?: import('../../application-contract/mission-file-edits.ts').MissionFileEditView[];
   fileProposals?: VelaFileProposal[];
   recoverableProviderRequestIds?: string[];
   /** Bounded transient excerpt of the active conversational response. */
@@ -452,6 +455,8 @@ export interface AdaptationState {
   applicationAvailable: boolean;
 }
 export interface VelaClient {
+  hostOperation?(input:{operationId:string}):Promise<import('../../application-contract/vela-tools.ts').VelaHostOperationView>;
+  missionFileEdit?(input:{type:'apply'|'verify';operationId:string}):Promise<import('../../application-contract/mission-file-edits.ts').MissionFileEditView>;
   pickSources?(input:VelaPickSourcesInput):Promise<VelaPickedSources>;
   state(): Promise<VelaState>;
   open(): Promise<VelaState>;
