@@ -405,3 +405,38 @@ This document establishes the governing baseline for Project Aetherwake. Its fir
 The governing standard is not whether Aerynth resembles science fiction in screenshots. It is whether Aerynth delivers a **beautiful, understandable, reliable, adaptive, and genuinely useful environment for intelligent work**.
 
 **Aerynth shall make powerful intelligence feel effortless, while remaining honest, inspectable, and under the user's control.**
+
+---
+
+## Proposed constitutional amendment CF-2026-11-05: capability-first completeness
+
+> **Amendment status: PROPOSED, awaiting explicit repository-owner acceptance.** This section is an amendment proposal, not a claim that the established Constitution was automatically ratified anew. Existing authority hierarchy and accepted constitutional protections remain in force. If approved, register the change and update implementation/evidence; until then implementers MUST treat these proposed norms as design intent under review. This section does not grant Vela new permissions.
+
+**AW-CON-092 — Capability-first product standard.** Aerynth and Vela MUST be designed for the complete user-intended capability, including reasoning, authentic tool execution, coordination, verification, memory, and meaningful interaction. Engineering effort, latency, token economy, and operational cost MUST be optimized *around* those required outcomes rather than used as unannounced reasons to delete or fake them.
+
+**AW-CON-093 — Capability is not appearance.** A screen, block, voice, or agent feature MUST NOT be represented as functional or complete merely because it renders, responds, produces a generic answer, initiates an API request, or passes a synthetic demonstration. Its documented user-visible outcome, real integration, permissions and postconditions determine acceptance.
+
+**AW-CON-094 — One Vela across execution domains.** Vela MUST maintain enduring identity and conversation/task continuity across direct model inference, native operations, delegated agents, signed-in Codex, API-key-authenticated services, voice and workspace navigation. Provider state is a scoped binding, not the application's authoritative task or memory identity.
+
+**AW-CON-095 — Execution authority.** No model, agent, subagent, tool search, hosted program, MCP connection or remote executor MAY confer its own authorization, widen sensitive-data scope or claim a side effect that was not observed and verified. Trusted application components enforce rights and preserve uncertain outcomes.
+
+**AW-CON-096 — Capability-aware adaptation.** The system SHOULD select models, reasoning effort, tools and execution environments using real, current availability, eligibility, capability, evidence needs, permissions, user pins, privacy and task requirements. If no capable route exists, it MUST state the limitation rather than silently selecting an incapable one.
+
+**AW-CON-097 — Genuine autonomy with restraint.** Vela MAY decompose and coordinate independent work concurrently, plan follow-ups and proactively assist when authorization permits, but MUST preserve explicit task lineage, controllable scope, resource isolation, stop/revoke behavior, truthful status and human agency. Provider completion alone is not verified task success.
+
+**AW-CON-098 — Provenance-preserving contextual memory.** Aerynth MUST own a persistent source-linked account of facts, decisions, artifacts, tasks, current state and deletion rules. Model contexts, provider conversation IDs, embeddings and generated summaries MAY accelerate recall but MUST NOT replace canonical knowledge provenance or override confidentiality boundaries.
+
+**AW-CON-099 — One continuous spatial universe.** Workspace, constellation and other primary spatial destinations MUST be integrated views of the same ongoing environment, using stable identities and meaningful motion rather than isolated screen swaps. Vela's Mind MUST be a genuinely GPU-rendered volumetric 3D presence when that feature is claimed; no 2D approximation may be marketed as its substitute.
+
+**AW-CON-100 — Observable truth in visual intelligence.** Intelligence Stream, timelines, agent/task blocks and Vela's visual Mind MUST reflect actual authorized events and reconciled state. Neither animation nor UI may claim to expose private model reasoning, fabricate agent activity, or promote ambiguous provider status to verified completion.
+
+**AW-CON-101 — Transparent resource economics.** Aerynth MUST distinguish API credits and paid charges from signed-in ChatGPT/Codex plan entitlements, and report measured usage separately from estimates or unavailable provider data. User-set spend and resource limits MUST be respected with honest pause/fallback choices, without silent degradation of core capability.
+
+**AW-CON-102 — Proof before acceptance.** Capability-first acceptance MUST include meaningful end-to-end, failure, security, performance, accessibility and real hardware/visual evidence appropriate to the claim. Passing unit tests, mocked provider calls, artistic prototypes, and API documentation are not by themselves proof of a completed system.
+
+### Constitutional design acceptance (proposed)
+
+A reviewer MUST be able to point to evidence for: (1) a real local information request without unnecessary model use; (2) a complex request carried through authorized agents/tools to verified outcomes; (3) preserved identity and privacy across provider transitions; (4) interrupted and resumed work without duplicated effects; (5) truthful provider/credit data; (6) an actually GPU-rendered 3D Mind connected to real events; and (7) coherent spatial navigation without losing state. A failed or unqualified scenario remains explicitly open.
+
+**Implementation companions:** [capability runtime](../docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md), [provider/tool contracts](../docs/specifications/VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md), [acceptance matrix](../docs/specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md). These subordinate documents describe mechanisms, not overrides of constitutional rights.
+

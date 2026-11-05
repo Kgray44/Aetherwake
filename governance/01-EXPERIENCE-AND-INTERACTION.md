@@ -337,3 +337,18 @@ Changes to these requirements MUST be traceable by identifier, evaluated against
 This document is a detailed **published proposal**, not an assertion that these features are implemented or ratified. The repository owner may approve it as a governing baseline. Implementation plans, graphics prototypes, and tests must demonstrate the requirements rather than simply paraphrase them.
 
 **The ultimate interaction standard:** the user communicates naturally, Aerynth interprets accurately, Vela helps appropriately, consequences are visible, and the interface never makes the user fight the machine to accomplish ordinary work.
+
+---
+
+## Proposed amendment CF-2026-11-05: capable interaction across every surface
+> **PROPOSED, pending owner acceptance.** Existing continuous spatial experience and accessibility rules remain.
+
+**AW-EXP-110 — Single Vela across surfaces.** Typed messages, voice, selected text, workspace and constellation MUST preserve assistant identity, task state, active scope and resource selection; a visual transition MUST NOT restart work.
+**AW-EXP-111 — Action versus advice.** A request to act MUST distinguish action proposal, approval, execution, partial result, failure and verified outcome. Generic advice MUST NOT replace an available authorized action without an explicit reason.
+**AW-EXP-112 — Fast, not shallow.** Aerynth SHOULD acknowledge lengthy work and stream meaningful progress without truncating backend investigation, verification or user-required capabilities.
+**AW-EXP-113 — Functional instrument identity.** Agent, task, research, checklist, timeline, clock and resource blocks MUST match their actual types and expose real behaviors; a visual imitation cannot count as functional completion.
+**AW-EXP-114 — Legible control.** Voice stop, task cancel, approval, provider pin, tool result, source and cost state MUST be discoverable and distinguishable. Stopping speech does not implicitly stop an external task.
+**AW-EXP-115 — Honest failure.** Missing privileges, unavailable models, unsupported hardware and exhausted credits MUST have actionable, non-fictitious states, not a silent generic reply.
+**AW-EXP-116 — Continuous navigation.** Primary destinations MUST share spatial identity, resource objects, history and state through transitions, rather than resetting as unrelated pages.
+
+**Acceptance:** Continue a live agent task while moving from chat to workspace to constellation, interrupt speech, approve one scoped action, create and restore a functional block; verify no task duplication. See [capability architecture](../docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md).

@@ -678,3 +678,19 @@ These are engineering research references, **not normative substitutions** for p
 **Aerynth MUST feel extraordinary without behaving wastefully.** The ideal experience is cinematic when the user is engaged, quiet when the user is focused elsewhere, responsive under realistic load, resilient across monitor changes, accessible without special effects, and honest about every limitation. The platform must serve Vela, Codex, projects, chats, and workspaces rather than demand the user's resources or attention as a price of using them.
 
 **Performance is not a concession against Liquid Intelligence. It is part of Liquid Intelligence.**
+
+---
+
+## Proposed amendment CF-2026-11-05: genuine GPU Mind and capability-preserving performance
+> **PROPOSED, pending owner acceptance.** Existing performance and multi-display governance remains.
+
+**AW-PLT-132 — GPU volumetric requirement.** The claimed 3D nebula Mind MUST use real GPU-supported 3D geometry/volume, camera depth/parallax and light flow, with demonstrable graphics execution. Static video, CSS or a flat shader cannot qualify.
+**AW-PLT-133 — Quality tier independence.** Lower graphics tiers, battery modes, disabled particles and reduced motion MUST NOT silently degrade actual agent reasoning, tool verification, persistent state or task access.
+**AW-PLT-134 — Overlapping load validation.** Testing MUST measure concurrent agents, GPT-Live voice, spatial navigation and 3D rendering with CPU/GPU/frame-time/RAM metrics, device thermals if available, p50/p95 latency and physical display behavior.
+**AW-PLT-135 — Native hardware truth.** Machine state values SHOULD originate from trustworthy OS-backed services where appropriate; unreachable hardware metrics MUST not be made up by a language model.
+**AW-PLT-136 — Meaningful fallback.** Absent GPUs, audio devices or network must preserve conversation, task inspection, privacy controls and accessible nonvisual alternatives wherever supported.
+**AW-PLT-137 — Renderer trust boundary.** Shaders, particles, visual plugins and renderer event subscribers MUST NOT possess privileged API keys, independently execute system tools or falsify canonical job state.
+**AW-PLT-138 — Spatial geometry persistence.** Mixed-DPI/display switches and constellation/workspace traversal MUST preserve canonical world-space and selection relationships rather than reset them without explanation.
+**AW-PLT-139 — Native proof.** A GPU Mind acceptance receipt MUST show device/backend, real camera parallax and volumetric activity driven by real task events, performance/resource metrics and human review.
+
+**Acceptance:** Vela talks while two agents run under a moving real GPU Mind on external OLED; reduce render tier and traverse all spatial destinations while monitoring responsiveness and unchanged task outcomes.

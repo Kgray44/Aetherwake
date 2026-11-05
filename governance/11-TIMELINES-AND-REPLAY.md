@@ -611,3 +611,17 @@ This document is a **published proposed charter**, not an assertion that all cap
 **Aerynth treats time as navigable context.** The user can move between evidence-backed history, active work, possible futures, and faithful replay without losing the distinction between them. Vela can summon and explain a living timeline inside the workspace, while the system preserves source truth, uncertainty, authorization, clarity, and the visual continuity of Liquid Intelligence.
 
 **A timeline is not merely an attractive chart. It is a trustworthy instrument for understanding and directing work through time.**
+
+---
+
+## Proposed amendment CF-2026-11-05: timelines as actual living instruments
+> **PROPOSED, pending owner acceptance.** Existing timeline editing, historical-versus-forecast and interaction requirements remain.
+
+**AW-TIME-128 — Canonical event time.** Agent, tool, voice, approval and scheduled activity MUST attach to authoritative timestamped events, distinguishing observed time, source time, timezone and causality as appropriate.
+**AW-TIME-129 — Actual direct editing.** A timeline presented as functional MUST support accessible navigation, pan/zoom, user-authorized point addition/editing/removal, revisions and persistent state, not only a static graphic.
+**AW-TIME-130 — Historical truth.** Completed external events MUST be distinguishable from estimates, manually entered milestones, simulations and unverified claims.
+**AW-TIME-131 — Non-false parallel graph.** Concurrent branches and causal joins MUST be understandable without presenting invented temporal dependencies between unrelated tasks.
+**AW-TIME-132 — Replay isolation.** Historical replay MUST NEVER resubmit an agent task, external call, command or charge-bearing operation.
+**AW-TIME-133 — Motion consistency.** Timeline, Intelligence Stream and Vela Mind MUST share canonical event state, motion semantics and reduced-motion accessibility without mutating task truth.
+
+**Acceptance:** Add and edit a time point, display a live branched task, restart, scrub history, and demonstrate no external replay side effect.

@@ -79,3 +79,15 @@ Treat charter numbers as routing references, **not evidence that the charter exi
 - A feature is not finished solely because it compiles: collect applicable functional, visual, motion, security, and performance evidence.
 
 When details remain undecided, document the decision and the validation needed. Don't quietly convert guesses into requirements.
+
+## Capability-first 2026-11-05 design packet (proposed)
+
+This repository now includes **proposed** capability-first amendments to the Constitution and all published specialized charters. They are not automatically ratified; do not relabel them as accepted because they exist in Git. For affected work, use the router and read the new sections under the applicable charter IDs. An agent assigned a limited coding task must not treat the design packet as permission to rewrite or override an owner-approved architecture.
+
+Read the [reference architecture](docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md), [provider/tool contracts](docs/specifications/VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md), [voice contract](docs/specifications/VELA-LIVE-VOICE-AND-MULTIMODAL-CONTRACT.md), [API evidence register](docs/research/OPENAI-PLATFORM-CAPABILITY-EVIDENCE-2026-11-05.md) and [acceptance matrix](docs/specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md) only when relevant to actual task scope. Avoid loading the entire packet for a trivial unrelated edit.
+
+**Execution doctrine:** First achieve the real, safe, complete user outcome. Select a capable model/tool/environment from qualified actual provider and native capabilities; optimize cost, latency and tokens only after correctness, authorization and user-experience requirements. A successful model response, mocked UI, audio demo, or provider "completed" marker does not independently establish a verified task. Every agent action must pass canonical authorization and effect verification. Preserve unknown outcomes and don't blindly retry writes. Real RAM measurements come from the OS, not a hallucinated answer. Do not expose API keys or sensitive machine paths in this public repo.
+
+**Interface and visual doctrine:** Vela's Mind must be genuinely 3D/GPU-rendered when claimed, driven by real event projections, and navigated inside one persistent spatial universe. Do not approximate hidden chain-of-thought with simulated neural visualization. Living Instruments must represent and edit actual canonical state. Label synthetic fixtures.
+
+**Integration scope:** PR #19 and PR #20 are draft stacked implementation work, not proof of full acceptance. Audit their latest actual state before changes. A new provider family requires official dated source verification, scoped account entitlement probe, privacy/retention analysis, full negative tests and a traceable rollout. Never conflate signed-in Codex quotas, Codex through API keys, managed Agents API bills or subscription API promotional credits.

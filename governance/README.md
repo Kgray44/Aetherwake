@@ -51,6 +51,14 @@ See Section 20 of the Constitution for domain boundaries.
 - For changes that conflict with governance, record a proposed amendment rather than treating a task prompt as an override.
 - Update this registry when a governing document is published, accepted, amended, or withdrawn; distinguish published drafts from ratified charters.
 
+## Proposed capability-first amendments (2026-11-05)
+
+Every currently published 00–16 charter contains an explicitly labeled **proposed** capability-first addendum. The Constitution remains **Established — v1.0.0** and specialized charters retain their published/pending-owner-acceptance statuses; committing proposed text is not ratification. Owner review must explicitly decide whether each amendment is accepted and then record the version/status change. Their normative requirement IDs are append-only within the existing domain-owner namespaces, so the current Governance Router and Context Router can retrieve them without introducing an overlapping charter.
+
+**Review package:** [architecture](../docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md), [API evidence register](../docs/research/OPENAI-PLATFORM-CAPABILITY-EVIDENCE-2026-11-05.md), [provider/tool contracts](../docs/specifications/VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md), [live voice](../docs/specifications/VELA-LIVE-VOICE-AND-MULTIMODAL-CONTRACT.md), [acceptance matrix](../docs/specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md), and [ADR-001](../docs/decisions/ADR-001-CAPABILITY-FIRST-EXECUTION-FABRIC.md). The documents specify intended architecture and test obligations; they do NOT claim newly added runtime functionality.
+
+Document ownership: 05 tasks, 06 Vela's intelligence behavior, 08 context/memory, 09 event truth, 10 profiling/cost, 12 provider integration, 14 permissions, 15 acceptance, 02/13 GPU visual, and other charters within their existing domains. Do not use a provider feature to bypass a domain owner.
+
 ## Planned companion documentation
 
 The `docs/` tree may include vision narratives, architecture, interface contracts, visual design specifications, research, and decision records. The `plans/` tree may contain milestones and implementation work. These are distinct from governance and do not override it.

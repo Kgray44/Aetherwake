@@ -577,3 +577,17 @@ This published document records the proposed governing requirements for Subsyste
 Changes MUST preserve requirement IDs where meaning is unchanged; changed semantics require explicit impact review. Dependent architecture, implementations, tests, and relevant governance references MUST be reviewed for consistency. The governance index MUST reflect the document's actual publication and acceptance state.
 
 **Final governing standard:** Aerynth's organizational model succeeds only when a user can effortlessly find, understand, combine, organize, and act upon work across multiple places **without losing identity, history, ownership clarity, trust, or control**. The spatial interface exists to reduce mental overhead, not to create another maze.
+
+---
+
+## Proposed amendment CF-2026-11-05: capability-first workspace agency
+> **PROPOSED, pending owner acceptance.** Canonical identity and geometry rules remain.
+
+**AW-PWR-106 — Real Workspace Architect.** Vela's workspace creation, organization, resizing and placement MUST invoke canonical APIs, persist actual block/resource state and verify resulting geometry, not merely provide suggested text.
+**AW-PWR-107 — Content-aware layout.** Generated layouts MUST account for semantic content, minimum usable area, workflow adjacency, display dimensions, collisions, accessibility, and user preferences; aesthetically aligned placeholders are insufficient.
+**AW-PWR-108 — True block types.** Agent, execution task, manual checklist, timeline, resource browser and research blocks MUST expose distinct operational semantics. A user-checked item cannot masquerade as verified provider execution.
+**AW-PWR-109 — Identity independence.** OpenAI model, Codex thread and managed-agent IDs MAY bind to a resource but MUST NOT supplant stable Aerynth project/workspace/block identity.
+**AW-PWR-110 — Spatial persistence.** Zooming between workspace and constellation MUST preserve selected resources, semantic links, geometry, focus and active task projections.
+**AW-PWR-111 — Permissioned mutation.** Vela MAY reorganize resources only with authorized scope, versioned changes, history/undo and truthful partial-result reporting.
+
+**Acceptance:** Build a functional engineering workspace with agent, checklist, timeline and resources; confirm actual interactivity, persistence/undo, collision-free layout and seamless return from constellation.

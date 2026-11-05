@@ -655,3 +655,17 @@ Aerynth is not meant to force human thought into a chat log, an agent assignment
 Vela should be able to recognize relevant ideas and connect them to current work while preserving uncertainty, provenance, user authorship, access boundaries, and control. Project Knowledge should become a reliable resource for conversations and agents without being mistaken for permanent model context. The Thought Stream should preserve the personal evolution of ideas without impersonating the separate observable activity of AI systems.
 
 **Capture without friction. Organize without loss. Retrieve with provenance. Act only with appropriate authority.**
+
+---
+
+## Proposed amendment CF-2026-11-05: knowledge as reliable intelligence input
+> **PROPOSED, pending owner acceptance.** Charter 07 retains original user-note ownership and Thought Stream distinctions.
+
+**AW-NKT-132 — Source identity.** Notes, documents, thoughts and generated artifacts MUST retain canonical IDs, scope, authorship, version and data classification when accessed by Vela.
+**AW-NKT-133 — Summaries are derivatives.** Model-created notes and summaries MUST preserve links to their source and distinguish interpretation, uncertainty and original human-authored evidence.
+**AW-NKT-134 — Actionable knowledge.** Vela MAY transform authorized notes into plans, checklists, timelines and delegated tasks, but MUST preserve originals and require appropriate action consent.
+**AW-NKT-135 — Branch knowledge fidelity.** Shared knowledge MUST record origin branch, selected facts, conflicts and privacy boundary; link formation does not confer universal access.
+**AW-NKT-136 — Memory deletion.** Source revocation/deletion MUST invalidate eligible derived indexes and caches or report remaining limitations, and MUST NOT silently restore stale facts.
+**AW-NKT-137 — Thought truth.** The user's Thought Stream and agent-visible summaries MUST never be confused with private model chain-of-thought or artificially simulated reasoning.
+
+**Acceptance:** Turn a source note into a verified plan while keeping the source untouched, trace facts to source, then revoke source and prove stale retrieval is not trusted.

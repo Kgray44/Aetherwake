@@ -677,3 +677,20 @@ This document is a **published proposed charter**. It defines target requirement
 **CIE succeeds when the user can continue a conversation or project for years without carrying all of its history in every request, while retaining trustworthy access to what matters, accurate knowledge of what was actually supplied, and the ability to recover authorized source context when needed.**
 
 **Remember where to find the truth. Retrieve the truth when relevant. Preserve its provenance. Spend context only when it earns its place.**
+
+---
+
+## Proposed amendment CF-2026-11-05: persistent context across adaptive models and agents
+> **PROPOSED, pending owner acceptance.** CIE remains the owner of contextual memory; provider sessions are subordinate.
+
+**AW-CIE-128 — Independent memory authority.** Durable user preferences, episodic facts, project knowledge, task checkpoints and provenance MUST survive model, Responses, Codex, voice and managed-agent session changes.
+**AW-CIE-129 — Typed provenance.** Every consequential remembered fact MUST distinguish direct source, observation, summary, inference, user preference, time validity and confidentiality scope.
+**AW-CIE-130 — Retrieval relevance.** CIE MUST prefer current relevant project/workspace requirements and conversation ancestry over indiscriminate loading; one-million-token context does not justify private-data spill.
+**AW-CIE-131 — Handoff capsules.** Agent/provider transfers MUST use bounded purpose-specific capsules containing authorized objective, factual evidence, verified prior actions, constraints, unresolved questions and source references.
+**AW-CIE-132 — Compaction safeguards.** Provider compaction or cache summaries MUST NOT erase canonical effect receipts, uncertain outcomes, outstanding approvals, relevant conflicts or data-deletion obligations.
+**AW-CIE-133 — Revocation propagation.** Deleted/revoked sources MUST be invalidated in local semantic indexes and eligible provider stores, or their deletion limitations truthfully disclosed; stale embeddings cannot be presented as current.
+**AW-CIE-134 — Temporal state hygiene.** CPU/RAM readings, tool health and selected windows MUST carry refresh/expiry limits and MUST NOT become permanent user memories without purpose.
+**AW-CIE-135 — Fidelity over token economy.** Retrieval/compaction SHOULD be optimized for cost and relevance only after demonstrating task quality, factual integrity, privacy and correct attribution.
+**AW-CIE-136 — Conflict presentation.** Disagreeing sources MUST retain provenance rather than being flattened into a single authoritative-seeming statement; consequential work SHOULD reverify.
+
+**Acceptance:** Cross-provider recall after restart, evidence-preserving compaction, deleted source invalidation and isolation between unrelated workspaces.

@@ -878,3 +878,9 @@ The field is alive, but it never lies. The system is extraordinary, but it never
 **Suggested next deliverable:** A separate experimental architecture and prototype plan under the appropriate docs/plans paths, validating graph integrity, camera and layout behavior, accessible equivalents, renderer performance, and honest observability before production decisions.
 
 **Approval boundary:** The repository owner decides whether to adopt this direction. A successful Constellation demo does not automatically approve a desktop host, database schema, graphics engine, information-sharing policy, or final visual design.
+
+## Proposed capability-first alignment (2026-11-05)
+
+Constellation, workspace and the conversational destination are **one continuous navigable spatial universe**, not three unrelated screens. Navigation must preserve canonical project/block/task objects, selection and context. Vela's volumetric nebula Mind is a **real GPU-rendered 3D interactive presence**, with moving luminous internal structures, depth-aware parallax and semantic animation driven by actual observable tasks and agent relationships, not a flat shader or fake model thoughts.
+
+The aspiration only becomes a shippable feature after native GPU/voice/task acceptance on actual devices, accessibility modes and realistic load. Rendering quality may adapt, but backend intelligence and action capabilities cannot be silently removed to meet a GPU frame target. See the [capability architecture](../architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md) and [acceptance matrix](../specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md). This remains a proposed vision, not a claim that the 3D Mind is implemented.

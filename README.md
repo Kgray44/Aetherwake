@@ -4,6 +4,8 @@
 
 **Aerynth** is the planned intelligent, spatial desktop environment for working with AI; **Vela** is its persistent, context-aware assistant. Both are working names.
 
+**Capability first:** deliver complete, authorized and verified user outcomes with Vela; then optimize model cost, latency, memory and hardware consumption without silently reducing functionality. An API call, beautiful mock or generic answer is not a completed feature.
+
 The goal is not to wrap Codex in a prettier chat window. Aerynth should combine first-class Codex conversations with spatial workspaces, project knowledge, notes, specialist agents, orchestration, universal contextual commands, observability, and adaptive context efficiency.
 
 The [official Aerynth mark](assets/brand/aerynth-mark-master.png) is committed and verified, with its design identity and usage guidance documented in [Aerynth Brand Identity](docs/design/AERYNTH-BRAND-IDENTITY.md). Future application integration and alternate icon/animation variants are still pending.
@@ -21,7 +23,7 @@ The [official Aerynth mark](assets/brand/aerynth-mark-master.png) is committed a
 7. **Prioritize beautiful, meaningful motion without wasting CPU, GPU, memory, or tokens.**
 8. **Separate AI reasoning, the application data model, orchestration, and rendering.**
 9. **Make consequential actions inspectable, permissioned, and reversible where possible.**
-10. **Design the UI and motion architecture first, with an early real Codex connection.**
+10. **Build complete capabilities and verified outcomes, including real provider/native tool connections and genuine GPU rendering.**
 
 ## Governance
 
@@ -57,3 +59,16 @@ Git cannot track empty directories, so currently empty locations are reserved us
 See the project design and architecture documents in `docs/` as they are developed.
 
 > This repository is currently **public**. Do not commit credentials, private conversation history, personal notes, private project files, API keys, or real agent telemetry containing sensitive data.
+
+## Capability-first Vela architecture (proposed)
+
+The November 5, 2026 design update is a **proposal under owner review**, not an assertion that new API services or 3D visuals are currently operational. Governance 00 and all 01–16 domain charters contain proposed capability-first addenda pending owner acceptance. Implementers must preserve current PR #19/#20 behavior, use verified APIs and produce real acceptance evidence.
+
+- [Vela Capability Runtime and Execution Fabric](docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md): system boundaries, tool gateway, task state, model selection, memory, GPU Mind.
+- [OpenAI Platform Capability Evidence Register](docs/research/OPENAI-PLATFORM-CAPABILITY-EVIDENCE-2026-11-05.md): official docs, API limits, credits, eligibility and test protocol.
+- [Provider, Tool and Agent Contracts](docs/specifications/VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md): adapters, scoped authorization, telemetry and recovery.
+- [Live Voice and Multimodal Contract](docs/specifications/VELA-LIVE-VOICE-AND-MULTIMODAL-CONTRACT.md): GPT-Live backend delegation, device/consent and audible tests.
+- [Capability-First Acceptance Matrix](docs/specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md): CF-001–030 positive and negative end-to-end scenarios.
+- [ADR-001: Capability-first execution fabric](docs/decisions/ADR-001-CAPABILITY-FIRST-EXECUTION-FABRIC.md): proposed decision, alternatives and consequences.
+
+**Provider distinction:** Eligible subscription-linked API credits can apply to Responses, managed Agents API, Decisions, GPT-Live and other eligible API use, but **not Codex usage through API keys**; signed-in Codex has separate limits. Do not infer project API key eligibility from a ChatGPT plan alone.

@@ -683,3 +683,34 @@ Changes to normative requirements MUST preserve stable requirement IDs wherever 
 **The chat is the conversation. The agent is the worker. The task is the commitment. The execution is an attempt. The workflow is the coordinated procedure. Evidence determines what actually happened. Authorization determines what may happen next.**
 
 Aerynth succeeds when an ordinary question remains effortless, a complicated objective becomes an intelligible set of bounded assignments, autonomous work remains under user control, and reported completion means something provable. It must not replace user mental overhead with an elaborate bureaucracy of agents who are very busy explaining why the actual work has not begun.
+
+---
+
+## Proposed amendment CF-2026-11-05: complete agentic execution and durable orchestration
+
+> **Status: proposed, pending owner acceptance.** The existing task lifecycle and authoritative identities remain canonical; this supplement tightens provider-independent execution contracts.
+
+**AW-ATW-153 — Outcome-owned task graph.** Every delegated operation MUST attach to a canonical Aerynth task and attempt, preserving user intent, required outcomes, input scope, dependencies, assigned agent/provider, current state, approval and evidence obligations.
+
+**AW-ATW-154 — Capability-appropriate delegation.** Planning MUST consider all qualified execution mechanisms, including native services, model tools, local Agents SDK orchestration, managed Agents API, Responses Multi-agent and existing Codex, without treating their auth, memory, quotas or environments as interchangeable.
+
+**AW-ATW-155 — Concurrency with actual isolation.** Parallel branches MAY be dispatched only when dependencies and authoritative resource/write claims permit it. Evidence of genuine overlapping execution MUST exist before marketing a workflow as parallel. Conflicting edits to the same canonical resource MUST serialize, transact or explicitly coordinate.
+
+**AW-ATW-156 — Bounded descendant authority.** An agent-created subtask, hosted subagent or SDK handoff MUST inherit a subset of the parent's approved resources, tools, data-transfer class, effect permissions, budget and lifetime. The executor cannot enlarge authority by spawning a new agent.
+
+**AW-ATW-157 — Cross-provider continuity.** Transfers between local and hosted agent runtimes MUST retain task/attempt identity, resolved objective, context provenance, privacy policy, outstanding approval, verified prior effects and uncertainty. Provider session IDs are auxiliary, not authoritative task IDs.
+
+**AW-ATW-158 — State dimensions.** Model turn completion, provider session completion, external effect receipt, postcondition verification, user delivery and owner acceptance MUST remain separately observable. A completed provider turn MUST NOT automatically mark a task verified.
+
+**AW-ATW-159 — Durable checkpoints.** Before effectful work, the runtime SHOULD persist intent, selected resources, authorization, idempotency key and resource claim. On reconnect, restart, timeout or webhook replay, it MUST reconcile actual side effects before retry.
+
+**AW-ATW-160 — Safe unknowns and cancellations.** Unknown outcomes MUST remain distinct from failure. Cancellation and permission revocation MUST fence future actions and account for in-flight irreversible work, never simply erase an unresolved attempt.
+
+**AW-ATW-161 — Managed session qualification.** Managed Agents API sessions MAY be used only after proving account access, model/tool support, data residency/retention suitability, sandbox/workspace scope, billing identity and service-level recoverability for the task.
+
+**AW-ATW-162 — Work product completeness.** Delegated workers MUST produce inspectable artifacts and acceptance evidence appropriate to the objective; synthetic or text-only completion reports MUST NOT stand in for a requested file edit, software execution, physical measurement or UI mutation.
+
+**AW-ATW-163 — Initiative remains task-bound.** Scheduled/proactive work MUST retain a user-authorized purpose, trigger, budget, stop/revoke mechanism, notification policy, evidence and accountable owner. Ambient speculation does not authorize persistent monitoring.
+
+**Required additional acceptance:** two independent read agents with measured overlap; two conflicting write agents with safe contention; real delegated tool action and verified readback; crashed session reconciliation; approval revoked mid-run; hosted subagent denied a forbidden tool; canceled non-idempotent action remaining unknown until proof. See [execution fabric](../docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md).
+

@@ -421,3 +421,18 @@ This charter is a comprehensive **published proposal**, not a claim of implement
 **The acceptance question is not "Did we animate the interface?" It is "Does Aerynth feel like one coherent, cinematic, intelligent environment, remain understandable and responsive, and accurately express the state of real work?"**
 
 **Liquid Intelligence is not a decoration. It is how Aerynth makes intelligence perceptible.**
+
+---
+
+## Proposed amendment CF-2026-11-05: Vela's GPU-rendered 3D Mind and semantic motion
+> **PROPOSED, pending owner acceptance.** Existing six-system Motion Coordinator, reduced-motion and event-truth obligations remain.
+
+**AW-LIQ-123 — Genuine 3D volume.** Any claimed nebula-like Vela Mind MUST be genuinely GPU-rendered with depth-aware geometry/volume, moving camera parallax, lighting appearance and internal flow. A planar sprite, CSS blur, static image or deceptive 2D approximation MUST NOT satisfy the claim.
+**AW-LIQ-124 — Living luminous behavior.** Filaments, particles and fields MUST evolve smoothly through 3D space and respond to real event sources. Random decorative motion alone cannot represent actual intelligence activity.
+**AW-LIQ-125 — One continuous space.** Workspaces, constellation and the remaining primary destinations MUST use coordinated spatial relationships, stable object identities, camera continuity and persistent focus rather than disconnected screen replacements.
+**AW-LIQ-126 — Observable meaning.** Agent branches, tool calls, waiting, verification, errors and memory links MAY drive animation only through provenance-bearing event projections. Hidden chain-of-thought or speculative neural states MUST NOT be portrayed as measured.
+**AW-LIQ-127 — Adaptive rendering without feature loss.** Lower render tiers and reduced-motion modes MUST preserve task capabilities, event meaning, spatial understanding and accessible interpretation.
+**AW-LIQ-128 — Proof of GPU operation.** Acceptance requires actual GPU and camera-depth captures, internal 3D occlusion/parallax, real-task event-driven movement, interaction latency, load/performance metrics and human visual review.
+**AW-LIQ-129 — Shared semantic motion.** Timelines, clocks, agent blocks, intelligence streams and the 3D Mind MUST share canonical events and Motion Coordinator semantics rather than isolated simulated data.
+
+**Acceptance:** A moving camera reveals real layered depth; independently completed tasks cause traceable flow transitions; switching spatial destinations preserves geometry; low-performance mode retains understanding.

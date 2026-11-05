@@ -668,3 +668,21 @@ This document is a **published proposed governing charter**, not a claim of impl
 **Gate G — User usefulness:** A person can quickly answer what an agent is doing, why it paused if known, which changes it made, what remains unverified, what a team accomplished, and what attention is required, without being overwhelmed by raw logs.
 
 **Final governing standard:** Aerynth must make intelligent work **visible, understandable, useful, and beautiful**, without sacrificing epistemic honesty, performance, user agency, security, or historical integrity. The Intelligence Stream is a window into **observable work**, never a fabricated window into private thought.
+
+---
+
+## Proposed amendment CF-2026-11-05: truthful shared execution stream
+> **PROPOSED, pending owner acceptance.** Existing immutable event and privacy rules remain.
+
+**AW-OBS-138 — Unified observable event.** Events from Vela, native calls, agents, models, voice, blocks and GPU Mind MUST be correlated by stable task/attempt/agent/provider IDs, causality, revision, provenance and visibility class.
+**AW-OBS-139 — Stage distinctions.** Tool discovery, requested call, actual execution, external receipt, postcondition verification, user delivery and owner acceptance MUST remain different events/states.
+**AW-OBS-140 — Delegation lineage.** Parent/child agents, concurrent branches, joins and messages MUST be reconstructible from observable provider and application events without revealing or inventing hidden chain-of-thought.
+**AW-OBS-141 — Replay-safe reconciliation.** Duplicate, reordered, partial or late tool and webhook events MUST be deduplicated and reconciled; conflicting completions require explicit unknown/error state, not winner-by-arrival.
+**AW-OBS-142 — Demo honesty.** Synthetic examples, animations and offline fixtures MUST remain labeled and separated from live progress.
+**AW-OBS-143 — Read-only render projections.** Vela Mind, timelines and Living Instruments MAY consume canonical events but MUST NOT originate evidence of actions that did not occur.
+**AW-OBS-144 — Privacy boundaries.** Events MUST support redaction, protected data scopes and stable private-artifact references, not public leakage of transcripts and secrets.
+**AW-OBS-145 — Actionable progress.** The user MUST be able to identify running, awaiting permission, blocked, cancelled, unknown and verified work, linked to next steps and evidence.
+**AW-OBS-146 — Usage provenance.** Token/audio/tool/sandbox charges MUST distinguish reported amounts from estimates/missing, and API credit benefits from signed-in plan usage.
+**AW-OBS-147 — Non-executing replay.** Historical replay MUST restore only recorded representation and MUST NEVER re-trigger tools or billed model/agent effects.
+
+**Acceptance:** Real concurrent agent activity in Mind and timeline; duplicate webhook, crash and failed tool retain correct truth; demo fixtures cannot masquerade as execution.

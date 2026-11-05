@@ -540,3 +540,38 @@ Aerynth's defining promise is not that it can display code, launch agents, produ
 **The feature demonstrably works.** That is verification.
 
 **The feature meets the intended cinematic, functional, safety, accessibility, performance, and product standard.** That is acceptance.
+
+---
+
+## Proposed amendment CF-2026-11-05: acceptance of complete capabilities
+
+> **Status: proposed, pending owner acceptance.** This supplements existing visual, functional, performance and security acceptance; none are waived.
+
+**AW-QVA-128 — Capability-first definition of done.** Every claimed capability MUST be tested for complete intended user outcome, truthful status, permissions, integration, error recovery and evidence, rather than judged only by output text, UI appearance or successful API invocation.
+
+**AW-QVA-129 — Separate evidence tiers.** Documentation, static code inspection, mock/unit test, integration test, native live test, visual/human acceptance and production verification MUST be labeled separately. A lower tier MUST NOT imply a higher acceptance state.
+
+**AW-QVA-130 — Real composite journeys.** The program MUST maintain end-to-end scenarios combining Vela intent, route selection, native/provider tools, task state, memory, permissions, rendering and actual postcondition readback.
+
+**AW-QVA-131 — Model/provider matrix.** Each planned provider route MUST be qualified under real connection, correct entitlements, supported model/effort, tool availability, user pins, region/data-class restriction, error/timeout, rate/credit exhaustion and live-versus-estimated usage.
+
+**AW-QVA-132 — Agent outcome and contention.** Parallel, delegated and persistent agent scenarios MUST verify real overlapping progress where claimed, correct resource isolation, trustworthy completion receipts, cancellation/restart reconciliation and absence of duplicate side effects.
+
+**AW-QVA-133 — Voice is an audible product.** Voice acceptance MUST include real microphone and speaker behavior, consent, interruptions, delegation, backlog/replay fences, accent/pacing consistency and a human-observed output path on supported hardware.
+
+**AW-QVA-134 — GPU Mind is an actual GPU scene.** A claimed 3D Vela Mind MUST have real GPU rendering evidence, volumetric/depth geometry, camera parallax, light/flow animation, response to real events, accessibility/performance behavior and no fake reasoning representation. A shader on a flat card is insufficient.
+
+**AW-QVA-135 — Spatial continuity.** The primary workspace/constellation/destination transitions MUST preserve canonical objects, ongoing work, focus/context, geometry and navigation without disconnected screen resets.
+
+**AW-QVA-136 — Negative and adversarial evidence.** Tests MUST include stale tools, prompt injection, provider loss, invalid credentials, model/tool mismatch, unsafe permissions, partial response/tool arguments, network drop, resource conflicts, quota exhaustion and corrupt/incomplete events.
+
+**AW-QVA-137 — Model quality over benchmark vanity.** Optimization claims MUST include representative task success, quality regressions, p50/p95 latency, cost provenance, actual CPU/GPU/RAM burden, human interaction friction and accessibility. Reduced token cost alone cannot justify reduced capability.
+
+**AW-QVA-138 — Provenance of cost and time.** Usage, credits, execution latency and workload metrics MUST identify provider-reported versus estimated versus missing evidence, with signed-in Codex and API charges treated separately.
+
+**AW-QVA-139 — Public repository redaction.** Verification artifacts MUST avoid sensitive conversations, credentials, private file paths, identifiable local telemetry and secret provider/account data.
+
+**AW-QVA-140 — Honest milestone reporting.** A published charter, API feature, test stub, or experimental demo MUST remain unqualified for release until the required task and product acceptance evidence exists.
+
+**Canonical acceptance catalog:** [CF-001 through CF-030](../docs/specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md). Reviewers MUST reconcile each claimed release capability with this catalog and the existing charter gates rather than treating the catalog as a replacement for them.
+

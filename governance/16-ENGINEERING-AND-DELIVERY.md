@@ -622,3 +622,20 @@ The repository owner should be able to verify that:
 ---
 
 **Final governing intent:** **Build the experience that was envisioned, integrate what actually works, prove the results, preserve the user's control and data, and tell the truth about everything that remains unfinished.**
+
+---
+
+## Proposed amendment CF-2026-11-05: implementing complete capability rather than placeholders
+> **PROPOSED, pending owner acceptance.** Existing workflow, branch and proof obligations remain.
+
+**AW-ENG-127 — Complete-outcome scope.** Every substantial feature plan MUST define user-intended result, actual tools/effects, authoritative state, failures, consent, integration evidence and omitted functionality before implementation.
+**AW-ENG-128 — Placeholder honesty.** Stubs, screenshots, simulated telemetry, diagrams, prose-only agents and API calls with no verified effects MAY be prototypes but MUST NOT be reported as completed capability.
+**AW-ENG-129 — Dated platform research.** Provider-dependent changes MUST cite current official API documentation, scoped entitlement checks, region/retention limits, cost and planned fallback prior to production reliance.
+**AW-ENG-130 — Preserve active work.** Cross-cutting refactors MUST inventory and protect working PR #19/#20 services, events, UI, spatial state, native brokers and voice; unreviewed simplification cannot erase accepted functionality.
+**AW-ENG-131 — Contract-first boundaries.** Model routing, agent orchestration, tool gateway, memory, voice, event and rendering integration MUST use versioned contracts with migration and failure tests.
+**AW-ENG-132 — Receipt-driven PRs.** A delivery PR MUST identify changed requirement IDs, real code paths, actual qualified provider/device, tests run, passing/failed evidence, regressions and remaining unverified cases.
+**AW-ENG-133 — Branch and owner boundaries.** Work MUST respect stacked PR relationships, current branch head and review rights; adding proposed constitutional/charter language does not silently ratify it.
+**AW-ENG-134 — Capability-preserving optimization.** Token, time, cost and hardware improvements MUST show outcome parity under representative work; within user constraints, more costly execution MAY be justified when essential to completion.
+**AW-ENG-135 — Independent verification.** An agent's report of its own success cannot independently satisfy acceptance; require observable source/artifact, postcondition and appropriate owner/reviewer evidence.
+
+**Release packet:** implementation inventory, decision record, API evidence, trust/cost matrix, native/voice/GPU journeys, known incomplete capabilities and rollback. See [CF-001 through CF-030](../docs/specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md).
