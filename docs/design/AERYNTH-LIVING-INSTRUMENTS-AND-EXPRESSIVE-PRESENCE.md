@@ -5,6 +5,8 @@
 >
 > **Every meaningful animation communicates something. Every beautiful component accomplishes something.**
 
+> **2026-11-04 OWNER-DIRECTED SCOPE UPDATE:** This prior Living Instruments document remains a useful design reference for Timeline, Blocks and Stream *Glimpse* or *Forensic* projections. **Its old small block-based Stream and Vela expressive-shape proposals are superseded as the product's primary full-screen experiences** by [Spatial Intelligence systems index](SPATIAL-INTELLIGENCE-SYSTEMS-INDEX.md), the corresponding governing addenda in 01/02/06/09/15, and their detailed GPU/runtime/acceptance specifications. Do not report a compact branching block or decorative Vela shape as completion of the newly required per-project immersive Stream or global 3D Intelligence Nebula.
+
 | Field | Value |
 | --- | --- |
 | Project | Aetherwake |
