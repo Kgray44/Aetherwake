@@ -414,6 +414,82 @@ Applicable milestone evidence SHOULD include: deterministic state/transition tes
 
 ---
 
+## 17. Owner-directed 2026-11-04 addendum: Vela's living Intelligence Nebula and continuous spatial travel
+
+> **Status and authority:** Detailed normative proposal in this *existing governing charter*, submitted following the repository owner's explicit design direction on 2026-11-04. The charter's published-draft/acceptance status does not silently change. This section is not a standalone speculative mockup and is not proof that the visual work has been implemented. It is to be reviewed under the same charter-acceptance process as the rest of 02.
+>
+> **Non-negotiable product direction:** **One continuous spatial universe. No disconnected screen changes.** The global Vela Presence must be a real, internally luminous, evolving GPU-rendered 3D nebular environment, not a flat image, spinning orb, radial menu, simple flowchart, or cloud of cards.
+
+This section provides specialized visual/motion requirements for the cross-view intelligence experience. Charter 01 owns navigation interaction semantics, 06 owns Vela's role and observable state, 09 owns source truth and project execution topology, 13 owns measured budgets, and 15 owns final quality gates. This charter alone owns how the above must look, move and remain spatially coherent.
+
+### 17.1 Visual identity and reference fidelity
+
+**AW-LIQ-200 — True volumetric identity.** Vela's full-screen Presence MUST be rendered through a real three-dimensional GPU-accelerated scene with depth-resolved, view-consistent volume, deformable surfaces, internal layers and/or spatial filaments. Flat textures, planar shaders, sprites with parallax, a 2D video, CSS filters, a billboard and particles, or a basic sphere with a noisy displacement texture MUST NOT be accepted as the defining implementation. A non-GPU accessible fallback is necessary but MUST be explicitly identified as a fallback.
+
+**AW-LIQ-201 — Reference fidelity.** The approved visual baseline MUST be compared side-by-side with the exact user-provided nebula image from the 2026-11-04 review. The scene MUST evoke its irregular asymmetrical gossamer-silk body, translucent overlapping veil folds, blue/cyan/violet/pearl layers, delicate hairlike currents, spatial sparkling interior and contrasting black negative space. Merely borrowing its colors or using it as a flat texture is insufficient.
+
+**AW-LIQ-202 — Real spatial parallax.** Moving the camera across at least two axes MUST reveal distinct occlusion, internal structure, surface relationships and depth, including at tendril junctions. Static camera-limited tricks MUST NOT count as 3D validation.
+
+**AW-LIQ-203 — Light flows within form.** The nebula MUST exhibit animated luminosity and particles *inside* layered three-dimensional structures, including depth-aware emission, scattering/absorption approximations or comparable physically coherent rendering. A single glow rim or edge-only beam cannot substitute for internal light.
+
+**AW-LIQ-204 — Evolving, nonmechanical motion.** The core MUST maintain recognizable identity while continuously evolving through large-scale veils, intermediate swirling/turning folds and microscopic light advection. A short repetitive 'breathing orb' cycle, random uncorrelated jitter or hard silhouette replacement is prohibited as the dominant motion.
+
+**AW-LIQ-205 — Specialized external nebulas.** The global Presence MUST include substantial neighboring 3D domain nebulas for Planning, Execution, Writing/Creation, Communication/Streaming, Memory/Context and Analysis/Observation (or an explicitly owner-approved equivalent taxonomy). Each MUST be recognizable, coherent with the central material language, and more substantial than a label or tiny orb. Exact arrangement may evolve through reviewed design.
+
+**AW-LIQ-206 — Spatial landmark stability.** Outer domain nebulas MUST retain approximate, learnable spatial positions. Their local turbulence and drifting motion MAY change continuously, but significant repositioning MUST communicate intentional spatial change and avoid user disorientation.
+
+### 17.2 The defining connected-tendril behavior
+
+**AW-LIQ-207 — Extension begins in the core.** Domain activation MUST make a portion of the central nebula visibly deform, stretch and generate a three-dimensional continuous material extension toward the target domain. A detached line or Bézier connector suddenly appearing between two preexisting clouds is not compliant.
+
+**AW-LIQ-208 — Connected luminous substance.** A tendril MUST visibly contain nested scales of cloud density, translucent silk-like veils, fine filaments and light currents. Its origin, body and destination MUST remain visually connected throughout extension, flow and retraction, including under camera movement.
+
+**AW-LIQ-209 — Multi-domain concurrency.** Simultaneously active domains MUST create multiple independently timed extensions with a coherent shared source, stable destinations, and bounded overlap. At least three concurrent tendrils MUST be shown and evaluated in the feature's reference implementation.
+
+**AW-LIQ-210 — Smooth dynamic response.** Emergence, growth, deformation, flow-speed change, branching and retraction MUST preserve perceptual continuity. Use coordinated acceleration/jerk limits, damping and phase coherence rather than teleportation, sudden rescaling or immediate velocity jumps. Exact motion constants remain research decisions.
+
+**AW-LIQ-211 — Source-driven intensity.** Changes in luminosity, domain activation, action-mote appearances and salient particle transport MUST respond to observed or clearly labeled reported runtime activity. Ambient motion MAY persist during idle but MUST NOT impersonate execution or secretly imply model cognition.
+
+**AW-LIQ-212 — Failure/wait semantics.** Unknown, failed, blocked, waiting and cancelled states MUST have distinct calm but understandable motion signatures. A waiting action MUST NOT visually complete; a failed action MUST NOT receive a success-like convergence burst.
+
+**AW-LIQ-213 — Domain distinction without false psychology.** Differentiated domain motion SHOULD communicate categories of *observable work*, never certainty about hidden thoughts, feelings, attention percentages or inaccessible internal model dynamics.
+
+### 17.3 Living satellites, camera, and layered presentation
+
+**AW-LIQ-214 — Action motes are spatial manifestations.** Small active actions MUST emerge and dissipate in a coordinated three-dimensional field near the relevant domain or tendril. Ordinary card rings, evenly spaced icons and decorative unbound particles MUST NOT be substituted for the intended live satellite experience.
+
+**AW-LIQ-215 — Collision-aware reflow.** Appearance, completion and grouping of action motes MUST cause gentle rearrangement with stable anchors, bounded displacement and overlap avoidance. Meaningful historical activity MUST remain inspectable through retained trace/Wake even after its mote has dissolved.
+
+**AW-LIQ-216 — User camera authority.** User-initiated pan, orbit, zoom, node selection, focused reading, approval, reduced-motion and emergency escape MUST override automatic cinematography without oscillation or forced recentering.
+
+**AW-LIQ-217 — Semantic scene continuity.** Vela Presence, project Intelligence Streams, Constellation and Workspaces MUST be coordinated projections of one spatial identity system. Major transitions SHOULD express an intelligible path and preserve the identity of selected project and operation. A mere opacity crossfade or hard screen replacement MUST NOT be accepted as the defining transition where the intended spatial relationship is available.
+
+**AW-LIQ-218 — Presence-to-Stream journey.** Selecting a project-linked mote MUST support a cinematic trajectory through its luminous domain/tendril into the project's actual branched execution scene, with recognizable source-to-destination mapping. The reverse journey MUST preserve camera and resource identity.
+
+**AW-LIQ-219 — Stream-to-Stream journey.** Switching directly between two project Streams MUST preserve the impression of traveling through one spatial environment; the first graph recedes and the second emerges, with the underlying task execution uninterrupted.
+
+**AW-LIQ-220 — Renderer boundary independence.** Distinct view renderers MAY exchange synchronized scene anchors, camera poses, motion tokens and partial visual geometry rather than share a monolithic GPU context. The chosen architecture MUST still realize perceptual continuity, correct focus and interruption-safe transitions.
+
+**AW-LIQ-221 — No cinematic tax on work.** Visual transitions MUST be interruptible or skippable and MUST NOT delay approval, essential input, urgent results or continuing background execution. Reduced motion must provide equivalent navigation and state information.
+
+### 17.4 Artistic gate and implementation ordering
+
+**AW-LIQ-222 — Art-first proof.** Before the feature can be reported as an integrated implementation candidate, engineering MUST produce a genuine GPU-native 3D prototype demonstrating core material fidelity, internal light flow and a connected tendril under moving-camera inspection. A 2D placeholder is permitted only as clearly labeled disposable exploration, never as completed Presence.
+
+**AW-LIQ-223 — Comparative artistic review.** The owner MUST be offered the reference image and moving-camera captures side-by-side, covering silhouette, multiple transparent spatial layers, edge behavior, spectral detail, depth, internal sparks, organic extension and overall extraordinary aesthetic. Automated screenshot similarity or a shader demo alone is insufficient.
+
+**AW-LIQ-224 — One Motion Coordinator.** Spatial travel, material deformation, atmospheric flow, semantic event activation, input focus and adaptive rendering MUST use or explicitly integrate with Aerynth's shared six-system Motion Coordinator. Independent unrelated animation loops for each domain are prohibited where they would cause conflicting transition states.
+
+**AW-LIQ-225 — Honest resource reduction.** Reduced quality and minimized/background conditions MAY lower sample counts, particle density, resolution and simulation frequency but MUST preserve semantic cues, user controls, and source-backed activity. See Charter 13 for benchmarks and Charter 15 for acceptance.
+
+### 17.5 Required scenarios and traceability
+
+The companion [Presence art direction](../docs/design/VELA-PRESENCE-INTELLIGENCE-NEBULA-ART-DIRECTION.md) and [GPU technical contract](../docs/architecture/VELA-PRESENCE-GPU-RENDERING-CONTRACT.md) describe candidate techniques and exact review scenes. They are subordinate to this charter and must not turn an owner artistic rejection into an automatic pass. Test at minimum: idle multi-axis camera orbit; connected extension and reabsorption; three simultaneous domains; one real observed file/tool action; failed/unknown event; a full Presence → project Stream → Presence journey; and reduced-motion/graphics loss. Record what was genuinely rendered and measured, including identified missing evidence.
+
+**Explicit nonacceptance:** a static beautiful image, shader-only color demo, attractive still, flat projected cloud, disconnected graph, floating card cluster, unverified particle stream, or unsourced 'thinking' animation cannot satisfy AW-LIQ-200–225.
+
+---
+
 ## Publication and intended outcome
 
 This charter is a comprehensive **published proposal**, not a claim of implementation, successful benchmark results, selected final stack, or owner ratification. Its purpose is to protect the visual vision while making it testable.
