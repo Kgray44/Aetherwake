@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "elapsedMs": 7838,
+  "renderer": "156.0.8078.75",
+  "electron": "45.2.1",
+  "steps": [
+    "Development workspace glass panels",
+    "Zoom out to project",
+    "Universe",
+    "Voyagewright project",
+    "Keyboard Enter Engineering workspace",
+    "Real canonical note edit",
+    "Return Development layout unchanged",
+    "Search Enter direct navigation",
+    "Reduced motion",
+    "Graphics fallback and recovery",
+    "Renderer and canonical service restart: camera, edit and geometry preserved"
+  ],
+  "browserErrors": [],
+  "screenshots": [
+    {
+      "file": "01-development-workspace.png",
+      "bytes": 609291,
+      "sha256": "30aae5430c7b31356716ae53495070ce760b85ef73b530ff0c3468d298b7178a"
+    },
+    {
+      "file": "02-project-overview.png",
+      "bytes": 749329,
+      "sha256": "b2098a565718641edce07a6f5c9fdf53a587ec9e74c711e0d391c05893e62875"
+    },
+    {
+      "file": "03-universe.png",
+      "bytes": 684178,
+      "sha256": "29d36a3f746d94c366abbe0cac5928da992b892f2ea109132f51d6eddb606b47"
+    },
+    {
+      "file": "04-engineering-workspace.png",
+      "bytes": 760993,
+      "sha256": "4d5b5d3ac4060ce0c54c56f3511829567e5d3e4fdc0b4de74cbd4e62fd9b4bd2"
+    },
+    {
+      "file": "05-restarted-camera.png",
+      "bytes": 707555,
+      "sha256": "7a02bec81e52c9582ef733683a1b1c6bef4b563ffd2e95a7bd8276e4344581df"
+    }
+  ],
+  "sourceSha256": {
+    "controller.ts": "8fda1880d7f909abb9fc51ea44ecf5b1625ed75c6018882122d418b6ae87fbe9",
+    "projection.ts": "64687ab9fa8338f4cc81a980df7b82f608ef4c0a5741c68920baa428e1eea635",
+    "view.ts": "91a2809b1ab523d299b27d96fe3d9e6e1fe8ae0beb55fb8c3b5ce4334ac41671",
+    "style.css": "cb127f735d13f2069424a9cf0b5488aa7c357166c2342a14da0b3d79e2f50c63",
+    "demo/main.ts": "de0172fdae91b2b9536e3b0f63969b140b506afa554e72e1bafbf56be44434d4",
+    "demo/service.mts": "72c50849ca48f4df632496f7e0928b5befe34b958b1dd5c9b0c91b74bb065869",
+    "tests/native.cjs": "8deca585d4eea0029cfc911be8189165ac0c701b233efd4fc13eba1991cb884d"
+  },
+  "limitations": "Synthetic isolated fixture, nonvisible Electron offscreen compositor capture. V3.5 scene/Vela and integrated shell acceptance belong to integration lead. Not a presented frame/GPU benchmark."
+}

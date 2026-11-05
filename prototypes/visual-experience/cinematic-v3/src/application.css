@@ -1,0 +1,1088 @@
+.command-surface {
+  color: #e6e0f2;
+  background: linear-gradient(140deg, #191728f5, #0b1020fc);
+  border: 1px solid #b9a4e24a;
+  border-radius: 24px;
+  padding: 28px;
+  width: min(780px, 90vw);
+  max-height: 82vh;
+  box-shadow: 0 30px 120px #000c;
+}
+.application-vela-content .vela-core {
+  padding: 0;
+}
+.application-vela-content .vela-core-header h2 {
+  display: none;
+}
+.application-vela-content
+  .vela-core-compose
+  .vela-core-field:has(input[type="checkbox"]) {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+.application-vela-content
+  .vela-core-compose
+  .vela-core-field:has(input[type="checkbox"])
+  > span {
+  flex: 1;
+  min-width: 0;
+}
+.application-vela-content .vela-core-compose input[type="checkbox"] {
+  flex: none;
+  order: -1;
+  margin-top: 4px;
+}
+.application-library-content .aw-library {
+  padding: 0;
+  border: 0;
+  max-height: none;
+  box-shadow: none;
+  background: transparent;
+}
+.application-direct-resource .aw-media-title,
+.working-content.aw-media .aw-media-heading {
+  display: none;
+}
+.aw-mission-workroom {
+  display: grid;
+  gap: 8px;
+  padding: 4px 2px 12px;
+  overflow-wrap: anywhere;
+}
+.aw-mission-workroom > h3,
+.aw-mission-workroom > p,
+.aw-mission-workroom > ol {
+  margin: 0;
+}
+.aw-mission-workroom > p,
+.aw-mission-workroom li > :is(small, time) {
+  color: #beb8cd;
+  font-size: 0.78rem;
+}
+.aw-mission-workroom > button {
+  justify-self: start;
+  min-height: 32px;
+  color: #ded0f2;
+  text-align: start;
+}
+.aw-mission-workroom > ol {
+  padding: 0;
+  list-style: none;
+}
+.aw-mission-workroom li {
+  display: grid;
+  gap: 3px;
+  padding: 6px 8px;
+  border-block-start: 1px solid #b9a4e23b;
+}
+.aw-mission-workroom li[data-task-state="verified"] {
+  border-inline-start: 2px solid #a9d8c6;
+}
+.aw-mission-workroom li > details > :is(small, time) {
+  display: block;
+  margin-block-start: 4px;
+  color: #beb8cd;
+  font-size: 0.78rem;
+}
+.aw-mission-workroom li > details > summary {
+  cursor: pointer;
+  color: #ded0f2;
+}
+.aw-mission-workroom li[data-mission-metric] {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 3px 12px;
+  font-size: 0.82rem;
+}
+.aw-mission-workroom li[data-mission-metric] > strong {
+  font-variant-numeric: tabular-nums;
+}
+.vela-mission-record [data-mission-admission] > small {
+  display: block;
+  margin-block-start: 4px;
+}
+.aw-mission-workroom-controls > summary {
+  cursor: pointer;
+  color: #ded0f2;
+  padding: 8px 2px;
+}
+/* PDF text is painted on the canvas. The selectable text above it must stay invisible. */
+.aw-media-pdf-text {
+  text-shadow: none;
+}
+.application-card-actions {
+  display: grid;
+  gap: 3px;
+}
+.application-card-actions button {
+  text-align: left;
+  padding-inline: 12px;
+  min-height: 30px;
+}
+.application-focused-rail-heading {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 300;
+  pointer-events: none;
+  padding-inline: 3px;
+  border-bottom: 1px solid #bbd4dc35;
+  color: #cadbdf;
+  font: 500 9px/1.45 "Segoe UI", sans-serif;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.application-ready .folio:not(.expanded) .aw-placement-trash,
+.application-ready .folio[data-locked="true"] .aw-placement-trash,
+.application-ready .folio:is(.expanded,.receded,[data-locked="true"]) .aw-card-edges {
+  display: none;
+}
+.application-environments.aw-contextual-surface,
+.application-workspace-actions.aw-contextual-surface,
+.application-resources.aw-contextual-surface,
+.application-stream.aw-contextual-surface,
+.application-agents.aw-contextual-surface {
+  width: 420px;
+  padding: 14px 12px 12px;
+  gap: 8px;
+  border-radius: 22px;
+  border-color: #cadfdc42;
+  color: #e6edec;
+  background:
+    radial-gradient(ellipse at 12% 0%, #b4d8d01f, transparent 58%),
+    linear-gradient(152deg, #192027da, #0b1018ed 57%, #101a23e0);
+  box-shadow:
+    0 18px 64px #01040975,
+    inset 0 1px 0 #ecfff333,
+    inset 0 -1px 0 #70b8ce12;
+  backdrop-filter: blur(24px) saturate(1.12);
+}
+#application-stream {
+  display: inline-grid;
+  place-items: center;
+}
+.application-environments > .aw-contextual-heading,
+.application-workspace-actions > .aw-contextual-heading,
+.application-agents > .aw-contextual-heading {
+  padding-inline: 8px 0;
+  color: #dae9e5;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+.application-environments > .aw-contextual-content,
+.application-workspace-actions > .aw-contextual-content,
+.application-agents > .aw-contextual-content {
+  overflow: hidden;
+  padding: 3px;
+}
+@media (forced-colors: active) {
+  .application-environments.aw-contextual-surface,
+  .application-workspace-actions.aw-contextual-surface,
+  .application-resources.aw-contextual-surface,
+  .application-stream.aw-contextual-surface,
+  .application-agents.aw-contextual-surface {
+    background: Canvas;
+    color: CanvasText;
+    border-color: CanvasText;
+    box-shadow: none;
+  }
+}
+.application-agent-content {
+  min-height: 0;
+  height: 100%;
+}
+.application-source-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+.application-source-choice button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+#conversation-surface.aw-contextual-surface,
+.application-ready .aw-workspace-layout {
+  color: var(--aw-surface-text);
+  border-color: var(--aw-surface-rim);
+  background: var(--aw-surface-fill);
+  box-shadow: var(--aw-surface-shadow);
+}
+#conversation-surface > .aw-contextual-heading {
+  color: var(--aw-surface-heading);
+}
+.application-ready .aw-workspace-layout button[aria-pressed="true"] {
+  color: var(--aw-control-text);
+  border-color: var(--aw-control-rim);
+  background: var(--aw-option-selected-film);
+}
+.application-conversation-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.application-conversation-content .cp-manager {
+  width: 100%;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.application-conversation-content .cp-manager > header > h2,
+#conversation-surface > .aw-contextual-heading > .aw-contextual-dismiss {
+  display: none;
+}
+/* Vela speaks from the scene; her existing host supplies geometry and lifecycle.
+   The only standing optical surface is the component's minimal composer. */
+#vela-assistant-surface.aw-contextual-surface {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  overflow: visible;
+  text-shadow: 0 1px 3px #03020bd9;
+}
+#vela-assistant-surface > .aw-contextual-heading {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  z-index: 1;
+  gap: 0;
+}
+#vela-assistant-surface > .aw-contextual-heading > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+#vela-assistant-surface .aw-contextual-dismiss {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: #c4a6e509;
+  color: #c6b6d7;
+  opacity: 0;
+}
+#vela-assistant-surface:hover .aw-contextual-dismiss,
+#vela-assistant-surface:focus-within .aw-contextual-dismiss {
+  opacity: 1;
+}
+#vela-assistant-surface > .aw-contextual-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: transparent;
+}
+#vela-assistant-surface .vela-core-compose textarea {
+  padding-right: 28px;
+}
+@media (forced-colors: active) {
+  #vela-assistant-surface.aw-contextual-surface {
+    background: Canvas;
+    border: 1px solid CanvasText;
+  }
+  #vela-assistant-surface .aw-contextual-dismiss {
+    opacity: 1;
+    color: ButtonText;
+    border: 1px solid ButtonText;
+  }
+}
+.command-surface.conversation-surface {
+  width: min(1140px, 94vw);
+  max-height: 88vh;
+  padding: 20px;
+}
+.conversation-surface .cp-manager {
+  width: 100%;
+  max-height: 75vh;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.command-surface::backdrop {
+  background: #02030b70;
+  backdrop-filter: blur(8px);
+}
+.command-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.command-heading h2 {
+  font-size: 24px;
+  font-weight: 400;
+  margin: 0 0 24px;
+}
+.command-surface button {
+  border: 1px solid #c6b6e43c;
+  border-radius: 10px;
+  padding: 11px 15px;
+  margin: 4px 0;
+  text-align: left;
+  background: #bab0ec09;
+}
+.command-surface button:hover {
+  background: #c8b2ff20;
+}
+.command-surface button:disabled {
+  opacity: 0.4;
+}
+.command-surface label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 15px 0;
+  font-size: 13px;
+}
+.command-surface input,
+.command-surface select {
+  color: #ede6fc;
+  background: #0c1022;
+  border: 1px solid #a394c950;
+  padding: 12px;
+  border-radius: 9px;
+  width: 100%;
+}
+.command-surface p {
+  color: #b7aec9;
+  line-height: 1.7;
+  font-size: 13px;
+}
+.command-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr;
+  gap: 30px;
+}
+.workspace-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.workspace-row > button:first-child {
+  flex: 1;
+}
+.workspace-row small,
+.resource-result small {
+  display: block;
+  color: #b5a8cb;
+  font-size: 10px;
+  margin-top: 5px;
+}
+.resource-result {
+  display: block;
+  width: 100%;
+}
+.geometry-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.layout-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+#command-error {
+  color: #f6b8ba;
+}
+.block-tools {
+  position: absolute;
+  right: 9px;
+  top: 8px;
+  display: flex;
+  gap: 3px;
+  z-index: 3;
+}
+.block-tools > button {
+  padding: 4px 7px;
+  border-radius: 6px;
+  color: #d0c3e5;
+}
+.block-tools .resize-handle {
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.folio[data-shape="rounded"]:not(.expanded) {
+  border-radius: 18px;
+}
+.folio[data-shape="circle"]:not(.expanded) {
+  border-radius: 50%;
+}
+.folio[data-shape="circle"]:not(.expanded) .folio-inner {
+  padding: 22% 17%;
+}
+.folio[data-shape="circle"]:not(.expanded) .folio-preview {
+  display: none;
+}
+.folio[data-shape="circle"]:not(.expanded) .block-tools {
+  right: 32%;
+  top: 12px;
+}
+.canvas-tools {
+  position: fixed;
+  left: 25px;
+  bottom: 118px;
+  display: flex;
+  gap: 8px;
+  z-index: 30;
+}
+.application-ready .dock {
+  display: none;
+}
+.application-ready .place {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.canvas-tools button {
+  background: #141727c9;
+  border: 1px solid #b9a3dc33;
+  border-radius: 10px;
+  padding: 8px 11px;
+}
+.conversation-transcript {
+  flex: 1;
+  min-height: 50px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  user-select: text;
+}
+.conversation-transcript b {
+  color: #c8afe8;
+  font-size: 11px;
+}
+.conversation-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conversation-compose label {
+  flex: initial !important;
+}
+.conversation-compose textarea {
+  padding: 8px !important;
+  min-height: 55px !important;
+  max-height: 100px;
+  font-size: 14px !important;
+}
+.conversation-compose button {
+  border: 1px solid #c3afd446;
+  border-radius: 8px;
+  padding: 8px 16px;
+  margin-right: 12px;
+}
+.provider-label,
+.execution-state {
+  font-size: 11px;
+  color: #b7a5c9;
+}
+.inline-events {
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.8;
+}
+#constellation-view {
+  position: fixed;
+  inset: 140px 35px 160px;
+  z-index: 22;
+  overflow: auto;
+  background: radial-gradient(ellipse at center, #141323da, #090c17b0);
+  border: 1px solid #b2a4cf20;
+  border-radius: 36px;
+  padding: 32px;
+}
+.universe-heading h1 {
+  font-weight: 300;
+  font-size: 36px;
+  margin: 14px 0;
+}
+.universe-heading p,
+.universe-foot {
+  color: #b4aaca;
+  font-size: 13px;
+}
+.workspace-stars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 35px;
+  justify-content: center;
+  padding: 30px;
+}
+.workspace-star {
+  width: 200px;
+  height: 170px;
+  border: 1px solid #b6a0dd50;
+  background: radial-gradient(ellipse, #baa0ec20, #080d1c);
+  border-radius: 45%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.workspace-star span {
+  font-size: 35px;
+  color: #ceb5f5;
+}
+.workspace-star small {
+  color: #a899bf;
+}
+.application-ready .dock {
+  max-width: 96vw;
+  gap: 7px;
+  padding: 12px 16px;
+}
+.application-ready .dock button {
+  padding: 8px;
+}
+.application-ready .provenance {
+  max-width: 40vw;
+}
+@media (max-width: 1100px) {
+  .application-ready .dock button span {
+    font-size: 9px;
+  }
+  .application-ready .dock {
+    gap: 2px;
+  }
+}
+@media (max-width: 850px) {
+  .command-grid {
+    grid-template-columns: 1fr;
+  }
+  .application-ready .dock button span {
+    display: none;
+  }
+}
+#constellation-view.constellation-host {
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+  pointer-events: none;
+}
+.application-ready .topbar {
+  top: 12px;
+  height: auto;
+  min-height: 80px;
+  padding: 0 var(--window-control-reserve, 20px) 0 16px;
+  gap: 18px;
+}
+.application-ready .brand {
+  flex: none;
+}
+.application-ready .brand img {
+  width: 80px;
+  height: 80px;
+}
+.application-ready .brand > span {
+  font-size: 19px;
+  letter-spacing: 0.28em;
+}
+.application-ready .brand small {
+  display: none;
+}
+.application-ready .place {
+  flex: 1 1 auto;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+  border: 0;
+  padding-left: 0;
+  font-size: 15px;
+}
+.application-ready .place > button {
+  min-height: 34px;
+  flex: none;
+  padding: 5px 2px;
+  line-height: 1.2;
+}
+.application-ready .aw-workspace-layout {
+  flex: none;
+  max-width: 100%;
+}
+.application-ready .aw-workspace-layout button {
+  font-size: 13px;
+  padding: 8px 10px;
+}
+.application-ready .aw-workspace-layout .aw-workspace-add {
+  font-size: 18px;
+  padding: 6px 10px;
+}
+.application-ready #application-stream svg {
+  width: 20px;
+  height: 20px;
+}
+.application-ready #application-connections {
+  font-size: 22px;
+}
+.application-ready #workspace-manager {
+  flex: 0 1 auto;
+  min-width: 88px;
+  max-width: min(24vw, 260px);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.application-ready .topbar > button {
+  flex: none;
+  padding: 8px 12px;
+  font-size: 15px;
+}
+.application-ready .scene-navigation {
+  display: flex;
+  flex: none;
+  gap: 16px;
+}
+.application-ready .scene-navigation button {
+  font-size: 14px;
+}
+@media (max-width: 1280px) {
+  .application-ready .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 2px 12px;
+    align-items: center;
+  }
+  .application-ready .brand {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .application-ready .place {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding-block: 0 6px;
+  }
+  .application-ready .scene-navigation {
+    grid-column: 2;
+    grid-row: 1;
+    margin-left: 0;
+  }
+  .application-ready #settings-button {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+@media (max-width: 850px) {
+  .application-ready .topbar {
+    gap: 2px 8px;
+    padding-left: 12px;
+  }
+  .application-ready .brand img {
+    width: 76px;
+    height: 76px;
+  }
+  .application-ready .brand > span {
+    font-size: 18px;
+  }
+  .application-ready #workspace-manager {
+    max-width: min(40vw, 220px);
+  }
+  .application-ready #settings-button {
+    font-size: 0;
+  }
+  .application-ready #settings-button span {
+    font-size: 12px;
+    margin-left: 0;
+  }
+}
+#constellation-view.overview {
+  background: transparent;
+  border: 0;
+}
+.constellation-host .aw-working .aw-constellation-bar {
+  display: flex;
+}
+.application-ready .topbar,
+.application-ready .dock,
+.application-ready .canvas-tools,
+.application-ready #status {
+  z-index: 300000;
+}
+.application-ready .floating-dialog,
+.application-ready .stream {
+  z-index: 350000;
+}
+.application-ready #constellation-view {
+  z-index: 250000;
+}
+.local-task-state {
+  display: flex !important;
+  flex-direction: row !important;
+  flex: initial !important;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+}
+.application-ready #stage {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.application-ready #stage .folio {
+  pointer-events: auto;
+}
+.vela-grip {
+  display: none;
+}
+.application-ready #vela.vela-card .vela-grip {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 0;
+  height: var(--vela-ui-inset, 28px);
+  line-height: var(--vela-ui-inset, 28px);
+  border: 1px solid #b9a4e244;
+  border-radius: 12px;
+  background: #121326bb;
+  color: #d7c8ee;
+  font-size: calc(11px * var(--vela-ui-scale, 1));
+  cursor: grab;
+  touch-action: none;
+  z-index: 2;
+  pointer-events: auto;
+}
+.application-ready #vela.vela-card .presence-target {
+  pointer-events: none;
+}
+.application-ready.vela-access #vela.vela-card {
+  z-index: 300001;
+}
+.application-ready #vela.vela-card .vela-label {
+  display: flex;
+  position: absolute;
+  top: auto;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  transform: none;
+  height: var(--vela-ui-inset, 28px);
+  justify-content: center;
+  max-width: 100%;
+  overflow: visible;
+}
+.application-ready #vela.vela-card .vela-label b,
+.application-ready #vela.vela-card .vela-label > span {
+  display: none;
+}
+.application-ready #vela.vela-card .vela-label small {
+  font-size: calc(10px * var(--vela-ui-scale, 1));
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.application-ready.constellation-overview .study-caption {
+  visibility: hidden;
+}
+.application-ready.constellation-overview #vela {
+  z-index: 300001;
+}
+.application-ready.constellation-overview #vela .vela-label {
+  display: flex;
+  top: calc(100% + 6px);
+  bottom: auto;
+  left: auto;
+  right: 0;
+  align-items: flex-end;
+  max-width: 208px;
+}
+/* Quiet actual idle presence; standalone synthetic studies keep their labels.
+   The existing button aria-label retains the full observed state. */
+body.application-ready:is(:not([data-vela]), [data-vela="idle"])
+  #vela
+  .vela-label
+  small {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+body.application-ready:is(:not([data-vela]), [data-vela="idle"])
+  #vela.vela-card
+  .vela-label
+  b {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: calc(11px * var(--vela-ui-scale, 1));
+}
+body.application-ready #vela .vela-label > span {
+  visibility: hidden;
+}
+body.application-ready #vela.vela-card .vela-label > span {
+  display: block;
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  font-size: calc(11px * var(--vela-ui-scale, 1));
+  line-height: 1.3;
+}
+body.application-ready
+  #vela:is(:hover, :focus-visible, :focus-within)
+  .vela-label
+  > span {
+  visibility: visible;
+}
+.layout-preview-guides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.layout-preview-guides i {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+.alignment-guide {
+  background: #c8b3e748;
+}
+.placement-area {
+  border: 1px solid #d1baf27a;
+  border-radius: 16px;
+  background: linear-gradient(150deg, #c9b5f00c, transparent);
+  box-shadow: inset 0 0 22px #c4a5e80c;
+}
+.layer-actions,
+.organization-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+.command-surface details {
+  padding: 12px 0;
+}
+.task-member-choice {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 10px;
+}
+.task-member-choice input {
+  width: auto !important;
+}
+.group-task-list {
+  list-style: none;
+  padding: 0;
+  max-height: 200px;
+  overflow: auto;
+}
+.group-task {
+  padding: 6px 10px;
+  margin: 2px 0;
+  text-align: left;
+  width: 100%;
+  border: 1px solid #baa8dd33;
+  border-radius: 8px;
+}
+.task-group-summary {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.conversation-draft-status {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+.conversation-draft-recovery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+.conversation-draft-recovery details {
+  width: 100%;
+}
+.conversation-draft-recovery pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow: auto;
+  padding: 0.6rem;
+  background: #14203322;
+  border-radius: 0.6rem;
+}
+.conversation-draft-recovery[hidden],
+.conversation-draft-recovery [hidden] {
+  display: none;
+}
+/* Application status belongs in the reserved footer, outside resource content.
+   Keep the existing live region and text; only its visual placement changes. */
+.application-ready #status {
+  position: fixed;
+  left: 50%;
+  right: auto;
+  bottom: 14px;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  max-width: min(32rem, calc(100vw - 48rem));
+  max-height: 32px;
+  margin: 0;
+  padding: 5px 12px;
+  border: 1px solid #c8c6e12e;
+  border-radius: 10px;
+  background: #11141ee8;
+  color: #e0ddea;
+  font:
+    12px/1.4 system-ui,
+    sans-serif;
+  letter-spacing: normal;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.application-ready #status:empty {
+  display: none;
+}
+
+/* The existing keyboard footer is hidden at this breakpoint. Use its left
+   slot and leave a separate, bounded right slot for the local-data notice. */
+@media (max-width: 1100px) {
+  .application-ready #status {
+    left: 24px;
+    transform: none;
+    max-width: min(32rem, calc(100vw - 16rem));
+  }
+  .application-ready .provenance {
+    right: 24px;
+    bottom: 18px;
+    max-width: 12rem;
+    margin: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+    text-align: right;
+  }
+}
+@media (max-width: 640px) {
+  .application-ready #status {
+    max-width: calc(100vw - 13rem);
+  }
+  .application-ready .provenance {
+    max-width: 9rem;
+    font-size: 8px;
+  }
+}
+
+/* The existing frame coordinator supplies a free footer slot or chrome slot.
+   Active placement uses viewport pixels and a left edge, without centering. */
+.application-ready[data-status-placement] #status {
+  left: var(--status-left, 24px);
+  max-width: var(--status-max-width, min(32rem, calc(100vw - 48px)));
+  bottom: var(--status-bottom, 14px);
+  transform: none;
+}
+.application-ready[data-status-placement="chrome"] #status {
+  z-index: 101;
+}
+.application-ready[data-status-placement="chrome"] .window-drag > span {
+  visibility: hidden;
+}
+.resource-opening-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+.resource-opening-row .resource-result {
+  min-width: 0;
+}
+.resource-opening-row > [data-attach] {
+  font-size: 0.8rem;
+}
+.application-connections {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  max-width: 30rem;
+}
+.application-connections h3,
+.application-connections p {
+  margin: 0;
+}
+.application-connections .connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+.application-connections .connection-boundary {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: #c6c0d1;
+}
+.application-connections details {
+  border-top: 1px solid #bbb0ce24;
+  padding-top: 0.65rem;
+}
+.application-connections details > button {
+  margin: 0.6rem 0.5rem 0.1rem 0;
+}
+.application-task-reference-picker {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.application-task-reference-picker > div {
+  display: grid;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.application-task-reference-picker :is(input, button) {
+  width: 100%;
+  min-height: 38px;
+  border-radius: var(--aw-control-radius, 999px);
+  padding: 8px 12px;
+  font: inherit;
+  color: var(--aw-control-text, #ede8f5);
+}
+.application-task-reference-picker button {
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.application-task-reference-picker p {
+  margin: 0;
+  color: var(--aw-control-muted, #bcb4cd);
+  font-size: 13px;
+}

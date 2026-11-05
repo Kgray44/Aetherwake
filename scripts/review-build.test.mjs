@@ -1,0 +1,122 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import * as fs from 'node:fs/promises';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
+import vm from 'node:vm';
+import { execFileSync } from 'node:child_process';
+import {createHash} from 'node:crypto';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { LIMITS, NATIVE_RUNTIME_ENTRIES, JOSE_RUNTIME, joseRuntime, contained, runtimeSource, electronRuntimeFile, allocation, destination, nodeClosure, bootstrap, readme, argumentsFor } from './review-build.mjs';
+import { readRendererReceipt, rendererReceiptName, reviewRendererReceipt } from './review-renderer.mjs';
+
+async function fixture(work){const dir=await fs.mkdtemp(path.join(tmpdir(),'aerynth-review-packager-'));try{return await work(dir);}finally{const rel=path.relative(path.resolve(tmpdir()),path.resolve(dir));assert(rel&&!rel.startsWith('..')&&!path.isAbsolute(rel)&&path.basename(dir).startsWith('aerynth-review-packager-'));await fs.rm(dir,{recursive:true,force:true});}}
+
+test('renderer review requires a completed build for the same clean candidate and exact asset bytes', async () => {
+  await fixture(async root => {
+    const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true }).trim();
+    const commit = message => git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+      'commit', '--quiet', '--no-gpg-sign', '-m', message);
+    const identity = () => ({ head: git('rev-parse', 'HEAD'), tree: git('rev-parse', 'HEAD^{tree}') });
+    const source = path.join(root, 'renderer.ts'), dist = path.join(root, 'dist');
+    await fs.writeFile(path.join(root, '.gitignore'), 'dist/\n');
+    await fs.writeFile(source, 'export const candidate = 1;');
+    git('init', '--quiet', '--template=');
+    git('add', '.');
+    commit('initial renderer');
+    const first = identity();
+    const plugin = reviewRendererReceipt();
+    plugin.configResolved({ root, build: { outDir: 'dist' } });
+    await fs.mkdir(path.join(dist, 'assets'), { recursive: true });
+    const asset = 'assets/entry.js', built = path.join(dist, asset);
+    await fs.writeFile(built, 'export const candidate=1;');
+    await assert.rejects(readRendererReceipt(dist, first, [asset]), /renderer_receipt_missing/);
+    await plugin.writeBundle.handler();
+    assert.match((await readRendererReceipt(dist, first, [asset])).sha256, /^[a-f0-9]{64}$/);
+    await assert.rejects(readRendererReceipt(dist, first, [asset, 'untracked.js']), /renderer_receipt_inventory_mismatch/);
+    await fs.appendFile(built, '\n// replaced after compilation');
+    await assert.rejects(readRendererReceipt(dist, first, [asset]), /renderer_output_changed_since_build/);
+
+    await fs.writeFile(source, 'export const candidate = 2;');
+    git('add', 'renderer.ts');
+    commit('changed renderer');
+    await assert.rejects(readRendererReceipt(dist, identity(), [asset]), /renderer_receipt_candidate_mismatch/);
+
+    await fs.unlink(path.join(dist, rendererReceiptName));
+    plugin.configResolved({ root, build: { outDir: 'dist' } });
+    await fs.appendFile(source, '\n// edit during compilation');
+    await plugin.writeBundle.handler();
+    await assert.rejects(readRendererReceipt(dist, identity(), [asset]), /renderer_receipt_missing/);
+  });
+});
+
+test('runtime selection excludes profiles, historical evidence, synthetic setup and developer entries',()=>{
+ for(const name of ['prototypes/integrated-backend/src/core.mts','prototypes/conversation-product/src/contracts.ts','prototypes/workspace-kernel/migrations/003-block-subjects.sql','prototypes/visual-experience/cinematic-v3/src/application.ts'])assert(runtimeSource(name),name);
+ for(const name of ['prototypes/vela-core/test/native-live.cjs','prototypes/integrated-backend/src/demo.mts','prototypes/integrated-backend/src/journey.mts','prototypes/block-library/benchmark-scale.mts','prototypes/connected-conversations/src/cli.ts','prototypes/workspace-engine/tests/engine.test.mts','prototypes/block-library/evidence-scale/baseline.json','prototypes/visual-experience/cinematic-v3/.runtime/secret.ts','prototypes/codex-bridge/protocol-generated/v2/Account.ts'])assert.equal(runtimeSource(name),false,name);
+});
+test('allocation is bounded before any copy and stored ZIP accounts for both directory and archive',()=>{
+ const files=[{target:'a.exe',bytes:374000000},{target:'vendor/node.exe',bytes:93000000}];const plan=allocation(files,true,4096);assert(plan.copyBound>467000000);assert(plan.totalBound>plan.copyBound+467000000);assert(plan.totalBound<LIMITS.totalBytes);assert.equal(allocation(files,false).zipBound,0);
+ assert.throws(()=>allocation([{target:'unknown',bytes:undefined}],true),/unknown/);assert.throws(()=>allocation([{target:'large',bytes:LIMITS.fileBytes+1}],false),/excessive/);assert.throws(()=>allocation([{target:'a',bytes:LIMITS.fileBytes},{target:'b',bytes:LIMITS.fileBytes}],true),/1GiB/);
+});
+
+test('actual native closure retains the Electron decision preload and fails if it is missing',async()=>{
+ const root=fileURLToPath(new URL('../',import.meta.url)),tracked=new Set(execFileSync('git',['-C',root,'ls-files','-z'],{encoding:'utf8',windowsHide:true}).split('\0').filter(Boolean));
+ const result=await nodeClosure(root,tracked,NATIVE_RUNTIME_ENTRIES),preload='prototypes/visual-experience/cinematic-v3/native/vela-review-preload.cjs';
+ assert(result.files.includes(preload),'the actual sharing dialog loads a preload outside the Node import graph');
+ assert(result.files.includes('prototypes/openai-provider/model-controls.ts'),'ordinary model controls ship in the actual native runtime closure');
+ for(const name of ['vela-review.cjs','vela-broker.cjs','desktop-preload.cjs'])assert(result.files.includes('prototypes/visual-experience/cinematic-v3/native/'+name),name);
+ const missing=new Set(tracked);missing.delete(preload);await assert.rejects(nodeClosure(root,missing,NATIVE_RUNTIME_ENTRIES),/untracked_or_missing_runtime_import/);
+});
+
+test('the ordinary Responses runtime resolves its exact reviewed model controls offline', async () => {
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  const tracked = new Set(execFileSync('git', ['-C', root, 'ls-files', '-z'], {
+    encoding: 'utf8', windowsHide: true,
+  }).split('\0').filter(Boolean));
+  const provider = 'prototypes/openai-provider/';
+  const closure = await nodeClosure(root, tracked, [provider + 'responses.mts']);
+  assert.deepEqual(closure.files, ['common.mts', 'model-controls.ts', 'responses.mts'].map(name => provider + name));
+});
+
+test('native synthetic preparation writers are excluded and cannot become a runtime dependency',async()=>{
+ for(const name of ['prepare-library-native.mts','prepare-native-scale.mts','prepare-workspace-native.mts','prepare-functional-workspace-native.mts'])assert.equal(runtimeSource('prototypes/block-library/'+name),false,name);
+ await fixture(async root=>{
+  const entry='prototypes/block-library/view.ts',seed='prototypes/block-library/prepare-workspace-native.mts';await fs.mkdir(path.dirname(path.join(root,entry)),{recursive:true});await fs.writeFile(path.join(root,entry),"import './prepare-workspace-native.mts';");await fs.writeFile(path.join(root,seed),'export const synthetic=true;');
+  await assert.rejects(nodeClosure(root,new Set([entry,seed]),[entry]),/fixture_or_private_runtime_import/);
+ });
+});
+test('locked Electron runtime inventory cannot silently pick up local data or a developer default app',()=>{
+ for(const file of ['electron.exe','LICENSE','LICENSES.chromium.html','locales/en-US.pak'])assert(electronRuntimeFile(file));assert.equal(electronRuntimeFile('resources/default_app.asar'),false);for(const file of ['resources/private.sqlite','profile.json','.runtime/trace.log','credentials.txt'])assert.throws(()=>electronRuntimeFile(file),/unexpected_Electron_runtime_file/);
+});
+test('CLI mode and destinations require an explicit new private custody path',async()=>{
+ assert.deepEqual(argumentsFor(['--plan','--output=C:\\Private\\review','--archive']),{mode:'plan',output:'C:\\Private\\review',archive:true});
+ assert.throws(()=>argumentsFor(['--plan','--build','--output=x']),/mutually_exclusive/);assert.throws(()=>argumentsFor(['--build','--output=x','--output=y']),/duplicate/);assert.throws(()=>argumentsFor(['--plan','--output=x','--guard=custom']),/unknown_argument/);
+ await fixture(async dir=>{const source=path.join(dir,'source'),vendor=path.join(dir,'vendor'),target=path.join(dir,'new','review');await fs.mkdir(source);await fs.mkdir(vendor);assert.equal(await destination(target,source,[vendor]),target);assert.equal(await fs.stat(source).then(s=>s.isDirectory()),true);await assert.rejects(destination(path.join(source,'release'),source,[vendor]),/inside_source/);await assert.rejects(destination(path.join(vendor,'release'),source,[vendor]),/inside_source/);await fs.writeFile(target+'.zip','owned prior artifact').catch(async error=>{if(error.code!=='ENOENT')throw error;await fs.mkdir(path.dirname(target));await fs.writeFile(target+'.zip','owned prior artifact');});await assert.rejects(destination(target,source,[vendor]),/already_exists/);assert.equal(await fs.readFile(target+'.zip','utf8'),'owned prior artifact');});
+});
+test('Node runtime closure removes type-only dependencies and follows real workers/imports without executing them',async()=>{
+ await fixture(async root=>{
+  const data={'entry.mts':"import type { T } from 'uninstalled-types';\nimport { value } from './dep.mts';\nimport { Worker } from 'node:worker_threads';\nexport function run(){ return value; }\nnew Worker(new URL('./worker.mts',import.meta.url));\n",'dep.mts':'export const value:number=1;','worker.mts':"import './dep.mts';"};for(const[name,text]of Object.entries(data))await fs.writeFile(path.join(root,name),text);
+  const traced=await nodeClosure(root,new Set(Object.keys(data)),['entry.mts']);assert.deepEqual(traced.files,['dep.mts','entry.mts','worker.mts']);
+  await fs.writeFile(path.join(root,'dep.mts'),"import 'unbundled-dependency';");await assert.rejects(nodeClosure(root,new Set(Object.keys(data)),['entry.mts']),/unbundled_runtime_dependency/);
+  await fs.writeFile(path.join(root,'dep.mts'),"import '../outside.mts';");await assert.rejects(nodeClosure(root,new Set(Object.keys(data)),['entry.mts']),/escapes_repository/);
+ });
+});
+test('verification helpers are excluded explicitly while new actual native host seams remain required',async()=>{
+ await fixture(async root=>{
+  const base='prototypes/visual-experience/cinematic-v3/native/',files={[base+'desktop-main.cjs']:"require('electron'); require('./backend-executable.cjs'); if(process.argv.includes('--integration-live'))require('./desktop-verify.cjs');",[base+'backend-executable.cjs']:"const fs=require('node:fs');module.exports={};"};for(const[name,text]of Object.entries(files)){await fs.mkdir(path.dirname(path.join(root,name)),{recursive:true});await fs.writeFile(path.join(root,name),text);}const result=await nodeClosure(root,new Set(Object.keys(files)),[base+'desktop-main.cjs']);assert.deepEqual(result.files,[base+'backend-executable.cjs',base+'desktop-main.cjs']);assert.deepEqual(result.excludedVerificationImports,[base+'desktop-verify.cjs']);
+ });
+});
+test('portable bootstrap compiles, preserves the real entry and blocks all verification/auto-grant routes',()=>{
+ const text=bootstrap('a'.repeat(40));new vm.Script(text);assert(text.includes('process.env.AERYNTH_NODE_BIN=node'));assert(text.includes("require('./prototypes/visual-experience/cinematic-v3/native/desktop-main.cjs')"));assert(text.includes('manifest.complete!==true'));assert(text.includes('portable-review'));assert(text.includes('verification_and_recording_modes_are_not_in_this_review_package'));
+ const help=readme('a'.repeat(40),'0.4.0');assert(help.includes('not an MSI/installer'));assert(help.includes('ReserveGuard.ps1'));assert(help.includes('No test auto-grants'));assert(help.includes('none is bundled'));assert(!/C:\\Users\\/.test(help));assert.equal(contained(path.resolve('/private'),path.resolve('/private-other')),false);
+});
+
+const SOURCE=fileURLToPath(new URL('../',import.meta.url)),PROVIDER='prototypes/openai-provider';
+function proofPath(root){const hex=Buffer.from(JOSE_RUNTIME.integrity.slice(7),'base64').toString('hex');return path.join(root,PROVIDER,'.runtime/npm-cache/_cacache/content-v2/sha512',hex.slice(0,2),hex.slice(2,4),hex.slice(4));}
+async function vendorFixture(work){return fixture(async root=>{const tracked=new Set(['package.json','package-lock.json','auth.mts','common.mts','contracts.mts'].map(name=>PROVIDER+'/'+name));for(const file of tracked){await fs.mkdir(path.dirname(path.join(root,file)),{recursive:true});await fs.copyFile(path.join(SOURCE,file),path.join(root,file));}await fs.cp(path.join(SOURCE,PROVIDER,'node_modules/jose'),path.join(root,PROVIDER,'node_modules/jose'),{recursive:true,errorOnExist:true});await fs.mkdir(path.dirname(proofPath(root)),{recursive:true});await fs.copyFile(proofPath(SOURCE),proofPath(root));return work(root,tracked);});}
+
+test('provider runtime sources are exact and exclude source-only tools/private/test fixtures',()=>{for(const name of ['auth.mts','responses.mts','native-storage.mts','loopback.mts','common.mts','contracts.mts'])assert(runtimeSource(PROVIDER+'/'+name));for(const name of ['README.md','test/auth.test.mts','.runtime/private.mts','node_modules/jose/dist/webapi/index.js','fixture-helper.mts','src/private.mts','prepare-native.mts'])assert.equal(runtimeSource(PROVIDER+'/'+name),false,name);});
+test('locked jose offline provenance validates complete installed inventory and hashes only exact needed runtime',async()=>{await vendorFixture(async(root,tracked)=>{const value=await joseRuntime(root,tracked);assert.equal(value.metadata.version,'6.2.15');assert.equal(value.metadata.license,'MIT');assert.equal(value.metadata.tarballSRIverified,true);assert.equal(value.metadata.installedInventoryVerified,true);assert.equal(value.metadata.installedFiles,80);assert(value.metadata.runtimeBytes<1024*1024);assert.equal(value.files.length,value.metadata.runtimeFiles);for(const file of value.files){assert(file.relative==='package.json'||file.relative==='LICENSE.md'||/^dist\/webapi\/.+\.js$/.test(file.relative));assert.match(file.sha256,/^[a-f0-9]{64}$/);assert(file.target.startsWith('resources/app/'+PROVIDER+'/node_modules/jose/'));}assert(value.files.some(file=>file.relative==='dist/webapi/index.js'));assert(!value.files.some(file=>file.relative.includes('dist/types')||file.relative==='README.md'));const closure=await nodeClosure(root,tracked,[PROVIDER+'/auth.mts']);assert.equal(closure.vendors.length,1);assert.equal(closure.vendorFiles.length,value.files.length);assert(closure.files.includes(PROVIDER+'/common.mts'));assert(!closure.files.some(name=>name.includes('node_modules')));});});
+test('missing proof, locked integrity/version drift, tarball corruption, added files and installed-byte tampering fail closed',async()=>{await vendorFixture(async(root,tracked)=>{const proof=await fs.readFile(proofPath(root));await fs.unlink(proofPath(root));await assert.rejects(joseRuntime(root,tracked),/jose_owned_tarball_proof_missing/);await fs.writeFile(proofPath(root),proof);const corrupted=Buffer.from(proof);corrupted[3]^=1;await fs.writeFile(proofPath(root),corrupted);await assert.rejects(joseRuntime(root,tracked),/jose_tarball_integrity_mismatch/);await fs.writeFile(proofPath(root),proof);const lockPath=path.join(root,PROVIDER,'package-lock.json'),lock=await fs.readFile(lockPath,'utf8'),parsed=JSON.parse(lock);parsed.packages['node_modules/jose'].version='6.2.14';await fs.writeFile(lockPath,JSON.stringify(parsed));await assert.rejects(joseRuntime(root,tracked),/locked_jose_metadata_mismatch/);await fs.writeFile(lockPath,lock);const extra=path.join(root,PROVIDER,'node_modules/jose/credentials.json');await fs.writeFile(extra,'SYNTHETIC_MUST_NOT_SHIP');await assert.rejects(joseRuntime(root,tracked),/unexpected_jose_installed_file/);await fs.unlink(extra);const entry=path.join(root,PROVIDER,'node_modules/jose/dist/webapi/index.js');await fs.appendFile(entry,'\n// changed installed bytes');await assert.rejects(joseRuntime(root,tracked),/jose_installed_tarball_bytes_mismatch/);});});
+test('jose exception never permits other importers, subpaths, dependencies or source-only modules',async()=>{await vendorFixture(async(root,tracked)=>{const auth=path.join(root,PROVIDER,'auth.mts');for(const spec of ['jose/jwt/verify','another-library']){await fs.writeFile(auth,"import '"+spec+"';");await assert.rejects(nodeClosure(root,tracked,[PROVIDER+'/auth.mts']),/unbundled_runtime_dependency/);}const other=PROVIDER+'/other.mts';tracked.add(other);await fs.writeFile(path.join(root,other),"import 'jose';");await assert.rejects(nodeClosure(root,tracked,[other]),/unbundled_runtime_dependency/);await fs.writeFile(auth,"import './other.mts';");await assert.rejects(nodeClosure(root,tracked,[PROVIDER+'/auth.mts']),/unreviewed_openai_runtime_source/);});});
+test('tiny actual offline runtime bundle resolves nested jose and performs local RSA JWT verification without source node_modules',async()=>{await vendorFixture(async(root,tracked)=>{const closure=await nodeClosure(root,tracked,[PROVIDER+'/auth.mts']),bundle=path.join(root,'bundle/resources/app');for(const file of closure.files){const target=path.join(bundle,file);await fs.mkdir(path.dirname(target),{recursive:true});await fs.copyFile(path.join(root,file),target);}for(const name of ['package.json','package-lock.json']){const target=path.join(bundle,PROVIDER,name);await fs.mkdir(path.dirname(target),{recursive:true});await fs.copyFile(path.join(root,PROVIDER,name),target);}for(const file of closure.vendorFiles){const target=path.join(root,'bundle',file.target);await fs.mkdir(path.dirname(target),{recursive:true});await fs.copyFile(file.file,target);assert.equal(createHash('sha256').update(await fs.readFile(target)).digest('hex'),file.sha256);}const modulePath=pathToFileURL(path.join(bundle,PROVIDER,'auth.mts')).href,josePath=pathToFileURL(path.join(bundle,PROVIDER,'node_modules/jose/dist/webapi/index.js')).href;const script=`globalThis.fetch=()=>{throw Error('network_forbidden')};const auth=await import(${JSON.stringify(modulePath)});if(typeof auth.SiwcSessionManager!=='function')throw Error('missing_auth');const j=await import(${JSON.stringify(josePath)});const k=await j.generateKeyPair('RS256');const jwt=await new j.SignJWT({sub:'fixture'}).setProtectedHeader({alg:'RS256'}).setIssuer('fixture-issuer').setAudience('fixture-client').setIssuedAt().setExpirationTime('1m').sign(k.privateKey);const result=await j.jwtVerify(jwt,k.publicKey,{issuer:'fixture-issuer',audience:'fixture-client'});if(result.payload.sub!=='fixture')throw Error('invalid_signature');process.stdout.write('PACKAGED_RUNTIME_OK');`;const output=execFileSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:5000,maxBuffer:65536,windowsHide:true,cwd:bundle,env:{...process.env,NODE_OPTIONS:'',NODE_PATH:''}});assert.equal(output,'PACKAGED_RUNTIME_OK');});});

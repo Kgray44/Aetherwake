@@ -23,6 +23,9 @@ const estimate=characters=>Math.ceil(characters/4); // Explicit character-based 
 const DEFAULT_POLICIES=JSON.parse(read("config/governance-context-policies.json"));
 
 export function buildGovernanceIndex(config,registry,readFile=read,exists=p=>existsSync(resolve(ROOT,p))) {
+  if(!config || typeof config!=="object" || Array.isArray(config)) throw new Error("Governance routing config must be an object");
+  if(!(registry instanceof Map)) throw new Error("Governance registry must be a Map parsed from governance/README.md");
+  if(typeof readFile!=="function" || typeof exists!=="function") throw new Error("Governance source readers must be functions");
   const check=validateRouter(config,registry,exists);
   if(check.errors.length) throw new Error("Governance invalid: "+check.errors.join("; "));
   const documents=[], requirements=new Map();
@@ -82,9 +85,25 @@ function unique(arr) {return [...new Set(arr)];}
  * Direct citation of another requirement in an extracted normative line
  * produces a bounded 1-hop dependency. No requirement is silently deleted.
  */
-export function buildContext({config,registry,index,task="",paths=[],requiredIds=[],maxSections=2,budgetTokens=null,forceFull=false,policies=DEFAULT_POLICIES}) {
+export function buildContext(options) {
+  if(!options || typeof options!=="object" || Array.isArray(options)) throw new Error("buildContext requires an options object");
+  const {config,registry,index,task="",paths=[],requiredIds=[],maxSections=2,budgetTokens=null,forceFull=false,policies=DEFAULT_POLICIES}=options;
+  if(!config || typeof config!=="object" || Array.isArray(config)) throw new Error("buildContext requires a routing config object");
+  if(!(registry instanceof Map)) throw new Error("buildContext requires a governance registry Map");
+  if(!index || !Array.isArray(index.documents) || !(index.requirements instanceof Map)) throw new Error("buildContext requires a governance index from buildGovernanceIndex()");
+  if(index.documents.some(doc=>!doc || typeof doc.path!=="string" || !Array.isArray(doc.sections))) throw new Error("Governance index has malformed document entries");
+  const sourceExists=path=>index.documents.some(doc=>doc.path===path&&doc.available);
+  const check=validateRouter(config,registry,sourceExists);
+  if(check.errors.length) throw new Error("Governance invalid: "+check.errors.join("; "));
+  if(typeof task!=="string") throw new Error("task must be a string");
+  if(!Array.isArray(paths) || paths.some(p=>typeof p!=="string" || !p.trim())) throw new Error("paths must be an array of nonempty strings");
+  if(!Array.isArray(requiredIds) || requiredIds.some(id=>typeof id!=="string" || !/^AW-[A-Z]+-\d{3}$/.test(id))) throw new Error("requiredIds must be an array of valid AW requirement IDs");
+  if(!Number.isSafeInteger(maxSections) || maxSections<1) throw new Error("maxSections must be a positive safe integer");
+  if(budgetTokens!==null && (!Number.isSafeInteger(budgetTokens) || budgetTokens<1)) throw new Error("budgetTokens must be a positive safe integer or null");
+  if(typeof forceFull!=="boolean") throw new Error("forceFull must be a boolean");
+  if(!policies || typeof policies!=="object" || policies.schemaVersion!==2 || !policies.dependencies || typeof policies.dependencies!=="object") throw new Error("Invalid governance coverage policy");
   if(!task.trim()&&!paths.length&&!requiredIds.length)throw new Error("Provide --task, --path, or --requirement");
-  const exists=path=>index.documents.some(x=>x.path===path&&x.available);
+  const exists=sourceExists;
   // Validate manual IDs before routing; avoid a partial "successful" package.
   for(const id of requiredIds)if(!index.requirements.has(id))throw new Error("Unknown or unindexed requirement ID: "+id);
   const route=routeGovernance(config,registry,task||requiredIds.join(" "),paths,exists);
@@ -102,7 +121,6 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
   if(!chosen.has("00"))chosen.set("00",{document:byDoc.get("00"),reason:["constitutional baseline"]});
   // Resolve stable cross-domain obligations from the domain map, not the
   // wording of individual benchmark prompts. One hop prevents runaway breadth.
-  if(policies.schemaVersion!==2 || !policies.dependencies)throw new Error("Invalid governance coverage policy");
   const dependencyExpansions=[];
   const initial=[...chosen.keys()];
   for(const from of initial) {
@@ -118,7 +136,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
   const selected=[], dependencies=[], warnings=[...route.warnings], missing=[...route.unavailable];
   // A safe requirement envelope for the WRONG charter is not sufficient.
   // Make unmatched primary scope an explicit review obligation.
-  const primaryDomains=[...chosen.keys()].filter(x=>!["00","14","15","16"].includes(x));
+  const primaryDomains=[...route.binding,...route.advisory].map(x=>x.id).concat(requiredIds.map(id=>index.requirements.get(id).charter)).filter(x=>!["00","15","16"].includes(x));
   const scopeNeedsReview=primaryDomains.length===0;
   if(scopeNeedsReview)warnings.push("No primary subsystem charter identified. Do not treat the selected context as sufficient without reviewing the task scope and applicable governance.");
 
@@ -126,7 +144,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
     const doc=entry.document;
     if(!doc?.available){missing.push({id,path:doc?.path,reason:["source unavailable"]});continue;}
     if(id==="00"||forceFull) {
-      selected.push({id,path:doc.path,authority:doc.authority,reason:entry.reason,mode:"full",sections:doc.sections.map(x=>x.ordinal),range:[1,doc.fullText.split(/\r?\n/).length],sha256:doc.sha256,text:doc.fullText});
+      selected.push({id,path:doc.path,authority:doc.authority,reason:entry.reason,mode:"full",sections:doc.sections.map(x=>x.ordinal),range:[1,doc.fullText.split(/\r?\n/).length],sha256:doc.sha256,documentSha256:doc.sha256,text:doc.fullText});
       continue;
     }
     const pinned=new Set(requiredIds.filter(rid=>index.requirements.get(rid)?.charter===id).map(rid=>index.requirements.get(rid).section));
@@ -137,7 +155,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
     const positive=scored.filter(x=>x.score>0);
     // Fallback to full charter if no section can be responsibly selected.
     if(!positive.length && !pinned.size){
-      selected.push({id,path:doc.path,authority:doc.authority,reason:[...entry.reason,"no reliable section match: full-document fallback"],mode:"full-fallback",sections:doc.sections.map(x=>x.ordinal),range:[1,doc.fullText.split(/\r?\n/).length],sha256:doc.sha256,text:doc.fullText});
+      selected.push({id,path:doc.path,authority:doc.authority,reason:[...entry.reason,"no reliable section match: full-document fallback"],mode:"full-fallback",sections:doc.sections.map(x=>x.ordinal),range:[1,doc.fullText.split(/\r?\n/).length],sha256:doc.sha256,documentSha256:doc.sha256,text:doc.fullText});
       warnings.push("Charter "+id+" needed full-document fallback; task relevance was not established.");
       continue;
     }
@@ -147,7 +165,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
       ordinals.add(x.section.ordinal);
     }
     const subset=doc.sections.filter(x=>ordinals.has(x.ordinal));
-    for(const s of subset)selected.push({id,path:doc.path,authority:doc.authority,reason:entry.reason,mode:"section",sections:[s.ordinal],title:s.title,range:[s.start_line,s.end_line],sha256:s.sha256,text:s.text,requirements:s.requirementIds});
+    for(const s of subset)selected.push({id,path:doc.path,authority:doc.authority,reason:[...entry.reason,...(pinned.has(s.ordinal)?["explicit requirement section"]:["ranked task relevance (score "+scored.find(x=>x.section.ordinal===s.ordinal).score+")"])],mode:"section",sections:[s.ordinal],title:s.title,range:[s.start_line,s.end_line],sha256:s.sha256,documentSha256:doc.sha256,text:s.text,requirements:s.requirementIds});
   }
   // One-hop normative dependencies. Parse references only in selected normative
   // lines, not introduction prose, metadata lists, or arbitrary hyperlinks.
@@ -162,7 +180,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
   const normative=[];
   for(const req of index.requirements.values()) {
     if(chosen.has(req.charter) && !selectedReqIds.has(req.id)) {
-      normative.push({...req,sha256:digest(req.text)});
+      normative.push({...req,sha256:digest(req.text),documentSha256:byDoc.get(req.charter).sha256});
       selectedReqIds.add(req.id);
     }
   }
@@ -180,7 +198,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
     const req=index.requirements.get(id);
     if(!req){warnings.push("Unresolved referenced requirement "+id);continue;}
     if(dependencies.length>=MAX_DEPENDENCIES){warnings.push("Dependency expansion limit reached: "+id+" not included");continue;}
-    dependencies.push({id:req.id,path:req.path,authority:req.authority,line:req.line,reason:"referenced by selected normative requirement",text:req.text});
+    dependencies.push({id:req.id,path:req.path,authority:req.authority,line:req.line,reason:"referenced by selected normative requirement",text:req.text,documentSha256:byDoc.get(req.charter).sha256});
   }
   const chars=selected.reduce((s,x)=>s+x.text.length,0)+normative.reduce((s,x)=>s+x.text.length,0)+dependencies.reduce((s,x)=>s+x.text.length,0);
   const baselineChars=unique(selected.map(x=>x.path)).reduce((s,path)=>s+(index.documents.find(d=>d.path===path)?.sourceChars||0),0);
@@ -192,7 +210,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
     constitutionalBaseline:"complete",authorityPolicy:"binding constitution, advisory unratified charters",scopeNeedsReview,coverageGuarantee:"every normative requirement in each selected charter; domain selection and explanatory completeness require review",
     route,selected,normative,dependencies,missing,warnings,
     metrics:{selectedCharacters:chars,estimatedTokens:estimate(chars),supplementalNormativeRequirements:normative.length,estimateMethod:"ceil(characters/4), NOT real tokenizer output",fullRoutedCharacters:baselineChars,characterReductionPercent:baselineChars?Math.round(10000*(1-chars/baselineChars))/100:0,budgetTokens,budgetExceeded},
-    coverage:{requested:requiredIds,found:requiredIds.filter(id=>selectedReqIds.has(id)||dependencies.some(d=>d.id===id)),missingRequired:requiredIds.filter(id=>!selectedReqIds.has(id)&&!dependencies.some(d=>d.id===id))}
+    coverage:{requested:requiredIds,found:requiredIds.filter(id=>selectedReqIds.has(id)||dependencies.some(d=>d.id===id)),missingRequired:requiredIds.filter(id=>!selectedReqIds.has(id)&&!dependencies.some(d=>d.id===id)),selectedCharters:[...chosen.keys()].sort(),explanatorySectionsPartial:selected.some(x=>x.mode==="section"),incompleteContext:scopeNeedsReview||missing.length>0||warnings.some(x=>x.startsWith("Unresolved referenced requirement")||x.startsWith("Dependency expansion limit"))}
   };
 }
 
@@ -218,7 +236,7 @@ export function formatContext(result) {
 }
 
 function parseCli(argv) {
-  const args={task:"",paths:[],requiredIds:[],maxSections:2,budgetTokens:null,forceFull:false,json:false,index:false};
+  const args={task:"",paths:[],requiredIds:[],maxSections:2,budgetTokens:null,forceFull:false,json:false,emitIndex:false};
   for(let i=0;i<argv.length;i++){
     const a=argv[i];
     if(a==="--task"||a==="--path"||a==="--requirement"||a==="--max-sections"||a==="--budget-tokens"){
@@ -229,11 +247,13 @@ function parseCli(argv) {
       else if(a==="--requirement")args.requiredIds.push(v);
       else if(a==="--max-sections"||a==="--budget-tokens"){
         if(!/^[1-9]\d*$/.test(v))throw new Error(a+" must be a positive integer");
-        args[a==="--max-sections"?"maxSections":"budgetTokens"]=Number(v);
+        const number=Number(v);
+        if(!Number.isSafeInteger(number))throw new Error(a+" must be a safe integer");
+        args[a==="--max-sections"?"maxSections":"budgetTokens"]=number;
       }
     }else if(a==="--full")args.forceFull=true;
     else if(a==="--json")args.json=true;
-    else if(a==="--index")args.index=true;
+    else if(a==="--index")args.emitIndex=true;
     else if(a==="--help"||a==="-h")args.help=true;
     else throw new Error("Unknown argument: "+a);
   }
@@ -244,11 +264,12 @@ function run(argv) {
   if(a.help){console.log("Usage: node scripts/governance-context.mjs --task \"DESCRIPTION\" [--path FILE ...] [--requirement AW-ID ...] [--max-sections N] [--budget-tokens N] [--full] [--json] [--index]\nDefault: full Constitution, selected complete charter sections, one-hop normative ID dependencies. --full loads entire routed documents. --index emits the live source index.");return;}
   const config=JSON.parse(read("config/governance-routes.json")),registry=parseRegistry(read("governance/README.md"));
   const index=buildGovernanceIndex(config,registry);
-  if(a.index){
+  if(a.emitIndex){
     const docs=index.documents.map(d=>({id:d.id,path:d.path,authority:d.authority,sha256:d.sha256,sections:d.sections.map(s=>({ordinal:s.ordinal,title:s.title,lines:[s.start_line,s.end_line],sha256:s.sha256,requirements:s.requirementIds}))}));
     console.log(JSON.stringify({schemaVersion:2,documents:docs,requirementCount:index.requirements.size},null,2));return;
   }
-  const result=buildContext({config,registry,index,...a});
+  const {task,paths,requiredIds,maxSections,budgetTokens,forceFull}=a;
+  const result=buildContext({config,registry,index,task,paths,requiredIds,maxSections,budgetTokens,forceFull});
   console.log(a.json?JSON.stringify(result,null,2):formatContext(result));
   if(result.coverage.missingRequired.length)process.exitCode=3;
 }

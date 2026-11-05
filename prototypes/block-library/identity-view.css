@@ -1,0 +1,1201 @@
+@import "./media-view.css";
+
+/* Type belongs to the registered DOM identity, not the shared GPU material family. */
+.folio[data-block-kind="task_objective"] { --aw-type-accent:#c6d0b4; }
+.aw-identity-objective,.aw-overview-objective { font:500 1.15rem/1.55 Georgia,serif; margin:0 0 .6rem; }
+.aw-identity-objective-state { display:block; font-size:.72rem; line-height:1.5; padding:.5rem 0; border-block:1px solid #c6d0b433; }
+.aw-identity-objective-requirements { padding-left:1.3rem; margin:.7rem 0 0; }.aw-identity-objective-requirements li { padding:.2rem 0; font-size:.8rem; line-height:1.5; }
+.folio[data-block-kind="agent"] { --aw-type-accent:#b7cadb; }
+.folio[data-block-kind="timeline"] { --aw-type-accent:#cbbfa7; }
+.aw-block-compact[data-layout="chronology"] .aw-identity-row { display:grid; grid-template-columns:4.5em minmax(0,1fr); padding:.45rem 0; border-top:1px solid #cbbfa733; }
+.aw-block-compact[data-layout="chronology"] .aw-identity-time { grid-column:1; grid-row:1/3; }.aw-block-compact[data-layout="chronology"] .aw-identity-row-title,.aw-block-compact[data-layout="chronology"] .aw-identity-row-detail { grid-column:2; }
+.folio[data-block-kind="checklist"] { --aw-type-accent:#bdc9b3; }
+.aw-block-compact[data-layout="agent"] .aw-identity-agent-profile { display:flex; align-items:center; gap:.7rem; margin-bottom:.7rem; }
+.aw-identity-agent-monogram { display:grid; place-items:center; flex:0 0 38px; height:38px; border-radius:50%; border:1px solid #b7cadb55; font:500 1.3rem Georgia,serif; }
+.aw-identity-agent-profile h3 { margin:0; font:500 1.1rem/1.4 system-ui,sans-serif; }.aw-identity-agent-specialties { display:block; margin-top:.5rem; opacity:.65; }
+.aw-block-compact[data-layout="ledger"] .aw-identity-row { border:1px solid #bdc9b32b; border-radius:.55rem; padding:.5rem; margin-bottom:.4rem; }
+.folio[data-block-kind] {
+  --aw-type-accent: #c9c4d3;
+}
+.folio[data-block-kind="conversation"] {
+  --aw-type-accent: #b8c4ef;
+}
+.folio[data-block-kind="task"],
+.folio[data-block-kind="task_group"] {
+  --aw-type-accent: #acc3d7;
+}
+.folio[data-block-kind="stream"] {
+  --aw-type-accent: #a7c8cb;
+}
+.folio[data-block-kind="project_overview"] {
+  --aw-type-accent: #bcb2dc;
+}
+.folio[data-block-kind="resource_browser"] {
+  --aw-type-accent: #b9c6d4;
+}
+.folio[data-block-kind="collection_browser"] {
+  --aw-type-accent: #c2b2d0;
+}
+.folio[data-block-kind="research"] {
+  --aw-type-accent: #9fc9d3;
+}
+.folio[data-block-kind="reference"] {
+  --aw-type-accent: #cabbac;
+}
+.folio[data-block-kind="file"] { --aw-type-accent:#b5c7ce; }
+.folio[data-block-kind="link"] { --aw-type-accent:#c4b9df; }
+.aw-block-compact[data-layout="file"] .aw-identity-document-heading { padding-bottom:.6rem; border-bottom:1px solid #b9c6d333; font:500 1.15rem/1.4 system-ui,sans-serif; }
+.aw-block-compact[data-layout="file"] p { font:12px/1.6 ui-monospace,Consolas,monospace; }
+.aw-block-compact[data-layout="link"] .aw-identity-document-heading { font:500 1.25rem/1.4 system-ui,sans-serif; }
+.aw-block-compact[data-layout="link"] p { overflow-wrap:anywhere; border-left:2px solid #c4b9df55; padding-left:.7rem; }
+.folio[data-block-kind] .folio-top {
+  gap: 0.65rem;
+}
+.folio[data-block-kind] .card-kind-label {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.5rem;
+  color: var(--aw-type-accent);
+}
+.folio[data-block-kind] .card-kind-label > span {
+  margin-left: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aw-block-mark {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  fill: none;
+  stroke: var(--aw-type-accent);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.folio[data-block-kind] .folio-number {
+  display: none;
+}
+.folio[data-block-kind] .folio-top .folio-actions {
+  margin: 0;
+  padding: 0;
+}
+.folio[data-block-kind] .folio-top .unfold {
+  font: inherit;
+  font-size: calc(13px * var(--aw-block-text-scale, 1));
+  min-height: 32px;
+  white-space: nowrap;
+  padding: 0.25rem 0.5rem;
+}
+/* Outrank legacy material-family previews regardless of stylesheet order.
+   A registered type owns its compact body; unavailable manifests retain their
+   existing recovery summary instead. */
+.folio[data-block-kind]:not([data-block-availability="unavailable"])
+  .folio-preview {
+  display: none;
+}
+.folio[data-block-kind] .folio-subtitle {
+  line-height: 1.5;
+  color: #bcb9c7;
+}
+.aw-block-compact {
+  flex: 1;
+  min-height: 0;
+  margin-top: 0.85rem;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #8c91a84d transparent;
+  font-size: calc(14px * var(--aw-block-text-scale, 1));
+  line-height: 1.55;
+  color: #e5e1ed;
+  user-select: text;
+}
+.folio.expanded .aw-block-compact,
+.folio.receded .aw-block-compact {
+  display: none;
+}
+.aw-identity-status:empty {
+  display: none;
+}
+.aw-identity-status {
+  font-size: 0.8em;
+  margin: 0.4rem 0 0;
+}
+.aw-identity-search {
+  width: 100%;
+  min-width: 0;
+  padding: 0.45rem 0.55rem;
+  margin: 0 0 0.5rem;
+  font: inherit;
+  color: inherit;
+  background: #c7d4ef09;
+  border: 1px solid #c2cde92b;
+  border-radius: 0.6rem;
+}
+.aw-identity-search[hidden] {
+  display: none;
+}
+.aw-identity-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #c3cde814;
+}
+.aw-identity-row-title {
+  color: #ede9f3;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.aw-identity-row-detail {
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+  color: #b7b6c5;
+}
+.aw-identity-open {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0.2rem 0;
+}
+.aw-identity-open:hover .aw-identity-row-title {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.aw-identity-attach {
+  flex: 0 0 27px;
+  width: 27px;
+  height: 27px;
+  border: 1px solid #c2cde926;
+  border-radius: 50%;
+  color: inherit;
+  font: inherit;
+  background: #c2cde907;
+}
+.aw-block-compact :is(button, input):focus-visible {
+  outline: 2px solid #dce7fa;
+  outline-offset: 3px;
+}
+.aw-identity-empty {
+  margin: 0.2rem 0;
+  color: #bdb9cb;
+  font-size: 0.95em;
+  line-height: 1.6;
+}
+.aw-identity-task-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  min-width: 0;
+  cursor: pointer;
+}
+.aw-identity-check {
+  width: 17px;
+  height: 17px;
+  margin: 0.25rem 0 0;
+  flex-shrink: 0;
+  accent-color: #bdcbdc;
+}
+.aw-block-compact[data-layout="task"] .aw-identity-check {
+  width: 26px;
+  height: 26px;
+  margin-top: 0.2rem;
+}
+.aw-block-compact[data-layout="task"] .aw-identity-row {
+  border: 0;
+  align-items: flex-start;
+  flex-direction: column;
+}
+.aw-block-compact[data-layout="task"] .aw-identity-row-title {
+  font-size: 1.4em;
+  line-height: 1.35;
+}
+.aw-block-compact[data-layout="task"] .aw-identity-row-detail {
+  padding-left: 2.25rem;
+}
+.aw-block-compact[data-layout="task"] .aw-identity-description {
+  margin: 0.7rem 0 0 2.25rem;
+  font-size: 0.9em;
+  line-height: 1.65;
+  color: #ccc8d6;
+}
+.aw-block-compact[data-layout="checklist"] .aw-identity-row {
+  flex-wrap: nowrap;
+}
+.aw-block-compact[data-layout="checklist"] .aw-identity-task-label {
+  flex: 1;
+}
+.aw-identity-row[data-checked="true"]
+  .aw-identity-task-label
+  .aw-identity-row-title {
+  text-decoration: line-through;
+  color: #b5c5bd;
+}
+.aw-block-compact[data-layout="timeline"] .aw-identity-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 3.1rem minmax(0, 1fr);
+  gap: 0.1rem 0.6rem;
+  padding: 0.45rem 0;
+  border: 0;
+}
+.aw-block-compact[data-layout="timeline"] .aw-identity-row-title {
+  font-size: 0.95em;
+}
+.aw-block-compact[data-layout="timeline"] .aw-identity-row-detail {
+  grid-column: 2;
+}
+.aw-identity-time {
+  font-family: Consolas, monospace;
+  color: #b9c6cc;
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+  align-self: start;
+  padding-top: 0.2rem;
+}
+.aw-block-compact[data-layout="chat"] .aw-identity-row {
+  display: block;
+  border: 0;
+  margin: 0.25rem 0 0.75rem;
+}
+.aw-block-compact[data-layout="chat"] .aw-identity-row-title {
+  display: block;
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+  color: #b8c4df;
+  margin-bottom: 0.2rem;
+}
+.aw-block-compact[data-layout="chat"] .aw-identity-row-detail {
+  display: block;
+  font-size: 0.95em;
+  color: #e0ddea;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.aw-block-compact[data-layout="execution"] .aw-identity-row {
+  display: block;
+  border-left: 1px solid #b8c4ef42;
+  padding-left: 0.65rem;
+  margin-top: 0.4rem;
+}
+.aw-block-compact[data-layout="execution"] .aw-identity-row-title {
+  display: block;
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+  color: #bac3de;
+}
+.aw-block-compact[data-layout="execution"] .aw-identity-row-detail {
+  display: block;
+  font-family: Consolas, monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+}
+.aw-identity-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 0 0 0.75rem;
+}
+.aw-identity-metrics > div {
+  display: flex;
+  flex-direction: column;
+}
+.aw-identity-metrics strong {
+  font-size: 1.7em;
+  line-height: 1.2;
+  font-weight: 500;
+}
+.aw-identity-metrics small {
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+  color: #bbb5cb;
+  margin-top: 0.3rem;
+}
+.aw-identity-caption {
+  font-size: 1em;
+  font-weight: 500;
+  margin: 0.2rem 0 0.65rem;
+}
+.aw-block-compact[data-layout="table"] .aw-identity-open {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.aw-block-compact[data-layout="table"] .aw-identity-row-title {
+  font-size: 0.94em;
+}
+.aw-block-compact[data-layout="table"] .aw-identity-row-detail {
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+}
+.aw-block-compact[data-layout="collection"] .aw-identity-row {
+  border: 0;
+  border-left: 1px solid #c2b2d047;
+  padding-left: 0.65rem;
+  margin: 0.25rem 0 0.65rem;
+}
+.aw-block-compact[data-layout="collection"] .aw-identity-row:nth-of-type(2) {
+  margin-left: 0.3rem;
+}
+.aw-block-compact[data-layout="collection"] .aw-identity-row:nth-of-type(3) {
+  margin-left: 0.6rem;
+}
+.aw-identity-document-heading {
+  font-size: 1.15em;
+  line-height: 1.4;
+  margin: 0 0 0.5rem;
+  font-weight: 500;
+}
+.aw-identity-paragraph {
+  margin: 0 0 0.65rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+.aw-block-compact[data-layout="document"] {
+  font-size: calc(16px * var(--aw-block-text-scale, 1));
+}
+.aw-block-compact[data-layout="research"] .aw-identity-document-heading {
+  font-size: 1.15em;
+  color: #e0e9ed;
+}
+.aw-block-compact[data-layout="research"] .aw-identity-paragraph {
+  font-size: 0.95em;
+}
+.aw-identity-sources {
+  margin-top: 0.8rem;
+  border-top: 1px solid #b5c9db26;
+  padding-top: 0.5rem;
+}
+.aw-identity-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.3rem 0;
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+}
+.aw-identity-source > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aw-identity-source button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.aw-block-compact[data-layout="reference"] .aw-identity-source {
+  align-items: flex-start;
+  flex-direction: column;
+  padding-left: 0.65rem;
+  border-left: 1px solid #cabbac55;
+}
+.aw-block-compact[data-layout="reference"] .aw-identity-source > span {
+  font-size: 1.15em;
+  color: #e3d8cb;
+}
+[data-block-availability="unavailable"] .aw-block-compact {
+  display: none;
+}
+[data-block-availability="unavailable"] .folio-preview {
+  display: -webkit-box;
+}
+[data-resource-availability="unavailable"] .working-content {
+  display: none !important;
+}
+.folio.expanded[data-resource-availability="unavailable"] .aw-block-compact {
+  display: block;
+}
+.folio[data-block-kind="note"][data-workspace-presentation="usable"]:not(
+    .receded
+  ):not([data-resource-availability="unavailable"])
+  .working-content {
+  display: flex;
+  opacity: 1;
+  margin-top: 0.6rem;
+}
+.folio[data-block-kind="note"][data-workspace-presentation="usable"]:not(
+    [data-resource-availability="unavailable"]
+  )
+  .aw-block-compact {
+  display: none;
+}
+.folio[data-block-kind="note"] .working-content > .synthetic {
+  display: none;
+}
+.folio[data-block-kind="note"] .working-content > label {
+  font-size: 0;
+  gap: 0;
+}
+.folio[data-block-kind="note"] .working-content textarea {
+  padding: 0.4rem 0;
+  min-height: 3rem;
+  border: 0;
+}
+.folio[data-block-kind="note"] .aw-note-tools {
+  margin: 0 0 0.3rem;
+}
+.folio[data-block-kind="note"] .aw-note-status {
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+  margin: 0.2rem 0;
+}
+.folio[data-block-kind="note"] .aw-note-tools :is(button, summary) {
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+}
+@container (max-width: 300px) {
+  .aw-identity-metrics {
+    gap: 0.4rem;
+  }
+  .aw-identity-metrics strong {
+    font-size: 1.3em;
+  }
+  .aw-block-compact[data-layout="table"] .aw-identity-open {
+    display: flex;
+  }
+}
+
+/* Keep the single Open/Return action reachable even in short focused windows. */
+.folio[data-block-kind].expanded .folio-top {
+  display: flex;
+}
+.folio[data-block-kind] .card-kind-label {
+  flex: 1;
+}
+.folio[data-block-kind] .anchor-glyph .aw-block-mark {
+  width: 24px;
+  height: 24px;
+}
+.folio[data-block-kind] .anchor-glyph {
+  font-style: normal;
+  transform: none;
+}
+.folio[data-block-kind="note"] .working-content {
+  flex-direction: column;
+}
+.folio[data-block-kind="note"] .working-content > label {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.folio[data-block-kind="note"] .working-content > .saved {
+  display: none;
+}
+.folio[data-block-kind="note"] .working-content textarea {
+  width: 100%;
+}
+.folio[data-block-kind="note"] .aw-note-reading {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.folio[data-block-kind="note"] .aw-note-actions-panel {
+  width: min(22rem, 65cqw);
+  max-height: 40cqh;
+  overflow: auto;
+}
+/* Same transcript and composer in both poses; the glass host supplies the frame. */
+.folio[data-block-kind="conversation"] .working-content {
+  overflow: hidden;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 0.6rem;
+}
+.folio[data-block-kind="conversation"][data-workspace-presentation="usable"]:not(
+    .receded
+  ):not([data-resource-availability="unavailable"])
+  .working-content {
+  display: flex;
+  opacity: 1;
+}
+.folio[data-block-kind="conversation"][data-workspace-presentation="usable"]:not(
+    [data-resource-availability="unavailable"]
+  )
+  .aw-block-compact {
+  display: none;
+}
+.folio[data-block-kind="conversation"] .aw-chat-history {
+  align-self: flex-end;
+  flex: none;
+  min-height: 28px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: #bbc7df;
+  font:
+    calc(12px * var(--aw-block-text-scale, 1)) / 1.5 system-ui,
+    sans-serif;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.folio[data-block-kind="conversation"] .cp-chat {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+}
+.folio[data-block-kind="conversation"] .cp-composer {
+  margin-inline: 0;
+  background: #c7d4ef08;
+}
+.folio[data-block-kind="conversation"] .cp-chat .cp-composer textarea {
+  flex: none;
+  letter-spacing: normal;
+}
+.folio[data-block-kind="conversation"] .cp-messages {
+  padding-inline: 0;
+}
+.folio[data-block-kind="conversation"] .cp-disclosure-panel {
+  background: #17202dd9;
+}
+.folio[data-block-kind="conversation"] .cp-composer-hint {
+  display: none;
+}
+.folio[data-block-kind="conversation"]
+  :is(
+    .cp-chat-status,
+    .cp-draft-status,
+    .cp-capability-note,
+    .cp-context-note
+  ) {
+  margin-inline: 0;
+}
+/* Research organizes findings beside source evidence; a reference leads with its citation. */
+.folio[data-block-kind="research"] [data-document-kind] .aw-note-sources {
+  border-top: 1px solid #9fc9d32b;
+  padding-top: 0.65rem;
+}
+.folio[data-block-kind="reference"] [data-document-kind] .aw-note-sources {
+  border-left: 1px solid #cabbac55;
+  padding-left: 0.8rem;
+}
+.folio[data-block-kind="reference"] .aw-identity-body {
+  display: flex;
+  flex-direction: column;
+}
+.folio[data-block-kind="reference"] .aw-identity-sources {
+  order: -1;
+  margin: 0 0 0.6rem;
+  padding-top: 0;
+  border: 0;
+}
+@container (max-width: 380px) {
+  .folio[data-block-kind="conversation"] .cp-composer-tools {
+    flex-wrap: wrap;
+  }
+  .folio[data-block-kind="conversation"] .cp-composer-provider {
+    flex: 1 1 80px;
+  }
+  .folio[data-block-kind="conversation"] .cp-chat {
+    gap: 4px;
+  }
+}
+
+/* Every registered normal card uses its actual working view. Visibility and
+   activity are controlled by the host; width is never an editing permission. */
+.folio[data-block-kind][data-workspace-presentation="usable"]:not(.receded):not(
+    [data-resource-availability="unavailable"]
+  ):not([data-block-availability="unavailable"])
+  .working-content {
+  display: flex;
+  flex-direction: column;
+  opacity: 1;
+  margin-top: 0.5rem;
+  gap: 0.4rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font-size: calc(14px * var(--aw-block-text-scale, 1));
+  line-height: 1.5;
+}
+.folio[data-block-kind][data-workspace-presentation="usable"]:not(
+    [data-resource-availability="unavailable"]
+  ):not([data-block-availability="unavailable"])
+  .aw-block-compact {
+  display: none;
+}
+.folio[data-block-kind]:not(.expanded)
+  .working-content
+  > :is(.synthetic, .saved) {
+  display: none;
+}
+.folio[data-block-kind]:not(.expanded) .title-select h2 {
+  font-size: calc(19px * var(--aw-block-text-scale, 1));
+  line-height: 1.25;
+  margin-block: 0.3rem;
+}
+.folio[data-block-kind="conversation"][data-workspace-presentation="usable"]
+  .working-content {
+  overflow: hidden;
+}
+.folio[data-block-kind] .working-content > label {
+  flex: none;
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+  letter-spacing: normal;
+  gap: 0.25rem;
+}
+.folio[data-block-kind] .working-content > label:has(textarea) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 4rem;
+  min-height: 0;
+  font-size: 0;
+}
+.folio[data-block-kind] .working-content[data-note-state] textarea {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.35rem 0;
+  border: 0;
+}
+.folio[data-block-kind="task"] .local-task-state {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex: none;
+  padding-bottom: 0;
+}
+.folio[data-block-kind="task"] .task-priority {
+  border-radius: 0.6rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid #b8cada30;
+  background: #b8cada0a;
+  color: inherit;
+  font: inherit;
+}
+.folio[data-block-kind="reference"] .aw-note-sources {
+  order: -1;
+}
+.folio[data-block-kind="research"] .aw-note-reading {
+  border-left: 2px solid #9fc9d344;
+  padding-left: 0.7rem;
+}
+
+/* Short saved/resized cards retain their canonical geometry. Their chrome
+   yields space to the actual working body; primary controls stay scrollable. */
+@container (max-height: 340px) {
+  .folio[data-block-kind]:not(.expanded):not(.receded) .folio-inner {
+    padding: 12px 20px;
+  }
+  .folio[data-block-kind]:not(.expanded) .title-select {
+    flex: none;
+    min-height: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+  .folio[data-block-kind]:not(.expanded) .title-select h2 {
+    margin-block: 0.2rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .folio[data-block-kind]:not(.expanded):not(
+      [data-resource-availability="unavailable"]
+    )
+    .folio-subtitle {
+    display: none;
+  }
+  .folio[data-block-kind]:not(.expanded) .folio-top {
+    gap: 0.4rem;
+  }
+  .folio[data-block-kind]:not(.expanded) .folio-top .folio-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex: none;
+  }
+  .folio[data-block-kind]:not(.expanded)
+    .folio-top
+    :is(.unfold, .aw-chat-history) {
+    min-height: 26px;
+    padding-block: 0.1rem;
+  }
+  .folio[data-block-kind="conversation"][data-workspace-presentation="usable"]:not(
+      .expanded
+    )
+    .working-content {
+    margin-top: 0.25rem;
+    gap: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+}
+@container (max-height: 210px) {
+  .folio[data-block-kind]:not(.expanded):not(.receded) .folio-inner {
+    padding: 8px 20px;
+  }
+}
+
+/* Explicit saved curved shapes remain curved. Their working rectangle lies
+   inside that SAME painted contour; geometry and canonical shape stay intact. */
+.folio[data-block-kind]:is(
+    [data-shape="lens"],
+    [data-shape="circle"],
+    [data-shape="pill"]
+  ):not(.expanded):not(.receded)
+  .folio-inner {
+  padding-block: max(
+    12px,
+    calc(var(--aw-resize-radius-y, 18px) * 0.2928932188134524 + 8px)
+  );
+  padding-inline: max(
+    16px,
+    calc(var(--aw-resize-radius-x, 18px) * 0.2928932188134524 + 16px)
+  );
+}
+
+/* Composition uses the host's actual projected body area. The observed wrapper
+   stays in layout; only its full-view children become inert/visually hidden. */
+.aw-block-overview[hidden],
+.aw-block-approach[hidden],
+.aw-block-restore[hidden] {
+  display: none !important;
+}
+.folio[data-block-composition="overview"] .working-content {
+  position: relative;
+  overflow: hidden;
+}
+.folio[data-block-composition="overview"] .working-content > :not(.aw-block-overview) {
+  visibility: hidden;
+  pointer-events: none;
+}
+.folio[data-block-composition="overview"] .folio-actions > :not(.aw-block-approach):not(.unfold):not(.aw-block-restore) {
+  display: none;
+}
+.folio[data-block-composition="overview"]:not(.expanded, .receded) .folio-top .folio-actions {
+  position: relative;
+  z-index: 6;
+}
+.folio[data-block-composition="overview"]:not(.expanded) .folio-top .unfold {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 0;
+}
+.folio[data-block-composition="overview"] .unfold::after {
+  content: "↗";
+  font-size: 16px;
+  line-height: 1;
+}
+.folio[data-block-composition="overview"] .title-select h2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow: hidden;
+  font-size: calc(16px * var(--aw-block-text-scale, 1));
+  line-height: 1.25;
+}
+.folio[data-block-composition="overview"] .folio-subtitle {
+  display: none;
+}
+.folio[data-block-minimized="true"][data-block-composition="overview"]:not(.expanded) .folio-top .unfold,
+.folio[data-block-minimized="true"].expanded .folio-top .unfold {
+  display: none;
+}
+.aw-block-approach,
+.aw-block-restore {
+  flex: none;
+  min-height: 28px;
+  padding: 0.15rem 0.35rem;
+  border: 1px solid #c2cde92b;
+  border-radius: 0.6rem;
+  background: #c7d4ef0a;
+  color: #ede9f3;
+  font: inherit;
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+  white-space: nowrap;
+  cursor: pointer;
+}
+.aw-block-approach:focus-visible,
+.aw-block-restore:focus-visible {
+  outline: 2px solid var(--aw-type-accent);
+  outline-offset: 2px;
+}
+.aw-block-overview {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  gap: 0.3rem;
+  font-size: calc(13px * var(--aw-block-text-scale, 1));
+  line-height: 1.45;
+  color: #e5e1ed;
+}
+.aw-block-overview-content {
+  min-height: 0;
+  overflow: hidden;
+}
+.aw-block-overview p {
+  margin: 0 0 0.4rem;
+}
+.aw-overview-excerpt,
+.aw-overview-task,
+.aw-overview-resource > span,
+.aw-overview-event {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.aw-overview-speaker,
+.aw-overview-state,
+.aw-overview-source {
+  color: var(--aw-type-accent);
+}
+.aw-overview-meta,
+.aw-overview-resource small {
+  display: block;
+  color: #bbb5cb;
+  font-size: 0.9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.aw-overview-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+.aw-overview-metrics dt {
+  font-size: 0.85em;
+  color: #bbb5cb;
+}
+.aw-overview-metrics dd {
+  font-size: 1.4em;
+  margin: 0;
+}
+.aw-block-overview[data-layout="collection"] .aw-overview-resource {
+  border-left: 1px solid var(--aw-type-accent);
+  padding-left: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.aw-block-overview[data-layout="reference"] .aw-overview-source {
+  border-bottom: 1px solid #cabbac44;
+  padding-bottom: 0.3rem;
+}
+.aw-block-overview[data-layout="timeline"] .aw-overview-event {
+  border-left: 1px solid var(--aw-type-accent);
+  padding-left: 0.5rem;
+}
+.aw-block-approach-status:empty {
+  display: none;
+}
+.aw-block-open-mark {
+  display: none;
+}
+@container (max-width: 220px) {
+  .folio[data-block-composition="overview"] .card-kind-label > span {
+    display: none;
+  }
+  .folio[data-block-composition="overview"]:not(.expanded) .folio-top {
+    gap: 4px;
+  }
+  .folio[data-block-composition="overview"]:not(.expanded) .folio-top .folio-actions {
+    gap: 3px;
+  }
+  .folio[data-block-composition="overview"] .aw-block-approach[aria-label^="Approach "] {
+    width: 28px;
+    min-height: 28px;
+    padding: 0;
+    font-size: 0;
+  }
+  .folio[data-block-composition="overview"] .aw-block-approach[aria-label^="Approach "]::before {
+    content: "⊕";
+    font-size: 18px;
+    line-height: 1;
+  }
+  .folio[data-block-minimized="true"] .aw-block-restore {
+    flex: 0 0 28px;
+    width: 28px;
+    min-height: 28px;
+    padding: 0;
+    font-size: 0;
+  }
+  .folio[data-block-minimized="true"] .aw-block-restore::before {
+    content: "⤢";
+    font-size: 18px;
+    line-height: 1;
+  }
+}
+
+/* A common optical shell does not impose a common document hierarchy.
+   These styles use the existing working controllers in both workspace and
+   focused poses. They never replace editors, add material layers or move data. */
+.folio[data-block-kind]:is([data-shape="rounded"], [data-shape="folio"], [data-shape="rectangle"]) {
+  border-radius: 18px;
+}
+.folio[data-block-kind] .folio-inner { border-radius: inherit; }
+.folio[data-block-kind] :is(.move-controls, .block-tools) { display: none; }
+.folio[data-block-kind] .card-kind-label > span {
+  font-size: calc(10px * var(--aw-block-text-scale, 1));
+  letter-spacing: 0.13em;
+}
+
+/* A conversation has a transcript and a composer, with a quiet title above it.
+   Codex retains its actual execution/provider controls in the same controller. */
+.folio[data-block-kind="conversation"]:not(.expanded) .title-select h2 {
+  font-size: calc(17px * var(--aw-block-text-scale, 1));
+  letter-spacing: -0.015em;
+  margin-block: 0.65rem 0.2rem;
+}
+.folio[data-block-kind="conversation"] .cp-messages { flex: 1; min-height: 0; }
+.folio[data-block-kind="conversation"] .cp-composer { border-radius: 16px; }
+.folio[data-block-variant="execution"] .card-kind-label,
+.folio[data-block-variant="execution"] .cp-message-role {
+  font-family: Consolas, monospace;
+}
+.folio[data-block-variant="execution"] .cp-composer { border-left: 2px solid #b8c4ef4d; }
+
+/* Notes are an editorial writing surface. No inset application panel surrounds
+   the actual retained textarea or the reading document. */
+.folio[data-block-kind="note"]:not(.expanded) .title-select h2 {
+  font: calc(24px * var(--aw-block-text-scale, 1)) / 1.25 Georgia, "Times New Roman", serif;
+  letter-spacing: -0.025em;
+  margin-block: 0.6rem;
+}
+.folio[data-block-kind="note"] .working-content { border-top: 1px solid #c9c4d32b; padding-top: 0.5rem; }
+.folio[data-block-kind="note"] .working-content :is(textarea, .aw-note-reading) {
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1.7;
+}
+.folio[data-block-kind="note"] .aw-note-tools { justify-content: flex-end; }
+
+/* A single task is an action; its status controls get the space that a document
+   gives to prose. A group is instead a checklist with its actual completion. */
+.folio[data-block-kind="task"]:not(.expanded) .title-select h2 {
+  font-size: calc(23px * var(--aw-block-text-scale, 1));
+  line-height: 1.25;
+  margin-block: 0.7rem;
+}
+.folio[data-block-kind="task"] .local-task-state {
+  padding: 0.65rem 0;
+  gap: 0.7rem;
+  border-block: 1px solid #acc3d72b;
+}
+.folio[data-block-kind="task"] .local-task-state input[type="checkbox"] { width: 24px; height: 24px; flex: none; accent-color: #b3cfca; }
+.folio[data-block-kind="task_group"]:not(.expanded) .title-select h2 { font-weight: 550; }
+.folio[data-block-kind="task_group"] .aw-task-group-tools :is(input, select) {
+  border-inline: 0;
+  border-top: 0;
+  border-radius: 0;
+  background: none;
+}
+
+/* The feed reads down a timeline, the project out toward workspaces, and the
+   browser across resource rows. Their own content supplies the distinction. */
+.folio[data-block-kind="stream"]:not(.expanded) .title-select h2 {
+  font: calc(17px * var(--aw-block-text-scale, 1)) / 1.4 Consolas, monospace;
+  margin-block: 0.6rem;
+}
+.folio[data-block-kind="stream"] .aw-event-tools { align-items: center; }
+.folio[data-block-kind="stream"] .aw-event-tools > button { border: 0; background: none; padding-inline: 0; }
+.folio[data-block-kind="project_overview"]:not(.expanded) .title-select h2 {
+  font-size: calc(23px * var(--aw-block-text-scale, 1));
+  letter-spacing: -0.04em;
+  margin-block: 0.6rem;
+}
+.folio[data-block-kind="resource_browser"]:not(.expanded) .title-select h2 {
+  font-size: calc(16px * var(--aw-block-text-scale, 1));
+  font-weight: 550;
+}
+.folio[data-block-kind="collection_browser"]:not(.expanded) .title-select h2 {
+  font-size: calc(22px * var(--aw-block-text-scale, 1));
+  font-weight: 450;
+  margin-block: 0.65rem;
+}
+
+/* Research keeps findings beside a source rail; references put their actual
+   citations before the annotation. Source availability is still stated by the
+   canonical document view and no source is fetched by presentation. */
+.folio[data-block-kind="research"] .aw-note-reading {
+  padding-left: 0.8rem;
+  border-left: 1px solid #9fc9d34d;
+}
+.folio[data-block-kind="research"] .aw-note-sources h3 {
+  font: 0.85em/1.5 Consolas, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.folio[data-block-kind="reference"] [data-document-kind="reference"] .aw-note-sources {
+  order: -1;
+  border: 0;
+  border-bottom: 1px solid #cabbac40;
+  padding: 0 0 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.folio[data-block-kind="reference"] .aw-note-sources code {
+  display: block;
+  font-size: 1.05em;
+  color: #e0d4c8;
+  overflow-wrap: anywhere;
+}
+.folio[data-block-kind="reference"] .aw-note-reading {
+  font-size: 0.95em;
+  line-height: 1.7;
+  color: #cec5c0;
+}
+
+@container (max-height: 280px) {
+  .folio[data-block-kind]:not(.expanded) .title-select h2 {
+    font-size: calc(17px * var(--aw-block-text-scale, 1));
+    margin-block: 0.3rem;
+  }
+  .folio[data-block-kind="note"] .working-content { padding-top: 0.25rem; }
+  .folio[data-block-kind="task_group"] .aw-task-group-summary { font-size: 1.3em; }
+  .folio[data-block-kind="project_overview"] .aw-project-metrics dd { font-size: 2em; }
+}
+
+/* The identity view selects this layout from the host's projected footprint.
+   Keep the button layout independent of container queries during the fit. */
+.folio[data-block-kind][data-overview-actions]:not(.expanded, .receded) {
+    & .folio-top {
+      min-height: 28px;
+      align-self: stretch;
+      justify-content: center;
+    }
+    & .folio-top .card-kind-label {
+      display: none;
+    }
+    & .folio-top .folio-actions {
+      display: grid;
+      grid-template-columns: repeat(2, 24px);
+      grid-template-rows: 24px;
+      align-content: center;
+      justify-content: center;
+      gap: 4px;
+      min-width: 0;
+      padding: 0;
+    }
+    &[data-block-minimized="true"] .folio-top .folio-actions {
+      grid-template-columns: 24px;
+    }
+    & .folio-top :is(.unfold, .aw-block-approach, .aw-block-restore) {
+      display: grid;
+      place-items: center;
+      grid-area: 1 / 1;
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      padding: 0;
+      font-size: 0;
+      pointer-events: auto;
+      outline-offset: -2px;
+    }
+    & .folio-top .aw-block-approach {
+      grid-column: 2;
+    }
+    & .folio-top .unfold::after {
+      position: absolute;
+      inset: 2px 2px auto auto;
+      font-size: 9px;
+    }
+    & .folio-top .unfold {
+      position: relative;
+    }
+    &[data-block-minimized="true"] .folio-top .unfold {
+      display: none;
+    }
+    & .folio-top :is(.aw-block-approach, .aw-block-restore)::before {
+      content: "";
+      width: 65%;
+      height: 65%;
+      background: currentColor;
+      mask: var(--aw-overview-icon) center / contain no-repeat;
+    }
+    & .folio-top .aw-block-approach {
+      --aw-overview-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 3v18M3 12h18'/%3E%3C/svg%3E");
+    }
+    & .folio-top .aw-block-restore {
+      --aw-overview-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Cpath d='M4 20 20 4M4 13v7h7M13 4h7v7'/%3E%3C/svg%3E");
+    }
+    &:not([data-block-minimized="true"]) .folio-actions > .aw-block-open-mark {
+      display: block;
+      grid-area: 1 / 1;
+      place-self: center;
+      width: min(14px, 60%);
+      height: min(14px, 60%);
+      translate: -14% 14%;
+      z-index: 1;
+      pointer-events: none;
+    }
+}
+
+.folio[data-block-kind]:is([data-overview-actions="centered"], [data-overview-actions="single"]):not(.expanded, .receded) {
+    & .folio-top .folio-actions {
+      position: absolute;
+      inset: 0;
+      z-index: 6;
+      pointer-events: none;
+    }
+    & .title-select {
+      opacity: 0;
+      pointer-events: none;
+    }
+    & .title-select:focus-visible {
+      position: absolute;
+      z-index: 7;
+      inset: 50% auto auto 50%;
+      translate: -50% -50%;
+      width: min(70%, 180px);
+      max-height: 60%;
+      opacity: 1;
+      pointer-events: auto;
+      outline-offset: -2px;
+      background: #171e29;
+    }
+    & .title-select:focus-visible h2 {
+      display: block;
+      margin: 0;
+      font-size: 12px;
+      line-height: 1;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    & .aw-block-overview-content {
+      visibility: hidden;
+    }
+}
+
+/* When two 24px targets cannot fit, keep one at the center. Approach remains a
+   native button in the tab order and takes the center spot on keyboard focus. */
+.folio[data-block-kind][data-overview-actions="single"]:not(.expanded, .receded) {
+    & .folio-top .folio-actions,
+    &[data-block-minimized="true"] .folio-top .folio-actions {
+      grid-template-columns: min(24px, 60%);
+      grid-template-rows: min(24px, 60%);
+    }
+    & .folio-top .unfold::after {
+      content: none;
+    }
+    & .folio-actions > .aw-block-open-mark {
+      translate: none;
+    }
+    & .folio-top .aw-block-approach {
+      grid-column: 1;
+      opacity: 0;
+      pointer-events: none;
+    }
+    & .folio-top .aw-block-approach:focus-visible {
+      z-index: 2;
+      opacity: 1;
+      pointer-events: auto;
+      background: #171e29;
+    }
+}

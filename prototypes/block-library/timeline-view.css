@@ -1,0 +1,31 @@
+.aw-timeline { display:flex; flex-direction:column; gap:.65rem; min-width:0; color:inherit; }
+.aw-timeline h3,.aw-timeline h4,.aw-timeline p { margin:0; }.aw-timeline h3 { font:500 1.2rem/1.4 Georgia,serif; }
+.aw-timeline-range,.aw-timeline-legend,.aw-timeline-status,.aw-timeline-coverage,.aw-timeline-gaps { font-size:.75rem; line-height:1.5; }
+.aw-timeline-tools,.aw-timeline-filters,.aw-timeline-review { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; }
+.aw-timeline button,.aw-timeline input,.aw-timeline select { box-sizing:border-box; min-height:32px; border:1px solid #b6c7d83d; border-radius:.6rem; padding:.35rem .55rem; font:inherit; font-size:.8rem; background:#b6c7d808; color:inherit; }
+.aw-timeline button { cursor:pointer; }.aw-timeline :disabled { opacity:.45; cursor:default; }.aw-timeline :focus-visible { outline:2px solid #b8cde5; outline-offset:3px; }
+.aw-timeline-filters { overflow:hidden; }.aw-timeline-filters label { display:flex; flex-direction:column; min-width:0; gap:.25rem; font-size:.75rem; }.aw-timeline-filters input,.aw-timeline-filters select { max-width:100%; }
+.aw-timeline-track { position:relative; width:100%; border-block:1px solid #b6c7d825; background:repeating-linear-gradient(to right,transparent 0,transparent calc(25% - 1px),#b6c7d818 25%); }
+.aw-timeline .aw-timeline-dot { position:absolute; left:0; top:0; width:14px; height:14px; min-height:14px; padding:0; border-radius:50%; background:#b6c7d8a0; border:1px solid #b6c7d8; }
+.aw-timeline .aw-timeline-dot[aria-pressed=true] { background:#e4d5b7; border-color:#e4d5b7; }
+.aw-timeline-items { list-style:none; margin:0; padding:0; position:relative; }.aw-timeline-items > li { position:absolute; top:0; left:0; width:100%; box-sizing:border-box; }
+/* The row follows its animated position; its button supplies the intrinsic
+   height. Sizing the button from the row would feed animation back into layout. */
+.aw-timeline-items > li > button {
+  display:grid; grid-template-columns:2px minmax(0,1fr); grid-template-rows:repeat(3,auto);
+  align-content:center; gap:.18rem .65rem; width:100%; min-height:64px; height:auto;
+  text-align:left; line-height:1.35; border:0; border-radius:.6rem;
+  background:#b6c7d808; padding:.45rem .7rem .45rem .5rem;
+}
+.aw-timeline-items > li > button:hover,.aw-timeline-items > li > button[aria-pressed=true] { background:#b6c7d816; }
+.aw-timeline-items > li > button:focus-visible { outline-offset:-2px; }
+.aw-timeline-items > li > button::before { content:''; grid-area:1/1/4/2; border-radius:2px; background:#b6c7d84f; }
+.aw-timeline-items > li > button[aria-pressed=true]::before { background:#e4d5b7; }
+.aw-timeline-items time,.aw-timeline-event-time { grid-area:1/2; font-size:.72rem; opacity:.75; font-variant-numeric:tabular-nums; }
+.aw-timeline-items strong,.aw-timeline-items small { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.aw-timeline-items strong { grid-area:2/2; font-size:.9rem; line-height:1.35; }
+.aw-timeline-items small { grid-area:3/2; font-size:.72rem; opacity:.75; }
+.aw-timeline-source-coverage { border-left:2px solid #b6c7d852; padding-left:.6rem; font-size:.75rem; line-height:1.5; overflow-wrap:anywhere; }
+.aw-timeline-selection h4 { overflow-wrap:anywhere; }
+.aw-timeline-selection { padding:.65rem; border:1px solid #b6c7d825; border-radius:.75rem; font-size:.8rem; }.aw-timeline-selection dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:.3rem .6rem; }.aw-timeline-selection dd { margin:0; overflow-wrap:anywhere; }.aw-timeline-selection p { font-size:.75rem; line-height:1.5; margin-bottom:.5rem; }
+.aw-timeline-gaps { margin:0; padding-left:1.2rem; }.aw-timeline-review > p { width:100%; font-size:.8rem; }.aw-timeline [hidden] { display:none; }

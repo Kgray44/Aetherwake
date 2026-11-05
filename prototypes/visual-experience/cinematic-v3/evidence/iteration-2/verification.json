@@ -1,0 +1,953 @@
+{
+  "capturedAt": "2026-11-01T17:18:05.127Z",
+  "kind": "actual Electron native renderer; synthetic content",
+  "versions": {
+    "node": "24.22.1",
+    "acorn": "8.18.0",
+    "ada": "4.0.0",
+    "amaro": "1.1.11",
+    "ares": "1.34.9",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "150",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.70.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.11",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.4",
+    "tz": "2026e",
+    "undici": "7.30.1",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.6.75.25-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "45.2.1",
+    "chrome": "156.0.8078.75"
+  },
+  "display": {
+    "size": {
+      "width": 2048,
+      "height": 1280
+    },
+    "scaleFactor": 1.25,
+    "refreshRate": 165
+  },
+  "window": {
+    "x": 231,
+    "y": 149,
+    "width": 1600,
+    "height": 1000
+  },
+  "checks": [
+    {
+      "name": "GPU constructed",
+      "passed": true,
+      "detail": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 172,
+        "drawCalls": 11,
+        "triangles": 34070,
+        "lines": 3520,
+        "geometries": 18,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false
+      }
+    },
+    {
+      "name": "isolated renderer",
+      "passed": true
+    },
+    {
+      "name": "reversal reconciles to collapsed",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "single persistent resource DOM",
+      "passed": true
+    },
+    {
+      "name": "draft survives interruption",
+      "passed": true
+    },
+    {
+      "name": "undo restores ID order",
+      "passed": true,
+      "detail": [
+        "conversation-tidal",
+        "research-material",
+        "note-field"
+      ]
+    },
+    {
+      "name": "synthetic provenance explicit",
+      "passed": true,
+      "detail": [
+        "input.received",
+        "execution.started",
+        "relationship.assigned",
+        "review.requested",
+        "result.reported",
+        "fixture.check.passed",
+        "execution.settled"
+      ]
+    },
+    {
+      "name": "reduced snaps with draft preserved",
+      "passed": true,
+      "detail": {
+        "x": 142.73999999999998,
+        "y": 112,
+        "w": 1000,
+        "h": 735,
+        "lift": 35,
+        "yaw": 0,
+        "opacity": 1
+      }
+    },
+    {
+      "name": "resize 900x850",
+      "passed": true,
+      "detail": {
+        "conversation-tidal": {
+          "x": 32.00723237922658,
+          "y": 155.02036745422927,
+          "w": 559.9871311329823,
+          "h": 175.0096262163795,
+          "lift": 12,
+          "yaw": 0,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 50.09172475890671,
+          "y": 344.0196959996943,
+          "w": 559.981214872468,
+          "h": 175.00639916518992,
+          "lift": 0,
+          "yaw": 0,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 32.05160433308322,
+          "y": 533.0093562780916,
+          "w": 559.9796013468731,
+          "h": 175,
+          "lift": 0,
+          "yaw": 0,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "resize 1280x800",
+      "passed": true,
+      "detail": {
+        "conversation-tidal": {
+          "x": 83.19479737677281,
+          "y": 295.9856725269951,
+          "w": 349.88801909949495,
+          "h": 217.59567125489295,
+          "lift": 16,
+          "yaw": -5,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 767.9270416248354,
+          "y": 447.9894322330894,
+          "w": 302.95945483745317,
+          "h": 192,
+          "lift": 0,
+          "yaw": 7,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 435.15902950326966,
+          "y": 500.66666666666663,
+          "w": 290.16075542954565,
+          "h": 149.33333333333334,
+          "lift": 0,
+          "yaw": -2,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "resize 1920x1080",
+      "passed": true,
+      "detail": {
+        "conversation-tidal": {
+          "x": 124.79577792951497,
+          "y": 399.58948542061904,
+          "w": 524.7822457242941,
+          "h": 326.3889576618083,
+          "lift": 16,
+          "yaw": -5,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 1151.9610267957485,
+          "y": 604.7840860420177,
+          "w": 454.3846274211558,
+          "h": 287.990256760419,
+          "lift": 0,
+          "yaw": 7,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 652.7779151855135,
+          "y": 705.9791602931186,
+          "w": 435.18527697484524,
+          "h": 223.99242192477038,
+          "lift": 0,
+          "yaw": -2,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "native minimized stops rendering",
+      "passed": true,
+      "detail": {
+        "draws": 0,
+        "active": false
+      }
+    },
+    {
+      "name": "no renderer errors",
+      "passed": true,
+      "detail": {
+        "renderer": [],
+        "host": []
+      }
+    },
+    {
+      "name": "graphics fallback retains resources",
+      "passed": true,
+      "detail": 3
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "balanced-active-1",
+      "durationMs": 4504,
+      "callbackSamples": 743,
+      "callbackMs": {
+        "p50": 6.099999999998545,
+        "p95": 6.19999999999709,
+        "p99": 6.200000000004366,
+        "max": 6.30000000000291
+      },
+      "drawSamples": 248,
+      "drawMs": {
+        "p50": 18.19999999999709,
+        "p95": 18.30000000000291,
+        "p99": 18.30000000000291
+      },
+      "cpuReportedSumMean": 2.975764154572575,
+      "workingSetKiBSumMean": 623938.2222222222,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 2368,
+        "drawCalls": 11,
+        "triangles": 34070,
+        "lines": 3520,
+        "geometries": 18,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false
+      }
+    },
+    {
+      "name": "cinematic-transition-1",
+      "durationMs": 4506,
+      "callbackSamples": 743,
+      "callbackMs": {
+        "p50": 6.099999999998545,
+        "p95": 6.19999999999709,
+        "p99": 6.200000000004366,
+        "max": 12.099999999998545
+      },
+      "drawSamples": 743,
+      "drawMs": {
+        "p50": 6.099999999998545,
+        "p95": 6.19999999999709,
+        "p99": 6.200000000004366
+      },
+      "cpuReportedSumMean": 5.722699024678361,
+      "workingSetKiBSumMean": 635260.8888888889,
+      "policy": "cinematic / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 3164,
+        "drawCalls": 11,
+        "triangles": 40214,
+        "lines": 3520,
+        "geometries": 19,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "cinematic",
+        "study": "architecture",
+        "contextLost": false
+      }
+    },
+    {
+      "name": "efficient-1",
+      "durationMs": 4508,
+      "callbackSamples": 744,
+      "callbackMs": {
+        "p50": 6.099999999998545,
+        "p95": 6.19999999999709,
+        "p99": 6.200000000004366,
+        "max": 6.200000000004366
+      },
+      "drawSamples": 65,
+      "drawMs": {
+        "p50": 72.59999999999854,
+        "p95": 72.70000000000437,
+        "p99": 72.80000000000291
+      },
+      "cpuReportedSumMean": 3.4525824050664147,
+      "workingSetKiBSumMean": 650079.5555555555,
+      "policy": "efficient / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 3236,
+        "drawCalls": 11,
+        "triangles": 31062,
+        "lines": 3520,
+        "geometries": 20,
+        "textures": 1,
+        "pixelRatio": 0.8,
+        "quality": "efficient",
+        "study": "architecture",
+        "contextLost": false
+      }
+    },
+    {
+      "name": "balanced-active-2",
+      "durationMs": 4506,
+      "callbackSamples": 744,
+      "callbackMs": {
+        "p50": 6.099999999998545,
+        "p95": 6.19999999999709,
+        "p99": 6.200000000004366,
+        "max": 6.200000000004366
+      },
+      "drawSamples": 248,
+      "drawMs": {
+        "p50": 18.19999999999709,
+        "p95": 18.30000000000291,
+        "p99": 18.30000000000291
+      },
+      "cpuReportedSumMean": 2.384177791219082,
+      "workingSetKiBSumMean": 606307.1111111111,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 3509,
+        "drawCalls": 11,
+        "triangles": 34070,
+        "lines": 3520,
+        "geometries": 20,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false
+      }
+    },
+    {
+      "name": "cinematic-transition-2",
+      "durationMs": 4507,
+      "callbackSamples": 742,
+      "callbackMs": {
+        "p50": 6.099999999998545,
+        "p95": 6.19999999999709,
+        "p99": 6.200000000004366,
+        "max": 12.19999999999709
+      },
+      "drawSamples": 742,
+      "drawMs": {
+        "p50": 6.099999999998545,
+        "p95": 6.19999999999709,
+        "p99": 6.200000000004366
+      },
+      "cpuReportedSumMean": 5.552011797752253,
+      "workingSetKiBSumMean": 660908.4444444445,
+      "policy": "cinematic / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 4296,
+        "drawCalls": 11,
+        "triangles": 40214,
+        "lines": 3520,
+        "geometries": 20,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "cinematic",
+        "study": "architecture",
+        "contextLost": false
+      }
+    },
+    {
+      "name": "efficient-2",
+      "durationMs": 4504,
+      "callbackSamples": 738,
+      "callbackMs": {
+        "p50": 6.099999999991269,
+        "p95": 6.19999999999709,
+        "p99": 6.2000000000116415,
+        "max": 12.10000000000582
+      },
+      "drawSamples": 64,
+      "drawMs": {
+        "p50": 72.59999999999127,
+        "p95": 72.79999999998836,
+        "p99": 72.80000000000291
+      },
+      "cpuReportedSumMean": 3.7882223857743336,
+      "workingSetKiBSumMean": 682323.1111111111,
+      "policy": "efficient / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 4367,
+        "drawCalls": 11,
+        "triangles": 31062,
+        "lines": 3520,
+        "geometries": 20,
+        "textures": 1,
+        "pixelRatio": 0.8,
+        "quality": "efficient",
+        "study": "architecture",
+        "contextLost": false
+      }
+    },
+    {
+      "name": "settled-idle",
+      "durationMs": 4008,
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.5541262463222472,
+      "workingSetKiBSumMean": 646571.5,
+      "policy": "balanced / settled idle",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 5027,
+        "drawCalls": 11,
+        "triangles": 34070,
+        "lines": 3520,
+        "geometries": 20,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false
+      }
+    },
+    {
+      "name": "native-minimized",
+      "durationMs": 4074,
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.13282742405525455,
+      "workingSetKiBSumMean": 512533.5,
+      "policy": "balanced / settled idle",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 5027,
+        "drawCalls": 11,
+        "triangles": 34070,
+        "lines": 3520,
+        "geometries": 20,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false
+      }
+    }
+  ],
+  "motionFrames": [
+    {
+      "sequence": "selection",
+      "index": 0,
+      "at": 1793553395199,
+      "file": "raw/selection-00.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 1,
+      "at": 1793553395393,
+      "file": "raw/selection-01.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 2,
+      "at": 1793553395607,
+      "file": "raw/selection-02.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 3,
+      "at": 1793553395806,
+      "file": "raw/selection-03.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 4,
+      "at": 1793553396000,
+      "file": "raw/selection-04.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 5,
+      "at": 1793553396188,
+      "file": "raw/selection-05.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 6,
+      "at": 1793553396385,
+      "file": "raw/selection-06.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 7,
+      "at": 1793553396572,
+      "file": "raw/selection-07.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 8,
+      "at": 1793553396765,
+      "file": "raw/selection-08.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 9,
+      "at": 1793553396964,
+      "file": "raw/selection-09.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 0,
+      "at": 1793553397301,
+      "file": "raw/expansion-00.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 1,
+      "at": 1793553397522,
+      "file": "raw/expansion-01.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 2,
+      "at": 1793553397758,
+      "file": "raw/expansion-02.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 3,
+      "at": 1793553398028,
+      "file": "raw/expansion-03.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 4,
+      "at": 1793553398291,
+      "file": "raw/expansion-04.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 5,
+      "at": 1793553398545,
+      "file": "raw/expansion-05.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 6,
+      "at": 1793553398812,
+      "file": "raw/expansion-06.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 7,
+      "at": 1793553399073,
+      "file": "raw/expansion-07.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 8,
+      "at": 1793553399337,
+      "file": "raw/expansion-08.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 9,
+      "at": 1793553399596,
+      "file": "raw/expansion-09.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 10,
+      "at": 1793553399858,
+      "file": "raw/expansion-10.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 11,
+      "at": 1793553400110,
+      "file": "raw/expansion-11.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 12,
+      "at": 1793553400369,
+      "file": "raw/expansion-12.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 13,
+      "at": 1793553400624,
+      "file": "raw/expansion-13.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 14,
+      "at": 1793553400872,
+      "file": "raw/expansion-14.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 15,
+      "at": 1793553401146,
+      "file": "raw/expansion-15.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 16,
+      "at": 1793553401404,
+      "file": "raw/expansion-16.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 17,
+      "at": 1793553401661,
+      "file": "raw/expansion-17.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 0,
+      "at": 1793553403268,
+      "file": "raw/rearrangement-00.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 1,
+      "at": 1793553403477,
+      "file": "raw/rearrangement-01.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 2,
+      "at": 1793553403702,
+      "file": "raw/rearrangement-02.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 3,
+      "at": 1793553403917,
+      "file": "raw/rearrangement-03.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 4,
+      "at": 1793553404142,
+      "file": "raw/rearrangement-04.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 5,
+      "at": 1793553404346,
+      "file": "raw/rearrangement-05.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 6,
+      "at": 1793553404545,
+      "file": "raw/rearrangement-06.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 7,
+      "at": 1793553404755,
+      "file": "raw/rearrangement-07.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 8,
+      "at": 1793553404951,
+      "file": "raw/rearrangement-08.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 9,
+      "at": 1793553405142,
+      "file": "raw/rearrangement-09.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 10,
+      "at": 1793553405334,
+      "file": "raw/rearrangement-10.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 11,
+      "at": 1793553405523,
+      "file": "raw/rearrangement-11.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 12,
+      "at": 1793553405710,
+      "file": "raw/rearrangement-12.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 13,
+      "at": 1793553405895,
+      "file": "raw/rearrangement-13.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 14,
+      "at": 1793553406084,
+      "file": "raw/rearrangement-14.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 15,
+      "at": 1793553406272,
+      "file": "raw/rearrangement-15.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 0,
+      "at": 1793553407333,
+      "file": "raw/vela-working-00.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 1,
+      "at": 1793553407524,
+      "file": "raw/vela-working-01.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 2,
+      "at": 1793553407710,
+      "file": "raw/vela-working-02.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 3,
+      "at": 1793553407918,
+      "file": "raw/vela-working-03.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 4,
+      "at": 1793553408107,
+      "file": "raw/vela-working-04.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 5,
+      "at": 1793553408292,
+      "file": "raw/vela-working-05.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 6,
+      "at": 1793553408481,
+      "file": "raw/vela-working-06.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 7,
+      "at": 1793553408673,
+      "file": "raw/vela-working-07.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 8,
+      "at": 1793553408862,
+      "file": "raw/vela-working-08.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 9,
+      "at": 1793553409063,
+      "file": "raw/vela-working-09.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 10,
+      "at": 1793553409255,
+      "file": "raw/vela-working-10.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 11,
+      "at": 1793553409454,
+      "file": "raw/vela-working-11.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 12,
+      "at": 1793553409640,
+      "file": "raw/vela-working-12.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 13,
+      "at": 1793553409831,
+      "file": "raw/vela-working-13.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 0,
+      "at": 1793553422179,
+      "file": "raw/return-to-calm-00.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 1,
+      "at": 1793553422386,
+      "file": "raw/return-to-calm-01.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 2,
+      "at": 1793553422615,
+      "file": "raw/return-to-calm-02.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 3,
+      "at": 1793553422828,
+      "file": "raw/return-to-calm-03.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 4,
+      "at": 1793553423014,
+      "file": "raw/return-to-calm-04.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 5,
+      "at": 1793553423201,
+      "file": "raw/return-to-calm-05.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 6,
+      "at": 1793553423391,
+      "file": "raw/return-to-calm-06.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 7,
+      "at": 1793553423584,
+      "file": "raw/return-to-calm-07.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 8,
+      "at": 1793553423778,
+      "file": "raw/return-to-calm-08.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 9,
+      "at": 1793553423968,
+      "file": "raw/return-to-calm-09.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 10,
+      "at": 1793553424156,
+      "file": "raw/return-to-calm-10.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 11,
+      "at": 1793553424349,
+      "file": "raw/return-to-calm-11.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 12,
+      "at": 1793553424543,
+      "file": "raw/return-to-calm-12.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 13,
+      "at": 1793553424734,
+      "file": "raw/return-to-calm-13.png"
+    }
+  ],
+  "errors": [],
+  "unavailable": [
+    "presented-frame timing",
+    "GPU utilization attributable to application",
+    "dedicated VRAM attributable to application",
+    "optical input-to-display latency",
+    "power",
+    "multi-display acceptance",
+    "external game automatic detection"
+  ],
+  "method": "Callback and draw intervals are scheduler observations, not presented FPS. CPU is Electron app-metrics sum, working-set KiB sums can double-count shared pages. Short repeated exploratory runs."
+}

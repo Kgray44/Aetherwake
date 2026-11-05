@@ -1,0 +1,122 @@
+{
+  "kind": "Independent ffmpeg decode of an existing native video; no application window or desktop capture",
+  "capturedAtUTC": "2026-11-01T20:42:45.2961902Z",
+  "status": "decoded",
+  "source": {
+    "basename": "aerynth-v3-5-ambient-1793565404168.webm",
+    "byteCount": 19540052,
+    "sha256": "deac866267b840ae47b71e99deff2c311b21c5f9bb5b3a2f0153d8fcaddaf15e"
+  },
+  "outputDirectory": ".runtime/v3-5/independent-review-20261101T204245221Z-68fae4d8",
+  "decoded": {
+    "codec": "vp9",
+    "width": 2000,
+    "height": 1252
+  },
+  "timing": {
+    "firstPacketPTSSeconds": 0.0,
+    "lastPacketPTSSeconds": 32.485,
+    "lastPacketDurationSeconds": 0.001,
+    "lastPacketEndPTSSeconds": 32.486,
+    "encodedPacketTimestampSpanSeconds": 32.485,
+    "containerDurationSeconds": null,
+    "packetCount": 909,
+    "timestampedPacketCount": 909,
+    "packetDataHashCount": 909,
+    "orderedPacketDataHashesSHA256": "3d3cef454ca882a45c5894db6cbdb0c0e903cf9cc56851b13cc4005cabb634a8",
+    "packetHashMethod": "SHA-256 of UTF-8 lowercase ffprobe SHA256:<payload hash> values in video-packet order, each followed by LF; timestamps and mux metadata excluded",
+    "nativeWallReceiptAvailable": true,
+    "nativeWallDurationSeconds": 30.003599999993998,
+    "encodedPTSSpanMinusNativeWallSeconds": 2.4814000000060012,
+    "deltaMeaning": "Last encoded packet PTS minus first PTS, minus native receipt wall duration. This excludes final frame duration; neither value is presented FPS."
+  },
+  "frames": [
+    {
+      "file": "frame-000300ms.png",
+      "requestedSeekSeconds": 0.3,
+      "decodedFramePTSSeconds": 0.321,
+      "decodedFramePTSOffsetFromRequestSeconds": 0.02100000000000002,
+      "byteCount": 458758,
+      "sha256": "88982e00c7f5b116f0324c28c5090df23d64a758b2441e32b0d891490e9b9dc7"
+    },
+    {
+      "file": "frame-002800ms.png",
+      "requestedSeekSeconds": 2.8,
+      "decodedFramePTSSeconds": 2.818,
+      "decodedFramePTSOffsetFromRequestSeconds": 0.018000000000000238,
+      "byteCount": 539332,
+      "sha256": "daafd2469563de46162f53bf1e620400efed1b30de9b7af6ad242c3467cc2858"
+    },
+    {
+      "file": "frame-006300ms.png",
+      "requestedSeekSeconds": 6.3,
+      "decodedFramePTSSeconds": 6.315,
+      "decodedFramePTSOffsetFromRequestSeconds": 0.015000000000000568,
+      "byteCount": 515060,
+      "sha256": "27fd61fc537978f8f526bc299ce11d95d9678ccf531d5c4330c9577f73cfbd29"
+    },
+    {
+      "file": "frame-010000ms.png",
+      "requestedSeekSeconds": 10,
+      "decodedFramePTSSeconds": 10.012,
+      "decodedFramePTSOffsetFromRequestSeconds": 0.012000000000000455,
+      "byteCount": 511724,
+      "sha256": "a8f74b3e76e917fef9133fa1554bf5b312d57201529d1f7db1ca186125790475"
+    },
+    {
+      "file": "frame-015800ms.png",
+      "requestedSeekSeconds": 15.8,
+      "decodedFramePTSSeconds": 15.812,
+      "decodedFramePTSOffsetFromRequestSeconds": 0.011999999999998678,
+      "byteCount": 475193,
+      "sha256": "7c9cadc07e7417223587cc8b83e52b084578f81f0e4962d37f71dd7da9ffa7af"
+    },
+    {
+      "file": "frame-021500ms.png",
+      "requestedSeekSeconds": 21.5,
+      "decodedFramePTSSeconds": 21.515,
+      "decodedFramePTSOffsetFromRequestSeconds": 0.015000000000000568,
+      "byteCount": 521655,
+      "sha256": "6746b7aad7bc69c32640777991460b944c036e649edfde6b90296bf24802e560"
+    },
+    {
+      "file": "frame-026500ms.png",
+      "requestedSeekSeconds": 26.5,
+      "decodedFramePTSSeconds": 26.516,
+      "decodedFramePTSOffsetFromRequestSeconds": 0.015999999999998238,
+      "byteCount": 512589,
+      "sha256": "3aff153fab3658648fc11dd03f5265ccc47dfbc483420f8d81b063fa8c01d9aa"
+    },
+    {
+      "file": "frame-029000ms.png",
+      "requestedSeekSeconds": 29,
+      "decodedFramePTSSeconds": 29.019,
+      "decodedFramePTSOffsetFromRequestSeconds": 0.01899999999999835,
+      "byteCount": 527332,
+      "sha256": "092e62162690a38d5877dd238aaa89167e86e5d5035c029e73cb0719e7886980"
+    }
+  ],
+  "storage": {
+    "estimatedCBytes": 134217728,
+    "estimatedDBytes": 0,
+    "maxPNGBytes": 125829120,
+    "pngBytes": 4061643,
+    "reserve": {
+      "utc": "2026-11-01T20:42:44.9098389Z",
+      "allowed": true,
+      "floorBytesEach": 32212254720,
+      "cFreeBytes": 134148354048,
+      "dFreeBytes": 502019538944,
+      "estimatedCBytes": 134217728,
+      "estimatedDBytes": 0,
+      "reason": "Both drives remain above reserve after estimated writes"
+    }
+  },
+  "limitations": [
+    "Encoded packet PTS and decoded frame PTS belong to the recording, not monitor presentation or application FPS.",
+    "Native recorder wall duration, container duration and encoded timestamp span are distinct; a discrepancy remains explicit.",
+    "Frame extraction does not change the source video timing, encoded payload, or quality. PNG previews are bounded SDR decoder outputs, not HDR qualification.",
+    "This inspection cannot by itself prove owner artistic acceptance or identify the application source build.",
+    "ReserveGuard covers this bounded local writer; it is not an OS quota and cannot stop unrelated applications, cloud tasks or processes that did not load the rule."
+  ]
+}

@@ -1,0 +1,31 @@
+[data-block-availability="unavailable"] .working-content {
+  display: none !important;
+}
+.aw-block-unavailable {
+  display: none;
+  margin-top: 1rem;
+  overflow-wrap: anywhere;
+  user-select: text;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.expanded[data-block-availability="unavailable"] .aw-block-unavailable {
+  display: block;
+}
+.aw-block-unavailable h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1.1em;
+}
+.aw-block-unavailable small {
+  display: block;
+  opacity: 0.8;
+  margin: 0.6rem 0;
+}
+.aw-block-unavailable button {
+  color: inherit;
+  font: inherit;
+  border: 1px solid #b4d7f42b;
+  border-radius: 1rem;
+  padding: 0.35rem 0.7rem;
+  background: #9fc6eb0c;
+}

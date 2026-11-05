@@ -1,0 +1,9 @@
+.aw-task-objective-creator { display:flex; flex-direction:column; gap:.7rem; min-width:0; color:inherit; padding:1rem; }
+.aw-task-objective-creator h3,.aw-task-objective-creator h4,.aw-task-objective-creator p { margin:0; }.aw-task-objective-creator h4 { font-size:.85rem; }
+.aw-task-objective-creator p { font-size:.8rem; line-height:1.55; }.aw-task-objective-creator form { display:flex; flex-direction:column; align-items:start; gap:.6rem; min-width:0; }
+.aw-task-objective-creator label { display:flex; flex-direction:column; gap:.35rem; width:100%; font-size:.85rem; }.aw-task-objective-creator ol { padding-left:1.3rem; margin:0; width:100%; box-sizing:border-box; }
+.aw-task-objective-creator li { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; margin:.4rem 0; }.aw-task-objective-creator li input { flex:1; }
+.aw-task-objective-creator input,.aw-task-objective-creator textarea,.aw-task-objective-creator button { box-sizing:border-box; min-width:0; min-height:36px; padding:.5rem .7rem; border:1px solid #c6d0b445; border-radius:.65rem; background:#c6d0b408; color:inherit; font:inherit; font-size:.85rem; }
+.aw-task-objective-creator textarea,.aw-task-objective-creator label input { width:100%; }.aw-task-objective-creator textarea { resize:vertical; line-height:1.55; }
+.aw-task-create-actions { display:flex; flex-wrap:wrap; gap:.5rem; margin-top:.3rem; }.aw-task-objective-creator button { cursor:pointer; }.aw-task-objective-creator :disabled { opacity:.5; cursor:default; }
+.aw-task-objective-creator :focus-visible { outline:2px solid #c6d0b4; outline-offset:3px; }.aw-task-objective-creator [hidden] { display:none; }

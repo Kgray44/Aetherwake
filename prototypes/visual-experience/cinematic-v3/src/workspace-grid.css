@@ -1,0 +1,61 @@
+/* Decorative spatial field; the application owns mounting and layer order.
+   The canonical 16-world-unit snap rule is independent of this visual LOD.
+   The existing Motion Coordinator supplies:
+   --workspace-grid-spacing: projected coarse interval in CSS px (96–192px);
+   --workspace-grid-x / --workspace-grid-y: projected world zero modulo spacing;
+   --workspace-grid-reveal: 0..1, with immediate targets for reduced motion.
+   Retain the node and its last spacing/origin until fade-out has settled. */
+.workspace-grid {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  border: 0;
+  background-color: transparent;
+  /* Symmetric feathering joins across tile edges without a hard hairline.
+     One interval family keeps a modulo-spacing origin exact while panning. */
+  background-image:
+    linear-gradient(
+      90deg,
+      #d4c2ef18 0,
+      #d4c2ef0b 0.7px,
+      #d4c2ef04 1.5px,
+      transparent 2.75px,
+      transparent calc(100% - 2.75px),
+      #d4c2ef04 calc(100% - 1.5px),
+      #d4c2ef0b calc(100% - 0.7px),
+      #d4c2ef18 100%
+    ),
+    linear-gradient(
+      0deg,
+      #d4c2ef18 0,
+      #d4c2ef0b 0.7px,
+      #d4c2ef04 1.5px,
+      transparent 2.75px,
+      transparent calc(100% - 2.75px),
+      #d4c2ef04 calc(100% - 1.5px),
+      #d4c2ef0b calc(100% - 0.7px),
+      #d4c2ef18 100%
+    );
+  background-repeat: repeat;
+  background-size: var(--workspace-grid-spacing, 128px)
+    var(--workspace-grid-spacing, 128px);
+  background-position: var(--workspace-grid-x, 0px) var(--workspace-grid-y, 0px);
+  mask-image: radial-gradient(
+    ellipse 62% 66% at 50% 50%,
+    #000 32%,
+    #000c 66%,
+    transparent 100%
+  );
+  /* Only opacity follows reveal. Geometry never scales or drifts during it.
+     No CSS timebase competes with MC reversal, interruption or reduced motion. */
+  opacity: clamp(0, var(--workspace-grid-reveal, 0), 1);
+  animation: none;
+  transition: none;
+}
+@media (forced-colors: active) {
+  .workspace-grid {
+    display: none;
+  }
+}

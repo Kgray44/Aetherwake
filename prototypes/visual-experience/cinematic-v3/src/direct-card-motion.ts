@@ -1,0 +1,35 @@
+import type { MotionCoordinator, Pose } from "./motion.ts";
+
+/** Transient gesture observation only; canonical preview owns every destination. */
+export type DirectCardGesture = Readonly<{
+  blockId: string;
+  intent: "move" | "resize";
+  phase: "active" | "committing";
+  fromFocusedSide?: true;
+}>;
+
+export function targetDirectCard(
+  motion: MotionCoordinator,
+  id: string,
+  destination: Pose,
+  cause: string,
+  gesture?: DirectCardGesture | null,
+) {
+  const own = gesture?.blockId === id ? gesture : null;
+  motion.target(
+    id,
+    own?.intent === "move" ? { ...destination, lift: 55, yaw: 0 } : destination,
+    cause,
+  );
+  // An edge stays directly under its resize handle. Moving cards retain the
+  // shared spring, its current position and velocity, in every layout mode.
+  if (own?.intent === "resize" && own.phase === "active") motion.snap(id);
+}
+
+export function directCardLayer(
+  savedLayer: number,
+  gesture?: DirectCardGesture | null,
+) {
+  if (gesture?.intent !== "move") return savedLayer;
+  return Math.max(gesture.fromFocusedSide ? 230000 : 150000, savedLayer);
+}

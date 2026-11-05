@@ -1,0 +1,10 @@
+.aw-folder { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; font-size: 14px; line-height: 1.5; }
+.aw-folder h3 { margin: 0; font-size: 18px; font-weight: 500; overflow-wrap: anywhere; }
+.aw-folder > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.aw-folder button { border: 1px solid #c8b8e332; border-radius: 999px; padding: 7px 12px; color: inherit; background: #d3c9eb09; font: inherit; cursor: pointer; }
+.aw-folder button:disabled { opacity: .5; cursor: default; }
+.aw-folder button:focus-visible { outline: 2px solid #ceb9f7; outline-offset: 3px; }
+.aw-folder > ul { display: grid; gap: 4px; padding: 0; margin: 0; list-style: none; overflow: auto; }
+.aw-folder-entry { min-width: 0; padding: 7px 10px; overflow-wrap: anywhere; border-radius: 10px; background: #c2b1dc06; }
+.aw-folder-entry button { width: 100%; text-align: start; background: none; border: 0; border-radius: 6px; padding: 0; }
+.aw-folder > p { margin: 0; color: #bbb2cb; font-size: 12px; }

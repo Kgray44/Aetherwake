@@ -1,0 +1,58 @@
+{
+  "kind": "Observed Windows GPU counters filtered to this prototype executable; de-identified",
+  "conditions": "Foreground native Balanced scene after focus. Attempt to activate the synthetic sequence through native input failed; sampling may include active-to-settled idle. Separate from the CPU/frame benchmark.",
+  "processCount": 4,
+  "sampleIntervalSeconds": 1,
+  "limitation": "Engine sums are not whole-GPU utilization. Process memory counters are diagnostic only: Microsoft documents incorrect-value cases, and sums can share memory. No physical VRAM, presented FPS or energy claim.",
+  "reference": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/performance/gpu-process-memory-counters-report-wrong-value",
+  "samples": [
+    {
+      "time": "2026-11-01T17:45:11.3162419Z",
+      "matchingEngineCounters": 14,
+      "maxSingleEnginePercent": 5.057912179385146,
+      "summedEnginePercent": 5.0955506745371375,
+      "dedicatedBytesCounterSum": 425803776,
+      "sharedBytesCounterSum": 9515008
+    },
+    {
+      "time": "2026-11-01T17:45:12.3396551Z",
+      "matchingEngineCounters": 14,
+      "maxSingleEnginePercent": 8.17065873295361,
+      "summedEnginePercent": 8.221293217636825,
+      "dedicatedBytesCounterSum": 402907136,
+      "sharedBytesCounterSum": 9113600
+    },
+    {
+      "time": "2026-11-01T17:45:13.3527056Z",
+      "matchingEngineCounters": 14,
+      "maxSingleEnginePercent": 6.694888359464804,
+      "summedEnginePercent": 6.7450832905171065,
+      "dedicatedBytesCounterSum": 339042304,
+      "sharedBytesCounterSum": 8171520
+    },
+    {
+      "time": "2026-11-01T17:45:14.3675635Z",
+      "matchingEngineCounters": 14,
+      "maxSingleEnginePercent": 6.853087511069283,
+      "summedEnginePercent": 6.898029763575767,
+      "dedicatedBytesCounterSum": 292446208,
+      "sharedBytesCounterSum": 10121216
+    },
+    {
+      "time": "2026-11-01T17:45:15.3939343Z",
+      "matchingEngineCounters": 14,
+      "maxSingleEnginePercent": 6.929211158384476,
+      "summedEnginePercent": 6.977254224301784,
+      "dedicatedBytesCounterSum": 330571776,
+      "sharedBytesCounterSum": 9342976
+    },
+    {
+      "time": "2026-11-01T17:45:16.4099388Z",
+      "matchingEngineCounters": 14,
+      "maxSingleEnginePercent": 2.8144461958583844,
+      "summedEnginePercent": 2.8399086815068237,
+      "dedicatedBytesCounterSum": 322822144,
+      "sharedBytesCounterSum": 7450624
+    }
+  ]
+}

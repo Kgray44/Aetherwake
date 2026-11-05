@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { blockDocument } from '../../../block-library/tests/component-dom.mts';
+import { until } from '../../../conversation-product/test/component-dom.mts';
+import { createVelaPermissionsView } from '../src/vela-permissions-view.ts';
+const snapshot = decision => ({ purpose: 'approximate-location:nws-weather', decision, version: 4 });
+test('permission settings remain passive until opened and change the displayed permission version without exposing coordinates', async () => {
+  const dom = blockDocument(), calls = [];
+  const view = createVelaPermissionsView(dom.doc, async request => { calls.push(request); return snapshot(request.type === 'change' ? 'deny' : 'allow'); });
+  dom.root.append(view.element);
+  const button = name => dom.root.querySelectorAll('button').find(node => node.textContent === name);
+  assert.equal(calls.length, 0);
+  view.setVisible(true); await until(() => !button('Change permission').disabled);
+  assert.deepEqual(calls, [{ type: 'status' }]);
+  button('Change permission').fire('click');
+  assert.deepEqual(calls[1], { type: 'change', expectedVersion: 4 });
+  await until(() => dom.root.textContent.includes('Weather location is off.'));
+  button('Windows location settings').fire('click');
+  assert.deepEqual(calls[2], { type: 'windows-settings' });
+  view.setVisible(false); view.dispose();
+});
+test('permission errors stay safe and an application allow never claims Windows granted access', async () => {
+  const dom = blockDocument(); let fail = false;
+  const view = createVelaPermissionsView(dom.doc, async () => { if (fail) throw Error('PRIVATE_COORDINATES_AND_KEY'); return snapshot('allow'); });
+  dom.root.append(view.element); view.setVisible(true);
+  await until(() => dom.root.textContent.includes('Windows permission is managed separately.'));
+  fail = true; view.setVisible(false); view.setVisible(true);
+  await until(() => dom.root.textContent.includes('Couldn’t update'));
+  assert.equal(dom.root.textContent.includes('PRIVATE_COORDINATES_AND_KEY'), false); view.dispose();
+});

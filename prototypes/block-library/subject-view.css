@@ -1,0 +1,234 @@
+.aw-subject-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  color: inherit;
+}
+.aw-subject-view :is(h3, h4, p) {
+  margin: 0;
+}
+.aw-subject-view ul,
+.aw-subject-view ol {
+  padding-left: 18px;
+  margin: 0;
+}
+.aw-subject-view small {
+  display: block;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+  font-size: 0.78em;
+}
+.aw-subject-view input,
+.aw-subject-view select {
+  font: inherit;
+  color: inherit;
+  background: #15172855;
+  border: 1px solid #d7c4f32b;
+  border-radius: 8px;
+  padding: 7px;
+  min-width: 0;
+}
+.aw-subject-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.aw-subject-filters input[type="search"] {
+  flex: 1;
+  min-width: 130px;
+}
+.aw-subject-filters label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.aw-subject-action {
+  font: inherit;
+  color: inherit;
+  padding: 6px 9px;
+  border: 1px solid #d7c4f32b;
+  border-radius: 8px;
+  background: #d7c4f30a;
+  cursor: pointer;
+}
+.aw-subject-action:focus-visible,
+.aw-subject-view :is(input, select):focus-visible {
+  outline: 2px solid #e6d6fa;
+  outline-offset: 2px;
+}
+.aw-subject-action:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+.aw-subject-resources {
+  list-style: none;
+  padding: 0 !important;
+  overflow: auto;
+  min-height: 0;
+  max-height: 460px;
+}
+.aw-subject-resources li {
+  padding: 10px 0;
+  border-bottom: 1px solid #d7c4f31f;
+}
+.aw-subject-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.aw-subject-status,
+.aw-subject-hint {
+  font-size: 0.8em;
+  opacity: 0.75;
+}
+
+.aw-subject-tools {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+.aw-subject-tools > input {
+  flex: 1 1 8rem;
+  width: 0;
+}
+.aw-subject-filter-menu summary,
+.aw-project-details > summary {
+  cursor: pointer;
+  padding: 0.4rem 0;
+}
+.aw-subject-filters {
+  margin-top: 0.4rem;
+}
+.aw-subject-resource-title {
+  color: inherit;
+  font: inherit;
+  font-weight: 550;
+  text-align: left;
+  border: 0;
+  background: none;
+  padding: 0;
+  overflow-wrap: anywhere;
+}
+button.aw-subject-resource-title {
+  cursor: pointer;
+}
+.aw-subject-resource-details {
+  font-size: 0.78em;
+  opacity: 0.75;
+  margin-top: 0.25rem;
+}
+.aw-subject-resource-details code {
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.aw-subject-resource-details summary {
+  cursor: pointer;
+}
+.aw-subject-resource-details .aw-subject-related {
+  display: block;
+  margin-top: 6px;
+}
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-resources li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.6rem;
+}
+.aw-subject-view[data-subject-kind="resource-query"]
+  .aw-subject-resources
+  small {
+  grid-column: 1;
+}
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-actions {
+  grid-column: 2;
+  grid-row: 1 / 3;
+}
+.aw-subject-view[data-subject-kind="collection"] .aw-subject-resources li {
+  border: 1px solid #c2b2d020;
+  border-radius: 0.75rem;
+  padding: 0.6rem 0.7rem;
+  margin-top: 0.45rem;
+}
+.aw-project-summary {
+  color: #d9d1e8;
+  font-size: 1.35em;
+}
+.aw-project-workspaces {
+  list-style: none;
+  padding-left: 0 !important;
+}
+.aw-project-workspaces li {
+  margin: 0.35rem 0;
+}
+.aw-subject-scope {
+  font-size: 0.78em;
+  color: #beb9ce;
+}
+.aw-subject-view[data-presentation="workspace"] {
+  gap: 0.4rem;
+}
+.aw-subject-view[data-presentation="workspace"] > .aw-subject-action {
+  align-self: flex-end;
+  padding-block: 0.2rem;
+}
+
+.aw-project-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  padding: 0.3rem 0 0.8rem;
+  margin: 0;
+  border-bottom: 1px solid #bcb2dc24;
+}
+.aw-project-metrics[hidden] { display: none; }
+.aw-project-metrics > div { display: flex; flex-direction: column; }
+.aw-project-metrics dd { margin: 0; color: #e4def0; font-size: 2.6em; font-weight: 350; letter-spacing: -0.06em; line-height: 1.1; }
+.aw-project-metrics dt { order: 1; margin-top: 0.35rem; font-size: 0.78em; color: #bcb2dc; }
+.aw-subject-view[data-subject-kind="project"] .aw-project-summary { margin: 0.65rem 0; font-size: 0.95em; }
+.aw-project-workspaces li { border-bottom: 1px solid #bcb2dc20; padding: 0.35rem 0; }
+.aw-project-workspaces .aw-subject-action {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+.aw-project-workspaces .aw-subject-action::after { content: "↗"; flex: none; color: #bcb2dc; }
+.aw-subject-kind {
+  display: inline-flex;
+  width: 3rem;
+  min-height: 2.8rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #b9c6d42b;
+  border-radius: 8px;
+  color: #c3ccdc;
+  font: 10px/1.2 Consolas, monospace;
+  letter-spacing: 0.025em;
+}
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-resources li:not(.aw-subject-empty) {
+  grid-template-columns: 3rem minmax(0, 1fr) auto;
+  column-gap: 0.7rem;
+}
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-kind { grid-column: 1; grid-row: 1 / 4; }
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-resource-title,
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-resources small,
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-resource-details { grid-column: 2; }
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-actions { grid-column: 3; }
+.aw-subject-view[data-subject-kind="collection"] .aw-subject-resources li:not(.aw-subject-empty) {
+  border: 0;
+  border-left: 2px solid #c2b2d059;
+  border-radius: 12px;
+  background: linear-gradient(90deg, #c2b2d00a, transparent);
+  padding: 0.8rem 0.9rem;
+  margin-bottom: 0.8rem;
+}
+.aw-subject-view[data-subject-kind="collection"] .aw-subject-kind { width: auto; min-height: 0; border: 0; margin-bottom: 0.4rem; color: #c2b2d0; }
+.aw-subject-view[data-subject-kind="collection"] .aw-subject-resource-title { display: block; font-size: 1.15em; }
+.aw-subject-view[data-subject-kind="project"] .aw-subject-kind { display: none; }

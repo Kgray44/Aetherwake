@@ -1,0 +1,208 @@
+{
+  "kind": "CPU-only derived silhouette compositor measurement",
+  "at": "2026-11-02T00:59:19.973Z",
+  "node": "v24.18.0",
+  "sourceHashes": {
+    "material-compositing.ts": "2ee9da2e62fd082fd47eb7dc6e3c03b81b706d0edd074670a61b5aad2e9a67ef",
+    "surface-contour.ts": "bee24e8466551708f2257e055bfcb18caea1f80303147c07227db9630a2ebeaf"
+  },
+  "cases": [
+    {
+      "count": 3,
+      "workload": "unchanged",
+      "samples": 180,
+      "p50Ms": 0.001599999999996271,
+      "p95Ms": 0.002300000000005298,
+      "maxMs": 0.011400000000001853,
+      "meanPathCharacters": 1222,
+      "scratchBefore": 21,
+      "scratchAfter": 21,
+      "recomputations": 1
+    },
+    {
+      "count": 3,
+      "workload": "moving-front",
+      "samples": 180,
+      "p50Ms": 0.023400000000002308,
+      "p95Ms": 0.12359999999999616,
+      "maxMs": 0.3399000000000001,
+      "meanPathCharacters": 780.3833333333333,
+      "scratchBefore": 17,
+      "scratchAfter": 28,
+      "recomputations": 225
+    },
+    {
+      "count": 3,
+      "workload": "resizing-front",
+      "samples": 180,
+      "p50Ms": 0.03619999999999379,
+      "p95Ms": 0.061400000000006116,
+      "maxMs": 0.18899999999999295,
+      "meanPathCharacters": 1519.6722222222222,
+      "scratchBefore": 25,
+      "scratchAfter": 28,
+      "recomputations": 225
+    },
+    {
+      "count": 3,
+      "workload": "moving-all",
+      "samples": 180,
+      "p50Ms": 0.045000000000001705,
+      "p95Ms": 0.1863000000000028,
+      "maxMs": 0.5319000000000074,
+      "meanPathCharacters": 1376.5722222222223,
+      "scratchBefore": 18,
+      "scratchAfter": 28,
+      "recomputations": 225
+    },
+    {
+      "count": 10,
+      "workload": "unchanged",
+      "samples": 180,
+      "p50Ms": 0.00740000000000407,
+      "p95Ms": 0.012000000000000455,
+      "maxMs": 0.2483000000000004,
+      "meanPathCharacters": 8778,
+      "scratchBefore": 96,
+      "scratchAfter": 96,
+      "recomputations": 1
+    },
+    {
+      "count": 10,
+      "workload": "moving-front",
+      "samples": 180,
+      "p50Ms": 0.233099999999979,
+      "p95Ms": 0.3673000000000002,
+      "maxMs": 0.6282999999999959,
+      "meanPathCharacters": 7783.772222222222,
+      "scratchBefore": 100,
+      "scratchAfter": 100,
+      "recomputations": 225
+    },
+    {
+      "count": 10,
+      "workload": "resizing-front",
+      "samples": 180,
+      "p50Ms": 0.27800000000002,
+      "p95Ms": 0.3984000000000094,
+      "maxMs": 1.028099999999995,
+      "meanPathCharacters": 9669.238888888889,
+      "scratchBefore": 99,
+      "scratchAfter": 108,
+      "recomputations": 225
+    },
+    {
+      "count": 10,
+      "workload": "moving-all",
+      "samples": 180,
+      "p50Ms": 0.2925999999999931,
+      "p95Ms": 0.4405000000000143,
+      "maxMs": 0.5974999999999682,
+      "meanPathCharacters": 10142.888888888889,
+      "scratchBefore": 104,
+      "scratchAfter": 128,
+      "recomputations": 225
+    },
+    {
+      "count": 25,
+      "workload": "unchanged",
+      "samples": 180,
+      "p50Ms": 0.002800000000036107,
+      "p95Ms": 0.007799999999974716,
+      "maxMs": 0.05710000000004811,
+      "meanPathCharacters": 29087,
+      "scratchBefore": 241,
+      "scratchAfter": 241,
+      "recomputations": 1
+    },
+    {
+      "count": 25,
+      "workload": "moving-front",
+      "samples": 180,
+      "p50Ms": 1.8488999999999578,
+      "p95Ms": 3.2718999999999596,
+      "maxMs": 4.490399999999909,
+      "meanPathCharacters": 26741.055555555555,
+      "scratchBefore": 271,
+      "scratchAfter": 282,
+      "recomputations": 225
+    },
+    {
+      "count": 25,
+      "workload": "resizing-front",
+      "samples": 180,
+      "p50Ms": 1.9087999999999283,
+      "p95Ms": 2.236599999999953,
+      "maxMs": 3.7822000000001026,
+      "meanPathCharacters": 29884.87222222222,
+      "scratchBefore": 241,
+      "scratchAfter": 261,
+      "recomputations": 225
+    },
+    {
+      "count": 25,
+      "workload": "moving-all",
+      "samples": 180,
+      "p50Ms": 2.0271000000000186,
+      "p95Ms": 2.3409999999998945,
+      "maxMs": 2.91150000000016,
+      "meanPathCharacters": 32654.92777777778,
+      "scratchBefore": 278,
+      "scratchAfter": 306,
+      "recomputations": 225
+    },
+    {
+      "count": 50,
+      "workload": "unchanged",
+      "samples": 180,
+      "p50Ms": 0.004100000000107684,
+      "p95Ms": 0.004999999999881766,
+      "maxMs": 0.028199999999969805,
+      "meanPathCharacters": 62464,
+      "scratchBefore": 257,
+      "scratchAfter": 257,
+      "recomputations": 1
+    },
+    {
+      "count": 50,
+      "workload": "moving-front",
+      "samples": 180,
+      "p50Ms": 4.601100000000088,
+      "p95Ms": 5.432999999999993,
+      "maxMs": 7.717399999999998,
+      "meanPathCharacters": 59964.72222222222,
+      "scratchBefore": 257,
+      "scratchAfter": 257,
+      "recomputations": 225
+    },
+    {
+      "count": 50,
+      "workload": "resizing-front",
+      "samples": 180,
+      "p50Ms": 4.866599999999835,
+      "p95Ms": 5.88130000000001,
+      "maxMs": 7.146300000000338,
+      "meanPathCharacters": 63516.583333333336,
+      "scratchBefore": 264,
+      "scratchAfter": 271,
+      "recomputations": 225
+    },
+    {
+      "count": 50,
+      "workload": "moving-all",
+      "samples": 180,
+      "p50Ms": 5.511399999999412,
+      "p95Ms": 6.547899999999572,
+      "maxMs": 9.265800000000127,
+      "meanPathCharacters": 72070.69444444444,
+      "scratchBefore": 320,
+      "scratchAfter": 333,
+      "recomputations": 225
+    }
+  ],
+  "limits": [
+    "Node CPU time excludes browser style/paint, GPU execution, native input and monitor presentation.",
+    "Scratch capacity is observed reusable typed buffers, not a universal JavaScript allocation-free claim.",
+    "Different overlap angles can grow the pool to a new high-water mark; this is not prolonged leak qualification."
+  ]
+}

@@ -1,0 +1,4161 @@
+{
+  "capturedAt": "2026-11-01T20:20:38.047Z",
+  "kind": "actual Electron native renderer; synthetic content",
+  "buildAssets": [
+    "graphics-BV8uUGpw.js",
+    "index-J6-7kO1R.js",
+    "index-XoOly929.css"
+  ],
+  "buildAssetHashes": {
+    "graphics-BV8uUGpw.js": "695caf0a32e593cf8c293e8e53746ec174ec9aad3df696c292cfe02ee016df2a",
+    "index-J6-7kO1R.js": "c3fd0e3f107520a5c93d02c63aca1e161c19f3bf6946c7d76ada03617fd4f6af",
+    "index-XoOly929.css": "f6fa1d2c15e5a4a748125a0c744890d67b0eca9ef0a342174ca7d930ded9977e"
+  },
+  "versions": {
+    "electron": "45.2.1",
+    "chrome": "156.0.8078.75",
+    "node": "24.22.1"
+  },
+  "display": {
+    "size": {
+      "width": 2048,
+      "height": 1280
+    },
+    "scaleFactor": 1.25,
+    "refreshRate": 165
+  },
+  "window": {
+    "width": 1600,
+    "height": 1001
+  },
+  "startup": {
+    "moduleToRendererLoadMs": 1061,
+    "meaning": "Native module evaluation to local page load, not OS cold-process startup"
+  },
+  "checks": [
+    {
+      "name": "three original architectural compositions remain selectable without resource replacement",
+      "passed": true,
+      "detail": [
+        {
+          "concept": "ring",
+          "actual": "ring",
+          "gpu": {
+            "backend": "Three.js WebGL2",
+            "framesRendered": 266,
+            "drawCalls": 30,
+            "triangles": 39082,
+            "lines": 2200,
+            "geometries": 35,
+            "textures": 1,
+            "pixelRatio": 1.25,
+            "quality": "balanced",
+            "study": "architecture",
+            "contextLost": false,
+            "architecture": {
+              "concept": "ring",
+              "quality": "balanced",
+              "drawObjects": 18,
+              "triangles": 46960,
+              "originalProceduralGeometry": true
+            },
+            "surfaceCapacity": 3,
+            "surfacesRendered": 3
+          }
+        },
+        {
+          "concept": "aperture",
+          "actual": "aperture",
+          "gpu": {
+            "backend": "Three.js WebGL2",
+            "framesRendered": 339,
+            "drawCalls": 37,
+            "triangles": 56842,
+            "lines": 2200,
+            "geometries": 54,
+            "textures": 1,
+            "pixelRatio": 1.25,
+            "quality": "balanced",
+            "study": "architecture",
+            "contextLost": false,
+            "architecture": {
+              "concept": "aperture",
+              "quality": "balanced",
+              "drawObjects": 22,
+              "triangles": 56032,
+              "originalProceduralGeometry": true
+            },
+            "surfaceCapacity": 3,
+            "surfacesRendered": 3
+          }
+        },
+        {
+          "concept": "observatory",
+          "actual": "observatory",
+          "gpu": {
+            "backend": "Three.js WebGL2",
+            "framesRendered": 412,
+            "drawCalls": 35,
+            "triangles": 45186,
+            "lines": 2200,
+            "geometries": 71,
+            "textures": 1,
+            "pixelRatio": 1.25,
+            "quality": "balanced",
+            "study": "architecture",
+            "contextLost": false,
+            "architecture": {
+              "concept": "observatory",
+              "quality": "balanced",
+              "drawObjects": 23,
+              "triangles": 53064,
+              "originalProceduralGeometry": true
+            },
+            "surfaceCapacity": 3,
+            "surfacesRendered": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "GPU constructed",
+      "passed": true,
+      "detail": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 451,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 71,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "isolated renderer",
+      "passed": true
+    },
+    {
+      "name": "overview Vela label stays clear across reordered resource roles",
+      "passed": true,
+      "detail": [
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "name": "focused Vela stays clear of the working surface and inside the viewport",
+      "passed": true,
+      "detail": {
+        "left": 1374.487548828125,
+        "right": 1583.8500518798828,
+        "resourceRight": 1243.9454193115234,
+        "width": 1602
+      }
+    },
+    {
+      "name": "horizontal resource anchors stay readable, separate and keyboard reachable",
+      "passed": true,
+      "detail": [
+        {
+          "x": 25.03191566467285,
+          "y": 238.89892578125,
+          "w": 173.93618774414062,
+          "h": 74.2021484375,
+          "label": "Open Light, held in a surface",
+          "keyboard": true,
+          "inert": true,
+          "visible": true,
+          "writingMode": "horizontal-tb"
+        },
+        {
+          "x": 25.03191566467285,
+          "y": 338.89892578125,
+          "w": 173.93618774414062,
+          "h": 74.2021484375,
+          "label": "Open Leave room for thought",
+          "keyboard": true,
+          "inert": true,
+          "visible": true,
+          "writingMode": "horizontal-tb"
+        }
+      ]
+    },
+    {
+      "name": "focus state coherently calms ambient motion and the field",
+      "passed": true
+    },
+    {
+      "name": "dark caption integrates a supported native controls overlay",
+      "passed": true,
+      "detail": {
+        "drag": "drag",
+        "height": 42
+      }
+    },
+    {
+      "name": "reversal reconciles to collapsed",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "single persistent resource DOM",
+      "passed": true
+    },
+    {
+      "name": "draft survives interruption",
+      "passed": true
+    },
+    {
+      "name": "same article and editor instances survive",
+      "passed": true
+    },
+    {
+      "name": "undo restores ID order",
+      "passed": true,
+      "detail": [
+        "conversation-tidal",
+        "research-material",
+        "note-field"
+      ]
+    },
+    {
+      "name": "synthetic provenance explicit",
+      "passed": true,
+      "detail": [
+        "input.received",
+        "execution.started",
+        "relationship.assigned",
+        "review.requested",
+        "result.reported",
+        "execution.settled"
+      ]
+    },
+    {
+      "name": "fixture validation has actual local evidence",
+      "passed": true,
+      "detail": [
+        {
+          "id": "event-18",
+          "sequence": 18,
+          "run": "synthetic-mvy9tfvo",
+          "source": "Local demo validator",
+          "resource": "research-material",
+          "kind": "fixture.check.passed",
+          "evidence": "local-observed",
+          "time": "2026-11-01T20:16:50.672Z",
+          "detail": "Only the synthetic event sequence was checked locally; no design or agent work was verified."
+        }
+      ]
+    },
+    {
+      "name": "lens unfolds with its original DOM identity",
+      "passed": true
+    },
+    {
+      "name": "focused activity record leaves Vela visible above it",
+      "passed": true,
+      "detail": {
+        "streamTop": 517.4000244140625,
+        "velaBottom": 376.5500030517578
+      }
+    },
+    {
+      "name": "local message history and separate composer survive rapid resource switching",
+      "passed": true
+    },
+    {
+      "name": "rapid resource switching does not duplicate messages",
+      "passed": true
+    },
+    {
+      "name": "interruptible environment changes preserve resources, reading position and selected text",
+      "passed": true,
+      "detail": {
+        "before": {
+          "order": [
+            "conversation-tidal",
+            "research-material",
+            "note-field"
+          ],
+          "scroll": 100,
+          "text": "Can a working environment make room for concentration without losing its sense of place? We need to review a substantial document, discuss an implementation, and compare a reported result with its evidence. Keep each of those activities readable while the same resources remain available.",
+          "resources": [
+            {
+              "id": "conversation-tidal",
+              "text": ""
+            },
+            {
+              "id": "research-material",
+              "text": "SYNTHETIC RESEARCH NOTEBOOK · Celestial materials\n\nQuestion\nHow can an immense orbital structure establish scale without competing with ordinary reading? These observations are invented review material, not measurements or published research.\n\n01 / Cross section before ornament\nA broad structural shell should have a visible inner face, a narrower recessed band, and a controlled outer lip. Repeated ribs can reveal curvature and thickness, but repetition alone does not establish size. The silhouette extending beyond the viewport supplies the primary scale cue. Light should vary across the cross section rather than tracing the entire outline.\n\n02 / A shared light field\nThe same pale violet direction should inform Vela’s pearl response and the architectural shell. A research lens may carry a cooler edge than a notebook, while the focused conversation uses a nearly opaque working plane. These are material roles within one environment. They do not require literal refraction or a costly transparent layer behind every paragraph.\n\n03 / Motion with a cause\nAn idle field continues its own slow motion. A moving resource displaces a local footprint according to its actual position, and that influence settles after the gesture. A wide folio can have a broader footprint than the notebook. The disturbance should remain spatially bounded. Reduced motion keeps the final spatial relationship without requiring a ripple.\n\n04 / Experiment ledger\nA — Monumental ring: inspect partial visibility, continuous curvature, and selective support divisions.\nB — Celestial aperture: inspect the space through layered shells, the relative depth of the opening, and the risk of a decorative halo.\nC — Suspended observatory: inspect the relationship between a dominant structure and distant supporting forms. More objects are useful only if the hierarchy remains clear.\n\n05 / Synthetic agent report\nSource: material-review fixture. Reported status: comparison drafted. Verification: unavailable until actual output is reviewed. No external agent ran, no GPU benchmark is represented by this paragraph, and no owner approval is implied.\n\nReview questions\nDoes the structure retain a dark, legible cross section in Efficient mode? Does the selected lens still feel like the same object after expansion? Can a paragraph be selected and copied without movement behind the text? Does a scene change preserve the draft, caret, and scroll position? Are the small labels readable at ordinary window sizes?\n\nWorking conclusion\nPrefer one coherent architectural structure over a collection of luminous rings. Preserve the responsive field and the double-loop presence. Keep the reading face calm. These are fixture observations for a realistic reading workload, not the actual milestone evaluation.\n"
+            },
+            {
+              "id": "note-field",
+              "text": "SYNTHETIC WORKING DOCUMENT · Observatory review plan\n\nPurpose\nAn intelligent observatory should make space for concentration. Architectural scale belongs to the surrounding environment; the document remains a stable, readable place to think. This fictional plan exercises long-form editing and navigation.\n\nWork package 1 — Preserve continuity\nKeep each resource’s canonical identity independent of its representation. Expanding the conversation must not create a second document. Returning to the workspace must preserve its draft and reading position. Switching between Living Intelligence and Luminous Architecture changes the environment around the same objects. An interrupted transition should reverse from its current pose and velocity.\n\nWork package 2 — Review the compositions\nCompare three actual rendered architectural studies. Examine the outer silhouette before looking for fine detail. An orbital shell should imply a larger structure beyond the window. The aperture should have convincing front-to-back separation. The suspended arrangement should keep a clear dominant form. Use the same window size for comparisons, and preserve a failed experiment when it teaches something useful.\n\nWork package 3 — Evaluate focused work\nRead the conversation’s coding discussion, then inspect the synthetic agent report. Distinguish a reported result from a checked event sequence. Select a sentence, scroll, edit this document, switch environments, and return. The environment should recede during these actions without disappearing abruptly. Vela should remain reachable without covering the text.\n\nTask overview\nOwner: fictional review team.\nDependencies: reproducible baseline, three comparable compositions, stable local drafts.\nProposed evidence: native screenshots, actual animation recording, functional regression checks, and bounded performance samples.\nOpen decisions: final artistic direction, sustained motion comfort, production host, and complete assistive-technology qualification.\n\nRisk register\nExcessive edge emission can flatten the shell into a neon line. Too many secondary forms can reduce the sense of scale. Transparent text surfaces can lower readability. Strong ambient motion may become distracting during a long session. Additional geometry can increase rendering cost without improving the image. Each concern needs direct observation rather than a claim based on implementation complexity.\n\nReview notes\nThis is an editable synthetic document. Replace or extend any paragraph. Local changes stay in this dedicated prototype profile. No external AI or synchronization service is connected. A fixture’s narrative is not evidence of real work, measured performance, or artistic acceptance.\n"
+            }
+          ]
+        },
+        "after": {
+          "sameArticle": true,
+          "sameEditor": true,
+          "order": [
+            "conversation-tidal",
+            "research-material",
+            "note-field"
+          ],
+          "scroll": 100,
+          "text": "Can a working environment make room for concentration without losing its sense of place? We need to review a substantial document, discuss an implementation, and compare a reported result with its evidence. Keep each of those activities readable while the same resources remain available.",
+          "resources": [
+            {
+              "id": "conversation-tidal",
+              "text": ""
+            },
+            {
+              "id": "research-material",
+              "text": "SYNTHETIC RESEARCH NOTEBOOK · Celestial materials\n\nQuestion\nHow can an immense orbital structure establish scale without competing with ordinary reading? These observations are invented review material, not measurements or published research.\n\n01 / Cross section before ornament\nA broad structural shell should have a visible inner face, a narrower recessed band, and a controlled outer lip. Repeated ribs can reveal curvature and thickness, but repetition alone does not establish size. The silhouette extending beyond the viewport supplies the primary scale cue. Light should vary across the cross section rather than tracing the entire outline.\n\n02 / A shared light field\nThe same pale violet direction should inform Vela’s pearl response and the architectural shell. A research lens may carry a cooler edge than a notebook, while the focused conversation uses a nearly opaque working plane. These are material roles within one environment. They do not require literal refraction or a costly transparent layer behind every paragraph.\n\n03 / Motion with a cause\nAn idle field continues its own slow motion. A moving resource displaces a local footprint according to its actual position, and that influence settles after the gesture. A wide folio can have a broader footprint than the notebook. The disturbance should remain spatially bounded. Reduced motion keeps the final spatial relationship without requiring a ripple.\n\n04 / Experiment ledger\nA — Monumental ring: inspect partial visibility, continuous curvature, and selective support divisions.\nB — Celestial aperture: inspect the space through layered shells, the relative depth of the opening, and the risk of a decorative halo.\nC — Suspended observatory: inspect the relationship between a dominant structure and distant supporting forms. More objects are useful only if the hierarchy remains clear.\n\n05 / Synthetic agent report\nSource: material-review fixture. Reported status: comparison drafted. Verification: unavailable until actual output is reviewed. No external agent ran, no GPU benchmark is represented by this paragraph, and no owner approval is implied.\n\nReview questions\nDoes the structure retain a dark, legible cross section in Efficient mode? Does the selected lens still feel like the same object after expansion? Can a paragraph be selected and copied without movement behind the text? Does a scene change preserve the draft, caret, and scroll position? Are the small labels readable at ordinary window sizes?\n\nWorking conclusion\nPrefer one coherent architectural structure over a collection of luminous rings. Preserve the responsive field and the double-loop presence. Keep the reading face calm. These are fixture observations for a realistic reading workload, not the actual milestone evaluation.\n"
+            },
+            {
+              "id": "note-field",
+              "text": "SYNTHETIC WORKING DOCUMENT · Observatory review plan\n\nPurpose\nAn intelligent observatory should make space for concentration. Architectural scale belongs to the surrounding environment; the document remains a stable, readable place to think. This fictional plan exercises long-form editing and navigation.\n\nWork package 1 — Preserve continuity\nKeep each resource’s canonical identity independent of its representation. Expanding the conversation must not create a second document. Returning to the workspace must preserve its draft and reading position. Switching between Living Intelligence and Luminous Architecture changes the environment around the same objects. An interrupted transition should reverse from its current pose and velocity.\n\nWork package 2 — Review the compositions\nCompare three actual rendered architectural studies. Examine the outer silhouette before looking for fine detail. An orbital shell should imply a larger structure beyond the window. The aperture should have convincing front-to-back separation. The suspended arrangement should keep a clear dominant form. Use the same window size for comparisons, and preserve a failed experiment when it teaches something useful.\n\nWork package 3 — Evaluate focused work\nRead the conversation’s coding discussion, then inspect the synthetic agent report. Distinguish a reported result from a checked event sequence. Select a sentence, scroll, edit this document, switch environments, and return. The environment should recede during these actions without disappearing abruptly. Vela should remain reachable without covering the text.\n\nTask overview\nOwner: fictional review team.\nDependencies: reproducible baseline, three comparable compositions, stable local drafts.\nProposed evidence: native screenshots, actual animation recording, functional regression checks, and bounded performance samples.\nOpen decisions: final artistic direction, sustained motion comfort, production host, and complete assistive-technology qualification.\n\nRisk register\nExcessive edge emission can flatten the shell into a neon line. Too many secondary forms can reduce the sense of scale. Transparent text surfaces can lower readability. Strong ambient motion may become distracting during a long session. Additional geometry can increase rendering cost without improving the image. Each concern needs direct observation rather than a claim based on implementation complexity.\n\nReview notes\nThis is an editable synthetic document. Replace or extend any paragraph. Local changes stay in this dedicated prototype profile. No external AI or synchronization service is connected. A fixture’s narrative is not evidence of real work, measured performance, or artistic acceptance.\n"
+            }
+          ],
+          "expanded": "conversation-tidal"
+        }
+      }
+    },
+    {
+      "name": "scene changes preserve the focused editor, draft and caret range",
+      "passed": true
+    },
+    {
+      "name": "architecture resource transformation retains canonical lens and returns to the workspace",
+      "passed": true
+    },
+    {
+      "name": "living resource transformation retains canonical lens and returns to the workspace",
+      "passed": true
+    },
+    {
+      "name": "all eight Vela presentation states retain GPU availability and explicit state",
+      "passed": true,
+      "detail": [
+        {
+          "requested": "idle",
+          "actual": "idle",
+          "graphicsFailed": false
+        },
+        {
+          "requested": "receiving",
+          "actual": "receiving",
+          "graphicsFailed": false
+        },
+        {
+          "requested": "working",
+          "actual": "working",
+          "graphicsFailed": false
+        },
+        {
+          "requested": "coordinating",
+          "actual": "coordinating",
+          "graphicsFailed": false
+        },
+        {
+          "requested": "attention",
+          "actual": "attention",
+          "graphicsFailed": false
+        },
+        {
+          "requested": "reported",
+          "actual": "reported",
+          "graphicsFailed": false
+        },
+        {
+          "requested": "verified",
+          "actual": "verified",
+          "graphicsFailed": false
+        },
+        {
+          "requested": "unavailable",
+          "actual": "unavailable",
+          "graphicsFailed": false
+        }
+      ]
+    },
+    {
+      "name": "resize during resource switching reconciles without identity loss",
+      "passed": true
+    },
+    {
+      "name": "native maximize and restore retain focused resource and draft",
+      "passed": true
+    },
+    {
+      "name": "reduced snaps with draft preserved",
+      "passed": true,
+      "detail": {
+        "x": 232,
+        "y": 152,
+        "w": 1000,
+        "h": 692,
+        "lift": 35,
+        "yaw": 0,
+        "opacity": 1
+      }
+    },
+    {
+      "name": "resize 900x850",
+      "passed": true,
+      "detail": {
+        "conversation-tidal": {
+          "x": 32.006101323074866,
+          "y": 155.018281936669,
+          "w": 559.9914129527095,
+          "h": 175.00550813888705,
+          "lift": 12,
+          "yaw": 0,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 50.08185941792103,
+          "y": 344.0182757223585,
+          "w": 559.976046657558,
+          "h": 175.00867178788883,
+          "lift": 0,
+          "yaw": 0,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 32.04338718631011,
+          "y": 533.0112140058368,
+          "w": 559.9832778552764,
+          "h": 175,
+          "lift": 0,
+          "yaw": 0,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "compact focused Vela retains a reachable separate corridor",
+      "passed": true,
+      "detail": {
+        "left": 834.1625366210938,
+        "right": 895.4750366210938,
+        "resourceRight": 820.5402069091797,
+        "width": 900
+      }
+    },
+    {
+      "name": "resize 1280x800",
+      "passed": true,
+      "detail": {
+        "conversation-tidal": {
+          "x": 83.2,
+          "y": 296.72534838183424,
+          "w": 366.96763901427715,
+          "h": 192.0328458774505,
+          "lift": 16,
+          "yaw": -5,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 812.7194631866945,
+          "y": 415.11611066877975,
+          "w": 221.85333997760935,
+          "h": 221.85143167136968,
+          "lift": 0,
+          "yaw": 7,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 435.15761616627657,
+          "y": 502.6501901540492,
+          "w": 290.11308641352616,
+          "h": 133.11376130467787,
+          "lift": 0,
+          "yaw": -2,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "resize 1920x1080",
+      "passed": true,
+      "detail": {
+        "conversation-tidal": {
+          "x": 124.80000000000001,
+          "y": 400.33021484495185,
+          "w": 550.3826713341749,
+          "h": 287.9909326748589,
+          "lift": 16,
+          "yaw": -5,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 1219.1616149350727,
+          "y": 584.1840314329463,
+          "w": 332.78952220205923,
+          "h": 332.78952220205923,
+          "lift": 0,
+          "yaw": 7,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 652.779447396347,
+          "y": 707.980605999004,
+          "w": 435.18629826423137,
+          "h": 199.6737133212356,
+          "lift": 0,
+          "yaw": -2,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "content zoom 0.8",
+      "passed": true,
+      "detail": {
+        "viewport": {
+          "width": 2000,
+          "height": 1252
+        },
+        "poses": {
+          "conversation-tidal": {
+            "x": 130,
+            "y": 463.24,
+            "w": 573.3333333333333,
+            "h": 300,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1269.9930585448717,
+            "y": 701.1200000000001,
+            "w": 346.66666666666663,
+            "h": 346.66666666666663,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 680,
+            "y": 868.6611077736862,
+            "w": 453.3333333333333,
+            "h": 208,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "content zoom 1.25",
+      "passed": true,
+      "detail": {
+        "viewport": {
+          "width": 1280,
+          "height": 801
+        },
+        "poses": {
+          "conversation-tidal": {
+            "x": 83.2,
+            "y": 296.37491152085533,
+            "w": 366.939408349241,
+            "h": 192,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 812.8134568387114,
+            "y": 414.1417802740567,
+            "w": 221.86666666666667,
+            "h": 221.86666666666667,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 435.2072052514254,
+            "y": 501.6774686348027,
+            "w": 290.1381368342836,
+            "h": 133.12,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "content zoom 1.5",
+      "passed": true,
+      "detail": {
+        "viewport": {
+          "width": 1066,
+          "height": 668
+        },
+        "poses": {
+          "conversation-tidal": {
+            "x": 69.29,
+            "y": 247.16,
+            "w": 305.58666666666664,
+            "h": 159.9,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 676.9100000000001,
+            "y": 318.2266666666667,
+            "w": 184.77333333333334,
+            "h": 184.77333333333334,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 362.44,
+            "y": 392.13599999999997,
+            "w": 241.62666666666667,
+            "h": 110.864,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "idle Vela keeps ambient motion without pointer input",
+      "passed": true,
+      "detail": {
+        "draws": 122,
+        "policy": "balanced / ambient idle"
+      }
+    },
+    {
+      "name": "ambient off stops autonomous rendering",
+      "passed": true,
+      "detail": 0
+    },
+    {
+      "name": "quiet mode stills the environment",
+      "passed": true,
+      "detail": 0
+    },
+    {
+      "name": "reduced motion stops autonomous rendering after reconciliation",
+      "passed": true,
+      "detail": 0
+    },
+    {
+      "name": "native minimized stops rendering",
+      "passed": true,
+      "detail": {
+        "draws": 0,
+        "active": false,
+        "nativeMinimized": true,
+        "nativeVisible": false
+      }
+    },
+    {
+      "name": "no renderer errors",
+      "passed": true,
+      "detail": {
+        "renderer": [],
+        "host": []
+      }
+    },
+    {
+      "name": "forced graphics loss retains resources",
+      "passed": true,
+      "detail": 3
+    },
+    {
+      "name": "graphics restoration retains DOM and drafts",
+      "passed": true,
+      "detail": false
+    },
+    {
+      "name": "unsent Vela input survives graphics restoration",
+      "passed": true
+    },
+    {
+      "name": "input feedback sampled",
+      "passed": true,
+      "detail": {
+        "kind": "programmatic DOM click dispatch to next coordinator callback; not optical input-to-display",
+        "samples": 16,
+        "p50": 3.1999999761465006,
+        "p95": 4.69999998214189,
+        "max": 4.69999998214189
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "balanced-active-1",
+      "durationMs": 4599,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 759,
+      "callbackMs": {
+        "p50": 6.099999999991269,
+        "p95": 6.19999999999709,
+        "p99": 6.2000000000116415,
+        "max": 6.30000000000291
+      },
+      "drawSamples": 276,
+      "drawMs": {
+        "p50": 18.19999999999709,
+        "p95": 18.30000000000291,
+        "p99": 18.30000000000291
+      },
+      "cpuReportedSumMean": 5.462947201083725,
+      "workingSetKiBSumMean": 1907612,
+      "workingSetKiBSum": {
+        "first": 1942520,
+        "last": 1875172,
+        "min": 1875172,
+        "max": 1942520,
+        "delta": -67348
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "working"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 6777,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 71,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "cinematic-transition-1",
+      "durationMs": 4607,
+      "warmupMs": 1200,
+      "workload": "Scripted resource expansion/reversal every approximately 500ms",
+      "callbackSamples": 393,
+      "callbackMs": {
+        "p50": 12.099999999991269,
+        "p95": 18.30000000000291,
+        "p99": 30.30000000000291,
+        "max": 60.5
+      },
+      "drawSamples": 393,
+      "drawMs": {
+        "p50": 12.099999999991269,
+        "p95": 18.30000000000291,
+        "p99": 30.30000000000291
+      },
+      "cpuReportedSumMean": 11.557717340590614,
+      "workingSetKiBSumMean": 1924440.888888889,
+      "workingSetKiBSum": {
+        "first": 1898136,
+        "last": 1924284,
+        "min": 1898136,
+        "max": 1934844,
+        "delta": 26148
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "cinematic",
+        "expanded": "conversation-tidal",
+        "vela": "working"
+      },
+      "policy": "cinematic / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 7370,
+        "drawCalls": 45,
+        "triangles": 81562,
+        "lines": 3520,
+        "geometries": 87,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "cinematic",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "cinematic",
+          "drawObjects": 37,
+          "triangles": 96416,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "efficient-1",
+      "durationMs": 4598,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 81,
+      "callbackMs": {
+        "p50": 60.6359999999986,
+        "p95": 78.73600000000442,
+        "p99": 78.80000000000291,
+        "max": 78.80000000000291
+      },
+      "drawSamples": 70,
+      "drawMs": {
+        "p50": 66.66400000000431,
+        "p95": 78.79999999998836,
+        "p99": 78.80000000000291
+      },
+      "cpuReportedSumMean": 0.9709050673507463,
+      "workingSetKiBSumMean": 1903094.6666666667,
+      "workingSetKiBSum": {
+        "first": 1934348,
+        "last": 1865780,
+        "min": 1865780,
+        "max": 1934348,
+        "delta": -68568
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "efficient",
+        "expanded": null,
+        "vela": "working"
+      },
+      "policy": "efficient / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 7458,
+        "drawCalls": 20,
+        "triangles": 18186,
+        "lines": 880,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 0.8,
+        "quality": "efficient",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "efficient",
+          "drawObjects": 6,
+          "triangles": 15104,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "balanced-active-2",
+      "durationMs": 4592,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 758,
+      "callbackMs": {
+        "p50": 6.099999999991269,
+        "p95": 6.100000000005821,
+        "p99": 6.2000000000116415,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 276,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.29999999998836,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 5.115824696277056,
+      "workingSetKiBSumMean": 1862735.5555555555,
+      "workingSetKiBSum": {
+        "first": 1859852,
+        "last": 1868812,
+        "min": 1859852,
+        "max": 1868812,
+        "delta": 8960
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "working"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 7807,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "cinematic-transition-2",
+      "durationMs": 4609,
+      "warmupMs": 1200,
+      "workload": "Scripted resource expansion/reversal every approximately 500ms",
+      "callbackSamples": 406,
+      "callbackMs": {
+        "p50": 12.10000000000582,
+        "p95": 18.20000000001164,
+        "p99": 24.29999999998836,
+        "max": 24.5
+      },
+      "drawSamples": 406,
+      "drawMs": {
+        "p50": 12.10000000000582,
+        "p95": 18.20000000001164,
+        "p99": 24.29999999998836
+      },
+      "cpuReportedSumMean": 11.915314074232139,
+      "workingSetKiBSumMean": 1998720.4444444445,
+      "workingSetKiBSum": {
+        "first": 1938256,
+        "last": 2043996,
+        "min": 1938256,
+        "max": 2043996,
+        "delta": 105740
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "cinematic",
+        "expanded": "conversation-tidal",
+        "vela": "working"
+      },
+      "policy": "cinematic / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 8413,
+        "drawCalls": 45,
+        "triangles": 81562,
+        "lines": 3520,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "cinematic",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "cinematic",
+          "drawObjects": 37,
+          "triangles": 96416,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "efficient-2",
+      "durationMs": 4607,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 76,
+      "callbackMs": {
+        "p50": 60.70000000001164,
+        "p95": 78.80000000001746,
+        "p99": 78.89999999999418,
+        "max": 78.89999999999418
+      },
+      "drawSamples": 69,
+      "drawMs": {
+        "p50": 66.60000000000582,
+        "p95": 78.80000000001746,
+        "p99": 78.89999999999418
+      },
+      "cpuReportedSumMean": 0.9714983228945245,
+      "workingSetKiBSumMean": 2047712.4444444445,
+      "workingSetKiBSum": {
+        "first": 2080468,
+        "last": 2008964,
+        "min": 2008964,
+        "max": 2084084,
+        "delta": -71504
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "efficient",
+        "expanded": null,
+        "vela": "working"
+      },
+      "policy": "efficient / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 8501,
+        "drawCalls": 20,
+        "triangles": 18186,
+        "lines": 880,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 0.8,
+        "quality": "efficient",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "efficient",
+          "drawObjects": 6,
+          "triangles": 15104,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "cinematic-active",
+      "durationMs": 4618,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 762,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.100000000005821,
+        "p99": 6.2000000000116415,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 762,
+      "drawMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.100000000005821,
+        "p99": 6.2000000000116415
+      },
+      "cpuReportedSumMean": 5.5021746450191955,
+      "workingSetKiBSumMean": 1974188.888888889,
+      "workingSetKiBSum": {
+        "first": 1989008,
+        "last": 1966560,
+        "min": 1966560,
+        "max": 1989220,
+        "delta": -22448
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "cinematic",
+        "expanded": null,
+        "vela": "working"
+      },
+      "policy": "cinematic / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 9438,
+        "drawCalls": 45,
+        "triangles": 81562,
+        "lines": 3520,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "cinematic",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "cinematic",
+          "drawObjects": 37,
+          "triangles": 96416,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "architecture-ring-ambient-1",
+      "durationMs": 3056,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 504,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.100000000005821,
+        "p99": 6.2000000000116415,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 183,
+      "drawMs": {
+        "p50": 18.10000000000582,
+        "p95": 18.29999999998836,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 4.6666756352368015,
+      "workingSetKiBSumMean": 1963943.3333333333,
+      "workingSetKiBSum": {
+        "first": 1963948,
+        "last": 1963940,
+        "min": 1963932,
+        "max": 1963952,
+        "delta": -8
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 9694,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "architecture-aperture-ambient-1",
+      "durationMs": 3058,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 504,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.199999999982538,
+        "p99": 6.2000000000116415,
+        "max": 6.2999999999883585
+      },
+      "drawSamples": 183,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.29999999998836,
+        "p99": 18.39999999999418
+      },
+      "cpuReportedSumMean": 5.120725417634987,
+      "workingSetKiBSumMean": 1959794,
+      "workingSetKiBSum": {
+        "first": 1965664,
+        "last": 1957064,
+        "min": 1956348,
+        "max": 1965664,
+        "delta": -8600
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "aperture",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 9951,
+        "drawCalls": 37,
+        "triangles": 56842,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "aperture",
+          "quality": "balanced",
+          "drawObjects": 22,
+          "triangles": 56032,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "architecture-observatory-ambient-1",
+      "durationMs": 3063,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 505,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.199999999982538,
+        "p99": 6.2000000000116415,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 183,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.29999999998836,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 5.508105422153516,
+      "workingSetKiBSumMean": 1956782,
+      "workingSetKiBSum": {
+        "first": 1956776,
+        "last": 1956636,
+        "min": 1956636,
+        "max": 1956988,
+        "delta": -140
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "observatory",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 10207,
+        "drawCalls": 35,
+        "triangles": 45186,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "observatory",
+          "quality": "balanced",
+          "drawObjects": 23,
+          "triangles": 53064,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "living-ambient-1",
+      "durationMs": 3062,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 505,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.199999999982538,
+        "p99": 6.2000000000116415,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 184,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.29999999998836,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 5.219797340216732,
+      "workingSetKiBSumMean": 1961498,
+      "workingSetKiBSum": {
+        "first": 1958416,
+        "last": 1964060,
+        "min": 1958416,
+        "max": 1965524,
+        "delta": 5644
+      },
+      "state": {
+        "study": "living",
+        "architectureConcept": "observatory",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 10465,
+        "drawCalls": 15,
+        "triangles": 42438,
+        "lines": 0,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "architecture": {
+          "concept": "observatory",
+          "quality": "balanced",
+          "drawObjects": 23,
+          "triangles": 53064,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "architecture-ring-ambient-2",
+      "durationMs": 3062,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 505,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.199999999982538,
+        "p99": 6.2000000000116415,
+        "max": 6.300000000017462
+      },
+      "drawSamples": 184,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.300000000017462,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 5.709218749887409,
+      "workingSetKiBSumMean": 1972494,
+      "workingSetKiBSum": {
+        "first": 1967472,
+        "last": 1977132,
+        "min": 1967472,
+        "max": 1977132,
+        "delta": 9660
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 10722,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "architecture-aperture-ambient-2",
+      "durationMs": 3057,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 504,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.199999999982538,
+        "p99": 6.2000000000116415,
+        "max": 6.5
+      },
+      "drawSamples": 183,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.29999999998836,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 5.29240732520422,
+      "workingSetKiBSumMean": 2014588.6666666667,
+      "workingSetKiBSum": {
+        "first": 1985512,
+        "last": 2047336,
+        "min": 1985512,
+        "max": 2047336,
+        "delta": 61824
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "aperture",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 10978,
+        "drawCalls": 37,
+        "triangles": 56842,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "aperture",
+          "quality": "balanced",
+          "drawObjects": 22,
+          "triangles": 56032,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "architecture-observatory-ambient-2",
+      "durationMs": 3081,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 508,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.199999999982538,
+        "p99": 6.2000000000116415,
+        "max": 6.7000000000116415
+      },
+      "drawSamples": 185,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.29999999998836,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 4.7015816867634035,
+      "workingSetKiBSumMean": 2127976,
+      "workingSetKiBSum": {
+        "first": 2094292,
+        "last": 2161712,
+        "min": 2094292,
+        "max": 2161712,
+        "delta": 67420
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "observatory",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 11237,
+        "drawCalls": 35,
+        "triangles": 45186,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "observatory",
+          "quality": "balanced",
+          "drawObjects": 23,
+          "triangles": 53064,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "living-ambient-2",
+      "durationMs": 3069,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 506,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.199999999982538,
+        "p99": 6.2000000000116415,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 184,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.29999999998836,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 4.960820869592793,
+      "workingSetKiBSumMean": 2239724.6666666665,
+      "workingSetKiBSum": {
+        "first": 2208084,
+        "last": 2272608,
+        "min": 2208084,
+        "max": 2272608,
+        "delta": 64524
+      },
+      "state": {
+        "study": "living",
+        "architectureConcept": "observatory",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 11494,
+        "drawCalls": 15,
+        "triangles": 42438,
+        "lines": 0,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "architecture": {
+          "concept": "observatory",
+          "quality": "balanced",
+          "drawObjects": 23,
+          "triangles": 53064,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "resource-selection",
+      "durationMs": 3146,
+      "warmupMs": 1200,
+      "workload": "Canonical resource selection changes every approximately 500ms",
+      "callbackSamples": 463,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.2000000000116415,
+        "p99": 18.300000000017462,
+        "max": 145.5
+      },
+      "drawSamples": 182,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.300000000017462,
+        "p99": 48.5
+      },
+      "cpuReportedSumMean": 10.702147955625513,
+      "workingSetKiBSumMean": 2361814,
+      "workingSetKiBSum": {
+        "first": 2324920,
+        "last": 2381124,
+        "min": 2324920,
+        "max": 2381124,
+        "delta": 56204
+      },
+      "state": {
+        "study": "living",
+        "architectureConcept": "observatory",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 11749,
+        "drawCalls": 15,
+        "triangles": 42438,
+        "lines": 0,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "architecture": {
+          "concept": "observatory",
+          "quality": "balanced",
+          "drawObjects": 23,
+          "triangles": 53064,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "resource-rearrangement",
+      "durationMs": 4623,
+      "warmupMs": 1200,
+      "workload": "Resource reorder and reactive field motion every approximately 500ms",
+      "callbackSamples": 755,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.2000000000116415,
+        "p99": 12,
+        "max": 12.199999999982538
+      },
+      "drawSamples": 279,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.300000000017462,
+        "p99": 24.10000000000582
+      },
+      "cpuReportedSumMean": 9.866956561369639,
+      "workingSetKiBSumMean": 2370592,
+      "workingSetKiBSum": {
+        "first": 2379824,
+        "last": 2375368,
+        "min": 2363760,
+        "max": 2379824,
+        "delta": -4456
+      },
+      "state": {
+        "study": "living",
+        "architectureConcept": "observatory",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 12101,
+        "drawCalls": 15,
+        "triangles": 42438,
+        "lines": 0,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "architecture": {
+          "concept": "observatory",
+          "quality": "balanced",
+          "drawObjects": 23,
+          "triangles": 53064,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "focused-long-conversation",
+      "durationMs": 4596,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 758,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.199999999982538,
+        "p99": 6.2000000000116415,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 276,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.29999999998836,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 3.5084928895455465,
+      "workingSetKiBSumMean": 2368933.3333333335,
+      "workingSetKiBSum": {
+        "first": 2388472,
+        "last": 2351792,
+        "min": 2351792,
+        "max": 2388472,
+        "delta": -36680
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": "conversation-tidal",
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 12450,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "focused-research-notebook",
+      "durationMs": 4612,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 761,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.100000000005821,
+        "p99": 6.300000000017462,
+        "max": 7.099999999976717
+      },
+      "drawSamples": 277,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.29999999998836,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 2.1133843930254144,
+      "workingSetKiBSumMean": 2364091.111111111,
+      "workingSetKiBSum": {
+        "first": 2380492,
+        "last": 2355144,
+        "min": 2355144,
+        "max": 2380492,
+        "delta": -25348
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": "research-material",
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 12800,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "scene-transitions",
+      "durationMs": 4610,
+      "warmupMs": 1200,
+      "workload": "Living Intelligence / Luminous Architecture retarget every approximately 500ms around the same resources",
+      "callbackSamples": 760,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.100000000005821,
+        "p99": 6.2000000000116415,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 278,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.29999999998836,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 5.26354638303383,
+      "workingSetKiBSumMean": 2398258.222222222,
+      "workingSetKiBSum": {
+        "first": 2413668,
+        "last": 2386676,
+        "min": 2386676,
+        "max": 2414724,
+        "delta": -26992
+      },
+      "state": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 13151,
+        "drawCalls": 31,
+        "triangles": 74922,
+        "lines": 160,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "vela-state-changes",
+      "durationMs": 4618,
+      "warmupMs": 1200,
+      "workload": "Explicitly synthetic presentation state changes every approximately 500ms",
+      "callbackSamples": 761,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.199999999982538,
+        "p99": 6.2000000000116415,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 279,
+      "drawMs": {
+        "p50": 18.199999999982538,
+        "p95": 18.29999999998836,
+        "p99": 18.300000000017462
+      },
+      "cpuReportedSumMean": 4.952866975335646,
+      "workingSetKiBSumMean": 2393248,
+      "workingSetKiBSum": {
+        "first": 2385672,
+        "last": 2406236,
+        "min": 2385672,
+        "max": 2406236,
+        "delta": 20564
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "receiving"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 13503,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "integrated-focus-stream",
+      "durationMs": 4629,
+      "warmupMs": 1200,
+      "workload": "Synthetic sequence, visible event stream, field response and repeated conversation focus/reversal",
+      "callbackSamples": 432,
+      "callbackMs": {
+        "p50": 12.099999999976717,
+        "p95": 18.20000000001164,
+        "p99": 18.400000000023283,
+        "max": 24.300000000017462
+      },
+      "drawSamples": 277,
+      "drawMs": {
+        "p50": 18.10000000000582,
+        "p95": 24.39999999999418,
+        "p99": 30.39999999999418
+      },
+      "cpuReportedSumMean": 12.078526386203247,
+      "workingSetKiBSumMean": 2591190.222222222,
+      "workingSetKiBSum": {
+        "first": 2543000,
+        "last": 2646492,
+        "min": 2543000,
+        "max": 2646492,
+        "delta": 103492
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "attention"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 13853,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "focused-native-resize",
+      "durationMs": 4629,
+      "warmupMs": 1200,
+      "workload": "Focused resource with native content size alternating 1280x800 / 1600x1000 every approximately 500ms",
+      "callbackSamples": 708,
+      "callbackMs": {
+        "p50": 6.099999999976717,
+        "p95": 6.2000000000116415,
+        "p99": 30.39999999999418,
+        "max": 54.5
+      },
+      "drawSamples": 279,
+      "drawMs": {
+        "p50": 18.10000000000582,
+        "p95": 18.300000000017462,
+        "p99": 36.39999999999418
+      },
+      "cpuReportedSumMean": 11.484410806428441,
+      "workingSetKiBSumMean": 2719551.111111111,
+      "workingSetKiBSum": {
+        "first": 2683636,
+        "last": 2748772,
+        "min": 2683636,
+        "max": 2748772,
+        "delta": 65136
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": "conversation-tidal",
+        "vela": "working"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 14207,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "ambient-idle",
+      "durationMs": 4078,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 241,
+      "callbackMs": {
+        "p50": 22.29999999998836,
+        "p95": 30.39999999999418,
+        "p99": 30.400000000023283,
+        "max": 36.39999999999418
+      },
+      "drawSamples": 122,
+      "drawMs": {
+        "p50": 36.20000000001164,
+        "p95": 37.89999999999418,
+        "p99": 38.19999999998254
+      },
+      "cpuReportedSumMean": 2.2689451718471587,
+      "workingSetKiBSumMean": 3008773,
+      "workingSetKiBSum": {
+        "first": 2988632,
+        "last": 3034352,
+        "min": 2988632,
+        "max": 3034352,
+        "delta": 45720
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / ambient idle",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 15134,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "ambient-off",
+      "durationMs": 2568,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.0875454331036184,
+      "workingSetKiBSumMean": 3014172,
+      "workingSetKiBSum": {
+        "first": 3017992,
+        "last": 3011864,
+        "min": 3011148,
+        "max": 3017992,
+        "delta": -6128
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / ambient off",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 15135,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "quiet-static",
+      "durationMs": 3070,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 3.1821987558912395,
+      "workingSetKiBSumMean": 3015403.2,
+      "workingSetKiBSum": {
+        "first": 3011660,
+        "last": 3031892,
+        "min": 3010908,
+        "max": 3031892,
+        "delta": 20232
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "efficient / quiet",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 15136,
+        "drawCalls": 20,
+        "triangles": 18186,
+        "lines": 880,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 0.8,
+        "quality": "efficient",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "efficient",
+          "drawObjects": 6,
+          "triangles": 15104,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "reduced-motion-static",
+      "durationMs": 2567,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.03398884327030917,
+      "workingSetKiBSumMean": 855291.2,
+      "workingSetKiBSum": {
+        "first": 857988,
+        "last": 851912,
+        "min": 851864,
+        "max": 857988,
+        "delta": -6076
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / reduced",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 15137,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "native-minimized",
+      "durationMs": 4088,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.023109179925930454,
+      "workingSetKiBSumMean": 846009.5,
+      "workingSetKiBSum": {
+        "first": 847396,
+        "last": 845812,
+        "min": 845808,
+        "max": 847396,
+        "delta": -1584
+      },
+      "state": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "expanded": null,
+        "vela": "idle"
+      },
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 15138,
+        "drawCalls": 30,
+        "triangles": 39082,
+        "lines": 2200,
+        "geometries": 88,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46960,
+          "originalProceduralGeometry": true
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    }
+  ],
+  "inputFeedback": {
+    "kind": "programmatic DOM click dispatch to next coordinator callback; not optical input-to-display",
+    "samples": 16,
+    "p50": 3.1999999761465006,
+    "p95": 4.69999998214189,
+    "max": 4.69999998214189
+  },
+  "motionFrames": [
+    {
+      "sequence": "selection",
+      "index": 0,
+      "at": 1793564178958,
+      "file": "raw/selection-00.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 1,
+      "at": 1793564179289,
+      "file": "raw/selection-01.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 2,
+      "at": 1793564179623,
+      "file": "raw/selection-02.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 3,
+      "at": 1793564179953,
+      "file": "raw/selection-03.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 4,
+      "at": 1793564180292,
+      "file": "raw/selection-04.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 5,
+      "at": 1793564180624,
+      "file": "raw/selection-05.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 6,
+      "at": 1793564180961,
+      "file": "raw/selection-06.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 7,
+      "at": 1793564181294,
+      "file": "raw/selection-07.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 8,
+      "at": 1793564181629,
+      "file": "raw/selection-08.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 9,
+      "at": 1793564181962,
+      "file": "raw/selection-09.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 0,
+      "at": 1793564182590,
+      "file": "raw/expansion-00.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 1,
+      "at": 1793564183030,
+      "file": "raw/expansion-01.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 2,
+      "at": 1793564183501,
+      "file": "raw/expansion-02.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 3,
+      "at": 1793564183925,
+      "file": "raw/expansion-03.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 4,
+      "at": 1793564184375,
+      "file": "raw/expansion-04.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 5,
+      "at": 1793564184827,
+      "file": "raw/expansion-05.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 6,
+      "at": 1793564185266,
+      "file": "raw/expansion-06.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 7,
+      "at": 1793564185688,
+      "file": "raw/expansion-07.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 8,
+      "at": 1793564186136,
+      "file": "raw/expansion-08.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 9,
+      "at": 1793564186578,
+      "file": "raw/expansion-09.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 10,
+      "at": 1793564187013,
+      "file": "raw/expansion-10.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 11,
+      "at": 1793564187449,
+      "file": "raw/expansion-11.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 12,
+      "at": 1793564187888,
+      "file": "raw/expansion-12.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 13,
+      "at": 1793564188325,
+      "file": "raw/expansion-13.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 14,
+      "at": 1793564188766,
+      "file": "raw/expansion-14.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 15,
+      "at": 1793564189199,
+      "file": "raw/expansion-15.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 16,
+      "at": 1793564189635,
+      "file": "raw/expansion-16.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 17,
+      "at": 1793564190070,
+      "file": "raw/expansion-17.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 0,
+      "at": 1793564192013,
+      "file": "raw/rearrangement-00.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 1,
+      "at": 1793564192344,
+      "file": "raw/rearrangement-01.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 2,
+      "at": 1793564192673,
+      "file": "raw/rearrangement-02.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 3,
+      "at": 1793564192999,
+      "file": "raw/rearrangement-03.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 4,
+      "at": 1793564193316,
+      "file": "raw/rearrangement-04.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 5,
+      "at": 1793564193625,
+      "file": "raw/rearrangement-05.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 6,
+      "at": 1793564193935,
+      "file": "raw/rearrangement-06.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 7,
+      "at": 1793564194249,
+      "file": "raw/rearrangement-07.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 8,
+      "at": 1793564194569,
+      "file": "raw/rearrangement-08.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 9,
+      "at": 1793564194909,
+      "file": "raw/rearrangement-09.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 10,
+      "at": 1793564195230,
+      "file": "raw/rearrangement-10.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 11,
+      "at": 1793564195538,
+      "file": "raw/rearrangement-11.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 12,
+      "at": 1793564195848,
+      "file": "raw/rearrangement-12.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 13,
+      "at": 1793564196160,
+      "file": "raw/rearrangement-13.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 14,
+      "at": 1793564196474,
+      "file": "raw/rearrangement-14.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 15,
+      "at": 1793564196788,
+      "file": "raw/rearrangement-15.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 0,
+      "at": 1793564198084,
+      "file": "raw/vela-working-00.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 1,
+      "at": 1793564198403,
+      "file": "raw/vela-working-01.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 2,
+      "at": 1793564198733,
+      "file": "raw/vela-working-02.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 3,
+      "at": 1793564199053,
+      "file": "raw/vela-working-03.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 4,
+      "at": 1793564199375,
+      "file": "raw/vela-working-04.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 5,
+      "at": 1793564199730,
+      "file": "raw/vela-working-05.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 6,
+      "at": 1793564200054,
+      "file": "raw/vela-working-06.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 7,
+      "at": 1793564200383,
+      "file": "raw/vela-working-07.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 8,
+      "at": 1793564200707,
+      "file": "raw/vela-working-08.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 9,
+      "at": 1793564201034,
+      "file": "raw/vela-working-09.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 10,
+      "at": 1793564201355,
+      "file": "raw/vela-working-10.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 11,
+      "at": 1793564201676,
+      "file": "raw/vela-working-11.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 12,
+      "at": 1793564201994,
+      "file": "raw/vela-working-12.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 13,
+      "at": 1793564202330,
+      "file": "raw/vela-working-13.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 0,
+      "at": 1793564215078,
+      "file": "raw/return-to-calm-00.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 1,
+      "at": 1793564215426,
+      "file": "raw/return-to-calm-01.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 2,
+      "at": 1793564215771,
+      "file": "raw/return-to-calm-02.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 3,
+      "at": 1793564216104,
+      "file": "raw/return-to-calm-03.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 4,
+      "at": 1793564216445,
+      "file": "raw/return-to-calm-04.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 5,
+      "at": 1793564216804,
+      "file": "raw/return-to-calm-05.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 6,
+      "at": 1793564217159,
+      "file": "raw/return-to-calm-06.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 7,
+      "at": 1793564217484,
+      "file": "raw/return-to-calm-07.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 8,
+      "at": 1793564217827,
+      "file": "raw/return-to-calm-08.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 9,
+      "at": 1793564218178,
+      "file": "raw/return-to-calm-09.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 10,
+      "at": 1793564218524,
+      "file": "raw/return-to-calm-10.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 11,
+      "at": 1793564218861,
+      "file": "raw/return-to-calm-11.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 12,
+      "at": 1793564219211,
+      "file": "raw/return-to-calm-12.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 13,
+      "at": 1793564219553,
+      "file": "raw/return-to-calm-13.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 0,
+      "at": 1793564219972,
+      "file": "raw/lens-unfold-00.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 1,
+      "at": 1793564220429,
+      "file": "raw/lens-unfold-01.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 2,
+      "at": 1793564220863,
+      "file": "raw/lens-unfold-02.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 3,
+      "at": 1793564221297,
+      "file": "raw/lens-unfold-03.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 4,
+      "at": 1793564221716,
+      "file": "raw/lens-unfold-04.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 5,
+      "at": 1793564222142,
+      "file": "raw/lens-unfold-05.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 6,
+      "at": 1793564222596,
+      "file": "raw/lens-unfold-06.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 7,
+      "at": 1793564223034,
+      "file": "raw/lens-unfold-07.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 8,
+      "at": 1793564223469,
+      "file": "raw/lens-unfold-08.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 9,
+      "at": 1793564223893,
+      "file": "raw/lens-unfold-09.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 10,
+      "at": 1793564224319,
+      "file": "raw/lens-unfold-10.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 11,
+      "at": 1793564224748,
+      "file": "raw/lens-unfold-11.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 12,
+      "at": 1793564225172,
+      "file": "raw/lens-unfold-12.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 13,
+      "at": 1793564225622,
+      "file": "raw/lens-unfold-13.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 14,
+      "at": 1793564226037,
+      "file": "raw/lens-unfold-14.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 15,
+      "at": 1793564226460,
+      "file": "raw/lens-unfold-15.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 16,
+      "at": 1793564226895,
+      "file": "raw/lens-unfold-16.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 17,
+      "at": 1793564227314,
+      "file": "raw/lens-unfold-17.png"
+    },
+    {
+      "sequence": "architecture-resource-transform",
+      "index": 0,
+      "at": 1793564237724,
+      "file": "raw/architecture-resource-transform-00.png"
+    },
+    {
+      "sequence": "architecture-resource-transform",
+      "index": 1,
+      "at": 1793564238116,
+      "file": "raw/architecture-resource-transform-01.png"
+    },
+    {
+      "sequence": "architecture-resource-transform",
+      "index": 2,
+      "at": 1793564238616,
+      "file": "raw/architecture-resource-transform-02.png"
+    },
+    {
+      "sequence": "architecture-resource-transform",
+      "index": 3,
+      "at": 1793564239003,
+      "file": "raw/architecture-resource-transform-03.png"
+    },
+    {
+      "sequence": "architecture-resource-transform",
+      "index": 4,
+      "at": 1793564239428,
+      "file": "raw/architecture-resource-transform-04.png"
+    },
+    {
+      "sequence": "architecture-resource-transform",
+      "index": 5,
+      "at": 1793564239806,
+      "file": "raw/architecture-resource-transform-05.png"
+    },
+    {
+      "sequence": "architecture-resource-transform",
+      "index": 6,
+      "at": 1793564240262,
+      "file": "raw/architecture-resource-transform-06.png"
+    },
+    {
+      "sequence": "architecture-resource-transform",
+      "index": 7,
+      "at": 1793564240724,
+      "file": "raw/architecture-resource-transform-07.png"
+    },
+    {
+      "sequence": "architecture-resource-field",
+      "index": 0,
+      "at": 1793564241889,
+      "file": "raw/architecture-resource-field-00.png"
+    },
+    {
+      "sequence": "architecture-resource-field",
+      "index": 1,
+      "at": 1793564242248,
+      "file": "raw/architecture-resource-field-01.png"
+    },
+    {
+      "sequence": "architecture-resource-field",
+      "index": 2,
+      "at": 1793564242594,
+      "file": "raw/architecture-resource-field-02.png"
+    },
+    {
+      "sequence": "architecture-resource-field",
+      "index": 3,
+      "at": 1793564242930,
+      "file": "raw/architecture-resource-field-03.png"
+    },
+    {
+      "sequence": "architecture-resource-field",
+      "index": 4,
+      "at": 1793564243260,
+      "file": "raw/architecture-resource-field-04.png"
+    },
+    {
+      "sequence": "architecture-resource-field",
+      "index": 5,
+      "at": 1793564243597,
+      "file": "raw/architecture-resource-field-05.png"
+    },
+    {
+      "sequence": "architecture-resource-field",
+      "index": 6,
+      "at": 1793564243954,
+      "file": "raw/architecture-resource-field-06.png"
+    },
+    {
+      "sequence": "architecture-resource-field",
+      "index": 7,
+      "at": 1793564244291,
+      "file": "raw/architecture-resource-field-07.png"
+    },
+    {
+      "sequence": "living-resource-transform",
+      "index": 0,
+      "at": 1793564246721,
+      "file": "raw/living-resource-transform-00.png"
+    },
+    {
+      "sequence": "living-resource-transform",
+      "index": 1,
+      "at": 1793564247255,
+      "file": "raw/living-resource-transform-01.png"
+    },
+    {
+      "sequence": "living-resource-transform",
+      "index": 2,
+      "at": 1793564247723,
+      "file": "raw/living-resource-transform-02.png"
+    },
+    {
+      "sequence": "living-resource-transform",
+      "index": 3,
+      "at": 1793564248214,
+      "file": "raw/living-resource-transform-03.png"
+    },
+    {
+      "sequence": "living-resource-transform",
+      "index": 4,
+      "at": 1793564248673,
+      "file": "raw/living-resource-transform-04.png"
+    },
+    {
+      "sequence": "living-resource-transform",
+      "index": 5,
+      "at": 1793564249060,
+      "file": "raw/living-resource-transform-05.png"
+    },
+    {
+      "sequence": "living-resource-transform",
+      "index": 6,
+      "at": 1793564249479,
+      "file": "raw/living-resource-transform-06.png"
+    },
+    {
+      "sequence": "living-resource-transform",
+      "index": 7,
+      "at": 1793564249923,
+      "file": "raw/living-resource-transform-07.png"
+    },
+    {
+      "sequence": "living-resource-field",
+      "index": 0,
+      "at": 1793564251145,
+      "file": "raw/living-resource-field-00.png"
+    },
+    {
+      "sequence": "living-resource-field",
+      "index": 1,
+      "at": 1793564251524,
+      "file": "raw/living-resource-field-01.png"
+    },
+    {
+      "sequence": "living-resource-field",
+      "index": 2,
+      "at": 1793564251861,
+      "file": "raw/living-resource-field-02.png"
+    },
+    {
+      "sequence": "living-resource-field",
+      "index": 3,
+      "at": 1793564252252,
+      "file": "raw/living-resource-field-03.png"
+    },
+    {
+      "sequence": "living-resource-field",
+      "index": 4,
+      "at": 1793564252636,
+      "file": "raw/living-resource-field-04.png"
+    },
+    {
+      "sequence": "living-resource-field",
+      "index": 5,
+      "at": 1793564253028,
+      "file": "raw/living-resource-field-05.png"
+    },
+    {
+      "sequence": "living-resource-field",
+      "index": 6,
+      "at": 1793564253435,
+      "file": "raw/living-resource-field-06.png"
+    },
+    {
+      "sequence": "living-resource-field",
+      "index": 7,
+      "at": 1793564253842,
+      "file": "raw/living-resource-field-07.png"
+    }
+  ],
+  "captures": [
+    {
+      "file": "study-architecture.png",
+      "atUTC": "2026-11-01T20:16:09.148Z",
+      "byteCount": 887663,
+      "sha256": "bef1073b32aa7c57ef5b057b6ceaa3374aeb6bf87719a78122035219ad795ad4",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 978.1999999999998,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "study-living.png",
+      "atUTC": "2026-11-01T20:16:10.403Z",
+      "byteCount": 945151,
+      "sha256": "b3931371d3d4fc9be6db57d0f7333f067c243da60b42e2826d2a816873a0c3e6",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 2190.3999999999996,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "study-observatory.png",
+      "atUTC": "2026-11-01T20:16:11.565Z",
+      "byteCount": 799186,
+      "sha256": "3e29624f7366c17d987ddc730c9a6b1ac99d63b807a681a6db0ecab71aacc86f",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "observatory",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 3451,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "architecture-ring.png",
+      "atUTC": "2026-11-01T20:16:12.769Z",
+      "byteCount": 896456,
+      "sha256": "838ace39d9ba1d3c5e434cb1887e0f25ee90225643a4d68a768b6ae828ae087d",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 4614.7,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "architecture-aperture.png",
+      "atUTC": "2026-11-01T20:16:13.975Z",
+      "byteCount": 909905,
+      "sha256": "ad69e83d48b9e901c7912af0cb89d391ce561c50187294c79d2ca7eeaf34b5ee",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "aperture",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 5814.6,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "architecture-observatory.png",
+      "atUTC": "2026-11-01T20:16:15.188Z",
+      "byteCount": 854207,
+      "sha256": "8159903f3dae2141b5e6500394fe8aa7e96872d8a81428cec9aacd9370e253da",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "observatory",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 7026.9,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "environment-idle.png",
+      "atUTC": "2026-11-01T20:16:15.830Z",
+      "byteCount": 886781,
+      "sha256": "641e06b2b3cb379bbd47368088ed4e9876dcc2d30ed251f414db38b944e4edea",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 7681.4,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "resource-selected.png",
+      "atUTC": "2026-11-01T20:16:22.283Z",
+      "byteCount": 874773,
+      "sha256": "b65ae4d40d495c9d0fafb515d14f2363d38ac5666e1461531180009587fcdac3",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 14142.300000000001,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "resource-expanded.png",
+      "atUTC": "2026-11-01T20:16:30.525Z",
+      "byteCount": 1115691,
+      "sha256": "9660246c4554ee530cb634533e3656681cd609c48edf7b50d8a87e2d83fddff5",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 22263.800000000003,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "workspace-rearranged.png",
+      "atUTC": "2026-11-01T20:16:37.093Z",
+      "byteCount": 817047,
+      "sha256": "aa2dace1a62a372b054f660d0f6c1aba9d3b888932fbc3b5f5c0a3eb8797c10d",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 28973.2,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "vela-active.png",
+      "atUTC": "2026-11-01T20:16:42.658Z",
+      "byteCount": 847140,
+      "sha256": "faf472c5203458514e1fc3f76f04f255725d3d8936212f573b88b3ecbf3852b7",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": null,
+        "vela": "working",
+        "reduced": false,
+        "visualClock": 34518.8,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "intelligence-stream.png",
+      "atUTC": "2026-11-01T20:16:49.477Z",
+      "byteCount": 896874,
+      "sha256": "77bc1215764d3d1e955a479bacad67f373696b09c868aee2c0c13bb69143ad78",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": null,
+        "vela": "reported",
+        "reduced": false,
+        "visualClock": 41313,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "lens-expanded.png",
+      "atUTC": "2026-11-01T20:17:07.740Z",
+      "byteCount": 1097630,
+      "sha256": "3d29b7ffb804912c55bac10c1223f485399c18e337497e3b89a500c6f3781d78",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "research-material",
+        "expanded": "research-material",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 59501.5,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "focused-working.png",
+      "atUTC": "2026-11-01T20:17:09.654Z",
+      "byteCount": 1111369,
+      "sha256": "3782e4c7fe3ecc90ea30bf8c65eacf59bba0aa0568c4e899f6310ddf13937a45",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 61392.6,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "focused-conversation.png",
+      "atUTC": "2026-11-01T20:17:10.819Z",
+      "byteCount": 1110111,
+      "sha256": "5ca066d796ef4e24b761c57d4c69319c05465cc54b11c9a956b4114bfb435740",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 62556.299999999996,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "local-message-retained.png",
+      "atUTC": "2026-11-01T20:17:12.124Z",
+      "byteCount": 1066585,
+      "sha256": "b08f357285a32f151ce012939b8b8d44aceb0649fd6330a95ae93120b1b24c2d",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 63835.1,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "scene-transition.png",
+      "atUTC": "2026-11-01T20:17:12.675Z",
+      "byteCount": 1106605,
+      "sha256": "6a3039de6f355636730015af0840db35c4e57eb580ddf23d542c03b3900dc0b6",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 64410.9,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "architecture-focused-conversation.png",
+      "atUTC": "2026-11-01T20:17:15.176Z",
+      "byteCount": 1076323,
+      "sha256": "6cd8d3ba4426826049eba80fee37fb1e47c6a652a440c674fe99384111a56ade",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 66926.1,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "living-focused-conversation.png",
+      "atUTC": "2026-11-01T20:17:16.503Z",
+      "byteCount": 1126567,
+      "sha256": "3a1832b2e848e03e31103c5407de320a4070d1117e5de803405fc714f1d318ce",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 68223.1,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "architecture-resource-interaction.png",
+      "atUTC": "2026-11-01T20:17:24.624Z",
+      "byteCount": 849858,
+      "sha256": "acb24796568fd656a867d792b0be5da473a9c9c5d3f049672209335a77352389",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 76478.1,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "living-resource-interaction.png",
+      "atUTC": "2026-11-01T20:17:34.251Z",
+      "byteCount": 885084,
+      "sha256": "5b11975ac3da60ea844d142602698fb636b9aad44d8bd782e0e90f960de1f8b0",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 86036.00000000001,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "vela-idle.png",
+      "atUTC": "2026-11-01T20:17:36.019Z",
+      "byteCount": 920723,
+      "sha256": "56c405e72b259207ba0ba2e3e9b936bf2581f68176b1f3354a92939982d8a4ad",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 87793.6,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "vela-receiving.png",
+      "atUTC": "2026-11-01T20:17:36.926Z",
+      "byteCount": 929207,
+      "sha256": "310ed5e1a9080cdfc9f75d9100e107504e82d24d3579b9b2d6aea2b70c146924",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "receiving",
+        "reduced": false,
+        "visualClock": 88757.3,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "vela-working.png",
+      "atUTC": "2026-11-01T20:17:37.905Z",
+      "byteCount": 921438,
+      "sha256": "87444143a9adc61027b40d32fb1802fb23a6505c58f845834eb4569c1d40a457",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "working",
+        "reduced": false,
+        "visualClock": 89678.50000000001,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "vela-coordinating.png",
+      "atUTC": "2026-11-01T20:17:38.852Z",
+      "byteCount": 921568,
+      "sha256": "088bed065a1a8cf1882c3da160bd46ab2b6a9794c15144b6a9b7261e07cfbfe1",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "coordinating",
+        "reduced": false,
+        "visualClock": 90648.20000000001,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "vela-attention.png",
+      "atUTC": "2026-11-01T20:17:39.800Z",
+      "byteCount": 913538,
+      "sha256": "25ee421560ddaa0b70a28eeaee78a8c82066981db7c5c56c24f5005854531a95",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "attention",
+        "reduced": false,
+        "visualClock": 91593.70000000001,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "vela-reported.png",
+      "atUTC": "2026-11-01T20:17:40.741Z",
+      "byteCount": 906970,
+      "sha256": "b845f101c76d699e95c0b82688cbf93641d225acb80c58e655fcaba01b3a07f6",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "reported",
+        "reduced": false,
+        "visualClock": 92545.20000000001,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "vela-verified.png",
+      "atUTC": "2026-11-01T20:17:41.682Z",
+      "byteCount": 907993,
+      "sha256": "22b643f8d20ce50c41f3a341d82638eae2093dba445d0eadf2ed397469d55778",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "verified",
+        "reduced": false,
+        "visualClock": 93484.70000000001,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "vela-unavailable.png",
+      "atUTC": "2026-11-01T20:17:42.617Z",
+      "byteCount": 878267,
+      "sha256": "7e7d4972952a05c95777764f40a2185dea9998be59d13712d09b0734d23e44e1",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "unavailable",
+        "reduced": false,
+        "visualClock": 94430.20000000001,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "reduced-motion.png",
+      "atUTC": "2026-11-01T20:17:46.706Z",
+      "byteCount": 1104687,
+      "sha256": "81f81f3ab06197fc872df642fe3449bbba78247f2284f42a6fdcd469ef4903d4",
+      "pixels": {
+        "width": 2000,
+        "height": 1252
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": true,
+        "visualClock": 98297.00000000001,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1600,
+          "height": 1001
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "resize-900.png",
+      "atUTC": "2026-11-01T20:17:47.877Z",
+      "byteCount": 619359,
+      "sha256": "50ae872474203023855609ff8ba8f11951cba0f1fd5759fbcbeda52d8562b05c",
+      "pixels": {
+        "width": 1125,
+        "height": 1064
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 99213.69999997618,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 900,
+          "height": 851
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "compact-focused.png",
+      "atUTC": "2026-11-01T20:17:49.078Z",
+      "byteCount": 590248,
+      "sha256": "0823eeb95df6a24b1a8cf6b873bf725ea136a9432232b0a7122819aaf2848ba7",
+      "pixels": {
+        "width": 1125,
+        "height": 1064
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 100425.99999997618,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 900,
+          "height": 851
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "resize-1280.png",
+      "atUTC": "2026-11-01T20:17:50.232Z",
+      "byteCount": 669541,
+      "sha256": "533a9dcaf38473a753bb37ac1640446cd7f8b8a3674391a6b717d1f80784099c",
+      "pixels": {
+        "width": 1600,
+        "height": 1002
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 101577.49999997618,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1280,
+          "height": 801
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "resize-1920.png",
+      "atUTC": "2026-11-01T20:17:51.526Z",
+      "byteCount": 1046664,
+      "sha256": "7b1a6ccd6ea9cd4b6a9bad25d1b2e323b665f18929e4f2038da045020264a0a1",
+      "pixels": {
+        "width": 2400,
+        "height": 1352
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 102729.09999997617,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1920,
+          "height": 1081
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "content-zoom-150.png",
+      "atUTC": "2026-11-01T20:17:55.493Z",
+      "byteCount": 942856,
+      "sha256": "30cbec734d87f225fd713e2e4552fd6c30c62ebbf940f864b0a2b3695d507ed9",
+      "pixels": {
+        "width": 2000,
+        "height": 1252
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 106747.39999997617,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1600,
+          "height": 1001
+        },
+        "zoomFactor": 1.5
+      }
+    },
+    {
+      "file": "final-calm.png",
+      "atUTC": "2026-11-01T20:20:34.491Z",
+      "byteCount": 893237,
+      "sha256": "7a28178bea52c0df011ee3cc0fdc75d66c7e0c4d55491f76a7504ca6e6b6804f",
+      "pixels": {
+        "width": 2000,
+        "height": 1252
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 247265.46399990463,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1600,
+          "height": 1001
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "graphics-fallback.png",
+      "atUTC": "2026-11-01T20:20:35.392Z",
+      "byteCount": 1143549,
+      "sha256": "ccf7e69e3717af373a355555a583b8ba4a737e8e4967059d586aeaede54be890",
+      "pixels": {
+        "width": 2000,
+        "height": 1252
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 248726.06399990467,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1600,
+          "height": 1001
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "graphics-restored.png",
+      "atUTC": "2026-11-01T20:20:36.588Z",
+      "byteCount": 899402,
+      "sha256": "c501dda7fa7eb91095187185071286b89466c4ddfbaf5c478b325c38051d7de6",
+      "pixels": {
+        "width": 2000,
+        "height": 1252
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 250023.16399990465,
+        "contentBounds": {
+          "x": 223,
+          "y": 115,
+          "width": 1600,
+          "height": 1001
+        },
+        "zoomFactor": 1
+      }
+    }
+  ],
+  "storage": {
+    "receipts": [
+      {
+        "utc": "2026-11-01T20:16:06.4556255Z",
+        "allowed": true,
+        "floorBytesEach": 32212254720,
+        "cFreeBytes": 120113758208,
+        "dFreeBytes": 502019817472,
+        "estimatedCBytes": 209715200,
+        "estimatedDBytes": 0,
+        "reason": "Both drives remain above reserve after estimated writes"
+      },
+      {
+        "utc": "2026-11-01T20:20:34.1620849Z",
+        "allowed": true,
+        "floorBytesEach": 32212254720,
+        "cFreeBytes": 119928094720,
+        "dFreeBytes": 502019792896,
+        "estimatedCBytes": 60388957,
+        "estimatedDBytes": 0,
+        "reason": "Both drives remain above reserve after estimated writes"
+      }
+    ],
+    "captureBytes": 152262431,
+    "maxCaptureBytes": 199229440,
+    "coverage": "Bounded local native writer only; not an OS quota, and cannot stop unrelated applications, cloud tasks or processes that did not load this rule."
+  },
+  "graphicsFeatureStatus": {
+    "2d_canvas": "enabled",
+    "direct_rendering_display_compositor": "disabled_off_ok",
+    "gpu_compositing": "enabled",
+    "multiple_raster_threads": "enabled_on",
+    "opengl": "enabled_on",
+    "rasterization": "enabled",
+    "raw_draw": "disabled_off_ok",
+    "skia_graphite": "disabled_off",
+    "trees_in_viz": "disabled_off",
+    "video_decode": "enabled",
+    "video_encode": "enabled",
+    "webgl": "enabled",
+    "webgpu": "enabled",
+    "webnn": "disabled_off"
+  },
+  "errors": [],
+  "unavailable": [
+    "presented-frame timing",
+    "GPU utilization attributable to application",
+    "dedicated VRAM attributable to application",
+    "optical input-to-display latency",
+    "power",
+    "multi-display acceptance",
+    "physical 60Hz display mode test",
+    "external game automatic detection"
+  ],
+  "method": "Callback and draw intervals are scheduler observations, not presented FPS. CPU is Electron app-metrics sum, working-set KiB sums can double-count shared pages. Short repeated exploratory runs."
+}

@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "revision": "ba22a44",
+  "measuredAt": "2026-11-02T00:09:54.766Z",
+  "measurement": "pure resolver wall time; not SQLite, native input or frame time",
+  "plan": {
+    "warmups": 3,
+    "samples": 20,
+    "rotatedEveryFifth": true,
+    "initialOverlap": "all blocks at one point",
+    "bounds": {
+      "x": 20,
+      "y": 170,
+      "width": 1240,
+      "height": 600
+    },
+    "gap": 12,
+    "concurrentWorkloads": "not sampled or attributed"
+  },
+  "environment": {
+    "node": "v24.18.0",
+    "platform": "win32",
+    "release": "10.0.26300",
+    "cpu": "AMD Ryzen AI 7 350 w/ Radeon 860M              "
+  },
+  "results": [
+    {
+      "blocks": 0,
+      "presence": 1,
+      "p50Ms": 0.009500000000002728,
+      "p95Ms": 0.039199999999993906,
+      "p99Ms": 0.039199999999993906,
+      "maxMs": 0.039199999999993906
+    },
+    {
+      "blocks": 1,
+      "presence": 1,
+      "p50Ms": 0.044399999999996,
+      "p95Ms": 0.6066999999999894,
+      "p99Ms": 0.6066999999999894,
+      "maxMs": 0.6066999999999894
+    },
+    {
+      "blocks": 10,
+      "presence": 1,
+      "p50Ms": 0.2968999999999937,
+      "p95Ms": 0.5986999999999938,
+      "p99Ms": 0.5986999999999938,
+      "maxMs": 0.5986999999999938
+    },
+    {
+      "blocks": 25,
+      "presence": 1,
+      "p50Ms": 1.6910999999999916,
+      "p95Ms": 2.220399999999998,
+      "p99Ms": 2.220399999999998,
+      "maxMs": 2.220399999999998
+    },
+    {
+      "blocks": 50,
+      "presence": 1,
+      "p50Ms": 9.600200000000001,
+      "p95Ms": 12.362099999999998,
+      "p99Ms": 12.362099999999998,
+      "maxMs": 12.362099999999998
+    }
+  ]
+}

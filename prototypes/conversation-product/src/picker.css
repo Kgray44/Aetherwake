@@ -1,0 +1,88 @@
+/* Uses only the host frame's shared MC samples; no transition/animation clock. */
+.cp-picker-host,.cp-picker{display:inline-flex;position:relative;max-width:100%;min-width:0;vertical-align:middle}
+.cp-picker-trigger,:root body .aw-optical-controls .cp-picker .cp-picker-option{font:inherit;color:var(--aw-control-text,#ede8f5);cursor:pointer;box-sizing:border-box;outline-offset:3px}
+:root body .aw-optical-controls .cp-picker .cp-picker-trigger{display:inline-flex;align-items:center;justify-content:space-between;gap:10px;min-height:var(--aw-control-min-height,36px);max-width:100%;padding:var(--aw-control-pad-block,6px) var(--aw-control-pad-inline,12px);border:1px solid var(--aw-control-rim,#d4b8f529);border-radius:var(--aw-control-radius,999px);background:linear-gradient(125deg,#e0d1f20b,#c4b2e806),rgb(212 184 245 / calc(.035 + var(--control-hover,0)*.055 + var(--control-press,0)*.05));opacity:calc(1 - var(--control-disabled,0)*.5)}
+.cp-picker-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.cp-picker-chevron{flex:none;color:var(--aw-control-muted,#bcb4cd);font-size:12px}
+.cp-picker-panel{position:absolute;z-index:20;inset-block-start:calc(100% + 6px);inset-inline-end:0;min-width:min(240px,80vw);max-width:min(360px,85vw);box-sizing:border-box;padding:var(--aw-menu-pad,6px);border:1px solid var(--aw-menu-rim,#d4b8f52b);border-radius:var(--aw-menu-radius,18px);background:linear-gradient(135deg,#e2d6f20d,#00000002),var(--aw-menu-ink,#10111d);box-shadow:var(--aw-menu-shadow,0 14px 36px #02030a40);opacity:var(--cp-picker-opacity,0);transform:translateY(var(--cp-picker-y,5px));transform-origin:top center}
+:root body .aw-optical-controls .cp-picker .cp-picker-option:disabled{color:var(--aw-control-muted,#bcb4cd);opacity:1;cursor:default}.cp-picker-panel[hidden]{display:none}.cp-picker-list{max-height:var(--cp-picker-height,0px);overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.cp-picker-option{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:var(--aw-control-min-height,36px);width:100%;text-align:start;padding:8px 11px;border:0;border-radius:var(--aw-option-radius,11px);background:rgb(212 184 245 / calc(var(--cp-option-selected,0)*.11 + var(--control-hover,0)*.06 + var(--control-press,0)*.05));opacity:calc(1 - var(--control-disabled,0)*.5)}
+.cp-picker-option-label{min-width:0;overflow-wrap:anywhere}.cp-picker-selected{opacity:var(--cp-option-selected,0);color:var(--aw-control-focus,#ddc7f7);font-size:12px;flex:none}
+.aw-optical-controls .cp-picker .cp-picker-search{width:100%;box-sizing:border-box;min-height:36px;margin:0 0 4px;padding:6px 10px;border:1px solid var(--aw-control-rim,#d4b8f529);border-radius:var(--aw-option-radius,11px);background:#eee5ff07;color:var(--aw-control-text,#ede8f5);font:inherit}
+.cp-picker-count{display:block;padding:6px 10px;color:var(--aw-control-muted,#bcb4cd);font-size:12px}.cp-picker-count[hidden],.cp-picker-search[hidden]{display:none}
+.cp-picker :focus-visible{outline:2px solid var(--aw-control-focus,#ddc7f7)}
+.cp-chat-top{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;min-width:0;flex:none;padding-block:2px 6px}.cp-chat-provider-slot{grid-column:2;min-width:0;max-width:min(320px,80vw)}
+.cp-chat-model-slot{grid-column:2;display:flex;gap:4px;min-width:0;justify-self:center;max-width:min(340px,80vw);margin-block-start:3px}
+.cp-chat-model-slot[hidden],.cp-chat-model-slot>.cp-picker[hidden]{display:none}
+.cp-chat-model-slot>.cp-picker{flex:0 1 auto}
+.cp-chat-model-slot .cp-picker-trigger{max-width:100%;font-size:12px}
+:is(.cp-chat-provider-slot,.cp-chat-model-slot)>.cp-picker>.cp-picker-panel{inset-inline-end:50%;translate:50% 0}
+.cp-chat-provider-slot .cp-picker-trigger{max-width:100%;font-size:13px}.cp-chat-provider-label{font-size:13px;color:var(--aw-control-muted,#bcb4cd)}
+.cp-chat[data-presentation=workspace] .cp-chat-top{padding-block:0 2px}.cp-chat[data-presentation=workspace] :is(.cp-chat-provider-slot,.cp-chat-model-slot) .cp-picker-trigger{min-height:22px;padding-block:1px;font-size:12px}
+
+.aw-optical-controls select[data-cp-native-picker],.cp-chat-provider-slot>.cp-composer-provider[hidden]{display:none}
+
+/* The transcript is the vertical scroll owner. Status summaries stay bounded;
+   invoked context/recovery and real live output use that same scroller. */
+.cp-chat.aw-optical-controls .cp-chat-feedback{flex:none;min-height:0;max-height:none;overflow:hidden;box-sizing:border-box;padding:0}
+.cp-chat.aw-optical-controls .cp-feedback-line{display:flex;align-items:center;gap:8px;min-height:0;width:100%;max-height:none;overflow:hidden}
+.cp-chat.aw-optical-controls .cp-chat-status{flex:1;min-width:0;margin:0;font-size:13px;line-height:1.45;max-height:none;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.cp-chat.aw-optical-controls .cp-chat-status:empty{display:none}
+.cp-chat.aw-optical-controls .cp-feedback-toggle{flex:none;min-height:26px;padding:3px 9px;border:1px solid var(--aw-control-rim,#d4b8f529);border-radius:var(--aw-control-radius,999px);background:rgb(212 184 245 / calc(.02 + var(--control-hover,0)*.06 + var(--control-press,0)*.05));font:inherit;font-size:12px;color:var(--aw-control-muted,#bcb4cd)}
+.cp-chat.aw-optical-controls .cp-feedback-toggle[hidden]{display:none}
+.cp-chat.aw-optical-controls .cp-chat-inspection{flex:none;overflow:hidden;box-sizing:border-box}
+.cp-chat.aw-optical-controls .cp-chat-inspection-content{display:flex;flex-direction:column;gap:8px;min-width:0;padding:10px 2px;overflow:visible}
+.cp-chat.aw-optical-controls .cp-chat-inspection[hidden],.cp-chat.aw-optical-controls .cp-stream[hidden]{display:none}
+.cp-chat.aw-optical-controls .cp-chat-inspection-content :is(p,.cp-draft-recovery,.cp-draft-conflict,pre){flex:none;max-height:none;overflow:visible}
+.cp-chat.aw-optical-controls .cp-chat-inspection-content pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.cp-chat.aw-optical-controls .cp-stream,.cp-chat.aw-optical-controls .cp-stream-text{flex:none;max-height:none;overflow:visible;white-space:pre-wrap;overflow-wrap:anywhere}
+.cp-chat.aw-optical-controls .cp-messages{min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
+.cp-chat.aw-optical-controls[data-presentation=workspace] .cp-chat-status{-webkit-line-clamp:1;font-size:12px}
+.cp-chat.aw-optical-controls[data-presentation=workspace] .cp-feedback-toggle{min-height:20px;padding-block:1px;font-size:11px}
+
+.cp-picker-chevron{transform:rotate(calc(var(--cp-picker-open,0)*180deg))}
+
+/* Opted-in legacy action chrome uses the same host control samples. These
+   selectors deliberately outrank old instantaneous hover/selected rules. */
+:root body .aw-optical-controls .cp-control[data-aerynth-motion-control]{border:1px solid rgb(var(--control-edge-rgb,212 184 245) / calc(.1 + var(--control-hover,0)*.1 + var(--control-focus,0)*.18 + var(--cp-control-selected,0)*.13));border-radius:var(--aw-control-radius,999px);color:var(--aw-control-text,#ede8f5);background:rgb(var(--control-film-rgb,212 184 245) / calc(.018 + var(--control-hover,0)*.055 + var(--control-press,0)*.06 + var(--cp-control-selected,0)*.07));box-shadow:inset 0 0 0 1px rgb(var(--control-sheen-rgb,240 221 255) / calc(var(--control-focus,0)*.06 + var(--control-press,0)*.07));opacity:calc(1 - var(--control-disabled,0)*.56);transform:none}
+:root body .aw-optical-controls .cp-control[data-aerynth-motion-control][data-emphasis=primary]{border-radius:var(--aw-control-radius,999px);background:rgb(var(--control-film-rgb,212 184 245) / calc(.1 + var(--control-hover,0)*.06 + var(--control-press,0)*.07));color:var(--aw-control-text,#ede8f5)}
+:root body .aw-optical-controls .cp-control[data-aerynth-motion-control][data-emphasis=danger]{color:#e8b7bf}
+:root body .aw-optical-controls .cp-control[data-aerynth-motion-control] .cp-control-glyph{opacity:calc(.76 + var(--cp-control-selected,0)*.24);color:inherit}
+:root body .cp-chat.aw-optical-controls[data-presentation=workspace] .cp-control[data-aerynth-motion-control]{min-height:24px;padding:3px 6px}
+
+/* Native semantic open state is immediate. Chromium's content slot remains
+   paintable while only the borrowed MC sample controls the measured body. */
+.aw-optical-controls details[data-cp-motion-disclosure]::details-content{content-visibility:visible}
+.aw-optical-controls .cp-motion-disclosure-body{min-width:0;box-sizing:border-box;overflow:hidden}
+.aw-optical-controls .cp-motion-disclosure-body[hidden]{display:none}
+.aw-optical-controls .cp-motion-disclosure-content{display:flow-root;min-width:0}
+.aw-optical-controls details[data-cp-disclosure-layout=menu]{position:relative;width:auto;flex-basis:auto}
+.aw-optical-controls details[data-cp-disclosure-layout=menu]>.cp-motion-disclosure-body{position:absolute;inset-block-start:calc(100% + 6px);inset-inline-end:0;z-index:24;width:min(360px,calc(100vw - 64px));max-width:calc(100vw - 64px);border-radius:var(--aw-menu-radius,18px);background:color-mix(in srgb,var(--aw-menu-ink,#10111d) 93%,transparent);box-shadow:var(--aw-menu-shadow,0 14px 36px #02030a40);backdrop-filter:blur(18px)}
+.aw-optical-controls details[data-cp-disclosure-layout=menu]>.cp-motion-disclosure-body>.cp-motion-disclosure-content{max-height:var(--cp-disclosure-cap,360px);overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.aw-optical-controls details[data-cp-disclosure-layout=menu]>.cp-motion-disclosure-body>.cp-motion-disclosure-content>.cp-disclosure-panel{position:static;inset:auto;width:auto;max-width:100%;max-height:none;overflow:visible;margin:0;background:transparent;border:1px solid var(--aw-menu-rim,#d4b8f52b);border-radius:var(--aw-menu-radius,18px)}
+.aw-optical-controls .cp-chat-extras[data-cp-disclosure-layout=menu]>.cp-motion-disclosure-body{width:min(480px,calc(100vw - 64px))}
+.aw-optical-controls .cp-chat-extras[data-cp-disclosure-layout=menu]>.cp-motion-disclosure-body>.cp-motion-disclosure-content{padding:8px 12px;box-sizing:border-box;border:1px solid var(--aw-menu-rim,#d4b8f52b);border-radius:var(--aw-menu-radius,18px)}
+.aw-optical-controls .cp-new-chat[data-cp-motion-disclosure],.aw-optical-controls .cp-chat-options[data-cp-motion-disclosure]{width:auto;flex-basis:auto}
+/* Left-side menus open into the glass surface. Embedded selectors expand
+   within the same bounded disclosure instead of escaping its clip. */
+.aw-optical-controls :is(.cp-new-chat,.cp-switcher,.cp-filters,.cp-history-tools)[data-cp-disclosure-layout=menu]>.cp-motion-disclosure-body{inset-inline-start:0;inset-inline-end:auto;width:min(320px,calc(100vw - 64px))}
+.aw-optical-controls .cp-motion-disclosure-content .cp-picker{flex-direction:column;align-items:stretch}
+.aw-optical-controls .cp-motion-disclosure-content .cp-picker-panel{position:relative;inset:auto;margin-block-start:4px;min-width:0;max-width:100%;box-shadow:none}
+:root body .aw-optical-controls.cp-manager :is(.cp-disclosure-panel input:not([type=checkbox]):not([type=radio]),.cp-toolbar>input[type=search]){border:1px solid rgb(var(--control-edge-rgb,212 184 245) / calc(.15 + var(--control-focus,0)*.27));border-radius:var(--aw-control-radius,999px);padding-inline:12px;background:rgb(var(--control-film-rgb,212 184 245) / calc(.025 + var(--control-hover,0)*.04 + var(--control-focus,0)*.045))}
+.aw-optical-controls .cp-message-actions[data-cp-motion-disclosure]{width:fit-content}
+.cp-chat.aw-optical-controls .cp-message.aw-control-motion>.cp-message-actions[data-cp-motion-disclosure]{opacity:max(var(--control-hover,0),var(--control-focus,0),var(--cp-disclosure-open,0))}
+.cp-chat.aw-optical-controls .cp-composer.aw-control-motion{border-color:rgb(var(--control-edge-rgb,212 184 245) / calc(.2 + var(--control-focus,0)*.27));box-shadow:inset 0 1px 0 rgb(var(--control-sheen-rgb,240 221 255) / calc(.08 + var(--control-focus,0)*.06))}
+
+.aw-optical-controls :is(.cp-results,.cp-switcher-results) button[data-resource-id]>.cp-control-glyph{display:none}
+
+@media (max-width: 760px){
+ .cp-manager[data-cp-history-motion]>.cp-body{position:relative}
+ .cp-manager[data-cp-history-motion]>.cp-body>.cp-detail{visibility:visible}
+ .cp-manager[data-cp-history-motion]>.cp-body>.cp-catalog{display:flex;position:absolute;inset:0 auto 0 0;width:min(100%,340px);z-index:8;box-sizing:border-box;padding:12px;border:1px solid var(--aw-menu-rim,#d4b8f52b);border-radius:var(--aw-menu-radius,18px);background:linear-gradient(125deg,#e0d1f20c,#c4b2e802),color-mix(in srgb,var(--aw-menu-ink,#10111d) 96%,transparent);box-shadow:var(--aw-menu-shadow,0 14px 36px #02030a40);opacity:var(--cp-history-drawer-opacity,0);transform:translateX(var(--cp-history-drawer-x,0px))}
+ .cp-manager[data-cp-history-motion][data-cp-history-paint=false]>.cp-body>.cp-catalog{visibility:hidden}
+ .cp-manager[data-cp-history-motion]>.cp-body>.cp-catalog[inert]{pointer-events:none}
+}
+
+.cp-manager .cp-detail{opacity:var(--cp-detail-reveal-opacity,1);translate:0 var(--cp-detail-reveal-y,0px)}
+/* Chat-header menus paint over the transcript, within their own measured cap. */
+.cp-manager[data-cp-history-motion] .cp-detail-header{position:relative;z-index:3;flex:0 0 auto;max-height:none;overflow:visible}
+.cp-manager[data-cp-history-motion] .cp-chat-identity h3{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;overflow-wrap:anywhere}

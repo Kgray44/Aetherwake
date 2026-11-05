@@ -1,0 +1,179 @@
+.aw-note-tools,
+.aw-note-recovery,
+.aw-note-rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.6rem 0;
+}
+.aw-note-tools input[type="search"] {
+  flex: 1;
+  min-width: 8rem;
+}
+.aw-note-tools button,
+.aw-note-recovery button,
+.aw-note-rename button,
+.aw-note-sources button {
+  border: 1px solid #aac9e626;
+  border-radius: 1rem;
+  padding: 0.3rem 0.65rem;
+  background: #9fc6eb0c;
+  color: inherit;
+  font: inherit;
+}
+.aw-note-tools input,
+.aw-note-rename input {
+  background: #0b172733;
+  border: 1px solid #b4d7f42b;
+  border-radius: 0.6rem;
+  color: inherit;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+}
+.aw-note-status {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+.aw-note-copy-status { font-size:.8rem; color:inherit; opacity:.85; }
+.aw-note-copy-status:empty { display:none; }
+.aw-note-actions-panel button:disabled,.aw-note-sources button:disabled,.aw-note-copy-code:disabled { opacity:.45; cursor:default; }
+.aw-note-reading .aw-note-code-block { position:relative; padding-top:2.5rem; }
+.aw-note-copy-code { position:absolute; top:.4rem; right:.4rem; border:1px solid #aac9e626; border-radius:.6rem; padding:.25rem .6rem; background:#9fc6eb0c; color:inherit; font:12px/1.4 system-ui,sans-serif; }
+.aw-note-copy-code:focus-visible { outline:2px solid #d4eaff; outline-offset:2px; }
+.aw-note-recovery details {
+  width: 100%;
+}
+.aw-note-recovery pre,
+.aw-note-reading pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 20rem;
+  overflow: auto;
+  background: #0a14241f;
+  padding: 0.75rem;
+  border-radius: 0.65rem;
+}
+/* The editor sits inside a small field label. Set its body size explicitly:
+   inheriting the label's font also bypasses the placement text-scale setting. */
+[data-note-state] textarea,
+[data-aw-content-mode] .working-content[data-note-state] textarea,
+[data-note-state] .aw-note-reading {
+  font-size: calc(16px * var(--aw-block-text-scale, 1));
+  line-height: 1.65;
+}
+.aw-note-reading {
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+/* Camera Approach/Return changes line wrapping on the retained editor.
+   Native scroll anchoring must not replace the user's scroll position. */
+[data-note-state] textarea {
+  overflow-anchor: none;
+}
+.aw-note-reading h1 {
+  font-size: 1.6em;
+}
+.aw-note-reading h2 {
+  font-size: 1.35em;
+}
+.aw-note-reading h3 {
+  font-size: 1.15em;
+}
+.aw-note-reading blockquote {
+  border-left: 2px solid #9ab9d6;
+  margin-left: 0;
+  padding-left: 0.8rem;
+}
+.aw-note-sources code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.aw-note-sources li {
+  margin: 0.5rem 0;
+}
+.aw-note-sources button {
+  margin-left: 0.4rem;
+}
+.aw-note-tools [hidden],
+.aw-note-recovery[hidden],
+.aw-note-recovery [hidden],
+.aw-note-rename[hidden],
+.aw-note-reading[hidden] {
+  display: none;
+}
+
+.aw-note-tools {
+  justify-content: flex-end;
+  position: relative;
+}
+.aw-note-actions {
+  position: relative;
+}
+.aw-note-actions > summary {
+  cursor: pointer;
+  list-style: none;
+  border: 1px solid #aac9e626;
+  border-radius: 1rem;
+  padding: 0.3rem 0.7rem;
+  background: #9fc6eb0c;
+  font: inherit;
+}
+.aw-note-actions > summary::marker {
+  content: "";
+}
+.aw-note-actions > summary:focus-visible {
+  outline: 2px solid #d4eaff;
+  outline-offset: 3px;
+}
+.aw-note-actions-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 20;
+  width: min(22rem, 70vw);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  padding: 0.65rem;
+  border: 1px solid #b4d7f42b;
+  border-radius: 0.9rem;
+  background: #122033de;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 0.6rem 2rem #0005;
+}
+.aw-note-actions-panel input {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+.aw-note-actions:not([open]) > .aw-note-actions-panel {
+  display: none;
+}
+
+[data-note-state] textarea[hidden],
+[data-note-state] label[hidden] {
+  display: none;
+}
+
+[data-document-presentation="workspace"] .aw-note-tools {
+  margin: 0;
+  gap: 0.3rem;
+  flex: none;
+}
+[data-document-presentation="workspace"] .aw-note-status {
+  margin: 0.2rem 0;
+  font-size: 0.8em;
+}
+[data-document-presentation="workspace"] .aw-note-reading > :first-child {
+  margin-top: 0;
+}
+[data-document-presentation="workspace"] .aw-note-sources :is(h3, p) {
+  margin: 0.35rem 0;
+}
+[data-document-presentation="workspace"] .aw-note-sources ul {
+  margin: 0;
+  padding-left: 1rem;
+}
+[data-document-kind="reference"] .aw-note-sources code {
+  font-size: 1em;
+}

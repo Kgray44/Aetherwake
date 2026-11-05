@@ -1,0 +1,2591 @@
+{
+  "capturedAt": "2026-11-01T21:04:26.257Z",
+  "kind": "Actual native composition exploration; not the full verifier or a performance result",
+  "sourceHashesAtLaunch": {
+    "native/main.cjs": "da7327aebf889583319c8f98eb482d012b9732efddd9145a4e62498ba8f1f39e",
+    "native/recording.cjs": "d9fba4f4df8df1537ac231e4d730d39cb7cc5dfca45f7ff1e6340babec6f1507",
+    "src/celestial-environment.ts": "8d514487e806ede8b8010c03a6a4ea07763b9be81a4610da1694f7ae398711b4",
+    "src/conversation.ts": "63a1a6bbd4224401ca36ab4cc0b912d6a18ffda6eef2c69404f48b04eb5ff542",
+    "src/main.ts": "545fb3b4ce2b8365c7e3f3b41861a7403742d2c286701bb46037c973b78066b2",
+    "src/material-occlusion.ts": "ef8a435868dd7d04939b42c8588a84315d5b2b07877c15c1fc265d656cd4a682",
+    "src/motion.ts": "70996a0131dfddfa4e0c430a6b05652802cd24a74d6de86cab622a5f65a44519",
+    "src/orbital-architecture.ts": "419db8c6ec15ac15aafc28b0fa7e019c66d6ee74622456a2c89beb431030d168",
+    "src/policy.ts": "f3f868b5d6e3936ed338f05460c1d36aa7c665909bbc2329e2cef9eb47211f86",
+    "src/renderer.ts": "9b844f2c7902982b28df8ed410e18f2e6178483127f8f25bdc2951feb761b1e8",
+    "src/scene-state.ts": "b0e1964628f0e3744fa75487b328e3b883aedf5f73e7a8b4467b1bf698060dfe",
+    "src/scene-transition.ts": "55f7b5c04b094f9d9bbfa6ce8983c91b6c53ec41d77b39b6ba0bea6e6385a711",
+    "src/store.ts": "b58472f4619743163dcf838348937baaa4c449a8919fd3181b53fe3274bffb17",
+    "src/style.css": "54c483d78d4263ebd860a15137ade0b75f4c84155cb3ac5b204bb9480a752669",
+    "src/workloads.ts": "d8233b60e6028383c444144e371bb6a480da16866b4daf0f167a653e3bbcac40",
+    "package-lock.json": "fac0dfcfd42c160951c68d87f28b0640c2bc922fe47d15f44fc8bcc172d4b6d3",
+    "index.html": "f5a68d2ee7d2eea1d6afab47bee5559cc79bfad86a404afeeb5be1f011ddfad2"
+  },
+  "sourceRevisionAtLaunch": "93889084565dcb26b26220ad9a1a1153bacdc4d0",
+  "buildAssets": [
+    "graphics-Dzv1tpKy.js",
+    "index-CKtvTF-y.js",
+    "index-kvYjZEr4.css"
+  ],
+  "buildAssetHashes": {
+    "graphics-Dzv1tpKy.js": "804d7fcca4c34bad75c613b0981a16621bdc848a002da93b56294551a593281e",
+    "index-CKtvTF-y.js": "8ae0d628cce5ccded6ddaaad03b120ff7c7051379847a660604ebca7cc03585e",
+    "index-kvYjZEr4.css": "05ebce866dab829108f2475264c88c1e9efdd86f0c45aebd2e5defe8e65cdca9"
+  },
+  "captures": [
+    {
+      "file": "study-architecture.png",
+      "atUTC": "2026-11-01T21:04:07.165Z",
+      "byteCount": 1089656,
+      "sha256": "8783eabc8f72847f181526ebe107bd83de75d9b6b2e8d28676040a11e9fa8306",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "starlit",
+        "environmentPhaseOverrideSeconds": null,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 3450.8999999999996,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 188,
+        "drawCalls": 42,
+        "triangles": 119358,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 188,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 3.3787000000000003,
+          "longitudinalRotationRadians": 0.0033787000000000005,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "study-living.png",
+      "atUTC": "2026-11-01T21:04:08.379Z",
+      "byteCount": 934797,
+      "sha256": "8b22008806d64e49c8b1fd3dd1b597446c11b347af2258d57e11cefde14ef87b",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "celestialStudy": "starlit",
+        "environmentPhaseOverrideSeconds": null,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 4729.7,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 265,
+        "drawCalls": 15,
+        "triangles": 45382,
+        "lines": 0,
+        "geometries": 29,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 0,
+          "renderedStars": 0,
+          "renderedFrames": 246,
+          "environmentWeight": 0,
+          "visible": false,
+          "batches": 0,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "shadows": {
+          "enabled": false,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 4.657600000000001,
+          "longitudinalRotationRadians": 0.004657600000000001,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": false,
+          "environmentWeight": 0,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "study-observatory.png",
+      "atUTC": "2026-11-01T21:04:09.503Z",
+      "byteCount": 768909,
+      "sha256": "8c3c9742e8605992e234384de1264faf9552a13fac8a4df27e474b7a1a0e06d5",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "observatory",
+        "architectureConcept": "ring",
+        "celestialStudy": "starlit",
+        "environmentPhaseOverrideSeconds": null,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 5941.9,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 334,
+        "drawCalls": 21,
+        "triangles": 12102,
+        "lines": 3212,
+        "geometries": 36,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "observatory",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 0,
+          "renderedStars": 0,
+          "renderedFrames": 246,
+          "environmentWeight": 0,
+          "visible": false,
+          "batches": 0,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "shadows": {
+          "enabled": false,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 5.8819,
+          "longitudinalRotationRadians": 0.0058819,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": false,
+          "environmentWeight": 0,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "architecture-ring.png",
+      "atUTC": "2026-11-01T21:04:10.733Z",
+      "byteCount": 1080971,
+      "sha256": "ee1b6c6e7958cf1cd8847ff4f82ccd02099d08bc04559df5199ad480373a1fc2",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "starlit",
+        "environmentPhaseOverrideSeconds": null,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 7069.200000000001,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 401,
+        "drawCalls": 42,
+        "triangles": 119358,
+        "lines": 2200,
+        "geometries": 36,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 300,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 6.997000000000001,
+          "longitudinalRotationRadians": 0.006997000000000001,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "architecture-aperture.png",
+      "atUTC": "2026-11-01T21:04:12.017Z",
+      "byteCount": 1187928,
+      "sha256": "09bd710a69ad29681a0f9d3e07d7d78708b8da65935ef85c7557c7fbec741823",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "aperture",
+        "celestialStudy": "starlit",
+        "environmentPhaseOverrideSeconds": null,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 8299.5,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 475,
+        "drawCalls": 50,
+        "triangles": 130794,
+        "lines": 2200,
+        "geometries": 52,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 374,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "aperture",
+          "quality": "balanced",
+          "drawObjects": 17,
+          "triangles": 48628,
+          "opticalClockSeconds": 8.2275,
+          "longitudinalRotationRadians": 0.008227499999999999,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "architecture-observatory.png",
+      "atUTC": "2026-11-01T21:04:13.251Z",
+      "byteCount": 1061276,
+      "sha256": "6361132ebc3d8c3fc625710a38aa7e197cccc7894e2ec132a5ae47c3a3e9d791",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "observatory",
+        "celestialStudy": "starlit",
+        "environmentPhaseOverrideSeconds": null,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 9584.4,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 552,
+        "drawCalls": 49,
+        "triangles": 116990,
+        "lines": 2200,
+        "geometries": 69,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 451,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "observatory",
+          "quality": "balanced",
+          "drawObjects": 18,
+          "triangles": 46374,
+          "opticalClockSeconds": 9.5124,
+          "longitudinalRotationRadians": 0.009512399999999999,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "celestial-A-starlit-ring.png",
+      "atUTC": "2026-11-01T21:04:14.507Z",
+      "byteCount": 1080752,
+      "sha256": "1b77c672ea6a4f5cc1775fa37772977b40c4dc7f1b5f0af942dc797823f8d021",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "starlit",
+        "environmentPhaseOverrideSeconds": 0,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 10820.9,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 626,
+        "drawCalls": 42,
+        "triangles": 119358,
+        "lines": 2200,
+        "geometries": 69,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 525,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 10.7488,
+          "longitudinalRotationRadians": 0,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": 0,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "celestial-starlit-structure-native-crop.png",
+      "atUTC": "2026-11-01T21:04:14.508Z",
+      "byteCount": 228159,
+      "sha256": "aadd2ac7d7b6f9088f17f0d7ac1c8b0a3fbaeaa71166a6f97f8b4878b898c907",
+      "pixels": {
+        "width": 520,
+        "height": 801
+      },
+      "kind": "actual-native-content-crop",
+      "source": {
+        "file": "celestial-A-starlit-ring.png",
+        "sha256": "1b77c672ea6a4f5cc1775fa37772977b40c4dc7f1b5f0af942dc797823f8d021",
+        "pixels": {
+          "width": 2002,
+          "height": 1253
+        }
+      },
+      "cropRectPixels": {
+        "x": 560,
+        "y": 200,
+        "width": 520,
+        "height": 801
+      },
+      "processing": "A crop of the recorded native PNG pixels, with no enlargement or offline scene rendering.",
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "starlit",
+        "environmentPhaseOverrideSeconds": 0,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 10820.9,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "celestial-B-shadow-reveal.png",
+      "atUTC": "2026-11-01T21:04:15.789Z",
+      "byteCount": 1011365,
+      "sha256": "70b4ae47bcceb044c8c72cc8e62c2814372ffd77e55bb2f917920764a9eb84cb",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "shadow",
+        "environmentPhaseOverrideSeconds": 0,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 12142.1,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 706,
+        "drawCalls": 42,
+        "triangles": 119358,
+        "lines": 2200,
+        "geometries": 69,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "shadow",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 605,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "shadow",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 12.0761,
+          "longitudinalRotationRadians": 0,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": 0,
+          "celestialStudy": "shadow",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "celestial-C-deep-observatory.png",
+      "atUTC": "2026-11-01T21:04:17.067Z",
+      "byteCount": 1130796,
+      "sha256": "53e01951327aeacae4390ce18d2b40ba216b98fb85c059d55b588b5dcbe7d543",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "deep",
+        "environmentPhaseOverrideSeconds": 0,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 13354.3,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 779,
+        "drawCalls": 65,
+        "triangles": 201014,
+        "lines": 2200,
+        "geometries": 81,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "deep",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 678,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "deep",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 26,
+          "triangles": 95096,
+          "opticalClockSeconds": 13.282200000000001,
+          "longitudinalRotationRadians": 0,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": 0,
+          "celestialStudy": "deep",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "celestial-shadow-held-phase-0s.png",
+      "atUTC": "2026-11-01T21:04:17.965Z",
+      "byteCount": 1015257,
+      "sha256": "4255412ec0fdb70c6e3373f54cb832fac1781645651abccba396a849f21f9bf2",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "shadow",
+        "environmentPhaseOverrideSeconds": 0,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 14281.6,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 835,
+        "drawCalls": 42,
+        "triangles": 119358,
+        "lines": 2200,
+        "geometries": 81,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "shadow",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 734,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "shadow",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 14.2095,
+          "longitudinalRotationRadians": 0,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": 0,
+          "celestialStudy": "shadow",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "celestial-shadow-held-phase-30s.png",
+      "atUTC": "2026-11-01T21:04:18.842Z",
+      "byteCount": 1016071,
+      "sha256": "b17e3ae8c8ae9c84be510141929d3e18d182dcf9c46ab871a68ebb9baa02776b",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "shadow",
+        "environmentPhaseOverrideSeconds": 30,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 15178.5,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 889,
+        "drawCalls": 42,
+        "triangles": 119358,
+        "lines": 2200,
+        "geometries": 81,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "shadow",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 788,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "shadow",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 15.1065,
+          "longitudinalRotationRadians": 0.03,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": 30,
+          "celestialStudy": "shadow",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "celestial-shadow-phase-30-structure-native-crop.png",
+      "atUTC": "2026-11-01T21:04:18.843Z",
+      "byteCount": 222544,
+      "sha256": "aa592bb5458e22c11d01104bf68f11c4b723489b05648237dde27bca20c261e4",
+      "pixels": {
+        "width": 520,
+        "height": 801
+      },
+      "kind": "actual-native-content-crop",
+      "source": {
+        "file": "celestial-shadow-held-phase-30s.png",
+        "sha256": "b17e3ae8c8ae9c84be510141929d3e18d182dcf9c46ab871a68ebb9baa02776b",
+        "pixels": {
+          "width": 2002,
+          "height": 1253
+        }
+      },
+      "cropRectPixels": {
+        "x": 560,
+        "y": 200,
+        "width": 520,
+        "height": 801
+      },
+      "processing": "A crop of the recorded native PNG pixels, with no enlargement or offline scene rendering.",
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "shadow",
+        "environmentPhaseOverrideSeconds": 30,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 15178.5,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "celestial-shadow-held-phase-60s.png",
+      "atUTC": "2026-11-01T21:04:19.821Z",
+      "byteCount": 1013699,
+      "sha256": "9e17f5ce1af590040eea1838c380a2308d59c1fcbc906bc9d66482f80914e436",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "shadow",
+        "environmentPhaseOverrideSeconds": 60,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 16142.3,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.24,
+            "h": 240.3,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.27,
+            "y": 559.3199999999999,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6800000000001,
+            "y": 665.1,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 947,
+        "drawCalls": 42,
+        "triangles": 119358,
+        "lines": 2200,
+        "geometries": 81,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "shadow",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 846,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "shadow",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 16.070200000000003,
+          "longitudinalRotationRadians": 0.06,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": 60,
+          "celestialStudy": "shadow",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "celestial-A-starlit-ring-focused-work.png",
+      "atUTC": "2026-11-01T21:04:21.027Z",
+      "byteCount": 858607,
+      "sha256": "6028da4c0e988ad390e4ed5094d4ca2bcad2cea99dfc9aecf7c7995468bbe8d1",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "starlit",
+        "environmentPhaseOverrideSeconds": null,
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 17365.5,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 231.98241264709128,
+            "y": 152.03008569308872,
+            "w": 999.9256233912652,
+            "h": 691.937872782444,
+            "lift": 35,
+            "yaw": 0,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 24.136615234407227,
+            "y": 238.0441946370269,
+            "w": 176.01398515714212,
+            "h": 76.02773924559813,
+            "lift": -4,
+            "yaw": 0,
+            "opacity": 0.8
+          },
+          "note-field": {
+            "x": 24.07161478777287,
+            "y": 338.0449896233397,
+            "w": 176.02573665031898,
+            "h": 76.01246230446826,
+            "lift": -4,
+            "yaw": 0,
+            "opacity": 0.8
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 1009,
+        "drawCalls": 42,
+        "triangles": 119358,
+        "lines": 2200,
+        "geometries": 81,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 908,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 16.514723774009,
+          "longitudinalRotationRadians": 0.016514723774008998,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "celestial-B-shadow-reveal-focused-work.png",
+      "atUTC": "2026-11-01T21:04:22.925Z",
+      "byteCount": 846695,
+      "sha256": "d760fb9b561e1f845adf1a9a5479a6ff04c52565996429e2ed4ad4ddb2ed1547",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "shadow",
+        "environmentPhaseOverrideSeconds": null,
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 19268.6,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 231.98702459841627,
+            "y": 152.02219628796777,
+            "w": 999.9451272529877,
+            "h": 691.9541644725473,
+            "lift": 35,
+            "yaw": 0,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 24.100790467905753,
+            "y": 238.0326054276757,
+            "w": 176.0103178136626,
+            "h": 76.02046515204046,
+            "lift": -4,
+            "yaw": 0,
+            "opacity": 0.8
+          },
+          "note-field": {
+            "x": 24.05283516146583,
+            "y": 338.0331919438339,
+            "w": 176.01898769957268,
+            "h": 76.00919430035744,
+            "lift": -4,
+            "yaw": 0,
+            "opacity": 0.8
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 1123,
+        "drawCalls": 42,
+        "triangles": 119358,
+        "lines": 2200,
+        "geometries": 81,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "shadow",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 1022,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "shadow",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 17.232998899550445,
+          "longitudinalRotationRadians": 0.017232998899550444,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "shadow",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "celestial-C-deep-observatory-focused-work.png",
+      "atUTC": "2026-11-01T21:04:24.826Z",
+      "byteCount": 879730,
+      "sha256": "d5805c762d522afb3941c4f8576aa5c00b7e05c59f6064bb2709bde99994a227",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "deep",
+        "environmentPhaseOverrideSeconds": null,
+        "quality": "balanced",
+        "selected": "conversation-tidal",
+        "expanded": "conversation-tidal",
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 21165.6,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 231.98700904821013,
+            "y": 152.0222228888286,
+            "w": 999.9450614914375,
+            "h": 691.9541095415384,
+            "lift": 35,
+            "yaw": 0,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 24.10091125896863,
+            "y": 238.03264450323857,
+            "w": 176.01033017891604,
+            "h": 76.02048967824341,
+            "lift": -4,
+            "yaw": 0,
+            "opacity": 0.8
+          },
+          "note-field": {
+            "x": 24.052898481097575,
+            "y": 338.0332317222997,
+            "w": 176.0190104551413,
+            "h": 76.00920531915048,
+            "lift": -4,
+            "yaw": 0,
+            "opacity": 0.8
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 1237,
+        "drawCalls": 65,
+        "triangles": 201014,
+        "lines": 2200,
+        "geometries": 81,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "deep",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 1136,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "deep",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 26,
+          "triangles": 95096,
+          "opticalClockSeconds": 17.950992331216487,
+          "longitudinalRotationRadians": 0.017950992331216487,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "deep",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "file": "environment-idle.png",
+      "atUTC": "2026-11-01T21:04:26.256Z",
+      "byteCount": 1086319,
+      "sha256": "7762409284b150051e0b5835a39ae7faaf2f122798110f3aa79eb4034652ce79",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "celestialStudy": "starlit",
+        "environmentPhaseOverrideSeconds": null,
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 22511.199999999997,
+        "resourceOrder": [
+          "conversation-tidal",
+          "research-material",
+          "note-field"
+        ],
+        "resourcePoses": {
+          "conversation-tidal": {
+            "x": 104.13000000000001,
+            "y": 370.74,
+            "w": 459.248830689939,
+            "h": 240.3073763271054,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1017.2537797555373,
+            "y": 559.3147527973755,
+            "w": 277.68,
+            "h": 277.68,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 544.6714972193998,
+            "y": 665.0946584091299,
+            "w": 363.12,
+            "h": 166.608,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        },
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      },
+      "diagnostics": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 1318,
+        "drawCalls": 42,
+        "triangles": 119358,
+        "lines": 2200,
+        "geometries": 81,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 1217,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 46738,
+          "opticalClockSeconds": 18.897793666829536,
+          "longitudinalRotationRadians": 0.018897793666829536,
+          "primaryRingRadiusWorldUnits": 21.5,
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    }
+  ],
+  "checks": [
+    {
+      "name": "three architectural compositions remain selectable without resource replacement",
+      "passed": true,
+      "detail": [
+        {
+          "concept": "ring",
+          "actual": "ring",
+          "gpu": {
+            "backend": "Three.js WebGL2",
+            "framesRendered": 421,
+            "drawCalls": 42,
+            "triangles": 119358,
+            "lines": 2200,
+            "geometries": 36,
+            "textures": 2,
+            "pixelRatio": 1.25,
+            "quality": "balanced",
+            "study": "architecture",
+            "contextLost": false,
+            "cosmos": {
+              "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+              "study": "starlit",
+              "quality": "balanced",
+              "starCapacity": 24000,
+              "configuredStars": 14000,
+              "activeStars": 14000,
+              "renderedStars": 14000,
+              "renderedFrames": 320,
+              "environmentWeight": 1,
+              "visible": true,
+              "batches": 2,
+              "geometryAllocations": 2,
+              "textureAllocations": 0,
+              "catalogBytes": 768000,
+              "translationParallax": "canceled at infinite distance; world orientation copied",
+              "timeVaryingTwinkle": false,
+              "disposed": false
+            },
+            "celestialStudy": "starlit",
+            "shadows": {
+              "enabled": true,
+              "mapSize": 1024,
+              "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+            },
+            "architecture": {
+              "concept": "ring",
+              "quality": "balanced",
+              "drawObjects": 13,
+              "triangles": 46738,
+              "opticalClockSeconds": 7.330500000000001,
+              "longitudinalRotationRadians": 0.007330500000000001,
+              "primaryRingRadiusWorldUnits": 21.5,
+              "scriptedPhaseSeconds": null,
+              "celestialStudy": "starlit",
+              "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+              "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+              "originalProceduralGeometry": true,
+              "environmentVisible": true,
+              "environmentWeight": 1,
+              "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+            },
+            "surfaceCapacity": 3,
+            "surfacesRendered": 3
+          }
+        },
+        {
+          "concept": "aperture",
+          "actual": "aperture",
+          "gpu": {
+            "backend": "Three.js WebGL2",
+            "framesRendered": 498,
+            "drawCalls": 50,
+            "triangles": 130794,
+            "lines": 2200,
+            "geometries": 52,
+            "textures": 2,
+            "pixelRatio": 1.25,
+            "quality": "balanced",
+            "study": "architecture",
+            "contextLost": false,
+            "cosmos": {
+              "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+              "study": "starlit",
+              "quality": "balanced",
+              "starCapacity": 24000,
+              "configuredStars": 14000,
+              "activeStars": 14000,
+              "renderedStars": 14000,
+              "renderedFrames": 397,
+              "environmentWeight": 1,
+              "visible": true,
+              "batches": 2,
+              "geometryAllocations": 2,
+              "textureAllocations": 0,
+              "catalogBytes": 768000,
+              "translationParallax": "canceled at infinite distance; world orientation copied",
+              "timeVaryingTwinkle": false,
+              "disposed": false
+            },
+            "celestialStudy": "starlit",
+            "shadows": {
+              "enabled": true,
+              "mapSize": 1024,
+              "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+            },
+            "architecture": {
+              "concept": "aperture",
+              "quality": "balanced",
+              "drawObjects": 17,
+              "triangles": 48628,
+              "opticalClockSeconds": 8.6093,
+              "longitudinalRotationRadians": 0.0086093,
+              "primaryRingRadiusWorldUnits": 21.5,
+              "scriptedPhaseSeconds": null,
+              "celestialStudy": "starlit",
+              "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+              "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+              "originalProceduralGeometry": true,
+              "environmentVisible": true,
+              "environmentWeight": 1,
+              "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+            },
+            "surfaceCapacity": 3,
+            "surfacesRendered": 3
+          }
+        },
+        {
+          "concept": "observatory",
+          "actual": "observatory",
+          "gpu": {
+            "backend": "Three.js WebGL2",
+            "framesRendered": 572,
+            "drawCalls": 49,
+            "triangles": 116990,
+            "lines": 2200,
+            "geometries": 69,
+            "textures": 2,
+            "pixelRatio": 1.25,
+            "quality": "balanced",
+            "study": "architecture",
+            "contextLost": false,
+            "cosmos": {
+              "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+              "study": "starlit",
+              "quality": "balanced",
+              "starCapacity": 24000,
+              "configuredStars": 14000,
+              "activeStars": 14000,
+              "renderedStars": 14000,
+              "renderedFrames": 471,
+              "environmentWeight": 1,
+              "visible": true,
+              "batches": 2,
+              "geometryAllocations": 2,
+              "textureAllocations": 0,
+              "catalogBytes": 768000,
+              "translationParallax": "canceled at infinite distance; world orientation copied",
+              "timeVaryingTwinkle": false,
+              "disposed": false
+            },
+            "celestialStudy": "starlit",
+            "shadows": {
+              "enabled": true,
+              "mapSize": 1024,
+              "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+            },
+            "architecture": {
+              "concept": "observatory",
+              "quality": "balanced",
+              "drawObjects": 18,
+              "triangles": 46374,
+              "opticalClockSeconds": 9.845799999999999,
+              "longitudinalRotationRadians": 0.009845799999999998,
+              "primaryRingRadiusWorldUnits": 21.5,
+              "scriptedPhaseSeconds": null,
+              "celestialStudy": "starlit",
+              "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+              "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+              "originalProceduralGeometry": true,
+              "environmentVisible": true,
+              "environmentWeight": 1,
+              "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+            },
+            "surfaceCapacity": 3,
+            "surfacesRendered": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "three celestial studies preserve canonical resource identities and expose diagnostics",
+      "passed": true,
+      "detail": [
+        {
+          "requested": "starlit",
+          "actual": "starlit",
+          "resourceIDs": [
+            "conversation-tidal",
+            "note-field",
+            "research-material"
+          ],
+          "cosmos": {
+            "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+            "study": "starlit",
+            "quality": "balanced",
+            "starCapacity": 24000,
+            "configuredStars": 14000,
+            "activeStars": 14000,
+            "renderedStars": 14000,
+            "renderedFrames": 546,
+            "environmentWeight": 1,
+            "visible": true,
+            "batches": 2,
+            "geometryAllocations": 2,
+            "textureAllocations": 0,
+            "catalogBytes": 768000,
+            "translationParallax": "canceled at infinite distance; world orientation copied",
+            "timeVaryingTwinkle": false,
+            "disposed": false
+          },
+          "architecture": {
+            "concept": "ring",
+            "quality": "balanced",
+            "drawObjects": 13,
+            "triangles": 46738,
+            "opticalClockSeconds": 11.100299999999999,
+            "longitudinalRotationRadians": 0,
+            "primaryRingRadiusWorldUnits": 21.5,
+            "scriptedPhaseSeconds": 0,
+            "celestialStudy": "starlit",
+            "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+            "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+            "originalProceduralGeometry": true,
+            "environmentVisible": true,
+            "environmentWeight": 1,
+            "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+          }
+        },
+        {
+          "requested": "shadow",
+          "actual": "shadow",
+          "resourceIDs": [
+            "conversation-tidal",
+            "note-field",
+            "research-material"
+          ],
+          "cosmos": {
+            "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+            "study": "shadow",
+            "quality": "balanced",
+            "starCapacity": 24000,
+            "configuredStars": 14000,
+            "activeStars": 14000,
+            "renderedStars": 14000,
+            "renderedFrames": 624,
+            "environmentWeight": 1,
+            "visible": true,
+            "batches": 2,
+            "geometryAllocations": 2,
+            "textureAllocations": 0,
+            "catalogBytes": 768000,
+            "translationParallax": "canceled at infinite distance; world orientation copied",
+            "timeVaryingTwinkle": false,
+            "disposed": false
+          },
+          "architecture": {
+            "concept": "ring",
+            "quality": "balanced",
+            "drawObjects": 13,
+            "triangles": 46738,
+            "opticalClockSeconds": 12.3913,
+            "longitudinalRotationRadians": 0,
+            "primaryRingRadiusWorldUnits": 21.5,
+            "scriptedPhaseSeconds": 0,
+            "celestialStudy": "shadow",
+            "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+            "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+            "originalProceduralGeometry": true,
+            "environmentVisible": true,
+            "environmentWeight": 1,
+            "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+          }
+        },
+        {
+          "requested": "deep",
+          "actual": "deep",
+          "resourceIDs": [
+            "conversation-tidal",
+            "note-field",
+            "research-material"
+          ],
+          "cosmos": {
+            "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+            "study": "deep",
+            "quality": "balanced",
+            "starCapacity": 24000,
+            "configuredStars": 14000,
+            "activeStars": 14000,
+            "renderedStars": 14000,
+            "renderedFrames": 701,
+            "environmentWeight": 1,
+            "visible": true,
+            "batches": 2,
+            "geometryAllocations": 2,
+            "textureAllocations": 0,
+            "catalogBytes": 768000,
+            "translationParallax": "canceled at infinite distance; world orientation copied",
+            "timeVaryingTwinkle": false,
+            "disposed": false
+          },
+          "architecture": {
+            "concept": "ring",
+            "quality": "balanced",
+            "drawObjects": 26,
+            "triangles": 95096,
+            "opticalClockSeconds": 13.6641,
+            "longitudinalRotationRadians": 0,
+            "primaryRingRadiusWorldUnits": 21.5,
+            "scriptedPhaseSeconds": 0,
+            "celestialStudy": "deep",
+            "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+            "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+            "originalProceduralGeometry": true,
+            "environmentVisible": true,
+            "environmentWeight": 1,
+            "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+          }
+        }
+      ]
+    },
+    {
+      "name": "held environment phases are labelled in controller and geometry diagnostics",
+      "passed": true,
+      "detail": [
+        {
+          "requested": 0,
+          "controller": 0,
+          "rendered": 0
+        },
+        {
+          "requested": 30,
+          "controller": 30,
+          "rendered": 30
+        },
+        {
+          "requested": 60,
+          "controller": 60,
+          "rendered": 60
+        }
+      ]
+    },
+    {
+      "name": "all celestial focus studies keep the same conversation article and editor",
+      "passed": true,
+      "detail": [
+        {
+          "expanded": "conversation-tidal",
+          "phase": null,
+          "sameArticle": true,
+          "sameEditor": true
+        },
+        {
+          "expanded": "conversation-tidal",
+          "phase": null,
+          "sameArticle": true,
+          "sameEditor": true
+        },
+        {
+          "expanded": "conversation-tidal",
+          "phase": null,
+          "sameArticle": true,
+          "sameEditor": true
+        }
+      ]
+    }
+  ],
+  "manualReviews": [
+    {
+      "artifact": "celestial-A-starlit-ring.png",
+      "status": "requires-human-review",
+      "questions": [
+        "Does the backdrop read as distant space with restrained stellar brightness, color and density?",
+        "Does the opaque architectural shell correctly obscure stars behind it?",
+        "Do the ring curvature, thickness and restrained structural details communicate monumental scale?",
+        "Do Vela and usable foreground resources retain the visual hierarchy?"
+      ]
+    },
+    {
+      "artifact": "celestial-B-shadow-reveal.png",
+      "status": "requires-human-review",
+      "questions": [
+        "Does the backdrop read as distant space with restrained stellar brightness, color and density?",
+        "Does the opaque architectural shell correctly obscure stars behind it?",
+        "Do the ring curvature, thickness and restrained structural details communicate monumental scale?",
+        "Do Vela and usable foreground resources retain the visual hierarchy?"
+      ]
+    },
+    {
+      "artifact": "celestial-C-deep-observatory.png",
+      "status": "requires-human-review",
+      "questions": [
+        "Does the backdrop read as distant space with restrained stellar brightness, color and density?",
+        "Does the opaque architectural shell correctly obscure stars behind it?",
+        "Do the ring curvature, thickness and restrained structural details communicate monumental scale?",
+        "Do Vela and usable foreground resources retain the visual hierarchy?"
+      ]
+    },
+    {
+      "artifacts": [
+        "celestial-shadow-held-phase-0s.png",
+        "celestial-shadow-held-phase-30s.png",
+        "celestial-shadow-held-phase-60s.png"
+      ],
+      "status": "requires-human-review",
+      "method": "Scripted presentation phases under the selected study's fixed lighting; camera, viewport and resource layout are unchanged. Vela's separate animation clock is not phase-locked. These stills do not prove real-time pacing.",
+      "questions": [
+        "Do fixed lights reveal different physically oriented shell/rib surfaces without a whole-object opacity pulse?",
+        "Are the deep backdrop and ring occlusion coherent at each held phase?"
+      ]
+    },
+    {
+      "artifact": "celestial-A-starlit-ring-focused-work.png",
+      "status": "requires-human-review",
+      "questions": [
+        "Do stars and architecture recede enough for sustained reading?",
+        "Are bright details absent from important text regions, and is Vela reachable?"
+      ]
+    },
+    {
+      "artifact": "celestial-B-shadow-reveal-focused-work.png",
+      "status": "requires-human-review",
+      "questions": [
+        "Do stars and architecture recede enough for sustained reading?",
+        "Are bright details absent from important text regions, and is Vela reachable?"
+      ]
+    },
+    {
+      "artifact": "celestial-C-deep-observatory-focused-work.png",
+      "status": "requires-human-review",
+      "questions": [
+        "Do stars and architecture recede enough for sustained reading?",
+        "Are bright details absent from important text regions, and is Vela reachable?"
+      ]
+    }
+  ],
+  "comparisonBaseline": {
+    "artifact": "evidence-v3-5/review-occlusion-final/verification.json",
+    "status": "historical-reference",
+    "sha256": "d77a93f0aa1888dc53aaf81c4c938020f79663ee2e2a15c3633bda807a7e182d",
+    "sourceRevision": "93889084565dcb26b26220ad9a1a1153bacdc4d0",
+    "capturedAt": "2026-11-01T20:59:15.685Z",
+    "scenarioCount": 28,
+    "limitation": "This preceding candidate lacks the expanded celestial environment. Same-named scenarios are workload references, not isolated effect-cost experiments."
+  },
+  "gpu": {
+    "backend": "Three.js WebGL2",
+    "framesRendered": 1341,
+    "drawCalls": 42,
+    "triangles": 119358,
+    "lines": 2200,
+    "geometries": 81,
+    "textures": 2,
+    "pixelRatio": 1.25,
+    "quality": "balanced",
+    "study": "architecture",
+    "contextLost": false,
+    "cosmos": {
+      "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+      "study": "starlit",
+      "quality": "balanced",
+      "starCapacity": 24000,
+      "configuredStars": 14000,
+      "activeStars": 14000,
+      "renderedStars": 14000,
+      "renderedFrames": 1240,
+      "environmentWeight": 1,
+      "visible": true,
+      "batches": 2,
+      "geometryAllocations": 2,
+      "textureAllocations": 0,
+      "catalogBytes": 768000,
+      "translationParallax": "canceled at infinite distance; world orientation copied",
+      "timeVaryingTwinkle": false,
+      "disposed": false
+    },
+    "celestialStudy": "starlit",
+    "shadows": {
+      "enabled": true,
+      "mapSize": 1024,
+      "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+    },
+    "architecture": {
+      "concept": "ring",
+      "quality": "balanced",
+      "drawObjects": 13,
+      "triangles": 46738,
+      "opticalClockSeconds": 19.28578967065482,
+      "longitudinalRotationRadians": 0.01928578967065482,
+      "primaryRingRadiusWorldUnits": 21.5,
+      "scriptedPhaseSeconds": null,
+      "celestialStudy": "starlit",
+      "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+      "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+      "originalProceduralGeometry": true,
+      "environmentVisible": true,
+      "environmentWeight": 1,
+      "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+    },
+    "surfaceCapacity": 3,
+    "surfacesRendered": 3
+  },
+  "errors": []
+}

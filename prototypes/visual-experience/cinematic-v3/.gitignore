@@ -1,0 +1,5 @@
+.runtime/
+evidence/raw/
+evidence-v3-5/**/raw/
+evidence-celestial/**/raw/
+evidence-instruments/**/raw/

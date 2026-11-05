@@ -1,0 +1,10 @@
+{
+  "name": "aetherwake-workspace-kernel-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mts",
+    "demo": "node demo.mts"
+  },
+  "engines": { "node": ">=24.0.0" }
+}

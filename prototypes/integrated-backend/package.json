@@ -1,0 +1,15 @@
+{
+  "name": "aerynth-integrated-backend-prototype",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=24.18" },
+  "scripts": {
+    "test": "node --test tests/*.test.mts",
+    "demo": "node src/demo.mts",
+    "smoke": "node src/demo.mts --live",
+    "benchmark": "node src/benchmark.mts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": { "@types/node": "24.10.1", "typescript": "5.9.3" }
+}

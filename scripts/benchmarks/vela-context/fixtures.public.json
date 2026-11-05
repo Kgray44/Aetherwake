@@ -1,0 +1,39 @@
+{
+  "contract": "aerynth.context-benchmark-fixtures@1",
+  "cases": [
+    {
+      "id": "interval-overlap",
+      "functionName": "overlapLength",
+      "parameters": ["aStart", "aEnd", "bStart", "bEnd"],
+      "objective": "Repair the synthetic interval overlap length expression while preserving the half-open interval contract.",
+      "criteria": ["Return the length of the intersection, never a negative number.", "Touching or empty intervals have zero intersection length.", "Support negative endpoints; inputs are finite ordered interval endpoints."],
+      "codeTitle": "Synthetic interval overlap implementation",
+      "code": "function overlapLength(aStart,aEnd,bStart,bEnd) { return Math.min(aEnd,bEnd)-Math.max(aStart,bStart); }",
+      "specTitle": "Synthetic interval overlap half-open contract",
+      "spec": "Each interval is half-open [start,end), with start <= end. Length is measured on the real line. The intersection length is zero if the intervals are disjoint or merely touch. Negative coordinates are valid. Empty intervals have zero length. Repair only the return expression."
+    },
+    {
+      "id": "capped-retry",
+      "functionName": "retryDelay",
+      "parameters": ["attempt", "base", "cap"],
+      "objective": "Repair the synthetic capped retry delay expression while preserving the attempt-zero and exponential-growth contract.",
+      "criteria": ["Attempt zero returns the base delay unless the cap is lower.", "Each later attempt doubles the uncapped delay.", "The result never exceeds the nonnegative cap; base is nonnegative and attempt is an integer from zero through twelve."],
+      "codeTitle": "Synthetic capped retry delay implementation",
+      "code": "function retryDelay(attempt,base,cap) { return Math.min(cap,base*attempt); }",
+      "specTitle": "Synthetic capped retry delay exponential contract",
+      "spec": "Delay begins at base for attempt zero. Each increment in attempt doubles the uncapped delay. Apply the cap to the final value. Inputs: integer attempt in [0,12], finite base >= 0, finite cap >= 0. A zero base or zero cap is allowed. Repair only the return expression."
+    }
+  ],
+  "otherNotes": [
+    {"id":"color","title":"Editor color preferences","content":"The synthetic editor uses a warm neutral canvas with cyan selection marks. Color preferences are persisted separately from content. Focus rings must remain visible in both light and dark themes. A palette change updates presentation without revising resource identity or modifying note text. Export preserves the original chosen palette."},
+    {"id":"fonts","title":"Typography measurement notes","content":"The synthetic reader uses a regular text face for paragraphs and a numeric face for measurements. Font metrics are sampled after loading completes. A reading paragraph may wrap; a large numeric display is reserved for short time or arithmetic answers. Caption labels remain subordinate to the actual response."},
+    {"id":"layout","title":"Board placement conventions","content":"A synthetic board contains persistent resources represented by separate placements. Moving a placement does not change the resource content. Geometry changes use an expected layout revision and preserve unrelated cards. New boards begin with deterministic spacing. Undo restores the prior complete placement transaction."},
+    {"id":"network","title":"Transport framing notes","content":"The synthetic transport sends one framed JSON record per line. The receiver rejects incomplete records and enforces a bounded queue. A missing acknowledgment is an unknown outcome rather than evidence of failure. Reconnecting does not replay a mutation automatically. Recorded provider usage remains distinct from local estimates."},
+    {"id":"archive","title":"Archive retention conventions","content":"Archived synthetic resources remain distinguishable from active records. Restoring visibility is an explicit local operation. Retention preserves the identities needed to resolve historical references. A stale revision cannot silently replace a newer change. Exported metadata must state whether content was included or intentionally omitted."},
+    {"id":"keyboard","title":"Keyboard accessibility observations","content":"The synthetic interface provides a visible focus indicator and a predictable navigation order. Text editing retains the selection and does not submit during composition. Escape closes a disclosed control without accepting a proposed mutation. A disabled action explains its unavailable state and cannot dispatch a hidden command."},
+    {"id":"images","title":"Raster asset preservation","content":"Original synthetic image assets are copied without resizing, replacement or recompression. An asset manifest stores its byte count and digest. A thumbnail is a separate derived representation and cannot replace the canonical original. A preview failure must preserve the resource and make the missing display state explicit."},
+    {"id":"clocks","title":"Clock presentation notes","content":"Synthetic clock display preferences are separate from scheduling authority. Hiding a clock card does not stop a running countdown. A world-clock zone is an explicit preference. A stopwatch uses elapsed time while a countdown has a persistent deadline. An expired timer requires a run-specific acknowledgment rather than a repeated generic alert."},
+    {"id":"tables","title":"Grid editing conventions","content":"A synthetic table keeps stable row and column identities. Cell edits use canonical versions; a renderer draft is not the saved value. Sorting changes presentation while preserving the relationship between fields in each row. Empty cells remain distinguishable from zero. Imports disclose unsupported field types without inventing values."},
+    {"id":"audio","title":"Audio state observations","content":"Synthetic audio state distinguishes a local track, a remote session and actual playback observation. Muting is different from closing. Missing finalization remains unknown. The visual interface receives metadata rather than microphone samples. Local capture remains off until an explicit native authorization, and a late callback cannot revive a stopped session."}
+  ]
+}

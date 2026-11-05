@@ -10,6 +10,12 @@ The original deterministic Governance Router selects relevant charters by task p
 
 This is a selective context assembly component that could later serve CIE. It is not a semantic embedding engine, a provider-native compaction service, or an authorization engine.
 
+## Reliability repair (2026-11-01)
+
+The reported `Cannot read properties of undefined (reading 'some')` failure was reproduced with `node scripts/governance-context.mjs --task "Implement workspace resource identity" --json` on the pre-repair revision. The library call using the same task succeeded. The CLI parser stored `--index` in an `index` boolean (default `false`), then spread its parsed object **after** the real governance index in `buildContext({config, registry, index, ...a})`. This replaced the index object with `false`, so `index.documents.some(...)` failed. The CLI now uses `emitIndex` and passes only supported context arguments explicitly. The library checks input shapes and reports actionable errors for missing indexes, invalid paths/IDs/options, and incomplete registries.
+
+CLI and library calls now produce identical JSON from the repository and an unrelated working directory. `--index`, `--full`, narrow `--requirement`, malformed argument, and repeated-run regression tests cover this boundary. A CLI invocation from another directory must use an absolute script path, for example `node C:\path\to\Aetherwake\scripts\governance-context.mjs --task "..." --json`; source resolution is relative to the script, not the caller's working directory.
+
 ## Commands
 
 The default human-readable result can be copied into an agent context:
@@ -44,6 +50,22 @@ node --test tests/governance-router.test.mjs tests/governance-context.test.mjs
 node scripts/benchmark-governance-context.mjs
 node scripts/evaluate-governance-engineering.mjs --strict
 ~~~
+
+For library callers, construct the index once from the current repository source, then pass it as `index` without substituting CLI flags:
+
+~~~js
+import { parseRegistry } from "./scripts/governance-router.mjs";
+import { buildGovernanceIndex, buildContext } from "./scripts/governance-context.mjs";
+import { readFileSync } from "node:fs";
+const config = JSON.parse(readFileSync("config/governance-routes.json", "utf8"));
+const registry = parseRegistry(readFileSync("governance/README.md", "utf8"));
+const index = buildGovernanceIndex(config, registry);
+const context = buildContext({config, registry, index, task:"Implement workspace resource identity", paths:["src/workspaces/link.ts"]});
+~~~
+
+Resolve those three input files from your repository root in an external caller. The CLI itself resolves them relative to its script location.
+
+The JSON package includes `schemaVersion`, `indexFingerprint`, `coveragePolicyFingerprint`, routed domains, selected source sections, source ranges, exact source text, authority, `documentSha256` source revisions, section hashes, inclusion reasons, normative requirement IDs and lines, referenced dependencies, `coverage`, `missing`, `warnings`, and character-based metrics. `coverage.incompleteContext` marks unresolved domain scope, unavailable sources, or unresolved/overflow references. `coverage.explanatorySectionsPartial` marks that some explanatory prose is absent even though all normative lines from selected charters are present. Consumers should inspect both fields and expand to `--full` when a decision depends on omitted definitions, tables, examples, or cross-domain material.
 
 ## General-purpose retrieval architecture
 
@@ -83,11 +105,11 @@ Seven representative engineering prompts assert charter selection and known rele
 - A rough proxy \`ceil(characters/4)\` marked explicitly as **not a tokenizer result**.
 - Whether every predeclared domain and requirement-ID fixture was retained.
 
-The independent sufficiency evaluator (`node scripts/evaluate-governance-engineering.mjs --strict`) also checks eight synthetic engineering scenarios with **45 separately curated requirement labels**, which are withheld from the retrieval call. Tests additionally vary task phrasing while asserting that every normative rule of every selected charter survives.
+The independent coverage evaluator (`node scripts/evaluate-governance-engineering.mjs --strict`) checks fifteen synthetic engineering scenarios with separately source-reviewed domain and requirement labels, withheld from the retrieval call. They include workspace identity, branching, cross-provider handoff, approval, event provenance, Codex integration, Vela, storage, performance, agent execution, privacy, visual motion, and accessibility. Tests also vary task phrasing while asserting that every normative rule of every selected charter survives. The evaluator compares compact and full packages, records latency, duplicate source ranges, deterministic repeatability, and critical requirements present only as normative lines.
 
-**Important change in measured performance:** the earlier phrase-dependent section strategy reduced source characters by about 70%, but initially recovered only 33/45 independently labeled essential requirements. The conservative domain-dependency + full-normative-envelope strategy now retrieves 45/45 labeled requirements, and the seven-fixture benchmark measures roughly **35.6% source-character reduction** (the precise value is emitted by CI). This is a fidelity/efficiency tradeoff, not a token or cost guarantee.
+**Measured local run on 2026-11-01:** the seven-fixture benchmark assembled 1,068,152 source characters against 1,661,660 full-source characters (35.63% mean per-fixture reduction). The fifteen-scenario evaluator found 100% of its predeclared essential and critical requirement IDs and all expected domains. It assembled 2,640,357 characters against 4,267,106 characters in full routed context packages; its `ceil(characters/4)` proxy was 660,090 versus 1,066,777. These totals sum repeated fixtures, not one agent's context. The estimator is a rough character proxy, **not a tokenizer**, billable token count, or measured saving. The evaluator reports per-case retrieval latency and duplicated ranges; in this run all repeated packages were identical and no source ranges were duplicated.
 
-This measures **selection volume, domain coverage, and defined fixture recall**, not agent accuracy. It cannot establish real prompt token costs, cache usage, reasoning quality, downstream task success, or latency. Those require a future end-to-end controlled Codex experiment comparing full and scoped governance under equivalent models, tools, and task suites. False negatives must be measured before enabling any aggressive retrieval mode by default.
+This measures **selection volume, domain coverage, defined fixture recall, local assembly latency, and repeatability**, not agent accuracy. Some critical rules were available only as single normative lines, without their full explanatory sections. `passedSafetyGate` in evaluator JSON means only that labeled rules and domains passed its offline coverage checks. It cannot establish that an engineer makes the correct decision, real prompt token costs, cache usage, or downstream task success. Those require an end-to-end controlled agent comparison of full and scoped governance under equivalent models, tools, and tasks. False negatives and explanatory omissions must be reviewed before enabling more aggressive retrieval.
 
 ## Future CIE integration
 

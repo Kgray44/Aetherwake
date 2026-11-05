@@ -1,0 +1,148 @@
+.aw-contextual-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1000000;
+  pointer-events: none;
+}
+.aw-contextual-surface {
+  position: fixed;
+  inset: 0 auto auto 0;
+  margin: 0;
+  padding: 14px 18px 18px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid #c8c6e139;
+  border-radius: 18px;
+  color: #e4e7f1;
+  background: linear-gradient(145deg, #383749d9, #101421f2 48%, #141722ed);
+  box-shadow:
+    0 20px 70px #02030a70,
+    inset 0 1px 0 #e8e6ff24;
+  backdrop-filter: blur(22px) saturate(1.1);
+  pointer-events: auto;
+  overflow: hidden;
+  contain: layout;
+  isolation: isolate;
+  text-shadow: 0 1px 2px #03071080;
+}
+.aw-contextual-surface:not([open]) {
+  display: none;
+}
+.aw-contextual-surface::backdrop {
+  background: #03061166;
+}
+.aw-contextual-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex: none;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.025em;
+}
+.aw-contextual-heading > span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.aw-contextual-dismiss {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #d1c8eb26;
+  border-radius: 9px;
+  background: #bcc8ee0b;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 19px;
+  line-height: 1;
+}
+.aw-contextual-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #b7b4d666 transparent;
+}
+.aw-contextual-pin,
+.aw-contextual-resize {
+  display: grid;
+  place-items: center;
+  color: inherit;
+}
+.aw-contextual-pin[hidden],
+.aw-contextual-resize[hidden] {
+  display: none;
+}
+.aw-contextual-pin {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-inline-start: auto;
+  margin-inline-end: -8px;
+  background: #bce2e909;
+  border: 1px solid #bce2e926;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.aw-contextual-pin[aria-pressed="true"] {
+  color: #d1f3fa;
+  background: #90c7d440;
+  border-color: #c4ebf075;
+}
+.aw-contextual-pin svg {
+  --pin-state: var(--control-toggled, 0);
+  transform: rotate(calc(-35deg * (1 - var(--pin-state))));
+}
+.aw-contextual-pin[aria-pressed="true"] svg {
+  --pin-state: var(--control-toggled, 1);
+}
+.aw-contextual-pin .aw-pin-head {
+  fill: currentColor;
+  fill-opacity: var(--pin-state);
+}
+.aw-contextual-resize {
+  position: absolute;
+  inset: auto 2px 2px auto;
+  width: 23px;
+  height: 23px;
+  border-radius: 8px;
+  background: #142028e3;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+:is(.aw-contextual-pin, .aw-contextual-resize) svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.aw-contextual-content > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.aw-contextual-content :is(input, select, textarea) {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+.aw-contextual-content :is(pre, table) {
+  max-width: 100%;
+  overflow: auto;
+}
+.aw-contextual-surface :focus-visible {
+  outline: 2px solid #dacbff;
+  outline-offset: 3px;
+}
+.aw-contextual-surface:focus-visible {
+  outline-offset: -3px;
+}

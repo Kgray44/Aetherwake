@@ -1,0 +1,83 @@
+# Vela Core functional module
+
+Vela is an application-level assistant and coordination service. Codex and other planning/execution providers retain their own identities. Local search, navigation, resource creation, workspace organization and relationships can use typed commands. The desktop host classifies supported free-text intents and applies authorization before dispatch. Natural-language planning uses an explicitly attributed `VelaPlanningPort`.
+
+## Level 0 and adaptive routing
+
+With Auto selected, Vela can answer device time, date, RAM, CPU, GPU and simple Aerynth status questions before opening any provider connection. Try “What’s the date?”, “Show me the CPU and GPU usage”, “Which workspace is open?” or “Calculate 15% of 240”. The calculator accepts parentheses, decimal and scientific notation, signs, arithmetic operators, powers, percentages, `sqrt()`, `pi` and `e`. It uses floating-point arithmetic and reports undefined or out-of-range operations. CPU is sampled over a short interval. Windows GPU results report the busiest observed engine across adapters and can be unavailable on hosts without valid counters.
+
+The Provider menu exposes Auto, Fast, Deep, Codex and Custom, with model and reasoning controls loaded on request from the connected catalog and supported model controls. Selecting Codex keeps work in its reviewed read-only sandbox. Source excerpts, prior messages and native readings included in a provider handoff go through the native review. The optional deeper retry applies once to a confirmed output-limit result in an unpinned Auto conversation. The original request retains route and outcome evidence. See [AIR implementation status](../../docs/engineering/VELA-AIR-STATUS.md).
+
+For an eligible prior answer, use **Continue with Codex** or **Continue with ChatGPT plan**, then write your follow-up. Vela selects that single exchange and asks you to review the exact text and destination when you send. Use the exchange chip to remove it before sending. The follow-up stays in the Vela conversation and the destination receives a separate provider turn.
+
+Under **Saved routing defaults**, inspect which scope supplies each value and save or reset the active global, project, workspace, or Vela chat profile. **Automatic** in the provider picker bypasses saved pins for one send. Global and project attempt limits remain in force for that send and any escalation. These limits count AIR stages admitted by Aerynth on a UTC day, including stages with uncertain outcomes. Account allowance and cost remain separate.
+
+For a repository edit on Windows, select up to four destinations in one checkout. For an explicit creation request, choose one unused filename in the native Save dialog. A mixed request can also replace up to three tracked files. The first review authorizes sending the selected paths and existing bytes to read-only Codex. Use **Review file changes** to compare and approve the proposed contents. Aerynth checks and stages the whole batch, then publishes each file in order. Replaced files have sibling backups. A new file is published only if its destination is still absent. A later failure can leave earlier files applied. **Check file outcomes** verifies current files against the recorded evidence without replaying the batch. Aerynth reports byte and supported syntax verification separately from project tests.
+
+In Vela Send, use “Run the Node tests” or “Type-check this project.” After all file changes are applied, **Run Node tests** and **Type-check TypeScript** open the same review. Select tracked check inputs in one checkout and review the exact command arguments and working directory. These commands run locally through the ready Windows Codex sandbox with no network access or model call. Node test files must support in-process, read-only execution. TypeScript uses a compiler installed in the checkout and checks types without emitting build artifacts. Vela shows the selected inputs and the observed outcome, and marks checks stale if reviewed inputs change. Standalone results stay in Vela's canonical chat.
+
+This module is an integration component, not a separate application or database. It adds one `vela_state` metadata table to the **injected canonical SQLite connection** and never opens or closes a connection. Canonical resources, conversation messages, placements, native command receipts and provider executions stay with their existing host owners. Vela stores request/plan/context/attention metadata and links to host receipts. It never copies a conversation transcript or treats a host/provider turn as a verified task outcome.
+
+## Host integration
+
+```ts
+import { VelaService } from './src/service.mts';
+const vela = new VelaService({
+  db: canonicalDatabase,
+  transaction: work => canonicalBackend.atomic(work),
+  host: canonicalVelaAdapter,
+  planner: optionalAttributedPlanner,
+});
+```
+
+`VelaHostPort` in `src/contracts.ts` is the integration contract. Its synchronous conversation operations use the host's canonical conversation ID and graph, within the supplied transaction. `scope()` is host-derived, never renderer-supplied. The host must mediate content eligibility and provider egress separately. Placement in an authorized workspace can be an access-policy input; it does not change resource ownership or duplicate the resource.
+
+The host's `authorize()` issues opaque authorization references and evaluates actual policy, including revocation and explicit execution consent. A renderer boolean is **not** an action authorization. `review()` records the host-issued review reference against a fixed plan fingerprint; `apply()` obtains fresh host authorization and passes its reference to every native command. Native typed actions that the user explicitly requested can use `native()` and `apply()` directly without an additional provider or redundant review interaction. A provider proposal requires review.
+
+`applyNative()` is the canonical command boundary. It must validate `expectedVersions`, the authorization reference and a globally idempotent `commandId` **atomically with the canonical mutation**. Most actions map to the existing `DesktopAction` union. `workspaceFromResources` is one host transaction that creates a workspace and attaches the exact existing canonical resource IDs. Its receipt returns `createdWorkspaceId`. The service never creates a replacement resource/placement store.
+
+`delegateTask()` is optional. It requires enabled delegation **and** a fresh host-issued execution authorization. Its input preserves the initiating intent, source canonical conversation, attributed receiving provider, bounded resource IDs, constraints and attenuated context manifest. Execution truth remains in the host. The returned receipt is not a declaration that the delegated objective is complete.
+
+## Planner integration
+
+`VelaPlanningPort.availability()` exposes observed availability/busy state. `propose()` receives one bounded request, explicitly selected content, capability schemas, provenance and an `AbortSignal`. Its result must satisfy `ProviderProposal` and name the actual provider. The host planner adapter is responsible for its supported provider protocol and identity, model selection, provider lifecycle and trusted instruction channels. Use the existing real Codex bridge when appropriate; do not replace Codex's identity, native instructions, or ordinary conversation controls.
+
+Metadata search and content inclusion are distinct. Search returns at most 30 permitted metadata references without reading content. A request may read at most 12 selected sources, 12,000 UTF-8 bytes each and 32,000 bytes total. Oversized sources are omitted with a reason rather than truncated. Every included source has a version, content digest and source link. Data is labeled untrusted. The manifest does not claim to expose provider-managed hidden context or private reasoning. Provider-context permission is checked before `propose()` against all discovered selected metadata, including omitted-source names/IDs, and the full prospective `contextManifest` is supplied to the host authorization policy so it can distinguish metadata from content egress.
+
+Proposals are validated as data, never evaluated as code. Unknown capabilities/fields, invalid IDs, wrong attribution and duplicate step IDs fail closed. Rejected provider output up to 64 KiB is preserved in private local state for inspection; larger/nonserializable output gets an explicit omission record. Plans expire after 15 minutes, bind exact target versions and policy, and are revalidated after inference, review, and before every action. Dependent mutations to the same versioned target need a fresh plan: this first slice deliberately does not invent refreshed versions or auto-expand a reviewed plan.
+
+`apply()` records a started receipt before dispatch. An adapter exception after dispatch is `unknown`, preventing automatic re-execution. On restart, in-flight planning/actions become unknown and are not replayed. Applying an already applied plan returns its receipt state without duplicate execution. Reconciliation of an unknown host outcome belongs to the canonical host execution/receipt service; this module does not guess it succeeded or retry it.
+
+## Existing-dialog UI
+
+`mountVelaPanel(root, client, options)` in `src/panel.ts` mounts inside the host's existing `#vela-dialog`. Include `src/panel.css` through the current renderer build and implement `VelaClient` via the host's existing trusted IPC. Mounting and `open()` do not start inference, apply plans, read source content, or mark events reviewed. The panel exposes a durable conversation, local search/actions, explicit provider-context disclosure, proposal review, typed targets/versions, context inspection, host receipts, cancellation and attention settings. All user/provider text is inserted through `textContent`, with no HTML interpretation.
+
+The panel is browser-safe and creates no native window. The host retains cinematic presentation and Motion Coordinator ownership. The panel itself uses no animation, continuous polling, pseudo-progress, fabricated thinking, provider turns, or external monitoring.
+
+Visible status is derived from the latest canonical request, its plan and actual command receipts, and persists across refreshes. The status element exposes `data-request-state`/`data-request-id` and, when linked, `data-plan-state` for semantic host assertions. Unknown or partial outcomes direct users to receipts; a completed delegated provider turn is never described as verified task completion. The optional `onConnectProvider: () => Promise<unknown>` host callback adds an explicit **Check planning connection** button and refreshes observed state after it returns. Mount/open never invokes this callback, starts inference or changes a historical request outcome.
+
+## Attention foundation
+
+Preferences persist normal/quiet/focused/collaborative/proactive modes, explicit app-event subscriptions, severity thresholds, interruption budgets, and independent monitoring/delegation toggles. Monitoring and delegation default off; learned preferences are explicitly disabled. Quiet produces silent recorded items; focused mode defers interruptions. Other modes use the configured threshold/budget, so changing a mode cannot silently broaden event subscriptions or permissions.
+
+Only host-fed authorized application events are classified. There is no OS/window activity watcher, screen capture, microphone, external account polling or inference loop. Event source, occurrence time, receive time, evidence class, correlation, source subject and coverage gap survive into review. Opening the app updates presence only; review/dismissal is per event, and neither changes the underlying task or approval. Revoked subjects are hidden from attention views and blocked at review. This is a stored app-event digest foundation, not a claim of continuous external awareness.
+
+## Adaptive Experience preferences
+
+Adaptation is a separate, default-disabled policy family in the same Vela metadata state. Each presentation/organization category has independent enablement and one of four levels: **manual** records explicit choices only; **suggestive** records inspectable hypotheses; **assisted** can apply an accepted hypothesis after user review; **adaptive** can automatically apply a permitted low-risk preference after at least three distinct observed user app actions and host authorization. These levels never grant source access, tools, provider execution, sensors or privilege changes.
+
+Only two keys are implemented: `presentation.density` (`comfortable`/`compact`) and `organization.defaultPreset` (`balanced`/`focus`/`development`/`research`), scoped globally or to an authorized workspace. The schema rejects all other keys and values. Confidence is explicitly a count-based heuristic (one/two observations low, three/four medium, five or more high), not a probability or fabricated model inference.
+
+The host app-event adapter calls `observePreference()` with an already recorded event ID. Evidence must be an observed, user-origin `presentation.densitySelected` or `workspace.presetSelected` event with matching structured `preferenceSignal`, value and scope. Vela/provider-origin actions cannot feed back into learning. No renderer method can manufacture a behavioral observation. The evidence remains linked to its actual source event and timestamp. Monitoring must be explicitly subscribed to those local app-event types before evidence can be used.
+
+Inferred hypotheses remain separate from explicit preferences. Explicit workspace choices, then explicit global choices, take precedence over applied inference. Accepting a hypothesis creates an explicit record; rejection/suppression prevents the same suggestion from repeatedly reappearing until an explicit reset. Users can inspect/correct values, disable learning, reset scope-specific preferences and inspect application receipts. Reset preserves evidence, deactivates explicit overrides and supersedes active hypotheses; it does not pretend to undo a prior host UI effect.
+
+Actual application uses the optional `host.applyPreference()` **canonical command port** with a host-issued authorization reference, expected target versions, idempotent command ID, origin and evidence IDs. The adapter must implement real low-risk settings/organization changes; the module never writes a parallel application-setting store. If that port is unavailable or policy denies it, the receipt/hypothesis records failure and the UI says application is unavailable. An exception after dispatch records unknown outcome, never a fabricated success. This module does not claim an application effect from saving a preference record alone.
+
+## Verification and limits
+
+Run `node --test prototypes/vela-core/tests/*.test.mts` with Node 24.18+ and typecheck `tsconfig.json` using the existing repository TypeScript installation. Tests use synthetic data and a real in-memory SQLite canonical host on the exact injected connection; they do not launch inference or native windows.
+
+The terminal-status/connection-control correction passed **37/37 module tests** and the module TypeScript check. Its minimal DOM component harness checks async request settlement, status persistence across refresh, explicit-only connection probing, observed provider refresh and persistent workspace-project choice. Pure state assertions check review/rejection, missing receipts, confirmed application, partial failure, unknown outcomes and unverified delegated completion. This is component/source evidence, not native browser rendering or provider qualification.
+
+No integrated desktop/provider, cinematic, keyboard/screen-reader, performance, long-history, cross-account, real Codex planning, or owner acceptance claim follows from these tests. Those checks belong to the actual application integration. The module's JSON state has a 4 MiB preservation limit; it refuses additional writes at capacity and never silently drops historical evidence. User-controlled export/retention and unknown-outcome reconciliation remain host integration work. Host transaction rollback must include its canonical graph/in-memory state, not SQLite alone. Adaptive preference application additionally requires an actual host adapter and appropriate product usability/reversibility review.

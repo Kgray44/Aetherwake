@@ -1,0 +1,75 @@
+/* Opt-in optical tokens only. Component owners retain semantics, layout,
+   keyboard behavior and menus. The host's existing MC owns interpolation. */
+.aw-optical-controls {
+  --aw-control-radius: 999px;
+  --aw-control-min-height: 36px;
+  --aw-control-pad-block: 6px;
+  --aw-control-pad-inline: 12px;
+  --aw-menu-radius: 18px;
+  --aw-option-radius: 11px;
+  --aw-menu-pad: 6px;
+  --aw-control-text: #ede8f5;
+  --aw-control-muted: #bcb4cd;
+  --aw-control-rim: #d4b8f529;
+  --aw-control-hover-film: #d4b8f514;
+  --aw-control-press-film: #d4b8f520;
+  --aw-control-focus: #ddc7f7;
+  --aw-menu-ink: #10111d;
+  --aw-menu-rim: #d4b8f52b;
+  --aw-menu-shadow: 0 14px 36px #02030a40;
+  --aw-option-selected-film: #d4b8f51c;
+  --aw-option-selected-text: var(--aw-control-text);
+  /* Optional aliases for the existing shared control-motion material rules.
+     Their host-owned defaults remain unchanged outside this opt-in scope. */
+  --control-edge-rgb: 212 184 245;
+  --control-film-rgb: 212 184 245;
+  --control-sheen-rgb: 240 221 255;
+  --control-focus-color: var(--aw-control-focus);
+}
+/* Agents and workspace actions already use this cool glass. Opt in on the
+   consuming surface; keep the original tokens for other optical roles. */
+.aw-optical-controls:where([data-aw-optics="workspace"]) {
+  --aw-control-text: #ecf2f4;
+  --aw-control-muted: #b9c4ce;
+  --aw-control-rim: #d5e5eb2b;
+  --aw-control-hover-film: #e1eef511;
+  --aw-control-press-film: #e1eef51b;
+  --aw-control-focus: #d9edf0;
+  --aw-menu-ink: #0b1018;
+  --aw-menu-rim: #cadfdc42;
+  --aw-option-selected-film: #e1eef51b;
+  --control-edge-rgb: 218 226 239;
+  --control-film-rgb: 217 226 240;
+  --control-sheen-rgb: 234 240 250;
+  --aw-surface-radius: 22px;
+  --aw-surface-text: #e6edec;
+  --aw-surface-heading: #dae9e5;
+  --aw-surface-rim: #cadfdc42;
+  --aw-surface-fill:
+    radial-gradient(ellipse at 12% 0%, #b4d8d01f, transparent 58%),
+    linear-gradient(152deg, #192027da, #0b1018ed 57%, #101a23e0);
+  --aw-surface-shadow:
+    0 18px 64px #01040975, inset 0 1px 0 #ecfff333, inset 0 -1px 0 #70b8ce12;
+}
+@media (forced-colors: active) {
+  .aw-optical-controls {
+    --aw-control-text: CanvasText;
+    --aw-control-muted: CanvasText;
+    --aw-control-rim: ButtonText;
+    --aw-control-hover-film: ButtonFace;
+    --aw-control-press-film: ButtonFace;
+    --aw-control-focus: Highlight;
+    --aw-menu-ink: Canvas;
+    --aw-menu-rim: CanvasText;
+    --aw-menu-shadow: none;
+    --aw-option-selected-film: Highlight;
+    --aw-option-selected-text: HighlightText;
+  }
+  .aw-optical-controls:where([data-aw-optics="workspace"]) {
+    --aw-surface-text: CanvasText;
+    --aw-surface-heading: CanvasText;
+    --aw-surface-rim: CanvasText;
+    --aw-surface-fill: Canvas;
+    --aw-surface-shadow: none;
+  }
+}

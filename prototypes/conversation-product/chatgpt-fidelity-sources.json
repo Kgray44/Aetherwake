@@ -1,0 +1,37 @@
+{
+  "format": "aerynth.chatgpt-fidelity-sources@1",
+  "reviewDateUtc": "2026-11-02",
+  "applicationBase": "856f604af743031b69d858c05dfa409ce22566c7",
+  "evidenceTier": "official-documentation-and-offline-public-schema",
+  "nativeAccountVerified": false,
+  "providerRequests": 0,
+  "installedCli": "codex-cli 0.153.3",
+  "schemaCommand": "codex app-server generate-ts --experimental --out <ignored-private-output>",
+  "officialSources": [
+    { "url": "https://developers.openai.com/siwc/quickstart.md", "status": 200, "bytes": 4478, "sha256": "9333205c63f73c561ee7055b8e8e924ff3bd491d6c9e2e0ca45b52e63a2391ff" },
+    { "url": "https://developers.openai.com/siwc/token-sharing-open-source.md", "status": 200, "bytes": 7361, "sha256": "7c916a3136973625481fe21673c2f342e97fe5a70153bc71e068d5b11be83ebd" },
+    { "url": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations.md", "status": 200, "bytes": 2866, "sha256": "051ee06d537d746de9a5f1aa5019a44400fd9856b27ec37b4a9c9fec5874fa0c" },
+    { "url": "https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference.md", "status": 200, "bytes": 3973, "sha256": "4cd568e57168de134717e5ed611d15d3505b88d30d6a45bd234b2a0a1ea96370" },
+    { "url": "https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions.md", "status": 200, "bytes": 6393, "sha256": "ab3eb6b64956e7ca22edbe4eb70f67ab2245cf9aea197902b16c639a6cf8dfc1" },
+    { "url": "https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt.md", "status": 200, "bytes": 18236, "sha256": "4f05505e785ffe04ba833ec4ea11fbdac5c1c16456f4dbc5c18b1a96a9745b60" },
+    { "url": "https://learn.chatgpt.com/docs/app.md", "status": 200, "bytes": 3624, "sha256": "078985b0a2fedec6e187a68284122033a95ae39cd976fbbfd7537e1684c54a1e" },
+    { "url": "https://learn.chatgpt.com/docs/projects.md", "status": 200, "bytes": 14106, "sha256": "2492a9886d932e82999f827b963558927dbf952e06494344a3ff329526dc7007" },
+    { "url": "https://learn.chatgpt.com/docs/whats-new.md", "status": 200, "bytes": 63342, "sha256": "276acc2ab26e321e6fc08e5cf9d0713d6d63f018e5b36a33ef8b1a4c4c7117db" },
+    { "url": "https://learn.chatgpt.com/docs/use-chatgpt.md", "status": 200, "bytes": 14472, "sha256": "53cc375d4167155c9c915f755ba2325be231dffb90f714d3e5670536eec69a8c" },
+    { "url": "https://learn.chatgpt.com/docs/personalize.md", "status": 200, "bytes": 3115, "sha256": "628a63ceec399c21bf089266c111353b282428300e95c68b5529b86360198273" },
+    { "url": "https://learn.chatgpt.com/docs/customization/memories.md", "status": 200, "bytes": 6550, "sha256": "1776e4e65a523214e7a3c428e57f002348c096f2eec6bf2fe5583d968cdc43a3" },
+    { "url": "https://learn.chatgpt.com/docs/app/commands.md", "status": 200, "bytes": 26950, "sha256": "c5e9b64bb8424a75df6f1e0437d9a2f068a8f39dcdaa28f3cdbdac1130267233" },
+    { "url": "https://learn.chatgpt.com/docs/model-selection.md", "status": 200, "bytes": 4576, "sha256": "b3ce4be1f893a1d7ec545fe22a05bdab4d273b39c943bb763159391696a626b3" },
+    { "url": "https://raw.githubusercontent.com/openai/codex/refs/tags/rust-v0.153.3/codex-rs/app-server/README.md", "status": 200, "bytes": 207211, "sha256": "1142bff07746d3b54dccf39fd84b58798ae609cd73fa26c82fa07743abc0395a" }
+  ],
+  "installedExperimentalSchema": [
+    { "file": "ClientRequest.ts", "bytes": 25377, "sha256": "83418e6f3f8100fa59b0324afaaf45c8d258db3dd42a10769d9c337c93b910f2" },
+    { "file": "v2/ThreadListParams.ts", "bytes": 2447, "sha256": "db46c94441e1d84921d5cc4fb8c59b3f8af4ba3a7d3a6f4d7832210343257c59" },
+    { "file": "v2/Project.ts", "bytes": 500, "sha256": "9d63a6da9ac0ae06003e5ee3bee9285208cb78c3ee0873020b7571f5697d35db" },
+    { "file": "v2/ProjectCreateParams.ts", "bytes": 355, "sha256": "b9b051a3236a758f52c3e7820e3a53924fb9a5cfd2ea7dc6b57643ee194b89fc" },
+    { "file": "v2/ThreadMemoryModeSetParams.ts", "bytes": 301, "sha256": "57e481988704f3d02f3270ce62414b24561f39b98318c55cd185c7a70c4acd67" },
+    { "file": "v2/ThreadSettings.ts", "bytes": 1283, "sha256": "d4e9d9746831c61e0d1a87007c90d0d85978be9322da90253a4c8a90701cceb9" },
+    { "file": "v2/Account.ts", "bytes": 379, "sha256": "122259e3439c0c0f63e53a2f2e0028a9e6f153b3bc16c1a705f640b98ff8bf37" },
+    { "file": "v2/ModelListParams.ts", "bytes": 490, "sha256": "9749040f93232fee23f044d307fd69eb08fea77eb6c56b1d04593d7533dd7bf4" }
+  ]
+}

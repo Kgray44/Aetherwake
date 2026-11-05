@@ -1,0 +1,1836 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { fixture as checklistFixture } from '../../checklist-product/tests/fixture.mts';
+import { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
+import { WorkspaceEngine } from "../../workspace-engine/engine.mts";
+import { DesktopState } from "../../integrated-backend/src/desktop.mts";
+import { ConversationGraph } from "../../connected-conversations/src/graph.ts";
+import { mockOrdinaryAdapter } from "../../connected-conversations/src/adapters.ts";
+import {
+  createCanonicalTemplateHost,
+  type CanonicalTemplateHostOptions,
+  type TaskGroupMembershipCommand,
+} from "../canonical-host.mts";
+import { TemplateService } from "../service.mts";
+import { createWorkspaceArchitect } from "../workspace-architect.mts";
+import { WORKSPACE_ARCHITECT_PROVIDER } from "../contracts.ts";
+import { predefinedTemplates, captureWorkspaceTemplate } from "../model.ts";
+import { BUILTIN_BLOCKS } from "../registry.ts";
+import {
+  blockCapabilities,
+  resolveBlockType,
+  validateConfiguration,
+  REGISTERED_BLOCKS,
+  BLOCK_DEFAULT_SIZES,
+} from "../registry.ts";
+import { limits } from "../../workspace-engine/geometry.mts";
+import { footprint, intersects } from "../../workspace-engine/collisions.mts";
+import type {
+  BlockKind,
+  LibraryCapabilities,
+  TemplateApplyInput,
+} from "../contracts.ts";
+
+function fixture(t: any) {
+  const kernel = WorkspaceKernel.open(":memory:"),
+    db = kernel.withTransaction((db) => db),
+    desktop = new DesktopState(kernel, db, {
+      allowSubjectAttachment: () => true,
+    }),
+    engine = desktop.nativeBlockServices().engine;
+  t.after(() => kernel.close());
+  const checklist = checklistFixture(t, ':memory:', kernel);
+  const revoked = new Set<string>(),
+    groupCommands: TaskGroupMembershipCommand[] = [],
+    factoryCalls: { kind: BlockKind; projectId: string | null }[] = [];
+  // The graph and mapping here are the parent's test-owned canonical state, never adapter state. No provider turn is invoked.
+  let graph = new ConversationGraph([mockOrdinaryAdapter()]),
+    mappings: Record<string, string> = {},
+    failMembership = false;
+  const capabilities: LibraryCapabilities = {
+    revision: 1,
+    kinds: Object.fromEntries(
+      BUILTIN_BLOCKS.map((b) => [b.kind, { state: "available" }]),
+    ),
+    providers: {
+      local: { state: "available" },
+      codex: { state: "setup_required" },
+    },
+    velaPlanning: { state: "unsupported" },
+  };
+  const options: CanonicalTemplateHostOptions = {
+    db,
+    kernel,
+    engine,
+    capabilities: () => capabilities,
+    authorizeSubject(subject) {
+      return subject.kind === "project"
+        ? !revoked.has(subject.projectId)
+        : subject.kind === "collection"
+          ? !revoked.has(subject.collectionId)
+          : (!subject.projectId || !revoked.has(subject.projectId)) &&
+            (!subject.collectionId || !revoked.has(subject.collectionId));
+    },
+    atomic<T>(operation: () => T): T {
+      const before = graph.snapshot(),
+        previous = { ...mappings };
+      try {
+        return kernel.withTransaction(operation);
+      } catch (error) {
+        graph = new ConversationGraph([mockOrdinaryAdapter()], before);
+        mappings = previous;
+        throw error;
+      }
+    },
+    createResource(kind, title, _provider, projectId) {
+      factoryCalls.push({ kind, projectId });
+      if (kind === 'checklist') return checklist.service.create({ commandId: randomUUID(), title, projectId }).resourceId;
+      const resource =
+        kind === "conversation"
+          ? kernel.createConversationRef(title, projectId)
+          : kernel.createNote(title, "", projectId);
+      db.prepare(
+        "INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)",
+      ).run(resource.id, kind);
+      if (kind === "conversation")
+        mappings[resource.id] = graph.createChat(
+          "ordinary",
+          "mock-ordinary",
+          title,
+        ).id;
+      return resource.id;
+    },
+    resourceKind(id) {
+      const row = db
+        .prepare("SELECT kind FROM desktop_resources WHERE resource_id=?")
+        .get(id);
+      return (row?.kind ?? kernel.getResource(id).resource.kind) as BlockKind;
+    },
+    navigateWorkspace(workspaceId) {
+      desktop.apply(
+        { type: "navigate", target: { kind: "workspace", workspaceId } },
+        () => {
+          throw new Error("unexpected_conversation_creation");
+        },
+      );
+    },
+    setTaskGroupMembers(command) {
+      groupCommands.push(structuredClone(command));
+      desktop.apply(command, () => {
+        throw new Error("unexpected_conversation_creation");
+      });
+      if (failMembership)
+        throw new Error("synthetic_parent_membership_failure");
+    },
+    isAuthorized({ id }) {
+      return !revoked.has(id);
+    },
+  };
+  const host = createCanonicalTemplateHost(options),
+    service = new TemplateService(db, host);
+  return {
+    kernel,
+    db,
+    desktop,
+    engine,
+    host,
+    service,
+    options,
+    revoked,
+    groupCommands,
+    factoryCalls,
+    checklist,
+    get graph() {
+      return graph;
+    },
+    get mappings() {
+      return mappings;
+    },
+    failMembership() {
+      failMembership = true;
+    },
+    allowMembership() {
+      failMembership = false;
+    },
+  };
+}
+
+test('Checklist library creation uses its canonical service and multiple placements retain one resource without Note content', t => {
+  const f = fixture(t), first = f.engine.createWorkspace('Synthetic Checklist workspace A');
+  const created = f.service.createBlock({ commandId: 'checklist:block:create', workspaceId: first.workspaceId,
+    expectedLayoutVersion: first.revision, kind: 'checklist', title: 'Actual canonical Checklist' });
+  assert.equal(f.kernel.getResource(created.resourceId).resource.kind, 'generic');
+  assert.equal(f.checklist.count('notes'), 0);
+  f.checklist.mutate(created.resourceId, [{ type: 'addEntry', key: 'entry', entry: { text: 'Keep one canonical identity' } }]);
+  const document = f.checklist.service.read(created.resourceId), second = f.engine.createWorkspace('Synthetic Checklist workspace B');
+  const reused = f.service.attachBlock({ commandId: 'checklist:block:reuse', workspaceId: second.workspaceId,
+    expectedLayoutVersion: second.revision, kind: 'checklist', resourceId: created.resourceId, expectedResourceVersion: document.resource.version });
+  assert.equal(reused.resourceId, created.resourceId); assert.notEqual(reused.placementId, created.placementId);
+  assert.equal(count(f.db, 'resources'), 1); assert.equal(f.checklist.count('checklist_documents'), 1);
+  const before = structuredClone(document), projected = f.engine.project(first.workspaceId);
+  f.engine.execute({ type: 'detachBlock', commandId: 'checklist:block:detach', workspaceId: first.workspaceId,
+    expectedRevision: projected.revision, blockId: created.placementId });
+  assert.deepEqual(f.checklist.service.read(created.resourceId), before);
+  assert.equal(count(f.db, 'resources'), 1); assert.equal(f.checklist.count('notes'), 0); assert.equal(count(f.db, 'blocks'), 1);
+});
+
+test('Checklist template capture and apply require explicit canonical reuse, preserve entries and reject empty-copy bypasses', t => {
+  const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic Checklist template source');
+  const created = f.service.createBlock({ commandId: 'checklist:template:create', workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: workspace.revision, kind: 'checklist', title: 'Checklist with actual saved items' });
+  f.checklist.mutate(created.resourceId, [{ type: 'addEntry', key: 'entry', entry: { text: 'Preserve actual contents', description: 'Retained item description' } }]);
+  f.desktop.apply({ type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.workspaceId } }, () => { throw new Error('No provider call'); });
+  const snapshot = f.desktop.snapshot(() => ({ provider: 'local', messages: [] })), retained = structuredClone(snapshot);
+  assert.throws(() => captureWorkspaceTemplate(snapshot, { [created.resourceId]: 'new' }), /checklist_template_reference_required/);
+  assert.equal(JSON.stringify(snapshot), JSON.stringify(retained));
+  const body = captureWorkspaceTemplate(snapshot, { [created.resourceId]: 'reference' });
+  assert.equal(body.resources[0].source.mode, 'reference');
+  assert.doesNotMatch(JSON.stringify(body), /Preserve actual contents|Retained item description/);
+  const fakeCopy = structuredClone(body);
+  fakeCopy.resources[0].source = { mode: 'new', kind: 'checklist', title: 'Should not become an empty copy' };
+  const templateCount = count(f.db, 'workspace_templates');
+  assert.throws(() => f.service.saveTemplate({ name: 'Refused empty Checklist copy', description: '', tags: [], body: fakeCopy }), /checklist_template_reference_required/);
+  assert.equal(count(f.db, 'workspace_templates'), templateCount);
+  const template = f.service.saveTemplate({ name: 'Explicitly reused Checklist', description: '', tags: [], body });
+  const document = f.checklist.service.read(created.resourceId), applied = f.service.applyTemplate(request({ templateId: template.id, expectedVersion: template.version }));
+  assert.deepEqual(Object.values(applied.resourceIds), [created.resourceId]);
+  assert.deepEqual(f.checklist.service.read(created.resourceId), document);
+  assert.equal(f.checklist.count('checklist_documents'), 1); assert.equal(count(f.db, 'resources'), 1);
+  f.checklist.mutate(created.resourceId, [{ type: 'setChecked', entryId: document.entries[0].id, checked: true }]);
+  const counts = [count(f.db, 'workspaces'), count(f.db, 'blocks')];
+  assert.throws(() => f.service.applyTemplate(request({ templateId: template.id, expectedVersion: template.version })), /reference_version_conflict/);
+  assert.deepEqual([count(f.db, 'workspaces'), count(f.db, 'blocks')], counts);
+});
+
+test("vacant initial placement honors host bounds while keeping fixed overlapping Freeform cards and presence exact", t => {
+  const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic bounded placement', null, { mode: 'freeform' });
+  const bounds = { x: 20, y: 170, width: 1240, height: 750 };
+  f.options.bounds = () => bounds;
+  for (let index = 0; index < 2; index++) f.service.createBlock({
+    commandId: randomUUID(), workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+    kind: 'note', title: 'Synthetic fixed overlap',
+    presentation: { x: 90, y: 160, width: 300, height: 220, rotation: index * 27, locked: true },
+  });
+  const before = f.engine.project(workspace.workspaceId), created = f.service.createBlock({
+    commandId: randomUUID(), workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: before.revision, kind: 'conversation', title: 'Synthetic vacant Chat', provider: 'local',
+  }), after = f.engine.project(workspace.workspaceId), added = after.blocks.find(b => b.blockId === created.placementId)!;
+  assert.deepEqual(after.blocks.filter(b => b.blockId !== added.blockId), before.blocks);
+  assert.deepEqual(after.presence, before.presence);
+  const box = footprint({ ...added, id: added.blockId });
+  assert.ok(box.x >= bounds.x && box.y >= bounds.y && box.x + box.width <= bounds.x + bounds.width && box.y + box.height <= bounds.y + bounds.height);
+  for (const item of [...before.blocks.map(b => ({ ...b, id: b.blockId })), before.presence]) assert.equal(intersects(box, footprint(item)), false);
+});
+
+test("legacy hosts fail automatic placement before creating a resource; either explicit coordinate retains exact overlap", t => {
+  const f = fixture(t), createdWorkspace = f.engine.createWorkspace('Synthetic legacy placement', null, { mode: 'freeform' }),
+    legacy = new TemplateService(f.db, { ...f.host, initialPlacement: undefined });
+  const workspace = f.engine.execute({ type: 'setPresence', commandId: randomUUID(), workspaceId: createdWorkspace.workspaceId,
+    expectedRevision: createdWorkspace.revision, expectedVersion: createdWorkspace.presence.version, presentation: { x: 900, y: 64 } });
+  const input = { commandId: randomUUID(), workspaceId: workspace.workspaceId, expectedLayoutVersion: workspace.revision, kind: 'note' as const, title: 'Synthetic legacy note' };
+  assert.throws(() => legacy.createBlock(input), /initial_placement_unavailable/);
+  assert.equal(f.factoryCalls.length, 0);
+  for (const patch of [{ x: 32 }, { y: 32 }, { x: 32, y: 32 }]) {
+    const created = legacy.createBlock({ ...input, commandId: randomUUID(), expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision, presentation: patch });
+    const added = f.engine.project(workspace.workspaceId).blocks.find(b => b.blockId === created.placementId)!;
+    assert.deepEqual([added.x, added.y], [32, 32]);
+  }
+});
+
+test("failure after canonical vacant placement rolls back its resource, geometry, mapping, history and retry receipt", t => {
+  const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic atomic placement', null, { mode: 'freeform' }),
+    before = f.engine.project(workspace.workspaceId), graph = f.graph.snapshot(), mappings = { ...f.mappings },
+    place = f.host.placeResource;
+  const input = { commandId: randomUUID(), workspaceId: workspace.workspaceId, expectedLayoutVersion: before.revision, kind: 'conversation' as const, title: 'Synthetic atomic Chat', provider: 'local' as const };
+  f.host.placeResource = value => { place(value); throw new Error('synthetic_after_vacant_placement'); };
+  assert.throws(() => f.service.createBlock(input), /synthetic_after_vacant_placement/);
+  assert.deepEqual(f.engine.project(workspace.workspaceId), before);
+  assert.deepEqual(f.graph.snapshot(), graph);
+  assert.deepEqual(f.mappings, mappings);
+  assert.equal(count(f.db, 'resources'), 0);
+  assert.equal(count(f.db, 'block_library_receipts'), 0);
+  f.host.placeResource = place;
+  const created = f.service.createBlock(input);
+  assert.deepEqual(f.service.createBlock(input), created);
+  assert.equal(count(f.db, 'resources'), 1);
+  assert.equal(f.engine.project(workspace.workspaceId).blocks.length, 1);
+});
+const request = (
+  extra: Partial<TemplateApplyInput> = {},
+): TemplateApplyInput => ({
+  commandId: randomUUID(),
+  templateId: "builtin:development",
+  expectedVersion: 1,
+  title: "Synthetic adapter workspace",
+  projectId: null,
+  ...extra,
+});
+const count = (db: CanonicalTemplateHostOptions["db"], table: string) => {
+  assert.ok(
+    [
+      "workspaces",
+      "resources",
+      "blocks",
+      "relationships",
+      "block_library_receipts",
+      'workspace_templates',
+    ].includes(table),
+  );
+  return Number(db.prepare("SELECT count(*) AS n FROM " + table).get()!.n);
+};
+
+test("Workspace Architect proposes and applies an ESP32 audio workspace with canonical reuse and editable geometry", async t => {
+  const f = fixture(t);
+  const capabilities = f.options.capabilities();
+  capabilities.velaPlanning = { state: "available" };
+  const architect = new TemplateService(f.db, f.host, createWorkspaceArchitect(f.host));
+  const project = f.kernel.createProject("Synthetic embedded audio");
+  const other = f.kernel.createProject("Synthetic unrelated audio project");
+  const bench = f.kernel.createNote("ESP32 audio bench notes", "private synthetic note body", project.id);
+  const measurement = f.host.createResource({ kind: "reference", title: "I2S measurement captures", projectId: project.id });
+  const denied = f.kernel.createNote("ESP32 audio processing denied note", "denied synthetic body", project.id);
+  const crossScope = f.kernel.createNote("ESP32 audio processing outside scope", "", other.id);
+  const unrelated = f.kernel.createNote("Grocery list", "", project.id);
+  f.revoked.add(denied.id);
+  const input = {
+    requestId: "architect-audio",
+    projectId: project.id,
+    prompt: 'Build a workspace for ESP32 audio processing with notes, checklist and developer chat. Use "I2S measurement captures".',
+  };
+  const inventory = () => ["workspaces", "resources", "blocks", "workspace_templates"].map(table => count(f.db, table));
+  const before = inventory();
+  const plan = await architect.requestVelaTemplate(input);
+  assert.deepEqual(plan, await architect.requestVelaTemplate(input));
+  assert.deepEqual(inventory(), before);
+  assert.deepEqual(plan.provenance, { requestId: input.requestId, providerId: WORKSPACE_ARCHITECT_PROVIDER });
+  assert.deepEqual(plan.body.resources.map(role => role.source.kind), ["note", "checklist", "conversation", "reference"]);
+  assert.deepEqual(plan.body.resources.filter(role => role.source.mode === "reference").map(role => role.source.resourceId),
+    [bench.id, measurement.id]);
+  for (const value of [denied.id, crossScope.id, unrelated.id, "private synthetic note body", "denied synthetic body"])
+    assert.ok(!JSON.stringify(plan).includes(value));
+  for (const [i, block] of plan.body.placements.entries()) {
+    assert.equal(block.presentation.locked, false);
+    for (const otherBlock of plan.body.placements.slice(i + 1))
+      assert.equal(intersects(footprint(block.presentation), footprint(otherBlock.presentation), 23), false);
+  }
+  const template = architect.saveTemplate({ ...plan, source: "vela" });
+  const apply = request({ templateId: template.id, projectId: project.id, expectedProjectVersion: project.version });
+  const saved = inventory();
+  const preview = architect.previewTemplate(apply);
+  assert.deepEqual([preview.newResourceCount, preview.referenceCount], [2, 2]);
+  assert.deepEqual(inventory(), saved);
+  f.revoked.add(bench.id);
+  assert.throws(() => architect.applyTemplate(apply), /reference_unavailable/);
+  assert.deepEqual(inventory(), saved);
+  f.revoked.delete(bench.id);
+  const canonicalFactory = f.options.createResource;
+  f.options.createResource = (...args) => {
+    if (args[0] === "conversation") throw new Error("synthetic_failed_factory");
+    return canonicalFactory(...args);
+  };
+  assert.throws(() => architect.applyTemplate(apply), /synthetic_failed_factory/);
+  assert.deepEqual(inventory(), saved);
+  assert.equal(f.checklist.count("checklist_documents"), 0);
+  f.options.createResource = canonicalFactory;
+  const result = architect.applyTemplate(apply);
+  assert.deepEqual(architect.applyTemplate(apply), result);
+  assert.equal(result.resourceIds.bench, bench.id);
+  assert.equal(result.resourceIds.measurements, measurement.id);
+  assert.equal(f.checklist.count("checklist_documents"), 1);
+  assert.equal(f.checklist.service.read(result.resourceIds.validation).entries.length, 0);
+  f.checklist.mutate(result.resourceIds.validation, [{ type: "addEntry", key: "sample", entry: { text: "Check actual I2S output" } }]);
+  assert.equal(f.checklist.service.read(result.resourceIds.validation).entries[0].checked, false);
+  const initial = f.engine.project(result.workspaceId);
+  const coordinates = ({ x, y, width, height }: { x: number; y: number; width: number; height: number }) => [x, y, width, height];
+  for (const placement of preview.body.placements)
+    assert.deepEqual(coordinates(initial.blocks.find(block => block.blockId === result.placementIds[placement.key])!), coordinates(placement.presentation));
+  assert.deepEqual(initial.viewport, preview.body.viewport);
+  const blockId = result.placementIds["placement-bench"];
+  const moved = f.engine.execute({
+    type: "moveBlock", commandId: randomUUID(), workspaceId: result.workspaceId,
+    expectedRevision: initial.revision, blockId, x: 16, y: 30,
+  });
+  assert.equal(moved.blocks.find(block => block.blockId === blockId)?.x, 16);
+  const restored = f.engine.execute({
+    type: "undoLayout", commandId: randomUUID(), workspaceId: result.workspaceId, expectedRevision: moved.revision,
+  });
+  assert.deepEqual(coordinates(restored.blocks.find(block => block.blockId === blockId)!),
+    coordinates(initial.blocks.find(block => block.blockId === blockId)!));
+  const redone = f.engine.execute({
+    type: "redoLayout", commandId: randomUUID(), workspaceId: result.workspaceId, expectedRevision: restored.revision,
+  });
+  assert.equal(redone.blocks.find(block => block.blockId === blockId)?.x, 16);
+  assert.equal(redone.blocks.find(block => block.blockId === blockId)?.resourceId, bench.id);
+});
+
+test("Workspace Architect distinguishes purposes, honors new-only and exclusions, and reports unavailable blocks", async t => {
+  const f = fixture(t);
+  const capabilities = f.options.capabilities();
+  capabilities.velaPlanning = { state: "available" };
+  capabilities.kinds.timeline = { state: "unsupported" };
+  const architect = new TemplateService(f.db, f.host, createWorkspaceArchitect(f.host));
+  f.kernel.createNote("Research findings on thermal behavior", "", null);
+  const plan = (prompt: string) => architect.requestVelaTemplate({ requestId: "architect-scenarios", prompt, projectId: null });
+  const research = await plan("Make a research workspace for thermal behavior from scratch, without notes.");
+  const review = await plan('Create a review workspace named "Thermal Review". Include a timeline.');
+  const operations = await plan("Make a server operations workspace");
+  assert.deepEqual(research.tags, ["workspace-architect", "research"]);
+  assert.ok(research.body.resources.every(role => role.source.mode === "new" && role.source.kind !== "note"));
+  assert.equal(review.name, "Thermal Review");
+  assert.match(review.description, /Unavailable requested blocks: Timeline/);
+  assert.ok(review.body.resources.some(role => role.key === "criteria"));
+  assert.ok(operations.body.resources.some(role => role.source.kind === "stream"));
+  assert.notDeepEqual(operations.body.resources, review.body.resources);
+  assert.equal(count(f.db, "workspaces"), 0);
+});
+
+test('direct ordinary Add forwards no provider while historical templates retain explicit manual-local semantics', t => {
+  const f = fixture(t), calls: unknown[] = [], factory = f.options.createResource;
+  f.options.createResource = (kind, title, provider, projectId) => { calls.push(provider); return factory(kind, title, provider, projectId); };
+  const workspace = f.engine.createWorkspace('Synthetic ordinary routing', null, { mode: 'freeform' });
+  f.service.createBlock({ commandId: randomUUID(), workspaceId: workspace.workspaceId, expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+    kind: 'conversation', title: 'Automatic ordinary' });
+  assert.deepEqual(calls, [undefined]);
+  const body = structuredClone(predefinedTemplates().find(item => item.id === 'builtin:development')!.body);
+  for (const role of body.resources) if (role.source.mode === 'new' && role.source.kind === 'conversation') delete role.source.provider;
+  const template = f.service.saveTemplate({ name: 'Synthetic historical template', description: '', tags: [], body });
+  f.service.applyTemplate(request({ templateId: template.id }));
+  assert.equal(calls.filter(value => value === 'local').length, 1);
+  assert.equal(calls.filter(value => value === undefined).length, body.resources.length);
+});
+
+test('registered file/link kinds cannot create empty canonical shells through generic Add, host factories or new-resource templates', t => {
+  const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic explicit import boundary', null, { mode: 'freeform' });
+  for (const kind of ['file', 'link'] as const) {
+    assert.throws(() => f.service.createBlock({ commandId: randomUUID(), workspaceId: workspace.workspaceId,
+      expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision, kind, title: 'No source' }), /media_import_required/);
+    assert.throws(() => f.host.createResource({ kind, title: 'No source', projectId: null }), /media_import_required/);
+    const body = structuredClone(predefinedTemplates().find(item => item.id === 'builtin:development')!.body);
+    body.resources[0].source = { mode: 'new', kind, title: 'No source' };
+    assert.throws(() => f.service.saveTemplate({ name: 'Refused empty media', description: '', tags: [], body }), /media_import_required/);
+  }
+  assert.equal(f.factoryCalls.length, 0); assert.equal(count(f.db, 'resources'), 0); assert.equal(count(f.db, 'blocks'), 0);
+});
+
+test("every non-media new block uses its distinct preferred geometry without rewriting resized placements or explicit templates", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic size project"),
+    collection = f.kernel.createCollection(
+      "Synthetic size collection",
+      project.id,
+    ),
+    workspace = f.engine.createWorkspace(
+      "Synthetic preferred sizes",
+      project.id,
+      { mode: "freeform" },
+    );
+  f.options.capabilities().subjects = {
+    project_overview: { state: "available" },
+    resource_browser: { state: "available" },
+    collection_browser: { state: "available" },
+  };
+  const sizes = new Set<string>();
+  const creatable = REGISTERED_BLOCKS.filter(definition => definition.creation !== 'reference-only' && definition.kind !== 'file' && definition.kind !== 'link');
+  for (const manifest of creatable) {
+    const base = {
+      commandId: "default-size:" + manifest.kind,
+      workspaceId: workspace.workspaceId,
+      expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+    };
+    const created =
+      manifest.kind === "project_overview"
+        ? f.service.createSubjectBlock({
+            ...base,
+            kind: manifest.kind,
+            subject: { kind: "project", projectId: project.id },
+          })
+        : manifest.kind === "resource_browser"
+          ? f.service.createSubjectBlock({
+              ...base,
+              kind: manifest.kind,
+              subject: {
+                kind: "resource-query",
+                projectId: project.id,
+                query: "",
+              },
+            })
+          : manifest.kind === "collection_browser"
+            ? f.service.createSubjectBlock({
+                ...base,
+                kind: manifest.kind,
+                subject: { kind: "collection", collectionId: collection.id },
+              })
+            : f.service.createBlock({
+                ...base,
+                kind: manifest.kind,
+                title: "Synthetic " + manifest.kind,
+              });
+    const placed = f.engine
+      .project(workspace.workspaceId)
+      .blocks.find((b) => b.blockId === created.placementId)!;
+    const preferred = BLOCK_DEFAULT_SIZES[manifest.kind];
+    assert.deepEqual({ width: placed.width, height: placed.height }, preferred);
+    assert.ok(
+      placed.width >= limits.minWidth && placed.height >= limits.minHeight,
+    );
+    assert.ok(
+      placed.width <= limits.maxSize && placed.height <= limits.maxSize,
+    );
+    sizes.add(placed.width + "x" + placed.height);
+  }
+  assert.equal(sizes.size, creatable.length);
+  assert.ok(
+    BLOCK_DEFAULT_SIZES.conversation.height >
+      BLOCK_DEFAULT_SIZES.conversation.width * 1.5,
+  );
+  const before = f.engine.project(workspace.workspaceId),
+    first = before.blocks[0];
+  f.engine.execute({
+    type: "resizeBlock",
+    commandId: randomUUID(),
+    workspaceId: workspace.workspaceId,
+    expectedRevision: before.revision,
+    blockId: first.blockId,
+    width: 635,
+    height: 415,
+  });
+  const resized = f.engine.project(workspace.workspaceId);
+  const explicit = f.service.createBlock({
+    commandId: "explicit-size",
+    workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: resized.revision,
+    kind: "note",
+    title: "Synthetic explicit geometry",
+    presentation: { width: 708, height: 352 },
+  });
+  // A fresh service/catalog read and template preview must not migrate stored geometry.
+  const reopened = new TemplateService(f.db, f.host);
+  reopened.discoverBlocks();
+  reopened.previewTemplate(request());
+  const after = f.engine.project(workspace.workspaceId);
+  assert.deepEqual(
+    after.blocks.find((b) => b.blockId === first.blockId),
+    resized.blocks[0],
+  );
+  const custom = after.blocks.find((b) => b.blockId === explicit.placementId)!;
+  assert.deepEqual(
+    { width: custom.width, height: custom.height },
+    { width: 708, height: 352 },
+  );
+});
+
+test("factory requires the identical kernel, engine and SQLite connection and delegates parent atomic", (t) => {
+  const fixtureA = fixture(t),
+    fixtureB = fixture(t);
+  assert.throws(
+    () => createCanonicalTemplateHost({ ...fixtureA.options, db: fixtureB.db }),
+    /canonical_connection_required/,
+  );
+  assert.throws(
+    () =>
+      createCanonicalTemplateHost({
+        ...fixtureA.options,
+        engine: fixtureB.engine,
+      }),
+    /canonical_engine_required/,
+  );
+  assert.equal(fixtureA.host.db, fixtureA.db);
+  let atomicCalls = 0;
+  const host = createCanonicalTemplateHost({
+    ...fixtureA.options,
+    atomic<T>(operation: () => T): T {
+      atomicCalls++;
+      return fixtureA.options.atomic(operation);
+    },
+  });
+  assert.equal(
+    host.atomic(() => 42),
+    42,
+  );
+  assert.equal(atomicCalls, 1);
+});
+
+test("adapter applies actual engine commands, canonical parent conversation mapping and actual DesktopState membership", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic adapter project"),
+    applied = f.service.applyTemplate(
+      request({ projectId: project.id, expectedProjectVersion: 1 }),
+    );
+  const template = f.service.getTemplate("builtin:development"),
+    state = f.engine.project(applied.workspaceId);
+  assert.equal(state.organization.mode, "structured");
+  assert.equal(state.presence.width, 208);
+  assert.equal(state.presence.height, 260);
+  assert.equal(state.presence.scale, 0.65);
+  assert.equal(f.factoryCalls.length, 4);
+  assert.equal(
+    f.factoryCalls.every((call) => call.projectId === project.id),
+    true,
+  );
+  const conversationRole = template.body.resources.find(
+    (role) => role.source.kind === "conversation",
+  )!;
+  assert.equal(f.graph.snapshot().conversations.length, 1);
+  assert.ok(f.mappings[applied.resourceIds[conversationRole.key]]);
+  assert.equal(f.graph.snapshot().messages.length, 0);
+  assert.equal(f.groupCommands.length, 1);
+  assert.equal(f.groupCommands[0].type, "setTaskGroupMembers");
+  assert.equal(f.groupCommands[0].expectedVersion, 1);
+  const groupId = applied.resourceIds[template.body.groups[0].groupKey];
+  assert.equal(f.kernel.getResource(groupId).resource.version, 2);
+  const snapshot = f.desktop.snapshot(() => ({
+    provider: "local",
+    messages: [],
+  }));
+  assert.equal(snapshot.activeWorkspaceId, applied.workspaceId);
+  assert.equal(snapshot.navigation.kind, "workspace");
+  assert.equal(
+    snapshot.resources.find((resource) => resource.id === groupId)?.taskMembers
+      ?.length,
+    1,
+  );
+  assert.deepEqual(
+    new Set(
+      state.organization.structured.order.filter((id) => id !== "system:vela"),
+    ),
+    new Set(Object.values(applied.placementIds)),
+  );
+  f.kernel.assertIntegrity();
+});
+
+test("Freeform overlap, presentation, viewport and same-ID shared placements survive adapter application", (t) => {
+  const f = fixture(t),
+    resource = f.kernel.createNote(
+      "Synthetic reusable source",
+      "Synthetic retained content",
+    );
+  f.db
+    .prepare("INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)")
+    .run(resource.id, "note");
+  const body = predefinedTemplates()[1].body;
+  body.organization.mode = "freeform";
+  body.viewport = { x: 25, y: 45, zoom: 0.75 };
+  body.resources = [
+    {
+      key: "shared",
+      label: "Synthetic reused note",
+      source: {
+        mode: "reference",
+        kind: "note",
+        resourceId: resource.id,
+        expectedVersion: 1,
+      },
+    },
+  ];
+  body.groups = [];
+  body.placements = body.placements.slice(0, 2).map((p, i) => ({
+    ...p,
+    key: "placement" + i,
+    resourceKey: "shared",
+    subjectBinding: undefined,
+    presentation: {
+      ...p.presentation,
+      x: 120,
+      y: 400,
+      shape: i ? "lens" : "folio",
+      rotation: i ? 15 : 0,
+      minimized: i === 1,
+      materialVariant: "default",
+    },
+    span: { columns: 2, rows: 3 },
+  }));
+  const template = f.service.saveTemplate({
+    name: "Synthetic intentional overlap",
+    description: "Synthetic adapter test",
+    tags: [],
+    body,
+  });
+  const applied = f.service.applyTemplate(request({ templateId: template.id })),
+    state = f.engine.project(applied.workspaceId);
+  assert.equal(state.organization.mode, "freeform");
+  assert.deepEqual(state.viewport, body.viewport);
+  assert.equal(state.blocks.length, 2);
+  assert.equal(new Set(state.blocks.map((b) => b.blockId)).size, 2);
+  assert.equal(
+    state.blocks.every(
+      (b) => b.resourceId === resource.id && b.x === 120 && b.y === 400,
+    ),
+    true,
+  );
+  assert.deepEqual(
+    new Set(state.blocks.map((b) => b.shape)),
+    new Set(["folio", "lens"]),
+  );
+  assert.equal(state.blocks.find((b) => b.shape === "lens")?.rotation, 15);
+  assert.equal(state.blocks.find((b) => b.shape === "lens")?.minimized, true);
+  assert.equal(
+    f.kernel.getResource(resource.id).note.content,
+    "Synthetic retained content",
+  );
+  assert.equal(f.kernel.getResource(resource.id).resource.project_id, null);
+  assert.equal(f.factoryCalls.length, 0);
+});
+
+test("archived owner projects and effective revoked grants hide active resources/workspaces and refuse creation", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic visibility project"),
+    workspace = f.engine.createWorkspace(
+      "Synthetic active workspace",
+      project.id,
+    ),
+    resource = f.kernel.createNote("Synthetic active source", "", project.id);
+  f.db
+    .prepare("INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)")
+    .run(resource.id, "note");
+  assert.equal(f.host.readProject(project.id)?.authorized, true);
+  assert.equal(f.host.readResource(resource.id)?.authorized, true);
+  assert.equal(f.host.readWorkspace(workspace.workspaceId)?.authorized, true);
+  f.kernel.setProjectArchived(project.id, true, 1);
+  assert.equal(f.host.readProject(project.id)?.authorized, false);
+  assert.equal(f.host.readResource(resource.id)?.authorized, false);
+  assert.equal(f.host.readWorkspace(workspace.workspaceId)?.authorized, false);
+  assert.throws(
+    () =>
+      f.host.atomic(() =>
+        f.host.createResource({
+          kind: "note",
+          title: "Synthetic denied",
+          projectId: project.id,
+        }),
+      ),
+    /project_unavailable/,
+  );
+  f.kernel.setProjectArchived(project.id, false, 2);
+  f.revoked.add(resource.id);
+  f.revoked.add(workspace.workspaceId);
+  assert.equal(f.host.readResource(resource.id)?.authorized, false);
+  assert.equal(f.host.readWorkspace(workspace.workspaceId)?.authorized, false);
+  assert.throws(
+    () =>
+      f.service.createBlock({
+        commandId: "denied-workspace",
+        kind: "note",
+        title: "Synthetic denied",
+        workspaceId: workspace.workspaceId,
+        expectedLayoutVersion: workspace.revision,
+      }),
+    /workspace_unavailable/,
+  );
+  f.revoked.clear();
+  f.revoked.add(project.id);
+  assert.equal(f.host.readResource(resource.id)?.authorized, false);
+  assert.equal(f.host.readWorkspace(workspace.workspaceId)?.authorized, false);
+});
+
+test("adapter uses current real engine revision fences and refuses role order/spans targeting system presence", (t) => {
+  const f = fixture(t),
+    workspace = f.engine.createWorkspace("Synthetic fence workspace"),
+    before = workspace.revision;
+  const created = f.service.createBlock({
+    commandId: "adapter-create-one",
+    kind: "note",
+    title: "Synthetic versioned note",
+    workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: before,
+  });
+  assert.ok(
+    f.host.readWorkspace(workspace.workspaceId)!.layoutVersion > before,
+  );
+  assert.throws(
+    () =>
+      f.service.createBlock({
+        commandId: "adapter-stale",
+        kind: "note",
+        title: "Synthetic stale note",
+        workspaceId: workspace.workspaceId,
+        expectedLayoutVersion: before,
+      }),
+    /layout_version_conflict/,
+  );
+  const state = f.engine.project(workspace.workspaceId);
+  assert.throws(
+    () =>
+      f.host.atomic(() =>
+        f.host.setOrganization({
+          workspaceId: workspace.workspaceId,
+          organization: {
+            mode: "structured",
+            structured: { order: ["system:vela"] },
+          },
+          viewport: state.viewport,
+        }),
+      ),
+    /invalid_template_placement_order/,
+  );
+  assert.throws(
+    () =>
+      f.host.atomic(() =>
+        f.host.setOrganization({
+          workspaceId: workspace.workspaceId,
+          organization: {
+            mode: "structured",
+            structured: {
+              order: [created.placementId],
+              spans: { "system:vela": { columns: 2, rows: 2 } },
+            },
+          },
+          viewport: state.viewport,
+        }),
+      ),
+    /invalid_template_span_target/,
+  );
+  assert.deepEqual(f.engine.project(workspace.workspaceId), state);
+  f.host.atomic(() =>
+    f.host.setOrganization({
+      workspaceId: workspace.workspaceId,
+      organization: {
+        mode: "structured",
+        structured: {
+          order: [created.placementId],
+          spans: { [created.placementId]: { columns: 2, rows: 3 } },
+        },
+      },
+      viewport: { x: 20, y: 30, zoom: 0.8 },
+    }),
+  );
+  assert.equal(
+    f.engine.project(workspace.workspaceId).organization.mode,
+    "structured",
+  );
+  assert.deepEqual(f.engine.project(workspace.workspaceId).viewport, {
+    x: 20,
+    y: 30,
+    zoom: 0.8,
+  });
+});
+
+test("actual parent membership failure rolls back canonical graph, session, workspace, subjects and placements", (t) => {
+  const f = fixture(t),
+    prior = f.engine.createWorkspace("Synthetic retained workspace");
+  f.desktop.apply(
+    {
+      type: "navigate",
+      target: { kind: "workspace", workspaceId: prior.workspaceId },
+    },
+    () => {
+      throw new Error("unexpected");
+    },
+  );
+  const before = [
+      "workspaces",
+      "resources",
+      "blocks",
+      "relationships",
+      "block_library_receipts",
+    ].map((table) => count(f.db, table)),
+    graphBefore = f.graph.snapshot(),
+    sessionBefore = f.desktop.snapshot(() => ({
+      provider: "local",
+      messages: [],
+    }));
+  f.failMembership();
+  const input = request();
+  assert.throws(
+    () => f.service.applyTemplate(input),
+    /synthetic_parent_membership_failure/,
+  );
+  assert.deepEqual(
+    [
+      "workspaces",
+      "resources",
+      "blocks",
+      "relationships",
+      "block_library_receipts",
+    ].map((table) => count(f.db, table)),
+    before,
+  );
+  assert.deepEqual(f.graph.snapshot(), graphBefore);
+  assert.deepEqual(f.mappings, {});
+  assert.equal(
+    f.desktop.snapshot(() => ({ provider: "local", messages: [] }))
+      .activeWorkspaceId,
+    sessionBefore.activeWorkspaceId,
+  );
+  assert.equal(f.engine.activeWorkspaceId(), prior.workspaceId);
+  f.allowMembership();
+  assert.ok(f.service.applyTemplate(input).workspaceId);
+  assert.equal(f.graph.snapshot().conversations.length, 1);
+  f.kernel.assertIntegrity();
+});
+
+test("parent resource factory may not return an existing identity or create with a wrong owner", (t) => {
+  const f = fixture(t),
+    resource = f.kernel.createNote("Synthetic existing identity", "");
+  f.db
+    .prepare("INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)")
+    .run(resource.id, "note");
+  const existing = createCanonicalTemplateHost({
+    ...f.options,
+    createResource: () => resource.id,
+  });
+  assert.throws(
+    () =>
+      existing.atomic(() =>
+        existing.createResource({
+          kind: "note",
+          title: "Synthetic new requested",
+          projectId: null,
+        }),
+      ),
+    /resource_factory_must_create_new/,
+  );
+  const project = f.kernel.createProject("Synthetic target owner"),
+    before = count(f.db, "resources");
+  const wrong = createCanonicalTemplateHost({
+    ...f.options,
+    createResource(kind, title) {
+      return f.options.createResource(kind, title, undefined, null);
+    },
+  });
+  assert.throws(
+    () =>
+      wrong.atomic(() =>
+        wrong.createResource({
+          kind: "note",
+          title: "Synthetic wrong owner",
+          projectId: project.id,
+        }),
+      ),
+    /created_resource_scope_mismatch/,
+  );
+  assert.equal(count(f.db, "resources"), before);
+});
+
+test("attachment discovers only authorized compatible resources and preserves one edited subject across placements", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic library target"),
+    other = f.kernel.createProject("Synthetic other project"),
+    workspace = f.engine.createWorkspace(
+      "Synthetic attach workspace",
+      project.id,
+      { mode: "freeform" },
+    );
+  const note = f.options.createResource(
+      "note",
+      "Synthetic reusable note",
+      undefined,
+      project.id,
+    ),
+    global = f.options.createResource(
+      "note",
+      "Synthetic global note",
+      undefined,
+      null,
+    ),
+    foreign = f.options.createResource(
+      "note",
+      "Synthetic foreign note",
+      undefined,
+      other.id,
+    ),
+    hidden = f.options.createResource(
+      "note",
+      "Synthetic hidden note",
+      undefined,
+      project.id,
+    );
+  f.revoked.add(hidden);
+  const page = f.service.findResources({
+    workspaceId: workspace.workspaceId,
+    kind: "note",
+    query: "synthetic",
+  });
+  assert.deepEqual(
+    new Set(page.resources.map((r) => r.id)),
+    new Set([note, global]),
+  );
+  assert.equal(
+    page.resources.some((r) => r.id === foreign || r.id === hidden),
+    false,
+  );
+  const input = {
+    commandId: "attach-canonical",
+    workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: workspace.revision,
+    kind: "note" as const,
+    resourceId: note,
+    expectedResourceVersion: 1,
+  };
+  const a = f.service.attachBlock(input);
+  assert.deepEqual(f.service.attachBlock(input), a);
+  assert.equal(f.factoryCalls.length, 4);
+  f.desktop.apply(
+    {
+      type: "content",
+      resourceId: note,
+      expectedVersion: 1,
+      content: "Synthetic retained text",
+    },
+    () => {
+      throw new Error("unexpected");
+    },
+  );
+  const before = f.engine.project(workspace.workspaceId),
+    b = f.service.attachBlock({
+      ...input,
+      commandId: "attach-second",
+      expectedLayoutVersion: before.revision,
+      expectedResourceVersion: 2,
+    });
+  assert.notEqual(a.placementId, b.placementId);
+  assert.equal(a.resourceId, b.resourceId);
+  assert.equal(
+    f.kernel.getResource(note).note.content,
+    "Synthetic retained text",
+  );
+  assert.throws(
+    () =>
+      f.service.attachBlock({
+        ...input,
+        commandId: "attach-stale",
+        expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+      }),
+    /reference_version_conflict/,
+  );
+  assert.throws(
+    () =>
+      f.service.attachBlock({
+        ...input,
+        commandId: "attach-foreign",
+        resourceId: foreign,
+        expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+      }),
+    /cross_project_reference/,
+  );
+  f.revoked.add(note);
+  assert.throws(
+    () =>
+      f.service.attachBlock({
+        ...input,
+        commandId: "attach-revoked",
+        expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+        expectedResourceVersion: 2,
+      }),
+    /reference_unavailable/,
+  );
+  assert.equal(f.engine.project(workspace.workspaceId).blocks.length, 2);
+  f.kernel.assertIntegrity();
+});
+
+test("attachment filters narrow the current workspace fence by project and authorized collection without writes", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic filter target"),
+    other = f.kernel.createProject("Synthetic other scope"),
+    workspace = f.engine.createWorkspace(
+      "Synthetic filtered workspace",
+      project.id,
+    ),
+    standalone = f.engine.createWorkspace("Synthetic independent workspace"),
+    note = f.options.createResource(
+      "note",
+      "Synthetic target note",
+      undefined,
+      project.id,
+    ),
+    global = f.options.createResource(
+      "note",
+      "Synthetic unassigned note",
+      undefined,
+      null,
+    ),
+    foreign = f.options.createResource(
+      "note",
+      "Synthetic foreign note",
+      undefined,
+      other.id,
+    ),
+    collection = f.kernel.createCollection(
+      "Synthetic authorized collection",
+      other.id,
+    );
+  f.kernel.addToCollection(collection.id, note);
+  f.kernel.addToCollection(collection.id, global);
+  f.kernel.addToCollection(collection.id, foreign);
+  const before = ["resources", "blocks", "relationships", "workspaces"].map(
+    (table) => count(f.db, table),
+  );
+  const query = { workspaceId: workspace.workspaceId, kind: "note" as const };
+  assert.deepEqual(
+    new Set(
+      f.service.findResources(query).resources.map((resource) => resource.id),
+    ),
+    new Set([note, global]),
+  );
+  assert.deepEqual(
+    f.service
+      .findResources({ ...query, projectScope: "workspace-project" })
+      .resources.map((resource) => resource.id),
+    [note],
+  );
+  assert.deepEqual(
+    f.service
+      .findResources({ ...query, projectScope: "unassigned" })
+      .resources.map((resource) => resource.id),
+    [global],
+  );
+  assert.deepEqual(
+    new Set(
+      f.service
+        .findResources({ ...query, collectionId: collection.id })
+        .resources.map((resource) => resource.id),
+    ),
+    new Set([note, global]),
+    "An accessible foreign collection does not grant attachment of its foreign-owned member",
+  );
+  assert.deepEqual(
+    f.service
+      .findResources({
+        ...query,
+        projectScope: "unassigned",
+        collectionId: collection.id,
+      })
+      .resources.map((resource) => resource.id),
+    [global],
+  );
+  assert.deepEqual(
+    f.service.findResources({
+      ...query,
+      workspaceId: standalone.workspaceId,
+      projectScope: "workspace-project",
+    }).resources,
+    [],
+  );
+  assert.throws(
+    () =>
+      f.service.findResources({
+        ...query,
+        projectScope: "all-projects" as never,
+      }),
+    /invalid_resource_query/,
+  );
+  f.options.capabilities().discoveryFilters = {
+    project: { state: "disabled" },
+    collection: { state: "unsupported" },
+  };
+  assert.throws(
+    () => f.service.findResources({ ...query, projectScope: "unassigned" }),
+    /project_filter_unavailable/,
+  );
+  assert.throws(
+    () => f.host.findResources!({ ...query, projectScope: "unassigned" }),
+    /project_filter_unavailable/,
+  );
+  assert.throws(
+    () => f.service.findResources({ ...query, collectionId: collection.id }),
+    /collection_filter_unavailable/,
+  );
+  assert.equal(
+    f.service.findResources(query).resources.length,
+    2,
+    "Ordinary compatible search still works when filters are disabled",
+  );
+  assert.deepEqual(
+    ["resources", "blocks", "relationships", "workspaces"].map((table) =>
+      count(f.db, table),
+    ),
+    before,
+  );
+});
+
+test("collection discovery rechecks actual grants and archive state on every page without exposing retained members", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic restricted collection project"),
+    workspace = f.engine.createWorkspace("Synthetic restricted picker"),
+    collection = f.kernel.createCollection(
+      "Synthetic private collection",
+      project.id,
+    ),
+    note = f.options.createResource(
+      "note",
+      "Synthetic retained member",
+      undefined,
+      null,
+    );
+  f.kernel.addToCollection(collection.id, note);
+  const query = {
+    workspaceId: workspace.workspaceId,
+    kind: "note" as const,
+    collectionId: collection.id,
+  };
+  assert.equal(f.service.findResources(query).resources[0].id, note);
+  f.revoked.add(collection.id);
+  assert.throws(() => f.service.findResources(query), /subject_unavailable/);
+  assert.throws(
+    () => f.host.findResources!(query),
+    /subject_unavailable/,
+    "Direct adapter calls also retain the subject grant boundary",
+  );
+  f.revoked.delete(collection.id);
+  f.revoked.add(project.id);
+  assert.throws(() => f.service.findResources(query), /subject_unavailable/);
+  f.revoked.delete(project.id);
+  f.kernel.setCollectionArchived(collection.id, true, 1);
+  assert.throws(() => f.service.findResources(query), /subject_unavailable/);
+  assert.throws(
+    () =>
+      f.service.findResources({ ...query, collectionId: "missing:collection" }),
+    /subject_unavailable/,
+  );
+  assert.equal(f.kernel.getResource(note).note.content, "");
+  assert.equal(f.kernel.listCollection(collection.id)[0].id, note);
+});
+
+test("placement settings have independent revisions and never mutate canonical content or geometry", (t) => {
+  const f = fixture(t),
+    workspace = f.engine.createWorkspace("Synthetic settings workspace", null, {
+      mode: "freeform",
+    });
+  // A standalone workspace is required; no inferred project or provider permission is involved.
+  const first = f.service.createBlock({
+    commandId: "settings-note",
+    workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: workspace.revision,
+    kind: "note",
+    title: "Synthetic settings note",
+  });
+  const second = f.service.attachBlock({
+    commandId: "settings-second",
+    workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+    kind: "note",
+    resourceId: first.resourceId,
+    expectedResourceVersion: 1,
+  });
+  const before = f.engine.project(workspace.workspaceId),
+    settings = f.service.getBlockSettings(first.placementId);
+  const changed = f.service.configureBlock({
+    placementId: first.placementId,
+    expectedVersion: settings.version,
+    configuration: { schemaVersion: 1, textScale: 1.5, contentMode: "reading" },
+  });
+  assert.equal(changed.version, 2);
+  assert.equal(
+    f.service.getBlockSettings(second.placementId).configuration.textScale,
+    1,
+  );
+  assert.equal(f.kernel.getResource(first.resourceId).resource.version, 1);
+  assert.deepEqual(f.engine.project(workspace.workspaceId), before);
+  f.engine.execute({
+    type: "undoLayout",
+    commandId: randomUUID(),
+    workspaceId: workspace.workspaceId,
+    expectedRevision: before.revision,
+  });
+  assert.equal(
+    f.service.getBlockSettings(first.placementId).configuration.textScale,
+    1.5,
+  );
+  const undone = f.engine.project(workspace.workspaceId);
+  f.engine.execute({
+    type: "redoLayout",
+    commandId: randomUUID(),
+    workspaceId: workspace.workspaceId,
+    expectedRevision: undone.revision,
+  });
+  assert.equal(
+    f.service.getBlockSettings(second.placementId).configuration.textScale,
+    1,
+  );
+  assert.throws(
+    () =>
+      f.service.configureBlock({
+        placementId: first.placementId,
+        expectedVersion: 1,
+        configuration: { schemaVersion: 1, textScale: 1, contentMode: "auto" },
+      }),
+    /block_configuration_conflict/,
+  );
+  assert.throws(
+    () =>
+      validateConfiguration({
+        schemaVersion: 1,
+        textScale: 1,
+        contentMode: "auto",
+        messages: ["not permitted"],
+      }),
+    /invalid_block_configuration/,
+  );
+  f.db
+    .prepare(
+      "UPDATE block_library_instances SET manifest_version=99 WHERE placement_id=?",
+    )
+    .run(first.placementId);
+  assert.throws(
+    () => f.service.getBlockSettings(first.placementId),
+    /unsupported_block_manifest_version/,
+  );
+  assert.equal(
+    f.db
+      .prepare(
+        "SELECT manifest_version FROM block_library_instances WHERE placement_id=?",
+      )
+      .get(first.placementId)?.manifest_version,
+    99,
+  );
+});
+
+test("manifest and capability discovery distinguish immutable definitions, local use and disconnected execution", (t) => {
+  const f = fixture(t);
+  assert.equal(Object.isFrozen(BUILTIN_BLOCKS[0].defaultConfiguration), true);
+  assert.equal(resolveBlockType("aerynth.note", 1).state, "available");
+  assert.equal(resolveBlockType("aerynth.note", 99).state, "unsupported");
+  assert.equal(resolveBlockType("missing.plugin", 1).state, "unsupported");
+  const states = blockCapabilities(
+    "conversation",
+    f.service.capabilities(),
+    "codex",
+  );
+  assert.equal(
+    states.find((s) => s.id === "read")?.availability.state,
+    "available",
+  );
+  assert.equal(
+    states.find((s) => s.id === "provider-execution")?.availability.state,
+    "setup_required",
+  );
+  assert.equal(
+    blockCapabilities("conversation", f.service.capabilities(), "local").find(
+      (s) => s.id === "provider-execution",
+    )?.availability.state,
+    "unsupported",
+  );
+  const preference = f.service.preferences(),
+    favorite = f.service.setFavorite({
+      kind: "note",
+      favorite: true,
+      expectedVersion: preference.version,
+    });
+  assert.deepEqual(favorite.favorites, ["note"]);
+  assert.throws(
+    () =>
+      f.service.setFavorite({
+        kind: "task",
+        favorite: true,
+        expectedVersion: preference.version,
+      }),
+    /preferences_version_conflict/,
+  );
+});
+
+test("Vela workspaceFromResources uses the template pipeline, returns same canonical IDs and a durable retry receipt", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic construction project"),
+    note = f.options.createResource(
+      "note",
+      "Synthetic construction note",
+      undefined,
+      project.id,
+    ),
+    task = f.options.createResource(
+      "task",
+      "Synthetic construction task",
+      undefined,
+      project.id,
+    );
+  const input = {
+    commandId: "native-composition",
+    title: "Synthetic native workspace",
+    projectId: project.id,
+    expectedProjectVersion: 1,
+    resources: [
+      { resourceId: note, expectedVersion: 1 },
+      { resourceId: task, expectedVersion: 1 },
+    ],
+    organization: { mode: "structured" as const },
+  };
+  const before = [
+    "workspaces",
+    "resources",
+    "blocks",
+    "block_library_receipts",
+  ].map((table) => count(f.db, table));
+  const preview = f.service.previewWorkspaceFromResources(input);
+  assert.deepEqual(preview.resourceIds, [note, task]);
+  assert.deepEqual(
+    ["workspaces", "resources", "blocks", "block_library_receipts"].map(
+      (table) => count(f.db, table),
+    ),
+    before,
+  );
+  const result = f.service.workspaceFromResources(input);
+  assert.deepEqual(result.resourceIds, [note, task]);
+  assert.equal(result.receipt.workspaceId, result.createdWorkspaceId);
+  assert.equal(result.receipt.operation, "workspaceFromResources");
+  assert.equal(
+    f.engine.project(result.createdWorkspaceId).organization.mode,
+    "structured",
+  );
+  assert.deepEqual(
+    new Set(
+      f.engine
+        .project(result.createdWorkspaceId)
+        .blocks.map((b) => b.resourceId),
+    ),
+    new Set([note, task]),
+  );
+  assert.equal(f.factoryCalls.length, 2);
+  assert.deepEqual(f.service.workspaceFromResources(input), result);
+  assert.equal(count(f.db, "resources"), before[1]);
+  assert.equal(count(f.db, "workspaces"), before[0] + 1);
+  assert.throws(
+    () =>
+      f.service.workspaceFromResources({ ...input, title: "Changed scope" }),
+    /idempotency_conflict/,
+  );
+  f.kernel.assertIntegrity();
+});
+
+test("construction revalidates grants/versions and rolls back canonical workspace/session/placements on mid-operation failure", (t) => {
+  const f = fixture(t),
+    note = f.options.createResource(
+      "note",
+      "Synthetic construct source",
+      undefined,
+      null,
+    ),
+    task = f.options.createResource(
+      "task",
+      "Synthetic construct task",
+      undefined,
+      null,
+    ),
+    existing = f.engine.createWorkspace("Synthetic retained context"),
+    input = {
+      commandId: "construction-failure",
+      title: "Synthetic construction",
+      projectId: null,
+      resources: [
+        { resourceId: note, expectedVersion: 1 },
+        { resourceId: task, expectedVersion: 1 },
+      ],
+    };
+  f.options.navigateWorkspace(existing.workspaceId);
+  const before = [
+    "workspaces",
+    "resources",
+    "blocks",
+    "block_library_receipts",
+  ].map((table) => count(f.db, table));
+  f.service.previewWorkspaceFromResources(input);
+  f.revoked.add(note);
+  assert.throws(
+    () => f.service.workspaceFromResources(input),
+    /reference_unavailable/,
+  );
+  f.revoked.clear();
+  assert.throws(
+    () =>
+      f.service.workspaceFromResources({
+        ...input,
+        resources: [{ resourceId: note, expectedVersion: 2 }],
+      }),
+    /reference_version_conflict/,
+  );
+  const original = f.host.placeResource;
+  let calls = 0;
+  f.host.placeResource = (command) => {
+    const result = original(command);
+    if (++calls === 2) throw new Error("synthetic_construction_failure");
+    return result;
+  };
+  assert.throws(
+    () => f.service.workspaceFromResources(input),
+    /synthetic_construction_failure/,
+  );
+  assert.deepEqual(
+    ["workspaces", "resources", "blocks", "block_library_receipts"].map(
+      (table) => count(f.db, table),
+    ),
+    before,
+  );
+  assert.equal(f.engine.activeWorkspaceId(), existing.workspaceId);
+  assert.equal(
+    f.desktop.snapshot(() => ({ provider: "local", messages: [] }))
+      .activeWorkspaceId,
+    existing.workspaceId,
+  );
+  f.host.placeResource = original;
+  assert.ok(f.service.workspaceFromResources(input).createdWorkspaceId);
+  f.kernel.assertIntegrity();
+});
+
+test("schema2 templates bind project context explicitly and preserve subject settings without cloning a canonical resource", (t) => {
+  const f = fixture(t),
+    projectA = f.kernel.createProject("Synthetic template project A"),
+    projectB = f.kernel.createProject("Synthetic template project B"),
+    body = predefinedTemplates()[0].body;
+  body.schemaVersion = 2;
+  body.placements = [
+    {
+      key: "overview",
+      subjectBinding: { mode: "project-context", view: "project" },
+      presentation: BUILTIN_BLOCKS[1].defaultPresentation,
+      configuration: {
+        schemaVersion: 1,
+        textScale: 1.5,
+        contentMode: "reading",
+      },
+    },
+  ];
+  const template = f.service.saveTemplate({
+    name: "Synthetic project template",
+    description: "Synthetic explicit context binding",
+    tags: [],
+    body,
+  });
+  const before = count(f.db, "resources");
+  const a = f.service.applyTemplate(
+      request({
+        templateId: template.id,
+        projectId: projectA.id,
+        expectedProjectVersion: 1,
+      }),
+    ),
+    b = f.service.applyTemplate(
+      request({
+        templateId: template.id,
+        projectId: projectB.id,
+        expectedProjectVersion: 1,
+      }),
+    );
+  assert.deepEqual(f.engine.project(a.workspaceId).blocks[0].subject, {
+    kind: "project",
+    projectId: projectA.id,
+  });
+  assert.deepEqual(f.engine.project(b.workspaceId).blocks[0].subject, {
+    kind: "project",
+    projectId: projectB.id,
+  });
+  assert.equal(count(f.db, "resources"), before);
+  assert.equal(
+    f.service.getBlockSettings(b.placementIds.overview).configuration.textScale,
+    1.5,
+  );
+  assert.deepEqual(f.service.getTemplate(template.id).body, body);
+  assert.throws(
+    () => f.service.applyTemplate(request({ templateId: template.id })),
+    /project_context_required/,
+  );
+  f.revoked.add(projectB.id);
+  assert.throws(
+    () =>
+      f.service.applyTemplate(
+        request({
+          templateId: template.id,
+          projectId: projectB.id,
+          expectedProjectVersion: 1,
+        }),
+      ),
+    /project_unavailable/,
+  );
+  f.kernel.assertIntegrity();
+});
+
+test("registered project/browser views have live capability states and create only canonical subject placements", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic subject library"),
+    workspace = f.engine.createWorkspace(
+      "Synthetic view workspace",
+      project.id,
+    );
+  assert.deepEqual(REGISTERED_BLOCKS.map(block=>block.kind).sort(),[
+    'conversation','note','research','task','task_group','checklist','agent','timeline','task_objective','clock_timer',
+    'reference','stream','file','folder','link','project_overview','resource_browser','collection_browser',
+  ].sort());
+  assert.equal(REGISTERED_BLOCKS.length, 18);
+  const folder=REGISTERED_BLOCKS.find(block=>block.kind==='folder')!;
+  assert.equal(folder.creation,'reference-only');assert(folder.requiredServices.includes('native-folder-access'));
+  const clock=REGISTERED_BLOCKS.find(block=>block.kind==='clock_timer')!;
+  assert(clock.requiredServices.includes('clock-timer-service'));
+  assert.deepEqual(clock.defaultConfiguration.clockTimer,{mode:'timer'});
+  assert.equal(
+    f.service
+      .discoverBlocks()
+      .find((entry) => entry.manifest.kind === "project_overview")?.availability
+      .state,
+    "unknown",
+  );
+  const input = {
+    commandId: "library-project-view",
+    workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: workspace.revision,
+    kind: "project_overview" as const,
+    subject: { kind: "project" as const, projectId: project.id },
+    configuration: {
+      schemaVersion: 1 as const,
+      textScale: 1.25,
+      contentMode: "reading" as const,
+    },
+  };
+  assert.throws(() => f.service.createSubjectBlock(input), /block_unavailable/);
+  f.options.capabilities().subjects = {
+    project_overview: { state: "available" },
+    resource_browser: { state: "available" },
+    collection_browser: { state: "available" },
+  };
+  const before = count(f.db, "resources"),
+    result = f.service.createSubjectBlock(input);
+  assert.equal(count(f.db, "resources"), before);
+  assert.deepEqual(result.subject, { kind: "project", projectId: project.id });
+  assert.equal(
+    f.engine.project(workspace.workspaceId).blocks[0].resourceId,
+    undefined,
+  );
+  assert.deepEqual(f.service.createSubjectBlock(input), result);
+  assert.equal(
+    f.service.getBlockSettings(result.placementId).configuration.textScale,
+    1.25,
+  );
+  const preferences = f.service.preferences();
+  assert.deepEqual(preferences.recent, ["project_overview"]);
+  assert.ok(
+    f.service
+      .setFavorite({
+        kind: "project_overview",
+        favorite: true,
+        expectedVersion: preferences.version,
+      })
+      .favorites.includes("project_overview"),
+  );
+  f.revoked.add(project.id);
+  assert.throws(
+    () => f.service.subjectTargets(workspace.workspaceId),
+    /workspace_unavailable/,
+  );
+  const standalone = f.engine.createWorkspace("Synthetic unassigned view");
+  assert.equal(
+    f.service
+      .subjectTargets(standalone.workspaceId)
+      .projects.some((item) => item.id === project.id),
+    false,
+  );
+  assert.throws(
+    () => f.service.projectOverview(project.id),
+    /subject_unavailable/,
+  );
+  f.kernel.assertIntegrity();
+});
+
+test("project overview and collection/resource browsing read actual authorized canonical state without copying contents", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic overview project"),
+    other = f.kernel.createProject("Synthetic unrelated project"),
+    workspace = f.engine.createWorkspace(
+      "Synthetic project workspace",
+      project.id,
+    ),
+    note = f.options.createResource(
+      "note",
+      "Synthetic research note",
+      undefined,
+      project.id,
+    ),
+    task = f.options.createResource(
+      "task",
+      "Synthetic review task",
+      undefined,
+      project.id,
+    ),
+    global = f.options.createResource(
+      "note",
+      "Synthetic unassigned note",
+      undefined,
+      null,
+    ),
+    foreign = f.options.createResource(
+      "note",
+      "Synthetic other project note",
+      undefined,
+      other.id,
+    ),
+    hidden = f.options.createResource(
+      "note",
+      "Synthetic revoked note",
+      undefined,
+      project.id,
+    ),
+    collection = f.kernel.createCollection(
+      "Synthetic canonical reading list",
+      project.id,
+    );
+  f.kernel.addToCollection(collection.id, note);
+  f.kernel.addToCollection(collection.id, global);
+  f.revoked.add(hidden);
+  f.desktop.apply(
+    {
+      type: "taskStatus",
+      resourceId: task,
+      expectedVersion: 1,
+      status: "done",
+    },
+    () => {
+      throw new Error("unexpected");
+    },
+  );
+  const before = ["workspaces", "resources", "blocks", "relationships"].map(
+      (table) => count(f.db, table),
+    ),
+    overview = f.service.projectOverview(project.id);
+  assert.equal(overview.project.id, project.id);
+  assert.deepEqual(
+    overview.workspaces.map((item) => item.id),
+    [workspace.workspaceId],
+  );
+  assert.equal(overview.resourcesByKind.note, 1);
+  assert.deepEqual(overview.tasks, { open: 0, done: 1 });
+  assert.ok(overview.recentEvents.length > 0);
+  for (const event of overview.recentEvents)
+    assert.ok(
+      f.db.prepare("SELECT 1 FROM change_events WHERE id=?").get(event.id),
+    );
+  const scoped = f.service.browseResources({
+    subject: { kind: "resource-query", projectId: project.id, query: "" },
+  });
+  assert.equal(scoped.scopeTitle, project.title);
+  assert.equal(
+    f.service.browseResources({
+      subject: { kind: "collection", collectionId: collection.id },
+    }).scopeTitle,
+    collection.title,
+  );
+  assert.deepEqual(
+    new Set(scoped.resources.map((item) => item.id)),
+    new Set([note, task]),
+  );
+  assert.equal(
+    scoped.resources.some(
+      (item) => item.id === hidden || item.id === foreign || item.id === global,
+    ),
+    false,
+  );
+  assert.deepEqual(
+    new Set(
+      f.service
+        .browseResources({
+          subject: { kind: "collection", collectionId: collection.id },
+        })
+        .resources.map((item) => item.id),
+    ),
+    new Set([note, global]),
+  );
+  assert.deepEqual(
+    f.service
+      .browseResources({
+        subject: { kind: "resource-query", projectId: null, query: "review" },
+        kind: "task",
+      })
+      .resources.map((item) => item.id),
+    [task],
+  );
+  assert.deepEqual(
+    ["workspaces", "resources", "blocks", "relationships"].map((table) =>
+      count(f.db, table),
+    ),
+    before,
+  );
+  const attached = f.service.attachBlock({
+    commandId: "browser-attach-note",
+    workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+    kind: "note",
+    resourceId: note,
+    expectedResourceVersion: 1,
+  });
+  assert.equal(
+    f.service
+      .browseResources({
+        subject: { kind: "project", projectId: project.id },
+        unplacedOnly: true,
+      })
+      .resources.some((item) => item.id === note),
+    false,
+  );
+  const current = f.engine.project(workspace.workspaceId);
+  f.engine.execute({
+    type: "detachBlock",
+    commandId: "browser-detach-note",
+    workspaceId: workspace.workspaceId,
+    expectedRevision: current.revision,
+    blockId: attached.placementId,
+  });
+  assert.equal(
+    f.service
+      .browseResources({
+        subject: { kind: "project", projectId: project.id },
+        unplacedOnly: true,
+      })
+      .resources.some((item) => item.id === note),
+    true,
+  );
+  f.kernel.setCollectionArchived(collection.id, true, 1);
+  assert.throws(
+    () =>
+      f.service.browseResources({
+        subject: { kind: "collection", collectionId: collection.id },
+      }),
+    /subject_unavailable/,
+  );
+  assert.equal(f.kernel.getResource(note).resource.id, note);
+  f.kernel.assertIntegrity();
+});
+
+test("browser keyset pages are bounded, distinct and do not infer permissions from project context", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic page project"),
+    workspace = f.engine.createWorkspace(
+      "Synthetic paging workspace",
+      project.id,
+    );
+  const ids = Array.from({ length: 3 }, (_, index) =>
+    f.options.createResource(
+      "note",
+      "Synthetic page " + index,
+      undefined,
+      project.id,
+    ),
+  );
+  const subject = {
+    kind: "resource-query" as const,
+    projectId: project.id,
+    query: "",
+  };
+  const first = f.service.browseResources({ subject, limit: 1 }),
+    second = f.service.browseResources({
+      subject,
+      limit: 1,
+      afterId: first.nextCursor!,
+    });
+  assert.equal(first.resources.length, 1);
+  assert.equal(second.resources.length, 1);
+  assert.notEqual(first.resources[0].id, second.resources[0].id);
+  assert.ok(ids.includes(first.resources[0].id));
+  f.revoked.add(first.resources[0].id);
+  assert.equal(
+    f.service
+      .browseResources({ subject })
+      .resources.some((item) => item.id === first.resources[0].id),
+    false,
+  );
+  assert.throws(
+    () => f.service.browseResources({ subject, limit: 101 }),
+    /invalid_resource_query/,
+  );
+  assert.throws(
+    () =>
+      f.service.browseResources({
+        subject: { ...subject, kinds: ["future-unavailable"] },
+      }),
+    /unsupported_resource_filter/,
+  );
+  assert.equal(
+    f.service.subjectTargets(workspace.workspaceId).projectId,
+    project.id,
+  );
+});

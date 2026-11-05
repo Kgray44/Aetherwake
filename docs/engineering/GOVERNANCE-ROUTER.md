@@ -22,7 +22,7 @@ node scripts/governance-router.mjs --task "Fix branch sharing" --path src/branch
 node --test tests/governance-router.test.mjs
 ```
 
-A contextual-command task selects the established Constitution and the published **advisory** Interaction, Resources, Trust, and Quality charters. Publication is not owner ratification. The separate Agents, Tasks, and Workflows charter (05) is still planned and remains unavailable; its absence must be reported rather than silently filled in. It must not load unrelated charters.
+A contextual-command task selects the established Constitution and the published **advisory** Interaction, Resources, Trust, and Quality charters. Publication is not owner ratification. The current registry lists Charter 05 as published and pending owner acceptance. Always read the live registry because availability and authority can change without changing this routing guide.
 
 ## Operating rules
 
@@ -39,7 +39,7 @@ A contextual-command task selects the established Constitution and the published
 
 The deterministic router cannot infer every dependency from prose; the agent must expand its selection when the work crosses domains. Routing itself spends no model tokens, but a Codex agent still consumes tokens when it reads selected files. Do not confuse tokens saved by selection with verified account-level usage savings. Use real telemetry for later CIE measurement.
 
-When new charters are accepted, update `governance/README.md`; the router will automatically treat them as binding on the next run. If a charter filename changes, update the mapping and registry link in the same change. Only Charter 05 remains planned as of November 1, 2026. Charters 01, 02, and 16 have been published as advisory drafts pending explicit owner acceptance.
+When new charters are accepted, update `governance/README.md`; the router will automatically treat them as binding on the next run. If a charter filename changes, update the mapping and registry link in the same change. As of November 1, 2026, all 16 specialist charters are published but pending owner acceptance; consult the registry for current status.
 
 ## Audit and verification boundaries
 

@@ -1,0 +1,448 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { CodexPlanningAdapter, CodexPlanningError, buildCodexPlanningPrompt, parseCodexPlanningOutput, planningDigest } from '../src/codex-planning-adapter.mts';
+import { CAPABILITIES } from '../src/capabilities.ts';
+import { createCapabilityCatalog, CapabilityCatalogLease, CAPABILITY_SCHEMA_TOOL, CAPABILITY_DISCOVERY_LIMITS } from '../src/capability-catalog.mts';
+import type { CodexPlanningAdapterOptions, PlanningInput, PlanningObservation } from '../src/codex-planning-adapter.mts';
+import type { Execution, Snapshot } from '../../integrated-backend/src/contracts.mts';
+import { VELA_PLANNING_INSTRUCTION } from '../src/service.mts';
+import { VELA_IDENTITY_PROMPT_BYTES } from '../src/vela-identity.mts';
+
+/** Explicit synthetic command-port doubles; these are adapter regressions, never real model qualification. */
+function input(): PlanningInput {
+  return { requestId: 'request:synthetic', conversationId: 'conversation:vela', intent: 'Create a research workspace referencing this note.',
+    instruction: 'Keep provider identity and propose typed actions only.', capabilities: CAPABILITIES,
+    context: { id: 'manifest:synthetic', createdAt: '2026-11-02T02:00:00Z', policyVersion: 'policy:synthetic',
+      discovered: [{ id: 'note:synthetic', kind: 'resource', version: 1, title: 'Synthetic note' }],
+      included: [{ id: 'note:synthetic', kind: 'resource', version: 1, title: 'Synthetic note', reason: 'explicit', content: 'Synthetic source text.', contentDigest: 'synthetic-digest', source: 'aerynth://note/synthetic', trust: 'untrusted-source-data' }],
+      omitted: [], contentBytes: 22, coverage: 'explicit-resources-only' } };
+}
+
+/** Independent consumer of the emitted rules; canonical schema objects are never modified. */
+function rehydrateCatalog(data:any) {
+  assert.equal(data.capabilityEncoding,'aerynth.inline-catalog@3');
+  const dictionary=(value:any):string[]=>{
+    if(Array.isArray(value))return value;const entries=[''];
+    for(let index=0;index<value.length;index++)if(value[index]==='\\')entries[entries.length-1]+=value[++index];
+    else if(value[index]==='|')entries.push('');else entries[entries.length-1]+=value[index];
+    return entries;
+  };
+  const schemaKeys=dictionary(data.keys),capabilityTexts=dictionary(data.texts);
+  const expand=(value:any):any=>{
+    if(Number.isSafeInteger(value)&&value<0)return expand(data.defs[-value-1]);
+    if(Array.isArray(value)) {
+      if(value.length===1&&Number.isSafeInteger(value[0])) {
+        if(value[0]<0)return schemaKeys[-value[0]-1];
+        assert(value[0]<data.defs.length);return expand(data.defs[value[0]]);
+      }
+      if(value.length===2&&value[0]===null&&Array.isArray(value[1]))return value[1].map(expand);
+      if(value.length===2&&value[0]===null&&Number.isSafeInteger(value[1])&&value[1]<0)return value[1];
+      if(value.length===3&&value[0]===null&&Number.isInteger(value[1])&&value[1]>=1&&value[1]<=7){
+        const flags=value[1],body=expand(value[2]);
+        return {...(flags&1?{type:'object'}:{}),...(flags&2?{additionalProperties:false}:{}),...body,
+          ...(flags&4?{required:Object.keys(body.properties)}:{})};
+      }
+      return value.map(expand);
+    }
+    if(value===null||typeof value!=='object')return value;
+    return Object.fromEntries(Object.entries(value).map(([key,entry])=>[
+      key.startsWith('~')?key.slice(1):/^[A-Za-z]$/.test(key)?schemaKeys['abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'.indexOf(key)]:key,expand(entry)]));
+  };
+  return data.capabilities.map(([values,encoded,flags,overrides={}]:any[])=>{
+    assert.equal(values.length,data.fields.length);assert(Number.isInteger(flags)&&flags>=0&&flags<=7);
+    const metadata={...data.defaults,...Object.fromEntries(data.fields.map((key:string,index:number)=>[key,values[index]])),...(typeof overrides==='number'?data.variants[overrides]:overrides)};
+    for(const key of ['label','scope'])if(typeof metadata[key]==='string'){
+      const shortCodes='!#$%&*+<=>?@^{}[]()|',value=metadata[key];let decoded='';
+      for(let index=0;index<value.length;index++){
+        const char=value[index];
+        if(char==='~'){const next=value[++index];decoded+=next==='~'||shortCodes.includes(next)?next:capabilityTexts['ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'.indexOf(next)];}
+        else decoded+=shortCodes.includes(char)?capabilityTexts[shortCodes.indexOf(char)]:char;
+      }
+      metadata[key]=decoded;
+    }
+    const expanded=expand(encoded),schema={...data.roots,...(flags&4?{properties:expanded}:expanded)};
+    if(flags&1)schema.properties={type:{const:metadata.id},...schema.properties};
+    if(flags&2){assert(!Object.hasOwn(schema,'required'));schema.required=Object.keys(schema.properties??{});}
+    return {...metadata,schema};
+  });
+}
+
+test('current catalog prompt expands to every exact action schema, scope, effect and effective policy without changing source context',()=>{
+  const request=input();
+  request.instruction='Keep provider identity, current canonical scope, exact versions, reviewed commands and native permission boundaries. '.repeat(7);
+  request.context.included[0].content='Synthetic canonical note with preserved provenance and current resource identifiers. '.repeat(4);
+  request.context.contentBytes=Buffer.byteLength(request.context.included[0].content);
+  const prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
+  assert(Buffer.byteLength(prompt)<=16384);assert(prompt.includes('with explicit fields winning'));
+  assert.deepEqual(data.context,request.context,'No source text, source metadata or omission record is truncated');
+  assert(data.defs.length>0);
+  const restored=rehydrateCatalog(data);assert.deepEqual(restored,request.capabilities);
+  const delegated=restored.find((capability:any)=>capability.id==='delegateTask'),search=restored.find((capability:any)=>capability.id==='search');
+  assert.ok(delegated);assert.ok(search);
+  assert.equal(delegated.authorization,'explicit-execution-authorization');assert.equal(search.reversible,'no-state-change');
+});
+
+test('same-turn discovery returns the complete Clock and Timer schema losslessly inside the unchanged 8 KiB response bound',()=>{
+  const original=structuredClone(CAPABILITIES.find(capability=>capability.id==='clockTimer')!);
+  assert(Buffer.byteLength(JSON.stringify(original.schema))>8192,'the released timer schema exercises the real oversized metadata case');
+  const catalog=createCapabilityCatalog(CAPABILITIES),lease=new CapabilityCatalogLease({catalog,expiresAt:new Date(Date.now()+60000).toISOString(),authorize(){}});
+  lease.bind('synthetic-thread','synthetic-turn');
+  const reply=lease.read({threadId:'synthetic-thread',turnId:'synthetic-turn',callId:'clock-schema',namespace:null,tool:CAPABILITY_SCHEMA_TOOL,
+    arguments:{catalogDigest:catalog.projection.digest,ids:['clockTimer']}});
+  assert.equal(reply.success,true);assert(Buffer.byteLength(JSON.stringify(reply))<=CAPABILITY_DISCOVERY_LIMITS.maxResponseBytes);
+  const data=JSON.parse(reply.contentItems[0].text);assert.equal(data.catalogDigest,catalog.projection.digest);assert.match(data.decoding,/Nested schemas inherit no defaults/);
+  assert.deepEqual(rehydrateCatalog(data),[original]);assert.deepEqual(lease.fetchedIds(),['clockTimer']);
+  assert.deepEqual(CAPABILITIES.find(capability=>capability.id==='clockTimer'),original,'encoding never mutates the canonical descriptor');
+});
+
+test('context dictionary fallback preserves every source byte, metadata identity and literal array while retaining the full catalog under 16 KiB',()=>{
+  const request=input();request.instruction=VELA_PLANNING_INSTRUCTION;
+  request.context.discovered.push(...Array.from({length:12},(_,index)=>({id:'note:discovered-source-'+index,kind:'resource' as const,version:1,
+    title:'Synthetic canonically discovered source. '.repeat(4),resourceKind:'note' as const,projectId:null})));
+  request.context.included[0].content+='\nLiteral source data: [0,"key",[2,1]], ~A, ! and \\ separators stay literal.';
+  request.context.contentBytes=Buffer.byteLength(request.context.included[0].content);
+  const original=structuredClone(request.context),prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
+  assert.equal(data.contextEncoding,'aerynth.json-dictionary@1');assert(Buffer.byteLength(prompt)<=16384);
+  const decode=(value:any):any=>!Array.isArray(value)?value:value[0]===0?Object.fromEntries(Array.from({length:(value.length-1)/2},(_,index)=>{
+    const key=value[index*2+1];return [typeof key==='number'?data.contextKeys[key]:key,decode(value[index*2+2])];
+  })):value[0]===1?value.slice(1).map(decode):value[0]===2?data.contextStrings[value[1]]:assert.fail('unknown JSON data tag');
+  assert.deepEqual(decode(data.context),original);assert.equal(planningDigest(decode(data.context)),planningDigest(original));
+  assert.deepEqual(request.context,original);assert.deepEqual(rehydrateCatalog(data),CAPABILITIES);
+});
+
+test('root schema defaults rehydrate every original field, explicit override and missing key without changing canonical descriptors',()=>{
+  const variants:Record<string,unknown>[][]=[
+    CAPABILITIES.map(capability=>capability.schema),
+    [
+      {type:'array',additionalProperties:true,items:{type:'object',additionalProperties:false,properties:{name:{type:'string',minLength:1,maxLength:200}}}},
+      {type:'object',additionalProperties:true,properties:{nested:{type:'object',additionalProperties:false,properties:{name:{type:'string',minLength:1,maxLength:200}}}}},
+    ],
+    [
+      {properties:{nested:{type:'object',additionalProperties:false}},additionalProperties:false},
+      {type:'object',properties:{nested:{type:'array',items:{type:'string'}}}},
+    ],
+    [
+      {type:'object',additionalProperties:false,properties:{same:{type:'string',minLength:1,maxLength:200}}},
+      {type:'object',additionalProperties:false,properties:{same:{type:'string',minLength:1,maxLength:200}}},
+    ],
+  ];
+  for(const schemas of variants){
+    const request=input();request.capabilities=schemas.map((schema,index)=>({...CAPABILITIES[index],schema:structuredClone(schema)}));
+    const before=structuredClone(request.capabilities),catalogDigest=createCapabilityCatalog(request.capabilities).projection.digest,
+      prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
+    const restored=rehydrateCatalog(data);
+    assert.deepEqual(restored,before);
+    assert.deepEqual(request.capabilities,before);assert.equal(createCapabilityCatalog(request.capabilities).projection.digest,catalogDigest);
+    for(const key of ['type','additionalProperties'])if(schemas.some(schema=>!Object.hasOwn(schema,key)))assert(!Object.hasOwn(data.roots,key));
+    assert(prompt.includes('Nested schemas inherit no defaults'));
+  }
+});
+
+test('required/effect defaults retain order, absence, nested arrays and expanded repeated properties exactly',()=>{
+  const properties={z:{type:'string',minLength:1,maxLength:200},a:{type:'string',minLength:1,maxLength:200}},
+    adversarialMap={type:'string',minLength:1,maxLength:200};
+  const variants:Record<string,unknown>[][]=[
+    [
+      {type:'object',additionalProperties:false,properties,required:['z','a']},
+      {type:'object',additionalProperties:false,properties,required:['a','z']},
+      {type:'object',additionalProperties:false,properties,required:['z']},
+      {type:'object',additionalProperties:false,properties,required:[]},
+    ],
+    [
+      {type:'object',additionalProperties:false,properties,required:['z','a']},
+      {type:'object',additionalProperties:false,properties},
+    ],
+    [
+      {type:'object',additionalProperties:false,properties:{nested:{type:'object',properties,required:['a']}},required:['nested']},
+      {type:'object',additionalProperties:false,properties:{nested:{type:'object',properties,required:['z','a']}},required:['nested']},
+    ],
+    // Deliberately adversarial JSON-shaped input: property maps are data in the codec, never schema $refs.
+    [
+      {type:'object',additionalProperties:false,properties:adversarialMap,required:Object.keys(adversarialMap)},
+      {type:'object',additionalProperties:false,properties:adversarialMap,required:Object.keys(adversarialMap)},
+    ],
+  ];
+  for(const [index,schemas]of variants.entries()){
+    const request=input();request.capabilities=schemas.map((schema,i)=>({...CAPABILITIES[i],effect:(['read','provider-execution','mutate','navigate'] as const)[i%4],schema:structuredClone(schema)}));
+    const before=structuredClone(request.capabilities),catalog=createCapabilityCatalog(request.capabilities),data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+    const restored=rehydrateCatalog(data);assert.deepEqual(restored,before);
+    assert.deepEqual(request.capabilities,before);assert.deepEqual(createCapabilityCatalog(request.capabilities),catalog);
+    assert.equal(data.defaults.effect,'mutate');assert.equal(restored[0].effect,'read');assert.equal(restored[1].effect,'provider-execution');
+    if(index===0){assert.deepEqual(restored[0].schema.required,['z','a']);assert.deepEqual(restored[1].schema.required,['a','z']);assert.deepEqual(restored[2].schema.required,['z']);assert.deepEqual(restored[3].schema.required,[]);}
+    if(index===1){assert.deepEqual(restored[0].schema.required,['z','a']);assert(!Object.hasOwn(restored[1].schema,'required'));}
+    if(index===3)assert.deepEqual(restored[0].schema.required,Object.keys(adversarialMap));
+  }
+});
+
+test('versioned schema data references round-trip native refs, literals, extension fields and both reserved array forms',()=>{
+  const repeated={type:'string',minLength:1,maxLength:200,'x-owner':'literal-extension-metadata'};
+  const literalPrototype=JSON.parse('{"__proto__":{"const":"literal prototype key"},"constructor":{"type":"string"},"0":{"const":"literal numeric key"},"01":{"const":"literal zero-prefixed key"},"~0":{"const":"literal escaped key"},"~~":{"const":"literal repeated escape"}}');
+  const schema={type:'object',additionalProperties:false,
+    $id:'https://synthetic.invalid/schema',
+    $defs:{native:repeated},$ref:'#/$defs/native',description:'Native ref siblings stay literal.',
+    properties:{type:{const:'search'},query:repeated,...literalPrototype},required:['type','query'],
+    const:{repeated,native:{$ref:'#/$defs/native',description:'Literal object, not a codec reference'}},
+    enum:[repeated,{nested:repeated}],examples:[[0],[null,[]],[null,[null,[0]]],[null,repeated],[[0]],[-1],[0.5],
+      ...Array.from({length:7},(_,index)=>[null,index+1,{properties:{letter:repeated}}])],
+    default:[null,repeated],minimum:-5,maximum:-1,'x-literal-integers':[-1,-2,[null,-3]],
+    'x-codec':{capabilityEncoding:'aerynth.inline-catalog@2',schemaDefinitions:[[0]],properties:{type:repeated}},
+    'x-opaque':{oneOf:[repeated],anyOf:[repeated],type:'array',items:repeated},
+  };
+  const request=input();request.capabilities=[{...CAPABILITIES[0],schema},{...CAPABILITIES[1],schema:structuredClone(schema)}];
+  const before=structuredClone(request.capabilities),prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
+  assert.deepEqual(rehydrateCatalog(data),before);
+  assert.deepEqual(request.capabilities,before);assert(prompt.includes('native $ref is unchanged'));
+  assert.equal(planningDigest(request.capabilities),planningDigest(before));
+});
+
+test('only useful definitions survive nested sharing and tiny repeated data remains inline',()=>{
+  const request=input(),tiny={};
+  request.capabilities=[{...CAPABILITIES[0],schema:{type:'object',properties:{first:tiny,second:tiny}}}];
+  let data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+  assert.equal(data.defs.length,0);assert.deepEqual(rehydrateCatalog(data),request.capabilities);
+  const leaf={value:'Synthetic shared payload that is long enough to benefit from factoring.'},parent={nested:leaf,flag:true};
+  request.capabilities=[{...CAPABILITIES[0],schema:{type:'object',properties:{first:parent,second:parent,third:parent}}}];
+  data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+  assert.deepEqual(rehydrateCatalog(data),request.capabilities);
+  const uses=new Array(data.defs.length).fill(0);
+  const visit=(value:any):void=>{
+    if(Number.isSafeInteger(value)&&value<0){uses[-value-1]++;return;}
+    if(Array.isArray(value)) {
+      if(value.length===1&&Number.isSafeInteger(value[0]))return;
+      if(value.length===2&&value[0]===null&&Array.isArray(value[1])){value[1].forEach(visit);return;}
+      if(value.length===2&&value[0]===null&&Number.isSafeInteger(value[1])&&value[1]<0)return;
+      value.forEach(visit);
+    }else if(value&&typeof value==='object')Object.values(value).forEach(visit);
+  };
+  data.defs.forEach(visit);data.capabilities.forEach((entry:any[])=>visit(entry[1]));
+  assert.equal(uses.length,1);assert(uses.every(count=>count>1),'No unused or single-use schema definition consumes prompt capacity');
+});
+
+test('metadata phrase references never reinterpret literal markers, adjacent codes or text inside a code',()=>{
+  const request=input();
+  request.capabilities=CAPABILITIES.map((capability,index)=>({...capability,...(index===0?{
+    label:capability.label+' literal ~A ~~ ~0 ~_ ~- ~ controls !#$%&*+<=>?@^{}[]()|',
+    scope:capability.scope+' Literal ~A ~~ ~0 ~_ ~- ~; duplicate or recreate the source without changing it.',
+  }:{})}));
+  const before=structuredClone(request.capabilities),data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+  assert(data.texts.length>0);assert.deepEqual(rehydrateCatalog(data),before);
+  assert.deepEqual(request.capabilities,before);
+});
+
+test('nested schema defaults preserve literal property maps, object order and non-derived required arrays',()=>{
+  const request=input(),literalMap={type:'object',additionalProperties:false,properties:{a:{const:'literal'}},required:['properties','type','additionalProperties']};
+  const schema={type:'object',additionalProperties:false,properties:{
+    type:{const:'synthetic'},
+    reordered:{required:['b','a'],properties:{a:{type:'string'},b:{type:'number'}},type:'object',additionalProperties:false},
+    partial:{type:'object',additionalProperties:false,properties:{a:{type:'string'},b:{type:'number'}},required:['b']},
+    literal:{type:'object',additionalProperties:false,properties:literalMap,required:Object.keys(literalMap)},
+  },required:['type','reordered','partial','literal']};
+  request.capabilities=[{...CAPABILITIES[0],schema},{...CAPABILITIES[1],schema:structuredClone(schema)}];
+  const data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+  assert.deepEqual(rehydrateCatalog(data),request.capabilities);
+});
+
+test('packed key dictionaries preserve literal separators and backslashes without changing property identities',()=>{
+  const request=input(),key='repeated|pipe\\key';
+  request.capabilities=CAPABILITIES.slice(0,6).map((capability,index)=>({...capability,schema:{
+    type:'object',additionalProperties:false,properties:{type:{const:capability.id},[key]:{const:index}},required:['type',key],
+  }}));
+  const data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+  assert.equal(typeof data.keys,'string');assert(data.keys.includes('\\|'));assert(data.keys.includes('\\\\'));
+  assert.deepEqual(rehydrateCatalog(data),request.capabilities);
+});
+
+test('production identity plus the complete catalog retains useful recent whole-message context within 16 KiB',t=>{
+  const request=input();request.instruction=VELA_PLANNING_INSTRUCTION;
+  const baseBytes=Buffer.byteLength(buildCodexPlanningPrompt(request));
+  const question='What did you create for Minecraft?';
+  const answer='The workspace has a note, checklist and local conversation. Their canonical bindings were verified; Minecraft itself was not changed.';
+  const messages=[
+    {id:'history:user',requestId:'history:request',role:'user' as const,source:'user' as const,classification:'observed' as const,content:question,contentDigest:planningDigest(question)},
+    {id:'history:assistant',requestId:'history:request',role:'assistant' as const,source:'provider' as const,providerId:'codex-app-server',classification:'reported' as const,content:answer,contentDigest:planningDigest(answer)},
+  ];
+  request.context.history={schemaVersion:1,messages,coverage:'bounded-authorized-whole-messages'};
+  const prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
+  assert(Buffer.byteLength(prompt)<=16384);assert.deepEqual(data.context,request.context);
+  assert.deepEqual(data.context.history.messages,messages);assert.deepEqual(rehydrateCatalog(data),CAPABILITIES);
+  assert.equal(data.schemaAvailability,'complete-approved-catalog');assert.equal(data.capabilities.length,CAPABILITIES.length);
+  t.diagnostic(JSON.stringify({evidence:'synthetic-production-instruction-full-catalog-formatter-only',identityBytes:VELA_IDENTITY_PROMPT_BYTES,
+    instructionBytes:Buffer.byteLength(request.instruction),capabilities:CAPABILITIES.length,baseBytes,promptBytes:Buffer.byteLength(prompt),
+    historyEncodedBytes:Buffer.byteLength(JSON.stringify(request.context.history)),ceiling:16384,providerCalls:0}));
+});
+const output = () => ({ schemaVersion: 1, summary: 'Propose a research workspace.', steps: [{ id: 'create', explanation: 'Use a reference to the selected canonical note.', action: { type: 'workspaceFromResources', title: 'Research', projectId: null, resourceIds: ['note:synthetic'] } }], contribution: { providerId: 'spoofed-provider', executionId: 'spoofed-execution', nativeThreadId: 'spoofed-thread', classification: 'reported' } });
+function fixture(mode: 'normal' | 'invalid-json' | 'simulated' | 'unknown' | 'pending' | 'missing-output' = 'normal', providerOutput?: unknown) {
+  let now = Date.parse('2026-11-02T02:00:00Z'), turns = 0, opens = 0, authorizations = 0, interrupts = 0;
+  const observations: PlanningObservation[] = [], prompts: string[] = [];
+  const snapshot = {
+    contract: 'aerynth.integration@0.1', schemaVersion: 1, conversations: [], resources: [], relationships: [],
+    resourceMap: {}, bindings: {}, handoffs: {}, executions: {}, messageEvidence: {},
+    graph: { schemaVersion: 1, counter: 0, tick: 0, providers: [{ id: 'codex-app-server', mock: false, label: 'Explicit synthetic command-port double, not a live Codex connection' }], conversations: [], messages: [], artifacts: [], edges: [], handoffs: [], unavailableMessageIds: [], idempotency: {} },
+  } as unknown as Snapshot;
+  const options: CodexPlanningAdapterOptions = {
+    now: () => now, wait: async ms => { now += ms; }, pollIntervalMs: 100, timeoutMs: 1000,
+    availability: () => ({ available: true, busy: false }),
+    backend: { command: async (name, request): Promise<any> => {
+      if (name === 'snapshot') return structuredClone(snapshot);
+      if (name === 'replay') return { events: [], earliest: null, latest: 0, truncated: false };
+      if (name === 'interrupt') { interrupts++; const e = Object.values(snapshot.executions).find(e => e.id === (request as any).executionId)!; e.state = 'interrupted'; return { requested: true, confirmed: false }; }
+      throw new Error('Unexpected synthetic command');
+    } },
+    authorizePlanning: request => { authorizations++; return { authorizationRef: 'host:synthetic-grant', requestId: request.requestId,
+      sourceConversationId: request.sourceConversationId, providerId: 'codex-app-server', contextDigest: request.contextDigest, promptDigest: request.promptDigest, expiresAt: new Date(now + 60000).toISOString() }; },
+    openPlanningConversation: async request => {
+      opens++; assert.equal(request.grant.authorizationRef, 'host:synthetic-grant'); assert.equal(request.sourceConversationId, 'conversation:vela');
+      snapshot.resourceMap['conversation:planning'] = 'graph:planning';
+      return { resourceId: 'conversation:planning', revision: 1, title: request.title, providerId: 'codex-app-server', kind: 'codex', projectId: null, taskId: null };
+    },
+    executePlanning: async request => {
+      turns++; prompts.push(request.prompt); assert.equal(request.grant.authorizationRef, 'host:synthetic-grant');
+      const e: Execution = { id: 'execution:synthetic', resourceId: request.resourceId, providerId: 'codex-app-server',
+        state: mode === 'pending' ? 'running' : mode === 'unknown' ? 'unknown' : 'provider_completed',
+        binding: { providerId: 'codex-app-server', nativeThreadId: 'native-thread:synthetic', nativeSessionId: null, instanceId: 'instance:synthetic', accountScope: 'account:synthetic' },
+        turnId: 'native-turn:synthetic', commandId: request.commandId, startedAt: new Date(now).toISOString(), endedAt: null, taskVerified: false };
+      snapshot.executions[e.id] = e;
+      if (mode !== 'missing-output') {
+        snapshot.graph.messages.push({ id: 'message:synthetic', conversationId: 'graph:planning', role: 'assistant', sequence: 1,
+          content: mode === 'invalid-json' ? 'This is not a JSON proposal.' : JSON.stringify(providerOutput === undefined ? output() : providerOutput), provenance: 'application', createdAt: new Date(now).toISOString(), referenceIds: [], constraint: false, sensitivity: 'internal', providerTurnId: e.turnId! });
+        snapshot.messageEvidence['message:synthetic'] = { classification: mode === 'simulated' ? 'simulated' : 'reported', executionId: e.id, providerId: 'codex-app-server', nativeThreadId: e.binding!.nativeThreadId, nativeTurnId: e.turnId! };
+      }
+      return structuredClone(e);
+    },
+    observe: observation => { observations.push(structuredClone(observation)); },
+  };
+  return { options, snapshot, observations, prompts, counts: () => ({ turns, opens, authorizations, interrupts }), adapter: () => new CodexPlanningAdapter(options) };
+}
+
+test('real adapter routes through host-authorized canonical planning execution and replaces spoofed contribution with observed IDs', async () => {
+  const f = fixture(), adapter = f.adapter();
+  const proposal = await adapter.propose(input(), new AbortController().signal);
+  assert.equal(proposal.contribution.providerId, 'codex-app-server');
+  assert.equal(proposal.contribution.executionId, 'execution:synthetic');
+  assert.equal(proposal.contribution.planningConversationId, 'conversation:planning');
+  assert.equal(proposal.contribution.sourceMessageId, 'message:synthetic');
+  assert.equal(proposal.contribution.nativeThreadId, 'native-thread:synthetic');
+  assert.equal(proposal.contribution.nativeTurnId, 'native-turn:synthetic');
+  assert.deepEqual(f.counts(), { turns: 1, opens: 1, authorizations: 1, interrupts: 0 });
+  assert.equal(f.observations.at(-1)?.stage, 'proposal-ready');
+  assert.equal(proposal.schemaVersion, 2); assert.equal(proposal.kind, 'plan', 'Legacy plan output normalizes explicitly');
+  assert.ok(f.prompts[0].includes('You remain Codex'));
+  assert.ok(f.prompts[0].includes('Synthetic source text.'));
+  assert.ok(f.prompts[0].includes('"id":"note:synthetic"'));
+});
+
+test('bounded prompt and complete-manifest host authorization fail before any provider execution or source truncation', async () => {
+  const f = fixture(), tooLarge = input(); tooLarge.context.included[0].content = 'x'.repeat(20000);
+  await assert.rejects(f.adapter().propose(tooLarge, new AbortController().signal), /planning_prompt_capacity_exceeded/);
+  assert.equal(f.counts().turns, 0); assert.equal(f.counts().opens, 0);
+  const original = f.options.authorizePlanning;
+  f.options.authorizePlanning = async request => { const grant = await original(request); return { ...grant, contextDigest: 'wrong-manifest' }; };
+  await assert.rejects(f.adapter().propose(input(), new AbortController().signal), /host_planning_authorization_required/);
+  assert.equal(f.counts().turns, 0); assert.equal(f.counts().opens, 0);
+  assert.notEqual(planningDigest(input().context), planningDigest(tooLarge.context));
+});
+
+test('discovery prompt retains a representative source manifest and exact digest-bound index without embedding full action schemas',()=>{
+  const request=input(),catalog=createCapabilityCatalog(request.capabilities);
+  request.context.included[0].content='Synthetic reviewed source with exact provenance. '.repeat(140);
+  request.context.contentBytes=Buffer.byteLength(request.context.included[0].content);
+  const prompt=buildCodexPlanningPrompt(request,{projection:catalog.projection,declaration:catalog.declaration}),payload=JSON.parse(prompt.split('\n').at(-1)!);
+  assert.deepEqual(payload.context,request.context);assert.deepEqual(payload.capabilityCatalog,catalog.projection);assert.deepEqual(payload.capabilityDiscovery,catalog.declaration);
+  assert.equal(payload.schemaAvailability,'fetch-before-proposing');assert(!Object.hasOwn(payload,'capabilities'));assert(Buffer.byteLength(prompt)<16384);
+  assert.throws(()=>buildCodexPlanningPrompt(request),/planning_prompt_capacity_exceeded/,'Legacy fallback never silently truncates the same sources');
+  request.context.included[0].content='x'.repeat(17000);assert.throws(()=>buildCodexPlanningPrompt(request,{projection:catalog.projection,declaration:catalog.declaration}),/planning_prompt_capacity_exceeded/);
+});
+test('semantic native review is byte-identical before correlation IDs exist; actual grants still bind and validate canonical IDs',async()=>{
+  const original=input(),{requestId:_requestId,conversationId:_conversationId,...semantic}=original;
+  const changedCorrelation:PlanningInput={...original,requestId:'actual:other-request',conversationId:'actual:other-conversation'};
+  const reviewed=buildCodexPlanningPrompt(semantic),dispatched=buildCodexPlanningPrompt(changedCorrelation);
+  assert.equal(reviewed,dispatched);const payload=JSON.parse(reviewed.split('\n').at(-1)!);
+  assert(!Object.hasOwn(payload,'requestId'));assert(!Object.hasOwn(payload,'sourceConversationId'));assert.equal(payload.context.discovered[0].id,'note:synthetic');
+  const f=fixture();await assert.rejects(f.adapter().propose({...original,requestId:''},new AbortController().signal),/invalid_planning_request/);assert.equal(f.counts().authorizations,0);assert.equal(f.counts().turns,0);
+});
+
+test('discovery grants bind the exact declaration and every proposed action passes the same-turn fetched-schema guard',async()=>{
+  const catalog=createCapabilityCatalog(CAPABILITIES),f=fixture();let finished=0,checks=0;
+  f.options.discovery={forRequest:()=>({projection:catalog.projection,declaration:catalog.declaration}),assertFetched:(requestId,ids,declaration)=>{checks++;assert.deepEqual(ids,['workspaceFromResources']);assert.deepEqual(declaration,catalog.declaration);},finish:()=>{finished++;}};
+  const authorize=f.options.authorizePlanning;f.options.authorizePlanning=async request=>({...await authorize(request),discovery:request.discovery});
+  await f.adapter().propose(input(),new AbortController().signal);assert.equal(checks,1);assert.equal(finished,1);
+  const h=fixture();h.options.discovery={...f.options.discovery,assertFetched:()=>{throw Object.assign(new Error('Schema not fetched'),{code:'planning_capability_schema_not_discovered'});}};
+  const authorizeH=h.options.authorizePlanning;h.options.authorizePlanning=async request=>({...await authorizeH(request),discovery:request.discovery});
+  await assert.rejects(h.adapter().propose(input(),new AbortController().signal),/planning_capability_schema_not_discovered/);assert.equal(finished,2);
+  const g=fixture();g.options.discovery={...f.options.discovery};
+  await assert.rejects(g.adapter().propose(input(),new AbortController().signal),/capability_discovery_grant_mismatch/);assert.equal(g.counts().turns,0);assert.equal(g.counts().opens,0);
+});
+
+test('one-active-turn capacity and fixture provider identity block planning rather than simulating intelligence', async () => {
+  const busy = fixture(); busy.options.availability = () => ({ available: true, busy: true });
+  await assert.rejects(busy.adapter().propose(input(), new AbortController().signal), /provider_busy/); assert.equal(busy.counts().turns, 0);
+  const simulated = fixture(); simulated.snapshot.graph.providers[0].mock = true;
+  await assert.rejects(simulated.adapter().propose(input(), new AbortController().signal), /real_codex_planning_provider_required/); assert.equal(simulated.counts().turns, 0);
+});
+
+test('invalid/missing/simulated canonical output fails with retained source/execution references and no invented response', async () => {
+  for (const [mode, code] of [['invalid-json', 'planning_output_not_json'], ['missing-output', 'planning_output_unavailable'], ['simulated', 'simulated_planning_output_rejected']] as const) {
+    const f = fixture(mode);
+    await assert.rejects(f.adapter().propose(input(), new AbortController().signal), (error: unknown) => {
+      assert.ok(error instanceof CodexPlanningError); assert.equal(error.code, code);
+      assert.equal(error.observation.executionId, 'execution:synthetic');
+      assert.equal(error.observation.planningConversationId, 'conversation:planning');
+      return true;
+    });
+    assert.equal(f.observations.at(-1)?.stage, 'invalid-output');
+    if (mode === 'invalid-json') { assert.equal(f.snapshot.graph.messages[0].content, 'This is not a JSON proposal.'); assert.equal(f.observations.at(-1)?.sourceMessageId, 'message:synthetic'); }
+  }
+});
+
+test('cancellation requests actual canonical interrupt and only confirms after recorded interrupted outcome', async () => {
+  const f = fixture('pending'), controller = new AbortController(), original = f.options.executePlanning;
+  f.options.executePlanning = async request => { const result = await original(request); controller.abort(); return result; };
+  await assert.rejects(f.adapter().propose(input(), controller.signal), /planning_execution_interrupted/);
+  assert.equal(f.counts().interrupts, 1);
+  const requested = f.observations.find(o => o.cancellation.interruptRequested)!;
+  assert.equal(requested.cancellation.confirmed, false);
+  assert.equal(f.observations.at(-1)?.cancellation.confirmed, true);
+  assert.equal(f.observations.at(-1)?.executionState, 'interrupted');
+});
+
+test('pre-dispatch cancellation starts no turn; canonical unknown and polling timeout stay unknown', async () => {
+  const cancelled = fixture(), controller = new AbortController(); controller.abort();
+  await assert.rejects(cancelled.adapter().propose(input(), controller.signal), /planning_cancelled_before_dispatch/);
+  assert.equal(cancelled.counts().turns, 0); assert.equal(cancelled.counts().opens, 0);
+  const unknown = fixture('unknown');
+  await assert.rejects(unknown.adapter().propose(input(), new AbortController().signal), (error: unknown) => { assert.ok(error instanceof CodexPlanningError); assert.equal(error.observation.stage, 'unknown'); assert.equal(error.outcome, 'unknown'); return true; });
+  const pending = fixture('pending');
+  await assert.rejects(pending.adapter().propose(input(), new AbortController().signal), /planning_execution_outcome_unknown_timeout/);
+  assert.equal(pending.counts().turns, 1); assert.equal(pending.counts().interrupts, 0);
+});
+
+test('parser accepts one enclosing JSON fence, rejects prose and unknown native actions, and trusts only host attribution', () => {
+  const contribution = { providerId: 'codex-app-server', classification: 'reported' as const, executionId: 'e:trusted' };
+  assert.equal(parseCodexPlanningOutput('```json\n' + JSON.stringify(output()) + '\n```', contribution).contribution.executionId, 'e:trusted');
+  assert.throws(() => parseCodexPlanningOutput('Here is the plan:\n' + JSON.stringify(output()), contribution), /planning_output_not_json/);
+  assert.throws(() => parseCodexPlanningOutput(JSON.stringify({ ...output(), steps: [{ id: 'bad', explanation: 'Unsupported action', action: { type: 'shell', command: 'not executable' } }] }), contribution), /unsupported_or_invalid_action/);
+  assert.ok(Buffer.byteLength(buildCodexPlanningPrompt(input())) <= 16384);
+});
+
+test('wire-v2 conversational kinds use only the observed canonical provider turn and replace spoofed identity/native references', async () => {
+  for (const kind of ['answer', 'clarification', 'inability'] as const) {
+    const result = { schemaVersion: 2, kind, content: 'Explicit synthetic command-port ' + kind + '.', contribution: output().contribution }, f = fixture('normal', result);
+    const response = await f.adapter().propose(input(), new AbortController().signal);
+    assert.equal(response.kind, kind); assert.equal(response.schemaVersion, 2); assert.equal('content' in response && response.content, result.content); assert.equal('steps' in response, false);
+    assert.deepEqual(response.contribution, { providerId: 'codex-app-server', classification: 'reported', executionId: 'execution:synthetic', planningConversationId: 'conversation:planning', sourceMessageId: 'message:synthetic', nativeThreadId: 'native-thread:synthetic', nativeTurnId: 'native-turn:synthetic' });
+    assert.equal(f.observations.at(-1)!.stage, 'response-ready'); assert.equal(f.observations.at(-1)!.responseKind, kind); assert.equal(Object.keys(f.snapshot.executions).length, 1, 'The authorized response turn stays canonical, with no follow-on execution');
+    assert.deepEqual(f.counts(), { turns: 1, opens: 1, authorizations: 1, interrupts: 0 }); assert.equal(f.snapshot.graph.messages[0].content, JSON.stringify(result), 'Exact raw provider output is retained separately from parsed conversation content');
+    assert(f.prompts[0].includes('schemaVersion:2')); assert(f.prompts[0].includes('no steps/actions')); assert(f.prompts[0].includes('You remain Codex')); assert(!f.prompts[0].includes('return an empty steps array')); assert(Buffer.byteLength(f.prompts[0]) <= 16384);
+  }
+});
+
+test('conversational output remains strict bounded JSON and invalid response kinds preserve the canonical raw output', async () => {
+  const contribution = { providerId: 'codex-app-server', classification: 'reported' as const, executionId: 'execution:trusted' };
+  for (const bad of [{ schemaVersion: 2, kind: 'answer', content: 'x'.repeat(16001) }, { schemaVersion: 2, kind: 'answer', content: 'Not an action', steps: [] }, { schemaVersion: 2, kind: 'unknown', content: 'No guessing' }]) {
+    const f = fixture('normal', bad);
+    await assert.rejects(f.adapter().propose(input(), new AbortController().signal), /invalid_provider_result/); assert.equal(f.observations.at(-1)!.stage, 'invalid-output'); assert.equal(f.observations.at(-1)!.sourceMessageId, 'message:synthetic'); assert.equal(f.snapshot.graph.messages[0].content, JSON.stringify(bad)); assert.equal(f.counts().turns, 1);
+  }
+  assert.throws(() => parseCodexPlanningOutput('A plain conversational answer', contribution), /planning_output_not_json/);
+  assert.throws(() => parseCodexPlanningOutput('x'.repeat(65537), contribution), /planning_output_capacity_exceeded/);
+  const v2 = parseCodexPlanningOutput(JSON.stringify({ ...output(), schemaVersion: 2, kind: 'plan' }), contribution); assert.equal(v2.kind, 'plan');
+});

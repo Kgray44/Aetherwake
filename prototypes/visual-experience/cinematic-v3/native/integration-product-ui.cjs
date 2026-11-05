@@ -1,0 +1,175 @@
+/* Bounded actual Vela/chat appearance and motion check. No model, edits or refocus. */
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
+const { createDriver } = require('./desktop-verify.cjs');
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const hash = value => createHash('sha256').update(value).digest('hex');
+
+// The actual controller publishes an errors array, not an error count. Reject
+// missing counters as well as observed errors before accepting a fresh draw.
+const healthyGraphics = value => value?.active === true && value.failed === false && value.contextLost === false
+  && Array.isArray(value.errors) && value.errors.length === 0
+  && Number.isFinite(value.frames) && Number.isFinite(value.draws);
+const freshGraphics = (prior, current) => healthyGraphics(prior) && healthyGraphics(current)
+  && current.frames > prior.frames && current.draws > prior.draws;
+exports.freshGraphics = freshGraphics;
+
+exports.verify = async ({ win, app, privateRoot, source, startupErrors = [], session, localURL }) => {
+  const started = Date.now(), deadline = started + 15000;
+  const out = path.resolve(__dirname, '../.runtime/application-evidence/product-ui-' + started);
+  const receipt = { contract: 'aerynth.actual-product-ui@1', source, passed: false, actions: [], captures: [], checks: [],
+    limits: { milliseconds: 15000, pngs: 2, pngBytes: 8388608, videos: 1, videoBytes: 50331648 },
+    scope: 'Actual integrated Vela and full conversation UI stills and one exact-window motion recording; no inline-block, live-provider, owner artistic or presentation-performance qualification.' };
+  let expired = false, timer, totalBytes = 0, driver, recorder;
+  const foreground = () => assert(!expired && Date.now() < deadline && !win.isDestroyed() && win.isVisible() && !win.isMinimized() && win.isFocused(), 'native_product_ui_focus_or_deadline');
+  const graphics = `(()=>{const s=window.__aerynth.snapshot();return {active:s.active,failed:s.graphicsFailed,errors:s.metrics.errors,draws:s.metrics.draws,frames:s.gpu?.framesRendered,contextLost:s.gpu?.contextLost}})()`;
+  const inspect = selector => `(${function (selector) {
+    const root = document.querySelector(selector), surface = root?.closest('.aw-contextual-surface');
+    if (!root || !surface) return null;
+    const r = surface.getBoundingClientRect(), body = surface.querySelector('.aw-contextual-content'),
+      composer = root.querySelector('.cp-composer,.vela-core-compose'), input = composer?.querySelector('textarea'),
+      c = composer?.getBoundingClientRect(), transcript = root.querySelector('.cp-messages'),
+      t = transcript?.getBoundingClientRect(), m = transcript?.querySelector('.cp-message')?.getBoundingClientRect();
+    let opacity = 1;
+    for (let e = root; e && e !== document.body; e = e.parentElement) {
+      const s = getComputedStyle(e);
+      if (s.display === 'none' || s.visibility === 'hidden') return null;
+      opacity *= Number(s.opacity);
+    }
+    return { x: r.x, y: r.y, width: r.width, height: r.height, opacity,
+      inBounds: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight,
+      outerScrollHeight: body.scrollHeight, outerClientHeight: body.clientHeight,
+      rootScrollWidth: root.scrollWidth, rootClientWidth: root.clientWidth,
+      composerBottom: c?.bottom, bodyBottom: body.getBoundingClientRect().bottom,
+      inputFont: input ? parseFloat(getComputedStyle(input).fontSize) : null,
+      transcript: t ? { height: t.height, visibleMessageHeight: m ? Math.max(0, Math.min(m.bottom, t.bottom) - Math.max(m.top, t.top)) : 0 } : null };
+  }.toString()})(${JSON.stringify(selector)})`;
+  const run = async () => {
+    assert(/^review-ui-polish-/.test(path.basename(privateRoot)), 'Only a dedicated synthetic polish profile is authorized');
+    const setup = JSON.parse(await fs.readFile(path.join(privateRoot, 'ui-polish-setup.json'), 'utf8'));
+    assert.equal(setup.contract, 'aerynth.product-ui-setup@1'); assert.equal(setup.syntheticOnly, true);
+    await fs.mkdir(out, { recursive: true });
+    driver = await createDriver(win, { assertActive: foreground }); foreground();
+    const js = code => { foreground(); return driver.js(code); };
+    const click = async selector => { receipt.phase = 'Click ' + selector; foreground(); await driver.click(selector); receipt.actions.push({ type: 'native-mouse', selector }); foreground(); };
+    const key = async keyCode => { for (const type of ['keyDown','keyUp']) { foreground(); win.webContents.sendInputEvent({type,keyCode}); } receipt.actions.push({type:'native-keyboard',key:keyCode}); };
+    const wait = async (phase, expression) => { receipt.phase = phase; await driver.wait(expression, Math.max(1, deadline - Date.now() - 1200)); foreground(); };
+    const desktop = () => js("window.aerynthHost.command('desktop',{type:'snapshot'})");
+    const noExecution = async () => assert.deepEqual(await js("window.aerynthHost.command('executionStatus',{})"), [], 'No provider execution authorized');
+    await noExecution(); const before = await desktop();
+    const readNotes = async snapshot => {
+      const ids = snapshot.resources.filter(resource => resource.kind === 'note' && resource.available !== false).map(resource => resource.id);
+      assert(ids.length > 0 && ids.length <= 10, 'Bounded canonical note fixture required');
+      return js(`Promise.all(${JSON.stringify(ids)}.map(resourceId=>window.aerynthHost.command('notes',{name:'readNote',input:resourceId})))`);
+    };
+    const beforeNotes = await readNotes(before);
+    assert(beforeNotes.some(value => value.result?.draft && value.result.draft.content !== value.result.resource.content), 'Separate untouched note recovery draft required for this check');
+    const { startWindowRecording } = require('./application-recording.cjs');
+    recorder = await startWindowRecording(win, session, localURL); foreground();
+    // Bounded diagnostics of the actual synthetic note's presentation layers.
+    // Text stays in private evidence and never enters a public source receipt.
+    receipt.noteLayers = await js(`(()=>[...document.querySelectorAll('.folio[data-block-kind="note"]')].slice(0,10).map(root=>({
+      blockId:root.dataset.block,classes:root.className,
+      layers:['.folio-preview','.aw-block-compact','.working-content','.resource-anchor'].map(selector=>{
+        const e=root.querySelector(selector);if(!e)return {selector,missing:true};
+        const s=getComputedStyle(e),r=e.getBoundingClientRect();return {selector,display:s.display,visibility:s.visibility,opacity:s.opacity,
+          x:r.x,y:r.y,width:r.width,height:r.height,text:e.textContent.slice(0,160)};
+      })
+    })))()`);
+    const capture = async (selector, name) => {
+      receipt.phase = 'Inspect ' + selector;
+      const prior = await js(graphics); let bounds, acknowledgement, last, stable = 0;
+      for (let sample = 0; sample < 70; sample++) {
+        foreground(); bounds = await js(inspect(selector)); const current = await js(graphics);
+        receipt.lastBounds = bounds; receipt.lastGraphics = { prior, current };
+        stable = bounds?.opacity >= .995 && last && ['x', 'y', 'width', 'height'].every(key => Math.abs(bounds[key] - last[key]) < .75) ? stable + 1 : 0;
+        last = bounds;
+        if (stable >= 3 && freshGraphics(prior, current)) { acknowledgement = current; break; }
+        await pause(60);
+      }
+      assert(acknowledgement, 'Fresh actual focused GPU draw and visible panel required');
+      receipt.lastBounds = bounds;
+      assert(bounds.inBounds, 'Product surface outside viewport');
+      assert(bounds.rootScrollWidth <= bounds.rootClientWidth + 1, 'Product surface horizontally overflows');
+      assert(bounds.outerScrollHeight <= bounds.outerClientHeight + 2, 'Outer surface scrolls instead of transcript');
+      assert(bounds.composerBottom <= bounds.bodyBottom + 2, 'Composer extends outside measured host');
+      assert(bounds.inputFont >= 15.95, 'Composer below 16px body baseline');
+      if (selector === '.cp-manager') {
+        assert(bounds.transcript?.height >= 80, 'Conversation transcript collapsed');
+        assert(bounds.transcript.visibleMessageHeight >= 40, 'Canonical message is clipped outside its transcript');
+      }
+      foreground(); const png = (await win.webContents.capturePage()).toPNG(); foreground();
+      assert(receipt.captures.length < 2 && totalBytes + png.length <= 8388608, 'PNG capacity exceeded');
+      const file = path.join(out, name + '.png'); await fs.writeFile(file, png); totalBytes += png.length;
+      receipt.captures.push({ file, bytes: png.length, sha256: hash(png), bounds, before: prior, acknowledgement });
+    };
+    // Existing saved placements are preserved. Exercise the real, discoverable
+    // viewport-only recovery instead of moving Vela or bypassing hit testing.
+    await click('.aw-workspace-layout button[aria-label="Workspace actions"]');
+    await click('#locate-vela');
+    await wait('Located Vela retains deliberate focus', "document.body.classList.contains('vela-access')");
+    await click('#vela');
+    await wait('Vela composer mounted', "!!document.querySelector('.vela-core-compose textarea')");
+    await js("window.__velaPolishEditor=document.querySelector('.vela-core-compose textarea')");
+    await key('Tab');
+    await capture('.vela-core', '01-vela');
+    const initial = await js(inspect('.vela-core'));
+    await click('.vela-core-compose-actions button[aria-label="Add sources"]');
+    await wait('Actual source context opens', "document.querySelector('.vela-core').dataset.context==='sources'");
+    receipt.morph = { initial, samples: [] };
+    for (let i = 0; i < 18; i++) { foreground(); receipt.morph.samples.push(await js(inspect('.vela-core'))); await pause(40); }
+    assert(receipt.morph.samples.some(value => value && value.height > initial.height + 2 && value.height < 578), 'No actual intermediate Vela size was painted');
+    assert(await js("document.querySelector('.vela-core-compose textarea')===window.__velaPolishEditor"), 'Context morph replaced the composer');
+    await key('Escape');
+    await wait('Source context closes without closing Vela', "document.querySelector('.vela-core')?.dataset.context==='none'");
+    await key('Escape');
+    await wait('Vela surface closed', "!document.querySelector('[data-surface-id=vela]')");
+    await click('#workspace-manager'); await click('#conversation-manager');
+    await wait('Actual conversation search ready', "!!document.querySelector('.cp-results button')&&!document.querySelector('.cp-manager').hasAttribute('aria-busy')");
+    const index = await js("[...document.querySelectorAll('.cp-results button')].findIndex(e=>e.textContent.includes('Synthetic package local chat'))");
+    assert(index >= 0, 'Expected actual synthetic local chat');
+    await click('.cp-results button:nth-of-type(' + (index + 1) + ')');
+    await wait('Canonical conversation rendered', "!!document.querySelector('.cp-composer textarea')&&!!document.querySelector('.cp-message')");
+    await click('[data-surface-id="conversations"] .aw-contextual-heading');
+    await capture('.cp-manager', '02-conversation');
+    const recording = recorder; recorder = null;
+    receipt.video = await recording.stop(path.join(out, 'product-motion.webm')); foreground();
+    await noExecution(); const after = await desktop();
+    for (const resource of before.resources) assert.deepEqual(after.resources.find(value => value.id === resource.id), resource, 'Opening UI changed existing canonical resource');
+    assert.deepEqual(after.blocks, before.blocks, 'Opening UI changed canonical placement geometry');
+    assert.deepEqual(after.presence, before.presence, 'Opening UI changed saved Vela position');
+    assert.deepEqual(await readNotes(after), beforeNotes, 'Opening UI changed canonical notes or separate recovery drafts');
+    assert.equal(startupErrors.length, 0, 'Observed startup graphics/console error');
+    receipt.checks.push('same existing canonical resources and placements', 'untouched canonical note and separate recovery draft preserved', 'zero provider execution', 'measured bounded surfaces and stable composers', 'fresh actual GPU draws', 'actual intermediate context morph preserves composer', 'one exact-window motion recording');
+    receipt.passed = true;
+  };
+  try {
+    await Promise.race([run(), new Promise((_, reject) => { timer = setTimeout(() => { expired = true; reject(new Error('native_product_ui_15s_deadline')); app.quit(); }, 15000); })]);
+  } catch (error) {
+    receipt.error = { message: error.message, stack: String(error.stack).slice(0, 5000) };
+    // A labelled failure still is diagnostic evidence, never a passed draw check.
+    try {
+      foreground();
+      if (receipt.captures.length < 2) {
+        const png = (await win.webContents.capturePage()).toPNG(); foreground();
+        if (totalBytes + png.length <= 8388608) {
+          const file = path.join(out, 'failure.png'); await fs.writeFile(file, png);
+          receipt.captures.push({ file, bytes: png.length, sha256: hash(png), failure: true, freshDrawQualified: false });
+        }
+      }
+    } catch { /* A lost focus/deadline does not authorize another capture. */ }
+  }
+  finally {
+    if (recorder) {
+      try { receipt.partialVideo = await recorder.stop(path.join(out, 'partial-product-motion.webm')); }
+      catch (error) { receipt.recordingError = String(error.message).slice(0, 1000); }
+      recorder = null;
+    }
+    expired = true; clearTimeout(timer); receipt.elapsedMs = Date.now() - started;
+    receipt.startupErrors = startupErrors.slice(0, 16); if (startupErrors.length) receipt.passed = false;
+    try { await fs.mkdir(out, { recursive: true }); const json = JSON.stringify(receipt, null, 2); assert(Buffer.byteLength(json) < 1048576); await fs.writeFile(path.join(out, 'ui.json'), json); console.log(JSON.stringify({ passed: receipt.passed, error: receipt.error?.message, evidence: out, captures: receipt.captures.length })); }
+    finally { process.exitCode = receipt.passed ? 0 : 1; app.quit(); }
+  }
+};

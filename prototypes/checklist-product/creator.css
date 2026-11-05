@@ -1,0 +1,11 @@
+.aw-checklist-creator { display:flex; flex-direction:column; gap:.65rem; min-width:0; padding:1rem; color:inherit; }
+.aw-checklist-creator h3,.aw-checklist-creator p { margin:0; }
+.aw-checklist-creator > p,.aw-checklist-create-status { font-size:.85rem; line-height:1.5; }
+.aw-checklist-creator form { display:flex; flex-wrap:wrap; align-items:end; gap:.5rem; }
+.aw-checklist-creator label { display:flex; flex:1 1 100%; flex-direction:column; gap:.3rem; font-size:.85rem; }
+.aw-checklist-creator input,.aw-checklist-creator button { box-sizing:border-box; min-height:36px; padding:.5rem .7rem; border:1px solid #c4b7d64a; border-radius:.65rem; background:#a5abc208; color:inherit; font:inherit; }
+.aw-checklist-creator input { width:100%; min-width:0; }
+.aw-checklist-creator button { cursor:pointer; }
+.aw-checklist-creator :disabled { cursor:default; opacity:.5; }
+.aw-checklist-creator :focus-visible { outline:2px solid #b8cde5; outline-offset:3px; }
+.aw-checklist-creator [hidden] { display:none; }

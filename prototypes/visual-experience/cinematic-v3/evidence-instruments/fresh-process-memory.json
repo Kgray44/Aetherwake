@@ -1,0 +1,4178 @@
+{
+  "kind": "Fresh-process native memory probe with no screenshots, videos or forced GC",
+  "status": "measured-active-runtime",
+  "sourceRevisionAtLaunch": "1f46e11a22e3f124222b457dbfbde45811d3524f",
+  "sourceHashesAtLaunch": {
+    "native/main.cjs": "55fd4ead4f06ef2573f82450b8423354160172fea1328229c62f2009fcff18bb",
+    "native/recording.cjs": "41b2258756689a9951072f80ad61f13b5da096862a0718fc5054310e1ef2ec4f",
+    "src/celestial-environment.ts": "49eb62df7944c2796f51ef45080c830c1e7b72776fd7d4aeb23e6ee9bd73ad07",
+    "src/conversation.ts": "63a1a6bbd4224401ca36ab4cc0b912d6a18ffda6eef2c69404f48b04eb5ff542",
+    "src/instrument-geometry.ts": "8f7fa68f57f13936b4a4b46de7809737a02291fdaa6b4223106b92034d7425b9",
+    "src/instrument-materials.ts": "a131d182d18a6970824234995281d97e1810a2fc1846b9a456100d4b53ebe5b8",
+    "src/main.ts": "3d748511ba0043a8d5a6b08a91cd9167ab5d94a54f156261719587460ca5f82c",
+    "src/material-occlusion.ts": "ef8a435868dd7d04939b42c8588a84315d5b2b07877c15c1fc265d656cd4a682",
+    "src/motion.ts": "70996a0131dfddfa4e0c430a6b05652802cd24a74d6de86cab622a5f65a44519",
+    "src/orbital-architecture.ts": "18931b7bfb79a92b3957222c9ce09076d1402969c3c3d2908ef85c1f7d70815a",
+    "src/policy.ts": "f3f868b5d6e3936ed338f05460c1d36aa7c665909bbc2329e2cef9eb47211f86",
+    "src/renderer.ts": "bb2bed94e988b7d6ec0bfdc3765a46f63998dd5525234b9671a80972e4a7c7df",
+    "src/scene-state.ts": "b0e1964628f0e3744fa75487b328e3b883aedf5f73e7a8b4467b1bf698060dfe",
+    "src/scene-transition.ts": "55f7b5c04b094f9d9bbfa6ce8983c91b6c53ec41d77b39b6ba0bea6e6385a711",
+    "src/store.ts": "b58472f4619743163dcf838348937baaa4c449a8919fd3181b53fe3274bffb17",
+    "src/style.css": "2627427c938da519fbabd9e4b3c5e3a5395e2f7e3b0842b2aa806078dfe6b01e",
+    "src/workloads.ts": "d8233b60e6028383c444144e371bb6a480da16866b4daf0f167a653e3bbcac40",
+    "package-lock.json": "fac0dfcfd42c160951c68d87f28b0640c2bc922fe47d15f44fc8bcc172d4b6d3",
+    "index.html": "f5a68d2ee7d2eea1d6afab47bee5559cc79bfad86a404afeeb5be1f011ddfad2"
+  },
+  "buildAssets": [
+    "graphics-CQNxUdO7.js",
+    "index-0FWzwBut.js",
+    "index-CLIKywP4.css"
+  ],
+  "buildAssetHashes": {
+    "graphics-CQNxUdO7.js": "80d90f539b905184d8b7e24f486700e1f697ac7bfb48248d9c2d1b585151ea7d",
+    "index-0FWzwBut.js": "645bd7dfc4ce22284fc4f11271cd82254e76608c56e115b1a10f28cbba55714f",
+    "index-CLIKywP4.css": "3a814a4b53d0134f62c3511a3622db39875288538236ddd57116f7f0e4b8a88d"
+  },
+  "capturedAtUTC": "2026-11-01T22:40:02.708Z",
+  "requestedDurationMs": 90000,
+  "durationMs": 90006,
+  "totalWallDurationMs": 92369,
+  "preflight": {
+    "passed": true,
+    "activatedOwnedWindow": true,
+    "observations": [
+      {
+        "elapsedMs": 0,
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 0,
+          "framesRendered": 0,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": ""
+        }
+      },
+      {
+        "elapsedMs": 256,
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 0,
+          "framesRendered": 0,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": ""
+        }
+      },
+      {
+        "elapsedMs": 508,
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 0,
+          "framesRendered": 0,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": ""
+        }
+      },
+      {
+        "elapsedMs": 762,
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 0,
+          "framesRendered": 0,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": ""
+        }
+      },
+      {
+        "elapsedMs": 1013,
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 0,
+          "framesRendered": 0,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": ""
+        }
+      },
+      {
+        "elapsedMs": 1276,
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 0,
+          "framesRendered": 0,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": ""
+        }
+      },
+      {
+        "elapsedMs": 1538,
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 0,
+          "framesRendered": 0,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": ""
+        }
+      },
+      {
+        "elapsedMs": 2363,
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 481.2000000000003,
+          "framesRendered": 10,
+          "callbacks": 22,
+          "draws": 10,
+          "policy": "balanced / active"
+        }
+      }
+    ],
+    "interventions": [
+      {
+        "elapsedMs": 4,
+        "action": "reassert controller active after observed visible/unhidden window"
+      },
+      {
+        "elapsedMs": 257,
+        "action": "reassert controller active after observed visible/unhidden window"
+      },
+      {
+        "elapsedMs": 509,
+        "action": "reassert controller active after observed visible/unhidden window"
+      },
+      {
+        "elapsedMs": 763,
+        "action": "reassert controller active after observed visible/unhidden window"
+      },
+      {
+        "elapsedMs": 1015,
+        "action": "reassert controller active after observed visible/unhidden window"
+      },
+      {
+        "elapsedMs": 1279,
+        "action": "reassert controller active after observed visible/unhidden window"
+      },
+      {
+        "elapsedMs": 1568,
+        "action": "activate owned probe window once after observed non-rendering startup; measurement begins only after preflight and warm-up"
+      },
+      {
+        "elapsedMs": 2103,
+        "action": "reassert controller active after observed visible/unhidden window"
+      }
+    ],
+    "durationMs": 2363
+  },
+  "validationFailures": [],
+  "versions": {
+    "electron": "45.2.1",
+    "chrome": "156.0.8078.75",
+    "node": "24.22.1"
+  },
+  "conditions": {
+    "tier": "balanced",
+    "contentBounds": {
+      "width": 1601,
+      "height": 1002
+    },
+    "finalNativeState": {
+      "native": {
+        "visible": false,
+        "minimized": true,
+        "contentBounds": {
+          "width": 0,
+          "height": 0
+        }
+      },
+      "document": {
+        "hidden": false,
+        "visibilityState": "visible",
+        "active": false,
+        "visualClockMs": 65893.89999991655,
+        "framesRendered": 3886,
+        "callbacks": 0,
+        "draws": 0,
+        "policy": "balanced / active"
+      }
+    },
+    "newDedicatedProfile": true,
+    "renderWhileVisible": true,
+    "screenshotCount": 0,
+    "recording": false
+  },
+  "phases": [
+    {
+      "name": "architecture-visible-ambient",
+      "durationMs": 12432,
+      "drawSamples": 733,
+      "callbacks": 2003,
+      "policy": "balanced / ambient idle",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "intendedActive": true,
+      "activityValid": true,
+      "observedActivity": {
+        "renderedFrames": 733,
+        "visualClockAdvanceMs": 12414.3,
+        "draws": 733,
+        "callbacks": 2003
+      },
+      "runtimeBefore": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 3487.4,
+          "framesRendered": 190,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      },
+      "runtimeAfter": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 15901.699999999999,
+          "framesRendered": 923,
+          "callbacks": 2003,
+          "draws": 733,
+          "policy": "balanced / ambient idle"
+        }
+      },
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 923,
+        "drawCalls": 39,
+        "triangles": 160840,
+        "lines": 0,
+        "geometries": 25,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 923,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 0,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 1.9800000000000002,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 459.24,
+              "height": 240.3,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 277.68,
+              "height": 277.68,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 363.12,
+              "height": 166.608,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 15.8417,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.03802008,
+          "longitudinalRotationRadians": 0.03802008,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 531520,
+      "lastWorkingSetKiBSum": 530476,
+      "deltaWorkingSetKiBSum": -1044
+    },
+    {
+      "name": "living-visible-ambient",
+      "durationMs": 12435,
+      "drawSamples": 733,
+      "callbacks": 2001,
+      "policy": "balanced / ambient idle",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "intendedActive": true,
+      "activityValid": true,
+      "observedActivity": {
+        "renderedFrames": 733,
+        "visualClockAdvanceMs": 12418.334,
+        "draws": 733,
+        "callbacks": 2001
+      },
+      "runtimeBefore": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 15895.865999988078,
+          "framesRendered": 924,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      },
+      "runtimeAfter": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 28314.19999998808,
+          "framesRendered": 1657,
+          "callbacks": 2001,
+          "draws": 733,
+          "policy": "balanced / ambient idle"
+        }
+      },
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 1657,
+        "drawCalls": 18,
+        "triangles": 57086,
+        "lines": 0,
+        "geometries": 29,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 0,
+          "renderedStars": 0,
+          "renderedFrames": 958,
+          "environmentWeight": 0,
+          "visible": false,
+          "batches": 0,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 3,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 0,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 459.24,
+              "height": 240.3,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 277.68,
+              "height": 277.68,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 363.12,
+              "height": 166.608,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": false,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 28.260034,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.0678240816,
+          "longitudinalRotationRadians": 0.0678240816,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": false,
+          "environmentWeight": 0,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 532472,
+      "lastWorkingSetKiBSum": 535564,
+      "deltaWorkingSetKiBSum": 3092
+    },
+    {
+      "name": "resource-expand-return",
+      "durationMs": 12433,
+      "drawSamples": 737,
+      "callbacks": 1997,
+      "policy": "balanced / active",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "intendedActive": true,
+      "activityValid": true,
+      "observedActivity": {
+        "renderedFrames": 737,
+        "visualClockAdvanceMs": 12429.600000000002,
+        "draws": 737,
+        "callbacks": 1997
+      },
+      "runtimeBefore": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 28308.799999964238,
+          "framesRendered": 1658,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      },
+      "runtimeAfter": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 40738.39999996424,
+          "framesRendered": 2395,
+          "callbacks": 1997,
+          "draws": 737,
+          "policy": "balanced / active"
+        }
+      },
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 2395,
+        "drawCalls": 18,
+        "triangles": 57086,
+        "lines": 0,
+        "geometries": 29,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 0,
+          "renderedStars": 0,
+          "renderedFrames": 958,
+          "environmentWeight": 0,
+          "visible": false,
+          "batches": 0,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 3,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 0,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 929.1260346523466,
+              "height": 632.79856101129,
+              "unfold": 0.8689363759382112,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 739,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 189.32665730439086,
+              "height": 102.43291170078173,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 739,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 200.52462533444208,
+              "height": 87.87550909752396,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 739,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": false,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 33.34571367386519,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.08002971281727646,
+          "longitudinalRotationRadians": 0.08002971281727646,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": false,
+          "environmentWeight": 0,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 583508,
+      "lastWorkingSetKiBSum": 844612,
+      "deltaWorkingSetKiBSum": 261104
+    },
+    {
+      "name": "focused-long-conversation",
+      "durationMs": 12441,
+      "drawSamples": 734,
+      "callbacks": 2006,
+      "policy": "balanced / ambient idle",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "intendedActive": true,
+      "activityValid": true,
+      "observedActivity": {
+        "renderedFrames": 734,
+        "visualClockAdvanceMs": 12449.099999999999,
+        "draws": 734,
+        "callbacks": 2006
+      },
+      "runtimeBefore": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 40750.49999996424,
+          "framesRendered": 2396,
+          "callbacks": 1,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      },
+      "runtimeAfter": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 53199.59999996424,
+          "framesRendered": 3130,
+          "callbacks": 2006,
+          "draws": 734,
+          "policy": "balanced / ambient idle"
+        }
+      },
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 3130,
+        "drawCalls": 18,
+        "triangles": 57086,
+        "lines": 0,
+        "geometries": 29,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 0,
+          "renderedStars": 0,
+          "renderedFrames": 958,
+          "environmentWeight": 0,
+          "visible": false,
+          "batches": 0,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 3,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 0,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 1000,
+              "height": 692,
+              "unfold": 1,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 790,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 176,
+              "height": 76,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 785,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 176,
+              "height": 76,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 785,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": false,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 34.09581265780729,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.0818299503787375,
+          "longitudinalRotationRadians": 0.0818299503787375,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": false,
+          "environmentWeight": 0,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 869224,
+      "lastWorkingSetKiBSum": 893164,
+      "deltaWorkingSetKiBSum": 23940
+    },
+    {
+      "name": "environment-retarget",
+      "durationMs": 12446,
+      "drawSamples": 750,
+      "callbacks": 2039,
+      "policy": "balanced / active",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "intendedActive": true,
+      "activityValid": true,
+      "observedActivity": {
+        "renderedFrames": 750,
+        "visualClockAdvanceMs": 12446.599999976155,
+        "draws": 750,
+        "callbacks": 2039
+      },
+      "runtimeBefore": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 53199.59999996424,
+          "framesRendered": 3130,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / ambient idle"
+        }
+      },
+      "runtimeAfter": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65646.19999994039,
+          "framesRendered": 3880,
+          "callbacks": 2040,
+          "draws": 750,
+          "policy": "balanced / active"
+        }
+      },
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 3880,
+        "drawCalls": 44,
+        "triangles": 196686,
+        "lines": 0,
+        "geometries": 29,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 1518,
+          "environmentWeight": 0.07459073125911861,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 3,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 0.14768964789305486,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 459.24,
+              "height": 240.3,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 859,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 277.68,
+              "height": 277.68,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 849,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 363.12,
+              "height": 166.608,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 849,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 46.42211066639639,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.11141306559935134,
+          "longitudinalRotationRadians": 0.11141306559935134,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 0.07459073125911861,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 929728,
+      "lastWorkingSetKiBSum": 1002544,
+      "deltaWorkingSetKiBSum": 72816
+    },
+    {
+      "name": "quiet-static",
+      "durationMs": 12445,
+      "drawSamples": 5,
+      "callbacks": 17,
+      "policy": "efficient / quiet",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "intendedActive": false,
+      "activityValid": true,
+      "observedActivity": {
+        "renderedFrames": 5,
+        "visualClockAdvanceMs": 253.10000000000582,
+        "draws": 5,
+        "callbacks": 17
+      },
+      "runtimeBefore": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65646.19999994039,
+          "framesRendered": 3880,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      },
+      "runtimeAfter": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      },
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 3885,
+        "drawCalls": 27,
+        "triangles": 109282,
+        "lines": 0,
+        "geometries": 30,
+        "textures": 2,
+        "pixelRatio": 0.8,
+        "quality": "efficient",
+        "study": "living",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "efficient",
+          "starCapacity": 24000,
+          "configuredStars": 6500,
+          "activeStars": 6500,
+          "renderedStars": 6500,
+          "renderedFrames": 1523,
+          "environmentWeight": 0.0055456602500823585,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 3,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 0.010980407295163072,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "efficient",
+              "width": 459.24,
+              "height": 240.3,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 1,
+              "triangles": 2304,
+              "shapeUpdates": 859,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "efficient",
+              "width": 277.68,
+              "height": 277.68,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 849,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "efficient",
+              "width": 363.12,
+              "height": 166.608,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 1,
+              "triangles": 2304,
+              "shapeUpdates": 849,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": false,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "efficient",
+          "drawObjects": 9,
+          "triangles": 44788,
+          "opticalClockSeconds": 46.42211066639639,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.11141306559935134,
+          "longitudinalRotationRadians": 0.11141306559935134,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 0.0055456602500823585,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 1012184,
+      "lastWorkingSetKiBSum": 605492,
+      "deltaWorkingSetKiBSum": -406692
+    },
+    {
+      "name": "native-minimized",
+      "durationMs": 12316,
+      "drawSamples": 0,
+      "callbacks": 0,
+      "policy": "balanced / active",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "intendedActive": false,
+      "activityValid": true,
+      "observedActivity": {
+        "renderedFrames": 0,
+        "visualClockAdvanceMs": 0,
+        "draws": 0,
+        "callbacks": 0
+      },
+      "runtimeBefore": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      },
+      "runtimeAfter": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      },
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 3886,
+        "drawCalls": 18,
+        "triangles": 57086,
+        "lines": 0,
+        "geometries": 30,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 0,
+          "renderedStars": 0,
+          "renderedFrames": 1523,
+          "environmentWeight": 0,
+          "visible": false,
+          "batches": 0,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 3,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 0,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 459.24,
+              "height": 240.3,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 859,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 277.68,
+              "height": 277.68,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 849,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 363.12,
+              "height": 166.608,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 849,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": false,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 46.440810666372556,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.11145794559929413,
+          "longitudinalRotationRadians": 0.11145794559929413,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": false,
+          "environmentWeight": 0,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 602372,
+      "lastWorkingSetKiBSum": 592436,
+      "deltaWorkingSetKiBSum": -9936
+    }
+  ],
+  "samples": [
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 4020,
+      "cpuReportedSum": 2.4339560293316973,
+      "workingSetKiBSum": 531520,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 4499.5,
+          "framesRendered": 251,
+          "callbacks": 167,
+          "draws": 61,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 5033,
+      "cpuReportedSum": 2.6970756078066227,
+      "workingSetKiBSum": 532804,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 5517.799999999999,
+          "framesRendered": 312,
+          "callbacks": 335,
+          "draws": 122,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 6043,
+      "cpuReportedSum": 2.509284930023759,
+      "workingSetKiBSum": 530344,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 6523.799999999999,
+          "framesRendered": 372,
+          "callbacks": 501,
+          "draws": 182,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 7054,
+      "cpuReportedSum": 2.2863446302153454,
+      "workingSetKiBSum": 528844,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 7536,
+          "framesRendered": 433,
+          "callbacks": 668,
+          "draws": 243,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 8068,
+      "cpuReportedSum": 2.0300167310321062,
+      "workingSetKiBSum": 528852,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 8548.199999999999,
+          "framesRendered": 494,
+          "callbacks": 835,
+          "draws": 304,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 9084,
+      "cpuReportedSum": 2.273864982319356,
+      "workingSetKiBSum": 530532,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 9566.4,
+          "framesRendered": 555,
+          "callbacks": 1003,
+          "draws": 365,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 10096,
+      "cpuReportedSum": 2.5835587645969764,
+      "workingSetKiBSum": 527304,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 10578.6,
+          "framesRendered": 616,
+          "callbacks": 1169,
+          "draws": 426,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 11109,
+      "cpuReportedSum": 2.534192773838199,
+      "workingSetKiBSum": 528312,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 11590.699999999999,
+          "framesRendered": 676,
+          "callbacks": 1336,
+          "draws": 486,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 12119,
+      "cpuReportedSum": 2.383321811201466,
+      "workingSetKiBSum": 528308,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 12602.9,
+          "framesRendered": 737,
+          "callbacks": 1503,
+          "draws": 547,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 13121,
+      "cpuReportedSum": 1.970790273772478,
+      "workingSetKiBSum": 528876,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 13602.9,
+          "framesRendered": 797,
+          "callbacks": 1668,
+          "draws": 607,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 14124,
+      "cpuReportedSum": 1.978635138129526,
+      "workingSetKiBSum": 529244,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 14608.999999999998,
+          "framesRendered": 857,
+          "callbacks": 1834,
+          "draws": 667,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 15140,
+      "cpuReportedSum": 1.8896752969726593,
+      "workingSetKiBSum": 530264,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 15596.999999999998,
+          "framesRendered": 914,
+          "callbacks": 1985,
+          "draws": 724,
+          "policy": "balanced / ambient idle"
+        }
+      }
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 15437,
+      "cpuReportedSum": 1.072882232355353,
+      "workingSetKiBSum": 530476,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 15901.699999999999,
+          "framesRendered": 923,
+          "callbacks": 2003,
+          "draws": 733,
+          "policy": "balanced / ambient idle"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 16459,
+      "cpuReportedSum": 2.5305027139689846,
+      "workingSetKiBSum": 532472,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 16919.89999998808,
+          "framesRendered": 985,
+          "callbacks": 164,
+          "draws": 61,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 17465,
+      "cpuReportedSum": 1.8961972638601856,
+      "workingSetKiBSum": 534016,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 17925.99999998808,
+          "framesRendered": 1045,
+          "callbacks": 330,
+          "draws": 121,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 18480,
+      "cpuReportedSum": 2.191718580463753,
+      "workingSetKiBSum": 534292,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 18938.19999998808,
+          "framesRendered": 1106,
+          "callbacks": 497,
+          "draws": 182,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 19490,
+      "cpuReportedSum": 2.343456942176887,
+      "workingSetKiBSum": 535128,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 19950.39999998808,
+          "framesRendered": 1167,
+          "callbacks": 664,
+          "draws": 243,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 20502,
+      "cpuReportedSum": 2.038694210334671,
+      "workingSetKiBSum": 535520,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 20962.39999998808,
+          "framesRendered": 1228,
+          "callbacks": 831,
+          "draws": 304,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 21514,
+      "cpuReportedSum": 1.728314386933822,
+      "workingSetKiBSum": 535920,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 21974.59999998808,
+          "framesRendered": 1288,
+          "callbacks": 998,
+          "draws": 364,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 22525,
+      "cpuReportedSum": 1.8806111849527611,
+      "workingSetKiBSum": 535720,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 22986.79999998808,
+          "framesRendered": 1349,
+          "callbacks": 1165,
+          "draws": 425,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 23530,
+      "cpuReportedSum": 2.0020583843493935,
+      "workingSetKiBSum": 536660,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 23992.89999998808,
+          "framesRendered": 1409,
+          "callbacks": 1331,
+          "draws": 485,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 24544,
+      "cpuReportedSum": 1.9179748985851162,
+      "workingSetKiBSum": 536860,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 25005.09999998808,
+          "framesRendered": 1470,
+          "callbacks": 1498,
+          "draws": 546,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 25557,
+      "cpuReportedSum": 1.9923642396191017,
+      "workingSetKiBSum": 536880,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 26017.29999998808,
+          "framesRendered": 1531,
+          "callbacks": 1665,
+          "draws": 607,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 26570,
+      "cpuReportedSum": 1.8335519486408636,
+      "workingSetKiBSum": 535052,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 27029.39999998808,
+          "framesRendered": 1592,
+          "callbacks": 1832,
+          "draws": 668,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 27583,
+      "cpuReportedSum": 1.7021116764250244,
+      "workingSetKiBSum": 535564,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 28041.49999998808,
+          "framesRendered": 1648,
+          "callbacks": 1984,
+          "draws": 724,
+          "policy": "balanced / ambient idle"
+        }
+      }
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 27880,
+      "cpuReportedSum": 1.0028505321068717,
+      "workingSetKiBSum": 535564,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 28314.19999998808,
+          "framesRendered": 1657,
+          "callbacks": 2001,
+          "draws": 733,
+          "policy": "balanced / ambient idle"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 28908,
+      "cpuReportedSum": 11.62492009591063,
+      "workingSetKiBSum": 583508,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 29331.899999964236,
+          "framesRendered": 1707,
+          "callbacks": 130,
+          "draws": 49,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 29922,
+      "cpuReportedSum": 10.881291313095154,
+      "workingSetKiBSum": 610512,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 30344.099999964234,
+          "framesRendered": 1768,
+          "callbacks": 293,
+          "draws": 110,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 30936,
+      "cpuReportedSum": 10.008536610563418,
+      "workingSetKiBSum": 653760,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 31356.19999996424,
+          "framesRendered": 1829,
+          "callbacks": 457,
+          "draws": 171,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 31946,
+      "cpuReportedSum": 6.808198117247651,
+      "workingSetKiBSum": 684444,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 32368.399999964236,
+          "framesRendered": 1890,
+          "callbacks": 624,
+          "draws": 232,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 32963,
+      "cpuReportedSum": 9.642851187173532,
+      "workingSetKiBSum": 701768,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 33386.59999996424,
+          "framesRendered": 1951,
+          "callbacks": 790,
+          "draws": 293,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 33970,
+      "cpuReportedSum": 6.858021143704372,
+      "workingSetKiBSum": 711916,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 34392.59999996424,
+          "framesRendered": 2012,
+          "callbacks": 956,
+          "draws": 354,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 34985,
+      "cpuReportedSum": 8.59725348258905,
+      "workingSetKiBSum": 749032,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 35410.89999996424,
+          "framesRendered": 2073,
+          "callbacks": 1124,
+          "draws": 415,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 35993,
+      "cpuReportedSum": 7.9027236191986,
+      "workingSetKiBSum": 776684,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 36416.99999996424,
+          "framesRendered": 2134,
+          "callbacks": 1290,
+          "draws": 476,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 37010,
+      "cpuReportedSum": 10.80272495396822,
+      "workingSetKiBSum": 821568,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 37435.39999996424,
+          "framesRendered": 2195,
+          "callbacks": 1453,
+          "draws": 537,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 38022,
+      "cpuReportedSum": 8.201261037301284,
+      "workingSetKiBSum": 820140,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 38447.39999996424,
+          "framesRendered": 2256,
+          "callbacks": 1619,
+          "draws": 598,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 39030,
+      "cpuReportedSum": 11.222894302484672,
+      "workingSetKiBSum": 824096,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 39453.49999996424,
+          "framesRendered": 2317,
+          "callbacks": 1785,
+          "draws": 659,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 40038,
+      "cpuReportedSum": 8.752951066007393,
+      "workingSetKiBSum": 834836,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 40459.49999996424,
+          "framesRendered": 2378,
+          "callbacks": 1951,
+          "draws": 720,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 40317,
+      "cpuReportedSum": 12.397020200834532,
+      "workingSetKiBSum": 844612,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 40738.39999996424,
+          "framesRendered": 2395,
+          "callbacks": 1997,
+          "draws": 737,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 41342,
+      "cpuReportedSum": 8.370982868639599,
+      "workingSetKiBSum": 869224,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 41762.69999996424,
+          "framesRendered": 2457,
+          "callbacks": 168,
+          "draws": 61,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 42352,
+      "cpuReportedSum": 3.728039903692524,
+      "workingSetKiBSum": 888452,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 42774.89999996424,
+          "framesRendered": 2517,
+          "callbacks": 335,
+          "draws": 121,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 43353,
+      "cpuReportedSum": 3.3014661041527367,
+      "workingSetKiBSum": 908828,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 43774.79999996424,
+          "framesRendered": 2577,
+          "callbacks": 500,
+          "draws": 181,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 44367,
+      "cpuReportedSum": 2.161387246344799,
+      "workingSetKiBSum": 910920,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 44787.09999996424,
+          "framesRendered": 2638,
+          "callbacks": 666,
+          "draws": 242,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 45378,
+      "cpuReportedSum": 2.208420586755551,
+      "workingSetKiBSum": 910384,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 45799.19999996424,
+          "framesRendered": 2699,
+          "callbacks": 833,
+          "draws": 303,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 46386,
+      "cpuReportedSum": 2.177300787399946,
+      "workingSetKiBSum": 905348,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 46811.39999996424,
+          "framesRendered": 2760,
+          "callbacks": 1000,
+          "draws": 364,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 47400,
+      "cpuReportedSum": 1.7454682034213915,
+      "workingSetKiBSum": 901428,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 47823.49999996424,
+          "framesRendered": 2820,
+          "callbacks": 1167,
+          "draws": 424,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 48414,
+      "cpuReportedSum": 1.7058078537659962,
+      "workingSetKiBSum": 894028,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 48835.69999996424,
+          "framesRendered": 2881,
+          "callbacks": 1334,
+          "draws": 485,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 49425,
+      "cpuReportedSum": 1.790672769722561,
+      "workingSetKiBSum": 891460,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 49847.79999996424,
+          "framesRendered": 2942,
+          "callbacks": 1501,
+          "draws": 546,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 50440,
+      "cpuReportedSum": 2.2086800739856107,
+      "workingSetKiBSum": 891752,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 50859.99999996424,
+          "framesRendered": 3002,
+          "callbacks": 1668,
+          "draws": 606,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 51442,
+      "cpuReportedSum": 2.297348990507088,
+      "workingSetKiBSum": 892076,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 51866.09999996424,
+          "framesRendered": 3063,
+          "callbacks": 1834,
+          "draws": 667,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 52452,
+      "cpuReportedSum": 2.1940427569125998,
+      "workingSetKiBSum": 892100,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 52866.09999996424,
+          "framesRendered": 3120,
+          "callbacks": 1986,
+          "draws": 724,
+          "policy": "balanced / ambient idle"
+        }
+      }
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 52774,
+      "cpuReportedSum": 1.1680979063972519,
+      "workingSetKiBSum": 893164,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 53199.59999996424,
+          "framesRendered": 3130,
+          "callbacks": 2006,
+          "draws": 734,
+          "policy": "balanced / ambient idle"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 53781,
+      "cpuReportedSum": 6.748282105595569,
+      "workingSetKiBSum": 929728,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 54203.099999940394,
+          "framesRendered": 3191,
+          "callbacks": 166,
+          "draws": 61,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 54794,
+      "cpuReportedSum": 6.884031203029606,
+      "workingSetKiBSum": 954376,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 55215.3999999404,
+          "framesRendered": 3252,
+          "callbacks": 322,
+          "draws": 122,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 55805,
+      "cpuReportedSum": 4.721202185918557,
+      "workingSetKiBSum": 950892,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 56227.499999940395,
+          "framesRendered": 3313,
+          "callbacks": 488,
+          "draws": 183,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 56821,
+      "cpuReportedSum": 4.07866538939699,
+      "workingSetKiBSum": 937472,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 57239.599999940394,
+          "framesRendered": 3374,
+          "callbacks": 655,
+          "draws": 244,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 57833,
+      "cpuReportedSum": 3.6913975654380162,
+      "workingSetKiBSum": 938396,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 58251.7999999404,
+          "framesRendered": 3435,
+          "callbacks": 821,
+          "draws": 305,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 58845,
+      "cpuReportedSum": 3.428983618685212,
+      "workingSetKiBSum": 936704,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 59263.999999940395,
+          "framesRendered": 3496,
+          "callbacks": 988,
+          "draws": 366,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 59859,
+      "cpuReportedSum": 3.1639457869347267,
+      "workingSetKiBSum": 937228,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 60282.19999994039,
+          "framesRendered": 3557,
+          "callbacks": 1156,
+          "draws": 427,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 60862,
+      "cpuReportedSum": 3.377431797336117,
+      "workingSetKiBSum": 938776,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 61282.2999999404,
+          "framesRendered": 3617,
+          "callbacks": 1321,
+          "draws": 487,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 61864,
+      "cpuReportedSum": 3.3283031589703382,
+      "workingSetKiBSum": 941188,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 62282.2999999404,
+          "framesRendered": 3677,
+          "callbacks": 1486,
+          "draws": 547,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 62876,
+      "cpuReportedSum": 3.6601411193244537,
+      "workingSetKiBSum": 950952,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 63294.39999994039,
+          "framesRendered": 3738,
+          "callbacks": 1653,
+          "draws": 608,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 63881,
+      "cpuReportedSum": 3.739080019565474,
+      "workingSetKiBSum": 972152,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 64300.5999999404,
+          "framesRendered": 3799,
+          "callbacks": 1819,
+          "draws": 669,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 64892,
+      "cpuReportedSum": 4.401137188423174,
+      "workingSetKiBSum": 994316,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65312.69999994039,
+          "framesRendered": 3860,
+          "callbacks": 1985,
+          "draws": 730,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 65222,
+      "cpuReportedSum": 4.846405793969623,
+      "workingSetKiBSum": 1002544,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65639.9999999404,
+          "framesRendered": 3880,
+          "callbacks": 2039,
+          "draws": 750,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 66233,
+      "cpuReportedSum": 2.1064777088880327,
+      "workingSetKiBSum": 1012184,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 67247,
+      "cpuReportedSum": 0.04792720883843812,
+      "workingSetKiBSum": 1008424,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 68259,
+      "cpuReportedSum": 0.029718448387687887,
+      "workingSetKiBSum": 1007372,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 69274,
+      "cpuReportedSum": 0.044604738448936844,
+      "workingSetKiBSum": 1005380,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 70286,
+      "cpuReportedSum": 0.02174929330731516,
+      "workingSetKiBSum": 1005384,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 71298,
+      "cpuReportedSum": 0.025863708147264738,
+      "workingSetKiBSum": 1005388,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 72311,
+      "cpuReportedSum": 0.02326315204597857,
+      "workingSetKiBSum": 1005392,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 73324,
+      "cpuReportedSum": 0.021208995280382694,
+      "workingSetKiBSum": 1005088,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 74340,
+      "cpuReportedSum": 0.01907854657833754,
+      "workingSetKiBSum": 1005092,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 75353,
+      "cpuReportedSum": 2.4288884034194558,
+      "workingSetKiBSum": 966124,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 76362,
+      "cpuReportedSum": 1.3248461311066277,
+      "workingSetKiBSum": 605348,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 77375,
+      "cpuReportedSum": 0.034860923562137804,
+      "workingSetKiBSum": 605488,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 77669,
+      "cpuReportedSum": 0.04787971450734976,
+      "workingSetKiBSum": 605492,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": true,
+          "minimized": false,
+          "contentBounds": {
+            "width": 1601,
+            "height": 1002
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": true,
+          "visualClockMs": 65899.2999999404,
+          "framesRendered": 3885,
+          "callbacks": 17,
+          "draws": 5,
+          "policy": "efficient / quiet"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 78692,
+      "cpuReportedSum": 0.4602335385373238,
+      "workingSetKiBSum": 602372,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 79703,
+      "cpuReportedSum": 0.04083709958811401,
+      "workingSetKiBSum": 601924,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 80704,
+      "cpuReportedSum": 0.02220730838331524,
+      "workingSetKiBSum": 601340,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 81717,
+      "cpuReportedSum": 0.01780350593165688,
+      "workingSetKiBSum": 601348,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 82732,
+      "cpuReportedSum": 0.020907386245302802,
+      "workingSetKiBSum": 601360,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 83747,
+      "cpuReportedSum": 0.017606736837382717,
+      "workingSetKiBSum": 601368,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 84757,
+      "cpuReportedSum": 0.020513119587797952,
+      "workingSetKiBSum": 600352,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 85768,
+      "cpuReportedSum": 0.01813598461137699,
+      "workingSetKiBSum": 600352,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 86780,
+      "cpuReportedSum": 0.24861067156706768,
+      "workingSetKiBSum": 592108,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 87792,
+      "cpuReportedSum": 0.020500496283917192,
+      "workingSetKiBSum": 592172,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 88804,
+      "cpuReportedSum": 0.03246943418211815,
+      "workingSetKiBSum": 592432,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 89817,
+      "cpuReportedSum": 0.018167477311845048,
+      "workingSetKiBSum": 592436,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 90004,
+      "cpuReportedSum": 0.05231286450927935,
+      "workingSetKiBSum": 592436,
+      "processCount": 4,
+      "runtime": {
+        "native": {
+          "visible": false,
+          "minimized": true,
+          "contentBounds": {
+            "width": 0,
+            "height": 0
+          }
+        },
+        "document": {
+          "hidden": false,
+          "visibilityState": "visible",
+          "active": false,
+          "visualClockMs": 65893.89999991655,
+          "framesRendered": 3886,
+          "callbacks": 0,
+          "draws": 0,
+          "policy": "balanced / active"
+        }
+      }
+    }
+  ],
+  "reserve": {
+    "utc": "2026-11-01T22:38:30.1766014Z",
+    "allowed": true,
+    "floorBytesEach": 32212254720,
+    "cFreeBytes": 112765603840,
+    "dFreeBytes": 501731033088,
+    "estimatedCBytes": 268435456,
+    "estimatedDBytes": 0,
+    "reason": "Both drives remain above reserve after estimated writes"
+  },
+  "errors": [],
+  "sourceReceipt": {
+    "artifact": ".runtime/memory-v3-5-1793572802709.json",
+    "sha256": "2dfb96d6d3683b8825f6299aa8f69e34516958b6ffdaff9c6adeec66648a2b78"
+  },
+  "sourceBinding": {
+    "nativeVerification": "evidence-instruments/review-resize-final/verification.json",
+    "nativeVerificationRevision": "831aadb6703a14ca9f910cc990d8d2e74ebf4ebe",
+    "soakHarnessRevision": "1f46e11a22e3f124222b457dbfbde45811d3524f",
+    "changedSourceFilesAgainstNativeVerification": ["native/main.cjs"],
+    "srcHashesMatchNativeVerification": true,
+    "buildHashesMatchNativeVerification": true,
+    "srcHashesMatchSourceTests": true,
+    "scopeMeaning": "Only memoryProbe diagnostics changed in native/main.cjs. The measured frontend and built assets are identical to the 831 controller candidate qualified by 57 native checks; this is not a new graphics-matrix qualification."
+  },
+  "summary": {
+    "sampleCount": 91,
+    "phaseCount": 7,
+    "intendedActivePhaseCount": 5,
+    "firstWorkingSetMiBSum": 519.0625,
+    "peakWorkingSetMiBSum": 988.4609375,
+    "lastWorkingSetMiBSum": 578.55078125,
+    "meaning": "Observed process working-set sums include shared pages; not unique resident memory, VRAM, a budget or a leak-free conclusion.",
+    "phaseDurationSumMs": 86948,
+    "configuredWarmupMs": 3000
+  },
+  "limitations": [
+    "Only the explicit soak diagnostics changed at 1f46e11; frontend/build hashes match the 57-check 831 native run.",
+    "The owned probe window was activated once during preflight after visible/unhidden/controller-active state alone produced no rendering. Actual frames, callbacks and visual clock advanced before the three-second warm-up. The reported 90.006-second probe window includes that warm-up and approximately 87 seconds of phase sampling. This intervention is recorded, not hidden.",
+    "Five intended-active phases passed visibility/active and real-render/clock validation. Passive Quiet/minimize counts include entry/reconciliation; they remain separate from warmed steady-state verifier windows.",
+    "Working-set sums may count shared pages repeatedly and measure neither unique resident memory nor VRAM.",
+    "A short probe with desktop load, Chromium allocation/cache changes and no forced GC cannot establish long-term leak freedom, thermal stability, energy use or production memory acceptance.",
+    "The failed unrendered 831 attempt and earlier valid 759 probe remain separate preserved evidence.",
+    "Private machine paths, process/window identifiers and raw logs are omitted; measured sample values and source/build binding remain."
+  ]
+}

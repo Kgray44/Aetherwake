@@ -1,0 +1,2011 @@
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const assert = require("node:assert/strict");
+const { assertNativeOwner, nativeInput } = require("./native-input.cjs");
+const { loadPreparedWorkspaces } = require("./prepared-workspaces.cjs");
+const { createHash } = require("node:crypto");
+const {
+  createNativeConsoleMonitor,
+  frameCaptureHealth,
+  assertFrameCaptureHealth,
+} = require("./native-console.cjs");
+const native = "../../visual-experience/cinematic-v3/native/";
+const {
+  checkLabelClearance,
+  verifyWorkspaceGuide,
+} = require("./native-labels.cjs");
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const monotonicNow = () => performance.now();
+const JOURNEY_LIMITS = Object.freeze({
+  receiptBytes: 2 * 1024 * 1024,
+  journalBytes: 256 * 1024,
+  journalEventBytes: 4096,
+  actions: 1024,
+  steps: 25,
+  expectedBytes: 2 * 1024 * 1024,
+});
+
+/** Same absolute budget as the host; no separate timer extends its slot. */
+function journeyDeadline(
+  argv,
+  startedAt,
+  moduleStartedMonotonicMs,
+  nowMonotonicMs = monotonicNow(),
+  nowWallMs = Date.now(),
+) {
+  const { verificationDeadline } = require(
+    native + "integration-spatial-benchmark.cjs",
+  );
+  return verificationDeadline(
+    argv,
+    Date.parse(startedAt),
+    moduleStartedMonotonicMs,
+    nowMonotonicMs,
+    nowWallMs,
+  );
+}
+
+function createJourneyGuard(
+  win,
+  expiresAt,
+  now = monotonicNow,
+  sleep = pause,
+  wallNow = Date.now,
+) {
+  assert.ok(
+    Number.isFinite(expiresAt) && expiresAt > now(),
+    "live absolute journey deadline required",
+  );
+  let aborted,
+    expectedEscapeUntil = 0,
+    expectedEscape = false;
+  const status = {
+    intentionalEscapesSent: 0,
+    intentionalEscapesObserved: 0,
+    escapeAllowanceMs: 250,
+  };
+  const guard = () => {
+    if (aborted) throw aborted;
+    if (now() >= expiresAt) throw Error("native_expanded_deadline");
+    assertNativeOwner(win);
+  };
+  const beforeInput = (event, input) => {
+    if (input.type !== "keyDown" || input.key !== "Escape") return;
+    // Electron's window event does not identify physical vs injected input.
+    // Consume only one non-repeat Escape explicitly sent by this helper, within
+    // a short bounded window. Any other Escape latches an irreversible abort.
+    if (expectedEscape && now() <= expectedEscapeUntil && !input.isAutoRepeat) {
+      expectedEscape = false;
+      status.intentionalEscapesObserved++;
+      return;
+    }
+    aborted = Error("native_expanded_operator_escape");
+    status.operatorEscapeAt = new Date(wallNow()).toISOString();
+    status.operatorEscapeMonotonicMs = now();
+    event?.preventDefault?.();
+  };
+  const input = (event) => {
+    guard();
+    if (event.type === "keyDown" && event.keyCode === "Escape") {
+      expectedEscape = true;
+      expectedEscapeUntil = Math.min(
+        expiresAt,
+        now() + status.escapeAllowanceMs,
+      );
+      status.intentionalEscapesSent++;
+    }
+    nativeInput(win, event);
+  };
+  const js = async (code, userGesture = true) => {
+    guard();
+    const value = await win.webContents.executeJavaScript(code, userGesture);
+    guard();
+    return value;
+  };
+  const ownedPause = async (ms) => {
+    const until = now() + ms;
+    do {
+      guard();
+      const remaining = expiresAt - now();
+      if (remaining <= 0) guard();
+      await sleep(Math.min(50, Math.max(1, until - now()), remaining));
+    } while (now() < until);
+    guard();
+  };
+  // The label/guide checks use these exact methods. They
+  // retain real window state and input, with no show/focus/reclaim capability.
+  const owner = {
+    isDestroyed: () => win.isDestroyed(),
+    isVisible: () => win.isVisible(),
+    isMinimized: () => win.isMinimized(),
+    isFocused: () => win.isFocused(),
+    webContents: {
+      isDestroyed: () => win.webContents.isDestroyed(),
+      executeJavaScript: js,
+      sendInputEvent: input,
+    },
+  };
+  return { guard, beforeInput, input, js, pause: ownedPause, owner, status };
+}
+
+function createJourneyEvidence(out, receipt, beforeCheckpoint = () => {}) {
+  let journalBytes = 0;
+  const checkpoint = async () => {
+    beforeCheckpoint();
+    assert.ok(
+      receipt.actions.length <= JOURNEY_LIMITS.actions,
+      "journey action count bound",
+    );
+    assert.ok(
+      receipt.steps.length <= JOURNEY_LIMITS.steps,
+      "journey step count bound",
+    );
+    const bytes = Buffer.from(JSON.stringify(receipt, null, 2));
+    assert.ok(
+      bytes.length <= JOURNEY_LIMITS.receiptBytes,
+      "journey receipt byte bound",
+    );
+    await fs.writeFile(path.join(out, "expanded.pending.json"), bytes);
+    await fs.rename(
+      path.join(out, "expanded.pending.json"),
+      path.join(out, "expanded.json"),
+    );
+  };
+  const record = async (event) => {
+    const bytes = Buffer.from(
+      JSON.stringify({ at: new Date().toISOString(), ...event }) + "\n",
+    );
+    assert.ok(
+      bytes.length <= JOURNEY_LIMITS.journalEventBytes,
+      "journey journal event byte bound",
+    );
+    assert.ok(
+      journalBytes + bytes.length <= JOURNEY_LIMITS.journalBytes,
+      "journey journal byte bound",
+    );
+    await fs.appendFile(path.join(out, "expanded-progress.jsonl"), bytes);
+    journalBytes += bytes.length;
+    await checkpoint();
+  };
+  return { checkpoint, record };
+}
+exports.JOURNEY_LIMITS = JOURNEY_LIMITS;
+exports.journeyDeadline = journeyDeadline;
+exports.createJourneyGuard = createJourneyGuard;
+exports.createJourneyEvidence = createJourneyEvidence;
+
+/** Standalone browser-side hit test; do not assume a fixed pixel misses labels. */
+function spatialDragPoint(selector, bodyKey, dx, dy) {
+  const surface = document.querySelector(selector),
+    r = surface?.getBoundingClientRect();
+  if (
+    !r ||
+    !r.width ||
+    !r.height ||
+    surface.hidden ||
+    surface.closest("[inert]")
+  )
+    return { error: "Missing or inactive spatial drag surface" };
+  const exposed = (x, y) => {
+    const hit = document.elementFromPoint(x, y);
+    return (
+      hit === surface ||
+      (hit?.classList?.contains("aw-spatial-world") && surface.contains(hit))
+    );
+  };
+  const inside = (x, y) =>
+    x >= Math.max(1, r.left) &&
+    y >= Math.max(1, r.top) &&
+    x + Math.min(0, dx) >= Math.max(1, r.left) &&
+    y + Math.min(0, dy) >= Math.max(1, r.top) &&
+    x + Math.max(0, dx) < Math.min(innerWidth, r.right) &&
+    y + Math.max(0, dy) < Math.min(innerHeight, r.bottom);
+  if (bodyKey) {
+    const label = [...surface.querySelectorAll(".aw-anchor[data-key]")].find(
+        (e) => e.dataset.key === bodyKey,
+      ),
+      lr = label?.getBoundingClientRect();
+    if (!lr) return { error: "Body label missing", bodyKey };
+    const lx = lr.left + lr.width / 2 - r.left,
+      ly = lr.top + lr.height / 2 - r.top;
+    const line = [...surface.querySelectorAll(".aw-connections line")].find(
+      (l) =>
+        Math.abs(Number(l.getAttribute("x2")) - lx) < 4 &&
+        Math.abs(Number(l.getAttribute("y2")) + 15 - ly) < 4,
+    );
+    if (!line) return { error: "Projected body leader missing", bodyKey };
+    const x = Math.round(r.left + Number(line.getAttribute("x1"))),
+      y = Math.round(r.top + Number(line.getAttribute("y1")));
+    if (!inside(x, y))
+      return { error: "Projected body drag path outside field", bodyKey, x, y };
+    if (!exposed(x, y))
+      return { error: "Projected body drag target occluded", bodyKey, x, y };
+    return { point: { x, y }, method: "actual-body-leader", attempts: 1 };
+  }
+  const candidates = [
+    [0.2, 0.7],
+    ...[0.45, 0.2, 0.75, 0.9, 0.1].flatMap((y) =>
+      [0.5, 0.15, 0.85, 0.3, 0.7].map((x) => [x, y]),
+    ),
+  ];
+  const blockers = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const [fx, fy] = candidates[i],
+      x = Math.round(r.left + r.width * fx),
+      y = Math.round(r.top + r.height * fy);
+    if (!inside(x, y)) continue;
+    if (exposed(x, y))
+      return {
+        point: { x, y },
+        method: "hit-tested-spatial-background",
+        attempts: i + 1,
+      };
+    const hit = document.elementFromPoint(x, y);
+    if (blockers.length < 4)
+      blockers.push(
+        String(hit?.className ?? hit?.id ?? "no element").slice(0, 160),
+      );
+  }
+  return {
+    error: "No exposed spatial background for native drag",
+    attempts: candidates.length,
+    blockers,
+  };
+}
+exports.spatialDragPoint = spatialDragPoint;
+
+/** Standalone browser read: an expanded host can precede its resource mount. */
+function taskGroupChecklistReady(blockId, expected) {
+  if (!Array.isArray(expected) || !expected.length || expected.length > 64)
+    return false;
+  const members = new Map();
+  for (const member of expected) {
+    if (
+      typeof member?.id !== "string" ||
+      typeof member.checked !== "boolean" ||
+      members.has(member.id)
+    )
+      return false;
+    members.set(member.id, member.checked);
+  }
+  const root = document.querySelector(
+    '[data-block="' +
+      CSS.escape(blockId) +
+      '"] .aw-task-group[aria-label="Manual task group"]',
+  );
+  if (
+    !root ||
+    !root.getClientRects().length ||
+    root.closest("[hidden],[inert]")
+  )
+    return false;
+  const rows = [...root.querySelectorAll("[data-task-id]")];
+  if (rows.length !== members.size) return false;
+  const seen = new Set();
+  for (const row of rows) {
+    const id = row.dataset.taskId,
+      input = row.querySelector('input[type="checkbox"]');
+    if (
+      !members.has(id) ||
+      seen.has(id) ||
+      !input ||
+      input.disabled ||
+      input.checked !== members.get(id) ||
+      !input.getClientRects().length ||
+      input.closest("[hidden],[inert]") ||
+      !input.getAttribute("aria-label")?.startsWith("Mark ")
+    )
+      return false;
+    seen.add(id);
+  }
+  return true;
+}
+
+function waitForTaskGroupChecklist(wait, blockId, canonicalMembers) {
+  const expected = canonicalMembers.map((member) => ({
+    id: member.id,
+    checked: member.status === "done",
+  }));
+  return wait(
+    "(" +
+      taskGroupChecklistReady.toString() +
+      ")(" +
+      JSON.stringify(blockId) +
+      "," +
+      JSON.stringify(expected) +
+      ")",
+    5000,
+  );
+}
+exports.taskGroupChecklistReady = taskGroupChecklistReady;
+exports.waitForTaskGroupChecklist = waitForTaskGroupChecklist;
+
+const geometry = (s) =>
+  s.blocks
+    .map(
+      ({
+        id,
+        resource_id,
+        workspace_id,
+        x,
+        y,
+        width,
+        height,
+        z,
+        shape,
+        rotation,
+      }) => ({
+        id,
+        resource_id,
+        workspace_id,
+        x,
+        y,
+        width,
+        height,
+        z,
+        shape,
+        rotation,
+      }),
+    )
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+/** Called only by the integration lead's existing real desktop host; never launches a window. */
+async function verifyJourney({
+  win,
+  app,
+  privateRoot,
+  source,
+  session,
+  localURL,
+  startupErrors,
+  moduleStartedMonotonicMs,
+}) {
+  assert.ok(
+    process.argv.includes("--integration-expanded"),
+    "explicit expanded native mode required",
+  );
+  assert.ok(
+    source?.hashes && source?.buildAssets,
+    "source and built asset hashes required",
+  );
+  const evidenceBase = path.resolve(
+    __dirname,
+    "../../visual-experience/cinematic-v3/.runtime/application-evidence",
+  );
+  await fs.mkdir(evidenceBase, { recursive: true });
+  const out = await fs.mkdtemp(
+    path.join(evidenceBase, "expanded-" + Date.now() + "-"),
+  );
+  const receipt = {
+    source,
+    syntheticData: true,
+    host: "Existing actual Aerynth desktop host, canonical SQLite and shared V3.5 WebGL context",
+    checks: [],
+    actions: [],
+    steps: [],
+    screenshots: [],
+    videos: [],
+    passed: false,
+    state: "initializing",
+    consoleDiagnostics: null,
+    rendererErrorScope:
+      "Window error events and caught graphics construction/recovery exceptions; console-message errors are recorded separately.",
+    limits: JOURNEY_LIMITS,
+    timing: {
+      helperStartedAt: new Date().toISOString(),
+      helperStartedMonotonicMs: monotonicNow(),
+    },
+    limitations: [
+      "Window recordings and callback statistics do not measure monitor-presented frames.",
+      "Ordinary conversation branching is an app-level continuation with reviewed source context; no provider fork, inference or model response is claimed.",
+      "This journey does not replace rendered-scale performance measurements or owner artistic acceptance.",
+      "Injected and physical window Escape events have no source identifier. Only one explicitly injected non-repeat Escape has a 250 ms allowance; unmatched or repeating Escape aborts.",
+      "UTC timestamps and deadlineAt are wall-clock evidence and may reverse; only the explicit host monotonic start drives expiry and elapsed durations.",
+    ],
+  };
+  let recorder, run, ownerContents, wait, click, fill, snapshot, consoleMonitor;
+  const rawJs = (code) => win.webContents.executeJavaScript(code, true);
+  const js = (code) => {
+    assert.ok(run, "admitted journey required");
+    return run.js(code);
+  };
+  const pause = (ms) => {
+    assert.ok(run, "admitted journey required");
+    return run.pause(ms);
+  };
+  const send = (event) => {
+    assert.ok(run, "admitted journey required");
+    return run.input(event);
+  };
+  const evidence = createJourneyEvidence(out, receipt, () => {
+    receipt.consoleDiagnostics = consoleMonitor?.snapshot() ?? null;
+  });
+  const mark = async (label) => {
+    receipt.actions.push({ label, at: new Date().toISOString() });
+    await evidence.record({ phase: "action", label });
+    run.guard();
+  };
+  const step = async (number, label) => {
+    receipt.steps.push({ number, label, at: new Date().toISOString() });
+    await evidence.record({ phase: "step-completed", number, label });
+    run.guard();
+  };
+  const spatial = () => js("window.__aerynth.snapshot().spatial");
+  const checkOverviewPresence = async (label) => {
+    await wait(
+      "(()=>{const b=window.__aerynth.snapshot().gpu.presenceBounds;return b&&b.w>0&&b.h>0&&b.x+b.w/2>=innerWidth*.75&&b.x+b.w/2<=innerWidth&&b.y+b.h/2>=0&&b.y+b.h/2<=innerHeight*.5})()",
+    );
+    receipt.actions.push({
+      label: "Overview Vela placement: " + label,
+      bounds: await js("window.__aerynth.snapshot().gpu.presenceBounds"),
+      labelClearance: await checkLabelClearance(run.owner),
+    });
+    const scene = await spatial(),
+      discs = scene.renderer.projectedBodies;
+    assert.ok(discs.length > 0, "actual scene has projected body bounds");
+    assert.equal(
+      scene.renderer.overlapCulled,
+      0,
+      "on-screen bodies are never removed for camera alignment",
+    );
+    assert.equal(
+      scene.renderer.nodes,
+      scene.renderer.detailedBodies + scene.renderer.instancedBodies,
+    );
+    for (let i = 0; i < discs.length; i++)
+      for (let j = i + 1; j < discs.length; j++)
+        assert.ok(
+          Math.hypot(
+            discs[i].world.x - discs[j].world.x,
+            discs[i].world.y - discs[j].world.y,
+            discs[i].world.z - discs[j].world.z,
+          ) >=
+            discs[i].worldRadius + discs[j].worldRadius + 27.99,
+          "actual body envelopes retain their physical gap through orbit",
+        );
+    assert.equal(
+      await js(
+        'document.querySelectorAll(".aw-constellation-bar button").length',
+      ),
+      2,
+      "only commands and info are persistent Constellation controls",
+    );
+  };
+  const flush = () => js("window.__aerynth.flush()");
+  const key = async (keyCode, modifiers = []) => {
+    send({ type: "keyDown", keyCode, modifiers });
+    send({ type: "keyUp", keyCode, modifiers });
+    await pause(100);
+  };
+  const nativeWheel = async (point, domDeltaY) => {
+    const scale = await js("devicePixelRatio");
+    assert.ok(
+      Number.isFinite(scale) && scale > 0 && scale <= 16,
+      "valid native wheel pixel scale",
+    );
+    // Electron copies deltaY to Blink's native delta; DOM wheel reverses it and
+    // divides by devicePixelRatio. Callers use DOM direction and CSS pixels.
+    // https://github.com/electron/electron/blob/v45.2.1/shell/common/gin_converters/blink_converter.cc#L409-L410
+    // https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/events/wheel_event.cc#L100-L101
+    send({ type: "mouseMove", ...point });
+    send({
+      type: "mouseWheel",
+      ...point,
+      deltaX: 0,
+      deltaY: -domDeltaY * scale,
+      canScroll: true,
+    });
+  };
+  const view = () => js("window.aerynthHost.command('viewState',{})");
+  const shot = async (name, failureOnly = false) => {
+    assert.ok(receipt.screenshots.length < 14, "screenshot count bound");
+    assert.ok(
+      win.isFocused() && !win.isMinimized(),
+      "native evidence requires the focused visible owner window",
+    );
+    const health = async () => {
+      if (!failureOnly) consoleMonitor.assertClean();
+      assertFrameCaptureHealth(
+        await js("(" + frameCaptureHealth.toString() + ")()"),
+        failureOnly,
+      );
+    };
+    await health();
+    const before = await js("window.__aerynth.snapshot().metrics.draws");
+    for (const x of [3, 1]) send({ type: "mouseMove", x, y: 1 });
+    const fresh = `window.__aerynth.snapshot().metrics.draws>${before}`;
+    if (failureOnly) {
+      // Initialization can fail before navigation controls exist. Keep this
+      // diagnostic read under the same admitted owner/deadline, without a
+      // console-health gate preventing capture of the actual error state.
+      const end = monotonicNow() + 8000;
+      while (!(await js(fresh))) {
+        if (monotonicNow() >= end)
+          throw Error("failure capture GPU draw timed out");
+        await pause(80);
+      }
+    } else await wait(fresh, 8000);
+    await pause(350);
+    run.guard();
+    await health();
+    const bytes = (await win.webContents.capturePage()).toPNG();
+    run.guard();
+    await health();
+    assert.ok(bytes.length < 8 * 1024 * 1024, "screenshot byte bound");
+    await fs.writeFile(path.join(out, name + ".png"), bytes, { flag: "wx" });
+    receipt.screenshots.push({
+      file: name + ".png",
+      purpose: failureOnly ? "failure-diagnostic" : "verification",
+      byteCount: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      freshGpuDraws: {
+        before,
+        after: await js("window.__aerynth.snapshot().metrics.draws"),
+      },
+    });
+    await evidence.record({ phase: "screenshot", file: name + ".png" });
+    run.guard();
+  };
+  const commandIds = {
+    "Link resources": "link",
+    "Explore neighborhood": "explore",
+    "Inspect relationships": "relationships",
+    "Branch conversation": "branch",
+    Universe: "universe",
+    "Inspect selection": "inspect",
+    Arrange: "arrange",
+    "Save current view": "save-view",
+    "Saved views": "saved-views",
+    Recenter: "home",
+  };
+  const command = async (title) => {
+    await click('.aw-quiet-control[aria-label="Commands and destinations"]');
+    await fill(".aw-destinations input", title);
+    await click(`.aw-command-row[data-command="${commandIds[title]}"]`);
+  };
+  const textButton = async (text, scope = ".aw-constellation") => {
+    if (commandIds[text] && scope !== ".aw-graph-dialog") return command(text);
+    const token = "expanded-" + Date.now();
+    await js(
+      `(()=>{const e=[...document.querySelectorAll(${JSON.stringify(scope + " button")})].find(e=>e.textContent.trim()===${JSON.stringify(text)});if(!e)throw Error('Missing button: '+${JSON.stringify(text)});e.dataset.expandedTarget=${JSON.stringify(token)}})()`,
+    );
+    await click(`[data-expanded-target="${token}"]`);
+  };
+  const closeGraph = () => textButton("Close", ".aw-graph-dialog");
+  const openEnvironments = async () => {
+    if (!(await js('!!document.querySelector(".en-navigator")?.getClientRects().length'))) await click("#workspace-manager");
+  };
+  const selectWorkspace = async (id) => {
+    const workspace = (await snapshot()).workspaces.find(item => item.id === id);
+    assert.ok(workspace, "Canonical workspace must exist before opening its control");
+    await openEnvironments();
+    await fill('.en-navigator input[name="query"]', workspace.title);
+    await click(`.en-tree .en-workspace-row[data-workspace-id=${JSON.stringify(id)}] [data-action="open-workspace"]`);
+    await wait(
+      `window.__aerynth.application().navigation.kind==='workspace'&&window.__aerynth.application().activeWorkspaceId===${JSON.stringify(id)}`,
+    );
+    await pause(300);
+  };
+  const node = async (nodeKey) => {
+    await wait(
+      `!!document.querySelector(${JSON.stringify('[data-key="' + nodeKey + '"]')})`,
+    );
+    await click(`[data-key="${nodeKey}"]`);
+    await key("Enter");
+    await pause(450);
+  };
+  const locate = async (title, id) => {
+    await click('.aw-quiet-control[aria-label="Commands and destinations"]');
+    await fill(".aw-destinations input", title);
+    await click(
+      `.aw-destination-results button[data-command=${JSON.stringify(id)}]`,
+    );
+    await wait(
+      `window.__aerynth.snapshot().spatial.selected===${JSON.stringify(id)}`,
+    );
+    await pause(550);
+  };
+  const beginEnvironment = async kind => {
+    await openEnvironments();
+    const toggle = '.en-navigator [data-action="toggle-create"]';
+    if (!(await js(`document.querySelector(${JSON.stringify(toggle)})?.getAttribute('aria-expanded')==='true'`))) await click(toggle);
+    await click(`.en-navigator [data-action="create-${kind}"]`);
+    return `.en-editor[data-mode="${kind}-create"]:not([hidden])`;
+  };
+  const createProject = async (title) => {
+    const editor = await beginEnvironment("project");
+    await fill(editor + ' input[name="title"]', title);
+    await click(editor + ' [data-action="submit-project-create"]');
+    await wait(`window.__aerynth.application().projects.some(p=>p.title===${JSON.stringify(title)})`);
+    return (await snapshot()).projects.find((p) => p.title === title).id;
+  };
+  const createWorkspace = async (title, projectId) => {
+    const editor = await beginEnvironment("workspace");
+    await fill(editor + ' input[name="title"]', title);
+    await fill(editor + ' select[name="projectId"]', projectId);
+    await click(editor + ' [data-action="submit-workspace-create"]');
+    await wait(
+      `window.__aerynth.application().workspaces.some(w=>w.title===${JSON.stringify(title)})`,
+    );
+    return (await snapshot()).workspaces.find((w) => w.title === title).id;
+  };
+  const libraryField = async (label, tag = "input") => {
+    const token = "library-field-" + label.toLowerCase().replaceAll(" ", "-");
+    await js(
+      `(()=>{const labels=[...document.querySelectorAll('.aw-library[aria-label="Block Library"] .aw-library__detail form label')],label=labels.find(e=>e.firstChild?.textContent.trim()===${JSON.stringify(label)}),control=label?.querySelector(${JSON.stringify(tag)});if(!control)throw Error('Missing Library field: '+${JSON.stringify(label)});control.dataset.expandedField=${JSON.stringify(token)}})()`,
+    );
+    return `[data-expanded-field="${token}"]`;
+  };
+  const add = async (kind, title, dimensions) => {
+    await workingHome();
+    const label = {
+      conversation: "Conversation",
+      note: "Note",
+      task: "Task",
+      research: "Research",
+      reference: "Reference",
+      task_group: "Task group",
+    }[kind];
+    assert.ok(label, "supported actual Library entry");
+    await click('.aw-workspace-add[aria-label="Add block"]');
+    await wait(
+      `!!document.querySelector('.aw-library[aria-label="Block Library"] .aw-library__detail form')`,
+    );
+    await fill('.aw-library input[aria-label="Search blocks"]', label);
+    await js(
+      `(()=>{const entry=[...document.querySelectorAll('.aw-library__list button')].find(e=>e.firstChild?.textContent.replace(/^★ /,'').trim()===${JSON.stringify(label)});if(!entry)throw Error('Missing available Library entry: '+${JSON.stringify(label)});entry.dataset.expandedKind=${JSON.stringify(kind)}})()`,
+    );
+    await click(`.aw-library__list button[data-expanded-kind="${kind}"]`);
+    await wait(
+      `document.querySelector('.aw-library__detail h3')?.textContent===${JSON.stringify(label)}`,
+    );
+    await fill(await libraryField("Title"), title);
+    if (kind === "conversation")
+      await fill(await libraryField("Conversation backend", "select"), "local");
+    if (dimensions) {
+      await click(".aw-library__detail form > details > summary");
+      for (const axis of ["Width", "Height"])
+        if (dimensions[axis.toLowerCase()] !== undefined)
+          await fill(
+            await libraryField(axis),
+            String(dimensions[axis.toLowerCase()]),
+          );
+    }
+    await click('.aw-library__detail form > button[type="submit"]');
+    await wait(
+      `!document.querySelector('.aw-library[aria-label="Block Library"]')`,
+    );
+    await wait(
+      `window.__aerynth.application().resources.some(r=>r.title===${JSON.stringify(title)})`,
+    );
+    const s = await snapshot(),
+      r = s.resources.find((r) => r.title === title),
+      b = s.blocks.find((b) => b.resource_id === r?.id);
+    assert.ok(r && b, "created canonical resource and block");
+    assert.equal(r.kind, kind);
+    if (kind === "conversation") assert.equal(r.provider, "local");
+    await mark("Created through actual Block Library: " + title);
+    return { resource: r, block: b };
+  };
+  const workingHome = async () => {
+    await key("Escape");
+    await wait('!document.querySelector(".folio.expanded")');
+  };
+  const workspaceActionsPanel = '[data-surface-id="workspace-actions"]';
+  const workspaceAction = action => `.aw-workspace-actions [data-action="${action}"]`;
+  const workspaceActions = async () => {
+    if (!(await js(`!!document.querySelector(${JSON.stringify(workspaceActionsPanel)})&&!document.querySelector(${JSON.stringify(workspaceActionsPanel)}).inert`)))
+      await click('.aw-workspace-layout [aria-label="Workspace actions"]');
+    await wait(`document.querySelector('.aw-workspace-actions')?.dataset.state==='ready'`);
+  };
+  const workspaceOut = async (wheel = false) => {
+    await workingHome();
+    if (wheel) {
+      const point = await js(
+        `(()=>{for(let y=90;y<innerHeight-70;y+=45)for(let x=45;x<innerWidth-40;x+=55){const e=document.elementFromPoint(x,y);if(e&&['world','stage','app'].includes(e.id))return{x,y}}return null})()`,
+      );
+      assert.ok(
+        point,
+        "actual empty workspace background is available for wheel departure",
+      );
+      await nativeWheel(point, 120);
+      await wait(
+        "window.__aerynth.application().navigation.kind==='constellation'",
+      );
+      await mark(
+        "Zoomed out through native wheel input over actual empty workspace space",
+      );
+    } else {
+      await workspaceActions();
+      await click(workspaceAction("constellation"));
+    }
+    await pause(350);
+  };
+  const workspaceIn = async (workspaceId) => {
+    const workspace = (await snapshot()).workspaces.find(
+        (w) => w.id === workspaceId,
+      ),
+      nodeKey = "workspace:" + workspaceId;
+    assert.ok(workspace);
+    await locate(workspace.title, nodeKey);
+    await click(`[data-key="${nodeKey}"]`);
+    const point = await js(
+      `(()=>{const e=document.querySelector(${JSON.stringify('[data-key="' + nodeKey + '"]')}),r=e?.getBoundingClientRect();if(!r)return null;const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);return document.elementFromPoint(x,y)?.closest('.aw-anchor')?.dataset.key===${JSON.stringify(nodeKey)}?{x,y}:null})()`,
+    );
+    assert.ok(
+      point,
+      "workspace destination is visibly exposed for inward wheel input",
+    );
+    await nativeWheel(point, -120);
+    await wait(
+      `window.__aerynth.application().navigation.kind==='workspace'&&window.__aerynth.application().activeWorkspaceId===${JSON.stringify(workspaceId)}`,
+    );
+    await mark(
+      "Entered the actual workspace through native inward wheel input",
+    );
+    await pause(350);
+  };
+  const openBlock = async (id) => {
+    await workingHome();
+    await workspaceActions();
+    const find = workspaceAction("find-toggle");
+    if (!(await js(`document.querySelector(${JSON.stringify(find)})?.getAttribute('aria-expanded')==='true'`))) await click(find);
+    await click(`${workspaceAction("find-block")}[data-block-id=${JSON.stringify(id)}]`);
+    if (await js(`!!document.querySelector(${JSON.stringify(workspaceActionsPanel)})&&!document.querySelector(${JSON.stringify(workspaceActionsPanel)}).inert`))
+      await click(workspaceActionsPanel + ' .aw-contextual-dismiss');
+    await wait(`!!document.querySelector('[data-block="${id}"].expanded')`);
+  };
+  const editDocument = async (id, content) => {
+    const scope = `[data-block="${id}"]`,
+      input = scope + " textarea",
+      edit = scope + ' .aw-note-tools button[aria-label="Edit document"]';
+    // Notes begin in Write; research/reference begin in Read. Open the actual
+    // Edit control only when present, never toggle a writable note back to Read.
+    await wait(
+      `(()=>{const e=document.querySelector(${JSON.stringify(input)});return !!e&&!e.disabled})()`,
+    );
+    if (await js(`!!document.querySelector(${JSON.stringify(edit)})`))
+      await click(edit);
+    await wait(
+      `(()=>{const e=document.querySelector(${JSON.stringify(input)});return !!e&&!e.disabled&&!e.hidden&&!e.closest('[hidden],[inert]')&&e.getClientRects().length>0})()`,
+    );
+    await fill(input, content);
+  };
+  const cardPoint = async (id, edge) => {
+    const selector = `[data-block="${id}"] ${edge ? ".aw-card-edge--" + edge : ".folio-top"}`;
+    let last, point;
+    const deadline = monotonicNow() + 3000;
+    do {
+      await pause(80);
+      point = await js(
+        `(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e?.getBoundingClientRect();if(!r||!r.width||!r.height)return{error:'Missing direct card target'};for(const ratio of [.5,.3,.7,.15,.85]){const x=Math.round(r.x+r.width*ratio),y=Math.round(r.y+r.height*.5),hit=document.elementFromPoint(x,y);if(hit?.closest('[data-block]')?.dataset.block===${JSON.stringify(id)}&&!hit.closest('button,input,textarea,select,a,[contenteditable=true]')&&(!${JSON.stringify(edge ?? null)}||hit.closest('[data-resize-edge]')?.dataset.resizeEdge===${JSON.stringify(edge ?? null)}))return{x,y};}return{error:'Occluded direct card target'}})()`,
+      );
+      if (
+        !point.error &&
+        last &&
+        !last.error &&
+        Math.hypot(last.x - point.x, last.y - point.y) < 0.75
+      )
+        return point;
+      last = point;
+    } while (monotonicNow() < deadline);
+    throw Error(point?.error ?? "Moving direct card target");
+  };
+  const cardGesture = async (id, edge, dx, dy) => {
+    const before = await snapshot(),
+      old = before.blocks.find((b) => b.id === id),
+      p = await cardPoint(id, edge);
+    assert.ok(
+      Number.isSafeInteger(old?.version),
+      "canonical gesture target has a revision",
+    );
+    receipt.lastGesture = {
+      blockId: id,
+      edge: edge ?? null,
+      before: old,
+      startingLayoutVersion: before.layoutVersion,
+      point: p,
+      dx,
+      dy,
+      at: new Date().toISOString(),
+    };
+    for (const type of ["mouseMove", "mouseDown"])
+      send({
+        type,
+        ...p,
+        button: "left",
+        clickCount: 1,
+      });
+    for (let i = 1; i <= 12; i++) {
+      send({
+        type: "mouseMove",
+        x: Math.round(p.x + (dx * i) / 12),
+        y: Math.round(p.y + (dy * i) / 12),
+        button: "left",
+        modifiers: ["leftbuttondown"],
+      });
+      await pause(20);
+    }
+    send({
+      type: "mouseUp",
+      x: p.x + dx,
+      y: p.y + dy,
+      button: "left",
+      clickCount: 1,
+    });
+    await wait(
+      `(()=>{const s=window.__aerynth.application(),b=s.blocks.find(b=>b.id===${JSON.stringify(id)});return s.layoutVersion>${before.layoutVersion}&&b?.version>${old.version}&&(${edge ? `b.width!==${old.width}||b.height!==${old.height}` : `b.x!==${old.x}||b.y!==${old.y}`})})()`,
+    );
+    const after = await snapshot(),
+      moved = after.blocks.find((b) => b.id === id);
+    receipt.lastGesture.after = moved;
+    receipt.lastGesture.endingLayoutVersion = after.layoutVersion;
+    assert.ok(
+      edge
+        ? moved.width !== old.width || moved.height !== old.height
+        : moved.x !== old.x || moved.y !== old.y,
+      "native gesture changes actual canonical geometry",
+    );
+    assert.deepEqual(
+      after.resources,
+      before.resources,
+      "layout gesture cannot edit canonical resource content",
+    );
+    receipt.actions.push({
+      label: edge ? "Resize card" : "Move card",
+      blockId: id,
+      edge: edge ?? null,
+      dx,
+      dy,
+      method: "native-mouse-input",
+      before: old,
+      after: moved,
+    });
+    await pause(150);
+  };
+  const cardPresentation = async (id, shape) => {
+    const p = await cardPoint(id);
+    for (const type of ["mouseMove", "mouseDown", "mouseUp"])
+      send({
+        type,
+        ...p,
+        button: "right",
+        clickCount: 1,
+      });
+    await textButton("Card settings", ".application-card-actions");
+    await wait(
+      'document.querySelector("#command-surface").open&&!!document.querySelector("#command-surface select[name=shape]")',
+    );
+    await fill('#command-surface select[name="shape"]', shape);
+    await click('#command-surface button[type="submit"]');
+    await wait('!document.querySelector("#command-surface").open');
+    await wait(
+      `window.__aerynth.application().blocks.find(b=>b.id===${JSON.stringify(id)}).shape===${JSON.stringify(shape)}`,
+    );
+    await mark("Changed actual card presentation through native context menu");
+  };
+  const projectView = async () => {
+    for (
+      let i = 0;
+      i < 2 && (await spatial()).location.kind !== "project";
+      i++
+    ) {
+      await workspaceOut();
+    }
+    assert.equal((await spatial()).location.kind, "project");
+  };
+  const relate = async (sourceId, targetId) => {
+    await textButton("Link resources", ".aw-constellation-bar");
+    await fill(".aw-graph-dialog label:nth-of-type(1) select", sourceId);
+    await fill(".aw-graph-dialog label:nth-of-type(2) select", targetId);
+    await fill(".aw-graph-dialog label:nth-of-type(3) select", "references");
+    await click('.aw-graph-dialog button[type="submit"]');
+    await wait('!document.querySelector(".aw-graph-dialog").open');
+    assert.ok(
+      (await snapshot()).relationships.some(
+        (e) =>
+          e.source_id === sourceId &&
+          e.target_id === targetId &&
+          e.kind === "references",
+      ),
+    );
+  };
+  const startSegment = async (label) => {
+    assert.ok(
+      receipt.videos.length < 2,
+      "two bounded recording segments maximum",
+    );
+    run.guard();
+    const { startWindowRecording } = require(
+      native + "application-recording.cjs",
+    );
+    recorder = await startWindowRecording(win, session, localURL);
+    run.guard();
+    await mark("Start recording: " + label);
+  };
+  const stopSegment = async (file) => {
+    run.guard();
+    receipt.videos.push(await recorder.stop(path.join(out, file)));
+    recorder = null;
+    await evidence.record({ phase: "recording-completed", file });
+    run.guard();
+  };
+  const drag = async (selector, dx, dy, modifiers = [], bodyKey) => {
+    const target = await js(
+      `(${spatialDragPoint.toString()})(${JSON.stringify(selector)},${JSON.stringify(bodyKey ?? null)},${JSON.stringify(dx)},${JSON.stringify(dy)})`,
+    );
+    receipt.lastSpatialGesture = {
+      selector,
+      dx,
+      dy,
+      modifiers,
+      bodyKey: bodyKey ?? null,
+      target,
+    };
+    await evidence.record({
+      phase: "spatial-gesture-start",
+      ...receipt.lastSpatialGesture,
+    });
+    assert.ok(
+      target.point && !target.error,
+      "Native spatial drag target: " + JSON.stringify(target),
+    );
+    const p = target.point;
+    send({ type: "mouseMove", ...p, modifiers });
+    send({
+      type: "mouseDown",
+      ...p,
+      button: "left",
+      clickCount: 1,
+      modifiers,
+    });
+    await pause(75);
+    for (let i = 1; i <= 12; i++) {
+      send({
+        type: "mouseMove",
+        x: Math.round(p.x + (dx * i) / 12),
+        y: Math.round(p.y + (dy * i) / 12),
+        button: "left",
+        modifiers: [...modifiers, "leftbuttondown"],
+      });
+      await pause(20);
+    }
+    send({
+      type: "mouseUp",
+      x: Math.round(p.x + dx),
+      y: Math.round(p.y + dy),
+      button: "left",
+      clickCount: 1,
+      modifiers,
+    });
+    await pause(650);
+    await mark("Native pointer drag " + selector + " " + modifiers.join("+"));
+  };
+  try {
+    const budget = journeyDeadline(
+      process.argv,
+      source.startedAt,
+      moduleStartedMonotonicMs,
+    );
+    receipt.timing.moduleStartedAt = source.startedAt;
+    receipt.timing.deadlineAt = new Date(
+      Date.parse(source.startedAt) + budget.durationMs,
+    ).toISOString();
+    receipt.timing.deadlineAtMonotonicMs = budget.expiresAtMonotonicMs;
+    receipt.timing.clock = budget.clock;
+    receipt.timing.deadlineMs = budget.durationMs;
+    run = createJourneyGuard(win, budget.expiresAtMonotonicMs);
+    receipt.inputGuard = run.status;
+    ownerContents = win.webContents;
+    ownerContents.on("before-input-event", run.beforeInput);
+    consoleMonitor = createNativeConsoleMonitor(ownerContents, startupErrors);
+    consoleMonitor.assertClean();
+    await evidence.record({ phase: "hydrating" });
+    const { benchmarkControls } = require(
+      native + "integration-spatial-benchmark.cjs",
+    );
+    const controls = benchmarkControls(win, js, run.guard, run.pause);
+    ({ click, fill, snapshot } = controls);
+    // Preserve the journey driver's previous local wait allowance.
+    wait = (expression, timeout = 30000) => controls.wait(expression, timeout);
+    await wait('document.body.dataset.applicationHydrated === "true"', 30000);
+    run.guard();
+    receipt.state = "running";
+    await evidence.record({
+      phase: "interactive",
+      restart: process.argv.includes("--verify-restore"),
+    });
+    if (process.argv.includes("--verify-restore")) {
+      assert.ok(
+        (await fs.stat(path.join(privateRoot, "expanded-expected.json")))
+          .size <= JOURNEY_LIMITS.expectedBytes,
+        "restart expectation byte bound",
+      );
+      const expected = JSON.parse(
+        await fs.readFile(
+          path.join(privateRoot, "expanded-expected.json"),
+          "utf8",
+        ),
+      );
+      assert.notEqual(
+        source.startedAt,
+        expected.sourceStartedAt,
+        "new native process start",
+      );
+      assert.deepEqual(
+        source.hashes,
+        expected.sourceHashes,
+        "same final source across restart",
+      );
+      assert.deepEqual(
+        source.buildAssets,
+        expected.buildAssets,
+        "same compiled assets across restart",
+      );
+      await step(
+        24,
+        "Restart the actual native host and service with the same source and profile",
+      );
+      const actual = await snapshot();
+      assert.equal(
+        actual.activeWorkspaceId,
+        expected.snapshot.activeWorkspaceId,
+      );
+      assert.deepEqual(geometry(actual), geometry(expected.snapshot));
+      assert.deepEqual(
+        geometry({ blocks: actual.navigationBlocks ?? actual.blocks }),
+        geometry({
+          blocks:
+            expected.snapshot.navigationBlocks ?? expected.snapshot.blocks,
+        }),
+        "all authorized workspace layouts survive restart",
+      );
+      for (const key of [
+        "projects",
+        "workspaces",
+        "resources",
+        "relationships",
+        "conversationBranches",
+        "presence",
+      ])
+        assert.deepEqual(
+          actual[key],
+          expected.snapshot[key],
+          "restart canonical " + key,
+        );
+      const restored = await view();
+      for (const key of [
+        "anchors",
+        "bookmarks",
+        "location",
+        "history",
+        "future",
+        "savedViews",
+      ])
+        assert.deepEqual(
+          restored[key],
+          expected.view[key],
+          "restart spatial " + key,
+        );
+      const live = await spatial(),
+        scope = "workspace:" + actual.activeWorkspaceId;
+      assert.deepEqual(
+        live.anchors,
+        expected.view.anchors,
+        "rendered controller anchors restored",
+      );
+      assert.deepEqual(
+        live.location,
+        expected.view.location,
+        "rendered controller destination restored",
+      );
+      assert.deepEqual(
+        live.camera,
+        expected.view.bookmarks[scope].spatial,
+        "actual camera restored, beyond the stored receipt",
+      );
+      assert.equal(live.selected, expected.view.bookmarks[scope].selected);
+      await step(
+        25,
+        "Verify all workspace geometry, canonical relationships, branch ancestry, XYZ, pins, bookmarks, history and live camera survived restart",
+      );
+      receipt.checks.push(
+        "fresh-process-restart-keeps-canonical-identities-content-relationships-branch-ancestry-and-complete-spatial-view",
+      );
+      await shot("11-restored-workspace");
+      await workspaceOut();
+      const project = actual.workspaces.find(
+          (w) => w.id === actual.activeWorkspaceId,
+        ).project_id,
+        projectCamera = expected.view.bookmarks["project:" + project].spatial;
+      await wait(
+        `JSON.stringify(window.__aerynth.snapshot().spatial.camera)===${JSON.stringify(JSON.stringify(projectCamera))}`,
+      );
+      assert.deepEqual(
+        (await spatial()).camera,
+        projectCamera,
+        "saved project pose is visible after restart",
+      );
+      await shot("12-restored-project");
+      assert.deepEqual(
+        receipt.steps.map((s) => s.number),
+        [24, 25],
+      );
+    } else {
+      let projects = [],
+        workspaces = [],
+        records = [];
+      if (process.argv.includes("--prepared-workspaces")) {
+        const prepared = await loadPreparedWorkspaces(
+          privateRoot,
+          source,
+          await snapshot(),
+        );
+        ({ projects, workspaces, records } = prepared);
+        receipt.taskGroups = prepared.taskGroups;
+        receipt.setup = prepared.evidence;
+      } else {
+        for (const [pi, [name, names]] of [
+          ["A World for Two", ["Development", "Planning"]],
+          ["Voyagewright", ["Engineering", "Review"]],
+          ["Airbrush Disc System", ["Calibration", "Hardware"]],
+        ].entries()) {
+          const projectId = await createProject(name);
+          projects.push(projectId);
+          for (const [wi, title] of names.entries()) {
+            const workspaceId = await createWorkspace(title, projectId);
+            workspaces.push(workspaceId);
+            const row = { projectId, workspaceId, title };
+            for (const kind of [
+              "conversation",
+              "note",
+              "task",
+              "research",
+              "reference",
+            ]) {
+              row[kind] = await add(
+                kind,
+                title + " " + kind,
+                kind === "note"
+                  ? { width: 330 + pi * 35, height: 230 + wi * 25 }
+                  : undefined,
+              );
+            }
+            const b = row.note.block;
+            await openBlock(b.id);
+            await workingHome();
+            await cardGesture(b.id, null, 35 + pi * 10, 15 + wi * 10);
+            await openBlock(b.id);
+            await editDocument(
+              b.id,
+              "Synthetic durable " + title + " note. Stable resource identity.",
+            );
+            await flush();
+            await openBlock(row.reference.block.id);
+            await editDocument(
+              row.reference.block.id,
+              "Synthetic link: https://example.invalid/" + title.toLowerCase(),
+            );
+            await flush();
+            await workingHome();
+            records.push(row);
+          }
+        }
+        assert.equal(projects.length, 3);
+        assert.equal(workspaces.length, 6);
+        receipt.taskGroups = [];
+        for (const row of [records[0], records[2], records[4]]) {
+          await selectWorkspace(row.workspaceId);
+          await add("conversation", row.title + " follow-up conversation");
+          const extraTask = await add("task", row.title + " verification task"),
+            taskGroup = await add(
+              "task_group",
+              row.title + " local task group",
+            );
+          await openBlock(taskGroup.block.id);
+          await textButton(
+            "Manage tasks",
+            `[data-block="${taskGroup.block.id}"] .aw-task-group[aria-label="Manual task group"]`,
+          );
+          for (const taskId of [row.task.resource.id, extraTask.resource.id])
+            await click(
+              `#task-group-members input[name="taskId"][value="${taskId}"]`,
+            );
+          await click('#task-group-members button[type="submit"]');
+          await wait('!document.querySelector("#command-surface").open');
+          await wait(
+            `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(taskGroup.resource.id)}).taskMembers.length===2`,
+          );
+          await click(
+            `[data-block="${taskGroup.block.id}"] .aw-task-group [data-task-id="${extraTask.resource.id}"] input[type="checkbox"]`,
+          );
+          await wait(
+            `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(extraTask.resource.id)}).taskStatus==='done'`,
+          );
+          const grouped = (await snapshot()).resources.find(
+            (r) => r.id === taskGroup.resource.id,
+          );
+          assert.equal(
+            grouped.taskMembers.filter((t) => t.status === "done").length,
+            1,
+          );
+          for (const taskId of [row.task.resource.id, extraTask.resource.id])
+            assert.ok(
+              (await snapshot()).relationships.some(
+                (e) =>
+                  e.kind === "contains_task" &&
+                  e.source_id === taskGroup.resource.id &&
+                  e.target_id === taskId,
+              ),
+            );
+          receipt.taskGroups.push({
+            projectId: row.projectId,
+            resourceId: taskGroup.resource.id,
+            blockId: taskGroup.block.id,
+            memberResourceIds: [row.task.resource.id, extraTask.resource.id],
+          });
+          await workingHome();
+          await projectView();
+          await relate(row.conversation.resource.id, row.note.resource.id);
+        }
+      }
+      const originalRow = records[0],
+        other = records[2],
+        sourceRow = originalRow;
+      assert.equal(projects.length, 3);
+      assert.equal(workspaces.length, 6);
+      assert.equal(receipt.taskGroups.length, 3);
+      const fixtureState = await snapshot();
+      for (const id of projects) {
+        const projectWorkspaces = new Set(
+            fixtureState.workspaces
+              .filter((w) => w.project_id === id)
+              .map((w) => w.id),
+          ),
+          projectResources = new Set(
+            (fixtureState.navigationBlocks ?? fixtureState.blocks)
+              .filter((b) => projectWorkspaces.has(b.workspace_id))
+              .map((b) => b.resource_id),
+          );
+        assert.ok(
+          fixtureState.resources.filter(
+            (r) => projectResources.has(r.id) && r.kind === "conversation",
+          ).length >= 3,
+          "each project has several ordinary conversations",
+        );
+        assert.ok(
+          fixtureState.resources.some(
+            (r) =>
+              projectResources.has(r.id) &&
+              r.kind === "task_group" &&
+              r.taskMembers?.length >= 2,
+          ),
+          "each project has a real task group",
+        );
+        assert.ok(
+          fixtureState.relationships.some(
+            (e) =>
+              e.kind === "references" &&
+              projectResources.has(e.source_id) &&
+              projectResources.has(e.target_id) &&
+              fixtureState.resources.find((r) => r.id === e.target_id)?.kind ===
+                "note",
+          ),
+          "each project has a canonical related note",
+        );
+      }
+      await selectWorkspace(records[4].workspaceId);
+      await openBlock(receipt.taskGroups[2].blockId);
+      const observedGroup = (await snapshot()).resources.find(
+        (r) => r.id === receipt.taskGroups[2].resourceId,
+      );
+      await waitForTaskGroupChecklist(
+        wait,
+        receipt.taskGroups[2].blockId,
+        observedGroup.taskMembers,
+      );
+      const renderedMembers = await js(
+        `(()=>{const root=document.querySelector('[data-block="${receipt.taskGroups[2].blockId}"] .aw-task-group[aria-label="Manual task group"]');if(!root||!root.getClientRects().length)return null;return [...root.querySelectorAll('[data-task-id]')].map(row=>{const input=row.querySelector('input[type="checkbox"]');return{id:row.dataset.taskId,checked:input?.checked??null,label:input?.getAttribute('aria-label')??null,visible:!!input?.getClientRects().length}})})()`,
+      );
+      assert.ok(
+        renderedMembers?.length,
+        "actual registered task group renders its checklist",
+      );
+      assert.deepEqual(
+        renderedMembers
+          .map((row) => ({ id: row.id, checked: row.checked }))
+          .sort((a, b) => a.id.localeCompare(b.id)),
+        observedGroup.taskMembers
+          .map((row) => ({ id: row.id, checked: row.status === "done" }))
+          .sort((a, b) => a.id.localeCompare(b.id)),
+        "rendered keyed task checkboxes match canonical membership and status",
+      );
+      assert.ok(
+        renderedMembers.every(
+          (row) => row.visible && row.label?.startsWith("Mark "),
+        ),
+        "task status controls remain visible and accessible",
+      );
+      receipt.renderedTaskGroup = {
+        resourceId: observedGroup.id,
+        members: renderedMembers,
+      };
+      receipt.focusedControls = await js(
+        `([...document.querySelectorAll('.aw-workspace-layout,.aw-workspace-layout button,#workspace-manager')].map(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {tag:e.tagName,text:e.textContent,rect:{x:r.x,y:r.y,w:r.width,h:r.height},display:s.display,opacity:s.opacity}}))`,
+      );
+      assert.equal(
+        await js('getComputedStyle(document.querySelector(".dock")).display'),
+        "none",
+        "legacy taskbar stays hidden",
+      );
+      await shot("00-real-local-task-group");
+      receipt.checks.push(
+        "each-of-three-projects-has-a-canonical-task-group-two-real-members-local-status-and-related-note",
+      );
+      await workingHome();
+      await selectWorkspace(originalRow.workspaceId);
+      receipt.workspaceGuide = await verifyWorkspaceGuide(run.owner);
+      receipt.checks.push(
+        "working-workspace-keeps-one-visible-glass-help-control-and-unchanged-canonical-state",
+      );
+      await shot("01-original-working-workspace");
+      await step(
+        1,
+        "Start in the normal A World for Two Development glass workspace",
+      );
+      receipt.checks.push(
+        "three-named-projects-six-workspaces-thirty-nine-typed-fixture-resources-with-three-ordinary-conversations-per-project",
+      );
+      await startSegment(
+        "working block creation, orbit, pan, conversation approach and reviewed branch",
+      );
+      const journeyNote = await add("note", "Development journey note");
+      await openBlock(journeyNote.block.id);
+      await editDocument(
+        journeyNote.block.id,
+        "Synthetic note created and arranged at the start of the real journey.",
+      );
+      await flush();
+      await workingHome();
+      await cardGesture(journeyNote.block.id, null, 50, 25);
+      await cardGesture(journeyNote.block.id, "se", 55, 30);
+      await cardPresentation(journeyNote.block.id, "lens");
+      assert.equal(
+        (await snapshot()).blocks.find((b) => b.id === journeyNote.block.id)
+          .shape,
+        "lens",
+      );
+      await shot("01b-new-block-created-and-arranged");
+      await step(
+        2,
+        "Create, edit, resize, reshape and place another real working block",
+      );
+      await workspaceOut(true);
+      await pause(650);
+      await checkOverviewPresence("project");
+      await step(3, "Zoom out from the workspace");
+      await step(4, "Observe its real project system");
+      const before = (await spatial()).camera;
+      await drag(".aw-spatial-field", 95, -25);
+      const orbited = (await spatial()).camera;
+      assert.notEqual(orbited.yaw, before.yaw);
+      await step(5, "Orbit the project with native pointer input");
+      await drag(".aw-spatial-field", 60, 25, ["shift"]);
+      const panned = (await spatial()).camera;
+      assert.notDeepEqual(panned.target, orbited.target);
+      await step(6, "Pan across its resource clusters");
+      await click('.aw-quiet-control[aria-label="Navigation guide"]');
+      await wait('!document.querySelector(".aw-navigation-guide").hidden');
+      await pause(200);
+      const guide = await js(
+        '(()=>{const e=document.querySelector(".aw-navigation-guide"),r=e.getBoundingClientRect();return {width:r.width,height:r.height,viewportHeight:innerHeight,text:e.textContent,material:getComputedStyle(e).backdropFilter,buttons:e.querySelectorAll("button").length}})()',
+      );
+      assert.ok(guide.width <= 360 && guide.height < guide.viewportHeight);
+      assert.equal(guide.buttons, 0);
+      assert.ok(
+        guide.text.includes("Alt + drag") && guide.text.includes("Ctrl + K"),
+      );
+      assert.notEqual(guide.material, "none");
+      await checkLabelClearance(run.owner);
+      receipt.actions.push({ label: "Compact glass navigation guide", guide });
+      await shot("02-orbit-pan-and-glass-guide");
+      await key("Escape");
+      await wait('document.querySelector(".aw-navigation-guide").hidden');
+      await key("F1");
+      await wait('!document.querySelector(".aw-navigation-guide").hidden');
+      await key("Escape");
+      receipt.checks.push(
+        "compact-glass-info-guide-with-native-keyboard-opening-and-dismissal",
+      );
+      await key("k", ["control"]);
+      await wait('!document.querySelector(".aw-destinations").hidden');
+      assert.equal(
+        await js('document.querySelector("#command-surface").open'),
+        false,
+        "overview Ctrl K opens only the spatial palette",
+      );
+      await key("Escape");
+      await wait('document.querySelector(".aw-destinations").hidden');
+      receipt.checks.push(
+        "native-pointer-orbit-and-shift-pan-change-real-perspective-camera",
+      );
+      await locate(
+        sourceRow.conversation.resource.title,
+        "resource:" + sourceRow.conversation.block.id,
+      );
+      await node("resource:" + sourceRow.conversation.block.id);
+      const conversationComposer = `#conversation-surface .cp-chat[data-resource-id="${sourceRow.conversation.resource.id}"] .cp-composer`,
+        conversationInput =
+          conversationComposer + ' textarea[aria-label="Message"]',
+        conversationSend =
+          conversationComposer +
+          ' button[type="submit"][data-cp-control="send"]';
+      await wait(
+        `(()=>{const e=document.querySelector(${JSON.stringify(conversationInput)});return !!e&&!e.disabled&&e.getClientRects().length>0})()`,
+      );
+      await step(
+        7,
+        "Approach the original project's actual conversation and unfold its working surface",
+      );
+      for (const content of [
+        "Synthetic selected context for a reviewed continuation.",
+        "Synthetic later message deliberately not selected for handoff.",
+      ]) {
+        await fill(conversationInput, content);
+        await click(conversationSend);
+        await wait(
+          `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(sourceRow.conversation.resource.id)}).messages.some(m=>m.content===${JSON.stringify(content)})`,
+        );
+      }
+      await textButton("Close", "#conversation-surface");
+      await workingHome();
+      await projectView();
+      const sourceConversation = (await snapshot()).resources.find(
+        (r) => r.id === sourceRow.conversation.resource.id,
+      );
+      assert.equal(sourceConversation.provider, "local");
+      assert.equal(sourceConversation.messages.length, 2);
+      await locate(
+        sourceConversation.title,
+        "resource:" + sourceRow.conversation.block.id,
+      );
+      await textButton("Explore neighborhood", ".aw-spatial-detail");
+      await wait(
+        `window.__aerynth.snapshot().spatial.camera.neighborhood===${JSON.stringify("resource:" + sourceRow.conversation.block.id)}`,
+      );
+      await textButton("Inspect relationships", ".aw-spatial-detail");
+      await shot("04-inspected-resource-provenance");
+      await step(
+        8,
+        "Inspect the conversation's canonical note reference and placement",
+      );
+      await closeGraph();
+      await textButton("Branch conversation", ".aw-spatial-detail");
+      assert.equal(
+        await js(
+          "document.querySelectorAll('.aw-graph-dialog input[type=checkbox]:checked').length",
+        ),
+        0,
+      );
+      await fill(
+        '.aw-graph-dialog input[type="text"]',
+        "Reviewed Development continuation",
+      );
+      await fill(
+        ".aw-graph-dialog select",
+        sourceConversation.messages.at(-1).id,
+      );
+      await click('.aw-graph-dialog fieldset input[type="checkbox"]');
+      receipt.reviewedBranch = {
+        parentResourceId: sourceConversation.id,
+        forkMessageId: sourceConversation.messages.at(-1).id,
+        selectedMessageIds: [sourceConversation.messages[0].id],
+        omittedMessageIds: [sourceConversation.messages[1].id],
+      };
+      await shot("05-explicit-context-review");
+      await click('.aw-graph-dialog button[type="submit"]');
+      await wait('!document.querySelector(".aw-graph-dialog").open');
+      const afterBranch = await snapshot(),
+        child = afterBranch.resources.find(
+          (r) => r.title === "Reviewed Development continuation",
+        ),
+        lineage = afterBranch.conversationBranches.find(
+          (b) => b.childResourceId === child?.id,
+        );
+      assert.ok(child && lineage);
+      assert.equal(child.provider, "local");
+      assert.equal(
+        child.providerId,
+        "local",
+        "continuation uses the real local provider identity",
+      );
+      assert.equal(lineage.parentResourceId, sourceConversation.id);
+      assert.equal(
+        lineage.sourceMessageId,
+        sourceConversation.messages.at(-1).id,
+      );
+      assert.equal(lineage.mode, "application_continuation");
+      assert.deepEqual(
+        afterBranch.resources.find((r) => r.id === sourceConversation.id)
+          .messages,
+        sourceConversation.messages,
+      );
+      assert.ok(
+        (afterBranch.navigationBlocks ?? afterBranch.blocks).some(
+          (b) => b.resource_id === child.id,
+        ),
+      );
+      receipt.checks.push(
+        "native-reviewed-app-level-branch-with-explicit-source-selection-real-ancestry-and-unchanged-parent",
+      );
+      await step(
+        9,
+        "Create a canonical app-level continuation using explicitly reviewed source context",
+      );
+      const childBlock = (
+        afterBranch.navigationBlocks ?? afterBranch.blocks
+      ).find((b) => b.resource_id === child.id);
+      await locate(child.title, "resource:" + childBlock.id);
+      assert.equal((await spatial()).selected, "resource:" + childBlock.id);
+      await checkOverviewPresence("new branch in original project");
+      await shot("05b-new-branch-visible");
+      await step(
+        10,
+        "Observe the new branch in the real original project constellation",
+      );
+      await stopSegment("01-orbit-inspect-reviewed-branch.webm");
+
+      await startSegment("pin, typed relationship and exact working return");
+      await locate(
+        sourceConversation.title,
+        "resource:" + sourceRow.conversation.block.id,
+      );
+      const beforeDrag = (await spatial()).anchors[
+        "resource:" + sourceRow.conversation.block.id
+      ].spatial;
+      await drag(
+        ".aw-spatial-field",
+        55,
+        -30,
+        ["alt"],
+        "resource:" + sourceRow.conversation.block.id,
+      );
+      const afterDrag = (await spatial()).anchors[
+        "resource:" + sourceRow.conversation.block.id
+      ];
+      assert.notDeepEqual(afterDrag.spatial, beforeDrag);
+      assert.equal(afterDrag.pinned, true);
+      await step(
+        11,
+        "Move the ray-picked conversation moon using native Alt-drag",
+      );
+      receipt.checks.push(
+        "native-alt-drag-moves-and-pins-the-ray-picked-3D-moon",
+      );
+      const old = (await spatial()).anchors[
+          "resource:" + sourceRow.conversation.block.id
+        ].spatial,
+        desired = {
+          x: Math.round(old.x + 20000),
+          y: Math.round(old.y + 1000),
+          z: Math.round(old.z - 20000),
+        };
+      await textButton("Inspect selection");
+      for (const axis of ["X", "Y", "Z"])
+        await fill(
+          `.aw-spatial-detail input[aria-label="Anchor ${axis} position"]`,
+          String(desired[axis.toLowerCase()]),
+        );
+      if (
+        !(await js(
+          'document.querySelector(".aw-spatial-detail input[type=checkbox]").checked',
+        ))
+      )
+        await click(
+          '.aw-spatial-detail input[aria-label="Pin spatial position"]',
+        );
+      await textButton("Save position", ".aw-spatial-detail");
+      await flush();
+      const pinned = (await spatial()).anchors[
+        "resource:" + sourceRow.conversation.block.id
+      ];
+      assert.deepEqual(pinned.spatial, desired);
+      assert.equal(pinned.pinned, true);
+      await click('.aw-spatial-detail [aria-label="Close information"]');
+      await key("f");
+      await step(
+        12,
+        "Set and persist the chosen XYZ and pin using non-drag controls",
+      );
+      await shot("06-moved-and-pinned-moon");
+      await textButton("Link resources", ".aw-constellation-bar");
+      // Each select belongs to a label, so address the form's label order explicitly.
+      await fill(
+        ".aw-graph-dialog label:nth-of-type(1) select",
+        sourceConversation.id,
+      );
+      await fill(
+        ".aw-graph-dialog label:nth-of-type(2) select",
+        sourceRow.research.resource.id,
+      );
+      await fill(".aw-graph-dialog label:nth-of-type(3) select", "references");
+      await click('.aw-graph-dialog button[type="submit"]');
+      await wait('!document.querySelector(".aw-graph-dialog").open');
+      const relationship = (await snapshot()).relationships.find(
+        (e) =>
+          e.source_id === sourceConversation.id &&
+          e.target_id === sourceRow.research.resource.id &&
+          e.kind === "references",
+      );
+      assert.ok(relationship);
+      await step(
+        13,
+        "Create a new explicit canonical resource-reference relationship",
+      );
+      await textButton("Inspect relationships", ".aw-spatial-detail");
+      assert.ok(
+        (
+          await js('document.querySelector(".aw-graph-dialog").textContent')
+        ).includes("references"),
+      );
+      await shot("07-typed-relationship-inspection");
+      await closeGraph();
+      await step(
+        14,
+        "Inspect the new relationship's direction, type and provenance",
+      );
+      receipt.checks.push(
+        "native-position-pin-and-canonical-directed-relationship-creation-with-inspection",
+      );
+      // Explicit branch placement is an authorized layout mutation. Capture the
+      // working reference AFTER those changes and BEFORE cross-project travel.
+      // The pinned moon's close neighborhood legitimately puts its workspace
+      // off-screen. Use real navigation to expose the destination first.
+      await textButton("Recenter");
+      await wait("!window.__aerynth.snapshot().spatial.camera.neighborhood");
+      await locate(originalRow.title, "workspace:" + originalRow.workspaceId);
+      await node("workspace:" + originalRow.workspaceId);
+      await wait(
+        `window.__aerynth.application().navigation.kind==='workspace'&&window.__aerynth.application().activeWorkspaceId===${JSON.stringify(originalRow.workspaceId)}`,
+      );
+      const original = await snapshot();
+      receipt.workingReference = {
+        workspaceId: original.activeWorkspaceId,
+        geometry: geometry(original),
+        resourceIds: original.blocks.map((b) => b.resource_id),
+        scope:
+          "After explicit branch/relationship changes; before cross-project travel",
+      };
+      await shot("07b-working-reference-before-travel");
+      await projectView();
+      await click(".aw-spatial-field");
+      await key("Home");
+      await textButton("Save current view");
+      await fill(
+        '.aw-saved-views input[name="viewName"]',
+        "Synthetic original constellation",
+      );
+      await click('.aw-saved-views button[type="submit"]');
+      await wait('!document.querySelector(".aw-saved-views").open');
+      await flush();
+      const savedCameraView = (await view()).savedViews.find(
+        (v) => v.name === "Synthetic original constellation",
+      );
+      assert.ok(
+        savedCameraView,
+        "the actual named camera view was privately persisted",
+      );
+      receipt.savedCameraView = savedCameraView;
+      await textButton("Universe", ".aw-constellation-bar");
+      await pause(650);
+      await checkOverviewPresence("universe");
+      await step(15, "Zoom out to Universe");
+      assert.equal(
+        (await snapshot()).projects.filter((p) => projects.includes(p.id))
+          .length,
+        3,
+      );
+      for (const id of projects)
+        assert.ok(
+          await js(`!!document.querySelector('[data-key="project:${id}"]')`),
+        );
+      await shot("03-three-planet-universe");
+      await step(16, "Observe all three actual named project systems");
+      await node("project:" + other.projectId);
+      await checkOverviewPresence("other project");
+      await step(17, "Approach Voyagewright");
+      await workspaceIn(other.workspaceId);
+      assert.equal((await snapshot()).activeWorkspaceId, other.workspaceId);
+      await step(18, "Enter its Engineering working workspace");
+      // Fluid insertion may legitimately move a prior block beyond this camera.
+      // Exercise the real offscreen-block access instead of assuming visibility.
+      await openBlock(other.note.block.id);
+      await editDocument(
+        other.note.block.id,
+        "Synthetic real editor change after spatial branch and relationship navigation.",
+      );
+      await flush();
+      assert.equal(
+        (await snapshot()).resources.find(
+          (r) => r.id === other.note.resource.id,
+        ).content,
+        "Synthetic real editor change after spatial branch and relationship navigation.",
+      );
+      await shot("08a-other-workspace-real-edit");
+      await step(19, "Edit and save a real persistent glass-panel note");
+      await workingHome();
+      await projectView();
+      await textButton("Universe", ".aw-constellation-bar");
+      await pause(500);
+      await step(20, "Return to Universe");
+      await textButton("Saved views");
+      await fill('.aw-saved-views select[name="viewId"]', savedCameraView.id);
+      await textButton("Open view", ".aw-saved-views");
+      await wait('!document.querySelector(".aw-saved-views").open');
+      assert.equal(
+        (await snapshot()).navigation.projectId,
+        originalRow.projectId,
+      );
+      assert.deepEqual(
+        (await spatial()).bookmark,
+        savedCameraView.bookmark.spatial,
+        "named view restores its exact camera and mode",
+      );
+      assert.equal(
+        (await spatial()).selected,
+        savedCameraView.bookmark.selected,
+        "named view restores the saved canonical selection",
+      );
+      receipt.checks.push(
+        "named-camera-view-save-and-return-with-identical-pose",
+      );
+      await step(21, "Navigate back to A World for Two");
+      await node("workspace:" + originalRow.workspaceId);
+      await step(22, "Restore its Development working workspace");
+      assert.deepEqual(geometry(await snapshot()), geometry(original));
+      assert.deepEqual(
+        (await snapshot()).presence,
+        original.presence,
+        "overview placement never overwrites saved workspace Vela",
+      );
+      assert.deepEqual(
+        (await snapshot()).viewport,
+        original.viewport,
+        "working viewport restored",
+      );
+      for (const id of original.blocks.map((b) => b.resource_id))
+        assert.deepEqual(
+          (await snapshot()).resources.find((r) => r.id === id),
+          original.resources.find((r) => r.id === id),
+        );
+      await shot("08-exact-original-workspace-return");
+      await step(
+        23,
+        "Verify exact original resource identities, geometry, shapes, content, viewport and Vela footprint",
+      );
+      assert.equal(
+        (await snapshot()).resources.find(
+          (r) => r.id === other.note.resource.id,
+        ).content,
+        "Synthetic real editor change after spatial branch and relationship navigation.",
+      );
+      receipt.checks.push(
+        "real-working-editor-save-and-exact-original-workspace-geometry-identities-return",
+        "automatic-upper-right-overview-Vela-preserves-the-canonical-workspace-footprint",
+      );
+      await stopSegment("02-pin-relationship-return.webm");
+      await flush();
+      const expected = {
+        sourceStartedAt: source.startedAt,
+        sourceHashes: source.hashes,
+        buildAssets: source.buildAssets,
+        snapshot: await snapshot(),
+        view: await view(),
+        reviewedBranch: receipt.reviewedBranch,
+      };
+      assert.deepEqual(
+        expected.view.anchors["resource:" + sourceRow.conversation.block.id]
+          .spatial,
+        desired,
+      );
+      assert.equal(
+        expected.view.anchors["resource:" + sourceRow.conversation.block.id]
+          .pinned,
+        true,
+      );
+      await fs.writeFile(
+        path.join(privateRoot, "expanded-expected.json"),
+        (() => {
+          const bytes = Buffer.from(JSON.stringify(expected));
+          assert.ok(
+            bytes.length <= JOURNEY_LIMITS.expectedBytes,
+            "restart expectation byte bound",
+          );
+          return bytes;
+        })(),
+        { flag: "wx" },
+      );
+      run.guard();
+      receipt.finalSpatial = await spatial();
+      receipt.checks.push(
+        "saved-private-view-state-includes-pins-XYZ-camera-bookmarks-and-history-with-real-canonical-branch-and-relationship",
+      );
+      assert.deepEqual(
+        receipt.steps.map((s) => s.number),
+        Array.from({ length: 23 }, (_, i) => i + 1),
+      );
+    }
+    receipt.rendererErrors = await js(
+      "(()=>{const errors=window.__aerynth.snapshot().metrics.errors;return Array.isArray(errors)?errors.slice(-16).map(e=>String(e).slice(0,1024)):null})()",
+    );
+    run.guard();
+    assert.deepEqual(
+      receipt.rendererErrors,
+      [],
+      "recorded window/runtime errors fail the journey",
+    );
+    consoleMonitor.assertClean();
+    receipt.passed = true;
+    receipt.state = "completed";
+    await evidence.record({
+      phase: "completed",
+      steps: receipt.steps.map((row) => row.number),
+    });
+  } catch (error) {
+    receipt.passed = false;
+    receipt.state = "failed";
+    receipt.error = String(error.stack ?? error).slice(0, 16384);
+    try {
+      await evidence.record({
+        phase: "failed",
+        error: receipt.error.slice(0, 2048),
+      });
+    } catch {}
+    if (receipt.lastGesture)
+      try {
+        const current = await rawJs("window.__aerynth.application()");
+        receipt.lastGesture.observedAfterFailure = current.blocks.find(
+          (b) => b.id === receipt.lastGesture.blockId,
+        );
+        receipt.lastGesture.observedLayoutVersion = current.layoutVersion;
+      } catch (gestureError) {
+        receipt.lastGesture.observationError = String(gestureError.message);
+      }
+    // Preserve the actual failed form before shutdown; do not retry or change it.
+    try {
+      receipt.failureDiagnostics = {
+        window: {
+          focused: win.isFocused(),
+          visible: win.isVisible(),
+          minimized: win.isMinimized(),
+          bounds: win.getBounds(),
+        },
+        renderer: await rawJs(`(()=>{
+          const library=document.querySelector('.aw-library[aria-label="Block Library"]');
+          const text=(value,max=512)=>String(value??'').slice(0,max);
+          const rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
+          const describe=e=>{
+            const style=getComputedStyle(e);
+            const result={tag:e.tagName,id:e.id,className:text(e.className,160),name:e.getAttribute('name'),type:e.getAttribute('type'),ariaLabel:e.getAttribute('aria-label'),text:text(e.textContent,160),labels:[...(e.labels??[])].map(l=>text(l.textContent,160)),disabled:e.disabled??null,readOnly:e.readOnly??null,hidden:e.hidden,required:e.required??null,bounds:rect(e),display:style.display,visibility:style.visibility};
+            if('value' in e)result.value=e.type==='password'?'[redacted]':text(e.value,1024);
+            if('checked' in e)result.checked=e.checked;
+            if(e.validity)result.validation={valid:e.validity.valid,valueMissing:e.validity.valueMissing,typeMismatch:e.validity.typeMismatch,rangeUnderflow:e.validity.rangeUnderflow,rangeOverflow:e.validity.rangeOverflow,stepMismatch:e.validity.stepMismatch,patternMismatch:e.validity.patternMismatch,customError:e.validity.customError,message:text(e.validationMessage)};
+            for(const key of ['min','max','step','minLength','maxLength'])if(key in e)result[key]=e[key];
+            return result;
+          };
+          let appState,sceneState;
+          try{const s=window.__aerynth.application();appState={navigation:s.navigation,activeWorkspaceId:s.activeWorkspaceId,projectCount:s.projects.length,workspaceCount:s.workspaces.length,resourceCount:s.resources.length,blockCount:s.blocks.length}}catch(e){appState={error:text(e.message)}}
+          try{const s=window.__aerynth.snapshot();sceneState={location:s.spatial?.location,selected:s.spatial?.selected,camera:s.spatial?.camera,renderer:s.spatial?.renderer,metrics:s.metrics}}catch(e){sceneState={error:text(e.message)}}
+          const active=document.activeElement,ancestors=[];
+          const surfaces=[...document.querySelectorAll('dialog.aw-contextual-surface')].slice(0,8).map(e=>{const s=getComputedStyle(e);return {id:e.id,surfaceId:e.dataset.surfaceId,closing:e.dataset.closing??null,inert:e.inert,open:e.open,hidden:e.hidden,ariaHidden:e.getAttribute('aria-hidden'),containsLibrary:!!library&&e.contains(library),bounds:rect(e),display:s.display,visibility:s.visibility,opacity:s.opacity,pointerEvents:s.pointerEvents,transform:s.transform}});
+          for(let e=active;e&&ancestors.length<8;e=e.parentElement)ancestors.push({tag:e.tagName,id:e.id,className:text(e.className,160),role:e.getAttribute('role')});
+          return {
+            page:{visibility:document.visibilityState,focused:document.hasFocus(),width:innerWidth,height:innerHeight},
+            library:library?{bounds:rect(library),heading:text(library.querySelector('.aw-library__detail h3')?.textContent),status:[...library.querySelectorAll('.aw-library__status,.status,.error,[role="status"],[role="alert"]')].slice(0,12).map(e=>text(e.textContent)),forms:[...library.querySelectorAll('form')].slice(0,4).map(form=>({id:form.id,noValidate:form.noValidate,controls:[...form.querySelectorAll('input,textarea,select,button')].slice(0,40).map(describe)})),submitTargets:[...library.querySelectorAll('button[type="submit"],input[type="submit"]')].slice(0,8).map(describe)}:null,
+            active:{tag:active?.tagName,id:active?.id,className:text(active?.className,160),ariaLabel:active?.getAttribute('aria-label'),inLibrary:!!library?.contains(active),control:library?.contains(active)?describe(active):null,ancestors},
+            hostStatus:{status:text(document.querySelector('#status')?.textContent),commandError:text(document.querySelector('#command-error')?.textContent)},
+            application:appState,scene:sceneState,surfaces
+          };
+        })()`),
+      };
+      receipt.rendererErrors =
+        receipt.failureDiagnostics.renderer.scene?.metrics?.errors
+          ?.slice(-16)
+          .map((value) => String(value).slice(0, 1024));
+    } catch (diagnosticError) {
+      receipt.failureDiagnosticError = String(
+        diagnosticError.stack ?? diagnosticError,
+      ).slice(0, 2048);
+    }
+    try {
+      await shot("failure", true);
+    } catch (captureError) {
+      receipt.failureCaptureError = String(
+        captureError.stack ?? captureError,
+      ).slice(0, 2048);
+    }
+  } finally {
+    try {
+      try {
+        if (run)
+          ownerContents?.removeListener("before-input-event", run.beforeInput);
+      } catch (error) {
+        receipt.listenerCleanupError = String(error.message).slice(0, 1024);
+      }
+      if (recorder)
+        try {
+          receipt.videos.push(
+            await recorder.stop(path.join(out, "partial-failed-segment.webm")),
+          );
+        } catch (error) {
+          receipt.recordingError = String(error.message).slice(0, 1024);
+        }
+      if (consoleMonitor) {
+        try {
+          consoleMonitor.dispose();
+          consoleMonitor.assertClean();
+        } catch (error) {
+          receipt.passed = false;
+          receipt.state = "failed";
+          receipt.consoleMonitoringError = String(error.message).slice(0, 1024);
+          receipt.error ??= receipt.consoleMonitoringError;
+        }
+      }
+      receipt.timing.finishedAt = new Date().toISOString();
+      receipt.timing.finishedMonotonicMs = monotonicNow();
+      receipt.helperElapsedMs =
+        receipt.timing.finishedMonotonicMs -
+        receipt.timing.helperStartedMonotonicMs;
+      if (receipt.timing.clock)
+        receipt.timing.endClockDiscontinuityMs =
+          Date.parse(receipt.timing.finishedAt) -
+          Date.parse(source.startedAt) -
+          (receipt.timing.finishedMonotonicMs - moduleStartedMonotonicMs);
+      try {
+        await evidence.checkpoint();
+      } catch (error) {
+        receipt.passed = false;
+        await fs.writeFile(
+          path.join(out, "expanded-finalization-failure.json"),
+          JSON.stringify({
+            passed: false,
+            state: "failed",
+            error: String(error.message).slice(0, 1024),
+            at: new Date().toISOString(),
+            retained: "Earlier bounded checkpoints and progress remain",
+          }),
+          { flag: "wx" },
+        );
+      }
+      console.log(
+        JSON.stringify({
+          passed: receipt.passed,
+          checks: receipt.checks,
+          error: receipt.error,
+          evidence: out,
+        }),
+      );
+    } finally {
+      process.exitCode = receipt.passed ? 0 : 1;
+    }
+  }
+}
+
+exports.verify = async (context) => {
+  try {
+    await verifyJourney(context);
+  } catch (error) {
+    // Admission/output initialization can fail before a receipt directory exists.
+    // The actual owned host must still close; do not strand its backend/window.
+    process.exitCode = 1;
+    console.error(
+      JSON.stringify({
+        passed: false,
+        state: "journey-initialization-failed",
+        error: String(error.stack ?? error).slice(0, 4096),
+      }),
+    );
+  } finally {
+    context.app.quit();
+  }
+};

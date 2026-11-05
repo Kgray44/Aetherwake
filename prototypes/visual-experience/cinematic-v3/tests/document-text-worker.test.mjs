@@ -1,0 +1,9 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+import {extractDocumentText} from '../src/document-text-worker.ts';
+import {pdfFixture,docxFixture,docxParts} from '../../../block-library/tests/media-fixtures.mts';
+const {zipSync,strToU8}=createRequire(new URL('../../../block-library/package.json',import.meta.url))('fflate');
+test('real existing PDF and DOCX parsers extract precisely labeled text, retain original bytes and never return a clipped prefix',async()=>{for(const [format,bytes] of [['pdf',pdfFixture()],['docx',docxFixture()]]){const original=bytes.slice(),complete=await extractDocumentText(bytes,format,11600);assert.equal(complete.state,'complete');assert.deepEqual(bytes,original);assert.match(complete.text,format==='pdf'?/Searchable second page/:/Table cell/);assert.equal(complete.coverage,format==='pdf'?'extractable-text-all-pages':'body-text');assert.ok(complete.unsupportedParts.length>0);const omitted=await extractDocumentText(bytes,format,5);assert.deepEqual(omitted,{state:'omitted',reason:'text-budget'});}});
+test('malformed, non-Word and lying-expansion ZIP inputs fail before any body text can be returned',async()=>{const bad=zipSync(docxParts({'extra.txt':new Uint8Array(100000).fill(65)})),view=new DataView(bad.buffer);for(let offset=0;offset<bad.length-46;offset++)if(view.getUint32(offset,true)===0x02014b50){const length=view.getUint16(offset+28,true),name=new TextDecoder().decode(bad.subarray(offset+46,offset+46+length));if(name==='extra.txt'){view.setUint32(offset+24,1,true);break;}}
+  for(const bytes of [new Uint8Array([80,75,3,4]),zipSync({other:strToU8('not a Word document')}),bad])assert.deepEqual(await extractDocumentText(bytes,'docx',11600),{state:'omitted',reason:'malformed'});});

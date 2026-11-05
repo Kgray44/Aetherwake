@@ -1,0 +1,794 @@
+{
+  "kind": "Fresh-process native memory probe with no screenshots, videos or forced GC",
+  "sourceRevisionAtLaunch": "877a6d20748cb480da563e110f75da65689e4392",
+  "sourceHashesAtLaunch": {
+    "native/main.cjs": "29cb74e3dfe1ebdef47c324ee17aa2accea79caec18d99b2c1828c74ea3a0f69",
+    "native/recording.cjs": "2dfd804896f7077a8537459a07ea173e8c50c89ab4829ba80c69963ff1d1d0f5",
+    "src/main.ts": "8e91a2d314bbedbbbe00a6705022087bf161e28453d7dea8964bf6cc3fa96d94",
+    "src/renderer.ts": "def728788ef0d2820f880341f0c86608899dd405d8f7cd6a3ba6baebf1223a00",
+    "src/orbital-architecture.ts": "d1c9ea1e383601b3171157662ca0b7042507a97eef3658b2d0e7fc769d8c9163",
+    "src/scene-transition.ts": "55f7b5c04b094f9d9bbfa6ce8983c91b6c53ec41d77b39b6ba0bea6e6385a711",
+    "src/motion.ts": "70996a0131dfddfa4e0c430a6b05652802cd24a74d6de86cab622a5f65a44519",
+    "src/style.css": "67e9a4c502c38bbed0b2ef68750fc96bbaa392f68e43f97dbdb39d662fb34478",
+    "src/workloads.ts": "d8233b60e6028383c444144e371bb6a480da16866b4daf0f167a653e3bbcac40",
+    "src/conversation.ts": "63a1a6bbd4224401ca36ab4cc0b912d6a18ffda6eef2c69404f48b04eb5ff542",
+    "src/store.ts": "b58472f4619743163dcf838348937baaa4c449a8919fd3181b53fe3274bffb17",
+    "src/policy.ts": "f3f868b5d6e3936ed338f05460c1d36aa7c665909bbc2329e2cef9eb47211f86",
+    "package-lock.json": "fac0dfcfd42c160951c68d87f28b0640c2bc922fe47d15f44fc8bcc172d4b6d3"
+  },
+  "capturedAtUTC": "2026-11-01T20:47:34.639Z",
+  "requestedDurationMs": 90000,
+  "durationMs": 90014,
+  "versions": {
+    "electron": "45.2.1",
+    "chrome": "156.0.8078.75",
+    "node": "24.22.1"
+  },
+  "conditions": {
+    "tier": "balanced",
+    "contentBounds": {
+      "width": 0,
+      "height": 0
+    },
+    "newDedicatedProfile": true,
+    "renderWhileVisible": true,
+    "screenshotCount": 0,
+    "recording": false
+  },
+  "phases": [
+    {
+      "name": "architecture-visible-ambient",
+      "durationMs": 12431,
+      "drawSamples": 733,
+      "callbacks": 2004,
+      "policy": "balanced / ambient idle",
+      "firstWorkingSetKiBSum": 574328,
+      "lastWorkingSetKiBSum": 575540,
+      "deltaWorkingSetKiBSum": 1212
+    },
+    {
+      "name": "living-visible-ambient",
+      "durationMs": 12431,
+      "drawSamples": 727,
+      "callbacks": 1989,
+      "policy": "balanced / ambient idle",
+      "firstWorkingSetKiBSum": 579812,
+      "lastWorkingSetKiBSum": 582260,
+      "deltaWorkingSetKiBSum": 2448
+    },
+    {
+      "name": "resource-expand-return",
+      "durationMs": 12434,
+      "drawSamples": 733,
+      "callbacks": 1701,
+      "policy": "balanced / active",
+      "firstWorkingSetKiBSum": 659080,
+      "lastWorkingSetKiBSum": 1009076,
+      "deltaWorkingSetKiBSum": 349996
+    },
+    {
+      "name": "focused-long-conversation",
+      "durationMs": 12430,
+      "drawSamples": 733,
+      "callbacks": 1982,
+      "policy": "balanced / ambient idle",
+      "firstWorkingSetKiBSum": 1031128,
+      "lastWorkingSetKiBSum": 978656,
+      "deltaWorkingSetKiBSum": -52472
+    },
+    {
+      "name": "environment-retarget",
+      "durationMs": 12467,
+      "drawSamples": 748,
+      "callbacks": 2051,
+      "policy": "balanced / active",
+      "firstWorkingSetKiBSum": 1039568,
+      "lastWorkingSetKiBSum": 1173788,
+      "deltaWorkingSetKiBSum": 134220
+    },
+    {
+      "name": "quiet-static",
+      "durationMs": 12430,
+      "drawSamples": 7,
+      "callbacks": 81,
+      "policy": "efficient / quiet",
+      "firstWorkingSetKiBSum": 1176232,
+      "lastWorkingSetKiBSum": 714684,
+      "deltaWorkingSetKiBSum": -461548
+    },
+    {
+      "name": "native-minimized",
+      "durationMs": 12335,
+      "drawSamples": 0,
+      "callbacks": 1,
+      "policy": "balanced / active",
+      "firstWorkingSetKiBSum": 710920,
+      "lastWorkingSetKiBSum": 707348,
+      "deltaWorkingSetKiBSum": -3572
+    }
+  ],
+  "samples": [
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 4004,
+      "cpuReportedSum": 2.460151268392135,
+      "workingSetKiBSum": 574328,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 5005,
+      "cpuReportedSum": 2.340442260461403,
+      "workingSetKiBSum": 575524,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 6007,
+      "cpuReportedSum": 2.2175988679364314,
+      "workingSetKiBSum": 574620,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 7007,
+      "cpuReportedSum": 2.4238870156301626,
+      "workingSetKiBSum": 574764,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 8007,
+      "cpuReportedSum": 2.395308440531541,
+      "workingSetKiBSum": 574792,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 9007,
+      "cpuReportedSum": 2.7141101761619164,
+      "workingSetKiBSum": 572760,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 10007,
+      "cpuReportedSum": 2.3331258503195746,
+      "workingSetKiBSum": 573604,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 11008,
+      "cpuReportedSum": 2.279876724864903,
+      "workingSetKiBSum": 574068,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 12009,
+      "cpuReportedSum": 2.210879667490615,
+      "workingSetKiBSum": 573344,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 13009,
+      "cpuReportedSum": 2.147640186768296,
+      "workingSetKiBSum": 573812,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 14010,
+      "cpuReportedSum": 2.1960743788312675,
+      "workingSetKiBSum": 574812,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 15010,
+      "cpuReportedSum": 1.9939289740282384,
+      "workingSetKiBSum": 575456,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 15433,
+      "cpuReportedSum": 1.050372230841508,
+      "workingSetKiBSum": 575540,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 16437,
+      "cpuReportedSum": 2.840555641055227,
+      "workingSetKiBSum": 579812,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 17438,
+      "cpuReportedSum": 1.9102767356734618,
+      "workingSetKiBSum": 580448,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 18438,
+      "cpuReportedSum": 1.9008182700335317,
+      "workingSetKiBSum": 581132,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 19439,
+      "cpuReportedSum": 1.8911741647259919,
+      "workingSetKiBSum": 581632,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 20440,
+      "cpuReportedSum": 1.9517394448969605,
+      "workingSetKiBSum": 582076,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 21440,
+      "cpuReportedSum": 1.837666532698604,
+      "workingSetKiBSum": 582656,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 22441,
+      "cpuReportedSum": 1.7757649441984755,
+      "workingSetKiBSum": 582640,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 23441,
+      "cpuReportedSum": 1.884200830173799,
+      "workingSetKiBSum": 582852,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 24443,
+      "cpuReportedSum": 1.7992007780059867,
+      "workingSetKiBSum": 582756,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 25443,
+      "cpuReportedSum": 1.751883213308956,
+      "workingSetKiBSum": 582756,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 26444,
+      "cpuReportedSum": 1.7796632153944585,
+      "workingSetKiBSum": 582508,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 27443,
+      "cpuReportedSum": 1.7527276625886887,
+      "workingSetKiBSum": 582272,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 27865,
+      "cpuReportedSum": 0.8515693433176923,
+      "workingSetKiBSum": 582256,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 27867,
+      "cpuReportedSum": 1.9649143300388592,
+      "workingSetKiBSum": 582260,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 28879,
+      "cpuReportedSum": 11.536004707146471,
+      "workingSetKiBSum": 659080,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 29881,
+      "cpuReportedSum": 11.390005489585937,
+      "workingSetKiBSum": 733148,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 30885,
+      "cpuReportedSum": 11.423864762706565,
+      "workingSetKiBSum": 776672,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 31887,
+      "cpuReportedSum": 11.498036620229609,
+      "workingSetKiBSum": 839916,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 32891,
+      "cpuReportedSum": 11.333691717344596,
+      "workingSetKiBSum": 840788,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 33894,
+      "cpuReportedSum": 11.180556739418764,
+      "workingSetKiBSum": 889488,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 34898,
+      "cpuReportedSum": 11.134803889262729,
+      "workingSetKiBSum": 892484,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 35900,
+      "cpuReportedSum": 12.22646133766637,
+      "workingSetKiBSum": 946836,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 36904,
+      "cpuReportedSum": 11.207947436542664,
+      "workingSetKiBSum": 929456,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 37907,
+      "cpuReportedSum": 10.922714393625016,
+      "workingSetKiBSum": 957652,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 38910,
+      "cpuReportedSum": 11.235638593799138,
+      "workingSetKiBSum": 960232,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 39912,
+      "cpuReportedSum": 11.05880579015637,
+      "workingSetKiBSum": 1022340,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 40296,
+      "cpuReportedSum": 12.02303598266587,
+      "workingSetKiBSum": 1008704,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 40301,
+      "cpuReportedSum": 15.543207092403055,
+      "workingSetKiBSum": 1009076,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 41305,
+      "cpuReportedSum": 8.250311006388353,
+      "workingSetKiBSum": 1031128,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 42306,
+      "cpuReportedSum": 2.8523692376467933,
+      "workingSetKiBSum": 1059752,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 43307,
+      "cpuReportedSum": 4.724790722802383,
+      "workingSetKiBSum": 1033644,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 44307,
+      "cpuReportedSum": 1.8165643231583493,
+      "workingSetKiBSum": 1023364,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 45307,
+      "cpuReportedSum": 1.778079915125525,
+      "workingSetKiBSum": 1013092,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 46308,
+      "cpuReportedSum": 1.7929252435723235,
+      "workingSetKiBSum": 986968,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 47308,
+      "cpuReportedSum": 1.7208821647328336,
+      "workingSetKiBSum": 979024,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 48309,
+      "cpuReportedSum": 1.7994764197829354,
+      "workingSetKiBSum": 978544,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 49310,
+      "cpuReportedSum": 1.7450152549956326,
+      "workingSetKiBSum": 978516,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 50310,
+      "cpuReportedSum": 1.8183708044319107,
+      "workingSetKiBSum": 978520,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 51311,
+      "cpuReportedSum": 1.8069456371432904,
+      "workingSetKiBSum": 978656,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 52310,
+      "cpuReportedSum": 1.7964787450921111,
+      "workingSetKiBSum": 978656,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 52733,
+      "cpuReportedSum": 0.9985780739160781,
+      "workingSetKiBSum": 978656,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 52734,
+      "cpuReportedSum": 2.4835918854415273,
+      "workingSetKiBSum": 978656,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 53742,
+      "cpuReportedSum": 11.591469002292378,
+      "workingSetKiBSum": 1039568,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 54744,
+      "cpuReportedSum": 4.2956760131013105,
+      "workingSetKiBSum": 1038360,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 55745,
+      "cpuReportedSum": 2.9749121447464675,
+      "workingSetKiBSum": 1013332,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 56746,
+      "cpuReportedSum": 2.847974521921638,
+      "workingSetKiBSum": 1017508,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 57747,
+      "cpuReportedSum": 2.7900876464314166,
+      "workingSetKiBSum": 1023048,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 58747,
+      "cpuReportedSum": 2.94157250615578,
+      "workingSetKiBSum": 1009160,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 59748,
+      "cpuReportedSum": 2.8695004902112773,
+      "workingSetKiBSum": 1035236,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 60748,
+      "cpuReportedSum": 3.0443292196065403,
+      "workingSetKiBSum": 1059344,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 61750,
+      "cpuReportedSum": 2.88728168315907,
+      "workingSetKiBSum": 1077456,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 62751,
+      "cpuReportedSum": 3.0347603572511117,
+      "workingSetKiBSum": 1099348,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 63751,
+      "cpuReportedSum": 2.7164231816576585,
+      "workingSetKiBSum": 1128300,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 64754,
+      "cpuReportedSum": 2.7728510920295313,
+      "workingSetKiBSum": 1154916,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 65168,
+      "cpuReportedSum": 2.9891799148217926,
+      "workingSetKiBSum": 1167336,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 65198,
+      "cpuReportedSum": 43.34458676697886,
+      "workingSetKiBSum": 1173788,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 66241,
+      "cpuReportedSum": 3.459048375570008,
+      "workingSetKiBSum": 1176232,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 67241,
+      "cpuReportedSum": 0.07485598626706783,
+      "workingSetKiBSum": 1164644,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 68242,
+      "cpuReportedSum": 0.015967053815680154,
+      "workingSetKiBSum": 1161992,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 69242,
+      "cpuReportedSum": 0.013146253230873785,
+      "workingSetKiBSum": 1161992,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 70243,
+      "cpuReportedSum": 0.019725051592910412,
+      "workingSetKiBSum": 1161800,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 71243,
+      "cpuReportedSum": 0.029050082937902438,
+      "workingSetKiBSum": 1158708,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 72243,
+      "cpuReportedSum": 0.013216782137591705,
+      "workingSetKiBSum": 1158524,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 73244,
+      "cpuReportedSum": 0.014780016579775953,
+      "workingSetKiBSum": 1155628,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 74244,
+      "cpuReportedSum": 2.011471304176499,
+      "workingSetKiBSum": 714776,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 75245,
+      "cpuReportedSum": 0.026744883323635418,
+      "workingSetKiBSum": 714688,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 76246,
+      "cpuReportedSum": 0.01693328979318423,
+      "workingSetKiBSum": 714688,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 77246,
+      "cpuReportedSum": 0.013522487172241844,
+      "workingSetKiBSum": 714688,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 77669,
+      "cpuReportedSum": 0.024762417769453964,
+      "workingSetKiBSum": 714684,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 78695,
+      "cpuReportedSum": 0.434321840694459,
+      "workingSetKiBSum": 710920,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 79711,
+      "cpuReportedSum": 0.02619600296506906,
+      "workingSetKiBSum": 710888,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 80722,
+      "cpuReportedSum": 0.012873867349048489,
+      "workingSetKiBSum": 710792,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 81737,
+      "cpuReportedSum": 0.01562147718445876,
+      "workingSetKiBSum": 710636,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 82738,
+      "cpuReportedSum": 0.022603519455563922,
+      "workingSetKiBSum": 710512,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 83751,
+      "cpuReportedSum": 0.011763615473476626,
+      "workingSetKiBSum": 710512,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 84761,
+      "cpuReportedSum": 0.011360681313176664,
+      "workingSetKiBSum": 710308,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 85776,
+      "cpuReportedSum": 0.013240593156281979,
+      "workingSetKiBSum": 710304,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 86788,
+      "cpuReportedSum": 0.22381074078019025,
+      "workingSetKiBSum": 707364,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 87798,
+      "cpuReportedSum": 0.011262073270701918,
+      "workingSetKiBSum": 707364,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 88812,
+      "cpuReportedSum": 0.01845541320473352,
+      "workingSetKiBSum": 707364,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 89826,
+      "cpuReportedSum": 0.05071768113455802,
+      "workingSetKiBSum": 707344,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 90013,
+      "cpuReportedSum": 0.023106422446919,
+      "workingSetKiBSum": 707348,
+      "processCount": 4
+    }
+  ],
+  "reserve": {
+    "utc": "2026-11-01T20:46:04.4498981Z",
+    "allowed": true,
+    "floorBytesEach": 32212254720,
+    "cFreeBytes": 134072614912,
+    "dFreeBytes": 502019518464,
+    "estimatedCBytes": 268435456,
+    "estimatedDBytes": 0,
+    "reason": "Both drives remain above reserve after estimated writes"
+  },
+  "errors": [],
+  "limitations": [
+    "Summed working sets include shared pages and are not unique resident memory or VRAM.",
+    "A 60–90 second exploratory probe cannot establish long-term leak freedom, thermal stability or production memory acceptance.",
+    "A fresh dedicated profile removes prior capture allocations; desktop load and Chromium allocation/cache changes remain uncontrolled.",
+    "Callback and submission observations are not presented-frame timing."
+  ]
+}

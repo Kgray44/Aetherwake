@@ -1,0 +1,18 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {readSavedVoiceCatalog,VOICE_CATALOG_ENDPOINT} from '../voice-catalog.mts';
+const secret='SYNTHETIC_ONLY_VOICE_CATALOG_KEY',credential={providerId:'openai-api-vela' as const,kind:'openai-api-key' as const,bearer:secret,boundaryDigest:'a'.repeat(64),project:'synthetic-project',organization:'synthetic-organization'};
+const row=(name:string,id:string)=>({object:'audio.voice',id,name,type:'prompt',prompt:'Synthetic adult voice.',created_at:10});
+function input(fetch:typeof globalThis.fetch){let validations=0;return{configurationId:'vela-primary',configurationVersion:7,signal:new AbortController().signal,resolveCredential:async()=>credential,revalidate:async boundary=>{assert.equal(boundary,credential.boundaryDigest);validations++;},fetch,now:()=>1000,get validations(){return validations;}};}
+test('existing voice discovery is one bounded GET under exact native project/configuration scope and filters unrelated names',async()=>{
+ let calls=0;const request=input((async(url,init)=>{calls++;assert.equal(url,VOICE_CATALOG_ENDPOINT);assert.equal(init?.method,'GET');assert.equal(init?.body,undefined);assert.equal(init?.redirect,'error');const headers=new Headers(init?.headers);assert.equal(headers.get('authorization'),'Bearer '+secret);assert.equal(headers.get('openai-project'),'synthetic-project');assert.equal(headers.get('openai-organization'),'synthetic-organization');return Response.json({object:'list',has_more:false,data:[row('Other private name','voice-unrelated'),row('Vela 3','voice-three'),row('Vela 2','voice-two')]});}) as typeof fetch);
+ const result=await readSavedVoiceCatalog(request);assert.equal(calls,1);assert.equal(request.validations,2);assert.equal(result.providerId,'openai-api-vela');assert.equal(result.configurationVersion,7);assert.equal(result.project,'synthetic-project');assert.equal(result.expiresAt-result.observedAt,300000);assert.deepEqual(result.voices.map(voice=>voice.name),['Vela 3','Vela 2']);assert(!JSON.stringify(result).includes('Other private name'));assert(!JSON.stringify(result).includes('voice-unrelated'));assert(!JSON.stringify(result).includes(secret));
+});
+test('missing original prompts remain honest imported metadata and no creation or inference request is made',async()=>{
+ const result=await readSavedVoiceCatalog(input((async()=>Response.json({data:[{id:'voice-three',name:'Vela 3',type:'prompt',created_at:10},{id:'voice-two',name:'Vela 2',type:'audio_sample'}]})) as typeof fetch));assert(result.voices.every(voice=>voice.type==='existing'&&!Object.hasOwn(voice,'prompt')));assert.equal(result.voices[1].createdAt,null);
+});
+test('ambiguous, incomplete, malformed, over-budget and revoked catalogs fail closed with bounded codes',async()=>{
+ for(const response of [()=>Response.json({data:[row('Vela 3','voice-a'),row('Vela 3','voice-b')]}),()=>Response.json({has_more:true,data:[row('Vela 3','voice-a')]}),()=>Response.json({data:[{...row('Vela 3','voice-a'),prompt:secret}]}),()=>new Response('x'.repeat(524289)),()=>Response.json({error:{message:secret}},{status:404})])await assert.rejects(readSavedVoiceCatalog(input((async()=>response()) as typeof fetch)),error=>error instanceof Error&&/^live_voice_catalog_[a-z_]+$/u.test(error.message)&&!error.message.includes(secret));
+});
+test('key scope revalidation after the GET prevents a stale catalog from being accepted',async()=>{
+ const request=input((async()=>Response.json({data:[row('Vela 3','voice-three')]})) as typeof fetch);let count=0;request.revalidate=async()=>{if(++count===2)throw Error('synthetic_scope_changed');};await assert.rejects(readSavedVoiceCatalog(request),/synthetic_scope_changed/);
+});

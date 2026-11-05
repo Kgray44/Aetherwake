@@ -1,0 +1,11 @@
+{
+  "name": "aetherwake-connected-conversations-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "demo": "node src/cli.ts demo",
+    "cli": "node src/cli.ts"
+  },
+  "engines": { "node": ">=22.18" }
+}

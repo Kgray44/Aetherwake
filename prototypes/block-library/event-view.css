@@ -1,0 +1,127 @@
+.aw-event-view {
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+.aw-event-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.7rem 0;
+}
+.aw-event-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.aw-event-filters input,
+.aw-event-filters select {
+  max-width: 100%;
+  min-width: 8rem;
+  background: #101d2b2b;
+  border: 1px solid #b8d8f330;
+  border-radius: 0.5rem;
+  color: inherit;
+  font: inherit;
+  padding: 0.3rem 0.45rem;
+}
+.aw-event-view button {
+  border: 1px solid #aac9e62b;
+  border-radius: 1rem;
+  background: #adc9e710;
+  color: inherit;
+  font: inherit;
+  padding: 0.35rem 0.65rem;
+}
+.aw-event-view ol {
+  padding-left: 1.25rem;
+}
+.aw-event-view li {
+  margin: 0.6rem 0;
+}
+.aw-event-view summary {
+  cursor: pointer;
+}
+.aw-event-view dl {
+  display: grid;
+  grid-template-columns: minmax(6rem, 1fr) minmax(8rem, 3fr);
+  gap: 0.25rem 0.6rem;
+}
+.aw-event-view dt {
+  opacity: 0.65;
+}
+.aw-event-view dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.aw-event-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+.aw-event-tools > input {
+  flex: 1 1 9rem;
+  min-width: 0;
+  width: 0;
+  color: inherit;
+  font: inherit;
+  background: #adc9e70a;
+  border: 1px solid #b8d8f330;
+  border-radius: 0.6rem;
+  padding: 0.4rem;
+}
+.aw-event-advanced > summary,
+.aw-event-about > summary {
+  padding: 0.35rem 0;
+}
+.aw-event-about {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+.aw-event-view > ol {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding-left: 0.7rem;
+  border-left: 1px solid #a7c8cb44;
+}
+.aw-event-view[data-presentation="workspace"] {
+  font-size: 1em;
+}
+.aw-event-view[data-presentation="workspace"] dl {
+  grid-template-columns: minmax(0, 1fr);
+}
+.aw-event-view :is(input, select, summary, button):focus-visible {
+  outline: 2px solid #c4e2e5;
+  outline-offset: 2px;
+}
+
+/* The event's received time is an actual timestamp; evidence stays explicit.
+   A temporal rail makes this a readable feed rather than a metadata paragraph. */
+.aw-event-view > ol > li { position: relative; padding: 0.3rem 0 0.7rem 0.55rem; }
+.aw-event-view > ol > li:not(.aw-event-empty)::before {
+  content: "";
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  top: 0.75rem;
+  left: -0.9rem;
+  border: 1px solid #a7c8cb;
+  border-radius: 50%;
+  background: #243238;
+}
+.aw-event-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 0.6rem;
+  row-gap: 0.2rem;
+  cursor: pointer;
+}
+.aw-event-time { grid-column: 1 / -1; color: #a7c8cb; font: 0.8em/1.5 Consolas, monospace; }
+.aw-event-type { min-width: 0; overflow-wrap: anywhere; font-weight: 550; }
+.aw-event-evidence { font-size: 0.8em; align-self: baseline; color: #bfd0d1; }
+.aw-event-recorded-status { grid-column: 1 / -1; font-size: 0.8em; color: #b6b8c6; }
+.aw-event-view > ol > li[data-evidence-class="inferred"]::before { background: transparent; }
+.aw-event-view .aw-event-entry::after { content: "Details ›"; grid-column: 2; font-size: 0.75em; color: #b6b8c6; }
+.aw-event-view details[open] > .aw-event-entry::after { content: "Details ⌄"; }

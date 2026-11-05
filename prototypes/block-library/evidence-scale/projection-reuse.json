@@ -1,0 +1,605 @@
+{
+  "schemaVersion": 1,
+  "kind": "synthetic-direct-core-operation-sample",
+  "source": "79f5d2e0a1271b80ad039f93583961d2982ee886",
+  "sourceHashes": {
+    "benchmark-scale.mts": "4c30b94371b7ab1adaf07b31a0ccda280d04a4c63455ba3ff66d96f68556393d",
+    "service.mts": "2a69dbdbf14925d4d656a05cd39ae1ab7fc61150f5f1bc44c1745b02f2b95b3b",
+    "model.ts": "d0920de81309df5302dee0c6b96acf203bebed03d31bf6fd1e94d4db808435cc",
+    "registry.ts": "9789f4a0938ba98f0ab623bf8974da2b7052b9b543933ec6dc32d0dd11bae7d2",
+    "canonical-host.mts": "dc1d4eee895289682f023c6c84504213c84414e1d11a7a7428de9d27dc0d1c2e",
+    "../integrated-backend/src/desktop.mts": "8e6583b04d032080ee1d62a158f1ae37e61d7c277ca9b0a09d7a6ded7f98c5a2",
+    "../integrated-backend/src/core.mts": "b9801bf06dc87c3393505a5adac373f710fea63f039e860fd93302b0f3b71b12"
+  },
+  "executedAt": "2026-11-02T03:37:20.715Z",
+  "runtime": {
+    "node": "v24.18.0",
+    "platform": "win32",
+    "arch": "x64"
+  },
+  "method": {
+    "counts": [
+      0,
+      1,
+      3,
+      10,
+      25,
+      50
+    ],
+    "trials": 3,
+    "registryAndSearchIterations": 1000,
+    "workspaceSwitchCommands": 10,
+    "geometryCommands": 10,
+    "provider": "synthetic fixture; no turn or connection",
+    "storage": "One retained SQLite fixture per sample; same-process close/reopen",
+    "sourcePath": "Direct BackendCore public commands and released canonical library",
+    "units": "Elapsed milliseconds; process memory bytes"
+  },
+  "limitations": [
+    "No native window or renderer ran.",
+    "No displayed-frame, GPU, idle, focus-transition, hidden-view or input-latency measurement.",
+    "Same-process SQLite restoration is not an operating-system or native desktop restart.",
+    "Process memory samples include module caches and uncontrolled garbage collection; they are not a leak verdict.",
+    "Three diagnostic trials do not establish exclusive host performance or framework acceptance."
+  ],
+  "samples": [
+    {
+      "count": 0,
+      "trial": 1,
+      "metrics": {
+        "registryLookup1000Ms": 0.8616000000000099,
+        "librarySearch1000Ms": 18.206500000000005,
+        "blockCreationTotalMs": 0.1775000000000091,
+        "blockCreationMeanMs": null,
+        "templateCaptureMs": 0.3509999999999991,
+        "templatePreviewMs": 2.177099999999996,
+        "templateInstantiationMs": 28.056799999999953,
+        "workspaceSwitch10CommandsMs": 168.32300000000004,
+        "geometryCommit10CommandsMs": null,
+        "sqliteReopenAndProjectionMs": 13.033400000000029
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 11661624,
+      "nodeHeapUsedAfterBytes": 12960664,
+      "nodeRssAfterBytes": 73224192,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 430080
+    },
+    {
+      "count": 0,
+      "trial": 2,
+      "metrics": {
+        "registryLookup1000Ms": 0.18389999999999418,
+        "librarySearch1000Ms": 10.562999999999988,
+        "blockCreationTotalMs": 0.007899999999949614,
+        "blockCreationMeanMs": null,
+        "templateCaptureMs": 0.09849999999994452,
+        "templatePreviewMs": 0.3048999999999751,
+        "templateInstantiationMs": 19.224000000000046,
+        "workspaceSwitch10CommandsMs": 133.25710000000004,
+        "geometryCommit10CommandsMs": null,
+        "sqliteReopenAndProjectionMs": 12.855500000000006
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 13278832,
+      "nodeHeapUsedAfterBytes": 13688040,
+      "nodeRssAfterBytes": 78331904,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 430080
+    },
+    {
+      "count": 0,
+      "trial": 3,
+      "metrics": {
+        "registryLookup1000Ms": 0.27060000000005857,
+        "librarySearch1000Ms": 8.975500000000011,
+        "blockCreationTotalMs": 0.0024000000000796717,
+        "blockCreationMeanMs": null,
+        "templateCaptureMs": 0.10410000000001673,
+        "templatePreviewMs": 0.20359999999982392,
+        "templateInstantiationMs": 16.49350000000004,
+        "workspaceSwitch10CommandsMs": 131.84609999999998,
+        "geometryCommit10CommandsMs": null,
+        "sqliteReopenAndProjectionMs": 12.77209999999991
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 14022896,
+      "nodeHeapUsedAfterBytes": 16293240,
+      "nodeRssAfterBytes": 79175680,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 430080
+    },
+    {
+      "count": 1,
+      "trial": 1,
+      "metrics": {
+        "registryLookup1000Ms": 0.17020000000002256,
+        "librarySearch1000Ms": 8.74720000000002,
+        "blockCreationTotalMs": 19.04489999999987,
+        "blockCreationMeanMs": 19.04489999999987,
+        "templateCaptureMs": 0.9489000000000942,
+        "templatePreviewMs": 0.7964999999999236,
+        "templateInstantiationMs": 24.940000000000055,
+        "workspaceSwitch10CommandsMs": 133.18759999999997,
+        "geometryCommit10CommandsMs": 180.50389999999993,
+        "sqliteReopenAndProjectionMs": 13.928300000000036
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 16594208,
+      "nodeHeapUsedAfterBytes": 14870736,
+      "nodeRssAfterBytes": 80138240,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 516096
+    },
+    {
+      "count": 1,
+      "trial": 2,
+      "metrics": {
+        "registryLookup1000Ms": 0.27559999999994034,
+        "librarySearch1000Ms": 10.722699999999804,
+        "blockCreationTotalMs": 18.86779999999999,
+        "blockCreationMeanMs": 18.86779999999999,
+        "templateCaptureMs": 0.19470000000001164,
+        "templatePreviewMs": 0.8298000000002048,
+        "templateInstantiationMs": 21.792000000000144,
+        "workspaceSwitch10CommandsMs": 131.856,
+        "geometryCommit10CommandsMs": 165.4344000000001,
+        "sqliteReopenAndProjectionMs": 14.301500000000033
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 15260688,
+      "nodeHeapUsedAfterBytes": 15082880,
+      "nodeRssAfterBytes": 80519168,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 516096
+    },
+    {
+      "count": 1,
+      "trial": 3,
+      "metrics": {
+        "registryLookup1000Ms": 0.3969999999999345,
+        "librarySearch1000Ms": 11.273400000000038,
+        "blockCreationTotalMs": 18.459399999999732,
+        "blockCreationMeanMs": 18.459399999999732,
+        "templateCaptureMs": 0.16519999999991342,
+        "templatePreviewMs": 0.5183999999999287,
+        "templateInstantiationMs": 21.450400000000172,
+        "workspaceSwitch10CommandsMs": 139.91129999999976,
+        "geometryCommit10CommandsMs": 166.04030000000012,
+        "sqliteReopenAndProjectionMs": 14.597599999999602
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 15407072,
+      "nodeHeapUsedAfterBytes": 15137664,
+      "nodeRssAfterBytes": 80896000,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 516096
+    },
+    {
+      "count": 3,
+      "trial": 1,
+      "metrics": {
+        "registryLookup1000Ms": 0.23050000000012005,
+        "librarySearch1000Ms": 10.110499999999774,
+        "blockCreationTotalMs": 66.90729999999985,
+        "blockCreationMeanMs": 22.302433333333283,
+        "templateCaptureMs": 0.457300000000032,
+        "templatePreviewMs": 1.2925000000000182,
+        "templateInstantiationMs": 37.772699999999986,
+        "workspaceSwitch10CommandsMs": 222.97320000000036,
+        "geometryCommit10CommandsMs": 266.3783000000003,
+        "sqliteReopenAndProjectionMs": 24.736399999999776
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 15438352,
+      "nodeHeapUsedAfterBytes": 13776688,
+      "nodeRssAfterBytes": 83546112,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 593920
+    },
+    {
+      "count": 3,
+      "trial": 2,
+      "metrics": {
+        "registryLookup1000Ms": 0.3989999999998872,
+        "librarySearch1000Ms": 14.946400000000267,
+        "blockCreationTotalMs": 74.42099999999982,
+        "blockCreationMeanMs": 24.80699999999994,
+        "templateCaptureMs": 0.3488999999999578,
+        "templatePreviewMs": 2.415599999999813,
+        "templateInstantiationMs": 56.545100000000275,
+        "workspaceSwitch10CommandsMs": 217.27480000000014,
+        "geometryCommit10CommandsMs": 396.5962000000004,
+        "sqliteReopenAndProjectionMs": 29.220400000000154
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 14063696,
+      "nodeHeapUsedAfterBytes": 16266896,
+      "nodeRssAfterBytes": 83587072,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 593920
+    },
+    {
+      "count": 3,
+      "trial": 3,
+      "metrics": {
+        "registryLookup1000Ms": 0.4467000000004191,
+        "librarySearch1000Ms": 17.32469999999921,
+        "blockCreationTotalMs": 86.54379999999946,
+        "blockCreationMeanMs": 28.847933333333156,
+        "templateCaptureMs": 0.3073999999996886,
+        "templatePreviewMs": 2.079899999999725,
+        "templateInstantiationMs": 44.345800000000054,
+        "workspaceSwitch10CommandsMs": 216.6875,
+        "geometryCommit10CommandsMs": 256.91610000000037,
+        "sqliteReopenAndProjectionMs": 19.401699999999437
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 16552704,
+      "nodeHeapUsedAfterBytes": 14758576,
+      "nodeRssAfterBytes": 84652032,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 593920
+    },
+    {
+      "count": 10,
+      "trial": 1,
+      "metrics": {
+        "registryLookup1000Ms": 0.18719999999939319,
+        "librarySearch1000Ms": 14.045199999999568,
+        "blockCreationTotalMs": 330.1734000000006,
+        "blockCreationMeanMs": 33.01734000000006,
+        "templateCaptureMs": 0.32600000000002183,
+        "templatePreviewMs": 5.510199999999713,
+        "templateInstantiationMs": 102.89329999999973,
+        "workspaceSwitch10CommandsMs": 275.51940000000013,
+        "geometryCommit10CommandsMs": 369.14869999999974,
+        "sqliteReopenAndProjectionMs": 29.050600000000486
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 15044240,
+      "nodeHeapUsedAfterBytes": 22276408,
+      "nodeRssAfterBytes": 95031296,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 892928
+    },
+    {
+      "count": 10,
+      "trial": 2,
+      "metrics": {
+        "registryLookup1000Ms": 0.25610000000051514,
+        "librarySearch1000Ms": 13.747599999999693,
+        "blockCreationTotalMs": 304.8269,
+        "blockCreationMeanMs": 30.48269,
+        "templateCaptureMs": 0.31199999999989814,
+        "templatePreviewMs": 3.45049999999992,
+        "templateInstantiationMs": 97.09709999999995,
+        "workspaceSwitch10CommandsMs": 290.7473,
+        "geometryCommit10CommandsMs": 465.8608999999997,
+        "sqliteReopenAndProjectionMs": 42.55529999999999
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 22562648,
+      "nodeHeapUsedAfterBytes": 24116352,
+      "nodeRssAfterBytes": 96542720,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 892928
+    },
+    {
+      "count": 10,
+      "trial": 3,
+      "metrics": {
+        "registryLookup1000Ms": 0.39400000000023283,
+        "librarySearch1000Ms": 17.902900000000045,
+        "blockCreationTotalMs": 365.66460000000006,
+        "blockCreationMeanMs": 36.566460000000006,
+        "templateCaptureMs": 0.3263999999999214,
+        "templatePreviewMs": 4.1556000000000495,
+        "templateInstantiationMs": 111.0012999999999,
+        "workspaceSwitch10CommandsMs": 373.72929999999906,
+        "geometryCommit10CommandsMs": 669.9045000000006,
+        "sqliteReopenAndProjectionMs": 41.186900000000605
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 24401512,
+      "nodeHeapUsedAfterBytes": 25807456,
+      "nodeRssAfterBytes": 97640448,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 892928
+    },
+    {
+      "count": 25,
+      "trial": 1,
+      "metrics": {
+        "registryLookup1000Ms": 2.115700000000288,
+        "librarySearch1000Ms": 16.374299999999494,
+        "blockCreationTotalMs": 1254.7430999999997,
+        "blockCreationMeanMs": 50.189723999999984,
+        "templateCaptureMs": 0.8495000000002619,
+        "templatePreviewMs": 12.298399999999674,
+        "templateInstantiationMs": 450.59799999999996,
+        "workspaceSwitch10CommandsMs": 663.9512000000013,
+        "geometryCommit10CommandsMs": 894.4148000000005,
+        "sqliteReopenAndProjectionMs": 65.32120000000032
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 25850448,
+      "nodeHeapUsedAfterBytes": 38646152,
+      "nodeRssAfterBytes": 120438784,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 1990656
+    },
+    {
+      "count": 25,
+      "trial": 2,
+      "metrics": {
+        "registryLookup1000Ms": 0.6532000000006519,
+        "librarySearch1000Ms": 18.93209999999999,
+        "blockCreationTotalMs": 1107.436599999999,
+        "blockCreationMeanMs": 44.29746399999996,
+        "templateCaptureMs": 0.44279999999889696,
+        "templatePreviewMs": 10.225599999999758,
+        "templateInstantiationMs": 329.0078999999987,
+        "workspaceSwitch10CommandsMs": 563.5445,
+        "geometryCommit10CommandsMs": 773.4026000000013,
+        "sqliteReopenAndProjectionMs": 47.07209999999941
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 38931096,
+      "nodeHeapUsedAfterBytes": 34188096,
+      "nodeRssAfterBytes": 137527296,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 1990656
+    },
+    {
+      "count": 25,
+      "trial": 3,
+      "metrics": {
+        "registryLookup1000Ms": 0.4988000000012107,
+        "librarySearch1000Ms": 16.36279999999897,
+        "blockCreationTotalMs": 1289.7379,
+        "blockCreationMeanMs": 51.589516,
+        "templateCaptureMs": 0.4853000000002794,
+        "templatePreviewMs": 13.247600000002421,
+        "templateInstantiationMs": 418.54339999999866,
+        "workspaceSwitch10CommandsMs": 610.7955999999976,
+        "geometryCommit10CommandsMs": 866.531500000001,
+        "sqliteReopenAndProjectionMs": 45.813500000000204
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 34475304,
+      "nodeHeapUsedAfterBytes": 38668408,
+      "nodeRssAfterBytes": 140632064,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 1986560
+    },
+    {
+      "count": 50,
+      "trial": 1,
+      "metrics": {
+        "registryLookup1000Ms": 0.35269999999945867,
+        "librarySearch1000Ms": 11.597099999999045,
+        "blockCreationTotalMs": 3742.5868999999984,
+        "blockCreationMeanMs": 74.85173799999997,
+        "templateCaptureMs": 0.6000999999996566,
+        "templatePreviewMs": 18.57630000000063,
+        "templateInstantiationMs": 1308.9256999999998,
+        "workspaceSwitch10CommandsMs": 1025.3742999999995,
+        "geometryCommit10CommandsMs": 1941.1235000000015,
+        "sqliteReopenAndProjectionMs": 133.33430000000226
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 38953848,
+      "nodeHeapUsedAfterBytes": 68563584,
+      "nodeRssAfterBytes": 201179136,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 5038080
+    },
+    {
+      "count": 50,
+      "trial": 2,
+      "metrics": {
+        "registryLookup1000Ms": 0.31230000000141445,
+        "librarySearch1000Ms": 17.353399999999965,
+        "blockCreationTotalMs": 3873.7785000000003,
+        "blockCreationMeanMs": 77.47557,
+        "templateCaptureMs": 0.7854000000006636,
+        "templatePreviewMs": 22.85620000000199,
+        "templateInstantiationMs": 1217.9843000000037,
+        "workspaceSwitch10CommandsMs": 1521.6983000000037,
+        "geometryCommit10CommandsMs": 2243.833700000003,
+        "sqliteReopenAndProjectionMs": 130.5025999999998
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 68849920,
+      "nodeHeapUsedAfterBytes": 99396936,
+      "nodeRssAfterBytes": 296476672,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 5038080
+    },
+    {
+      "count": 50,
+      "trial": 3,
+      "metrics": {
+        "registryLookup1000Ms": 0.699800000002142,
+        "librarySearch1000Ms": 16.947299999999814,
+        "blockCreationTotalMs": 4231.902399999999,
+        "blockCreationMeanMs": 84.63804799999998,
+        "templateCaptureMs": 0.4565999999977066,
+        "templatePreviewMs": 18.626799999998184,
+        "templateInstantiationMs": 1517.565800000004,
+        "workspaceSwitch10CommandsMs": 1478.8593000000037,
+        "geometryCommit10CommandsMs": 2272.3142000000007,
+        "sqliteReopenAndProjectionMs": 114.20490000000427
+      },
+      "checksum": 6000,
+      "nodeHeapUsedBeforeBytes": 99685968,
+      "nodeHeapUsedAfterBytes": 95761648,
+      "nodeRssAfterBytes": 292270080,
+      "checks": {
+        "resourceIdentity": true,
+        "placementCount": true,
+        "exactTemplatePreferences": true,
+        "exactOrganization": true,
+        "exactPresence": true,
+        "exactRestoredGeometry": true,
+        "exactRestoredViewport": true,
+        "noProviderExecution": true
+      },
+      "fixtureBytes": 5038080
+    }
+  ]
+}

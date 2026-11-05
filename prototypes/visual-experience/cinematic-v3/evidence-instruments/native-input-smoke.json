@@ -1,0 +1,92 @@
+{
+  "kind": "Separate physical pointer and keyboard smoke through native Windows input",
+  "capturedAtUTC": "2026-11-01T22:45:30.031979+00:00",
+  "nativeHarnessRevision": "1f46e11a22e3f124222b457dbfbde45811d3524f",
+  "frontendRevision": "831aadb6703a14ca9f910cc990d8d2e74ebf4ebe",
+  "sourceHashes": {
+    "native/main.cjs": "55fd4ead4f06ef2573f82450b8423354160172fea1328229c62f2009fcff18bb",
+    "native/recording.cjs": "41b2258756689a9951072f80ad61f13b5da096862a0718fc5054310e1ef2ec4f",
+    "src/celestial-environment.ts": "49eb62df7944c2796f51ef45080c830c1e7b72776fd7d4aeb23e6ee9bd73ad07",
+    "src/conversation.ts": "63a1a6bbd4224401ca36ab4cc0b912d6a18ffda6eef2c69404f48b04eb5ff542",
+    "src/instrument-geometry.ts": "8f7fa68f57f13936b4a4b46de7809737a02291fdaa6b4223106b92034d7425b9",
+    "src/instrument-materials.ts": "a131d182d18a6970824234995281d97e1810a2fc1846b9a456100d4b53ebe5b8",
+    "src/main.ts": "3d748511ba0043a8d5a6b08a91cd9167ab5d94a54f156261719587460ca5f82c",
+    "src/material-occlusion.ts": "ef8a435868dd7d04939b42c8588a84315d5b2b07877c15c1fc265d656cd4a682",
+    "src/motion.ts": "70996a0131dfddfa4e0c430a6b05652802cd24a74d6de86cab622a5f65a44519",
+    "src/orbital-architecture.ts": "18931b7bfb79a92b3957222c9ce09076d1402969c3c3d2908ef85c1f7d70815a",
+    "src/policy.ts": "f3f868b5d6e3936ed338f05460c1d36aa7c665909bbc2329e2cef9eb47211f86",
+    "src/renderer.ts": "bb2bed94e988b7d6ec0bfdc3765a46f63998dd5525234b9671a80972e4a7c7df",
+    "src/scene-state.ts": "b0e1964628f0e3744fa75487b328e3b883aedf5f73e7a8b4467b1bf698060dfe",
+    "src/scene-transition.ts": "55f7b5c04b094f9d9bbfa6ce8983c91b6c53ec41d77b39b6ba0bea6e6385a711",
+    "src/store.ts": "b58472f4619743163dcf838348937baaa4c449a8919fd3181b53fe3274bffb17",
+    "src/style.css": "2627427c938da519fbabd9e4b3c5e3a5395e2f7e3b0842b2aa806078dfe6b01e",
+    "src/workloads.ts": "d8233b60e6028383c444144e371bb6a480da16866b4daf0f167a653e3bbcac40",
+    "package-lock.json": "fac0dfcfd42c160951c68d87f28b0640c2bc922fe47d15f44fc8bcc172d4b6d3",
+    "index.html": "f5a68d2ee7d2eea1d6afab47bee5559cc79bfad86a404afeeb5be1f011ddfad2"
+  },
+  "buildAssetHashes": {
+    "graphics-CQNxUdO7.js": "80d90f539b905184d8b7e24f486700e1f697ac7bfb48248d9c2d1b585151ea7d",
+    "index-0FWzwBut.js": "645bd7dfc4ce22284fc4f11271cd82254e76608c56e115b1a10f28cbba55714f",
+    "index-CLIKywP4.css": "3a814a4b53d0134f62c3511a3622db39875288538236ddd57116f7f0e4b8a88d"
+  },
+  "context": "Owned interactive preview; Optical Glass, Architecture, Starlit Ring, Balanced. Original V3 windows were left alone.",
+  "observations": [
+    {
+      "action": "Native maximize and restore",
+      "result": "Settled window resized and restored; current maximize screenshot has no duplicate peripheral labels."
+    },
+    {
+      "action": "Pointer activates note Unfold",
+      "result": "Same note opens as a readable opaque working surface."
+    },
+    {
+      "action": "Focus note; Tab and Shift+Tab; Control+End; literal typing",
+      "result": "Visible editor caret and focus outline inspected before typing. Appended Native keyboard input verified. was visible in editor and accessibility text."
+    },
+    {
+      "action": "Escape; pointer Move note earlier; Undo move",
+      "result": "Workspace returned; note/research changed spatial positions; Undo restored original positions and became disabled."
+    },
+    {
+      "action": "Reopen note after return and move/Undo",
+      "result": "Appended synthetic text remained present."
+    },
+    {
+      "action": "Escape and settle",
+      "result": "Original workspace layout restored and preview left open."
+    }
+  ],
+  "limits": [
+    "Accessibility focused_element reported the document ancestor; editor focus was verified visually by caret and focus outline.",
+    "A sampled collapse transition briefly mixed peripheral and full-card labels before settling; the resize-only correction is not a universal transition artifact claim.",
+    "Move/Undo used native pointer controls; this repeat did not requalify physical grip dragging.",
+    "Limited smoke, not full assistive-technology, input latency, presented-frame smoothness, multi-display or owner artistic acceptance."
+  ],
+  "artifacts": [
+    {
+      "file": "native-maximize-fixed.jpg",
+      "sha256": "d600630680c644cbf7813b4b083cb8e7862b76a0471897e96c42110afb4f3115",
+      "bytes": 132245
+    },
+    {
+      "file": "native-keyboard-edit.jpg",
+      "sha256": "8245367440711732d33ab12e9014df58dad57a85ac2e5458e336f7492af77024",
+      "bytes": 142008
+    },
+    {
+      "file": "native-move-note.jpg",
+      "sha256": "b1ed3e398d3df932970f13c086fa1d1bb33d337ae0b358e827b901442a14009c",
+      "bytes": 113578
+    },
+    {
+      "file": "native-undo-workspace.jpg",
+      "sha256": "c3ac24c2b57d26825c1580a2a19dde0c9695ad3a7561c92b58b3ac735bbbc98c",
+      "bytes": 112410
+    },
+    {
+      "file": "native-input-final-workspace.jpg",
+      "sha256": "adbca002dc7baf5480de6308c48386e296069a427b2e1e443c0932062abefc17",
+      "bytes": 112923
+    }
+  ]
+}
