@@ -494,7 +494,7 @@ The companion [Presence art direction](../docs/design/VELA-PRESENCE-INTELLIGENCE
 
 ## Publication and intended outcome
 
-This charter is a comprehensive **published proposal**, not a claim of implementation, successful benchmark results, selected final stack, or owner ratification. Its purpose is to protect the visual vision while making it testable.
+This charter is **owner-ratified (2026-11-05)**. This is not a claim of completed implementation, successful GPU benchmarks or final release acceptance.
 
 **The acceptance question is not "Did we animate the interface?" It is "Does Aerynth feel like one coherent, cinematic, intelligent environment, remain understandable and responsive, and accurately express the state of real work?"**
 
