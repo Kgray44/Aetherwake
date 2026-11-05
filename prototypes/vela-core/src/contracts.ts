@@ -188,7 +188,7 @@ export interface VelaPlanningPort {
 export type RequestState = 'planning' | 'checking' | 'awaiting-review' | 'native-ready' | 'provider-unavailable' | 'invalid-plan' | 'failed' | 'cancelled' | 'unknown' | 'completed' | 'responded';
 export type VelaProviderRecovery = { state: 'provider_completed' | 'failed' | 'interrupted'; observedAt: string };
 export interface VelaRequest {
-  toolWorkflow?:{id:string;phase:import('../../application-contract/vela-tools.ts').VelaWorkflowPhase;reason?:string};
+  toolWorkflow?:{id:string;phase:import('../../application-contract/vela-tools.ts').VelaWorkflowPhase;reason?:string;/** Current-scope source-observed reads; excludes receipts represented by host operations. */completedReadJobs?:number};
   id: string; conversationId: string; intent: string; state: RequestState;
   createdAt: string; updatedAt: string; providerId: string | null;
   nativeAttachment?:{id:string;workspaceId:string;layoutBefore:number;layoutAfter:number;resources:ResourceRef[];addedCount:number;existingCount:number;verified:true;searchReceiptId?:string};

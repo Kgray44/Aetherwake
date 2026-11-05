@@ -595,6 +595,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const content = conciseObservedAnswer(message?.content,facts);
     const missionReport = message?.missionReport;
     const hostOperations=current?.hostOperations?.filter(operation=>operation.requestId===selectedRequest?.id)??[];
+    const readJobs=selectedRequest?.toolWorkflow?.completedReadJobs;
+    const completedReadJobs=Number.isSafeInteger(readJobs)&&readJobs!>=0&&readJobs!<=16?readJobs!:0;
     const completedPlan = selectedRequest && current?.plans.find(plan => plan.id === projection.currentPlanId && confirmedVelaPlan(current!, selectedRequest, plan));
     const speakable=message&&view()==='current'&&projection.kind!=='action'&&(missionReport||completedPlan||selectedRequest?.state==='responded'&&selectedRequest.response?.messageId===message.id)?message:undefined;
     const actionPlan = current?.plans.find(plan => plan.id === projection.currentPlanId);
@@ -603,7 +605,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const completedFiles = current?.fileProposals?.find(item => item.requestId === selectedRequest?.id && item.state === 'applied' && item.result?.verified && item.result.workspaceId === item.target.workspaceId && item.result.importedCount + item.result.reusedCount === item.count);
     const fileDetails=fileProposal||completedFiles;
     const actionMessage = projection.kind === 'action' && actionPlan ? ({ prepared: 'Ready for your review.', approved: 'Ready to apply.', applying: 'Working…', applied: 'The result needs checking.', failed: 'That couldn’t be completed. Open details to review.', cancelled: 'Cancelled.', rejected: 'No changes made.', unknown: 'The outcome needs checking. Open details before trying again.' }[actionPlan.state]) : '';
-    const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind,view:view(), content, actionMessage, missionReport, completedPlan: completedPlan?.id, fileProposal, completedFiles,hostOperations,replySpeech });
+    const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind,view:view(), content, actionMessage, missionReport, completedPlan: completedPlan?.id, fileProposal, completedFiles,hostOperations,completedReadJobs,replySpeech });
     manifestationBody.dataset.density = facts && ['time','date','calculator'].includes(facts.kind) && content.length <= 80 ? 'signal' : 'reading';
     shell.dataset.manifestationKind = projection.kind; shell.dataset.presentationView = view(); manifestation.dataset.requestId = projection.currentRequestId ?? ''; manifestation.dataset.currentMessageId = projection.currentMessageId ?? '';
     manifestation.hidden = projection.kind === 'none' || view() === 'history' && !projection.requiredPlanIds.length;
@@ -625,12 +627,12 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         question:content || 'I found these files that seem to match. Would you like me to add them?',acceptLabel:'Yes, add them',declineLabel:'No',
         items:fileProposal.files.map(file=>({id:file.id,label:file.displayName,kind:file.kind,detail:file.relativePath.split(/[\\/]/u).slice(0,-1).slice(-2).join(' / ')}))} : null);
       if (fileProposal && client.fileProposal) manifestationBody.append(fileProposalView.element);
-      else if (reviewPlan) manifestationBody.append(planProposalView.element,responseFooter());
-      else if (actionMessage) manifestationBody.append(el('p', undefined, actionMessage), responseFooter());
+      else if (reviewPlan) manifestationBody.append(planProposalView.element,responseFooter(undefined,[],completedReadJobs));
+      else if (actionMessage) manifestationBody.append(el('p', undefined, actionMessage), responseFooter(undefined,[],completedReadJobs));
       else if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content));
       if (missionReport) manifestationBody.append(missionReplyFooter(missionReport,speakable));
       else if (message && projection.kind !== 'action') {
-        const footer=responseFooter(completedPlan || undefined,hostOperations,completedFiles&&!completedPlan?1:0,speakable);
+        const footer=responseFooter(completedPlan || undefined,hostOperations,(completedFiles&&!completedPlan?1:0)+completedReadJobs,speakable);
         manifestationBody.append(footer);
       }
     }

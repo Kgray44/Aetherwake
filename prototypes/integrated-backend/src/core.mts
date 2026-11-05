@@ -2486,6 +2486,13 @@ export class BackendCore {
       state.activeAnswer = { requestId: live.requestId, text: this.assistantText.slice(0, 480), truncated: this.assistantText.length > 480 };
     }
     const context=this.velaHost.context(),scope=this.velaHost.scope();
+    const jobScopeDigest=this.toolPermissionScopeDigest();
+    for(const request of state.requests)if(request.toolWorkflow){
+      const input=state.conversation?.messages.find(message=>message.id===request.inputMessageId&&message.requestId===request.id&&message.role==='user');
+      const completedReadJobs=request.providerId===VELA_API_PROVIDER&&input&&request.inputContentDigest&&historyDigest(input.content)===request.inputContentDigest
+        ?this.toolWorkflows?.completedReadJobs(request.toolWorkflow.id,{requestId:request.id,conversationId:request.conversationId,inputMessageId:input.id,inputDigest:request.inputContentDigest,scopeDigest:jobScopeDigest})??0:0;
+      request.toolWorkflow={...request.toolWorkflow,completedReadJobs};
+    }
     const references=scope.projectIds.map(id=>this.velaHost.resolve({id,kind:'project'},scope)).filter((r):r is ResourceRef=>r!==null);
     if(context.currentWorkspaceId){const workspace=this.velaHost.resolve({id:context.currentWorkspaceId,kind:'workspace'},scope);if(workspace)references.push(workspace);}
     return {...state,hostOperations:this.toolWorkflows?.hostOperations()??[],fileProposals:this.velaFileProposals.list(),nativeCapabilities,planningReferences:structuredClone(this.state.vela!.planning),applicationContext:{currentProjectId:context.currentProjectId,currentWorkspaceId:context.currentWorkspaceId,references}};
