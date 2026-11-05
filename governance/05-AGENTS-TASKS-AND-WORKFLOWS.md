@@ -660,7 +660,7 @@ Each decision SHOULD have an owner, experimental evidence, alternatives, known t
 
 ## 22. Governance change control, acceptance, and final rules
 
-Publication of this document records a **draft proposal**. It is not proof of owner ratification, implementation, or verified product behavior. Its status MUST remain consistent with the [governance registry](README.md).
+The owner ratified this charter on 2026-11-05. Publication alone had not granted approval; this separate explicit decision establishes binding design without claiming implemented behavior.
 
 Changes to normative requirements MUST preserve stable requirement IDs wherever the meaning remains intact. Substantive changes MUST identify affected charters, existing interfaces, acceptance scenarios and migration implications. Conflicts with the Constitution require formal amendment or correction; a task prompt cannot waive them.
 
@@ -690,7 +690,7 @@ Aerynth succeeds when an ordinary question remains effortless, a complicated obj
 
 ## Ratified amendment CF-2026-11-05: complete agentic execution and durable orchestration
 
-> **Status: proposed, pending owner acceptance.** The existing task lifecycle and authoritative identities remain canonical; this supplement tightens provider-independent execution contracts.
+> **Status: Owner-ratified 2026-11-05; implementation validation remains separate.** The existing task lifecycle and authoritative identities remain canonical; this supplement tightens provider-independent execution contracts.
 
 **AW-ATW-153 — Outcome-owned task graph.** Every delegated operation MUST attach to a canonical Aerynth task and attempt, preserving user intent, required outcomes, input scope, dependencies, assigned agent/provider, current state, approval and evidence obligations.
 
