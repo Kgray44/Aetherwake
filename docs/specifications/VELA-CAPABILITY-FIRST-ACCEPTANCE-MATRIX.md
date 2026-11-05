@@ -1,5 +1,5 @@
 # Capability-First Aerynth Acceptance Matrix
-**CF-TEST-01 · proposed 2026-11-05 · subordinate to governance/15**
+**CF-TEST-01 · owner-accepted 2026-11-05 · subordinate to governance/15 · tests not automatically passed**
 
 > **Owner-accepted specification (2026-11-05).** The contract and release criteria are binding design targets subject to the governing charters; actual capability, security and usability require implementation and independent test evidence.
 
