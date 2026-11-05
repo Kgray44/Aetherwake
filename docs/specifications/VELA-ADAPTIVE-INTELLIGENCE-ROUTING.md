@@ -1,6 +1,8 @@
 # Vela Adaptive Intelligence Routing (AIR)
 ## Provider, Model, Reasoning, Tool, and Execution Strategy Specification
 
+> **Owner-approved specification (2026-11-05).** Adaptive routing, model selection and Vela capability-first behavior are accepted product requirements. Available provider/model entitlements must still be discovered at runtime, and implementation must pass the recorded acceptance matrix. The companion [Unified Memory Runtime](../architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md) defines durable context participation.
+
 | Field | Value |
 |---|---|
 | Project | Aetherwake |
@@ -9,13 +11,13 @@
 | Document ID | SPEC-VELA-AIR-001 |
 | Version | 0.1.0 |
 | Date | 2026-11-03 |
-| Status | **Proposed implementation specification; not a ratified charter or evidence of implementation** |
+| Status | Owner-approved 2026-11-05; implementation verification ongoing |
 | Priority | **P0 architectural capability; incremental implementation** |
 | Location | docs/specifications/VELA-ADAPTIVE-INTELLIGENCE-ROUTING.md |
 | Primary authority | governance/00-AETHERWAKE-CONSTITUTION.md |
 | Related charters | 01 Experience; 03 Resources; 04 Conversations; 05 Agents; 06 Vela; 07 Thought Stream; 08 Context; 09 Observability; 10 Profiler; 12 Codex; 13 Platform; 14 Trust; 15 Quality; 16 Engineering |
 
-> **Product promise:** Vela uses the fastest and least expensive *capable* intelligence and execution path for the user's actual intent, increases capability and reasoning effort when useful, and preserves one coherent assistant experience. The user should not have to operate a model-selection control panel to ask a question or get real work done.
+ > **Product promise (capability-first revision proposed 2026-11-05):** Vela pursues the complete, authorized, verified user outcome first; among routes demonstrably capable of that outcome, it optimizes latency and cost. It increases reasoning, tools and execution depth when needed without sacrificing quality or changing Vela identity. The user should not have to operate a model-selection control panel to ask a question or get real work done.
 >
 > **Authority:** This is an actionable design specification subordinate to the Constitution and applicable charters. Where this proposal and a higher-authority requirement conflict, the charter wins. Requirements below are proposed implementation acceptance criteria, not replacements for AW-CON, AW-VELA, AW-CEX, or other normative IDs.
 >
@@ -40,7 +42,7 @@ These are **route classes**, not a promise of five distinct models, and route cl
 ### 1.1 Goals
 
 - **AIR-G01:** Automatic routing is the default for Vela while explicit direct provider chats remain first-class.
-- **AIR-G02:** Choose the lowest-latency, lowest-cost *feasible* approach with adequate expected quality and safety; optimize on verified outcomes, not simply model price or confident prose.
+- **AIR-G02 (proposed revision):** First filter for complete outcome capability, quality, permissions, data scope and reliability; only then optimize latency, cost and resources across viable routes. No hidden capability downgrade.
 - **AIR-G03:** Select effective provider, model, reasoning effort, environment, tools, and context scope, subject to real connection capabilities and user settings.
 - **AIR-G04:** Make mid-request escalation and handoffs possible without changing Vela's enduring identity or claiming native continuity that a provider does not support.
 - **AIR-G05:** Show decisions and real execution states unobtrusively, with optional detailed provenance in Thought Streams and the Profiler.
@@ -525,4 +527,29 @@ Decide based on implementation evidence. Do not block M1 because the research or
 
 **Full AIR is done only when** multi-stage work and escalations maintain task and conversation continuity, provenance, safe permissions, reliable verification, truthful accounting and measurable improvements versus a nonadaptive baseline.
 
-**The governing design principle:** *Use the least expensive and fastest available intelligence that can reliably accomplish the user's intent, automatically increasing capability, reasoning effort and execution depth when necessary, without sacrificing identity, quality, privacy, or user control.*
+**The proposed capability-first design principle:** *Deliver the complete authorized outcome with a qualified execution path, automatically increasing reasoning, tools and depth when needed. Optimize speed and expense among capable choices without sacrificing identity, correctness, privacy, experience or user control.*
+
+## 16. Capability-first integration amendment (proposed 2026-11-05)
+
+This section supersedes narrower cost-first *design suggestions* above where they conflict, subject to owner and governance acceptance. It does not assert that any new API integration is working today.
+
+### 16.1 Provider families and specific boundaries
+
+1. **Native Windows/Aerynth services:** exact measurements, workspace mutations, resource queries, and selected local tools, all through typed rights and verified readback. Prefer zero-model exact reads only when they completely satisfy intent.
+2. **Responses API:** model reasoning, schema output, functions and hosted tools, with app-owned task/permission state. Model completion is not system effect completion.
+3. **Decisions API:** bounded classification, scoring and choice; its probabilistic output does not authorize actions.
+4. **Agents SDK:** application-orchestrated agents, local tools, handoffs and traces; Aerynth owns durability and effect claims.
+5. **Managed Agents API:** provider-managed Codex harness and durable sessions, with separate sandbox charges, privacy/retention qualifications and account entitlements; not signed-in desktop Codex.
+6. **Responses Multi-agent beta:** qualified hosted agent tree, model-dependent and feature-limited; tool calls from descendants still pass policy checks.
+7. **Signed-in Codex bridge:** preserve existing thread, agent and plan-specific behavior; don't map plan quota to API credits.
+8. **GPT-Live client delegation:** spoken conversation interface to the same canonical runtime; speech can stop or steer without blindly cancelling or retrying effects.
+
+### 16.2 Router contract and qualification
+
+Router inputs: intent, selected canonical resources, account/project/host, user model/provider pin, permissions, data class, needed modalities/tools, difficulty, evidence obligations, current provider health, latency budget, user spend ceiling and task dependencies. Output: qualified route proposal, supported model/effort, tools, environment, expected verification, risk, cost estimate with provenance, and limitations. If a required ability is unsupported or authorization is missing, return a blocked/unavailable plan with an explanation. Model catalog and prices are versioned research inputs, not immutable settings.
+
+Routing must independently test (i) fast native read, (ii) deep technical question requiring reasoning, (iii) local file edit needing Codex or scoped tool harness, (iv) complex parallel analysis, (v) full-duplex voice plus delegated task, (vi) provider outage, (vii) beta API withdrawal, (viii) permission revocation, (ix) credit exhaustion and (x) verified readback. A model-produced report that no actual tool was called fails an action request.
+
+### 16.3 Implementation owner links
+
+Use [capability runtime architecture](../architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md), [provider/tool contracts](VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md), [API evidence](../research/OPENAI-PLATFORM-CAPABILITY-EVIDENCE-2026-11-05.md), [live voice](VELA-LIVE-VOICE-AND-MULTIMODAL-CONTRACT.md) and [acceptance catalog](VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md). All are proposed pending owner review. Track actual implementation separately.
