@@ -649,3 +649,52 @@ This document is a **published proposed subsystem charter**, not an assertion th
 - Agent-written implementations MUST NOT claim this document's acceptance scenarios are satisfied without observable evidence.
 
 **Final charter principle:** Vela succeeds when a user can think, converse, select, organize, delegate, return, and understand ongoing work naturally, while Aerynth takes on the organizational burden. She should be perceptive without pretending to be omniscient, proactive without becoming intrusive, adaptive without becoming uncontrollable, and powerful without sacrificing trust.
+
+---
+
+## 22. Owner-directed 2026-11-04 addendum: Vela Presence as an observable global orchestration field
+
+> **Status:** Proposed normative extension to this existing governing charter, not a claim of ratification or shipped capability. Artistic expression belongs to Charter 02, event truth to Charter 09, and authority/privacy to Charter 14. This section governs Vela's meaning, interaction and relationship to the representation.
+
+Vela's Presence is the global view of her current *observable* acts, not a private model mind-reader and not a project-specific plan graph. The center is a symbolic, living Intelligence Nebula. Neighboring nebulae represent operating domains. Tendrils indicate reported/observed engagement in categories of work, not actual electrical energy or hidden neural operations.
+
+**AW-VELA-200 — Persistent global identity.** Vela Presence MUST maintain one recognizable Vela identity across projects, chats, agents and tools. Opening individual project Streams MUST NOT create independent assistant identities, duplicate plans, or sever chat/memory continuity.
+
+**AW-VELA-201 — Observable domain taxonomy.** The default Presence MUST support Planning, Execution, Writing/Creation, Communication/Streaming, Memory/Context, and Analysis/Observation. Each domain maps to authorized observable events or supported source-reported activity; the application MUST NOT claim access to undisclosed inner thought, raw chain-of-thought or mental attention percentages.
+
+**AW-VELA-202 — Concurrent states.** Vela MAY be conversing while multiple tasks, agents and projects continue. Presence MUST represent relevant simultaneous activity without forcing a single global state such as 'thinking' or 'writing' that erases other work.
+
+**AW-VELA-203 — Semantic mapping versioning.** The event-to-domain mapping MUST be explicit, documented and versionable. A synthetic test may exercise a mode but MUST NOT be presented as live provider activity. Unknown mappings SHOULD appear as unclassified/other observable activity, not guessed cognitive states.
+
+**AW-VELA-204 — Delegation integrity.** An agent's own execution MAY remain active while Vela is idle/awaiting input. Presence MUST NOT misattribute agent activity as Vela's continuous private reasoning. The relationship between delegator, task and agent MUST remain inspectable.
+
+**AW-VELA-205 — Project-scoped activity links.** A floating action or domain event associated with a real project MUST retain a navigable canonical project ID, execution/run ID and source references where available. Clicking a project-linked mote MAY open the project Stream through the designated spatial navigation contract; it MUST NOT spawn duplicate work.
+
+**AW-VELA-206 — Unassigned activity.** Global activity with ambiguous or unknown project membership MUST remain explicitly unassigned. Aerynth MUST NOT silently assign it to whichever workspace is visible simply to fill the nebular scene.
+
+**AW-VELA-207 — Graceful quiet state.** When no new source events are observed, Vela's nebula MAY remain gently alive as decorative atmosphere. It MUST NOT emit fictional progress, fabricated action motes, model 'thoughts' or unearned completion effects.
+
+**AW-VELA-208 — Real-world action disclosure.** Action motes and interaction details MUST distinguish planning from dispatch, reported from verified results, waiting from active work, unknown from failure, and normal observation from an action requiring approval.
+
+**AW-VELA-209 — Attention and source recency.** A visualization of 'focus' or intensity MUST be described as an activity-derived presentation metric, not a measurement of consciousness or literal cognition. Unknown sampling, disconnected tool calls and provider coverage gaps MUST be surfaced honestly.
+
+**AW-VELA-210 — Actionable presence.** Presence MUST permit users to select real activity, inspect relevant evidence, navigate to project and agent views, pause automatic camera follow, and return to current global context. It MUST NOT become a purely decorative video that the user cannot interrogate.
+
+**AW-VELA-211 — Control during autonomous work.** Navigation into Presence, Stream or other views MUST NOT change permission or authorization scope, autonomously dispatch new high-impact work, duplicate existing executions, or bypass the same review and approvals used elsewhere.
+
+**AW-VELA-212 — Accessible alternative.** An accessible low-motion/global activity representation MUST be available when 3D GPU rendering is disabled, unsupported, too expensive or inappropriate; this must preserve the truth, selection and navigation semantics rather than pretending to have met the full artistic bar.
+
+**AW-VELA-213 — Cross-view historic unity.** A Presence satellite that becomes an Intelligence Stream event, a Workspace artifact or a Timeline entry MUST retain the same canonical source identity, timestamps and evidence class. Projection changes do not rewrite past fact.
+
+**AW-VELA-214 — Provenance-aware recent Wake.** Completed action motes MAY dissolve from the visual orbit, but their referenced records MUST remain discoverable through authorized history, recent Wake, source inspection and replay according to established retention policy. No visual cleanup may delete event evidence.
+
+**AW-VELA-215 — No dependence on one provider.** Presence may adapt to the actual tool/model/backend capabilities available, including missing events, but MUST NOT represent unavailable capability as full awareness. It SHOULD remain useful for local actions, ordinary conversations, delegated work and partial observability.
+
+**AW-VELA-216 — Design review authority.** Vela's public-facing visual identity MUST be judged on the actual supplied Intelligence Nebula reference, with GPU moving-camera evidence, living connected tendrils, and owner review before product-level acceptance. Agent-generated self-assessment that the aesthetic is 'close enough' does not substitute for explicit artistic acceptance.
+
+**AW-VELA-217 — Coherent personality, not anthropomorphic claim.** Aerynth MAY give Vela an expressive presence, coordinated voice and subtle feedback, but MUST NOT suggest the scene exposes a sentient consciousness or guarantees emotions or inaccessible private thought.
+
+**Mandatory behavioral validation:** ordinary chat plus concurrent tasks; a tool and agent handoff; an unknown result; waiting approval; a completed action that disappears from the orbit but remains inspectable; two projects with distinct identifiers; a user-selected direct journey into one Stream; and full fallback without GPU. Review domain-mapping provenance and never pass solely because animations respond to synthetic local timers.
+
+References: [Vela Presence art direction](../docs/design/VELA-PRESENCE-INTELLIGENCE-NEBULA-ART-DIRECTION.md), [runtime/navigation contract](../docs/architecture/UNIFIED-SPATIAL-INTELLIGENCE-RUNTIME-AND-NAVIGATION.md), and [GPU rendering contract](../docs/architecture/VELA-PRESENCE-GPU-RENDERING-CONTRACT.md).
+
