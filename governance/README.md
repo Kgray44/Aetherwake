@@ -40,6 +40,22 @@ The repository owner retains final decision authority. Amendments must be explic
 
 See Section 20 of the Constitution for domain boundaries.
 
+## Owner-directed Spatial Intelligence addenda (2026-11-04)
+
+The repository owner's detailed design directive for Vela Presence and project Intelligence Stream V2 is captured as **numbered normative amendments inside the existing governing charters**, not as mere short design notes. Their status follows each parent charter's **published / pending owner acceptance** status until that charter is explicitly ratified. Publication or an agent commit alone does not count as ratification.
+
+| Charter | Normative addendum | Purpose |
+|---|---|---|
+| [01 — Experience and Interaction](01-EXPERIENCE-AND-INTERACTION.md) | §17, AW-EXP-200–217 | One continuous spatial universe, Active Projects Dock and multi-project navigation |
+| [02 — Liquid Intelligence and Motion](02-LIQUID-INTELLIGENCE-AND-MOTION.md) | §17, AW-LIQ-200–225 | Reference-faithful true GPU 3D Intelligence Nebula, living continuous tendrils and spatial motion |
+| [06 — Vela Intelligence and Adaptation](06-VELA-INTELLIGENCE-AND-ADAPTATION.md) | §22, AW-VELA-200–217 | Global multi-domain Vela Presence using source-backed observable activity |
+| [09 — Intelligence Streams and Observability](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md) | §21, AW-OBS-200–230 | Per-project full-screen plan-first execution Stream, waves and Activity Theater |
+| [15 — Quality, Verification, and Acceptance](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md) | §21, AW-QVA-200–216 | Art-first native GPU and source-truth acceptance gates |
+
+**Required design/implementation entrypoint:** [Spatial Intelligence systems index](../docs/design/SPATIAL-INTELLIGENCE-SYSTEMS-INDEX.md). The older PR #20 Living Instruments visual reference remains useful for block-level instruments, but its prior mini-Stream and Vela shape direction are not accepted substitutes for the newly specified immersive Vela Presence and project Stream.
+
+These additions do not modify the Constitution, grant new tool authorization, amend trust policy or assert that any required native GPU demonstration has passed. Applicable existing charter requirements remain in force.
+
 ## Rules for contributors and agents
 
 - Read the Constitution and the approved governance documents relevant to the work. Do not blindly load all future charters into each task.
