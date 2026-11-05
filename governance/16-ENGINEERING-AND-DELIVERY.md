@@ -596,7 +596,7 @@ This charter does **not**:
 
 ## 25. Document lifecycle, ratification, and final invariants
 
-This document is a **published proposed charter**. Its publication creates a reviewable artifact and stable requirements for discussion. It does not, by itself, prove repository-owner ratification. Upon explicit acceptance, update its status, version and the [governance registry](README.md) in a reviewed change. Future amendments must retain requirement IDs where meanings remain consistent, and publish a change record when semantics evolve.
+This is an **owner-ratified governing charter (2026-11-05)**. Publication alone had not provided approval; that separate owner decision is now recorded. Implementation and release evidence remain outstanding.
 
 ### Conditions for charter acceptance
 
