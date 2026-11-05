@@ -643,7 +643,7 @@ Research, prototypes, and architecture decisions MUST resolve these within the C
 
 ## 20. Change control, readiness gates, and acceptance
 
-This document is a **published proposed governing charter**, not a claim of implementation, completion, or owner ratification.
+This document is an **owner-ratified governing charter (2026-11-05)**; its functionality, tested evidence and production acceptance remain separate.
 
 - The [Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) remains the higher authority.
 - Requirement identifiers SHOULD stay stable where their meaning is unchanged. Material changes require impact assessment, updated tests, and repository history.
