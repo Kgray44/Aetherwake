@@ -6,8 +6,8 @@
 | Field | Value |
 |---|---|
 | Product | Aerynth / Vela / Project Aetherwake |
-| Edition | 2026-11-04, owner-directed design baseline for review |
-| Status | Detailed design reference; requirements are owned by the relevant proposed governance charter addenda, not this document |
+| Edition | 2026-11-04 owner direction; formally accepted 2026-11-05 |
+| Status | Owner-approved visual art direction, binding under ratified charter addenda; GPU/native artistic proof still pending |
 | Governing owners | 01 interaction, 02 motion, 06 Vela, 09 observability, 13 platform, 14 trust, 15 quality |
 | Primary image | User-supplied Vela nebula reference in the 2026-11-04 design conversation; original image is the visual-review target, not a synthetic demo result |
 | Companion | [GPU implementation contract](../architecture/VELA-PRESENCE-GPU-RENDERING-CONTRACT.md), [shared runtime](../architecture/UNIFIED-SPATIAL-INTELLIGENCE-RUNTIME-AND-NAVIGATION.md), [prototype and review plan](../engineering/SPATIAL-INTELLIGENCE-PROTOTYPE-AND-ACCEPTANCE-PLAN.md) |
