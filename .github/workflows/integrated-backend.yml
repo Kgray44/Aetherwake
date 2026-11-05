@@ -5,6 +5,8 @@ on:
       - 'prototypes/integrated-backend/**'
       - 'prototypes/openai-provider/**'
       - 'prototypes/application-contract/**'
+      - 'prototypes/block-library/**'
+      - 'prototypes/timeline-product/**'
       - 'prototypes/workspace-kernel/**'
       - 'prototypes/connected-conversations/**'
       - 'prototypes/codex-bridge/**'
@@ -24,10 +26,13 @@ jobs:
           cache-dependency-path: |
             prototypes/integrated-backend/package-lock.json
             prototypes/openai-provider/package-lock.json
+            prototypes/block-library/package-lock.json
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: prototypes/integrated-backend
       - run: npm ci --ignore-scripts --no-audit --no-fund --cache .runtime/npm-cache
         working-directory: prototypes/openai-provider
+      - run: npm ci --ignore-scripts --no-audit --no-fund --cache .runtime/npm-cache
+        working-directory: prototypes/block-library
       - run: npm run typecheck
         working-directory: prototypes/integrated-backend
       - run: npm test
