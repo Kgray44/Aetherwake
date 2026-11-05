@@ -643,7 +643,7 @@ Changes to normative IDs, privacy guarantees, model/provider access assumptions,
 
 **AW-TRUST-139 — No silent narrowing.** A convenient prototype, unsupported provider action, or shortened implementation schedule MUST NOT quietly redefine trust and autonomy expectations. A missing capability must be declared, deferred, or substituted by an approved safe alternative.
 
-**AW-TRUST-140 — Owner acceptance.** Until the owner explicitly accepts this document, implementation MAY use it as a proposed design baseline, but MUST NOT present the charter as ratified governance.
+**AW-TRUST-140 — Owner acceptance.** The repository owner explicitly accepted this charter on 2026-11-05 and the governance registry records its binding status. Publication alone does not ratify future amendments and owner design approval does not replace security, privacy or release verification.
 
 ### Owner-review checklist
 
