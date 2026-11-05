@@ -19,6 +19,11 @@ export interface TimelineView {
   mode: "activity" | "execution";
   /** Missing on existing views, which continue to use capture time. */
   timeAxis?: "receivedAt" | "reportedAt";
+  /** Explicitly saved display preferences. Omission preserves existing view digests. */
+  presentation?: {
+    orientation: "horizontal" | "vertical" | "multilane";
+    detail: "compact" | "expanded";
+  };
   /** Empty resourceIds means the authorized project/application scope, not all data. */
   scope: { projectId: string | null; resourceIds: string[] };
   sources: {

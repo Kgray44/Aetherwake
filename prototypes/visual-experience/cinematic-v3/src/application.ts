@@ -542,6 +542,7 @@ export function installApplication(hooks: Hooks) {
   }
   const restoreMissionWorkroomCards = () => refreshMissionWorkroomCards();
   document.addEventListener("visibilitychange", restoreMissionWorkroomCards);
+  let missionWorkroomSerial = 0;
   function mountWorkroomCard(
     root: HTMLElement,
     resourceId: string,
@@ -561,7 +562,16 @@ export function installApplication(hooks: Hooks) {
     }, mountDefault, (missionId) => {
       if (!velaOpen) openVela();
       velaPanel?.showMission(missionId);
-    }, (id) => { openCanonicalResource(id); });
+    }, (id) => { openCanonicalResource(id); }, {
+      motion: experienceMotion,
+      viewId: `mission-workroom:${resourceId}:${++missionWorkroomSerial}`,
+      readMission: async (id) => {
+        const result = await host.command!("missions", { name: "read", input: { id } }) as MissionResponse;
+        if (result === null) return null;
+        if (result && "tasks" in result && "outcome" in result && "scope" in result && result.id === id) return result;
+        throw new Error("mission_projection_unavailable");
+      },
+    });
     missionWorkroomViews.add(view);
     return { ...view, dispose() { missionWorkroomViews.delete(view); view.dispose(); } };
   }

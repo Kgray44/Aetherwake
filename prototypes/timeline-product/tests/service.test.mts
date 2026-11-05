@@ -1150,3 +1150,27 @@ test('planning item capacity is bounded including undo tombstones and rejects co
   f.db.prepare('UPDATE timeline_planning_items SET state_json=? WHERE item_id=?').run('{broken', created.item!.id);
   assert.throws(() => f.service.planning({ op: 'list', resourceId: made.resourceId, expectedVersion: 2 }), /timeline_planning_corrupt/);
 });
+
+
+test('optional presentation roundtrips without migration or normalizing old view digests and receipts', t => {
+  const directory = resolve('.runtime/timeline-presentation-tests',randomUUID());mkdirSync(directory,{recursive:true});
+  const file=resolve(directory,'timeline.sqlite'),f=fixture(t,file),original=view(),made=f.create(original,'old-presentation-create');
+  const oldReceipt=f.db.prepare('SELECT result_json FROM timeline_receipts WHERE command_id=?').get('old-presentation-create')!.result_json;
+  const read=f.service.read(made.resourceId);assert.equal(Object.hasOwn(read.view,'presentation'),false);assert.equal(read.viewDigest,made.viewDigest);
+  const configured={...original,presentation:{orientation:'vertical' as const,detail:'compact' as const}};
+  const saved=f.service.save({commandId:'save-presentation',resourceId:made.resourceId,expectedVersion:1,view:configured});
+  assert.equal(f.db.prepare('SELECT version FROM timeline_schema').get()!.version,1);
+  assert.deepEqual(f.service.read(made.resourceId).view.presentation,configured.presentation);
+  assert.deepEqual(f.create(original,'old-presentation-create'),made);
+  assert.equal(f.db.prepare('SELECT result_json FROM timeline_receipts WHERE command_id=?').get('old-presentation-create')!.result_json,oldReceipt);
+  f.close();const restored=fixture(t,file);assert.deepEqual(restored.service.read(made.resourceId).view.presentation,configured.presentation);
+  assert.equal(restored.service.read(made.resourceId).viewDigest,saved.viewDigest);
+});
+
+test('presentation validation rejects incomplete, unknown and authority-bearing preferences', t => {
+  const f=fixture(t);
+  for(const presentation of [undefined,null,{}, {orientation:'diagonal',detail:'compact'}, {orientation:'horizontal',detail:'dense'}, {orientation:'horizontal',detail:'compact',canEdit:true}])
+    assert.throws(()=>f.create({...view(),presentation} as any),/timeline_invalid_presentation/);
+  for(const orientation of ['horizontal','vertical','multilane'] as const)
+    assert.deepEqual(f.service.read(f.create({...view(),presentation:{orientation,detail:'expanded'}}).resourceId).view.presentation,{orientation,detail:'expanded'});
+});

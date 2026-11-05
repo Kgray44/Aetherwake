@@ -77,17 +77,17 @@ category accurately remains empty; no measurements or unsupported kinds are inve
 | Scenarios | Current status / proof still required |
 | --- | --- |
 | LI-01, LI-02 | Source/component verified; native finite synthetic replay and real Add Note/Clock paths verified. Complete showroom visual review remains open |
-| LI-03 | Existing canonical Add/drop paths retained and tested; new native drag/restart proof pending |
-| LI-04 | Canonical planning CRUD/undo verified natively; explicit offsets, elapsed durations, drag/snap/CAS/cancel behavior tested at component/service level. Native drag/duration demonstration remains open |
-| LI-05 | Native orientation, selected event and canonical zoom verified; presentation preference persistence and complete motion review remain open |
+| LI-03 | Real native Library drag/drop, canonical placement geometry, undo preserving resource, redo and restart verified |
+| LI-04 | Canonical planning CRUD/undo, real pointer move/resize/snap, Escape cancellation and reduced-motion keyboard edits verified natively; full visual review remains open |
+| LI-05 | Native orientation, selected event and canonical zoom verified; optional saved orientation/detail preferences tested at renderer/service level. Complete persistence/motion native review remains open |
 | LI-06 | Partial: exact recorded-header time review, not historical state reconstruction or reexecution |
 | LI-07, LI-08 | Explicit causal event edges plus real current-plan task dependencies/joins implemented; current-plan edges are not historical event causation. Native mission-flow journey pending |
 | LI-09 | Metadata allowlist and authorization filtering tested; native inspection pending |
 | LI-10, LI-11 | Thirteen target crops and a six-frame native morph sequence captured with explicit simulation label and unchanged canonical resources. Live backend/voice coverage and artistic acceptance remain open |
 | LI-12 | Trusted native countdown creation/start/pause/resume, world dials and restart verified. Stopwatch service/view tests pass; complete native family review remains open. Focus preset is not a separate session domain |
 | LI-13 | Notes/task-group/objective/agent/subject presentations upgraded; comprehensive family and native two-size acceptance remains open |
-| LI-14, LI-15 | Native restart preserves Timeline viewport/selection/plans, paused timer duration and world zone; canonical Add Note/Clock verified. Full layout/drag recovery review remains open |
-| LI-16 | Keyboard/static fallbacks and reduced-motion lifecycle tested at component level; native accessibility review pending |
+| LI-14, LI-15 | Native restart preserves Timeline viewport/selection/plans, paused timer duration, world zone and Library-dropped Note binding/geometry. Full layout recovery review remains open |
+| LI-16 | Native planning keyboard edits under reduced motion verified; keyboard/static fallbacks and lifecycle tested at component level. Comprehensive accessibility review pending |
 | LI-17 | Not accepted: realistic sustained load, CPU/GPU/RAM/frame-time and latency measurements required |
 | LI-18 | Authorization/revocation/fallback regressions covered; native degradation review pending |
 | LI-19 | Time-first Timeline and causality-first Stream implemented; native comparative review pending |
@@ -122,6 +122,25 @@ above 16.67 ms within its 240-callback cap. These are renderer callback observat
 Earlier timer attempts correctly failed the gesture gate or rejected a hidden legacy
 pointer target; their receipts remain preserved. The final verifier uses real
 software pointer events on visible controls and leaves the gate intact.
+
+A later interaction run verified real planning movement (+11 seconds), resizing
+(30 to 36 seconds), unchanged canonical version/data after Escape, and exact
+one-second keyboard move/resize under reduced motion. That combined run failed its
+Library drop because the chosen pointer destination remained over the Library;
+the dependent placement restart check consequently failed. A focused diagnostic
+run then passed **3/3 checks in 7.890 seconds**: it probed actual hit-tested targets,
+released over the confirmed workspace, and verified canonical Note placement,
+undo preserving its resource, redo and exact placement recovery after restart.
+Both owned Electron processes exited successfully, with zero renderer errors or
+canonical executions. These complementary receipts are not a single all-pass run.
+
+Optional Timeline orientation/detail persistence passed **42/42** focused tests
+with renderer and backend typechecking. Omitted legacy preferences stay omitted;
+this does not normalize old receipts or change their digests.
+
+Hosted backend CI at `c7ab83f` passes dependency installation and typechecking,
+then fails Ubuntu tests with `spawnSync git.exe ENOENT` in Vela-owned fixture paths.
+The failure was sent to their owner; no tests or safety assertions were disabled.
 
 Reproduce from the repository root with
 `node --experimental-strip-types scripts/verify-living-instruments-native.mjs`.

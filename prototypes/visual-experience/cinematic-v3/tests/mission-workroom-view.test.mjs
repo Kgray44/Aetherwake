@@ -2,9 +2,68 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { componentDocument } from "../../../conversation-product/test/component-dom.mts";
 import { mountMissionWorkroomView } from "../src/mission-workroom-view.ts";
+import { blockDocument } from '../../../block-library/tests/component-dom.mts';
 
 const binding = (dashboard, revision = 1) => ({
   kind: "workroom-resource", missionId: "mission-a", outcome: "running", revision, dashboard,
+});
+
+const fullMission = (revision = 1) => ({ contract: 'aerynth.vela-mission@1', id: 'mission-a', requestId: 'synthetic:mission-request',
+  objective: 'SYNTHETIC CPU and RAM fixture', scope: { workspaceId: 'origin', projectId: null }, criteria: ['Inspect samples'],
+  createdAt: '2026-11-05T01:00:00Z', revision, planRevision: 1, concurrency: 2, disposition: 'active', outcome: 'verified', waits: {},
+  tasks: [['cpu', []], ['ram', []], ['report', ['cpu', 'ram']]].map(([id, dependencies]) => ({ id, dependencies, state: 'verified',
+    objective: id, executor: id === 'report' ? 'join.samples' : 'sample.' + id, claims: [], criterion: 'Inspect samples', timeoutMs: 1000,
+    maxAttempts: 1, queuedAt: '2026-11-05T01:00:00Z', priority: 0, attempts: [] })), events: [],
+  profile: { elapsedMs: 1, peakWorkers: 2, attempts: 3, retries: 0, providerCalls: null, reportedTotalTokens: null, usageReports: 0, verifiedObjectivesPerReportedToken: null } });
+const flowPort = () => { const poses = new Map(); return { poses, motion: { reduced: true, add(key, pose) { poses.set(key, pose); },
+  target(key, pose) { poses.set(key, pose); }, pose(key) { assert(poses.has(key)); return poses.get(key); }, remove(key) { poses.delete(key); }, wake() {} } }; };
+
+for (const cardKind of ['stream', 'graph']) test(cardKind + ' workroom defaults to shared canonical Flow with real dependency joins and forensic rows', async t => {
+  const dom = blockDocument(), restore = dom.install(), port = flowPort();
+  const mission = fullMission(), dashboard = cardKind === 'graph' ? { kind: 'graph', objective: mission.objective, planRevision: 1,
+    tasks: mission.tasks.map(task => ({ ...task, title: task.objective })) } : { kind: 'stream', events: [{ eventId: 'actual-event', cursor: 7,
+      receivedAt: '2026-11-05T01:00:00Z', type: 'vela.mission/settled', status: 'verified', classification: 'observed', taskId: 'cpu' }] };
+  const view = mountMissionWorkroomView(dom.root, cardKind === 'graph' ? 'dashboard' : 'stream', 'workroom', async () => binding(dashboard), undefined,
+    () => {}, undefined, { motion: port.motion, viewId: 'synthetic:' + cardKind, readMission: async () => mission });
+  t.after(() => { view.dispose(); restore(); }); await view.refresh(); view.frame();
+  assert.equal(dom.root.querySelectorAll('.aw-mission-task').length, 3); assert.equal(dom.root.querySelectorAll('.aw-mission-edge').length, 2);
+  assert.equal(dom.root.querySelector('[data-mission-task-id="report"]').dataset.join, 'true'); assert.equal(port.poses.size, 3);
+  dom.root.querySelector('[data-mission-task-id="cpu"]').onclick(); assert.match(dom.root.querySelector('.aw-stream-inspector').textContent, /Task IDcpu/);
+  const rows = dom.root.querySelector('.aw-mission-workroom').querySelector('ol'); assert(rows.hidden);
+  dom.root.querySelector('[data-workroom-mode="forensic"]').onclick(); assert.equal(rows.hidden, false); assert.equal(port.poses.size, 0);
+  if (cardKind === 'stream') assert(rows.querySelector('[data-stream-event-id="actual-event"]'));
+  dom.root.querySelector('[data-workroom-mode="glimpse"]').onclick(); assert(rows.hidden); assert.equal(port.poses.size, 3);
+  view.setActive(false); assert.equal(port.poses.size, 0); view.frame();
+});
+
+test('mission identity/revision mismatch, denied full reads and late scope replies cannot retain or remount graph authority', async t => {
+  const dom = blockDocument(), restore = dom.install(), port = flowPort(); let current = fullMission(), denied = false, release;
+  const view = mountMissionWorkroomView(dom.root, 'stream', 'workroom', async () => binding({ kind: 'stream', events: [] }, 2), undefined, () => {}, undefined,
+    { motion: port.motion, viewId: 'synthetic:scope', readMission: async () => { if (denied) throw Error('denied'); return current; } });
+  t.after(() => { view.dispose(); restore(); }); await view.refresh(); assert.equal(port.poses.size, 0); assert.match(dom.root.textContent, /access could not be confirmed/);
+  current = { ...fullMission(2), id: 'wrong-mission' }; await view.refresh(); assert.equal(port.poses.size, 0);
+  current = fullMission(2); await view.refresh(); assert.equal(port.poses.size, 3);
+  denied = true; view.observe(true); assert.equal(port.poses.size, 0); await view.refresh(); assert.equal(dom.root.querySelectorAll('.aw-mission-task').length, 0);
+  denied = false; let held = new Promise(resolve => { release = resolve; });
+  const late = mountMissionWorkroomView(dom.root, 'stream', 'workroom', async () => binding({ kind: 'stream', events: [] }), undefined, () => {}, undefined,
+    { motion: port.motion, viewId: 'synthetic:late', readMission: () => held });
+  await Promise.resolve(); late.setScope(null); release(fullMission()); await late.refresh();
+  assert.equal(port.poses.size, 0); assert.equal(dom.root.querySelectorAll('.aw-mission-task').length, 0); late.dispose();
+});
+
+test('mission Timeline mounts the canonical temporal/planning experience as primary and retains recorded journal in Forensic disclosure', async () => {
+  const dom = componentDocument(), calls = [], canonical = dom.doc.createElement('section'); canonical.textContent = 'Canonical Timeline instrument';
+  let allowed = true;
+  const manual = { setActive: value => calls.push(['active', value]), setPresentation() {}, refresh: async () => calls.push(['refresh']),
+    flush: async () => {}, frame: () => calls.push(['frame']), reflow() {}, dispose: () => calls.push(['dispose']) };
+  const view = mountMissionWorkroomView(dom.root, 'timeline', 'workroom', async () => { if (!allowed) throw Error('denied'); return { kind: 'workroom-resource', missionId: 'mission-a', outcome: 'verified', revision: 1,
+    timeline: [{ seq: 1, kind: 'created', time: '2026-11-05T01:00:00Z' }] }; }, host => { host.append(canonical); return manual; }, () => {});
+  try {
+    await view.refresh(); assert.equal(dom.root.children[0], canonical.parentElement); assert(calls.some(call => call[0] === 'active' && call[1] === true));
+    const forensic = dom.root.querySelector('details'); assert.match(forensic.querySelector('summary').textContent, /Forensic mission journal/); assert.equal(forensic.open, false);
+    assert(forensic.querySelector('[data-mission-sequence="1"]')); view.frame(); assert(calls.some(call => call[0] === 'frame'));
+    allowed = false; view.observe(true); await view.refresh(); assert.equal(canonical.parentElement.parentElement, null); assert(calls.some(call => call[0] === 'active' && call[1] === false));
+  } finally { view.dispose(); } assert.equal(calls.filter(call => call[0] === 'dispose').length, 1);
 });
 
 test("an individual specialist card separates assignment, observed attempts and provider-reported outcomes", async () => {

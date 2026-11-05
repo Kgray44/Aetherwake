@@ -52,7 +52,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   const scale = node('div', '', 'aw-timeline-scale'), laneLabels = node('div', '', 'aw-timeline-lanes');
   const presentationTools = node('div', '', 'aw-timeline-tools'), orientation = node('select'), detail = node('select');
   const reviewTools = node('div', '', 'aw-timeline-review-time'), scrub = node('input'), speed = node('select'), reviewTime = node('output'), playhead = node('div', '', 'aw-timeline-playhead');
-  let display: TemporalOrientation = 'horizontal', density = options.presentation === 'workspace' ? 'compact' : 'expanded', forensic = false, densityChosen = false;
+  let display: TemporalOrientation = 'horizontal', density: 'compact' | 'expanded' = options.presentation === 'workspace' ? 'compact' : 'expanded', forensic = false, densityChosen = false, layoutChosen = false;
   let playing = false, reviewPosition: number | null = null, reviewStarted = 0, reviewOrigin = 0;
   let orderedKeys: string[] = [];
   const sourceCoverage = node('p', '', 'aw-timeline-source-coverage');
@@ -85,7 +85,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
     const base = dirty && baseView ? baseView : current.view;
     const start = new Date(from.value + 'Z'), end = new Date(to.value + 'Z');
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) throw new Error('Invalid capture interval');
-    return { ...structuredClone(base), mode: mode.value as TimelineView['mode'], viewport: { ...base.viewport, from: start.toISOString(), to: end.toISOString() },
+    return { ...structuredClone(base), ...((layoutChosen || base.presentation) ? { presentation: { orientation: display, detail: density } } : {}), mode: mode.value as TimelineView['mode'], viewport: { ...base.viewport, from: start.toISOString(), to: end.toISOString() },
       sources: { providerIds: readFilter(provider, base.sources.providerIds), eventTypes: readFilter(eventType, base.sources.eventTypes), classifications: classification.value ? readFilter(classification, base.sources.classifications) as TimelineView['sources']['classifications'] : ['observed', 'reported', 'inferred', 'simulated'] }, selection: selected ? { ...selected } : null };
   };
   const apply = action('Save view', () => { if (canEdit()) return save(collect()); });
@@ -136,6 +136,13 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   }
   function paintFields() {
     if (!current || dirty) return;
+    const savedPresentation = current.view.presentation;
+    if (!(layoutChosen && current.canEdit !== true)) {
+      display = savedPresentation?.orientation ?? 'horizontal';
+      density = savedPresentation?.detail ?? (section.dataset.presentation === 'workspace' ? 'compact' : 'expanded');
+      densityChosen = !!savedPresentation; layoutChosen = false;
+      orientation.value = display; detail.value = density;
+    }
     mode.value = current.view.mode; from.value = current.view.viewport.from.slice(0, 19); to.value = current.view.viewport.to.slice(0, 19);
     setOptions(provider, current.view.sources.providerIds, window?.items.map(item => item.event.providerId) ?? [], 'All sources');
     setOptions(eventType, current.view.sources.eventTypes, window?.items.map(item => item.event.type) ?? [], 'All event types');
@@ -345,8 +352,8 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   for (const value of ['expanded', 'compact']) { const option = node('option', value); option.value = value; detail.append(option); }
   for (const value of ['1', '10', '60']) { const option = node('option', value + '× recorded time'); option.value = value; speed.append(option); }
   speed.value = '1'; orientation.value = 'horizontal'; detail.value = density;
-  orientation.onchange = () => { display = orientation.value as TemporalOrientation; reflow(); };
-  detail.onchange = () => { densityChosen = true; density = detail.value; reflow(); };
+  orientation.onchange = () => { if (disposed || !active) return; layoutChosen = true; display = orientation.value as TemporalOrientation; if (canEdit()) markDirty(); reflow(); };
+  detail.onchange = () => { if (disposed || !active) return; layoutChosen = densityChosen = true; density = detail.value as 'compact' | 'expanded'; if (canEdit()) markDirty(); reflow(); };
   speed.onchange = () => { reviewOrigin = reviewPosition ?? reviewBounds().start; reviewStarted = performance.now(); };
   scrub.type = 'range'; scrub.setAttribute('aria-label', 'Recorded time position');
   scrub.oninput = () => { playing = false; play.textContent = 'Play recorded time'; reviewPosition = Number(scrub.value); motion.wake(); };

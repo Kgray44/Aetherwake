@@ -275,3 +275,35 @@ test('LI04 cancelled or stale planning pointer previews restore canonical geomet
   begin();control.onkeydown({key:'Escape',preventDefault(){},stopPropagation(){}});s.frame();assert.equal(band.style.transform,original);
   begin();s.f.setWritable(false);await s.controller.refresh();control.onpointerup({pointerId:1});s.frame();assert.equal(band.style.transform,original);assert.equal(s.document!.resource.version,2);
 });
+
+
+test('LI-05: explicit Save persists orientation/detail; reopen and focus/resize retain event identity',async t=>{
+  const s=await setup(t);await s.ready();
+  const section=s.dom.root.querySelector('.aw-timeline');
+  const select=(name:string)=>s.dom.root.querySelectorAll('select').find((e:any)=>e.getAttribute('aria-label')===name);
+  const dot=s.dom.root.querySelector('.aw-timeline-dot');dot.onclick();
+  const eventId=dot.dataset.eventId,version=s.document!.resource.version;
+  select('Orientation').value='vertical';select('Orientation').onchange();select('Detail').value='compact';select('Detail').onchange();
+  assert.equal(s.document!.resource.version,version);
+  s.controller.setPresentation('workspace');s.controller.setPresentation('focused');s.controller.reflow();s.frame();
+  assert.equal(section.dataset.orientation,'vertical');assert.equal(section.dataset.density,'compact');assert.equal(dot.dataset.eventId,eventId);assert.equal(dot.getAttribute('aria-pressed'),'true');
+  button(s.dom.root,'Save view').onclick();await until(()=>s.document!.resource.version===version+1&&s.settled());
+  assert.deepEqual(s.document!.view.presentation,{orientation:'vertical',detail:'compact'});
+  assert.equal(s.document!.view.selection!.eventId,eventId);
+  s.controller.dispose();
+  const motion:ExperienceMotionPort={reduced:true,add:(key,pose)=>s.coordinator.add(key,pose),target:(key,pose,cause)=>s.coordinator.target(key,pose,cause),pose:key=>s.coordinator.pose(key),remove:key=>{s.coordinator.bodies.delete(key);},wake(){}};
+  const reopened=mountTimelineExperience(s.dom.root,s.f.created.resourceId,s.f.port,{motion,viewId:'reopened-persisted-preferences'});
+  await until(()=>s.dom.root.querySelector('.aw-timeline').getAttribute('aria-busy')==='false');
+  assert.equal(s.dom.root.querySelector('.aw-timeline').dataset.orientation,'vertical');assert.equal(s.dom.root.querySelector('.aw-timeline').dataset.density,'compact');
+  assert.equal(s.dom.root.querySelector('.aw-timeline-dot').getAttribute('aria-pressed'),'true');reopened.dispose();
+});
+
+test('readonly orientation and detail remain temporary while Save stays denied and old view stays absent',async t=>{
+  const s=await setup(t,f=>{f.setWritable(false);return{};});await s.ready();const version=s.document!.resource.version;
+  const select=(name:string)=>s.dom.root.querySelectorAll('select').find((e:any)=>e.getAttribute('aria-label')===name);
+  select('Orientation').value='multilane';select('Orientation').onchange();select('Detail').value='compact';select('Detail').onchange();
+  s.controller.setPresentation('focused');s.controller.reflow();s.frame();await s.controller.refresh();
+  assert.equal(s.dom.root.querySelector('.aw-timeline').dataset.orientation,'multilane');assert.equal(s.dom.root.querySelector('.aw-timeline').dataset.density,'compact');
+  assert.equal(button(s.dom.root,'Save view').disabled,true);button(s.dom.root,'Save view').onclick();
+  assert.equal(s.f.service.read(s.f.created.resourceId).resource.version,version);assert.equal(Object.hasOwn(s.f.service.read(s.f.created.resourceId).view,'presentation'),false);
+});

@@ -416,11 +416,17 @@ export class TimelineService {
   private view(input: unknown): TimelineView {
     const required = ["schemaVersion", "mode", "scope", "sources", "viewport", "selection"];
     check(
-      fields(input, [...required, "timeAxis"], required) &&
+      fields(input, [...required, "timeAxis", "presentation"], required) &&
         input.schemaVersion === 1 &&
         ["activity", "execution"].includes(input.mode) &&
         (!Object.hasOwn(input, "timeAxis") || ["receivedAt", "reportedAt"].includes(input.timeAxis)),
       "timeline_invalid_view",
+    );
+    if (Object.hasOwn(input, "presentation")) check(
+      fields(input.presentation, ["orientation", "detail"]) &&
+        ["horizontal", "vertical", "multilane"].includes(input.presentation.orientation) &&
+        ["compact", "expanded"].includes(input.presentation.detail),
+      "timeline_invalid_presentation",
     );
     check(
       fields(input.scope, ["projectId", "resourceIds"]) &&
