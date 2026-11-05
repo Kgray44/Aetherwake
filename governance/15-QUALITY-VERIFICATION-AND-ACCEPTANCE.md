@@ -626,7 +626,7 @@ Aerynth's defining promise is not that it can display code, launch agents, produ
 
 ## Ratified amendment CF-2026-11-05: acceptance of complete capabilities
 
-> **Status: proposed, pending owner acceptance.** This supplements existing visual, functional, performance and security acceptance; none are waived.
+> **Status: Owner-ratified 2026-11-05; implementation acceptance is a separate gate.** This supplements existing visual, functional, performance and security acceptance; none are waived.
 
 **AW-QVA-128 — Capability-first definition of done.** Every claimed capability MUST be tested for complete intended user outcome, truthful status, permissions, integration, error recovery and evidence, rather than judged only by output text, UI appearance or successful API invocation.
 
