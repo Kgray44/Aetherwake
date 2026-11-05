@@ -52,7 +52,7 @@ Responsibilities:
 3. **Provider Registry** reports discovered model/tool capabilities, constraints, supported reasoning efforts, regions, account scopes, limits, pricing metadata and freshness. A static hardcoded model list may bootstrap diagnosis but may not claim account capability.
 4. **Execution Fabric** maps a plan node to Responses, Decisions, SDK-managed local agent, managed Agents API, signed-in Codex, or native services as distinct routes. Model inference is not synonymous with agent execution.
 5. **Trusted Tool Gateway** owns schema checks, explicit scoped authorization, data classification, idempotency/once-only effect claims, concurrency locks and postcondition verification.
-6. **Memory CIE** owns canonical facts, links, retention/deletion, semantic retrieval and context-capsule provenance. Provider conversation state is an optimization, not authority.
+6. **Memory CIE** owns derived memory projections, retrieval/indexing, context assembly and capsule provenance. Canonical facts, links and their retention/deletion authority remain with each source owner; CIE enforces current source policy and coordinates invalidation as specified in the [Unified Memory and Context Runtime](VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md). Provider conversation state is an optimization, not authority.
 7. **Evidence/Event Bus** records user-visible true activity, ordered and correlated by stable IDs.
 8. **Spatial Renderer** interprets events as motion, 3D GPU volume and interactive blocks without modifying task truth.
 
