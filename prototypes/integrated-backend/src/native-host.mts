@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { NativeLiveMediaServices } from './live-media-host.mts';
 import type { NativeWakeCaptureServices } from './wake-capture-host.mts';
+import type { FileEditAdmission } from './vela-file-edit.mts';
 
 /** Private native-process injection. Never renderer RPC or serialized workerData. */
 export interface NativeHostServices {
+  /** Trusted constructor-only admission; omission retains the native host reserve policy. */
+  fileEditAdmission?: FileEditAdmission;
   maintenance?:import('./windows-maintenance-host.mts').NativeHostMaintenanceServices;
   computer?:import('./windows-computer-host.mts').NativeWindowsComputerServices;
   documents?:import('./document-text-host.mts').NativeDocumentTextServices;

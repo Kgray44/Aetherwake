@@ -75,6 +75,27 @@ export class VelaToolWorkflows {
   private receipt(w:Workflow,input:VelaToolInvocation,result:VelaToolOwnerResult,id:string):VelaToolReceipt {const outputJson=bounded(result.output,TOOL_WORKFLOW_LIMITS.outputBytes);return {contract:'aerynth.vela.tool-receipt@1',id,workflowId:w.id,requestId:w.binding.requestId,invocationId:input.invocationId,capabilityId:input.capabilityId,catalogDigest:w.catalog.digest,scopeDigest:w.binding.scopeDigest,inputDigest:sha(input.argumentsJson),outputDigest:sha(outputJson),state:result.state,observedAt:new Date(this.now()).toISOString(),outputJson,verification:result.verification??{kind:'unverified',evidenceRefs:[]},pause:result.pause??'none'};}
   stateForRequest(requestId:string){const row=this.host.db.prepare('SELECT id FROM vela_tool_workflows WHERE request_id=?').get(requestId);return row?this.read(String(row.id)):null;}
   receipts(workflowId:string):VelaToolReceipt[]{return this.host.db.prepare('SELECT json FROM vela_tool_invocations WHERE workflow_id=? AND json IS NOT NULL ORDER BY rowid').all(workflowId).map(row=>JSON.parse(String(row.json)));}
+  /** A committed observation is a fact, not a fresh execution admission or whole-request verification. */
+  completedReadJobs(workflowId:string,visible:Pick<ToolWorkflowBinding,'requestId'|'conversationId'|'inputMessageId'|'inputDigest'|'scopeDigest'>):number {
+    try{
+      if(!identifier(workflowId)||!identifier(visible.requestId))return 0;
+      const row=this.host.db.prepare('SELECT request_id,json FROM vela_tool_workflows WHERE id=?').get(workflowId);if(!row||row.request_id!==visible.requestId)return 0;
+      const w=JSON.parse(String(row.json)) as Workflow,binding=w.currentBinding??w.binding;
+      if(w.id!==workflowId||['requestId','conversationId','inputMessageId','inputDigest'].some(key=>w.binding[key as keyof ToolWorkflowBinding]!==visible[key as keyof typeof visible])||binding.scopeDigest!==visible.scopeDigest)return 0;
+      const operations=this.host.db.prepare('SELECT json FROM vela_host_operations WHERE workflow_id=? LIMIT ?').all(workflowId,TOOL_WORKFLOW_LIMITS.toolCalls+1);
+      if(operations.length>TOOL_WORKFLOW_LIMITS.toolCalls)return 0;
+      const represented=new Set(operations.map(row=>(JSON.parse(String(row.json)) as HostOperation).view.receiptId).filter((id):id is string=>typeof id==='string'));
+      const rows=this.host.db.prepare('SELECT invocation_id,state,json FROM vela_tool_invocations WHERE workflow_id=? ORDER BY rowid LIMIT ?').all(workflowId,TOOL_WORKFLOW_LIMITS.toolCalls+1);
+      if(rows.length>TOOL_WORKFLOW_LIMITS.toolCalls)return 0;
+      const entries=rows.filter(row=>typeof row.json==='string').map(row=>({row,receipt:JSON.parse(String(row.json)) as VelaToolReceipt}));
+      const ids=new Map<string,number>(),invocations=new Map<string,number>();
+      for(const {receipt}of entries){ids.set(receipt.id,(ids.get(receipt.id)??0)+1);invocations.set(receipt.invocationId,(invocations.get(receipt.invocationId)??0)+1);}
+      return entries.filter(({row,receipt})=>receipt.contract==='aerynth.vela.tool-receipt@1'&&identifier(receipt.id)&&ids.get(receipt.id)===1&&invocations.get(receipt.invocationId)===1&&!represented.has(receipt.id)&&
+        row.state==='observed'&&receipt.state==='observed'&&receipt.workflowId===workflowId&&receipt.requestId===visible.requestId&&receipt.invocationId===row.invocation_id&&
+        receipt.catalogDigest===w.catalog.digest&&receipt.scopeDigest===w.catalog.scopeDigest&&receipt.pause==='none'&&receipt.verification?.kind==='owner-observed'&&
+        typeof receipt.outputJson==='string'&&receipt.outputDigest===sha(receipt.outputJson)&&w.catalog.descriptors.some(d=>d.id===receipt.capabilityId&&d.effect==='read'&&d.availability==='available')).length;
+    }catch{return 0;}
+  }
   checkpointContinuation(workflowId:string,continuation:{id:string;digest:string},pendingReceiptId?:string){const w=this.read(workflowId);ensure(identifier(continuation.id)&&/^[a-f0-9]{64}$/u.test(continuation.digest)&&Object.keys(continuation).sort().join(',')==='digest,id','invalid_vela_tool_continuation');this.host.atomic(()=>{w.continuation=structuredClone(continuation);w.pendingReceiptId=pendingReceiptId;this.save(w);});}
   private replacePendingReceipt(workflowId:string,receiptId:string,result:VelaToolOwnerResult):VelaToolReceipt {ensure(this.host.db.isTransaction,'vela_tool_transaction_required');const prior=this.receipts(workflowId).find(r=>r.id===receiptId);ensure(prior&&['native-review','owner-job'].includes(prior.pause),'vela_tool_resume_receipt_unavailable');const outputJson=bounded(result.output,TOOL_WORKFLOW_LIMITS.outputBytes),next={...prior,id:randomUUID(),state:result.state,outputJson,outputDigest:sha(outputJson),observedAt:new Date(this.now()).toISOString(),verification:result.verification??{kind:'unverified' as const,evidenceRefs:[]},pause:result.pause??'none'};this.host.db.prepare('UPDATE vela_tool_invocations SET state=?,json=? WHERE workflow_id=? AND invocation_id=?').run(next.state,bounded(next,24576),workflowId,next.invocationId);return next;}
   replaceOwnerReceipt(workflowId:string,receiptId:string,result:VelaToolOwnerResult):VelaToolReceipt {const w=this.read(workflowId);this.current(w);return this.host.atomic(()=>this.replacePendingReceipt(workflowId,receiptId,result));}

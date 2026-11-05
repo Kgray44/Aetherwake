@@ -268,7 +268,7 @@ for (const authenticated of [false, true])
       assert.equal(Buffer.byteLength(exact.sourceChat), 40);
       assert.equal(Buffer.byteLength(exact.sourceNote), 60);
       const expectedIds = CAPABILITIES.filter(capability =>
-        (process.platform==='win32'||capability.id!=='readWeather')&&(authenticated || capability.id !== "delegateTask"),
+        (process.platform==='win32'||!['readWeather','clockTimer'].includes(capability.id))&&(authenticated || capability.id !== "delegateTask"),
       ).map(capability => capability.id).sort();
       assert.deepEqual(capabilities.map((capability: { id: string }) => capability.id).sort(), expectedIds);
       assert(capabilities.some((capability: { id: string }) => capability.id === "createTimeline"));

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { ownedFileEditAdmission } from './fixture-file-edit-admission.mts';
 import {execFileSync} from 'node:child_process';
 import {createCipheriv,createDecipheriv,randomBytes,randomUUID} from 'node:crypto';
 import {mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
@@ -19,10 +20,10 @@ function response(model:string,text:string){const id='synthetic-'+randomUUID();r
 function fixture(){
   const parent=resolve(homedir(),'Documents','Aerynth Validation'),root=join(parent,'mfec-'+randomUUID()),repo=join(root,'repo'),profile=join(root,'profile'),file=join(repo,'source.mjs'),testPath=join(repo,'source.test.mjs');
   mkdirSync(repo,{recursive:true});mkdirSync(profile);writeFileSync(file,before);writeFileSync(testPath,"import test from 'node:test';import assert from 'node:assert/strict';import {add} from './source.mjs';test('adds',()=>assert.equal(add(2,3),5));\n");
-  const git=(args:string[])=>execFileSync('git.exe',['-C',repo,...args],{windowsHide:true,timeout:5000,stdio:'pipe'});
+  const git=(args:string[])=>execFileSync(process.platform==='win32'?'git.exe':'git',['-C',repo,...args],{windowsHide:true,timeout:5000,stdio:'pipe'});
   git(['init','-q']);git(['add','source.mjs','source.test.mjs']);git(['-c','user.name=Synthetic Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-qm','Synthetic M3 file']);
   const key=randomBytes(32),bodies:any[]=[];let checkCalls=0,execute=async()=>({exitCode:0,stdout:tap,stderr:''}),holdApi=false,releaseApi=()=>{},nativeMedia=true;
-  const native:NativeHostServices={secrets:{available:async()=>true,seal:async text=>{const iv=randomBytes(12),c=createCipheriv('aes-256-gcm',key,iv);return Buffer.concat([iv,c.update(text),c.final(),c.getAuthTag()]);},open:async bytes=>{const b=Buffer.from(bytes),c=createDecipheriv('aes-256-gcm',key,b.subarray(0,12));c.setAuthTag(b.subarray(-16));return Buffer.concat([c.update(b.subarray(12,-16)),c.final()]).toString();}}};
+  const native:NativeHostServices={fileEditAdmission:ownedFileEditAdmission([root]),secrets:{available:async()=>true,seal:async text=>{const iv=randomBytes(12),c=createCipheriv('aes-256-gcm',key,iv);return Buffer.concat([iv,c.update(text),c.final(),c.getAuthTag()]);},open:async bytes=>{const b=Buffer.from(bytes),c=createDecipheriv('aes-256-gcm',key,b.subarray(0,12));c.setAuthTag(b.subarray(-16));return Buffer.concat([c.update(b.subarray(12,-16)),c.final()]).toString();}}};
   const api={fetch:(async(url,init)=>{if(String(url).endsWith('/models'))return Response.json({data:[{id:'gpt-6-luna'}]});assert.equal(String(url),'https://api.openai.com/v1/responses');const body=JSON.parse(String(init?.body));bodies.push(body);if(holdApi)await new Promise<void>(resolve=>{releaseApi=resolve;});const input=JSON.parse(body.input[0].content);return response(body.model,JSON.stringify({summary:'Fix addition',files:[{path:input.inspection.source.relativePath,replacement:after}]}));}) as typeof fetch};
   const create=()=>{const core=new BackendCore({path:join(profile,'canonical.sqlite'),privateRoot:profile,provider:'fixture',contentPolicy:'synthetic-only',nativeMedia},()=>{},native,undefined,api);
     (core as any).port.projectChecks={ready:async()=>true,execute:async(argv:string[],cwd:string)=>{checkCalls++;assert.equal(cwd.toLowerCase(),repo.toLowerCase());assert.deepEqual(argv.slice(1),['--test','--test-isolation=none','--test-reporter=tap','--','./source.test.mjs']);return execute();}};return core;};
@@ -45,6 +46,12 @@ function fixture(){
   };
 }
 
+// The Windows CI job retains every native write, recovery and authority assertion.
+if(process.platform!=='win32'){
+test('non-Windows actual Core refuses selected-file preparation before API dispatch or write authority',async()=>{
+ const f=fixture();try{await f.ready();await assert.rejects(f.prepare(),/vela_codex_write_unavailable/);assert.equal(f.bodies.length,0);assert.equal(f.checkCalls,0);assert.equal(readFileSync(f.file,'utf8'),before);for(const table of ['mission_file_inspections','mission_file_operations','mission_file_authorities'])assert.equal(f.db.prepare('SELECT count(*) n FROM '+table).get()!.n,0);}finally{await f.close();}
+});
+}else{
 test('actual stale second Core closes without a mutation and cannot overwrite the first host', async () => {
   const f=fixture(); let second:BackendCore|undefined,reopened:BackendCore|undefined;
   try {
@@ -163,3 +170,4 @@ test('native file access disabled on restart revokes the route even when API cre
     await assert.rejects(f.core.command('missionFileEditReviewNative',{operationId:op.id}),/mission_edit_native_required/);assert.equal((await f.state()).missionFileEdits!.length,0);assert.equal(readFileSync(f.file,'utf8'),before);assert.equal(f.bodies.length,1);
   }finally{await f.close();}
 });
+}

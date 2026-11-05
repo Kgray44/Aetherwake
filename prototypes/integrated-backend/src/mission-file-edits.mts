@@ -8,7 +8,7 @@ import { ensure } from './contracts.mts';
 import { mediaSourceRevision } from './media-sources.mts';
 import { admitVelaFileEdit, observeVelaFileEdit, parseVelaFileEdit, publishVelaFile, readVelaFileEditTargets,
   stageVelaFile, validateVelaFileEditTarget, velaEditSiblings, verifyVelaReplacement,
-  type VelaFileEditItem, type VelaFileEditRecord, type VelaFileEditTarget } from './vela-file-edit.mts';
+  type VelaFileEditItem, type VelaFileEditRecord, type VelaFileEditTarget, type FileEditAdmission } from './vela-file-edit.mts';
 import { interpretVelaProjectCheck, planVelaProjectCheck } from './vela-project-check.mts';
 
 export const MISSION_FILE_EDIT_LIMITS = Object.freeze({ operations: 128, inspections: 256, events: 32, bytes: 8192, leaseMs: 180000 });
@@ -50,6 +50,7 @@ interface Operation {
  * native UI decisions independently of renderer/model-supplied booleans. */
 export interface MissionFileEditsHost {
   db: DatabaseSync; atomic<T>(work: () => T): T; privateRoot?: string; now?(): number;
+  fileEditAdmission?: FileEditAdmission;
   scope(): MissionEditScope;
   /** Resolves current mission attempt or explicit selected-file intent; never invents a chat turn. */
   ownerCurrent(owner: MissionFileEditOwner, scope: MissionEditScope): boolean;
@@ -275,7 +276,7 @@ export class MissionFileEdits {
     ensure(op.events.length <= MISSION_FILE_EDIT_LIMITS.events - 3, 'mission_edit_storage_unavailable');
     const release = this.host.lease(op.inspection.target.root); ensure(release, 'mission_edit_checkout_busy');
     try {
-      verifyVelaReplacement(op.inspection.target.path, op.after); admitVelaFileEdit(op.inspection.target.path, this.host.privateRoot);
+      verifyVelaReplacement(op.inspection.target.path, op.after); (this.host.fileEditAdmission ?? admitVelaFileEdit)(op.inspection.target.path, this.host.privateRoot);
       this.host.atomic(() => { this.consume(op, writeAuthority, op.review!); Object.assign(op.file, velaEditSiblings(op.file.target, op.id)); op.phase = 'applying'; this.save(op, 'write-started'); });
       try { stageVelaFile(op.file, op.after); this.beforeCurrent(op.inspection); publishVelaFile(op.file); } catch { /* Reconcile observed bytes; never replay the write. */ }
       try { this.host.atomic(() => this.finishObserved(op)); }

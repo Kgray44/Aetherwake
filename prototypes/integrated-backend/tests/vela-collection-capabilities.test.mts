@@ -224,7 +224,9 @@ test('archive audit requires an actual applied receipt, current owner and every 
     const beforeMissing=await f.state();
     await assert.rejects(f.core.command('velaRequestPreview',{intent:'Recall the earlier Synthetic audit project operations',resourceIds:[]}),/vela_operation_context_unavailable/);
     assert.equal((await f.state()).requests.length,beforeMissing.requests.length,'an essential receipt that cannot fit never dispatches or guesses');
-    const preview = await f.core.command('velaRequestPreview', { intent: 'Synthetic explicit two-target regression', resourceIds: [] }),
+    // Real bounded user text guarantees pressure even with a smaller platform catalog.
+    const intent='Synthetic explicit two-target regression. '+('Retain exact collection audit ownership and the independent conversation target; this is bounded synthetic context. '.repeat(18));
+    const preview = await f.core.command('velaRequestPreview', { intent, resourceIds: [] }),
       review = await f.core.command('velaNativeReview',{previewId:preview.id,signature:preview.signature}),
       grant = await f.core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature,reviewDigest:review.reviewDigest });
     const frozen=(f.core as any).velaPreviews.get(preview.id).frozenContext;

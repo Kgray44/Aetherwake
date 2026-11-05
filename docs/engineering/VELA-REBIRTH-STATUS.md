@@ -7,15 +7,16 @@ stacked on #18, #17 and #16. These remain review candidates, not merged releases
 The Constitution is binding; the specialist registry remains advisory.
 
 The latest qualified source checkpoint is
-`90a4ce8539c0d1e13fc348fca443a1d803ee156e`: both type checks, all 17 regression
+`956bf2e2c918f530b09588c876e0f0f9599b934d`: both type checks, all 17 regression
 groups and 21 review guards passed against its clean, exact source. The backend
-group passed 758 tests with two gated skips; desktop passed 678 with one gated
-skip; Vela Core passed 308. The later `64f3e4f` changes only a Git executable
-test fixture to select `git.exe` on Windows and `git` elsewhere. Its two affected
-Windows tests passed. Ubuntu CI then stopped at missing document-parser
-dependencies before tests; `0efd4b2` reuses the released workflow correction to
-install the existing block-library dependencies. Its remote result remains
-separate acceptance.
+group passed 768 tests with two gated skips; desktop passed 678 with one gated
+skip; Vela Core passed 310. The package's 569 manifested files and 571 disk/ZIP
+entries were independently verified; this package is not yet the open review.
+`91f2c24` adds Windows/Ubuntu CI coverage, truthful unsupported-platform metadata
+for Windows-only selected-code tools, and portable fixtures. Its affected Windows
+group passed 50 checks; a final selected-code recheck passed, alongside 21
+simulated platform-branch checks and backend typechecking. The simulation is not
+Ubuntu qualification. The remote matrix remains separate acceptance.
 
 The open portable review is
 `cfc64a47674a304af0bb146abc7161e4031b68ef`, also qualified across all 17 groups.
@@ -32,19 +33,25 @@ The dedicated API now discovers typed, owner-scoped tools through the canonical
 runtime and receives structured results for further calls and verification.
 Windows capabilities enforce host-owned permissions and identity checks; this
 does not make the read-only Codex sandbox a privileged host executor. A visible
-desktop semantic-memory check reached one genuine Responses POST after
-the isolated test catalog-cache budget fault was corrected. HTTP 200 streaming
-then failed with `api_response_item_changed_reasoning_encrypted`; its durable
-provider outcome remains unknown, with no reported usage and no automatic
-retry. No native memory read or tool receipt occurred. This does not establish
-live tool selection or measured-memory acceptance. Seven durable canonical
-Intelligence Stream events preserve the failed request's provenance; this does
-not claim a visible Stream inspection. The scoped parser correction retains
+desktop semantic-memory check completed two genuine API calls with 3,895 reported
+tokens. Bounded live metadata confirmed completed-item and terminal-snapshot
+ciphertext drift with matching identity and summary, and the parser correction
+accepted it. A subsequent stage failed before HTTP dispatch. An actual-class
+offline clock reproduction confirmed catalog expiry between stages. The scoped
+correction refreshes the existing catalog under the original cancellation and
+authority fences, then settles genuine blockers with a canonical native observed
+reply on the same API request. Unknown outcomes, earlier effect receipts and
+real review/job pauses remain intact. Both typechecks and focused regressions
+passed; fresh live qualification is pending. No native memory read
+or measurement receipt occurred, so measured-memory acceptance remains pending.
+Eighteen durable Intelligence Stream events preserve the failed run's provenance;
+this does not claim a visible Stream inspection. The prior one-call attempt
+remains unknown with no reported usage and was not replayed. The parser retains
 the completed item ciphertext for continuation under the
 [streaming contract](https://developers.openai.com/api/reference/resources/responses/streaming-events),
 while retaining identity, content and duplicate-completion checks. All 125
-provider tests passed. Because the original stream payload was not retained,
-the exact failure's repair remains unproved until fresh live qualification.
+provider tests passed. The earlier failed attempt's raw stream was not retained;
+its exact lifecycle cannot be reconstructed from the later live proof.
 No RAM trim was requested or performed. Typed-response speech now selects the
 same current primary reply as the UI, including verified native results and
 canonical partial mission summaries without promoting their completion state.

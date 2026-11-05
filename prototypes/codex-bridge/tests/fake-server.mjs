@@ -1,4 +1,6 @@
 import { createInterface } from "node:readline";
+import { existsSync } from 'node:fs';
+import { isAbsolute,basename,dirname } from 'node:path';
 const mode = process.argv[2] ?? "normal";
 const lines = createInterface({ input: process.stdin });
 const send = message => process.stdout.write(JSON.stringify(message) + "\n");
@@ -47,7 +49,13 @@ lines.on("line", line => {
     send({ method: "turn/started", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "inProgress", startedAt: 123 } } });
     if (mode === "approval" || mode === "explicit-denial" || mode === "cancel") send({ id: 88, method: "item/commandExecution/requestApproval", params: { threadId: "fixture-thread", turnId: "fixture-turn", command: "echo harmless" } });
     else if (mode === "file-approval") send({ id: 88, method: "item/fileChange/requestApproval", params: { threadId: "fixture-thread", turnId: "fixture-turn", reason: "fixture" } });
-    else if (mode === "recoverable-crash") setTimeout(() => process.exit(19), 50);
+    else if (mode === "recoverable-crash") {
+      const acknowledged=process.argv[3];
+      if(acknowledged){
+        if(!isAbsolute(acknowledged)||basename(acknowledged)!=='observed-turn-started'||!basename(dirname(acknowledged)).startsWith('aerynth-integration-'))process.exit(22);
+        const deadline=Date.now()+10000,timer=setInterval(()=>{if(existsSync(acknowledged)||Date.now()>=deadline){clearInterval(timer);process.exit(19);}},10);
+      }else setTimeout(() => process.exit(19), 50);
+    }
     else if (mode === "crash") process.exit(19);
     else if (mode === "interrupted-stream") process.exit(0);
     else if (mode === "wait-interrupt") return;
