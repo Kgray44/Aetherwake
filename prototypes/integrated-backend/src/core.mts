@@ -99,6 +99,7 @@ import type { AgentProfile, AgentProviderCatalog } from '../../agent-product/con
 import { matchOrdinaryClockQuestion } from './ordinary-clock-questions.mts';
 import { pureCourtesyReply } from './vela-courtesy.mts';
 import {VelaToolWorkflows,type VelaToolOwner,type ToolWorkflowBinding,type ToolOwnerDispatchFence,type ToolOwnerNegativeProof} from './vela-tool-workflows.mts';
+import {confirmedVelaPlan,projectVelaManifestation} from '../../vela-core/src/manifestation-state.ts';
 import {toolDescriptor,derivedToolCatalog,exactToolArguments} from './vela-tool-registry.mts';
 import {validWindowsMemorySnapshot,validWindowsProcessInspection} from '../../application-contract/windows-maintenance.ts';
 import type {VelaToolPort,VelaToolReceipt} from '../../application-contract/vela-tools.ts';
@@ -270,6 +271,7 @@ export class BackendCore {
   private missionPublication: MissionPublication;
   private missionPublicationTimer?: NodeJS.Timeout;
   private missionPublicationRetryMs = 250;
+  private readonly missionSpeechBacklog = new Set<string>();
   private missionWorkrooms: MissionWorkrooms;
   private missionExecutors: Readonly<Record<string, MissionExecutor>>;
   private missionSpecialistsInFlight = 0;
@@ -481,6 +483,8 @@ export class BackendCore {
       this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
         onChange: () => this.missions?.capacityChanged() });
       this.missionPublication = new MissionPublication(this.db);
+      // Persisted publication is recovery, even when its first message is appended later.
+      for(const row of this.db.prepare('SELECT mission_id FROM vela_mission_report_outbox').all())this.missionSpeechBacklog.add(String(row.mission_id));
       this.missions = new MissionService({
         db: this.db, atomic: work => this.kernel.withTransaction(work),
         authorized: scope => this.missionScopeAllowed(scope),
@@ -703,7 +707,7 @@ export class BackendCore {
       const message = this.appendVelaMessage(origin, {
         role: 'assistant', source: 'vela-native', classification: 'observed', content, responseKind: 'answer',
         missionReport: { missionId: id, workspaceId: scope.workspaceId, projectId: scope.projectId, jobsDone },
-      });
+      }, !this.missionSpeechBacklog.has(id));
       this.db.prepare('INSERT INTO vela_mission_report_links VALUES(?,?)').run(id, message.id);
       this.record('vela.mission/report-posted', 'observed', undefined, 'mission:report:' + id, {
         providerId: 'aerynth-native', detached: true, correlationId: id,
@@ -1903,7 +1907,7 @@ export class BackendCore {
       return {state:request.state==='unknown'?'unknown':'failed',content:request.state==='awaiting-review'?'Review the proposed action in Vela.':'The requested action has no verified result.'};
     }finally{this.pendingVoiceInput=undefined;}
   }
-  private appendVelaMessage(id:string,message:Omit<VelaMessage,'id'>):VelaMessage {
+  private appendVelaMessage(id:string,message:Omit<VelaMessage,'id'>,observeSpeech=true):VelaMessage {
     this.requireVelaConversation(id);
     if (message.role==='user' && this.pendingVoiceInput && message.content===this.pendingVoiceInput.intent) {
       const input=this.pendingVoiceInput,entry=this.state.graph.messages.find(value=>value.id===input.messageId&&value.conversationId===this.gid(id)),meta=this.state.vela!.messages[input.messageId];
@@ -1926,12 +1930,26 @@ export class BackendCore {
     }
     const {role:_role,content:_content,...metadata}=message;
     this.state.vela!.messages[entry.id]=metadata;this.state.revisions[id]++;
-    if(message.role==='assistant'&&message.requestId&&!message.missionReport&&!message.planId)setImmediate(()=>{if(!this.closed)void this.velaVoiceRuntime?.observeReply(entry.id).catch(()=>{});});
+    const observe=observeSpeech&&message.role==='assistant'?this.velaVoiceRuntime?.captureReplyObserver():undefined;
+    if(observe)setImmediate(()=>{if(!this.closed)void observe(entry.id).catch(()=>{});});
     return {...message,id:entry.id};
   }
   private readVoicePrimaryReply(messageId:string,contentDigest?:string){
-    ensure(!this.closed&&identifier(messageId),'voice_reply_unavailable');const conversationId=this.state.vela?.conversationId;ensure(conversationId&&this.velaHost.resolve({id:conversationId,kind:'resource'},this.velaHost.scope()),'voice_reply_unavailable');const messages=this.readVelaConversation(conversationId).messages,message=messages.find(item=>item.id===messageId),request=message?.requestId&&this.vela.state().requests.find(item=>item.id===message.requestId);
-    ensure(message?.role==='assistant'&&!message.missionReport&&!message.planId&&request&&['responded','completed'].includes(request.state)&&request.response?.messageId===messageId&&request.response.contentDigest===planningDigest(message.content)&&messages.filter(item=>item.role==='assistant'&&!item.missionReport&&!item.planId&&item.responseKind).at(-1)?.id===messageId,'voice_reply_unavailable');const digest=this.missionEditHash(message.content);ensure(contentDigest===undefined||contentDigest===digest,'voice_reply_changed');return {id:messageId,conversationId,content:message.content,contentDigest:digest};
+    ensure(!this.closed&&identifier(messageId),'voice_reply_unavailable');const scope=this.velaHost.scope(),state=this.vela.state(),conversationId=state.conversation?.resourceId;ensure(conversationId&&state.presentation?.view==='current'&&this.velaHost.resolve({id:conversationId,kind:'resource'},scope),'voice_reply_unavailable');
+    const projection=projectVelaManifestation(state,state.presentation),message=state.conversation!.messages.find(message=>message.id===messageId);ensure(projection.kind!=='none'&&projection.kind!=='action'&&projection.currentMessageId===messageId&&message?.role==='assistant','voice_reply_unavailable');
+    if(message.missionReport){
+      const link=message.missionReport,record=this.db.prepare('SELECT message_id FROM vela_mission_report_links WHERE mission_id=?').get(link.missionId);ensure(record?.message_id===message.id,'voice_reply_unavailable');const mission=this.missions.read(link.missionId,{workspaceId:link.workspaceId,projectId:link.projectId}),expected=missionCompletion(mission);ensure(missionResultAvailable(mission)&&mission.originConversationId===conversationId&&message.content===expected.content&&link.jobsDone===expected.jobsDone,'voice_reply_unavailable');
+    }else{
+      const request=state.requests.find(request=>request.id===projection.currentRequestId);ensure(request&&request.conversationId===conversationId,'voice_reply_unavailable');
+      if(message.planId){
+        const plan=state.plans.find(plan=>plan.id===message.planId);ensure(plan&&confirmedVelaPlan(state,request,plan)&&plan.scope.principalId===scope.principalId&&plan.scope.policyVersion===scope.policyVersion,'voice_reply_unavailable');
+        for(const step of plan.steps){const receipt=state.receipts.find(receipt=>receipt.planId===plan.id&&receipt.requestId===request.id&&receipt.stepId===step.id&&receipt.state==='applied'),result=receipt&&this.state.receipts[receipt.commandId]?.result as HostActionResult|undefined;ensure(receipt&&result?.status==='applied'&&result.receiptId===receipt.hostReceiptId,'voice_reply_unavailable');
+          for(const [key,kind] of [['createdResourceId','resource'],['createdWorkspaceId','workspace'],['createdProjectId','project'],['createdCollectionId','collection']] as const){ensure(receipt[key]===result[key],'voice_reply_unavailable');if(result[key])ensure(this.velaHost.resolve({id:result[key]!,kind},scope),'voice_reply_unavailable');}
+          if(result.clockTimer?.resourceId)ensure(this.velaHost.resolve({id:result.clockTimer.resourceId,kind:'resource'},scope),'voice_reply_unavailable');
+        }
+      }else ensure(request.state==='responded'&&request.response?.messageId===messageId&&request.response.contentDigest===planningDigest(message.content),'voice_reply_unavailable');
+    }
+    const digest=this.missionEditHash(message.content);ensure(contentDigest===undefined||contentDigest===digest,'voice_reply_changed');return {id:messageId,conversationId,content:message.content,contentDigest:digest};
   }
   /** Trusted targeted facts and the SAME canonical graph. No general scope,
    * metadata projection, selected resources, provider port or context builder. */
@@ -5707,6 +5725,7 @@ export class BackendCore {
         return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
       }
       case 'close': {
+        this.velaVoiceRuntime.closeSpeechAdmission();
         let cleanupError: unknown, cleanupFailed = false;
         const cleanup = async (work: () => unknown | Promise<unknown>) => {
           try { await work(); } catch (error) { if (!cleanupFailed) { cleanupFailed = true; cleanupError = error; } }

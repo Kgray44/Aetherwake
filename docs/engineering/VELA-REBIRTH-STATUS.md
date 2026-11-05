@@ -6,20 +6,54 @@ integration is `35b823804645d7e7921fa4db8e1225291c91f2db` on draft PR #19,
 stacked on #18, #17 and #16. These remain review candidates, not merged releases.
 The Constitution is binding; the specialist registry remains advisory.
 
-Development includes the dedicated API, native voice, canonical timer and
-workspace flows, API specialist scheduling, weather data tools and native battery
-answers. The prior packaged API-weather review is
-`c72e2d19f57c064af0418d9ab5a143d1ea03386d`, with its existing workspace
-preserved. Source-bound packaging receipts are separate from this implementation
-status. The preceding 3d21aef passed 16 of 17
-regression groups; the remaining backend group found one stale expectation that
-weather questions stayed native. The corrected complete backend group passed
-647 tests with two skips at c72, alongside three helper guards, 21 review checks
-and a fresh renderer build. All 548 packaged files and the archive were
-independently verified. This combines evidence across checkpoints rather than
-claiming all 17 groups reran at c72. The earlier 1c90185 passed all 17 groups.
-Prior candidates and their receipts remain preserved.
-This is not a declaration that the full program is complete.
+The latest qualified source checkpoint is
+`90a4ce8539c0d1e13fc348fca443a1d803ee156e`: both type checks, all 17 regression
+groups and 21 review guards passed against its clean, exact source. The backend
+group passed 758 tests with two gated skips; desktop passed 678 with one gated
+skip; Vela Core passed 308. The later `64f3e4f` changes only a Git executable
+test fixture to select `git.exe` on Windows and `git` elsewhere. Its two affected
+Windows tests passed. Ubuntu CI then stopped at missing document-parser
+dependencies before tests; `0efd4b2` reuses the released workflow correction to
+install the existing block-library dependencies. Its remote result remains
+separate acceptance.
+
+The open portable review is
+`cfc64a47674a304af0bb146abc7161e4031b68ef`, also qualified across all 17 groups.
+Its 569 manifested files, source identities and archive were independently
+verified. The preceding review closed normally; its entire profile was backed
+up and verified before opening this candidate with the same profile. Post-start
+database checks found unchanged canonical counts and API-ledger identities,
+without new dispatch or automatic replay. Actual Windows inspection confirmed
+the original stellar background and transparent, floating Agents, Resources and
+Intelligence Stream header controls. The later negative-review and speech
+changes are source checkpoints, not claims about this open binary.
+
+The dedicated API now discovers typed, owner-scoped tools through the canonical
+runtime and receives structured results for further calls and verification.
+Windows capabilities enforce host-owned permissions and identity checks; this
+does not make the read-only Codex sandbox a privileged host executor. A visible
+desktop semantic-memory check reached one genuine Responses POST after
+the isolated test catalog-cache budget fault was corrected. HTTP 200 streaming
+then failed with `api_response_item_changed_reasoning_encrypted`; its durable
+provider outcome remains unknown, with no reported usage and no automatic
+retry. No native memory read or tool receipt occurred. This does not establish
+live tool selection or measured-memory acceptance. Seven durable canonical
+Intelligence Stream events preserve the failed request's provenance; this does
+not claim a visible Stream inspection. The scoped parser correction retains
+the completed item ciphertext for continuation under the
+[streaming contract](https://developers.openai.com/api/reference/resources/responses/streaming-events),
+while retaining identity, content and duplicate-completion checks. All 125
+provider tests passed. Because the original stream payload was not retained,
+the exact failure's repair remains unproved until fresh live qualification.
+No RAM trim was requested or performed. Typed-response speech now selects the
+same current primary reply as the UI, including verified native results and
+canonical partial mission summaries without promoting their completion state.
+All 87 focused speech/projection checks and both type checks passed. Regressions
+cover startup/deferred report publication, durable unknown sessions, failed
+logging during media cleanup, and admission during shutdown. An independent
+source review found no remaining scoped blocker. This is fixture qualification;
+live voice playback remains unqualified. Prior candidates and receipts are
+preserved. The full program is not declared complete.
 
 Weather now persists the purpose permission rather than coordinates. Every
 question requests a fresh Windows fix; stale/default/IP positions are rejected.

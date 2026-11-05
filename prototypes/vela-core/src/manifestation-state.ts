@@ -53,13 +53,16 @@ function planMessage(request: VelaRequest, plan: VelaPlan, messages: readonly Ve
   }
   return null;
 }
-/** A compact success requires the complete host result, never a provider's completion claim. */
-export function confirmedVelaPlan(state: VelaManifestationSource, request: VelaRequest, plan: VelaPlan): boolean {
-  return request.state === 'completed' && request.planId === plan.id && plan.requestId === request.id &&
+function receiptedPlan(state:VelaManifestationSource,request:VelaRequest,plan:VelaPlan):boolean {
+  return request.planId === plan.id && plan.requestId === request.id &&
     plan.state === 'applied' && plan.steps.length > 0 && new Set(plan.steps.map(step => step.id)).size === plan.steps.length &&
-    plan.steps.every(step => step.action.type !== 'delegateTask' && state.receipts.some(receipt =>
+    plan.steps.every(step => state.receipts.some(receipt =>
       receipt.requestId === request.id && receipt.planId === plan.id && receipt.stepId === step.id &&
       receipt.state === 'applied' && id(receipt.hostReceiptId)));
+}
+/** A compact success requires the complete host result, never a provider's completion claim. */
+export function confirmedVelaPlan(state: VelaManifestationSource, request: VelaRequest, plan: VelaPlan): boolean {
+  return request.state==='completed'&&plan.steps.every(step=>step.action.type!=='delegateTask')&&receiptedPlan(state,request,plan);
 }
 /** Pure current-field projection. Canonical supplied state remains the authority; this grants no access or action approval. */
 export function projectVelaManifestation(state: VelaManifestationSource | null, selection: VelaManifestationSelection = { selectedRequestId: null, dismissedRequestIds: [], pinnedRequestIds: [] }): VelaManifestationState {
@@ -86,15 +89,19 @@ export function projectVelaManifestation(state: VelaManifestationSource | null, 
   const mustRemain = requiredRequests.includes(request);
   if (!mustRemain && selection.dismissedRequestIds.includes(request.id)) return empty();
   const plan = plans.get(request.planId ?? ''), hasReceipts = state.receipts.some(receipt => receipt.requestId === request.id);
-  const message = !plan && !hasReceipts ? responseMessage(request, messages) : null;
+  // A source-receipted tool result can be followed by the same API request's
+  // reported answer. Keep its plan/details without promoting that answer to verification.
+  const reconciledToolPlan=plan&&request.providerId==='openai-api-vela'&&request.toolWorkflow&&['partial','verified'].includes(request.toolWorkflow.phase)&&
+    (receiptedPlan(state,request,plan)||plan.state==='rejected'&&!!plan.reviewedAt);
+  const message = !plan && !hasReceipts || reconciledToolPlan ? responseMessage(request, messages) : null;
   const completedMessage = plan && confirmedVelaPlan(state, request, plan)
     ? conversation.messages.findLast(value => messages.get(value.id) === value && value.role === 'assistant' &&
       value.requestId === request.id && value.planId === plan.id && value.source === 'vela-native' &&
       value.classification === 'observed' && value.providerId === undefined && value.providerContribution === undefined) : undefined;
   return {
-    kind: plan && !completedMessage ? 'action' : request.local && message ? 'whisper' : 'insight',
+    kind: plan && !completedMessage&&!message ? 'action' : request.local && message ? 'whisper' : 'insight',
     currentRequestId: request.id,
-    currentMessageId: completedMessage?.id ?? (plan ? planMessage(request, plan, conversation.messages.filter(value => messages.has(value.id))) : message?.id ?? null),
+    currentMessageId: completedMessage?.id ?? message?.id ?? (plan ? planMessage(request, plan, conversation.messages.filter(value => messages.has(value.id))) : null),
     currentPlanId: plan?.id ?? null,
     historyResource, pinned: selection.pinnedRequestIds.includes(request.id), canDismiss: !mustRemain, requiredPlanIds,
     selectionReason: mustRemain ? 'required-plan' : selected ? 'selected' : 'latest',

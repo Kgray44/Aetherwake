@@ -86,11 +86,16 @@ function apiJsonEqual(left: unknown, right: unknown): boolean {
     const keys = Object.keys(left);
     return keys.length === Object.keys(right).length && keys.every(key => Object.hasOwn(right,key) && apiJsonEqual(left[key],right[key]));
 }
-function reconcileApiItem(prior: ApiResponseItem | undefined, next: ApiResponseItem): ApiResponseItem {
+function reconcileApiItem(prior: ApiResponseItem | undefined, next: ApiResponseItem, terminalSnapshot = false): ApiResponseItem {
     if (!prior || apiJsonEqual(prior,next)) return next;
     requireValue(prior.id === next.id && prior.type === next.type, 'api_response_item_changed_identity');
     if (prior.type === 'reasoning' && next.type === 'reasoning') {
         requireValue(next.summary.length >= prior.summary.length && prior.summary.every((part,index) => apiJsonEqual(part,next.summary[index])), 'api_response_item_changed_reasoning_summary');
+        // The streaming contract names output_item.done as the authoritative
+        // encrypted continuation. A response-level snapshot cannot replace it.
+        // Keep exact done bytes; duplicate item.done events still reconcile strictly.
+        // https://developers.openai.com/api/reference/resources/responses/streaming-events
+        if (terminalSnapshot && prior.encrypted_content !== undefined) return { ...next, encrypted_content: prior.encrypted_content };
         requireValue(prior.encrypted_content === undefined || next.encrypted_content === undefined || prior.encrypted_content === next.encrypted_content, 'api_response_item_changed_reasoning_encrypted');
         return { ...next, ...(next.encrypted_content === undefined && prior.encrypted_content !== undefined ? { encrypted_content: prior.encrypted_content } : {}) };
     }
@@ -359,9 +364,9 @@ export class ResponsesTransport {
             const decoder = new TextDecoder('utf-8', { fatal: true });
             let buffer = '', streamBytes = 0, outputBytes = 0;
             const emit = async (event: Parameters<TransportOptions['onEvent']>[0]) => { await abortable(Promise.resolve(this.options.onEvent(event)), controller.signal); };
-            const acceptApiItem = async (value: unknown): Promise<ApiResponseItem> => {
+            const acceptApiItem = async (value: unknown, terminalSnapshot = false): Promise<ApiResponseItem> => {
                 const parsed = apiItem(value, review.api!.tools);
-                const item = reconcileApiItem(outputItems.get(parsed.id),parsed);
+                const item = reconcileApiItem(outputItems.get(parsed.id),parsed,terminalSnapshot);
                 const prospective = [...outputItems.values()].filter(previous => previous.id !== item.id).concat(item);
                 requireValue(prospective.length <= 128 && Buffer.byteLength(JSON.stringify(prospective)) <= this.limits.outputBytes, 'output_capacity_exceeded');
                 if (item.type === 'function_call') {
@@ -440,7 +445,7 @@ export class ResponsesTransport {
                         const terminalItems: ApiResponseItem[] = [];
                         for (const item of event.response.output) {
                             if (expected !== 'completed' && partialApiFunction(item, review.api!.tools)) continue;
-                            terminalItems.push(await acceptApiItem(item));
+                            terminalItems.push(await acceptApiItem(item,true));
                         }
                         requireValue(new Set(terminalItems.map(item => item.id)).size === terminalItems.length && outputItems.size === terminalItems.length, 'api_terminal_items_mismatch');
                         result.api!.outputItems = terminalItems;
