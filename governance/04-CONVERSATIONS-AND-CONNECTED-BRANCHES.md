@@ -597,7 +597,7 @@ For owner acceptance, review whether:
 
 ## Charter completion statement
 
-This charter specifies the intended conversation and connected-branch behavior of Aerynth. It is a **proposed governing document**, not an assertion that these features have been implemented, tested, or approved. Upon explicit owner acceptance, the governance registry and version should be updated to reflect its governing status.
+This charter specifies **owner-ratified (2026-11-05)** conversation and Connected Branch behavior, without asserting the features are already implemented or verified.
 
 **Aerynth must preserve the freedom of a simple conversation while making long-running, branching, multi-agent knowledge understandable, connected, efficient, and reliably under the user's control.**
 
