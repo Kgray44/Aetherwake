@@ -75,13 +75,15 @@ test('actual Core leaves pinned routes, handoffs, agents, selected resources and
 test('a local courtesy preserves the earlier actual Core unknown API request, execution and receipt through restart without replay',async()=>{
   const f=fixture();try{
     const unknown=await f.unknown();assert.equal(unknown.state,'unknown');assert.equal(f.bodies.length,1);
+    const projectedUnknown={...unknown,...(unknown.toolWorkflow?{toolWorkflow:{...unknown.toolWorkflow,completedReadJobs:0}}:{})};
+    const canonicalUnknown=()=>(f.core as any).vela.state().requests.find((request:VelaRequest)=>request.id===unknown.id);
     const before=await f.core.command('snapshot',{}),receipts=(f.core as any).db.prepare('SELECT * FROM vela_api_runs').all(),reads=f.modelReads;
     const reply=await f.send('awesome, thank you');assert.equal(reply.state,'responded');
-    assert.deepEqual((await f.state()).requests.find(r=>r.id===unknown.id),unknown);
+    assert.deepEqual(canonicalUnknown(),unknown);assert.deepEqual((await f.state()).requests.find(r=>r.id===unknown.id),projectedUnknown);
     assert.deepEqual((await f.core.command('snapshot',{})).executions,before.executions);assert.deepEqual((f.core as any).db.prepare('SELECT * FROM vela_api_runs').all(),receipts);
     assert.equal(f.bodies.length,1);assert.equal(f.modelReads,reads);assert.equal(f.codexCalls,0);
     const current=await f.state();assert.equal(current.conversation!.messages.filter(m=>m.content==='awesome, thank you'&&m.role==='user').length,1);assert.equal(current.plans.length,0);
-    await f.reopen();assert.deepEqual((await f.state()).requests.find(r=>r.id===unknown.id),unknown);assert.deepEqual((await f.core.command('snapshot',{})).executions,before.executions);
+    await f.reopen();assert.deepEqual(canonicalUnknown(),unknown);assert.deepEqual((await f.state()).requests.find(r=>r.id===unknown.id),projectedUnknown);assert.deepEqual((await f.core.command('snapshot',{})).executions,before.executions);
     assert.equal(f.bodies.length,1);assert.equal((await f.state()).requests.find(r=>r.id===reply.id)!.state,'responded');
   }finally{await f.close();}
 });
