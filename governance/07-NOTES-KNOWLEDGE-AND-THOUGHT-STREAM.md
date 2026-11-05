@@ -626,7 +626,7 @@ A proposed amendment SHOULD include: affected requirement IDs, problem statement
 
 **AW-NKT-130 — Traceable charter changes.** Normative changes MUST retain stable requirement IDs where meaning remains stable; semantic changes MUST be documented and versioned with cross-charter impact review.
 
-**AW-NKT-131 — Owner ratification.** This document remains a **published draft pending owner acceptance** until that acceptance is explicitly recorded. Creating the file or linking it in the registry MUST NOT be represented as owner ratification.
+**AW-NKT-131 — Owner ratification.** The repository owner expressly ratified this charter on 2026-11-05 and the registry records the binding baseline. Future normative amendments require separate explicit owner approval; publication alone is not ratification.
 
 ### Traceability map
 
