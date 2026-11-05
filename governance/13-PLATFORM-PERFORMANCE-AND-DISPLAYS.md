@@ -640,7 +640,7 @@ Work MAY progress in parallel where evidence permits, but a release MUST NOT cla
 
 ## 18. Document change control and acceptance
 
-This charter is published for repository-owner review, **not automatically ratified by publication**.
+This charter was **explicitly ratified by the repository owner on 2026-11-05**. Publication alone did not confer that authority; implementation and release evidence must still satisfy its separately defined requirements.
 
 Amendments MUST:
 1. Identify requirement IDs and scope of change.
