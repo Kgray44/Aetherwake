@@ -651,7 +651,7 @@ The following summarize requirements already defined above; they do not create c
 
 ## Ratified amendment CF-2026-11-05: OpenAI API and heterogeneous execution adapters
 
-> **Status: proposed, pending owner acceptance.** Charter 12 remains authoritative for transport, provider capability discovery and actual integration boundaries. It does not supersede agent task ownership (05), Vela behavior (06), or trust policy (14).
+> **Status: Owner-ratified 2026-11-05; implementation acceptance is a separate gate.** Charter 12 remains authoritative for transport, provider capability discovery and actual integration boundaries. It does not supersede agent task ownership (05), Vela behavior (06), or trust policy (14).
 
 **AW-CEX-132 — Provider identity separation.** The integration layer MUST model Responses API, Decisions API, Agents SDK-controlled execution, managed Agents API, GPT-Live, Realtime, native services and existing Codex sign-in/API-key modes as potentially distinct providers and billing/credential scopes.
 
