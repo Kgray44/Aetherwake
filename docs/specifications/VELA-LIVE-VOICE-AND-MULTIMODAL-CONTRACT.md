@@ -1,5 +1,5 @@
 # Vela Live Voice and Multimodal Delegation Contract
-**CF-SPEC-02 · 2026-11-05 · proposed; not a live-session qualification report**
+**CF-SPEC-02 · owner-accepted 2026-11-05 · live-session qualification still required**
 
 > **Owner-accepted specification (2026-11-05).** The contract and release criteria are binding design targets subject to the governing charters; actual capability, security and usability require implementation and independent test evidence.
 
