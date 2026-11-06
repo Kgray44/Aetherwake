@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-006 |
-| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Version | 1.2.0 — owner-directed clarification 2026-11-05 |
 | Status | **Owner-accepted and ratified governing charter (binding requirements; implementation separate)** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem charter subordinate to [The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
@@ -734,3 +734,16 @@ References: [Vela Presence art direction](../docs/design/VELA-PRESENCE-INTELLIGE
 
 **Demonstrations:** spoken RAM report from real native tool; composite "research then change workspace" task; voice interruption while separate agent continues; model change without lost conversation; intentional agent failure with useful preserved state; credible rejected dangerous action. See [runtime](../docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md) and [voice](../docs/specifications/VELA-LIVE-VOICE-AND-MULTIMODAL-CONTRACT.md).
 
+## Owner-directed clarification CX-2026-11-05: seamless continuity and adaptive context
+
+> **Authority:** Clarifies Vela's accepted persistent identity and adaptive-experience behavior. Related: [local-first continuity architecture](../docs/architecture/AERYNTH-LOCAL-FIRST-STORAGE-AND-CONTINUITY.md), [UMCR-01](../docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md), [ADR-002](../docs/decisions/ADR-002-ARCHITECTURE-RECOVERY-AND-COHESIVE-RUNTIME.md).
+
+**AW-VELA-162 — One coherent projected application state.** Vela, workspaces, agent/task views, Intelligence Streams, timelines and spatial navigation MUST depict the same source-owned canonical identities, revisions, state transitions and evidence. Frontend interpolation MAY change presentation but MUST NOT invent completed effects or competing data authority.
+
+**AW-VELA-163 — Context-sensitive anticipation, not mind reading.** Vela SHOULD use authorized active task/selection/project context to prepare relevant information and low-friction suggestions before a repeated user request. It MUST NOT imply continuous model consciousness, speculate as fact, monitor unconsented activity or silently launch consequential actions.
+
+**AW-VELA-164 — Scoped and reversible adaptation.** Inferred user habits MUST retain scope, provenance and uncertainty; explicit user choices override inference. Learned display or workflow assistance must be reversible, inspectable and independently consented where required; adapting the interface MUST NOT relax tools, model disclosures or governance constraints.
+
+**AW-VELA-165 — Backend-to-experience continuity.** Native and provider events that materially change Vela's task understanding or user-visible state SHOULD move through typed, observable canonical projections with stable causation IDs. Provider switches and application restart MUST NOT fabricate a new Vela identity or break task/source lineage. Performance and graceful fallback must be tested in the real application.
+
+**Status:** Accepted design clarification, not proof of integrated adaptation or full visual acceptance.

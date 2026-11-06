@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-016 |
-| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Version | 1.2.0 — owner-directed clarification 2026-11-05 |
 | Status | **Owner-accepted and ratified governing charter; implementation verification separate** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem charter subordinate to [00 — The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
@@ -641,3 +641,19 @@ The repository owner should be able to verify that:
 **AW-ENG-135 — Independent verification.** An agent's report of its own success cannot independently satisfy acceptance; require observable source/artifact, postcondition and appropriate owner/reviewer evidence.
 
 **Release packet:** implementation inventory, decision record, API evidence, trust/cost matrix, native/voice/GPU journeys, known incomplete capabilities and rollback. See [CF-001 through CF-030](../docs/specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md).
+
+## Owner-directed clarification AR-2026-11-05: architectural recovery and engineering elegance
+
+> **Decision reference:** [ADR-002](../docs/decisions/ADR-002-ARCHITECTURE-RECOVERY-AND-COHESIVE-RUNTIME.md). Architecture Recovery and Full Realization are explicitly separate engineering programs. This clarification does not de-scope any owner-ratified final capability.
+
+**AW-ENG-136 — Explicit dual-program delivery.** **Architecture Recovery** MUST organize, reconcile, simplify, test and stabilize *existing* Aerynth behavior and storage authority, without silently claiming to complete unimplemented charter requirements. **Full Aerynth Realization** separately delivers missing accepted capabilities with dedicated implementation and native acceptance evidence.
+
+**AW-ENG-137 — Complexity must earn its existence.** New services, schedulers, databases, indexes, agents, coordination layers, state machines and render paths SHOULD be introduced only when a documented existing owner/contract cannot meet a measured requirement. Avoid duplicating canonical sources, task IDs, model routing, approvals or presentation state merely for implementation convenience.
+
+**AW-ENG-138 — Source-preserving consolidation.** Refactoring shared coordination code MUST preserve source identity, approved history, permission boundaries, effect receipts, data migrations, real features and rollback paths. Structural changes require before/after ownership maps and integrated regression evidence, not merely passing isolated unit tests.
+
+**AW-ENG-139 — Workstream-aware agent delegation.** Planner, implementation, independent reviewer and integration owner roles SHOULD receive bounded tasks and distinct code ownership. Worker self-reported success, high agent counts or test counts do not replace actual integrated verified outcomes. An agent MUST NOT expand a cleanup assignment into full product realization without explicit authorization.
+
+**AW-ENG-140 — Observable backend elegance.** Maintainability SHOULD be evaluated by comprehensible responsibilities, narrow typed contracts, predictable lifecycle and recovery, performance, proven feature continuity and absence of duplicate authority, not lines generated, number of abstractions or visual ornament. A fluent frontend requires reliable canonical backend projections, not fabricated animation states.
+
+**Status:** Accepted engineering sequencing and design clarification; implementation remains independently qualified.
