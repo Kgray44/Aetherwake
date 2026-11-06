@@ -2,7 +2,7 @@
 
 <p align="center"><a href="assets/brand/aerynth-mark-master.png"><img src="assets/brand/aerynth-mark-master.png" alt="Official Aerynth mark: a fluid glass-like sculptural A in indigo and violet" width="240" /></a></p>
 
-**Aerynth** is the planned intelligent, spatial desktop environment for working with AI; **Vela** is its persistent, context-aware assistant. Both are working names.
+**Aerynth** is an actively developed intelligent spatial desktop environment for working with AI; **Vela** is its persistent, context-aware assistant. The accepted product vision is larger than what the current implementation has verified.
 
 The goal is not to wrap Codex in a prettier chat window. Aerynth should combine first-class Codex conversations with spatial workspaces, project knowledge, notes, specialist agents, orchestration, universal contextual commands, observability, and adaptive context efficiency.
 
@@ -33,12 +33,17 @@ Key accepted architecture: [Unified Memory Runtime](docs/architecture/VELA-UNIFI
 
 The governing foundation lives in [`governance/`](governance/README.md), beginning with **[the Aetherwake Master Constitution](governance/00-AETHERWAKE-CONSTITUTION.md)**. It establishes the project's binding principles, the Liquid Intelligence experience, user-control requirements, agent and context integrity, observability, and the reserved specialized charters. **Publication and acceptance are separate statuses.** Consult the [live governance registry](governance/README.md) for which numbered charters exist, which are pending, and which have been accepted. Missing charters are authored separately; do not create placeholders for them.
 
-## Development direction
+## Current engineering workstreams (2026-11-05)
 
-- **AI execution:** Codex App Server through a well-defined backend adapter (validate protocol and authentication in a spike).
-- **Desktop/rendering stack:** research and benchmark alternatives before choosing Tauri versus Electron or graphics backends.
-- **First deliverable:** a striking, interactive *visual experience prototype* featuring Vela's presence, animated blocks, workspace transitions, contextual command, notes capture, and event-driven Intelligence Streams.
-- **Do not mistake simulated agent events for real Codex activity**; prototypes must label simulations clearly.
+**Architecture Recovery, current priority:** inventory, consolidate, simplify and independently verify the existing integrated Aerynth desktop/backend; correct source-ownership, CIE, storage, CI and stale-document boundaries **without** treating cleanup as permission to implement the entire future product.
+
+**Full Aerynth Realization, separate longer program:** complete the owner-ratified intelligence, CIE, adaptive learning, 3D Vela Mind, Stream V2 and seamless spatial experience against native acceptance criteria. Missing future functionality is not evidence that present-day code cleanup failed.
+
+**Existing implementation:** the connected Electron desktop and cinematic application live primarily under `prototypes/visual-experience/cinematic-v3/`, with `prototypes/integrated-backend/`, `prototypes/vela-core/` and other source-owned domain modules. The `prototypes/` naming is historical; neither source location nor merged PR proves complete product acceptance. Keep synthetic experience previews separate from real native provider/tool execution and evidence.
+
+**Architecture references:** [ADR-002](docs/decisions/ADR-002-ARCHITECTURE-RECOVERY-AND-COHESIVE-RUNTIME.md), [Local-First Storage and Continuity](docs/architecture/AERYNTH-LOCAL-FIRST-STORAGE-AND-CONTINUITY.md), [CIE Semantic Interpretation and Evidence Retrieval](docs/specifications/CIE-SEMANTIC-INTERPRETATION-AND-EVIDENCE-RETRIEVAL.md), and [UMCR-01](docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md).
+
+**Rule:** real source evidence, owner permissions and task outcomes outrank visual simulation, model confidence and code volume.
 
 ## Repository map
 
@@ -55,8 +60,10 @@ The governing foundation lives in [`governance/`](governance/README.md), beginni
 | `docs/decisions/` | Architecture and design decisions |
 | `plans/milestones/` | Milestones, delivery phases, and goals |
 | `plans/tasks/` | Actionable scoped work |
-| `prototypes/visual-experience/` | Visual/motion proof-of-concept work |
-| `src/` | Application source |
+| `prototypes/visual-experience/cinematic-v3/` | Current connected Electron desktop and cinematic application, including synthetic previews |
+| `prototypes/integrated-backend/` | Current backend integration and native/runtime orchestration |
+| `prototypes/vela-core/` | Vela context, history and core assistant contracts |
+| `prototypes/personal-context/` | Currently isolated, protected personal context service; full native CIE integration remains incomplete |
 
 Git cannot track empty directories, so currently empty locations are reserved using `.gitkeep` placeholders. They are not substantive specifications or completed implementations.
 
