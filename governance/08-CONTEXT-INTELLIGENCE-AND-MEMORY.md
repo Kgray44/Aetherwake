@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-008 |
-| Version | **1.1.0 — owner-ratified 2026-11-05** |
+| Version | **1.2.0 — owner-directed clarification 2026-11-05** |
 | Status | **Owner-accepted and ratified governing charter; implementation verification remains separate** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem charter subordinate to [The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
@@ -753,3 +753,23 @@ This is an **owner-ratified governing charter (2026-11-05)**. These are accepted
 - **UM-11–UM-15:** semantic outage fallback, injection isolation, branch permission denial, deletion propagation and held-out recall/quality/performance comparison.
 
 **Cross-charter ownership:** 04 keeps branch identity and source history; 05 owns authoritative task state; 06 owns Vela behavior and initiative; 07 owns authored knowledge and approval; 09 owns observations and event records; 10 owns real usage accounting; 12 owns provider capabilities; 14 owns permission and data policy; 15 owns independent acceptance. See the [runtime architecture](../docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md).
+
+## Owner-directed clarification SI-2026-11-05: semantic intent and evidence sufficiency
+
+> **Scope:** Interpretation/retrieval implementation beneath Charter 08. The existing source-owner, permission, memory lifecycle and acceptance rules remain binding. This amendment clarifies the requirement for genuine semantic information-need understanding, not a privileged model planner. Design contracts: [CIE-SER-01](../docs/specifications/CIE-SEMANTIC-INTERPRETATION-AND-EVIDENCE-RETRIEVAL.md), [UMCR-01](../docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md), and [STOR-CONT-01](../docs/architecture/AERYNTH-LOCAL-FIRST-STORAGE-AND-CONTINUITY.md).
+
+**AW-CIE-158 — Semantic information-need interpretation.** CIE MUST be able to infer the evidence requirements of ambiguous, paraphrased, historical or relational user intents; lexical keyword overlap alone MUST NOT qualify as the full CIE semantic understanding capability.
+
+**AW-CIE-159 — Typed model proposals, host authority.** Where qualified model assistance is used, the interpreter MUST emit a bounded, validated, typed *proposal* for evidence needs. The host MUST resolve actual user/resource/task identity and verify current scope, policy, source authority and provider eligibility. A model output MUST NOT grant access, mutate source truth or become an executable command.
+
+**AW-CIE-160 — Evidence sufficiency and gap recovery.** Retrieval SHOULD track which distinct required evidence needs are supported, contradicted, stale, inaccessible or missing, and MAY initiate bounded additional search. Relevant similarity hits MUST NOT be treated as proof that all material requirements were satisfied.
+
+**AW-CIE-161 — Qualified cost-effective semantic models.** CIE MAY use a fast structured-output API model for semantic interpretation and evidence review when actual permission, provider availability, measured quality, latency and cost justify it. Exact identifiers, native telemetry and trusted selected resources MUST retain model-free paths. A model's confidence does not confer source authority.
+
+**AW-CIE-162 — Interpreter disclosure boundary.** Sending a user request, excerpt or derived memory to an interpreter is provider disclosure; it MUST be policy-checked before transport and separately from any later Vela/Codex context dispatch. Model results and candidate embeddings remain scoped sensitive derivatives, not governing instructions.
+
+**AW-CIE-163 — Comparative semantic acceptance.** Production promotion of model-assisted retrieval MUST be based on independently labeled, held-out recall/coverage and verified answer outcomes against current lexical, FTS/relationship and hybrid baselines. Report privacy failures, stale-source effects, rework, cost and p95 latency. Syntactically valid JSON or an improved relevance score alone is insufficient.
+
+**AW-CIE-164 — Recovery versus realization.** Current Architecture Recovery MUST preserve existing retrieval and improve ownership/benchmark readiness without pretending to complete the full CIE. Full semantic retrieval, candidate memory learning and broad adaptive context integration require their own verified Full Realization milestones.
+
+**Status:** These are owner-directed design requirements, not claims of implemented semantics, native provider eligibility or production benchmark success.
