@@ -553,3 +553,11 @@ Routing must independently test (i) fast native read, (ii) deep technical questi
 ### 16.3 Implementation owner links
 
 Use [capability runtime architecture](../architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md), [provider/tool contracts](VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md), [API evidence](../research/OPENAI-PLATFORM-CAPABILITY-EVIDENCE-2026-11-05.md), [live voice](VELA-LIVE-VOICE-AND-MULTIMODAL-CONTRACT.md) and [acceptance catalog](VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md). All are proposed pending owner review. Track actual implementation separately.
+
+## 17. CIE semantic-request responsibility boundary (2026-11-05)
+
+AIR chooses **eligible execution routes** from real model/provider/tool capabilities and authorized user preferences; it is not the repository's semantic memory search engine. [CIE-SER-01](CIE-SEMANTIC-INTERPRETATION-AND-EVIDENCE-RETRIEVAL.md) assigns ambiguous *information-need interpretation* and source-backed evidence completeness to CIE, while the native host resolves identities, source policy, scope and disclosure. A qualified low-cost API model (initial research candidate: `gpt-6-luna`) MAY serve the interpreter role after measured accuracy, latency, pricing and eligibility checks. No source authority, permission or execution right follows from a model's structured output or confidence.
+
+Direct native reads and exact ID lookups remain model-free paths. Do not chain a routing classifier, Decisions API call, semantic interpreter and high-effort planner for every trivial request. Distinguish the interpreter's disclosure authorization from Vela/Codex's eventual context disclosure. See [UMCR-01](../architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md) and [ADR-002](../decisions/ADR-002-ARCHITECTURE-RECOVERY-AND-COHESIVE-RUNTIME.md).
+
+**Status:** Additional accepted architecture guidance; not an assertion of implemented model-assisted retrieval or verified provider access.
