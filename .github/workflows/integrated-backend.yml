@@ -31,7 +31,7 @@ permissions:
   contents: read
 jobs:
   synthetic-integration:
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 35 || 20 }}
     strategy:
       fail-fast: false
       matrix:

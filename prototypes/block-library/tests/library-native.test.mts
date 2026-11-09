@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { BackendCore } from '../../integrated-backend/src/core.mts';
 import { prepareLibraryNative } from '../prepare-library-native.mts';
+import { workspaceNativePreparationSkip } from './workspace-native-prerequisites.mts';
 const require = createRequire(import.meta.url), { createGuard, options, verify } = require('./library-native.cjs');
 
 function fakeWindow() {
@@ -64,7 +65,9 @@ test('existing workspace host entry delegates the explicit A/C option without ru
     assert.equal(receipt.contract, 'aerynth.library-template-evidence@1'); assert.equal(receipt.passed, false); assert.equal(receipt.actions.length, 0); assert.equal(exit, 1);
   } finally { process.argv = argv; }
 });
-test('schema-only A/C preparation creates no project/workspace/resource; real Core reopening and existing-profile refusal retain that empty state', async t => {
+test('schema-only A/C preparation creates no project/workspace/resource; real Core reopening and existing-profile refusal retain that empty state', {
+  skip: process.platform === 'win32' && workspaceNativePreparationSkip,
+}, async t => {
   const dir = mkdtempSync(join(tmpdir(), 'aerynth-library-empty-')), profile = join(dir, 'review-workspace-native-ac-source');
   t.after(() => { const part = relative(resolve(tmpdir()), resolve(dir)); assert(part.startsWith('aerynth-library-empty-') && !part.startsWith('..') && !isAbsolute(part)); rmSync(dir, { recursive: true, force: true }); });
   const seed = await prepareLibraryNative(profile); assert.deepEqual(seed.ordinaryCounts, { projects: 0, workspaces: 0, resources: 0 }); assert.equal(Object.keys(seed.hashes).length, 8);

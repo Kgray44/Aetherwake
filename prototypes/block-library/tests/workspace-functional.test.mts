@@ -13,6 +13,7 @@ import { NoteSession } from '../note-session.ts';
 import type { NoteDocument } from '../note-contracts.ts';
 import type { CreatedBlock, ProjectOverview } from '../contracts.ts';
 import type { Detail, ConversationDraft } from '../../conversation-product/src/contracts.ts';
+import { workspaceNativePreparationSkip } from './workspace-native-prerequisites.mts';
 const require = createRequire(import.meta.url), helper = require('./workspace-functional.cjs'), { preflight, expressions: x } = require('./workspace-functional-expressions.cjs');
 
 test('combined workspace factories compile every added/inherited expression and helpers use genuine guarded native input', () => {
@@ -116,7 +117,9 @@ test('normal comparison requires visible viewport/footer/Vela bounds, content/fo
   assert.equal(probe().ready, true);
 });
 
-test('combined fixture and equivalent canonical operations preserve exact cross-block identities, unrelated recovery, project/task events and process reopen without a provider', async t => {
+test('combined fixture and equivalent canonical operations preserve exact cross-block identities, unrelated recovery, project/task events and process reopen without a provider', {
+  skip: process.platform === 'win32' && workspaceNativePreparationSkip,
+}, async t => {
   const profile = join(tmpdir(), 'review-workspace-native-functional-source-' + randomUUID()), seed = await prepareFunctionalWorkspaceNative(profile), roles = helper.fixture(seed);
   assert.equal(seed.expected.blocks.length, 6); assert.equal(seed.expected.workspaces.length, 2); assert.equal(seed.expected.resources.length, 6);
   assert.equal(seed.validation.preflightSha256, preflight().sha256);

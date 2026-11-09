@@ -162,7 +162,10 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
           previous = undefined;
           await js(`document.querySelector(${JSON.stringify(query)})?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`);
         }
-        const value = await js(targetScript(query, 'inspect'));
+        const inspect = targetScript(query, 'inspect');
+        const value = await js(typeof target === 'function'
+          ? `document.querySelector(${JSON.stringify(query)})?.textContent.trim()===${JSON.stringify(label)} ? (${inspect}) : {unavailable:true}`
+          : inspect);
         if (!value.ready) { await js(`(()=>{const n=document.querySelector(${JSON.stringify(query)});if(!n||n.closest('[hidden],[inert]'))return;const r=n.getBoundingClientRect();let clipped=r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight;for(let p=n.parentElement;p&&!clipped;p=p.parentElement){const s=getComputedStyle(p),b=p.getBoundingClientRect();clipped=(s.overflowX!=='visible'&&(r.left<b.left||r.right>b.right))||(s.overflowY!=='visible'&&(r.top<b.top||r.bottom>b.bottom));}if(clipped)n.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});})()`); previous = undefined; return false; }
         point = { x: Math.round(value.rect.x + value.rect.width / 2), y: Math.round(value.rect.y + value.rect.height / 2) };
         const stable = previous && Math.abs(point.x - previous.x) < 1 && Math.abs(point.y - previous.y) < 1; previous = point; return stable;
@@ -180,7 +183,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     // Context transitions can change sibling order while the target settles.
     const byText = (container, text, tag = 'button') => click(() => js(`(()=>{
       const root=document.querySelector(${JSON.stringify(container)});
-      const n=[...root?.querySelectorAll(${JSON.stringify(tag)})??[]].find(b=>b.textContent.trim()===${JSON.stringify(text)});
+      const n=[...root?.querySelectorAll(${JSON.stringify(tag)})??[]].find(b=>!b.disabled&&!b.closest('[hidden],[inert]')&&b.getClientRects().length&&b.textContent.trim()===${JSON.stringify(text)});
       if(!n)return null;
       let p=n;const parts=[];
       while(p&&p!==document.documentElement){parts.unshift(p.tagName.toLowerCase()+':nth-child('+([...p.parentElement.children].indexOf(p)+1)+')');p=p.parentElement;}
