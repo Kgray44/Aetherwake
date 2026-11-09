@@ -22,13 +22,14 @@ This ledger records Windows x64 runs on November 9, 2026, with Node 24.18.0, the
 
 The process observer uses `scripts/observe-living-instruments-processes.ps1` with the exact owned Electron PID, executable path and creation time. Native runner output, captures, fixture databases and observer data remain private. No live model call, physical input claim or owner visual acceptance is inferred from the fixture runs.
 
-## Local native continuation
+## Native acceptance continuation
 
-The following receipts apply to local test commit `dd607d00131499f2fa094f8e62fe77e632a2c9e2`. Draft PR #25 remains at the independently green A1 head `3180d46bacc9c2efc8734bb760754904b1b5d299`.
+The first passing continuation receipts apply to `dd607d00131499f2fa094f8e62fe77e632a2c9e2`. The revised fallback and expanded rerun below apply to `3ee9adb041750f7f695d6ed20017c62e75e1925f`. The original A1 hosted results remain evidence for `3180d46bacc9c2efc8734bb760754904b1b5d299`. See [draft PR #25](https://github.com/Kgray44/Aetherwake/pull/25) for checks on its published head.
 
 - **Expanded Electron journey and restart passed.** The retained wrong-target run clicked the intended body's projected center, which lay inside a nearer body's projected bound. The test now uses the keyed renderer projection to avoid overlaps and checks selection before moving the pointer. A fully covered run stopped before issuing the body drag. The follow-up adds a bounded native camera orbit for covered views. The passing receipt used an exposed point without needing that fallback, selected the intended body on press, and verified its changed position and pinned state. The initial run passed 12 checks over 23 steps. The exact same-profile restart passed its check over two steps. Both recorded zero renderer errors.
 - **Offline AIR passed.** The focused run observed ten local answers and the unavailable ordinary model route, then verified no provider executions or contributions.
 - **Checklist initial and restore passed.** The first continuation attempt stopped after focus loss. An isolated fresh-profile run then passed the initial journey and exact same-profile restart. The restore retained canonical checklist, entry, attribution and source-link identities. The isolated runs closed cleanly, and the process check found no owned Electron processes remaining.
-- **Focused regression passed.** `node --test "prototypes/constellation/tests/*.test.cjs"` passed 68 tests, including the retained overlap geometry and the fully covered case.
+- **Revised expanded journey and restart passed.** At `3ee9adb`, the first attempt timed out opening the conversation neighborhood before body input. The isolated retry selected the intended body and passed all 12 initial checks and the same-profile restart, with zero renderer errors. It used an exposed point without the fallback.
+- **Focused regression passed.** At `3ee9adb`, `node --test "prototypes/constellation/tests/*.test.cjs"` passed 70 tests. The focused tests exercise the retained overlap geometry, target reacquisition after orbiting, the four-orbit bound and propagation of owner loss. The native pass exercised the ordinary camera orbit and the exposed body drag separately.
 
-The green CI receipts remain scoped to the published draft head. Live provider behavior and owner visual acceptance were outside these offline native runs.
+The AIR and Checklist runner and application sources are identical between the two tested revisions. Live provider behavior, hardware qualification and owner visual acceptance were outside these offline native runs.
