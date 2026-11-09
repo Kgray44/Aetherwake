@@ -15,6 +15,7 @@ Program A establishes the connected application's source and verification baseli
 4. The `record` and `soak` scripts implicitly opened the connected desktop, whose entry point does not handle those flags. That could open the regular review profile. Both commands now name the visual harness that owns the flags. The connected guide documents the explicit offline verification runner and separately authorized live review.
 5. The initial Linux CI run exposed Windows paths in test fixture setup and cleanup. Portable fixtures now use native path semantics. Three real Windows profile preparation tests require the Windows elapsed clock and the installed reserve guard. Hosted jobs without those prerequisites report the missing gate, while local qualified Windows ran all three journeys.
 6. The Living Instruments runner left an unsaved orientation change before attempting plan creation. The Timeline correctly disabled editing. The runner now saves and observes the new version before planning, and requires the initial planning and timer evidence before evaluating restart.
+7. Resource action IDs stopped being assigned when the Add sources menu moved to the panel header. The renderer now assigns the existing IDs on the actual menu. The Checklist helper resolves its target while it settles, since opening a resource can change DOM sibling order. The AIR helper waits for the renderer to match the exact canonical conversation under its existing deadline.
 
 These changes preserve the runtime command and IPC contracts, canonical data owners, profile schema, provider permissions and effect verification. The existing acceptance runner is reused without a second orchestration layer.
 
@@ -44,3 +45,5 @@ Run commands from the repository root unless noted. Windows setup requires Node 
 | Live provider and owner acceptance | Standard reviewed native send for any authorized live request. Owner review for artistic and physical-display acceptance | Separate gates. Local fixture responses and hosted tests supply no evidence of account entitlement or owner acceptance |
 
 The candidate PR records the exact executed journeys and results. Raw profiles and captures stay out of the public repository. Existing historical results retain their original scope.
+
+The broad desktop `npm run format:check` remains red. Prettier misclassifies the unchanged native C++ include `windows-computer.inc` and also reports existing style drift. A0/A1 leaves bulk reformatting out of scope.
