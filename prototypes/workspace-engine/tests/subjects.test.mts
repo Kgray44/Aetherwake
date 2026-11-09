@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
 import { WorkspaceEngine } from "../engine.mts";
@@ -15,7 +15,8 @@ function disk(t: any) {
     path = join(dir, "synthetic.sqlite");
   t.after(() => {
     const target = resolve(dir);
-    assert.ok(target.startsWith(resolve(tmpdir()) + "\\"));
+    assert.equal(dirname(target), resolve(tmpdir()));
+    assert.ok(basename(target).startsWith("aerynth-subject-test-"));
     rmSync(target, { recursive: true, force: true });
   });
   return path;

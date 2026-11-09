@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { prepareWorkspaceNative, WORKSPACE_SOURCE_REVIEW_BLOCKS } from "../prepare-workspace-native.mts";
 import { BackendCore } from "../../integrated-backend/src/core.mts";
 import { blockDefinition } from '../registry.ts';
+import { workspaceNativePreparationSkip } from './workspace-native-prerequisites.mts';
 const require = createRequire(import.meta.url);
 const { options, workspaceState, verify } = require("./workspace-native.cjs");
 
@@ -137,7 +138,7 @@ test("observed host startup shader/console errors fail before interaction and re
   }
 });
 
-test("offline normal-card preparation and fresh Core restore use canonical kinds, distinct defaults and actual subject membership with no execution", async (t) => {
+test("offline normal-card preparation and fresh Core restore use canonical kinds, distinct defaults and actual subject membership with no execution", { skip: workspaceNativePreparationSkip }, async (t) => {
   const profile = join(
       tmpdir(),
       "review-workspace-native-source-" + randomUUID(),

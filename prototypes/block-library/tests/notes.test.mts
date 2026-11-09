@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
 import { DesktopState } from "../../integrated-backend/src/desktop.mts";
 import { NoteExperienceService } from "../note-service.mts";
@@ -120,7 +120,8 @@ test("opening and automatically draining an untouched recovery after restart pre
   t.after(() => {
     f.kernel.close();
     const target = resolve(directory);
-    assert.ok(target.startsWith(resolve(tmpdir()) + "\\"));
+    assert.equal(dirname(target), resolve(tmpdir()));
+    assert.ok(basename(target).startsWith("aerynth-note-recovery-nav-"));
     rmSync(target, { recursive: true, force: true });
   });
   const note = f.kernel.createNote(
@@ -457,7 +458,8 @@ test("durable unsaved text and monotonic draft versions survive restart without 
   t.after(() => {
     f.kernel.close();
     const target = resolve(directory);
-    assert.ok(target.startsWith(resolve(tmpdir()) + "\\"));
+    assert.equal(dirname(target), resolve(tmpdir()));
+    assert.ok(basename(target).startsWith("aerynth-note-draft-"));
     rmSync(target, { recursive: true, force: true });
   });
   const note = f.kernel.createNote(

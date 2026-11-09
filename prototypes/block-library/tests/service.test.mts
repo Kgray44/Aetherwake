@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
@@ -585,7 +585,8 @@ test("save, rename, search, archive, restore and optimistic metadata versions su
     host.close();
     const absolute = resolve(dir),
       allowed = resolve(tmpdir());
-    assert.ok(absolute.startsWith(allowed + "\\"));
+    assert.equal(dirname(absolute), allowed);
+    assert.ok(basename(absolute).startsWith("aerynth-template-test-"));
     rmSync(absolute, { recursive: true, force: true });
   });
   const saved = service.saveTemplate(draft(predefinedTemplates()[1].body));
@@ -786,7 +787,8 @@ test("schema upgrade, per-placement preferences, recents and favorites survive S
     host.close();
     const absolute = resolve(dir),
       allowed = resolve(tmpdir());
-    assert.ok(absolute.startsWith(allowed + "\\"));
+    assert.equal(dirname(absolute), allowed);
+    assert.ok(basename(absolute).startsWith("aerynth-library-restart-"));
     rmSync(absolute, { recursive: true, force: true });
   });
   const workspace = host.engine.createWorkspace("Synthetic persisted library"),

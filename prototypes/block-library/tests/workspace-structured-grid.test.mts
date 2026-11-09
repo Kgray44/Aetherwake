@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { prepareWorkspaceNative } from '../prepare-workspace-native.mts';
 import { BackendCore } from '../../integrated-backend/src/core.mts';
+import { workspaceNativePreparationSkip } from './workspace-native-prerequisites.mts';
 const require = createRequire(import.meta.url), helper = require('./workspace-structured-grid.cjs'), { expressions: x, preflight } = require('./workspace-structured-grid-expressions.cjs');
 
 test('Structured grid preflight exhausts finite read-only probes and inherits every shared expression before native dispatch', () => {
@@ -51,7 +52,7 @@ test('mode and gesture assertions reject silent packing, changed shape/order/ver
   for (const mutate of [(s: any) => s.blocks[1].x++, (s: any) => s.blocks[0].shape = 'rectangle', (s: any) => s.blocks[0].x++, (s: any) => s.resources[0].content = 'Changed']) { const changed = structuredClone(moved); mutate(changed); assert.throws(() => helper.assertGesture(mode, changed, 'note', 'move')); }
 });
 
-test('Structured specialization prepares three real off-grid shapes and equivalent canonical operations persist exactly across Core restart without provider activity', async t => {
+test('Structured specialization prepares three real off-grid shapes and equivalent canonical operations persist exactly across Core restart without provider activity', { skip: workspaceNativePreparationSkip }, async t => {
   const profile = join(tmpdir(), 'review-workspace-native-grid-source-' + randomUUID()), seed = await prepareWorkspaceNative(profile, { structuredGrid: true }), fixture = helper.fixture(seed);
   assert.equal(seed.cases.length, 11); assert(seed.cases.some(entry=>entry.kind==='clock_timer'&&entry.resourceId&&entry.blockId));
   assert.equal(seed.shapeCases.length, 3); assert.equal(seed.expected.workspaces.length, 14); assert.equal(seed.expected.blocks.length, 3); assert.equal(Object.keys(seed.hashes).length, 7); assert.equal(seed.structuredGridValidation!.preflightSha256, preflight().sha256);

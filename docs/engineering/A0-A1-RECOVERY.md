@@ -3,6 +3,7 @@
 Program A establishes the connected application's source and verification baseline. The starting commit is [`6d249eba7c1b3f8327f5a592734a5d334be1bf6e`](https://github.com/Kgray44/Aetherwake/commit/6d249eba7c1b3f8327f5a592734a5d334be1bf6e). GitHub `main` and the local tracking ref agreed when the recovery checkout was created. The draft PR identifies the candidate commit and hosted checks. Ratified design authority remains in the [governance registry](../../governance/README.md).
 
 - [Runtime architecture, state owners, technical debt, and A2 handoff](A0-A1-RUNTIME-OWNERSHIP.md)
+- [Windows native baseline and retained evidence](A0-A1-NATIVE-BASELINE.md)
 - [Legacy PR reconciliation and ratified design provenance](A0-A1-LEGACY-PR-RECONCILIATION.md)
 - [Connected application setup and native verification](../../prototypes/visual-experience/cinematic-v3/APPLICATION.md)
 
@@ -12,6 +13,8 @@ Program A establishes the connected application's source and verification baseli
 2. The connected desktop build was absent from CI. Windows now builds the real Electron application and its Windows system helper. Linux checks desktop TypeScript and runs cross-platform fixture coverage. The workflow keeps the OpenAI provider's locked package cache for its offline provenance check.
 3. The governance workflow filtered out many local link targets whose deletion can invalidate a charter or the registry. The [governance workflow](../../.github/workflows/governance-router.yml) now runs for every PR and push to `main`, so a stale path list cannot prevent this gate from running.
 4. The `record` and `soak` scripts implicitly opened the connected desktop, whose entry point does not handle those flags. That could open the regular review profile. Both commands now name the visual harness that owns the flags. The connected guide documents the explicit offline verification runner and separately authorized live review.
+5. The initial Linux CI run exposed Windows paths in test fixture setup and cleanup. Portable fixtures now use native path semantics. Three real Windows profile preparation tests require the Windows elapsed clock and the installed reserve guard. Hosted jobs without those prerequisites report the missing gate, while local qualified Windows ran all three journeys.
+6. The Living Instruments runner left an unsaved orientation change before attempting plan creation. The Timeline correctly disabled editing. The runner now saves and observes the new version before planning, and requires the initial planning and timer evidence before evaluating restart.
 
 These changes preserve the runtime command and IPC contracts, canonical data owners, profile schema, provider permissions and effect verification. The existing acceptance runner is reused without a second orchestration layer.
 
