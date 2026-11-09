@@ -80,6 +80,10 @@ jobs:
         if: runner.os == 'Windows'
         run: npm run build
         working-directory: prototypes/visual-experience/cinematic-v3
+      - name: Verify the Windows addon boundary before the full suite
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        run: node --test prototypes/visual-experience/cinematic-v3/tests/windows-system-build.test.mjs
       - name: Exercise the cross-package acceptance fixtures
         run: node scripts/run-aerynth-acceptance.mts
       - name: Test the review build and runtime source contracts

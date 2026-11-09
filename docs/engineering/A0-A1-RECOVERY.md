@@ -31,6 +31,8 @@ These changes preserve the runtime command and IPC contracts, canonical data own
 
 Older Electron and Tauri visual labs remain outside the integrated application path filter. The integrated workflow installs five packages from lockfiles. Constellation's standalone tests resolve its pinned Three.js peer from its own install. The offline acceptance fixtures require an OS temporary directory outside the checkout, consistent with the runtime's private storage fence. Windows installs Electron for the compiled addon contract. Linux runs the portable assertions and reports the Windows PowerShell parser and addon checks as platform skips. Interactive Electron journeys and the opt-in output-only DOM journey are separate.
 
+The Windows addon smoke runs before the longer aggregate to surface host and ABI failures early. It still checks real system measurements, unissued-reference denial and in-flight revocation. Catalog discovery can report only the two native desktop eligibility refusals as unavailable. To require nonempty real desktop catalogs and a visible memory candidate on an eligible local Windows host, set `AERYNTH_WINDOWS_INTERACTIVE_QA=1` and run `node --test prototypes/visual-experience/cinematic-v3/tests/windows-system-build.test.mjs`.
+
 ## Verification and acceptance
 
 Run commands from the repository root unless noted. Windows setup requires Node 24.18, the documented dependencies, a Windows SDK and MSVC. Run the host reserve guard before each disk-consuming stage.
