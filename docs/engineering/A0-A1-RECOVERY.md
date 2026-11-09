@@ -33,6 +33,8 @@ Older Electron and Tauri visual labs remain outside the integrated application p
 
 The Windows addon smoke runs before the longer aggregate to surface host and ABI failures early. It resolves the executable through the locked Electron package, which provisions the binary on first use. It still checks real system measurements, unissued-reference denial and in-flight revocation. Catalog discovery can report only the two native desktop eligibility refusals as unavailable. To require nonempty real desktop catalogs and a visible memory candidate on an eligible local Windows host, set `AERYNTH_WINDOWS_INTERACTIVE_QA=1` and run `node --test prototypes/visual-experience/cinematic-v3/tests/windows-system-build.test.mjs`.
 
+The hosted worker-loss test also hit its previous 12-second deadline. It now interrupts the actual worker immediately after the durable CPU attempt event, reports the stage if its bounded deadline expires and still requires the exact paused/recovered journal and workroom projections.
+
 ## Verification and acceptance
 
 Run commands from the repository root unless noted. Windows setup requires Node 24.18, the documented dependencies, a Windows SDK and MSVC. Run the host reserve guard before each disk-consuming stage.

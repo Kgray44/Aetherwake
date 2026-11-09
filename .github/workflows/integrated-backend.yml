@@ -84,6 +84,10 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 4
         run: node --test prototypes/visual-experience/cinematic-v3/tests/windows-system-build.test.mjs
+      - name: Verify worker-loss recovery on Windows before the full suite
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        run: node --test --test-name-pattern "a lost worker never" prototypes/integrated-backend/tests/mission-integration.test.mts
       - name: Exercise the cross-package acceptance fixtures
         run: node scripts/run-aerynth-acceptance.mts
       - name: Test the review build and runtime source contracts
