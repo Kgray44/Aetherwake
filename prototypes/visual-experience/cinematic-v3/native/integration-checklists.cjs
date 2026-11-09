@@ -152,10 +152,16 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const desktop = () => rpc('desktop', { type: 'snapshot' });
     const read = async id => { const value = assertDocument((await rpc('checklists', { name: 'read', input: { resourceId: id } })).result); assert.equal(value.resource.id, id); return value; };
     const wait = (label, check) => { receipt.phase = label; return waitForCondition({ slot, label, check, diagnose: () => js("({checklist:[...document.querySelectorAll('.aw-checklist')].map(n=>({id:n.dataset.resourceId,title:n.querySelector('h3')?.textContent,status:n.querySelector('[role=status]')?.textContent,entries:[...n.querySelectorAll('[data-checklist-entry-id]')].map(e=>e.dataset.checklistEntryId)})),creator:document.querySelector('.aw-checklist-create-status')?.textContent,manager:document.querySelector('.cp-status')?.textContent,surfaces:[...document.querySelectorAll('[data-surface-id]')].map(n=>n.dataset.surfaceId),error:document.querySelector('#command-error')?.textContent})") }); };
-    const click = async query => {
-      await js(`document.querySelector(${JSON.stringify(query)})?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`);
-      let previous, point;
-      await wait('Visible stable actual Checklist control ' + query, async () => {
+    const click = async (target, label = target) => {
+      let query, previous, point;
+      await wait('Visible stable actual Checklist control ' + label, async () => {
+        const nextQuery = typeof target === 'function' ? await target() : target;
+        if (!nextQuery) { previous = undefined; return false; }
+        if (query !== nextQuery) {
+          query = nextQuery;
+          previous = undefined;
+          await js(`document.querySelector(${JSON.stringify(query)})?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`);
+        }
         const value = await js(targetScript(query, 'inspect'));
         if (!value.ready) { await js(`(()=>{const n=document.querySelector(${JSON.stringify(query)});if(!n||n.closest('[hidden],[inert]'))return;const r=n.getBoundingClientRect();let clipped=r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight;for(let p=n.parentElement;p&&!clipped;p=p.parentElement){const s=getComputedStyle(p),b=p.getBoundingClientRect();clipped=(s.overflowX!=='visible'&&(r.left<b.left||r.right>b.right))||(s.overflowY!=='visible'&&(r.top<b.top||r.bottom>b.bottom));}if(clipped)n.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});})()`); previous = undefined; return false; }
         point = { x: Math.round(value.rect.x + value.rect.width / 2), y: Math.round(value.rect.y + value.rect.height / 2) };
@@ -171,11 +177,15 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       await click(query); await wait('Actual native select focus', () => js(`document.activeElement===document.querySelector(${JSON.stringify(query)})`)); key('Home'); for (let i = 0; i < index; i++) key('Down'); key('Return');
       await wait('Exact actual native option value', () => js(`document.querySelector(${JSON.stringify(query)})?.value===${JSON.stringify(value)}`));
     };
-    const byText = async (container, text, tag = 'button') => {
-      let index; await wait('Exact public control ' + text, async () => { index = await js(`(()=>{const n=document.querySelector(${JSON.stringify(container)});return n?[...n.querySelectorAll(${JSON.stringify(tag)})].findIndex(b=>b.textContent.trim()===${JSON.stringify(text)}):-1})()`); return index >= 0; });
-      // The index comes from the current actual DOM, not a manufactured test ID.
-      const query = await js(`(()=>{const n=document.querySelector(${JSON.stringify(container)})?.querySelectorAll(${JSON.stringify(tag)})[${index}];if(!n)return null;let p=n,parts=[];while(p&&p!==document.documentElement){parts.unshift(p.tagName.toLowerCase()+':nth-child('+([...p.parentElement.children].indexOf(p)+1)+')');p=p.parentElement;}return 'html>'+parts.join('>')})()`); assert(query); await click(query);
-    };
+    // Context transitions can change sibling order while the target settles.
+    const byText = (container, text, tag = 'button') => click(() => js(`(()=>{
+      const root=document.querySelector(${JSON.stringify(container)});
+      const n=[...root?.querySelectorAll(${JSON.stringify(tag)})??[]].find(b=>b.textContent.trim()===${JSON.stringify(text)});
+      if(!n)return null;
+      let p=n;const parts=[];
+      while(p&&p!==document.documentElement){parts.unshift(p.tagName.toLowerCase()+':nth-child('+([...p.parentElement.children].indexOf(p)+1)+')');p=p.parentElement;}
+      return 'html>'+parts.join('>');
+    })()`), text);
     const close = async surfaceId => { const query = `[data-surface-id=${JSON.stringify(surfaceId)}]`; await click(query + ' .aw-contextual-dismiss'); await wait('Actual surface closed ' + surfaceId, () => js(`!document.querySelector(${JSON.stringify(query)})`)); };
     const openChecklist = async id => {
       await click('#application-resources'); await fill('#resource-search', id === expected?.linkedId ? FIXTURE.linked : FIXTURE.title);
