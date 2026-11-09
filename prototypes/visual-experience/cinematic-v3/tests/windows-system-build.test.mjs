@@ -1,5 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,writeFile,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import path from 'node:path';import {promisify} from 'node:util';import {execFile} from 'node:child_process';import {fileURLToPath} from 'node:url';
 import {buildWindowsSystem} from '../native/windows-system-build.mjs';
+import {createRequire} from 'node:module';
 test('fixed Windows addon reads real memory/process facts, preserves consent diagnoses and rejects an unissued reclaim',{
  skip:process.platform!=='win32'&&'requires Windows, MSVC, and the Electron executable',
 },async t=>{
@@ -62,7 +63,10 @@ test('fixed Windows addon reads real memory/process facts, preserves consent dia
    const reason=typeof error==='string'&&/^(?:memory|computer)_[a-z_]+$/.test(error)?error:'assertion-or-unexpected-error';
    process.stderr.write('NATIVE_BOUNDARY_FAILED '+stage+' '+reason);process.exitCode=1;
  });`;
- for(const executable of [process.execPath,path.join(root,'node_modules/electron/dist/electron.exe')]){
+ // The locked Electron package provisions its binary on first resolution.
+ const electron = createRequire(import.meta.url)('electron');
+ assert(path.isAbsolute(electron), 'Installed Electron executable unavailable');
+ for(const executable of [process.execPath,electron]){
   const result=await promisify(execFile)(executable,['-e',code,file],{windowsHide:true,timeout:15000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
   assert.match(result.stdout,/^NATIVE_BOUNDARY_OK (catalog-observed|computer_secure_desktop|computer_admin_denied|electron-node-mode)$/);
   t.diagnostic(result.stdout);

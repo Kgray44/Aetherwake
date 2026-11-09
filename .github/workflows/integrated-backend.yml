@@ -63,7 +63,7 @@ jobs:
         if: runner.os == 'Linux'
         run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: prototypes/visual-experience/cinematic-v3
-      - name: Install desktop and Electron for Windows native contract tests
+      - name: Install desktop dependencies for Windows native contract tests
         if: runner.os == 'Windows'
         run: npm ci --no-audit --no-fund
         working-directory: prototypes/visual-experience/cinematic-v3
@@ -82,7 +82,7 @@ jobs:
         working-directory: prototypes/visual-experience/cinematic-v3
       - name: Verify the Windows addon boundary before the full suite
         if: runner.os == 'Windows'
-        timeout-minutes: 2
+        timeout-minutes: 4
         run: node --test prototypes/visual-experience/cinematic-v3/tests/windows-system-build.test.mjs
       - name: Exercise the cross-package acceptance fixtures
         run: node scripts/run-aerynth-acceptance.mts
