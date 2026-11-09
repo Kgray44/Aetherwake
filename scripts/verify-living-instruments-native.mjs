@@ -297,7 +297,16 @@ try {
     expected = await wait('canonical zoom saved', async () => { const doc = await rpc('timelines', { name: 'read', input: { resourceId: timelineId } }); return doc.resource.version > before.resource.version && doc; });
     assert.equal(Date.parse(expected.view.viewport.to) - Date.parse(expected.view.viewport.from), (Date.parse(before.view.viewport.to) - Date.parse(before.view.viewport.from)) / 2); assert.equal(expected.view.selection.eventId, observation.selected);
     await sleep(400); await capture('timeline-horizontal');
-    await cdp.evaluate(`(()=>{const n=document.querySelector('.aw-timeline select[aria-label="Orientation"]');n.value='vertical';n.dispatchEvent(new Event('change',{bubbles:true}));})()`); await sleep(400); await capture('timeline-vertical'); return observation;
+    await cdp.evaluate(`(()=>{const n=document.querySelector('.aw-timeline select[aria-label="Orientation"]');n.value='vertical';n.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await sleep(400); await capture('timeline-vertical');
+    // Planning stays disabled while Timeline view settings have unsaved changes.
+    await clickText('.aw-timeline', 'Save view');
+    expected = await wait('vertical Timeline view saved', async () => {
+      const doc = await rpc('timelines', { name: 'read', input: { resourceId: timelineId } });
+      return doc.view?.presentation?.orientation === 'vertical' && doc;
+    });
+    await wait('vertical Timeline save settled', () => cdp.evaluate(`document.querySelector('.aw-timeline').getAttribute('aria-busy')==='false'`));
+    return observation;
   });
   await step('LI04 native canonical planning create/edit/delete/undo', async () => {
     await cdp.evaluate(`document.querySelector('.aw-timeline-planning').open=true`);
@@ -419,7 +428,7 @@ try {
     return { resourceId: timerId, state: timer.timers[0].state, remainingMs: timer.timers[0].remainingMs, timeZone: timer.worldClocks[0].timeZone };
   });
   await step('LI15 restart restores exact canonical Timeline viewport and selected event', async () => {
-    assert(expected, 'initial canonical zoom required'); await launch();
+    assert(expected && savedPlans && savedTimer, 'initial canonical Timeline, planning and timer receipts required'); await launch();
     const restored = await rpc('timelines', { name: 'read', input: { resourceId: timelineId } }); assert.deepEqual(restored.view, expected.view); assert.equal(restored.resource.id, timelineId);
     await cdp.evaluate(`window.__aerynth.openResource({resourceId:${expr(timelineId)},preferredPresentation:'direct'})`); await wait('restored Timeline', () => cdp.evaluate(`document.querySelector('.aw-timeline')?.getAttribute('aria-busy')==='false'`)); const plans=await rpc('timelines',{name:'planning',input:{op:'list',resourceId:timelineId,expectedVersion:restored.resource.version}});assert.deepEqual(plans.items,savedPlans);const timer=await rpc('clockTimers',{name:'read',input:{resourceId:timerId}});assert.equal(timer.timers[0].state,'paused');assert.equal(timer.timers[0].remainingMs,savedTimer.timers[0].remainingMs);assert.equal(timer.worldClocks[0].timeZone,'Asia/Tokyo');return { resourceId: timelineId, selection: restored.view.selection, viewport: restored.view.viewport,planningItems:plans.items,timerResourceId:timerId };
   });

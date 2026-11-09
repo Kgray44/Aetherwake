@@ -23,6 +23,8 @@ on:
       - 'prototypes/codex-bridge/**'
       - 'scripts/run-aerynth-acceptance.mts'
       - 'scripts/review-*.mjs'
+      - 'scripts/verify-living-instruments-native.mjs'
+      - 'scripts/living-instruments-*-fixture.mts'
       - '.github/workflows/integrated-backend.yml'
   workflow_dispatch:
 permissions:
@@ -82,5 +84,7 @@ jobs:
         run: node scripts/run-aerynth-acceptance.mts
       - name: Test the review build and runtime source contracts
         run: node --test "scripts/review-*.test.mjs"
+      - name: Check native journey script syntax
+        run: node --check scripts/verify-living-instruments-native.mjs
       - name: Record the native verification boundary
         run: echo "Interactive Windows verification requires a qualified desktop and the host ReserveGuard. This job runs build and synthetic checks."
