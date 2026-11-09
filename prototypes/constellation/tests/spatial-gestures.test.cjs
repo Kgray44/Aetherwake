@@ -1,7 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const vm = require("node:vm");
-const { spatialDragPoint } = require("./integrated-native.cjs");
+const { spatialDragPoint, resolveSpatialDragTarget } = require("./integrated-native.cjs");
 
 function fixture({
   width = 1600,
@@ -140,4 +140,26 @@ test("inactive fields and paths leaving the actual viewport produce no native in
     fixture({ width: 300, height: 200 }).read("resource:unit-moon").error,
     /No exposed isolated/,
   );
+});
+
+test("camera fallback rechecks an occluded body after orbiting and stops at the first exposed point", async () => {
+  const moon = { key: "resource:unit-moon", x: 400, y: 300, radius: 64 };
+  const cover = { key: "resource:foreground", x: 400, y: 300, radius: 120 };
+  let orbits = 0;
+  const readTarget = () => fixture({ bodies: orbits ? [moon] : [moon, cover] }).read(moon.key);
+  const result = await resolveSpatialDragTarget(readTarget, async () => { orbits++; });
+  assert.equal(orbits, 1);
+  assert.equal(result.cameraAdjustments, 1);
+  assert.deepEqual(result.target.point, { x: 400, y: 300 });
+});
+
+test("camera fallback is bounded and propagates a lost native input owner", async () => {
+  const moon = { key: "resource:unit-moon", x: 400, y: 300, radius: 64 };
+  const cover = { key: "resource:foreground", x: 400, y: 300, radius: 120 };
+  const readTarget = () => fixture({ bodies: [moon, cover] }).read(moon.key);
+  const result = await resolveSpatialDragTarget(readTarget, async () => {});
+  assert.equal(result.cameraAdjustments, 4);
+  assert.equal(result.target.point, undefined);
+  const ownerLost = Error("native_owner_window_inactive");
+  await assert.rejects(resolveSpatialDragTarget(readTarget, async () => { throw ownerLost; }), ownerLost);
 });

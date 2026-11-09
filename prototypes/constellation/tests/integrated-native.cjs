@@ -259,6 +259,20 @@ function spatialDragPoint(selector, bodyKey, dx, dy) {
 }
 exports.spatialDragPoint = spatialDragPoint;
 
+async function resolveSpatialDragTarget(readTarget, orbit) {
+  let target = await readTarget();
+  let cameraAdjustments = 0;
+  // Orbit on exposed background before attempting input on a covered body.
+  for (const [x, y] of [[100, 0], [-200, 0], [100, 80], [100, -160]]) {
+    if (!orbit || target.error !== "No exposed isolated projected body drag path") break;
+    await orbit(x, y);
+    cameraAdjustments++;
+    target = await readTarget();
+  }
+  return { target, cameraAdjustments };
+}
+exports.resolveSpatialDragTarget = resolveSpatialDragTarget;
+
 /** Standalone browser read: an expanded host can precede its resource mount. */
 function taskGroupChecklistReady(blockId, expected) {
   if (!Array.isArray(expected) || !expected.length || expected.length > 64)
@@ -939,18 +953,10 @@ async function verifyJourney({
     const readTarget = () => js(
       `(${spatialDragPoint.toString()})(${JSON.stringify(selector)},${JSON.stringify(bodyKey ?? null)},${JSON.stringify(dx)},${JSON.stringify(dy)})`,
     );
-    let target = await readTarget();
-    let cameraAdjustments = 0;
-    if (bodyKey) {
-      // A generated fixture can hide the body from this viewing angle. Orbit
-      // on exposed background before attempting any input on the body.
-      for (const [x, y] of [[100, 0], [-200, 0], [100, 80], [100, -160]]) {
-        if (target.error !== "No exposed isolated projected body drag path") break;
-        await drag(selector, x, y);
-        cameraAdjustments++;
-        target = await readTarget();
-      }
-    }
+    const { target, cameraAdjustments } = await resolveSpatialDragTarget(
+      readTarget,
+      bodyKey ? (x, y) => drag(selector, x, y) : undefined,
+    );
     receipt.lastSpatialGesture = {
       selector,
       dx,
