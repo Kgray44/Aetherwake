@@ -2988,7 +2988,7 @@ export function installApplication(hooks: Hooks) {
     });
     content.querySelector<HTMLElement>(".aw-context-search")!.id = "resource-search";
     content.querySelector<HTMLElement>(".aw-context-resource-list")!.id = "resource-results";
-    for (const action of content.querySelectorAll<HTMLElement>("[data-resource-action]"))
+    for (const action of view.addMenu?.querySelectorAll<HTMLElement>("[data-resource-action]") ?? [])
       action.id = action.dataset.resourceAction!;
     const motion = conversationDisclosures(content, { motion: experienceMotion, viewId: "context-resources" });
     openWorkspacePanel({
