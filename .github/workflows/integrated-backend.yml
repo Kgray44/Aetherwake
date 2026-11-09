@@ -88,11 +88,11 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 2
         run: node --test --test-name-pattern "a lost worker never" prototypes/integrated-backend/tests/mission-integration.test.mts
-      - name: Exercise the cross-package acceptance fixtures
-        run: node scripts/run-aerynth-acceptance.mts
       - name: Test the review build and runtime source contracts
         run: node --test "scripts/review-*.test.mjs"
       - name: Check native journey script syntax
         run: node --check scripts/verify-living-instruments-native.mjs
+      - name: Exercise the cross-package acceptance fixtures
+        run: node scripts/run-aerynth-acceptance.mts
       - name: Record the native verification boundary
         run: echo "Interactive Windows verification requires a qualified desktop and the host ReserveGuard. This job runs build and synthetic checks."

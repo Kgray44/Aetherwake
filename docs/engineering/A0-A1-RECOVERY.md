@@ -35,6 +35,8 @@ The Windows addon smoke runs before the longer aggregate to surface host and ABI
 
 The hosted worker-loss test also hit its previous 12-second deadline. It now interrupts the actual worker immediately after the durable CPU attempt event, reports the stage if its bounded deadline expires and still requires the exact paused/recovered journal and workroom projections.
 
+The Windows review-build fixtures canonicalize their temporary parent before creating the owned fixture. This accommodates the runner's short path aliases without changing the packager's path-containment or vendor-integrity checks. The workflow runs these contracts before the longer aggregate.
+
 ## Verification and acceptance
 
 Run commands from the repository root unless noted. Windows setup requires Node 24.18, the documented dependencies, a Windows SDK and MSVC. Run the host reserve guard before each disk-consuming stage.
