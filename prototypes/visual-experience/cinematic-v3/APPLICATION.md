@@ -11,6 +11,7 @@ From the repository root:
 ```powershell
 npm --prefix prototypes/openai-provider ci --ignore-scripts --no-audit --no-fund
 npm --prefix prototypes/block-library ci --ignore-scripts --no-audit --no-fund
+npm --prefix prototypes/constellation ci --ignore-scripts --no-audit --no-fund
 npm --prefix prototypes/visual-experience/cinematic-v3 ci --no-audit --no-fund
 npm --prefix prototypes/visual-experience/cinematic-v3 start
 ```

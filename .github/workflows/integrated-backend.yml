@@ -2,6 +2,7 @@ name: Integrated Aerynth application
 on:
   pull_request:
     paths:
+      - 'Aerynth.cmd'
       - 'prototypes/integrated-backend/**'
       - 'prototypes/openai-provider/**'
       - 'prototypes/application-contract/**'
