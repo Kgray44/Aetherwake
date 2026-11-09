@@ -201,26 +201,31 @@ function spatialDragPoint(selector, bodyKey, dx, dy) {
     x + Math.max(0, dx) < Math.min(innerWidth, r.right) &&
     y + Math.max(0, dy) < Math.min(innerHeight, r.bottom);
   if (bodyKey) {
-    const label = [...surface.querySelectorAll(".aw-anchor[data-key]")].find(
-        (e) => e.dataset.key === bodyKey,
-      ),
-      lr = label?.getBoundingClientRect();
-    if (!lr) return { error: "Body label missing", bodyKey };
-    const lx = lr.left + lr.width / 2 - r.left,
-      ly = lr.top + lr.height / 2 - r.top;
-    const line = [...surface.querySelectorAll(".aw-connections line")].find(
-      (l) =>
-        Math.abs(Number(l.getAttribute("x2")) - lx) < 4 &&
-        Math.abs(Number(l.getAttribute("y2")) + 15 - ly) < 4,
-    );
-    if (!line) return { error: "Projected body leader missing", bodyKey };
-    const x = Math.round(r.left + Number(line.getAttribute("x1"))),
-      y = Math.round(r.top + Number(line.getAttribute("y1")));
-    if (!inside(x, y))
-      return { error: "Projected body drag path outside field", bodyKey, x, y };
-    if (!exposed(x, y))
-      return { error: "Projected body drag target occluded", bodyKey, x, y };
-    return { point: { x, y }, method: "actual-body-leader", attempts: 1 };
+    const bodies = window.__aerynth.snapshot().spatial?.renderer?.projectedBodies;
+    const valid = (body) =>
+      [body.x, body.y, body.radius].every(Number.isFinite) && body.radius > 0;
+    const body = bodies?.find((candidate) => candidate.key === bodyKey);
+    if (!body || !valid(body))
+      return { error: "Requested body is missing from the renderer projection", bodyKey };
+    const others = bodies.filter((candidate) => candidate.key !== bodyKey && valid(candidate));
+    // The renderer bounds include the body, but a closer body can cover its
+    // center. Probe only pixels outside every other body's conservative bound.
+    let attempts = 0;
+    for (const fraction of [0, 0.35, 0.6, 0.8]) {
+      const count = fraction === 0 ? 1 : 24;
+      for (let i = 0; i < count; i++) {
+        const angle = i * 2 * Math.PI / count;
+        const x = Math.round(r.left + body.x + fraction * body.radius * Math.cos(angle));
+        const y = Math.round(r.top + body.y + fraction * body.radius * Math.sin(angle));
+        attempts++;
+        if (!inside(x, y) || !exposed(x, y)) continue;
+        if (others.some((other) =>
+          Math.hypot(x - r.left - other.x, y - r.top - other.y) <= other.radius + 2
+        )) continue;
+        return { point: { x, y }, method: "isolated-projected-body", attempts };
+      }
+    }
+    return { error: "No exposed isolated projected body drag path", bodyKey, attempts };
   }
   const candidates = [
     [0.2, 0.7],
@@ -960,6 +965,14 @@ async function verifyJourney({
       modifiers,
     });
     await pause(75);
+    if (bodyKey) {
+      const selected = (await spatial()).selected;
+      receipt.lastSpatialGesture.selectedOnPress = selected;
+      if (selected !== bodyKey) {
+        send({ type: "mouseUp", ...p, button: "left", clickCount: 1, modifiers });
+        assert.equal(selected, bodyKey, "Native pointer press must select the intended body before dragging");
+      }
+    }
     for (let i = 1; i <= 12; i++) {
       send({
         type: "mouseMove",
