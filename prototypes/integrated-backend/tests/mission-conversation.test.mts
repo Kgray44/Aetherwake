@@ -10,7 +10,7 @@ import type { ProductCommandMap } from '../../conversation-product/src/contracts
 import type { NoteDocument } from '../../block-library/note-contracts.ts';
 import { BackendCore } from '../src/core.mts';
 import type { ConversationProductRequest, StreamEvent } from '../src/contracts.mts';
-import type { MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview } from '../src/mission-contracts.mts';
+import type { MissionAdmission, MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview } from '../src/mission-contracts.mts';
 import type { VelaState } from '../../vela-core/src/contracts.ts';
 
 function fixture(emit?: (event: StreamEvent) => void) {
@@ -157,14 +157,15 @@ test('a workroom created while work is held receives exactly one receipt after a
   const f = fixture();
   try {
     await origin(f.core);
-    const host = (f.core as any).missions.host;
-    const admission = host.admission;
-    host.admission = () => ({ workerLimit: 0, reasons: ['physical-memory'], readings: {} });
+    const missions = (f.core as any).missions;
+    // Control admission for both phases so host pressure cannot undo the fixture's release.
+    let admission: MissionAdmission = { workerLimit: 0, reasons: ['physical-memory'], readings: {} };
+    missions.host.admission = () => admission;
     const mission = await start(f.core);
     const room = await workroom(f.core, mission.id);
     assert.equal((await product(f.core, 'detail', { resourceId: room.missionConversationResourceId! })).messages.total, 0);
-    host.admission = admission;
-    (f.core as any).missions.capacityChanged();
+    admission = { workerLimit: 1, reasons: [], readings: {} };
+    missions.capacityChanged();
     await verified(f.core, mission.id);
     const delivered = await receipt(f.core, room);
     await f.reopen();
