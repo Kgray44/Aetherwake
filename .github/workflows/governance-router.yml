@@ -2,47 +2,14 @@ name: Governance Router
 
 on:
   push:
-    paths:
-      - 'AGENTS.md'
-      - 'config/governance-routes.json'
-      - 'config/governance-context-policies.json'
-      - 'scripts/governance-router.mjs'
-      - 'scripts/governance-context.mjs'
-      - 'scripts/benchmark-governance-context.mjs'
-      - 'scripts/evaluate-governance-engineering.mjs'
-      - 'tests/fixtures/engineering-context-cases.json'
-      - 'scripts/verify-governance.mjs'
-      - 'docs/engineering/GOVERNANCE-ROUTER.md'
-      - 'docs/engineering/GOVERNANCE-CONTEXT-ROUTER-V2.md'
-      - 'docs/vision/**'
-      - 'README.md'
-      - 'tests/governance-router.test.mjs'
-      - 'tests/governance-context.test.mjs'
-      - 'governance/**'
-      - '.github/workflows/governance-router.yml'
+    branches: [main]
   pull_request:
-    paths:
-      - 'AGENTS.md'
-      - 'config/governance-routes.json'
-      - 'config/governance-context-policies.json'
-      - 'scripts/governance-router.mjs'
-      - 'scripts/governance-context.mjs'
-      - 'scripts/benchmark-governance-context.mjs'
-      - 'scripts/evaluate-governance-engineering.mjs'
-      - 'tests/fixtures/engineering-context-cases.json'
-      - 'scripts/verify-governance.mjs'
-      - 'docs/engineering/GOVERNANCE-ROUTER.md'
-      - 'docs/engineering/GOVERNANCE-CONTEXT-ROUTER-V2.md'
-      - 'docs/vision/**'
-      - 'README.md'
-      - 'tests/governance-router.test.mjs'
-      - 'tests/governance-context.test.mjs'
-      - 'governance/**'
-      - '.github/workflows/governance-router.yml'
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
   validate:
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

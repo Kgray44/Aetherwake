@@ -1,6 +1,8 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,writeFile,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import path from 'node:path';import {promisify} from 'node:util';import {execFile} from 'node:child_process';import {fileURLToPath} from 'node:url';
 import {buildWindowsSystem} from '../native/windows-system-build.mjs';
-test('fixed Windows addon reads real memory/process facts, preserves consent diagnoses and rejects an unissued reclaim',async t=>{
+test('fixed Windows addon reads real memory/process facts, preserves consent diagnoses and rejects an unissued reclaim',{
+ skip:process.platform!=='win32'&&'requires Windows, MSVC, and the Electron executable',
+},async t=>{
  const root=fileURLToPath(new URL('..',import.meta.url)),folder=await mkdtemp(path.join(tmpdir(),'aerynth-system-addon-test-'));
  try{const built=await buildWindowsSystem(root),file=path.join(folder,'fixed.node');await writeFile(file,built.binary);assert(built.binary.length<4*1024*1024);assert.equal(Object.keys(built.metadata.inputs).join('|'),'native/windows-system.cpp|native/windows-computer.inc');t.diagnostic('Compiled asset '+built.binary.length+' bytes; measured post-compile temporary outputs '+built.allocation.postCompileTemporaryBytes+' bytes; no trim performed.');
  const code=`const a=require(process.argv[1]);const assert=require('node:assert/strict');
