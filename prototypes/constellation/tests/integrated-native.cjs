@@ -936,15 +936,28 @@ async function verifyJourney({
     run.guard();
   };
   const drag = async (selector, dx, dy, modifiers = [], bodyKey) => {
-    const target = await js(
+    const readTarget = () => js(
       `(${spatialDragPoint.toString()})(${JSON.stringify(selector)},${JSON.stringify(bodyKey ?? null)},${JSON.stringify(dx)},${JSON.stringify(dy)})`,
     );
+    let target = await readTarget();
+    let cameraAdjustments = 0;
+    if (bodyKey) {
+      // A generated fixture can hide the body from this viewing angle. Orbit
+      // on exposed background before attempting any input on the body.
+      for (const [x, y] of [[100, 0], [-200, 0], [100, 80], [100, -160]]) {
+        if (target.error !== "No exposed isolated projected body drag path") break;
+        await drag(selector, x, y);
+        cameraAdjustments++;
+        target = await readTarget();
+      }
+    }
     receipt.lastSpatialGesture = {
       selector,
       dx,
       dy,
       modifiers,
       bodyKey: bodyKey ?? null,
+      cameraAdjustments,
       target,
     };
     await evidence.record({
