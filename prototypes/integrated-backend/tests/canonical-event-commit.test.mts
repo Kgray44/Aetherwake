@@ -38,3 +38,39 @@ test('canonical application events are delivered only after outer commit and rem
     const target=resolve(dir),part=relative(resolve(tmpdir()),target);assert(part.startsWith('aerynth-event-commit-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(target,{recursive:true,force:true});
   }
 });
+
+test('reentrant canonical observers preserve committed cursor order', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aerynth-event-commit-'));
+  const path = join(dir, 'canonical.sqlite');
+  const options = {path, provider: 'fixture', contentPolicy: 'synthetic-only'} as const;
+  const core = new BackendCore(options);
+  const owner = core as any;
+  const types = ['vela.synthetic.first', 'vela.synthetic.second', 'vela.synthetic.reentrant'];
+  const delivered: {type: string; cursor: number; eventId: string}[] = [];
+  const receipt = ({type, cursor, eventId}: typeof delivered[number]) => ({type, cursor, eventId});
+  let observerError: unknown;
+  owner.emit = (event: typeof delivered[number]) => {
+    if (!types.includes(event.type)) return;
+    delivered.push(receipt(event));
+    if (event.type === types[0]) {
+      try { owner.record(types[2], 'observed', undefined, types[2]); }
+      catch (error) { observerError = error; }
+    }
+  };
+  try {
+    owner.atomic(() => {
+      owner.record(types[0], 'observed', undefined, types[0]);
+      owner.atomic(() => owner.record(types[1], 'observed', undefined, types[1]));
+      assert.deepEqual(delivered, []);
+    });
+    assert.equal(observerError, undefined);
+    const replay = (await core.command('replay', {})).events.filter(event => types.includes(event.type)).map(receipt);
+    assert.deepEqual(replay.map(event => event.type), types);
+    assert.deepEqual(delivered, replay);
+  } finally {
+    await core.command('close', {});
+    const part = relative(resolve(tmpdir()), resolve(dir));
+    assert(part.startsWith('aerynth-event-commit-') && !isAbsolute(part));
+    rmSync(dir, {recursive: true, force: true});
+  }
+});

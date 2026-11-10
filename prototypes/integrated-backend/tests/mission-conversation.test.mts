@@ -56,7 +56,9 @@ async function start(core: BackendCore, objective = 'Measure CPU and RAM') {
   return core.command('missions', { name: 'start', input: { objective, fingerprint: preview.fingerprint, requestId: randomUUID() } }) as Promise<MissionProjection>;
 }
 async function verified(core: BackendCore, id: string) {
-  const deadline = performance.now() + 7000;
+  // Hosted Windows can spend several seconds on SQLite and OS scheduling.
+  // This bounds test observation only. The mission's own deadlines still apply.
+  const deadline = performance.now() + (process.platform === 'win32' ? 20_000 : 7000);
   let mission: MissionProjection;
   do {
     mission = await core.command('missions', { name: 'read', input: { id } }) as MissionProjection;
@@ -64,7 +66,8 @@ async function verified(core: BackendCore, id: string) {
     assert.ok(['queued', 'running'].includes(mission.outcome), JSON.stringify(mission.tasks.map(task => [task.id, task.state, task.detail])));
     await delay(15);
   } while (performance.now() < deadline);
-  assert.fail('Native mission did not verify within its bounded test window');
+  assert.fail('Native mission did not verify within its bounded test window: ' +
+    JSON.stringify(mission.tasks.map(task => [task.id, task.state, task.detail, task.attempts.at(-1)?.timing])));
 }
 async function workroom(core: BackendCore, id: string) {
   const preview = await core.command('missions', { name: 'workroom-preview', input: { id } }) as MissionWorkroomPreview;
@@ -178,6 +181,9 @@ for (const revoke of ['origin', 'workroom', 'chat', 'placement', 'project'] as c
     const f = fixture();
     try {
       const workspaceId = await origin(f.core, true);
+      // This fixture tests source scope. Keep worker admission independent of host pressure.
+      const admission: MissionAdmission = { workerLimit: 2, reasons: [], readings: {} };
+      (f.core as any).missions.host.admission = () => admission;
       const mission = await verified(f.core, (await start(f.core)).id);
       const room = await workroom(f.core, mission.id);
       const detail = await receipt(f.core, room), message = detail.messages.items[0];

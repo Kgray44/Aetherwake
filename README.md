@@ -41,7 +41,7 @@ The governing foundation lives in [`governance/`](governance/README.md), beginni
 
 **Existing implementation:** the connected Electron desktop and cinematic application live primarily under `prototypes/visual-experience/cinematic-v3/`, with `prototypes/integrated-backend/`, `prototypes/vela-core/` and other source-owned domain modules. The `prototypes/` naming is historical; neither source location nor merged PR proves complete product acceptance. Keep synthetic experience previews separate from real native provider/tool execution and evidence.
 
-See the [Architecture Recovery A0/A1 report](docs/engineering/A0-A1-RECOVERY.md) for the connected runtime, current verification status, and CI coverage. The [application guide](prototypes/visual-experience/cinematic-v3/APPLICATION.md) covers Windows setup and the offline native verification runner.
+See the [Architecture Recovery A0/A1 report](docs/engineering/A0-A1-RECOVERY.md) for the connected runtime, current verification status, and CI coverage. The [A2.1 transaction report](docs/engineering/A2-1-TRANSACTION-COORDINATION.md) covers the persistence implementation, measurements and verification. The [application guide](prototypes/visual-experience/cinematic-v3/APPLICATION.md) covers Windows setup and the offline native verification runner.
 
 **Architecture references:** [ADR-002](docs/decisions/ADR-002-ARCHITECTURE-RECOVERY-AND-COHESIVE-RUNTIME.md), [Local-First Storage and Continuity](docs/architecture/AERYNTH-LOCAL-FIRST-STORAGE-AND-CONTINUITY.md), [CIE Semantic Interpretation and Evidence Retrieval](docs/specifications/CIE-SEMANTIC-INTERPRETATION-AND-EVIDENCE-RETRIEVAL.md), and [UMCR-01](docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md).
 
