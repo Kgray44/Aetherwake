@@ -134,6 +134,12 @@ A catalog handler release fault leaves the closed lease unusable, records a boun
 | Orchestration and continuity | Qualify heterogeneous durable checkpoint and handoff contracts, review renewal, worker loss, cancellation and uncertain outcomes. Test one canonical Vela identity across routes, providers and restart with no provider-history conflation or blind retry. |
 | Performance and cost | Measure route, capability, admission and settlement distributions across qualified hosts and real workloads. Compare verified outcome quality per unit of latency and cost with reported usage and entitlements. Keep unobserved cost and unsupported capabilities explicitly unknown. |
 
+### Merge qualification follow-up
+
+Review of `c900191` reproduced standing tool effects that exceeded the user's request. Core now requires every creation clause to match its bounded grammar before it considers standing execution. Conditional, deferred and ambiguous proposals use the existing exact owner review. A same-kind follow-up checks canonical plan state, so a new invocation identity cannot spend the same creation instruction twice. Timer proposals bind the requested duration and current destination. A timer requested “there” after workspace creation requires that request's applied workspace receipt before it can use standing authorization.
+
+The disk-backed tool tests cover withheld authorization, a condition introduced after punctuation, a different object containing a workspace reference, distinct invocation IDs, wrong timer duration and a timer proposed before its requested destination exists. The existing named-workspace, readback and ordered workspace-plus-timer journeys exercise the positive path.
+
 ## A2.3 handoff
 
 - Reconcile live cursor delivery against Core replay's `after`, `earliest`, `latest`, and `truncated` contract. The Electron broker currently supplies a bounded latest slice. Exercise missed delivery, retention gaps and reconnects with authorized scope changes. Use the journal and canonical readback as the owners.

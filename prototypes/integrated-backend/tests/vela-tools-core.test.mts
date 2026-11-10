@@ -99,7 +99,11 @@ test('informational and no-change requests deny an unsolicited standing workspac
 });
 
 test('conditional or different application actions require review before provider-selected creation', async () => {
-  for (const intent of ['Create a workspace only after I review it.', 'Rename the active workspace to Sprint Review.',
+  for (const intent of ['Create a workspace only after I review it.',
+    'Create a workspace, but wait until I explicitly authorize it.',
+    'Create a workspace, if the tests pass.', 'Create a workspace, but do not actually create it yet.',
+    'Create a note about a workspace.', 'Create a mockup of a workspace.',
+    'Rename the active workspace to Sprint Review.',
     'Create a workspace named Sprint Review.', 'Make the workspace easier to find.', 'Create no workspace.']) {
     const f = fixture();
     try {
@@ -123,9 +127,33 @@ test('conditional or different application actions require review before provide
   }
 });
 
+test('two distinct invocations cannot use one standing workspace instruction twice', async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    const before = await f.core.command('desktop', { type: 'snapshot' });
+    const action = (title: string) => ({ type: 'createWorkspace', title, projectId: null });
+    f.replies.push(
+      catalog => tool(VELA_TOOL_SCHEMAS, { catalogDigest: catalog.digest, ids: ['application.createWorkspace'] }),
+      catalog => invoke(catalog, 'application.createWorkspace', action('First workspace')),
+      catalog => invoke(catalog, 'application.createWorkspace', action('Second workspace')),
+      () => answer('Finished creating workspaces.'),
+    );
+    const request = await f.send('Create a workspace.');
+    const after = await f.core.command('desktop', { type: 'snapshot' });
+    assert.equal(after.workspaces.length, before.workspaces.length + 1);
+    assert(after.workspaces.some(workspace => workspace.title === 'First workspace'));
+    assert(!after.workspaces.some(workspace => workspace.title === 'Second workspace'));
+    assert.equal(request.state, 'awaiting-review');
+    assert.equal(f.requests.length, 3);
+    const state = await f.state();
+    assert.equal(state.receipts.filter(receipt => receipt.requestId === request.id && receipt.state === 'applied').length, 1);
+  } finally { await f.close(); }
+});
+
 test('a workspace or explicit no-change request cannot silently create an unrelated timer', async () => {
   for (const intent of ["Create a new workspace for the sprint and don't add a timer.", 'Make no changes to the timer.',
-    'Create a one-minute timer.']) {
+    'Create a one-minute timer.', 'Make a one-minute timer.']) {
     const f = fixture();
     try {
       await f.ready();
@@ -135,7 +163,7 @@ test('a workspace or explicit no-change request cannot silently create an unrela
         catalog => invoke(catalog, 'application.clockTimer', {
           type: 'clockTimer', workspaceId: before.activeWorkspaceId,
           request: { name: 'create', input: { title: 'Unrequested timer', projectId: null, operations: [
-            { type: 'createTimer', key: 'unrequested', name: 'Unrequested timer', durationMs: 60000, start: false },
+            { type: 'createTimer', key: 'unrequested', name: 'Unrequested timer', durationMs: intent.startsWith('Make') ? 1200000 : 60000, start: false },
             ...(intent === 'Create a one-minute timer.'
               ? [{ type: 'createTimer', key: 'extra', name: 'Extra running timer', durationMs: 60000, start: true }] : []),
           ] } },
@@ -152,6 +180,30 @@ test('a workspace or explicit no-change request cannot silently create an unrela
       assert(!after.resources.some(resource => resource.kind === 'clock_timer'));
     } finally { await f.close(); }
   }
+});
+
+test('a timer requested in a new workspace waits for that workspace to exist', async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    const before = await f.core.command('desktop', { type: 'createWorkspace', title: 'Original workspace', projectId: null });
+    f.replies.push(
+      catalog => tool(VELA_TOOL_SCHEMAS, { catalogDigest: catalog.digest, ids: ['application.clockTimer'] }),
+      catalog => invoke(catalog, 'application.clockTimer', {
+        type: 'clockTimer', workspaceId: before.activeWorkspaceId,
+        request: { name: 'create', input: { title: 'Measurement', projectId: null, operations: [
+          { type: 'createTimer', key: 'measurement', name: 'Measurement', durationMs: 60000, start: false },
+        ] } },
+        focus: { mode: 'timer', timerId: null, timerKey: 'measurement' }, query: null,
+      }),
+    );
+    const request = await f.send('Set up a calibration bench workspace and put a one-minute measurement timer there.');
+    const after = await f.core.command('desktop', { type: 'snapshot' });
+    assert.equal(request.state, 'awaiting-review');
+    assert(!after.resources.some(resource => resource.kind === 'clock_timer'));
+    assert.deepEqual(after.workspaces, before.workspaces);
+    assert.equal(f.requests.length, 2);
+  } finally { await f.close(); }
 });
 
 test('unknown provider outcome after a receipted app effect preserves the effect and shows an observed inability',async()=>{

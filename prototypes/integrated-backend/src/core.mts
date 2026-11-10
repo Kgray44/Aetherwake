@@ -3274,37 +3274,61 @@ export class BackendCore {
     this.vela.validateProviderHistory({context:snapshot.preview.frozenContext,...(snapshot.preview.historyFence?{historyFence:snapshot.preview.historyFence}:{})});
   }
   private toolCompletionContext(requestId:string){const snapshot=this.toolWorkflowRuns.get(requestId)?.snapshot;if(!snapshot)return;const c=this.velaContext();return {context:snapshot.preview.frozenContext,...(snapshot.preview.historyFence?{historyFence:snapshot.preview.historyFence}:{}),navigation:{currentProjectId:c.currentProjectId,currentWorkspaceId:c.currentWorkspaceId},validate:()=>this.validateToolContextAdvance(requestId,snapshot.certificate,{contextDigest:snapshot.preview.signature,promptDigest:this.missionEditHash(snapshot.preview.prompt)})};}
-  private canConsiderStandingVelaAction(intent: string, action: VelaNativeAction) {
+  private standingVelaActionKind(action: VelaNativeAction | VelaPlan['steps'][number]['action']) {
+    return action.type === 'createResource' ? 'createResource:' + action.kind : action.type;
+  }
+  private canConsiderStandingVelaAction(requestId: string, intent: string, action: VelaNativeAction) {
     if (!velaStandingMutationRequested(intent)) return false;
     if (action.type === 'search' || action.type === 'readLocalFact' || action.type === 'inspectVelaOperation') return true;
-    // Only unambiguous creation clauses opt into standing effects. Other
-    // proposed mutations keep the existing exact native review path.
     const subjects: Partial<Record<VelaNativeAction['type'], RegExp>> = {
-      createProject: /\bprojects?$/u, createWorkspace: /\bworkspaces?$/u,
-      createConversation: /\b(?:chats?|conversations?)$/u, createCollection: /\b(?:collections?|folders?)$/u,
-      ...(action.type === 'clockTimer' && action.request?.name === 'create' &&
-        action.request.input.operations.length === 1 && action.request.input.operations[0].type === 'createTimer' &&
-        !action.request.input.operations[0].start ? { clockTimer: /\b(?:timers?|countdowns?)$/u } : {}),
+      createProject: /\bproject$/u, createWorkspace: /\bworkspace$/u,
+      createConversation: /\b(?:chat|conversation)$/u, createCollection: /\b(?:collection|folder)$/u,
+      clockTimer: /\btimer$/u,
     };
     const subject = action.type === 'createResource'
-      ? { note: /\bnotes?$/u, task: /\btasks?$/u, task_group: /\btask groups?$/u, checklist: /\bchecklists?$/u }[action.kind]
+      ? { note: /\bnote$/u, task: /\btask$/u, task_group: /\btask group$/u, checklist: /\bchecklist$/u }[action.kind]
       : subjects[action.type];
     if (!subject) return false;
     const current = this.velaContext();
     if ('projectId' in action && action.projectId !== current.currentProjectId ||
         'workspaceId' in action && action.workspaceId !== null && action.workspaceId !== current.currentWorkspaceId) return false;
-    const text = intent.normalize('NFKC').toLowerCase().replace(/"[^"]*"|\u201c[^\u201d]*\u201d/gu, '');
-    const creation = /^(?:(?:vela|then|please|can you|could you|would you)[,:]?\s+)*(?:create|make|add|build|set up|start|put(?: together)?)\b(.*)$/u;
-    const subjectsRequested = text.split(/[,.;!?]+|\s+(?:and|then)\s+/u).flatMap(clause => {
-      const match = creation.exec(clause.trim());
-      if (!match || !/^\s+(?:a|an|one|new)\s+/u.test(match[1]) ||
-          /\b(?:no|not|never|without|in|inside|under)\b/u.test(match[1])) return [];
-      const title = /\b(?:named|called|titled)\b\s*(.*)$/u.exec(match[1]);
-      if (title && (!title[1] || !('title' in action) || action.title.normalize('NFKC').toLowerCase() !== title[1].trim())) return [];
-      return [match[1].split(/\b(?:named|called|titled|with|for|using|from)\b/u, 1)[0]
-        .trim().replace(/\s+(?:here|there)$/u, '')];
-    });
-    return subjectsRequested.some(clause => subject.test(clause));
+
+    const text = intent.normalize('NFKC').toLowerCase().trim().replace(/^vela[,:]?\s+/u, '');
+    const clauses = text.split(/\s*(?:,|;|[.!?](?=\s|$))\s*|\s+(?:and|then)\s+/u).filter(Boolean);
+    const creation = /^(?:(?:and|then|please|can you|could you|would you)\s+)*(?:create|make|add|build|set up|put(?: together)?)\s+((?:a|an|one|new)\s+.+)$/u;
+    const creationSubject = /^(?:a|an|one|new)\s+(?<modifiers>(?:[\p{L}\p{N}][\p{L}\p{N}-]*\s+){0,3})(?<kind>project|workspace|chat|conversation|collection|folder|timer|note|task|task group|checklist)$/u;
+    let matched = false;
+    for (const clause of clauses) {
+      if (/^(?:then )?(?:describe what was created|confirm its (?:saved|stored) result)$/u.test(clause)) continue;
+      const body = creation.exec(clause)?.[1];
+      if (!body) return false;
+      const title = /\s+(?:named|called|titled)\s+("[^"]+"|“[^”]+”|[\p{L}\p{N}_ -]+)$/u.exec(body);
+      const description = (title ? body.slice(0, title.index) : body).replace(/\s+(?:here|there)$/u, '');
+      if (/\b(?:if|unless|until|when|once|after|before|provided|assuming|but|only|except|no|not|never|without|in|inside|under)\b/u.test(description)) return false;
+      if (title && !/^["“]/u.test(title[1]) &&
+          /\b(?:if|unless|until|when|once|after|before|provided|assuming|but|only|except|no|not|never|without)\b/u.test(title[1])) return false;
+      const phrase = creationSubject.exec(description)?.groups;
+      if (!phrase || /\b(?:a|an|about|as|at|by|for|from|into|like|of|on|to|using|with|project|workspace|chat|conversation|collection|folder|timer|note|task|checklist)\b/u.test(phrase.modifiers)) return false;
+      if (!subject.test(phrase.kind)) continue;
+      if (/\s+there$/u.test(body) && (!('workspaceId' in action) || !action.workspaceId ||
+          !this.vela.state().receipts.some(receipt => receipt.requestId === requestId &&
+            receipt.state === 'applied' && receipt.createdWorkspaceId === action.workspaceId))) continue;
+
+      if (action.type === 'clockTimer') {
+        const request = action.request;
+        const operation = request.name === 'create' && (request.input.projectId ?? null) === current.currentProjectId &&
+          action.workspaceId === current.currentWorkspaceId && request.input.operations.length === 1
+          ? request.input.operations[0] : undefined;
+        const parsed = parseVelaTimerIntent('create ' + body.replace(/\s+(?:here|there)$/u, '').replace(/-(?=(?:milliseconds?|seconds?|minutes?|hours?|days?|weeks?)\b)/gu, ' '), { documents: [] });
+        const expected = parsed.kind === 'create' && parsed.operations.length === 1 ? parsed.operations[0] : undefined;
+        if (operation?.type !== 'createTimer' || operation.start || expected?.type !== 'createTimer' ||
+            operation.durationMs !== expected.durationMs ||
+            (title || expected.name !== 'Timer') && operation.name.normalize('NFKC').toLowerCase() !== expected.name.toLowerCase()) continue;
+      } else if (title && (!('title' in action) ||
+          action.title.normalize('NFKC').toLowerCase() !== title[1].replace(/^["“]|["”]$/gu, ''))) continue;
+      matched = true;
+    }
+    return matched;
   }
   private toolOwners(requestId:string):VelaToolOwner[] {
     const request=this.vela.state().requests.find(r=>r.id===requestId);ensure(request,'vela_tool_request_unavailable');
@@ -3318,7 +3342,11 @@ export class BackendCore {
           if(action.type==='readLocalFact')return observed(evaluateLocalCapability(action.capabilityId,this.localVelaHost()));
           if(action.type==='inspectVelaOperation')return observed(this.vela.operationContext(this.inspectVelaOperationWorkspace,{query:action.receiptId}));
           if (explicitReadOnlyVelaIntent(request.intent)) return { state: 'denied', output: { reason: 'request-read-only' } };
-          if (this.canConsiderStandingVelaAction(request.intent, action) && this.vela.canExecuteToolActions([action]))
+          const kind = this.standingVelaActionKind(action);
+          const prior = this.vela.state().plans.some(plan => plan.requestId === requestId &&
+            ['approved', 'applying', 'applied', 'unknown'].includes(plan.state) &&
+            plan.steps.some(step => this.standingVelaActionKind(step.action) === kind));
+          if (!prior && this.canConsiderStandingVelaAction(requestId, request.intent, action) && this.vela.canExecuteToolActions([action]))
             return await this.executeStandingToolActions(requestId, [action], capability.label);
           const plan=this.vela.prepareToolAction(requestId,action,capability.label);return this.toolWorkflows.prepareOwnerOperation(this.toolWorkflowRuns.get(requestId)!.port.workflowId,'application.'+capability.id,'application-plan',{id:plan.id,digest:plan.fingerprint},plan.summary,'Review the exact source-owned application actions before applying.');
         }};
@@ -3982,9 +4010,11 @@ export class BackendCore {
   private canAutoApplyVelaApiPlan(preview: PrivateVelaPreview, plan: VelaPlan): boolean {
     if (plan.steps.length > 6 || preview.resourceIds.length || preview.context.included.length || preview.handoff || preview.routingAgent ||
         explicitReadOnlyVelaIntent(preview.intent) || !velaStandingMutationRequested(preview.intent)) return false;
+    const kinds = plan.steps.map(step => this.standingVelaActionKind(step.action));
+    if (new Set(kinds).size !== kinds.length) return false;
     const intent = preview.intent.normalize('NFKC').toLowerCase(), current = this.velaContext();
     return plan.steps.every(({action}) => {
-      if (action.type === 'delegateTask' || !this.canConsiderStandingVelaAction(preview.intent, action)) return false;
+      if (action.type === 'delegateTask' || !this.canConsiderStandingVelaAction(plan.requestId, preview.intent, action)) return false;
       if ('projectId' in action && action.projectId !== current.currentProjectId ||
           'workspaceId' in action && action.workspaceId !== null && action.workspaceId !== current.currentWorkspaceId) return false;
       let allowed = false;
