@@ -172,9 +172,20 @@ test('explicit app preset events supply inspectable adaptation evidence while le
   const desktop=await f.core.command('desktop',{type:'createWorkspace',title:'Synthetic preference workspace',projectId:null}),workspace=desktop.workspaces[0];
   await vela(f.core,'preferences',{expectedVersion:1,patch:{monitoringEnabled:true,allowedEventTypes:['workspace.presetSelected'],mode:'quiet'}});
   await vela(f.core,'adaptationPolicy',{expectedVersion:1,enabled:true,categories:{presentation:{enabled:false,level:'manual'},organization:{enabled:true,level:'suggestive'}}});
+  const owner = f.core as any;
+  owner.emit = (event: {type: string; eventId: string}) => {
+    if (event.type !== 'application/applyStructuredPreset') return;
+    owner.record('vela.synthetic.after-preset', 'observed', undefined, 'synthetic-after-preset');
+    event.eventId = 'synthetic-observer-only';
+  };
   await f.core.command('desktop',{type:'applyStructuredPreset',workspaceId:workspace.id,preset:'focus'});
   const state=await vela(f.core,'state');assert.equal(state.adaptation.hypotheses.length,1);assert.equal(state.adaptation.hypotheses[0].source,'inferred');assert.equal(state.adaptation.hypotheses[0].state,'suggested');assert.equal(state.adaptation.hypotheses[0].evidence[0].actor,'user');
-  const replay=await f.core.command('replay',{after:0,limit:100});assert.ok(replay.events.some(e=>e.eventId===state.adaptation.hypotheses[0].evidence[0].eventId));assert.equal(state.adaptation.applicationAvailable,false);
+  const replay = await f.core.command('replay', {after: 0, limit: 100});
+  const preset = replay.events.find(event => event.type === 'application/applyStructuredPreset');
+  const reentrant = replay.events.find(event => event.type === 'vela.synthetic.after-preset');
+  assert(preset && reentrant && preset.cursor < reentrant.cursor);
+  assert.equal(preset.eventId, state.adaptation.hypotheses[0].evidence[0].eventId);
+  assert.equal(state.adaptation.applicationAvailable, false);
  }finally{await f.close();}
 });
 

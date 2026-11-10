@@ -178,8 +178,8 @@ const interruptionProgram = `
 
 for (const phase of ['before-release', 'after-release']) {
   test('process interruption ' + phase + ' recovers only committed rows and cursors', async t => {
-    const {path, close, open} = fixture(t);
-    await close();
+    const {core: contender, path, close, open} = fixture(t);
+    if (phase === 'after-release') await close();
     const child = spawn(process.execPath, ['--input-type=module', '--eval', interruptionProgram, path, phase],
       {stdio: ['ignore', 'pipe', 'pipe']});
     const exited = once(child, 'exit');
@@ -191,16 +191,22 @@ for (const phase of ['before-release', 'after-release']) {
         exited.then(([code, signal]) => 'child exited ' + (code ?? signal) + ': ' + stderr),
       ]);
       assert.equal(observed, phase);
+      if (phase === 'before-release') {
+        await assert.rejects(contender.command('workspace', {title: 'Synthetic blocked writer'}), /database is locked/i);
+      }
     } finally {
       child.kill('SIGKILL');
       await exited;
     }
+    await close();
     const restored = open();
     const snapshot = await restored.command('snapshot', {});
     const eventCount = (await restored.command('replay', {})).events.filter(event => event.type === 'vela.synthetic.interruption').length;
     const expected = phase === 'after-release' ? 1 : 0;
     assert.equal(snapshot.conversations.filter(item => item.title === 'Synthetic interrupted conversation').length, expected);
     assert.equal(eventCount, expected);
+    const desktop = await restored.command('desktop', {type: 'snapshot'});
+    assert(!desktop.workspaces.some(workspace => workspace.title === 'Synthetic blocked writer'));
   });
 }
 
