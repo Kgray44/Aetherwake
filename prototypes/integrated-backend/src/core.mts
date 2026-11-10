@@ -3302,17 +3302,24 @@ export class BackendCore {
       if (/^(?:then )?(?:describe what was created|confirm its (?:saved|stored) result)$/u.test(clause)) continue;
       const body = creation.exec(clause)?.[1];
       if (!body) return false;
-      const title = /\s+(?:named|called|titled)\s+("[^"]+"|“[^”]+”|[\p{L}\p{N}_ -]+)$/u.exec(body);
-      const description = (title ? body.slice(0, title.index) : body).replace(/\s+(?:here|there)$/u, '');
+      const finalPlacement = /\s+(here|there)$/u.exec(body);
+      const withoutFinalPlacement = finalPlacement ? body.slice(0, finalPlacement.index) : body;
+      const title = /\s+(?:named|called|titled)\s+("[^"]+"|“[^”]+”|[\p{L}\p{N}_ -]+)$/u.exec(withoutFinalPlacement);
+      const described = title ? withoutFinalPlacement.slice(0, title.index) : withoutFinalPlacement;
+      const earlierPlacement = /\s+(here|there)$/u.exec(described);
+      if (finalPlacement && earlierPlacement) return false;
+      const placement = finalPlacement?.[1] ?? earlierPlacement?.[1];
+      const description = earlierPlacement ? described.slice(0, earlierPlacement.index) : described;
       if (/\b(?:if|unless|until|when|once|after|before|provided|assuming|but|only|except|no|not|never|without|in|inside|under)\b/u.test(description)) return false;
       if (title && !/^["“]/u.test(title[1]) &&
           /\b(?:if|unless|until|when|once|after|before|provided|assuming|but|only|except|no|not|never|without)\b/u.test(title[1])) return false;
-      const phrase = creationSubject.exec(description)?.groups;
+      const object = description.replace(/(?<=\btimer)\s+for\s+.+$/u, '');
+      const phrase = creationSubject.exec(object)?.groups;
       if (!phrase || /\b(?:a|an|about|as|at|by|for|from|into|like|of|on|to|using|with|project|workspace|chat|conversation|collection|folder|timer|note|task|checklist)\b/u.test(phrase.modifiers)) return false;
       if (!subject.test(phrase.kind)) continue;
-      if (/\s+here$/u.test(body) && (!('workspaceId' in action) || !current.currentWorkspaceId ||
+      if (placement === 'here' && (!('workspaceId' in action) || !current.currentWorkspaceId ||
           action.workspaceId !== current.currentWorkspaceId)) continue;
-      if (/\s+there$/u.test(body) && (!('workspaceId' in action) || !action.workspaceId ||
+      if (placement === 'there' && (!('workspaceId' in action) || !action.workspaceId ||
           !this.vela.state().receipts.some(receipt => receipt.requestId === requestId &&
             receipt.state === 'applied' && receipt.createdWorkspaceId === action.workspaceId))) continue;
 
@@ -3321,7 +3328,8 @@ export class BackendCore {
         const operation = request.name === 'create' && (request.input.projectId ?? null) === current.currentProjectId &&
           action.workspaceId === current.currentWorkspaceId && request.input.operations.length === 1
           ? request.input.operations[0] : undefined;
-        const parsed = parseVelaTimerIntent('create ' + body.replace(/\s+(?:here|there)$/u, '').replace(/-(?=(?:milliseconds?|seconds?|minutes?|hours?|days?|weeks?)\b)/gu, ' '), { documents: [] });
+        const timerIntent = description.replace(/^(?:a|an|one|new)\s+(?:paused\s+)?/u, 'a ') + (title?.[0] ?? '');
+        const parsed = parseVelaTimerIntent('create ' + timerIntent.replace(/-(?=(?:milliseconds?|seconds?|minutes?|hours?|days?|weeks?)\b)/gu, ' '), { documents: [] });
         const expected = parsed.kind === 'create' && parsed.operations.length === 1 ? parsed.operations[0] : undefined;
         if (operation?.type !== 'createTimer' || operation.start || expected?.type !== 'createTimer' ||
             operation.durationMs !== expected.durationMs ||

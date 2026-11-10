@@ -182,23 +182,26 @@ test('a workspace or explicit no-change request cannot silently create an unrela
   }
 });
 
-test('standing note creation binds here to the active workspace', async () => {
-  const f = fixture();
-  try {
-    await f.ready();
-    await f.core.command('desktop', { type: 'createWorkspace', title: 'Current workspace', projectId: null });
-    f.replies.push(
-      catalog => tool(VELA_TOOL_SCHEMAS, { catalogDigest: catalog.digest, ids: ['application.createResource'] }),
-      catalog => invoke(catalog, 'application.createResource', {
-        type: 'createResource', kind: 'note', title: 'Review note', workspaceId: null,
-      }),
-    );
-    const request = await f.send('Create a note here.');
-    const after = await f.core.command('desktop', { type: 'snapshot' });
-    assert(!after.resources.some(resource => resource.title === 'Review note'));
-    assert.equal(request.state, 'awaiting-review');
-    assert.equal(f.requests.length, 2);
-  } finally { await f.close(); }
+test('standing note creation binds here to the active workspace even with a title', async () => {
+  for (const intent of ['Create a note here.', 'Create a note here named Review note.', 'Create a note named Review note here.']) {
+    const f = fixture();
+    try {
+      await f.ready();
+      await f.core.command('desktop', { type: 'createWorkspace', title: 'Current workspace', projectId: null });
+      f.replies.push(
+        catalog => tool(VELA_TOOL_SCHEMAS, { catalogDigest: catalog.digest, ids: ['application.createResource'] }),
+        catalog => invoke(catalog, 'application.createResource', {
+          type: 'createResource', kind: 'note',
+          title: intent.includes('named Review note here') ? 'Review note here' : 'Review note', workspaceId: null,
+        }),
+      );
+      const request = await f.send(intent);
+      const after = await f.core.command('desktop', { type: 'snapshot' });
+      assert(!after.resources.some(resource => resource.kind === 'note'), intent);
+      assert.equal(request.state, 'awaiting-review', intent);
+      assert.equal(f.requests.length, 2, intent);
+    } finally { await f.close(); }
+  }
 });
 
 test('a timer requested in a new workspace waits for that workspace to exist', async () => {
