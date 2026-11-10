@@ -13,6 +13,11 @@ function fixture(mode='normal'){
  return {get core(){return core;},async reopen(){await core.command('close',{});core=new BackendCore({path,provider:'fixture',fixtureMode:mode,contentPolicy:'synthetic-only'});},async close(){await core.command('close',{});const target=resolve(dir),part=relative(resolve(tmpdir()),target);assert.ok(part.startsWith('aerynth-product-integration-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(target,{recursive:true,force:true});}};
 }
 async function product<K extends keyof ProductCommandMap>(core:BackendCore,name:K,input:ProductCommandMap[K]['input']):Promise<ProductCommandMap[K]['output']>{return core.command('conversation',{name,input} as ConversationProductRequest) as Promise<ProductCommandMap[K]['output']>;}
+function gate() {
+  let release!: () => void;
+  const promise = new Promise<void>(resolve => { release = resolve; });
+  return { promise, release };
+}
 async function approved(core:BackendCore,input:ConversationSendInput){const preview=await core.command('conversationSendPreview',input),grant=await core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:input.commandId});return {preview,dispatch:{previewId:preview.id,fingerprint:preview.fingerprint,commandId:input.commandId,grantId:grant.grantId}};}
 
 test('desktop shutdown snapshot copies the graph once while returning every canonical conversation header', async () => {
@@ -120,6 +125,132 @@ test('native send requires exact nonexpired grant and revalidates stale revision
   setup.input.commandId=crypto.randomUUID();const expiring=await approved(f.core,setup.input),clock=Date.now;try{Date.now=()=>clock()+61000;await assert.rejects(f.core.command('conversationSend',expiring.dispatch),/native_send_grant_expired/);}finally{Date.now=clock;}
   assert.equal(Object.keys((await f.core.command('snapshot',{})).executions).length,0);
  }finally{await f.close();}
+});
+
+test('a native Send grant that expires during context preparation never admits execution', async () => {
+  const f = fixture();
+  const clock = Date.now;
+  const resume = gate();
+  const entered = gate();
+  try {
+    const setup = await sourceContext(f.core);
+    const { dispatch } = await approved(f.core, setup.input);
+    const core = f.core as any;
+    const grant = core.sendGrants.get(dispatch.grantId);
+    const context = core.conversations.attachedContext.bind(core.conversations);
+    core.conversations.attachedContext = async (id: string) => {
+      entered.release();
+      await resume.promise;
+      return context(id);
+    };
+    const before = await f.core.command('snapshot', {});
+    const sending = f.core.command('conversationSend', dispatch);
+    await entered.promise;
+    Date.now = () => Date.parse(grant.expiresAt) + 1;
+    resume.release();
+    await assert.rejects(sending, /native_send_grant_expired/);
+    assert.equal(grant.consumed, false);
+    const after = await f.core.command('snapshot', {});
+    assert.deepEqual(after.executions, before.executions);
+    assert.deepEqual(after.graph.messages, before.graph.messages);
+  } finally {
+    Date.now = clock;
+    resume.release();
+    await f.close();
+  }
+});
+
+test('managed Codex cannot disclose terminal output after its attached source is revoked', async () => {
+  const f = fixture();
+  const held = gate();
+  const resume = gate();
+  let sending: Promise<unknown> | undefined;
+  try {
+    const setup = await sourceContext(f.core);
+    const { dispatch } = await approved(f.core, setup.input);
+    const core = f.core as any;
+    const port = core.port as ProviderPort;
+    const terminal = port.terminal.bind(port);
+    port.terminal = async (threadId, turnId) => {
+      const event = await terminal(threadId, turnId);
+      held.release();
+      await resume.promise;
+      return event;
+    };
+    sending = f.core.command('conversationSend', dispatch);
+    await held.promise;
+    await core.conversations.command('revokeShare', { shareId: setup.share.id });
+    assert.equal((await f.core.command('conversationActivity', { resourceIds: [setup.parent.resourceId] })).preview, null);
+    resume.release();
+    const execution = await sending as Awaited<ReturnType<BackendCore['execute']>>;
+    assert.equal(execution.state, 'unknown');
+    assert.equal(execution.errorCode, 'source_unavailable');
+    assert(execution.turnId && execution.binding);
+    const snapshot = await f.core.command('snapshot', {});
+    const childId = snapshot.resourceMap[setup.parent.resourceId];
+    assert(!snapshot.graph.messages.some(message => message.conversationId === childId && message.role === 'assistant'));
+    assert.equal(core.active, null);
+    await f.reopen();
+    assert.equal((await f.core.command('snapshot', {})).executions[execution.id].state, 'unknown');
+  } finally {
+    resume.release();
+    await sending?.catch(() => {});
+    await f.close();
+  }
+});
+
+test('a bound Codex turn cannot inherit late journal events from a prior turn on the same thread', async () => {
+  const f = fixture();
+  const waitingForTerminal = gate();
+  const releaseTerminal = gate();
+  let sending: ReturnType<BackendCore['execute']> | undefined;
+  try {
+    const chat = await f.core.command('createConversation', { providerId: 'fixture-codex', commandId: crypto.randomUUID() });
+    const execute = (prompt: string) => f.core.command('execute', {
+      resourceId: chat.resourceId, commandId: crypto.randomUUID(), prompt, authorized: true,
+    });
+    const first = await execute('Synthetic first Codex turn');
+    assert.equal(first.state, 'provider_completed');
+    assert(first.binding && first.turnId);
+    const cursor = (await f.core.command('replay', { after: 0 })).latest;
+
+    const core = f.core as any;
+    const port = core.port as ProviderPort;
+    const terminal = port.terminal.bind(port);
+    port.terminal = async (threadId, turnId) => {
+      waitingForTerminal.release();
+      await releaseTerminal.promise;
+      return terminal(threadId, turnId);
+    };
+    sending = execute('Synthetic successor Codex turn');
+    await Promise.race([waitingForTerminal.promise, sending.then(() => { throw Error('Successor settled before terminal was held'); })]);
+    const snapshot = await f.core.command('snapshot', {});
+    const next = Object.values(snapshot.executions).find(execution => execution.id !== first.id);
+    assert(next?.binding && next.turnId);
+    assert.equal(next.state, 'running');
+    assert.equal(next.binding.nativeThreadId, first.binding.nativeThreadId);
+    assert.notEqual(next.turnId, first.turnId);
+
+    core.ingest({
+      schemaVersion: 1, eventId: crypto.randomUUID(), sequence: core.sequence + 1,
+      provider: 'codex-app-server', providerThreadId: first.binding.nativeThreadId, providerTurnId: first.turnId,
+      method: 'item/agentMessage/delta', observedAt: new Date().toISOString(), observedAtSource: 'bridge-clock',
+      providerTime: null, providerTimeSource: null, evidence: 'observed', terminalStatus: null,
+      payload: { delta: 'Synthetic retired turn text' },
+    });
+    releaseTerminal.release();
+    assert.equal((await sending).state, 'provider_completed');
+
+    const replay = await f.core.command('replay', { after: cursor });
+    const attributed = replay.events.filter(event => event.executionId === next.id && event.type === 'item/agentMessage/delta');
+    assert.deepEqual(attributed.map(event => event.turnId), [next.turnId]);
+    const after = await f.core.command('snapshot', {});
+    assert(!after.graph.messages.some(message => message.content.includes('Synthetic retired turn text')));
+  } finally {
+    releaseTerminal.release();
+    await sending?.catch(() => {});
+    await f.close();
+  }
 });
 
 test('selective context is supplied only after real fixture turn acceptance; exact user text and receipts survive restart',async()=>{

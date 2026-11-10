@@ -204,6 +204,114 @@ test('API model pins and usage revocation fail closed and incomplete output neve
   } finally { await f.close(); }
 });
 
+test('Vela API reserves its foreground slot before admission observers can start Codex', async () => {
+  const f = fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const codex = await f.core.command('createConversation', { providerId: 'fixture-codex', commandId: 'synthetic-codex-chat' });
+    const owner = f.core as any;
+    const emit = owner.emit;
+    let overlapping: Promise<unknown> | undefined;
+    owner.emit = (event: StreamEvent) => {
+      emit(event);
+      if (event.type === 'execution/dispatching' && event.providerId === 'openai-api-vela') {
+        overlapping = f.core.execute({ resourceId: codex.resourceId, commandId: 'synthetic-observer-race',
+          prompt: 'Synthetic overlapping Codex request', authorized: true }).catch(error => error);
+      }
+    };
+    f.replies.push(() => response('Synthetic API result', 'resp-foreground-admission'));
+    const result = await f.send('Explain the difference between mass and weight', { providerId: 'openai-api-vela' });
+    assert.equal(result.state, 'responded');
+    assert.match(String(await overlapping), /execution_busy/);
+    assert.equal(Object.values((await f.core.command('snapshot', {})).executions).length, 1);
+    assert.equal(owner.active, null);
+    assert.equal(owner.ordinaryController, null);
+    assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});
+
+test('Vela API deferred admission failure does not consume authority or count a request', async () => {
+  const f = fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const owner = f.core as any;
+    owner.db.exec([
+      'CREATE TEMP TABLE api_admission_parent(id INTEGER PRIMARY KEY);',
+      'CREATE TEMP TABLE api_admission_child(id INTEGER REFERENCES api_admission_parent(id) DEFERRABLE INITIALLY DEFERRED);',
+      'CREATE TEMP TRIGGER reject_api_admission AFTER INSERT ON intelligence_events',
+      "WHEN json_extract(NEW.json, '$.type') = 'execution/dispatching'",
+      'BEGIN INSERT INTO api_admission_child VALUES(1); END;',
+    ].join(' '));
+    const before = owner.providerActivity.providerRequests;
+    const result = await f.send('Explain the difference between mass and weight', { providerId: 'openai-api-vela' });
+    assert.equal(f.requests.length, 0);
+    const grant = [...owner.velaGrants.values()].find((entry: { requestId: string }) => entry.requestId === result.id);
+    assert.equal(grant?.consumed, false);
+    assert.equal(owner.providerActivity.providerRequests, before);
+    assert.equal(owner.active, null);
+    assert.equal(owner.ordinaryController, null);
+    assert.deepEqual((await f.core.command('snapshot', {})).executions, {});
+    assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 0);
+    assert(!f.events.some(event => event.type === 'execution/dispatching'));
+    owner.db.exec('DROP TRIGGER reject_api_admission');
+    f.replies.push(() => response('Synthetic answer after admission failure.', 'resp-api-after-admission'));
+    assert.equal((await f.send('Explain the difference between mass and weight', { providerId: 'openai-api-vela' })).state, 'responded');
+    assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});
+
+test('Vela API deferred terminal commit failure keeps receipt, execution and replay aligned', async () => {
+  const f = fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const owner = f.core as any;
+    const runtime = owner.velaApiRuntime as VelaApiRuntime;
+    const emit = owner.emit;
+    const early: string[] = [];
+    owner.emit = (event: StreamEvent) => {
+      if (owner.db.isTransaction) early.push(event.type);
+      emit(event);
+    };
+    owner.db.exec(`
+      CREATE TEMP TABLE api_parent(id INTEGER PRIMARY KEY);
+      CREATE TEMP TABLE api_child(id INTEGER REFERENCES api_parent(id) DEFERRABLE INITIALLY DEFERRED);
+      CREATE TEMP TRIGGER reject_api_terminal AFTER INSERT ON intelligence_events
+      WHEN json_extract(NEW.json, '$.type') = 'vela.api/scoped-completed'
+      BEGIN INSERT INTO api_child VALUES(1); END;
+    `);
+    const input = { requestId: 'synthetic-api-terminal', version: 1, model: 'gpt-6-luna',
+      prompt: 'Synthetic terminal transaction', contextDigest: 'a'.repeat(64), oneUse: true as const, validate() {} };
+    f.replies.push(() => response('Uncommitted answer', 'resp-api-terminal-fault'));
+    const run = await runtime.run(input, new AbortController().signal);
+    assert.equal(run.result.outcome, 'unknown');
+    assert.equal(run.result.errorCode, 'vela_api_settlement_unavailable');
+    assert.equal(run.result.partialText, '');
+    const [receipt] = runtime.receiptsForRequest(input.requestId);
+    const execution = (await f.core.command('snapshot', {})).executions[receipt.executionId];
+    assert.equal(receipt.state, 'unknown');
+    assert.equal(execution.state, 'unknown');
+    assert.equal(execution.responseId, 'resp-api-terminal-fault');
+    assert.equal(receipt.responseId, execution.responseId);
+    assert.deepEqual(early, []);
+    const replay = (await f.core.command('replay', {})).events.filter(event => event.correlationId === input.requestId);
+    assert.deepEqual(replay.filter(event => event.type.startsWith('vela.api/')).map(event => event.type),
+      ['vela.api/scoped-dispatch', 'vela.api/scoped-unknown']);
+    assert(!f.events.some(event => event.type === 'vela.api/scoped-completed'));
+    await assert.rejects(runtime.run(input, new AbortController().signal), /api_execution_already_dispatched/);
+    assert.equal(f.requests.length, 1);
+    await f.reopen();
+    assert.deepEqual((await f.core.command('snapshot', {})).executions[receipt.executionId], execution);
+    const reopened = (f.core as any).velaApiRuntime as VelaApiRuntime;
+    assert.deepEqual(reopened.receiptsForRequest(input.requestId), [receipt]);
+    f.replies.push(() => response('Synthetic subsequent answer', 'resp-api-after-fault'));
+    assert.equal((await reopened.run({ ...input, requestId: 'synthetic-api-fresh' }, new AbortController().signal)).result.outcome, 'completed');
+    assert.equal(f.requests.length, 2);
+  } finally { await f.close(); }
+});
+
 test('scoped structured proposals use global canonical execution, journal correlation, measured usage and request receipts', async () => {
   const f=fixture();
   try {
