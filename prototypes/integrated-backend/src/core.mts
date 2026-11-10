@@ -3310,6 +3310,8 @@ export class BackendCore {
       const phrase = creationSubject.exec(description)?.groups;
       if (!phrase || /\b(?:a|an|about|as|at|by|for|from|into|like|of|on|to|using|with|project|workspace|chat|conversation|collection|folder|timer|note|task|checklist)\b/u.test(phrase.modifiers)) return false;
       if (!subject.test(phrase.kind)) continue;
+      if (/\s+here$/u.test(body) && (!('workspaceId' in action) || !current.currentWorkspaceId ||
+          action.workspaceId !== current.currentWorkspaceId)) continue;
       if (/\s+there$/u.test(body) && (!('workspaceId' in action) || !action.workspaceId ||
           !this.vela.state().receipts.some(receipt => receipt.requestId === requestId &&
             receipt.state === 'applied' && receipt.createdWorkspaceId === action.workspaceId))) continue;

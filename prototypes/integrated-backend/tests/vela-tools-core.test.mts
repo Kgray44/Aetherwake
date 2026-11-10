@@ -182,6 +182,25 @@ test('a workspace or explicit no-change request cannot silently create an unrela
   }
 });
 
+test('standing note creation binds here to the active workspace', async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    await f.core.command('desktop', { type: 'createWorkspace', title: 'Current workspace', projectId: null });
+    f.replies.push(
+      catalog => tool(VELA_TOOL_SCHEMAS, { catalogDigest: catalog.digest, ids: ['application.createResource'] }),
+      catalog => invoke(catalog, 'application.createResource', {
+        type: 'createResource', kind: 'note', title: 'Review note', workspaceId: null,
+      }),
+    );
+    const request = await f.send('Create a note here.');
+    const after = await f.core.command('desktop', { type: 'snapshot' });
+    assert(!after.resources.some(resource => resource.title === 'Review note'));
+    assert.equal(request.state, 'awaiting-review');
+    assert.equal(f.requests.length, 2);
+  } finally { await f.close(); }
+});
+
 test('a timer requested in a new workspace waits for that workspace to exist', async () => {
   const f = fixture();
   try {
