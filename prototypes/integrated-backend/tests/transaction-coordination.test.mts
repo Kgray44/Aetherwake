@@ -1,5 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -26,7 +28,7 @@ function fixture(t: TestContext) {
       rmSync(dir, {recursive: true, force: true});
     }
   });
-  return {core: open(), open, close, delivered};
+  return {core: open(), open, close, delivered, path};
 }
 
 test('desktop mutation and its event roll back together if the SQLite event insert fails', async t => {
@@ -150,4 +152,71 @@ test('serialization and the UTF-8 snapshot ceiling reject changes without durabl
   assert.equal((await core.command('snapshot', {})).graph.messages.length, 0);
   assert(!delivered.includes(eventType));
   assert(!(await core.command('replay', {})).events.some(event => event.type === eventType));
+});
+
+const interruptionProgram = `
+  import { writeSync } from 'node:fs';
+  import { BackendCore } from ${JSON.stringify(new URL('../src/core.mts', import.meta.url).href)};
+  const [path, phase] = process.argv.slice(1);
+  const type = 'vela.synthetic.interruption';
+  function interrupt() {
+    writeSync(1, phase + '\\n');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  }
+  const owner = new BackendCore({path, provider: 'fixture', contentPolicy: 'synthetic-only'}, event => {
+    if (phase === 'after-release' && event.type === type) interrupt();
+  });
+  if (phase === 'before-release') {
+    const save = owner.save;
+    owner.save = function () { save.call(this); interrupt(); };
+  }
+  owner.atomic(() => {
+    owner.create('Synthetic interrupted conversation', 'local');
+    owner.record(type, 'observed', undefined, type);
+  });
+`;
+
+for (const phase of ['before-release', 'after-release']) {
+  test('process interruption ' + phase + ' recovers only committed rows and cursors', async t => {
+    const {path, close, open} = fixture(t);
+    await close();
+    const child = spawn(process.execPath, ['--input-type=module', '--eval', interruptionProgram, path, phase],
+      {stdio: ['ignore', 'pipe', 'pipe']});
+    const exited = once(child, 'exit');
+    let stderr = '';
+    child.stderr.setEncoding('utf8').on('data', text => { stderr += text; });
+    try {
+      const observed = await Promise.race([
+        once(child.stdout, 'data', {signal: AbortSignal.timeout(10_000)}).then(([chunk]) => String(chunk).trim()),
+        exited.then(([code, signal]) => 'child exited ' + (code ?? signal) + ': ' + stderr),
+      ]);
+      assert.equal(observed, phase);
+    } finally {
+      child.kill('SIGKILL');
+      await exited;
+    }
+    const restored = open();
+    const snapshot = await restored.command('snapshot', {});
+    const eventCount = (await restored.command('replay', {})).events.filter(event => event.type === 'vela.synthetic.interruption').length;
+    const expected = phase === 'after-release' ? 1 : 0;
+    assert.equal(snapshot.conversations.filter(item => item.title === 'Synthetic interrupted conversation').length, expected);
+    assert.equal(eventCount, expected);
+  });
+}
+
+test('an unchanged local snapshot still checks the durable concurrent writer fence', async t => {
+  const {core, path} = fixture(t);
+  const second = new BackendCore({path, provider: 'fixture', contentPolicy: 'synthetic-only'});
+  try {
+    const stale = second as any;
+    const before = stale.storedJson;
+    const winner = await core.command('createConversation', {
+      title: 'Synthetic winning writer', providerId: 'local', commandId: 'synthetic-writer-win',
+    });
+    assert.throws(() => stale.atomic(() => {}), /concurrent_backend_writer/);
+    assert.equal(stale.storedJson, before);
+    assert((await core.command('snapshot', {})).conversations.some(item => item.resourceId === winner.resourceId));
+  } finally {
+    await second.command('close', {});
+  }
 });

@@ -195,6 +195,7 @@ export class BackendCore {
   private storedJson: string | null = null;
   private mutationDepth = 0;
   private pendingEventDelivery: StreamEvent[] = [];
+  private deliveringRecordedEvents = false;
   private missionConversations?: MissionConversationReceipts;
   private workspaceRecovery!: WorkspaceRecoveryService;
   private port: ProviderPort;
@@ -1126,7 +1127,7 @@ export class BackendCore {
         version: Number(row.version), state: row.state as 'active' | 'archived' } : null;
     };
     this.timerDomain = createTimerDomain({ kernel: this.kernel, clock, host: {
-      db: this.db, atomic: work => this.timerAtomic(work),
+      db: this.db, atomic: work => this.withEventTransaction(work),
       createResource: input => {
         ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
         ensure(input.projectId === null || this.libraryAuthorized({ kind: 'project', id: input.projectId }) &&
@@ -1164,17 +1165,21 @@ export class BackendCore {
     } });
     return this.timerDomain;
   }
-  /** Timer transactions touch kernel/domain/event rows, never Core graph/state.
-   * Retain canonical event staging without rewriting integration_state on reads. */
-  private timerAtomic<T>(work: () => T): T {
-    const eventStart = this.pendingEventDelivery.length; let committed = false;
+  /** Stage events alongside kernel writes. Timer operations only need this boundary. */
+  private withEventTransaction<T>(work: () => T): T {
+    const eventStart = this.pendingEventDelivery.length;
+    let result: T;
     this.mutationDepth++;
-    try { const result = this.kernel.withTransaction(work); committed = true; return result; }
-    catch (error) { this.pendingEventDelivery.length = eventStart; throw error; }
-    finally {
+    try {
+      result = this.kernel.withTransaction(work);
+    } catch (error) {
+      this.pendingEventDelivery.length = eventStart;
+      throw error;
+    } finally {
       this.mutationDepth--;
-      if (committed && this.mutationDepth === 0) for (const event of this.pendingEventDelivery.splice(0)) this.publishRecordedEvent(event);
     }
+    this.flushRecordedEvents();
+    return result;
   }
   private async readyTimers(): Promise<TimerDomain> {
     const domain = this.ensureTimerDomain(); await domain.ready.catch(error => { if (domain.status().clock.state !== 'ready') throw error; });
@@ -4948,15 +4953,18 @@ export class BackendCore {
     this.storedJson = json;
   }
   private atomic<T>(fn: () => T): T {
-    const before = structuredClone(this.state);
+    // The saved projection is read-only and save() replaces it wholesale.
+    // Checkpoint the live graph separately: it can contain unsaved outer edits.
+    const before = { ...structuredClone({ ...this.state, graph: null }), graph: this.state.graph };
     const graphBefore = this.graph.snapshot();
     const storedBefore = this.storedJson;
-    const eventStart = this.pendingEventDelivery.length;
-    let committed = false;
-    this.mutationDepth++;
-    try { const result=this.kernel.withTransaction(() => { const value=fn(); this.save(); return value; });committed=true;return result; }
-    catch (error) {
-      this.pendingEventDelivery.length=eventStart;
+    try {
+      return this.withEventTransaction(() => {
+        const result = fn();
+        this.save();
+        return result;
+      });
+    } catch (error) {
       // An awaiting execution retains its execution/review objects. Restore
       // their values in place so another command's rollback cannot detach the
       // live turn from the canonical records it must eventually complete.
@@ -4968,10 +4976,10 @@ export class BackendCore {
         }
       };
       retain(this.state.executions, before.executions); retain(this.state.reviews, before.reviews);
-      this.state = before; this.storedJson = storedBefore; this.graph = this.createGraph(graphBefore); throw error;
-    } finally {
-      this.mutationDepth--;
-      if(committed&&this.mutationDepth===0)for(const event of this.pendingEventDelivery.splice(0))this.publishRecordedEvent(event);
+      this.state = before;
+      this.storedJson = storedBefore;
+      this.graph = this.createGraph(graphBefore);
+      throw error;
     }
   }
   private gid(resourceId: string) { ensure(typeof resourceId === 'string' && Object.hasOwn(this.state.resources, resourceId), 'resource_not_found'); return this.state.resources[resourceId]; }
@@ -5075,6 +5083,7 @@ export class BackendCore {
     this.kernel.withTransaction(() => {
       const result = this.db.prepare('INSERT OR IGNORE INTO intelligence_events(dedupe,json) VALUES(?,?)').run(dedupe, JSON.stringify(e));
       if (!result.changes) { acknowledge?.(); return; }
+      ensure(this.pendingEventDelivery.length < this.maxEvents, 'observation_backpressure');
       inserted = true; e.cursor = Number(result.lastInsertRowid);
       const stored = {...e,...(override?.externalEvidence?{externalEvidence:override.externalEvidence}:{}),...(override?.externalCoverage?{externalCoverage:override.externalCoverage}:{})};
       this.db.prepare('UPDATE intelligence_events SET json=? WHERE cursor=?').run(JSON.stringify(stored), e.cursor);
@@ -5083,10 +5092,23 @@ export class BackendCore {
       acknowledge?.();
     });
     if (inserted) {
-      if(this.mutationDepth>0){ensure(this.pendingEventDelivery.length<this.maxEvents,'observation_backpressure');this.pendingEventDelivery.push(e);}
-      else this.publishRecordedEvent(e);
+      this.pendingEventDelivery.push(e);
+      this.flushRecordedEvents();
     }
     return inserted ? e : null;
+  }
+  private flushRecordedEvents() {
+    if (this.mutationDepth || this.deliveringRecordedEvents || !this.pendingEventDelivery.length) return;
+    this.deliveringRecordedEvents = true;
+    try {
+      // Synchronous observers can commit more events. Drain the current
+      // batch before delivering those newer cursors.
+      while (this.pendingEventDelivery.length) {
+        for (const event of this.pendingEventDelivery.splice(0)) this.publishRecordedEvent(event);
+      }
+    } finally {
+      this.deliveringRecordedEvents = false;
+    }
   }
   private publishRecordedEvent(e:StreamEvent) {
     try {
@@ -5603,18 +5625,20 @@ export class BackendCore {
           this.atomic(() => {
             const resourceId = this.createLibraryResource('clock_timer', a.title, 'local', workspace?.project_id === undefined || workspace.project_id === null ? null : String(workspace.project_id));
             if (a.workspaceId !== null) this.desktop.apply({ type: 'attach', workspaceId: a.workspaceId, resourceId }, () => { throw new ServiceError('unexpected_clock_conversation'); });
+            this.record('application/createResource', 'observed');
           });
-          this.record('application/createResource', 'observed'); return await this.command('desktop', { type: 'snapshot' }) as CommandMap[K]['output'];
+          return await this.command('desktop', { type: 'snapshot' }) as CommandMap[K]['output'];
         }
         if(a.type==='createResource')ensure(!['file','link','folder'].includes(a.kind),'media_import_required');
         if(a.type==='createResource'&&a.kind==='conversation'&&a.provider===undefined)await this.refreshOrdinaryStatus();
         if (a.type !== 'snapshot') {
           if(['createResource','content','archiveSubject','relate','unrelate','setTaskGroupMembers'].includes(a.type))ensure(!this.active,'execution_busy');
-          this.atomic(() => this.desktop.apply(a, (title, codex) => this.create(title, codex ? this.port.id : a.provider==='local'?'local':this.defaultOrdinaryProvider()).resourceId));
-          this.record('application/' + a.type, 'observed');
+          const recorded = this.atomic(() => {
+            this.desktop.apply(a, (title, codex) => this.create(title, codex ? this.port.id : a.provider==='local'?'local':this.defaultOrdinaryProvider()).resourceId);
+            return this.record('application/' + a.type, 'observed');
+          });
           if (a.archived === false && (a.type === 'archiveWorkspace' || a.type === 'archiveSubject')) this.flushMissionPublication();
-        if(a.type==='applyStructuredPreset')try{
-          const recorded=JSON.parse(String(this.db.prepare('SELECT json FROM intelligence_events ORDER BY cursor DESC LIMIT 1').get()!.json));
+        if(a.type==='applyStructuredPreset'&&recorded)try{
           this.vela.ingestAttention({id:recorded.eventId,type:'workspace.presetSelected',source:'aerynth.workspace-engine',occurredAt:recorded.receivedAt,subject:{id:a.workspaceId,kind:'workspace'},severity:'info',classification:'observed',summary:'User selected workspace preset '+a.preset,correlationId:recorded.eventId,actor:'user',preferenceSignal:{key:'organization.defaultPreset',value:a.preset}});
           this.vela.observePreference({eventId:recorded.eventId,key:'organization.defaultPreset',value:a.preset,scope:{kind:'workspace',id:a.workspaceId}});
         }catch{/* Explicit monitoring/category permissions may exclude this event from learning. */}
