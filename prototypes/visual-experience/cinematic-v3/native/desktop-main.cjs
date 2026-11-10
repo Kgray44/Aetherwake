@@ -668,6 +668,7 @@ app.whenReady().then(async () => {
       if (
         ![
           "rendererEventPage",
+          "replay",
           "executionStatus",
           "conversationActivity",
           "openResource",
@@ -745,6 +746,12 @@ app.whenReady().then(async () => {
         result = await call("capabilities", {});
       else if (command === "rendererEventPage")
         result = await call("rendererEventPage", input);
+      else if (command === "replay") {
+        // Legacy review callers receive the old bounded tail shape, still
+        // projected by Core under the current renderer authorization.
+        const { events, earliest, latest, truncated } = await call("rendererEventPage", { recent: true, limit: 250 });
+        result = { events, earliest, latest, truncated };
+      }
       else if (command === "conversationActivity")
         result = await call("conversationActivity", input);
       else if (command === "media")
