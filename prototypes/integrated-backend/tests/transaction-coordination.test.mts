@@ -220,3 +220,29 @@ test('an unchanged local snapshot still checks the durable concurrent writer fen
     await second.command('close', {});
   }
 });
+
+test('a failing post-commit publisher keeps the writer fence and delivers the rest of the batch', async t => {
+  const {core, delivered} = fixture(t);
+  const owner = core as any;
+  const skipped = 'vela.synthetic.delivery-fault';
+  const next = 'vela.synthetic.delivery-next';
+  const publish = owner.publishRecordedEvent.bind(owner);
+  owner.publishRecordedEvent = (event: {type: string}) => {
+    if (event.type === skipped) throw Error('synthetic publication failure');
+    publish(event);
+  };
+  const created = owner.atomic(() => {
+    const conversation = owner.create('Synthetic committed conversation', 'local');
+    owner.record(skipped, 'observed', undefined, skipped);
+    owner.record(next, 'observed', undefined, next);
+    return conversation;
+  });
+  assert(!delivered.includes(skipped));
+  assert(delivered.includes(next));
+  const replay = (await core.command('replay', {})).events.filter(event => [skipped, next].includes(event.type));
+  assert.deepEqual(replay.map(event => event.type), [skipped, next]);
+  const message = await core.command('addMessage', {
+    resourceId: created.resourceId, content: 'Synthetic follow-up', expectedRevision: 1, role: 'user',
+  });
+  assert.equal(message.revision, 2);
+});

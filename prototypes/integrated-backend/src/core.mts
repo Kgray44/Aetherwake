@@ -1166,7 +1166,7 @@ export class BackendCore {
     return this.timerDomain;
   }
   /** Stage events alongside kernel writes. Timer operations only need this boundary. */
-  private withEventTransaction<T>(work: () => T): T {
+  private withEventTransaction<T>(work: () => T, restore?: () => void): T {
     const eventStart = this.pendingEventDelivery.length;
     let result: T;
     this.mutationDepth++;
@@ -1174,6 +1174,7 @@ export class BackendCore {
       result = this.kernel.withTransaction(work);
     } catch (error) {
       this.pendingEventDelivery.length = eventStart;
+      restore?.();
       throw error;
     } finally {
       this.mutationDepth--;
@@ -4958,13 +4959,11 @@ export class BackendCore {
     const before = { ...structuredClone({ ...this.state, graph: null }), graph: this.state.graph };
     const graphBefore = this.graph.snapshot();
     const storedBefore = this.storedJson;
-    try {
-      return this.withEventTransaction(() => {
-        const result = fn();
-        this.save();
-        return result;
-      });
-    } catch (error) {
+    return this.withEventTransaction(() => {
+      const result = fn();
+      this.save();
+      return result;
+    }, () => {
       // An awaiting execution retains its execution/review objects. Restore
       // their values in place so another command's rollback cannot detach the
       // live turn from the canonical records it must eventually complete.
@@ -4979,8 +4978,7 @@ export class BackendCore {
       this.state = before;
       this.storedJson = storedBefore;
       this.graph = this.createGraph(graphBefore);
-      throw error;
-    }
+    });
   }
   private gid(resourceId: string) { ensure(typeof resourceId === 'string' && Object.hasOwn(this.state.resources, resourceId), 'resource_not_found'); return this.state.resources[resourceId]; }
   private publicId(graphId: string) { const id = Object.keys(this.state.resources).find(id => this.state.resources[id] === graphId); ensure(id, 'resource_not_found'); return id; }
@@ -5104,7 +5102,10 @@ export class BackendCore {
       // Synchronous observers can commit more events. Drain the current
       // batch before delivering those newer cursors.
       while (this.pendingEventDelivery.length) {
-        for (const event of this.pendingEventDelivery.splice(0)) this.publishRecordedEvent(event);
+        for (const event of this.pendingEventDelivery.splice(0)) {
+          try { this.publishRecordedEvent(event); }
+          catch { /* Delivery failure cannot reverse a durable commit. */ }
+        }
       }
     } finally {
       this.deliveringRecordedEvents = false;
@@ -5635,7 +5636,9 @@ export class BackendCore {
           if(['createResource','content','archiveSubject','relate','unrelate','setTaskGroupMembers'].includes(a.type))ensure(!this.active,'execution_busy');
           const recorded = this.atomic(() => {
             this.desktop.apply(a, (title, codex) => this.create(title, codex ? this.port.id : a.provider==='local'?'local':this.defaultOrdinaryProvider()).resourceId);
-            return this.record('application/' + a.type, 'observed');
+            const event = this.record('application/' + a.type, 'observed');
+            // Capture identity before synchronous observers receive the event object.
+            return event && {eventId: event.eventId, receivedAt: event.receivedAt};
           });
           if (a.archived === false && (a.type === 'archiveWorkspace' || a.type === 'archiveSubject')) this.flushMissionPublication();
         if(a.type==='applyStructuredPreset'&&recorded)try{
