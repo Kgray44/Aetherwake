@@ -18,7 +18,7 @@ function fixture(pressured=false,code?:string){const requestedBase=code===undefi
  const create=()=>{const c=new BackendCore({path:join(profile,'canonical.sqlite'),privateRoot:profile,provider:'fixture',contentPolicy:'synthetic-only',syntheticTimerClock:{epochMs:Date.parse('2026-11-04T12:00:00Z'),monotonicMs:1000,sessionId:'synthetic-tool-core-clock',timeZone:'UTC',locale:'en-US'},nativeMedia:code!==undefined},()=>{},native,undefined,api);const port=(c as any).port;for(const name of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[name]=()=>{codex++;throw Error('Unexpected Codex call');};return c;};core=create();
  return {get core(){return core;},snapshot,requests,replies,file,testPath,get resourceId(){return resourceId;},get reads(){return reads;},get processReads(){return processReads;},get codex(){return codex;},
   async ready(){await core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:'SYNTHETIC_TOOL_CORE_KEY'},expectedVersion:null});await core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true});if(code!==undefined){const d=await core.command('desktop',{type:'createWorkspace',title:'Synthetic source scope',projectId:null});const picked=await core.command('velaSourcesPickNative',{commandId:randomUUID(),selection:{kind:'files',paths:[file]},destination:'workspace',workspaceId:d.activeWorkspaceId!,expectedLayoutVersion:d.layoutVersion});resourceId=picked.resources[0].id;}},
-  async send(intent:string,resourceIds:string[]=[]){const p=await core.command('velaRequestPreview',{intent,resourceIds,adaptive:true}),a={previewId:p.id,signature:p.signature},review=await core.command('velaNativeReview',a),grant=await core.command('authorizeVelaRequest',{...a,reviewDigest:review.reviewDigest,...(p.sendDisposition==='routine'?{directSend:true}:{})});return await core.command('vela',{name:'request',input:{intent,resourceIds,authorizeProvider:true,previewId:p.id,grantId:grant.grantId}}) as any;},
+  async send(intent:string,resourceIds:string[]=[],settings?:import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting){const p=await core.command('velaRequestPreview',{intent,resourceIds,adaptive:true,...settings}),a={previewId:p.id,signature:p.signature},review=await core.command('velaNativeReview',a),grant=await core.command('authorizeVelaRequest',{...a,reviewDigest:review.reviewDigest,...(p.sendDisposition==='routine'?{directSend:true}:{})});return await core.command('vela',{name:'request',input:{intent,resourceIds,authorizeProvider:true,previewId:p.id,grantId:grant.grantId}}) as any;},
   async state(){return await core.command('vela',{name:'state',input:{}}) as VelaBackendState;},
   async reopen(){await core.command('close',{});core=create();},
   async close(){if(!(core as any).closed)await core.command('close',{});const p=relative(base,resolve(dir));assert(p.startsWith('aerynth-tool-core-')&&!p.startsWith('..')&&!isAbsolute(p));rmSync(dir,{recursive:true,force:true});}
@@ -61,6 +61,89 @@ test('provider failure between tool stages settles the same request visibly and 
   assert.equal((f.core as any).db.prepare('SELECT count(*) n FROM vela_tool_invocations').get().n,1);
   f.replies.push(()=>answer('A committed byte is backed by the system commit limit.'));const next=await f.send('Explain a committed byte.');assert.equal(next.state,'responded');assert.equal(f.requests.length,4);
  }finally{await f.close();}
+});
+
+test('informational and no-change requests deny an unsolicited standing workspace mutation', async () => {
+  for (const intent of ['What is a workspace used for?', 'Explain what a workspace is. Do not create or change anything.']) {
+    const f = fixture();
+    try {
+      await f.ready();
+      const before = await f.core.command('desktop', { type: 'snapshot' });
+      f.replies.push(
+        catalog => tool(VELA_TOOL_SCHEMAS, { catalogDigest: catalog.digest, ids: ['application.createWorkspace'] }),
+        catalog => invoke(catalog, 'application.createWorkspace', {
+          type: 'createWorkspace', title: 'Synthetic unauthorized workspace', projectId: null,
+        }),
+        (_catalog, body) => {
+          const receipt = body.input.filter((item: any) => item.type === 'function_call_output')
+            .map((item: any) => JSON.parse(item.output)).find((item: any) => item.contract === 'aerynth.vela.tool-receipt@1');
+          assert.equal(receipt.state, 'denied');
+          assert.equal(receipt.pause, 'none');
+          assert.notEqual(receipt.verification.kind, 'owner-observed');
+          return answer('A workspace organizes your resources.');
+        },
+      );
+      const result = await f.send(intent);
+      const after = await f.core.command('desktop', { type: 'snapshot' });
+      assert.deepEqual(after.workspaces, before.workspaces);
+      assert.equal(after.activeWorkspaceId, before.activeWorkspaceId);
+      assert.equal(result.state, 'responded');
+      assert.equal(f.requests.length, 3);
+      const state = await f.state();
+      assert(!state.receipts.some(receipt => receipt.requestId === result.id && receipt.state === 'applied'));
+      assert.equal(state.hostOperations?.length, 0);
+      assert.equal(state.conversation?.messages.filter(message => message.role === 'user').length, 1);
+    } finally { await f.close(); }
+  }
+});
+
+test('conditional or different application actions require review before provider-selected creation', async () => {
+  for (const intent of ['Create a workspace only after I review it.', 'Rename the active workspace to Sprint Review.',
+    'Create a workspace named Sprint Review.']) {
+    const f = fixture();
+    try {
+      await f.ready();
+      const before = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic original workspace', projectId: null });
+      f.replies.push(
+        catalog => tool(VELA_TOOL_SCHEMAS, { catalogDigest: catalog.digest, ids: ['application.createWorkspace'] }),
+        catalog => invoke(catalog, 'application.createWorkspace', {
+          type: 'createWorkspace', title: 'Synthetic unreviewed workspace', projectId: null,
+        }),
+      );
+      const result = await f.send(intent);
+      assert.equal(result.state, 'awaiting-review');
+      assert.equal(f.requests.length, 2);
+      const after = await f.core.command('desktop', { type: 'snapshot' });
+      assert.deepEqual(after.workspaces, before.workspaces);
+      assert.equal(after.activeWorkspaceId, before.activeWorkspaceId);
+      const state = await f.state();
+      assert(!state.receipts.some(receipt => receipt.requestId === result.id && receipt.state === 'applied'));
+    } finally { await f.close(); }
+  }
+});
+
+test('a workspace request cannot silently create an unrelated timer', async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    const before = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic current workspace', projectId: null });
+    f.replies.push(
+      catalog => tool(VELA_TOOL_SCHEMAS, { catalogDigest: catalog.digest, ids: ['application.clockTimer'] }),
+      catalog => invoke(catalog, 'application.clockTimer', {
+        type: 'clockTimer', workspaceId: before.activeWorkspaceId,
+        request: { name: 'create', input: { title: 'Unrequested timer', projectId: null, operations: [
+          { type: 'createTimer', key: 'unrequested', name: 'Unrequested timer', durationMs: 60000, start: false },
+        ] } },
+        focus: { mode: 'timer', timerId: null, timerKey: 'unrequested' }, query: null,
+      }),
+    );
+    const request = await f.send("Create a new workspace for the sprint and don't add a timer.");
+    assert.equal(request.state, 'awaiting-review');
+    assert.equal(f.requests.length, 2);
+    const after = await f.core.command('desktop', { type: 'snapshot' });
+    assert.deepEqual(after.workspaces, before.workspaces);
+    assert(!after.resources.some(resource => resource.kind === 'clock_timer'));
+  } finally { await f.close(); }
 });
 
 test('unknown provider outcome after a receipted app effect preserves the effect and shows an observed inability',async()=>{
@@ -121,9 +204,9 @@ test('same-request selected-code tools bind actual API proposal evidence, native
 });
 
 }
-test('standing app policy executes workspace then timer through owner receipts and same-loop context advances',async()=>{
- const f=fixture();try{await f.ready();let workspaceId='';f.replies.push(c=>tool(VELA_TOOL_SCHEMAS,{catalogDigest:c.digest,ids:['application.createWorkspace','application.clockTimer']}),c=>invoke(c,'application.createWorkspace',{type:'createWorkspace',title:'Synthetic calibration bench',projectId:null}),(c,body)=>{workspaceId=(f.core as any).velaContext().currentWorkspaceId;assert(workspaceId);assert(String(body.input[0].content).includes(workspaceId),'existing context composer must provide the actually created workspace');return invoke(c,'application.clockTimer',{type:'clockTimer',workspaceId,request:{name:'create',input:{title:'Calibration timer',projectId:null,operations:[{type:'createTimer',key:'measurement',name:'Measurement',durationMs:60000,start:false}]}},focus:{mode:'timer',timerId:null,timerKey:'measurement'},query:null});},(c,body)=>{assert(String(body.input[0].content).includes(workspaceId));return answer('The calibration workspace and its ready timer are saved.');});
-  const request=await f.send('Set up a calibration bench workspace and put a one-minute measurement timer there.');const state=await f.state();assert.equal(request.state,'responded',JSON.stringify({state:request.state,errorCode:request.errorCode,workflow:request.toolWorkflow,messages:state.conversation!.messages.map(m=>m.content)}));assert.equal(f.requests.length,4);assert.equal(state.requests.length,1);assert.equal(state.conversation!.messages.filter(m=>m.role==='user').length,1);assert.equal(state.hostOperations!.filter(o=>o.reviewAvailable).length,0);assert.equal(state.hostOperations!.reduce((n,o)=>n+(o.jobsDone??0),0),2);
+test('standing app policy keeps a turn API override through workspace and timer owner receipts',async()=>{
+ const f=fixture();try{await f.ready();await f.core.command('vela',{name:'saveRoutingSettings',input:{scope:'global',id:null,expectedVersion:0,defaults:{providerId:'chatgpt-plan-responses'}}});let workspaceId='';f.replies.push(c=>tool(VELA_TOOL_SCHEMAS,{catalogDigest:c.digest,ids:['application.createWorkspace','application.clockTimer']}),c=>invoke(c,'application.createWorkspace',{type:'createWorkspace',title:'Synthetic calibration bench',projectId:null}),(c,body)=>{workspaceId=(f.core as any).velaContext().currentWorkspaceId;assert(workspaceId);assert(String(body.input[0].content).includes(workspaceId),'existing context composer must provide the actually created workspace');return invoke(c,'application.clockTimer',{type:'clockTimer',workspaceId,request:{name:'create',input:{title:'Calibration timer',projectId:null,operations:[{type:'createTimer',key:'measurement',name:'Measurement',durationMs:60000,start:false}]}},focus:{mode:'timer',timerId:null,timerKey:'measurement'},query:null});},(c,body)=>{assert(String(body.input[0].content).includes(workspaceId));return answer('The calibration workspace and its ready timer are saved.');});
+  const request=await f.send('Set up a calibration bench workspace and put a one-minute measurement timer there.', [], {providerId:'openai-api-vela',model:'gpt-6-luna',reasoningEffort:'low'});const state=await f.state();assert.equal(request.state,'responded',JSON.stringify({state:request.state,errorCode:request.errorCode,workflow:request.toolWorkflow,messages:state.conversation!.messages.map(m=>m.content)}));assert.equal(f.requests.length,4);assert.equal(state.requests.length,1);assert.equal(state.conversation!.messages.filter(m=>m.role==='user').length,1);assert.equal(state.hostOperations!.filter(o=>o.reviewAvailable).length,0);assert.equal(state.hostOperations!.reduce((n,o)=>n+(o.jobsDone??0),0),2);
   assert.equal(state.requests[0].toolWorkflow?.completedReadJobs,0,'workspace and timer jobs already have host-operation receipts');
   const desktop=await f.core.command('desktop',{type:'snapshot'}),timer=desktop.resources.find(r=>r.kind==='clock_timer');assert(timer);assert(desktop.blocks.some(b=>b.workspace_id===workspaceId&&b.resource_id===timer.id));assert.equal(f.codex,0);
  }finally{await f.close();}
