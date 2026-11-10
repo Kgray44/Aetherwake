@@ -471,7 +471,7 @@ app.whenReady().then(async () => {
       nodeIntegration: false,
       sandbox: true,
       ...(offscreenScale ? { offscreen: true, backgroundThrottling: false } : {}),
-      additionalArguments: process.argv.includes("--integration-drag-glide")
+      additionalArguments: process.argv.includes("--integration-drag-glide") || process.argv.includes("--integration-expanded")
         ? ["--aerynth-geometry-observation"]
         : [],
     },
@@ -667,7 +667,7 @@ app.whenReady().then(async () => {
       }
       if (
         ![
-          "replay",
+          "rendererEventPage",
           "executionStatus",
           "conversationActivity",
           "openResource",
@@ -743,14 +743,9 @@ app.whenReady().then(async () => {
       else if (command === "viewState") result = await call("viewState", input);
       else if (command === "capabilities")
         result = await call("capabilities", {});
-      else if (command === "replay") {
-        const bounds = await call("replay", { after: 0, limit: 1 });
-        result = await call("replay", {
-          after: Math.max(0, bounds.latest - 250),
-          limit: 250,
-        });
-        result.truncated ||= bounds.latest > 250;
-      } else if (command === "conversationActivity")
+      else if (command === "rendererEventPage")
+        result = await call("rendererEventPage", input);
+      else if (command === "conversationActivity")
         result = await call("conversationActivity", input);
       else if (command === "media")
         result = await mediaCommand(input);

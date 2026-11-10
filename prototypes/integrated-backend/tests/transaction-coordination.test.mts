@@ -6,11 +6,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { BackendCore } from '../src/core.mts';
+import type { Options } from '../src/contracts.mts';
 
-function fixture(t: TestContext) {
+function fixture(t: TestContext, extra: Partial<Options> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'aerynth-transaction-'));
   const path = join(dir, 'canonical.sqlite');
-  const options = {path, provider: 'fixture', contentPolicy: 'synthetic-only'} as const;
+  const options: Options = {path, provider: 'fixture', contentPolicy: 'synthetic-only', ...extra};
   const delivered: string[] = [];
   let core: BackendCore | undefined;
   const open = () => core = new BackendCore(options, event => delivered.push(event.type));
@@ -251,4 +252,64 @@ test('a failing post-commit publisher keeps the writer fence and delivers the re
     resourceId: created.resourceId, content: 'Synthetic follow-up', expectedRevision: 1, role: 'user',
   });
   assert.equal(message.revision, 2);
+});
+
+test('renderer event pages cover hidden rows without exposing an archived conversation', async t => {
+  const {core, delivered} = fixture(t, {rendererEventTransport: true});
+  const owner = core as any;
+  const first = await core.command('desktop', {type: 'snapshot'});
+  const conversation = await core.command('createConversation', {
+    title: 'Synthetic hidden conversation', providerId: 'fixture-codex', commandId: 'renderer-replay-hidden',
+  });
+  const hidden = owner.record('conversation/synthetic-hidden', 'observed', undefined, 'renderer-hidden', {
+    providerId: 'aerynth-native', resourceId: conversation.resourceId,
+  });
+  owner.record('conversation/synthetic-hidden', 'observed', undefined, 'renderer-hidden', {
+    providerId: 'aerynth-native', resourceId: conversation.resourceId,
+  });
+  const visible = owner.record('application/synthetic-visible', 'observed');
+  await core.command('desktop', {type: 'archiveSubject', kind: 'resource', id: conversation.resourceId, archived: true, expectedVersion: 1});
+  owner.record('conversation/synthetic-revoked-live', 'observed', undefined, 'renderer-revoked', {
+    providerId: 'aerynth-native', resourceId: conversation.resourceId,
+  });
+  assert(!delivered.includes('conversation/synthetic-revoked-live'));
+  const page = (after: number) => core.command('rendererEventPage', {after, limit: 1});
+  const hiddenPage = await page(first.eventCursor ?? 0);
+  assert.equal(hiddenPage.scope, first.eventScope);
+  assert.equal(hiddenPage.scannedThrough, hidden.cursor);
+  assert.deepEqual(hiddenPage.events, []);
+  assert(hiddenPage.latest > hiddenPage.scannedThrough);
+  const visiblePage = await page(hiddenPage.scannedThrough);
+  assert.equal(visiblePage.scannedThrough, visible.cursor);
+  assert(visible.cursor > hidden.cursor + 1, 'SQLite can skip cursor numbers during deduplication');
+  assert.deepEqual(visiblePage.events.map(event => event.eventId), [visible.eventId]);
+});
+
+test('the renderer snapshot and recent event page identify the current owner scope', async t => {
+  const {core} = fixture(t, {rendererEventTransport: true});
+  const first = await core.command('desktop', {type: 'snapshot'});
+  const next = await core.command('desktop', {type: 'createWorkspace', title: 'Synthetic scope', projectId: null});
+  const tail = await core.command('rendererEventPage', {recent: true, limit: 1});
+  assert.notEqual(first.eventScope, next.eventScope);
+  assert.equal(next.eventScope, tail.scope);
+  assert.equal(next.eventCursor, tail.latest);
+  assert.equal(tail.scannedThrough, tail.latest);
+  assert.equal(tail.events.at(-1)?.type, 'application/createWorkspace');
+});
+
+test('renderer event pages expose retention gaps and recover the bounded recent window', async t => {
+  const {core} = fixture(t, {rendererEventTransport: true, retention: {maxEvents: 4}});
+  const first = await core.command('desktop', {type: 'snapshot'});
+  for (const title of ['Synthetic first', 'Synthetic second', 'Synthetic third', 'Synthetic fourth', 'Synthetic fifth'])
+    await core.command('desktop', {type: 'createWorkspace', title, projectId: null});
+  const page = await core.command('rendererEventPage', {after: first.eventCursor, limit: 1});
+  assert.equal(page.truncated, true);
+  assert.equal(page.scannedThrough, page.earliest);
+  assert(page.scannedThrough < page.latest);
+  const recent = await core.command('rendererEventPage', {recent: true, limit: 2});
+  assert.equal(recent.truncated, true);
+  assert.equal(recent.scannedThrough, recent.latest);
+  assert.equal(recent.events.length, 2);
+  assert.equal(recent.events.at(-1)?.cursor, recent.latest);
+  await assert.rejects(core.command('rendererEventPage', {recent: true, after: 0}), /invalid_cursor/);
 });

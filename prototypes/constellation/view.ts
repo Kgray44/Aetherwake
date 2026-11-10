@@ -141,6 +141,12 @@ export function mountConstellation(
     const bounds = field.getBoundingClientRect();
     return pointInsideUi(x - bounds.left, y - bounds.top, uiExclusions());
   };
+  const pickField = (x: number, y: number) => {
+    const rect = field.getBoundingClientRect();
+    return layer.enabled && rect.width > 0 && rect.height > 0
+      ? layer.pick(x - rect.left, y - rect.top, rect.width, rect.height)
+      : null;
+  };
   layer = new ConstellationScene(
     controller,
     spatial,
@@ -788,14 +794,7 @@ export function mountConstellation(
     const rect = field.getBoundingClientRect(),
       hit = label?.dataset.key
         ? { key: label.dataset.key }
-        : layer.enabled
-          ? layer.pick(
-              e.clientX - rect.left,
-              e.clientY - rect.top,
-              rect.width,
-              rect.height,
-            )
-          : null;
+        : pickField(e.clientX, e.clientY);
     if (hit?.key) {
       controller.select(hit.key);
       layer.selectedEdge = null;
@@ -1084,6 +1083,14 @@ export function mountConstellation(
     controller,
     layer,
     uiExclusions,
+    pointerBodyAt(x: number, y: number) {
+      if (!Number.isFinite(x) || !Number.isFinite(y) || disposed ||
+          field.hidden || field.closest("[inert]")) return null;
+      const hit = root.ownerDocument.elementFromPoint(x, y);
+      if ((hit !== field && hit !== world) || overUi(x, y)) return null;
+      return pickField(x, y)?.key ?? null;
+    },
+    activeDragKey: () => pointer?.key ?? null,
     ready: controller.restore(),
     frame,
     update(snapshot: Snapshot) {

@@ -183,10 +183,8 @@ import "../../../block-library/manual-task-view.css";
 import "../../../block-library/task-group-view.css";
 import {
   mountEventExperience,
-  readRecentEvents,
   missionEventInScope,
   recordedEventTitle,
-  type ReplayWindow,
   filterRecordedEvents,
   type EventWindow,
 } from "../../../block-library/event-view.ts";
@@ -241,6 +239,8 @@ const escape = (s: string) =>
         c
       ]!,
   );
+
+import { reconcileRendererReplay, rendererAccessChanged, type RendererEventPage } from "./renderer-replay.ts";
 
 export function installApplication(hooks: Hooks) {
   const host = window.aerynthHost!;
@@ -320,6 +320,8 @@ export function installApplication(hooks: Hooks) {
   let velaOpen = false;
   let velaOpening = 0;
   let velaRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let velaStateRead: Promise<unknown> | undefined;
+  let velaActive = false;
   const velaContent = document.createElement("div");
   velaContent.className = "application-vela-content";
   const velaManifestation = createVelaManifestation({
@@ -350,6 +352,10 @@ export function installApplication(hooks: Hooks) {
   );
   const velaClient = createVelaClient({
     command: (name, input) => host.command!(name, input),
+    observationFence: () => {
+      const generation = eventRefreshGeneration;
+      return () => generation === eventRefreshGeneration && !eventClosed && !eventDisconnected;
+    },
     activeCard: () => {
       const blockId = hooks.selectedCard();
       return blockId && state?.navigation.kind === "workspace"
@@ -435,6 +441,9 @@ export function installApplication(hooks: Hooks) {
       visualEvidence.pendingRequest = value.requests.some(request => request.state === 'checking');
       visualEvidence.applying = value.receipts.some(receipt => receipt.state === 'started');
       visualEvidence.needsInput = value.requests.some(request => request.state === 'awaiting-review');
+      velaActive = !!value.activeAnswer || !!visualEvidence.planning ||
+        !!visualEvidence.pendingRequest || !!visualEvidence.applying;
+      if (velaActive) refreshVelaFromEvent(1000);
       if (velaOpen) velaPanel?.observeLiveAnswer(value.activeAnswer);
       if (
         value.requests.some((r) => r.state === "planning") ||
@@ -748,6 +757,14 @@ export function installApplication(hooks: Hooks) {
     retainedLatest = 0,
     eventDisconnected = false;
   let streamScopeKey = "", eventRefreshGeneration = 0;
+  let eventBoundary: { scope: string; cursor: number } | undefined;
+  let eventScannedThrough: number | undefined;
+  let requiredAccessCursor = 0;
+  let eventRead: Promise<void> | undefined;
+  let eventReadAgain = false, eventClosed = false, eventHistoryGap = false;
+  let eventRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let eventRefreshDue = 0;
+  let stopApplicationEvents: (() => void) | undefined;
   const seenEvents = new Set<string>();
   let lastTrigger: HTMLElement | null = null;
   const conversationView = createManagerState();
@@ -920,6 +937,14 @@ export function installApplication(hooks: Hooks) {
   addEventListener(
     "pagehide",
     () => {
+      eventClosed = true;
+      eventRefreshGeneration++;
+      clearTimeout(eventRefreshTimer);
+      clearTimeout(velaRefreshTimer);
+      stopApplicationEvents?.();
+      conversationExecution.dispose();
+      window.removeEventListener("focus", recoverEventProjection);
+      document.removeEventListener("visibilitychange", recoverEventProjection);
       environmentNavigator?.dispose();
       workspaceActions?.dispose();
       workspaceRecoveryView?.dispose();
@@ -1171,6 +1196,8 @@ export function installApplication(hooks: Hooks) {
     });
   }
   function apply(next: DesktopSnapshot) {
+    if (eventClosed || next.eventCursor !== undefined &&
+        next.eventCursor < Math.max(requiredAccessCursor, eventBoundary?.cursor ?? 0)) return;
     const changed = state?.activeWorkspaceId !== next.activeWorkspaceId;
     const leavingWorkspace =
       state?.navigation.kind === "workspace" &&
@@ -1217,12 +1244,17 @@ export function installApplication(hooks: Hooks) {
       .filter((block) => block.resource_id && streamResources.has(block.resource_id))
       .map((block) => block.id);
     const scopeKey = JSON.stringify(streamScope());
-    if (scopeKey !== streamScopeKey) {
+    const replayScopeChanged = scopeKey !== streamScopeKey ||
+      next.eventScope !== undefined && eventBoundary !== undefined && next.eventScope !== eventBoundary.scope;
+    if (replayScopeChanged) {
       streamScopeKey = scopeKey;
-      eventRefreshGeneration++;
-      discardStreamMissions();
-      if (streamView || streamBlockIds.length) void refreshEvents().catch(report);
+      resetEventProjection();
     }
+    if (next.eventScope !== undefined && next.eventCursor !== undefined)
+      eventBoundary = { scope: next.eventScope, cursor: next.eventCursor };
+    if (next.eventCursor !== undefined && next.eventCursor >= requiredAccessCursor)
+      delete document.body.dataset.applicationAccessPending;
+    if (replayScopeChanged) requestEventRefresh();
     scheduleStreamRefresh();
     const taskStamp = JSON.stringify(
       next.resources.map((resource) => [
@@ -2618,18 +2650,27 @@ export function installApplication(hooks: Hooks) {
     el("#vela").setAttribute("aria-expanded", "true");
     void velaPanel.open().catch(report);
   }
-  function refreshVelaFromEvent() {
-    if (!velaPanel || velaRefreshTimer) return;
+  function refreshVelaFromEvent(delay = 150) {
+    if (!velaPanel || velaRefreshTimer || velaStateRead ||
+        eventClosed || eventDisconnected || document.hidden) return;
     velaRefreshTimer = setTimeout(() => {
       velaRefreshTimer = undefined;
+      if (eventClosed || eventDisconnected || document.hidden) return;
       // Keep an in-progress settings edit intact while still observing real presence.
       const editing =
         velaContent.contains(document.activeElement) &&
         document.activeElement?.matches("input,textarea,select");
-      void (
-        velaOpen && !editing ? velaPanel!.refresh() : velaClient.state()
-      ).catch(report);
-    }, 150);
+      velaStateRead = (velaOpen && !editing ? velaPanel!.refresh() : velaClient.state())
+        .catch(error => {
+          if (error instanceof Error && error.message === "vela_observation_superseded") {
+            velaActive = true;
+          } else report(error);
+        })
+        .finally(() => {
+          velaStateRead = undefined;
+          if (velaActive) refreshVelaFromEvent(1000);
+        });
+    }, delay);
   }
   dialog.addEventListener("close", () =>
     returnFocusAfterDialogClose(dialog, lastTrigger),
@@ -4683,17 +4724,27 @@ export function installApplication(hooks: Hooks) {
       : state?.workspaces.find((workspace) => workspace.id === workspaceId)?.project_id ?? null;
     return { workspaceId, projectId };
   }
-  function discardStreamMissions(all = false) {
-    const scope = streamScope();
-    for (let index = localEvents.length - 1; index >= 0; index--) {
-      const event = localEvents[index];
-      if ((all && event.mission) || !missionEventInScope(event, scope)) {
-        seenEvents.delete(event.eventId);
-        localEvents.splice(index, 1);
-      }
-    }
+  function invalidateEventAccess(cursor: number) {
+    requiredAccessCursor = Math.max(requiredAccessCursor, cursor);
+    if ((eventBoundary?.cursor ?? -1) < requiredAccessCursor)
+      document.body.dataset.applicationAccessPending = "true";
+    visualMission = null;
+    visualEvidence.panelPhase = undefined;
+    visualEvidence.planning = visualEvidence.pendingRequest = visualEvidence.applying = visualEvidence.needsInput = false;
+    velaPanel?.observeLiveAnswer(undefined);
+    resetEventProjection();
+  }
+  function resetEventProjection() {
+    eventRefreshGeneration++;
+    eventBoundary = undefined;
+    eventScannedThrough = undefined;
+    localEvents.length = 0;
+    seenEvents.clear();
+    retainedEarliest = null;
+    retainedLatest = 0;
     streamView?.update();
     for (const view of eventViews.values()) view.update();
+    scheduleStreamRefresh();
   }
   function eventWindow(): EventWindow {
     return {
@@ -4703,6 +4754,7 @@ export function installApplication(hooks: Hooks) {
       earliest: retainedEarliest,
       latest: retainedLatest,
       disconnected: eventDisconnected,
+      recoveredGap: eventHistoryGap && eventScannedThrough !== undefined,
       resources: (state?.resources ?? [])
         .filter(
           (resource) =>
@@ -4778,20 +4830,89 @@ export function installApplication(hooks: Hooks) {
     }
     return true;
   }
-  async function refreshEvents() {
-    const generation = ++eventRefreshGeneration;
-    const replay = await readRecentEvents(
-      async (input) => (await host.command!("replay", input)) as ReplayWindow,
-    );
-    if (generation !== eventRefreshGeneration) return;
-    const newer = localEvents.filter((event) => event.cursor > replay.latest);
-    localEvents.length = 0;
-    seenEvents.clear();
-    retainedEarliest = replay.earliest;
-    retainedLatest = replay.latest;
-    eventDisconnected = false;
-    for (const event of [...replay.events, ...newer]) rememberEvent(event);
-    scheduleStreamRefresh();
+  function requestEventRefresh(delay = 100) {
+    if (eventClosed || eventDisconnected || document.hidden) return;
+    const due = performance.now() + delay;
+    if (eventRefreshTimer && eventRefreshDue <= due) return;
+    clearTimeout(eventRefreshTimer);
+    eventRefreshDue = due;
+    eventRefreshTimer = setTimeout(() => {
+      eventRefreshTimer = undefined;
+      void refreshEvents().catch(report);
+    }, delay);
+  }
+  function recoverEventProjection() {
+    if (document.hidden || eventClosed || eventDisconnected) return;
+    requestEventRefresh();
+    refreshVelaFromEvent();
+    void conversationExecution.refresh();
+  }
+  function refreshEvents(): Promise<void> {
+    if (eventClosed || eventDisconnected) return Promise.resolve();
+    eventReadAgain = true;
+    if (eventRead) return eventRead;
+    eventRead = Promise.resolve().then(async () => {
+      let rebases = 0;
+      while (eventReadAgain && !eventClosed && !eventDisconnected) {
+        eventReadAgain = false;
+        if (!eventBoundary) await enqueueResult(() => command({ type: "snapshot" }));
+        const boundary = eventBoundary;
+        if (!boundary) throw Error("renderer_snapshot_cursor_unavailable");
+        const generation = eventRefreshGeneration;
+        let sourceChanged = false, executionChanged = false, replayed = false;
+        const result = await reconcileRendererReplay({
+          scope: boundary.scope,
+          after: eventScannedThrough ?? boundary.cursor,
+          seed: eventScannedThrough === undefined,
+          read: input => host.command!("rendererEventPage", input) as Promise<RendererEventPage>,
+          current: () => generation === eventRefreshGeneration && !eventClosed && !eventDisconnected,
+          accept: (page, history) => {
+            const missedAccessChange = !history && page.events.find(event =>
+              event.cursor > Math.max(boundary.cursor, requiredAccessCursor) &&
+              rendererAccessChanged(event.type));
+            if (missedAccessChange) {
+              invalidateEventAccess(missedAccessChange.cursor);
+              conversationExecution.invalidate();
+              eventReadAgain = true;
+              return;
+            }
+            retainedEarliest = page.earliest;
+            retainedLatest = page.latest;
+            for (const event of page.events) {
+              rememberEvent(event);
+              if (history) continue;
+              replayed = true;
+              executionChanged ||= /^(execution|turn|thread|stream|provider)[./]/.test(event.type);
+              sourceChanged ||= event.cursor > boundary.cursor &&
+                /^(resource|note|conversation|source|policy|project|workspace|block|application)[./]/.test(event.type);
+            }
+          },
+        });
+        if (result.status === "obsolete") continue;
+        if (result.status === "rebase") {
+          eventHistoryGap ||= result.gap;
+          resetEventProjection();
+          if (++rebases > 2) throw Error("renderer_event_reconciliation_interrupted");
+          eventReadAgain = true;
+          continue;
+        }
+        if (!("cursor" in result)) continue;
+        eventScannedThrough = result.cursor;
+        if (sourceChanged) await enqueueResult(() => command({ type: "snapshot" }));
+        if (executionChanged) void conversationExecution.refresh();
+        if (replayed) refreshVelaFromEvent();
+        scheduleStreamRefresh();
+        if (result.status === "more") {
+          requestEventRefresh();
+          break;
+        }
+      }
+    }).finally(() => {
+      eventRead = undefined;
+      if (streamView || streamBlockIds.some(id => blockPresentations.get(id)?.visible))
+        requestEventRefresh(1500);
+    });
+    return eventRead;
   }
   function openStreamMission(id: string) {
     if (!velaOpen) openVela();
@@ -4855,17 +4976,17 @@ export function installApplication(hooks: Hooks) {
       ]).catch(report);
     });
   }
-  host.onEvent?.((event) => {
+  stopApplicationEvents = host.onEvent?.((event) => {
     refreshVelaFromEvent();
     const e = event as Activity & {
       resourceId?: string;
       payload?: { delta?: string };
     };
     if (/^vela[./]voice[./]/.test(e.type)) velaVoice.observe();
-    const accessChanged = /^policy[./]/.test(e.type);
+    const accessChanged = rendererAccessChanged(e.type);
     const observedWake = (event as StreamEvent).payload?.wake;
     if (observedWake) visualEvidence.wake = { phase: observedWake.phase, detector: observedWake.detector, microphone: observedWake.microphone };
-    if (accessChanged) { visualMission = null; visualEvidence.panelPhase = undefined; visualEvidence.planning = visualEvidence.pendingRequest = visualEvidence.applying = visualEvidence.needsInput = false; }
+
     if (e.type.startsWith('clock_timer.') && e.resourceId) {
       for (const [id, entry] of clockTimerViews) {
         if (state?.blocks.find(block => block.id === id)?.resource_id === e.resourceId) void entry.view.refresh().catch(report);
@@ -4875,9 +4996,8 @@ export function installApplication(hooks: Hooks) {
       hooks.wake();
     }
     if (accessChanged) {
-      eventRefreshGeneration++;
-      discardStreamMissions(true);
-      if (streamView || streamBlockIds.length) void refreshEvents().catch(report);
+      invalidateEventAccess(e.cursor ?? requiredAccessCursor);
+      requestEventRefresh();
     }
     const sourceChanged = !e.payload?.delta && /^(resource|note|conversation|source)[./]/.test(e.type);
     if (e.type.startsWith("vela.mission/") || accessChanged || sourceChanged) {
@@ -4912,14 +5032,17 @@ export function installApplication(hooks: Hooks) {
     }
     // Assistant text is handled by the one shared execution adapter. It is not
     // copied into a second transcript, activity payload cache or frame path.
-    if (e.payload?.delta && e.resourceId) return;
+    if (e.payload?.delta && e.resourceId) {
+      if (Number.isSafeInteger(e.cursor)) requestEventRefresh();
+      return;
+    }
     if (
       /^(execution\/|resource[./]|note[./]|conversation[./]|agent[./]|task-objective[./]|policy[./]|source[./])/.test(
         e.type,
       )
     )
       refreshTaskProjections();
-    if (rememberEvent(e)) scheduleStreamRefresh();
+    if (Number.isSafeInteger(e.cursor)) requestEventRefresh();
     if (e.type === "provider/connection") {
       void connectionsView?.refresh();
       void conversationManager?.refresh().catch(report);
@@ -4928,13 +5051,18 @@ export function installApplication(hooks: Hooks) {
     }
     if (e.type === "backend/disconnected") {
       eventDisconnected = true;
-      scheduleStreamRefresh();
+      resetEventProjection();
+      clearTimeout(velaRefreshTimer);
+      velaRefreshTimer = undefined;
+      velaPanel?.observeLiveAnswer(undefined);
       hooks.status(
         "Backend disconnected. Current surfaces are retained; restart to recover persisted data. Execution outcomes may be unknown.",
       );
       hooks.vela("unavailable");
     }
   });
+  window.addEventListener("focus", recoverEventProjection);
+  document.addEventListener("visibilitychange", recoverEventProjection);
   el("#workspace-manager").onclick = () => manager();
   el("#application-resources").onclick = () => picker();
   el("#application-stream").onclick = () => {
@@ -5370,6 +5498,8 @@ export function installApplication(hooks: Hooks) {
             })
           | null
       )?.layer ?? null,
+    spatialPointerBodyAt: (x: number, y: number) => constellation?.pointerBodyAt(x, y) ?? null,
+    spatialActiveDragKey: () => constellation?.activeDragKey() ?? null,
     spatialDiagnostics: () => ({
       location: constellation?.controller.location,
       selected: constellation?.controller.selected,
@@ -5522,6 +5652,7 @@ export function installApplication(hooks: Hooks) {
       )
         return;
       blockPresentations.set(id, { visible, usable, presentation });
+      if (visible && !previous?.visible && streamBlockIds.includes(id)) requestEventRefresh();
       if (visible && !previous?.visible && streamBlockIds.includes(id))
         scheduleStreamRefresh();
       const article = document.querySelector<HTMLElement>(

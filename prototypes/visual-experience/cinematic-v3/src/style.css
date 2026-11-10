@@ -1492,3 +1492,8 @@ body.focused #vela .vela-label {
     font-size: 14px;
   }
 }
+
+/* A pending permission read must not expose the previous scope's content. */
+body[data-application-access-pending] :is(#stage, .aw-contextual-surface) {
+  visibility: hidden;
+}

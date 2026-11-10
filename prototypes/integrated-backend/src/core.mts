@@ -213,6 +213,7 @@ export class BackendCore {
   private streamFailure = false;
   private stopEvents: () => void;
   private emit: (event: StreamEvent) => void;
+  private readonly rendererEventTransport: boolean;
   private maxEvents: number;
   private closed = false;
   private githubImport: AbortController | null = null;
@@ -309,6 +310,7 @@ export class BackendCore {
   constructor(options: Options, emit: (event: StreamEvent) => void = () => {}, nativeHostServices?:NativeHostServices,ordinaryTest?:OrdinaryResponsesTestServices,velaApiTest?:VelaApiRuntimeTestServices) {
     this.nativeHostServices=nativeHostServices;
     this.nativeMedia = options.nativeMedia === true;
+    this.rendererEventTransport = options.rendererEventTransport === true;
     this.privateMode = options.contentPolicy === 'local-private';
     ensure(!velaApiTest || !this.privateMode, 'synthetic_api_services_forbidden'); this.velaApiTest = velaApiTest;
     ensure(!options.syntheticTimerClock || !this.privateMode, 'synthetic_timer_clock_forbidden');
@@ -2247,6 +2249,10 @@ export class BackendCore {
         return () => {
           grant.consumed = true;
           this.active = execution;
+          this.activeSourceFence = () => {
+            ensure(!controller.signal.aborted && this.velaApiRuntime.authorized(preview.connectionVersion), 'vela_api_connection_changed');
+            validate();
+          };
           this.assistantText = '';
           this.assistantCursor = 0;
           this.liveVelaAnswer = !planning ? { requestId: input.requestId, scopeStamp: preview.scopeStamp } : undefined;
@@ -2308,6 +2314,7 @@ export class BackendCore {
       if (this.ordinaryController === controller) {
         this.active = null;
         this.ordinaryController = null;
+        this.activeSourceFence = undefined;
         this.liveVelaAnswer = undefined;
         this.assistantText = '';
         this.assistantCursor = 0;
@@ -2508,7 +2515,7 @@ export class BackendCore {
     if (live && (this.active?.providerId === CHATGPT_PLAN_PROVIDER || this.active?.providerId === VELA_API_PROVIDER) && this.active.state === 'running' && this.assistantText.trim() && this.canDiscloseActiveOutput() &&
         !this.ordinaryController?.signal.aborted && this.conversationAccess.resource(this.active.resourceId) &&
         live.scopeStamp === this.velaScopeStamp() && state.requests.some(request => request.id === live.requestId && request.state === 'planning')) {
-      state.activeAnswer = { requestId: live.requestId, text: this.assistantText.slice(0, 480), truncated: this.assistantText.length > 480 };
+      state.activeAnswer = { requestId: live.requestId, providerId: this.active.providerId, text: this.assistantText.slice(0, 480), truncated: this.assistantText.length > 480 };
     }
     const context=this.velaHost.context(),scope=this.velaHost.scope();
     const jobScopeDigest=this.toolPermissionScopeDigest();
@@ -4309,6 +4316,12 @@ export class BackendCore {
       canonicalReadBatch:read=>this.canonicalConversationReadBatch(read),
       organize,access:(id,messageId)=>this.conversationReadAccess(id,messageId),capabilitySnapshot:this.capabilityCache.snapshot,providerRegistrySnapshot:()=>this.ordinaryRegistry(),
       sendWithContext:async()=>{throw new ServiceError('native_send_approval_required');},
+      commitShareRevocation: revoke => this.withEventTransaction(() => {
+        revoke();
+        this.record('policy/share-revoked', 'observed', undefined, randomUUID(), {
+          detached: true, providerId: 'aerynth-native',
+        });
+      }),
       contextReceipt:(executionId,resourceId,shareId,digest)=>{
         const receipt=this.state.contextSupplies?.[executionId];return receipt?.resourceId===resourceId&&receipt.items.some(i=>i.shareId===shareId&&i.digest===digest)===true;
       },
@@ -4897,10 +4910,12 @@ export class BackendCore {
     const latest=new Map<string,Execution>();for(const execution of Object.values(this.state.executions))if(allowed.has(execution.resourceId))latest.set(execution.resourceId,execution);
     if(current&&allowed.has(current.resourceId))latest.set(current.resourceId,current);
     const executions=[...latest.values()].map(publicExecution);
-    const preview=current&&allowed.has(current.resourceId)&&this.conversationAccess.resource(current.resourceId)&&['dispatching','running'].includes(current.state)&&this.assistantCursor>0&&this.assistantText&&this.canDiscloseActiveOutput()
+    const previewAllowedFor=current&&allowed.has(current.resourceId)&&this.conversationAccess.resource(current.resourceId)&&['dispatching','running'].includes(current.state)&&this.canDiscloseActiveOutput()
+      ? current.resourceId : null;
+    const preview=current&&previewAllowedFor&&this.assistantCursor>0&&this.assistantText
       ? {resourceId:current.resourceId,executionId:current.id,providerId:current.providerId,cursor:this.assistantCursor,text:this.assistantText,classification:this.port.mock?'simulated' as const:'reported' as const}
       : null;
-    return {contract:'aerynth.conversation-activity@1',resources,executions,preview};
+    return {contract:'aerynth.conversation-activity@1',resources,executions,preview,previewAllowedFor};
   }
   private answerConversationClock(input: ConversationSendInput): CommandMap['conversationClock']['output'] {
     if (input?.webSearch) return null;
@@ -5155,6 +5170,57 @@ export class BackendCore {
     const scope = workspaceId ? { workspaceId, projectId } : null;
     return scope && this.missionScopeAllowed(scope) ? scope : null;
   }
+  private rendererEventScope() {
+    const { principalId, policyVersion, currentProjectId, currentWorkspaceId } = this.velaContext();
+    return JSON.stringify([principalId, policyVersion, currentProjectId, currentWorkspaceId]);
+  }
+  private journalLatest() {
+    return Number(this.db.prepare('SELECT latest FROM integration_meta WHERE id=1').get()!.latest);
+  }
+  private rendererEventResourceAllowed(event: StreamEvent) {
+    const execution = event.executionId ? this.state.executions[event.executionId] : undefined;
+    if (event.executionId && !execution) return false;
+    const resources = new Set([event.resourceId, execution?.resourceId]);
+    for (const resourceId of resources) {
+      if (!resourceId) continue;
+      if (!this.conversationAccess.resource(resourceId)) return false;
+      const source = this.db.prepare('SELECT d.kind,r.project_id FROM desktop_resources d JOIN resources r ON d.resource_id=r.id WHERE r.id=?').get(resourceId);
+      if (source?.kind === 'folder') {
+        const folder = readFolderSource(this.db, resourceId);
+        if (folder?.grantState !== 'active' || folder.projectId !== source.project_id) return false;
+      }
+    }
+    return true;
+  }
+  private rendererEventPage(input: CommandMap['rendererEventPage']['input']): CommandMap['rendererEventPage']['output'] {
+    ensure(input && typeof input === 'object' && !Array.isArray(input) &&
+      Object.keys(input).every(key => ['after', 'limit', 'recent'].includes(key)), 'invalid_cursor');
+    const { recent = false, after = 0, limit = 250 } = input;
+    ensure(typeof recent === 'boolean' && (!recent || input.after === undefined) &&
+      Number.isSafeInteger(after) && after >= 0 && Number.isInteger(limit) && limit >= 1 && limit <= 250, 'invalid_cursor');
+    return this.kernel.withTransaction(() => {
+      // Read bounds, rows, and current access in one SQLite read snapshot. Raw rows determine
+      // coverage, including rows that the current policy excludes from delivery.
+      const scope = this.rendererEventScope();
+      const missionScope = this.missionStreamScope(), legacyMissions = new Map<string, Mission | null>();
+      const latest = this.journalLatest();
+      const earliest = this.db.prepare('SELECT min(cursor) AS value FROM intelligence_events').get()!.value as number | null;
+      const select = "SELECT cursor,dedupe,json_remove(json,'$.externalEvidence','$.externalCoverage','$.payload.delta') AS json FROM intelligence_events";
+      const rows = recent
+        ? this.db.prepare(select + ' ORDER BY cursor DESC LIMIT ?').all(limit).reverse()
+        : this.db.prepare(select + ' WHERE cursor > ? ORDER BY cursor LIMIT ?').all(after, limit);
+      const events = rows.flatMap(row => {
+        const event = JSON.parse(String(row.json)) as StreamEvent;
+        if (!this.rendererEventResourceAllowed(event)) return [];
+        if (!event.type.startsWith('vela.mission/')) return [event];
+        const projected = this.projectReplayedMissionEvent(event, String(row.dedupe), missionScope, legacyMissions);
+        return projected ? [projected] : [];
+      });
+      const scannedThrough = recent || rows.length < limit ? latest : Number(rows.at(-1)!.cursor);
+      const truncated = earliest !== null && (recent ? earliest > 1 || Number(rows[0]?.cursor) > earliest : after < earliest - 1);
+      return { events, earliest, latest, scannedThrough, truncated, scope };
+    });
+  }
   private missionStreamFields(mission: Mission, event: MissionEvent): Pick<StreamEvent, 'mission' | 'status' | 'payload'> {
     const executor = (mission.tasks.find(task => task.id === event.taskId) ??
       mission.retiredTasks?.find(task => task.id === event.taskId))?.executor;
@@ -5269,12 +5335,15 @@ export class BackendCore {
   }
   private publishLiveDelta(event: StreamEvent, delta: string) {
     if (!this.canDiscloseActiveOutput()) return;
-    try { this.emit({ ...event, payload: { redacted: true, delta } }); }
-    catch { /* Canonical output and cursor replay do not depend on the live subscriber. */ }
+    try {
+      if (!this.rendererEventTransport || this.rendererEventResourceAllowed(event))
+        this.emit({ ...event, payload: { redacted: true, delta } });
+    } catch { /* Canonical output and cursor replay do not depend on the live subscriber. */ }
   }
   private publishRecordedEvent(e:StreamEvent) {
     try {
-      if (!e.type.startsWith('vela.mission/') || this.missionLiveScopeAllowed(e)) this.emit(e);
+      if ((!this.rendererEventTransport || this.rendererEventResourceAllowed(e)) &&
+          (!e.type.startsWith('vela.mission/') || this.missionLiveScopeAllowed(e))) this.emit(e);
     } catch { /* Replay remains authoritative after a delivery failure. */ }
     const {type,classification}=e;
     if(this.vela&&classification!=='simulated'&&!type.startsWith('vela.'))try{this.vela.ingestAttention({id:e.eventId,type:type.replaceAll('/','.'),source:'aerynth.canonical-events',occurredAt:e.receivedAt,subject:e.resourceId?{id:e.resourceId,kind:'resource'}:null,severity:type.includes('failed')||type.includes('unknown')||type.includes('gap')?'warning':'info',classification,summary:'Recorded application event: '+type,correlationId:e.correlationId??e.eventId,...(type==='stream/reopened'?{coverageGap:'Collection resumed at this recorded event; offline activity is unavailable'}:{})});}catch{/* Delivery cannot falsify a committed canonical operation. */}
@@ -5776,7 +5845,7 @@ export class BackendCore {
       ensure(typeof a?.intent === 'string' && a.intent.length <= 16000, 'invalid_vela_intent');
       return await this.routeVelaNative(a.intent, a.settings,a.activeCard,a.resourceIds,a.resourceRefs) as any;
     }
-    if (!(name==='close'&&(this.active?.providerId===CHATGPT_PLAN_PROVIDER||this.active?.providerId===VELA_API_PROVIDER))&&!(name==='conversation'&&['saveDraft','saveViewState','selectView'].includes(a?.name))&&!['providerActivity','providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','mediaDescribe','mediaReadChunk','snapshot','replay','interrupt','execute','desktop','viewState','conversationCitation','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['inspectWorkspace','capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
+    if (!(name==='close'&&(this.active?.providerId===CHATGPT_PLAN_PROVIDER||this.active?.providerId===VELA_API_PROVIDER))&&!(name==='conversation'&&['saveDraft','saveViewState','selectView','revokeShare'].includes(a?.name))&&!['providerActivity','providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','mediaDescribe','mediaReadChunk','snapshot','replay','rendererEventPage','interrupt','execute','desktop','viewState','conversationCitation','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['inspectWorkspace','capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
       case 'providerAuth':return this.providerAuth(a) as any;
       case 'providerConnection':{
@@ -5897,6 +5966,10 @@ export class BackendCore {
           const authorized = cards.filter(id => placed.has(id) && this.productResourceAccess(id));
           if (authorized.length) snapshot.missionWorkroomCardIds = authorized;
         }
+        if (this.rendererEventTransport) {
+          snapshot.eventCursor = this.journalLatest();
+          snapshot.eventScope = this.rendererEventScope();
+        }
         return snapshot as any;
       }
       case 'createConversation': {const title=a.title===undefined||typeof a.title==='string'&&!a.title.trim()?'New conversation':a.title;ensure(typeof title==='string'&&title.trim()&&title.length<=200,'invalid_title');if(a.providerId===undefined||a.providerId===CHATGPT_PLAN_PROVIDER)await this.refreshOrdinaryStatus();return this.atomic(() => this.once(a.commandId, { name, ...a }, () => this.create(title.trim(), a.providerId ?? this.defaultOrdinaryProvider()))) as any;}
@@ -5974,6 +6047,7 @@ export class BackendCore {
         } catch { this.record('stream/provider-thread-unavailable', 'inferred'); return { resourceId: a.resourceId, providerThreadAvailable: false, executionOutcome: 'unchanged' } as any; }
       }
       case 'snapshot': return { contract: CONTRACT, schemaVersion: 1, conversations: Object.keys(this.state.resources).map(id => this.conv(id)), graph: this.graph.snapshot(), resourceMap: structuredClone(this.state.resources), bindings: structuredClone(this.state.bindings), handoffs: structuredClone(this.state.reviews), executions: structuredClone(this.state.executions), messageEvidence: structuredClone(this.state.messageEvidence), resources: Object.keys(this.state.resources).map(id => this.kernel.getResource(id)), relationships: Object.keys(this.state.resources).flatMap(id => this.kernel.listRelationships(id)) } as any;
+      case 'rendererEventPage': return this.rendererEventPage(a) as CommandMap[K]['output'];
       case 'replay': {
         const after = a.after ?? 0, limit = a.limit ?? 100;
         ensure(Number.isSafeInteger(after) && after >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 1000, 'invalid_cursor');

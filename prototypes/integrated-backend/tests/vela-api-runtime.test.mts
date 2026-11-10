@@ -430,3 +430,46 @@ test('explicitly attached source data requires native review even with durable A
     assert.equal(f.requests.length,0);
   } finally { await f.close(); }
 });
+
+test('a stalled foreground API preview loses disclosure when its connection is revoked', {timeout: 5000}, async () => {
+  const f = fixture();
+  let closeStream: (() => void) | undefined;
+  let sending: Promise<VelaRequest> | undefined;
+  try {
+    await f.configure();
+    await f.authorize();
+    const owner = f.core as any;
+    const emit = owner.emit;
+    let observePreview!: () => void;
+    const previewObserved = new Promise<void>(resolve => { observePreview = resolve; });
+    owner.emit = (event: StreamEvent) => {
+      emit(event);
+      if (event.payload.delta) observePreview();
+    };
+    const text = 'Synthetic foreground partial response';
+    f.replies.push(() => new Response(new ReadableStream({
+      start(stream) {
+        closeStream = () => stream.close();
+        for (const event of [
+          {type: 'response.created', response: {id: 'resp-preview', status: 'in_progress'}},
+          {type: 'response.output_text.delta', delta: text},
+        ]) stream.enqueue(Buffer.from('data: ' + JSON.stringify(event) + '\n\n'));
+      },
+    }), {headers: {'Content-Type': 'text/event-stream'}}));
+    sending = f.send('Explain the difference between mass and weight', {providerId: 'openai-api-vela'});
+    await Promise.race([previewObserved, sending.then(() => { throw Error('Provider settled before preview'); })]);
+    const resourceId = owner.active.resourceId as string;
+    const read = () => f.core.command('conversationActivity', {resourceIds: [resourceId]});
+    assert.equal((await read()).preview?.text, text);
+    const before = await f.core.command('vela', {name: 'state', input: {}}) as VelaState;
+    assert.equal(before.activeAnswer?.text, text);
+    await f.core.command('velaApiUsageAuthorize', {expectedVersion: 1, enabled: false});
+    assert.equal((await read()).preview, null);
+    const after = await f.core.command('vela', {name: 'state', input: {}}) as VelaState;
+    assert.equal(after.activeAnswer, undefined);
+  } finally {
+    closeStream?.();
+    await sending?.catch(() => {});
+    await f.close();
+  }
+});

@@ -103,6 +103,8 @@ export type PublicConversationExecution = {
 /** Read-only, scoped to at most 64 requested conversations per call. Live text
  * is the existing ephemeral provider buffer, never a second transcript store. */
 export type ConversationActivitySnapshot = {
+  /** Current execution resource whose live output can be disclosed, even before text arrives. */
+  previewAllowedFor?: string | null;
   contract: "aerynth.conversation-activity@1";
   resources: { resourceId: string; available: boolean }[];
   /** Current active or latest retained execution per requested readable resource. */
@@ -168,6 +170,9 @@ export type WorkspacePresence = {
 export type SavedWorkspaceLayout = { id: string; name: string; createdAt: string };
 export type DesktopSnapshot = {
   contract: "aerynth.desktop@1";
+  /** Core journal high-water sampled with this canonical desktop projection. */
+  eventCursor?: number;
+  eventScope?: string;
   revision: number;
   projects: Project[];
   workspaces: Workspace[];

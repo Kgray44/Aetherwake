@@ -35,7 +35,7 @@ export function decorateConversationDisclosure(node: HTMLDetailsElement, summary
 export type ConversationExecutionObservation = {
   execution?: ConversationExecution; connection?: 'available'|'unavailable'; resourceAvailable?: boolean;
   /** Complete, access-checked live buffer from the same canonical execution, through cursor. */
-  preview?: { executionId: string; cursor: number; text: string };
+  preview?: { executionId: string; cursor: number; text: string } | null;
   delta?: { eventId: string; cursor: number; text: string };
 };
 export interface ConversationExecutionPort {
@@ -567,13 +567,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     // An activity signal cannot grant access. Only a later successful canonical detail read restores it.
     if(accessRevoked)return;
     if(observation.connection)connection=observation.connection;
-    if(connection==='unavailable'){report('Connection unavailable. '+(execution?'Last observed: '+execution.state+'. Outcome unconfirmed.':'Execution state is unavailable.'));renderDraft();}
+    if(connection==='unavailable'){
+      streamText.textContent='';stream.hidden=true;lastCursor=-1;seenEvents.clear();streamLimited=false;liveFollow=false;
+      report('Connection unavailable. '+(execution?'Last observed: '+execution.state+'. Outcome unconfirmed.':'Execution state is unavailable.'));renderDraft();
+    }
     const next=observation.execution??execution;if(!next)return;
     if(execution&&next.id!==execution.id&&next.startedAt<execution.startedAt)return;
     if(execution?.id===next.id&&!['dispatching','running'].includes(execution.state)&&['dispatching','running'].includes(next.state))return;
     execution=next;
     if(streamExecution!==next.id){streamExecution=next.id;streamText.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;liveFollow=false;}
     const preview=observation.preview;
+    if(preview===null){streamText.textContent='';lastCursor=-1;seenEvents.clear();streamLimited=false;liveFollow=false;}
     if(preview&&active()&&preview.executionId===next.id&&Number.isSafeInteger(preview.cursor)&&preview.cursor>=0&&preview.cursor>=lastCursor){
       // A complete snapshot supersedes only output through its cursor. Earlier/equal deltas are then covered.
       const text=preview.text.slice(0,1048576);if(streamText.textContent!==text)streamText.textContent=text;lastCursor=preview.cursor;seenEvents.clear();streamLimited=preview.text.length>1048576;

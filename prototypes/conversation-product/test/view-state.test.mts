@@ -9,6 +9,7 @@ import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import type { ConversationGraph } from '../../connected-conversations/src/graph.ts';
 import { ConversationProduct, type CanonicalConversationHost, type ConversationReadView } from '../src/service.mts';
 import { CONVERSATION_VIEW_LIMITS as limits, type ProductCommandMap } from '../src/contracts.ts';
+import { ConversationViewPersistence } from '../src/view-persistence.ts';
 
 function fixture(){
  const dir=mkdtempSync(join(tmpdir(),'aerynth-view-state-')),path=join(dir,'canonical.sqlite'),core=new BackendCore({path,contentPolicy:'synthetic-only',provider:'fixture'});
@@ -69,6 +70,46 @@ test('draft acknowledgement version is exact, stale selection is pruned read-onl
   await assert.rejects(f.product.command('saveViewState',{...input,expectedVersion:first.version,position:read.position,selection:{draftVersion:later.version,start:0,end:later.content.length+1,direction:'forward'}}),/invalid_conversation_view_selection/);
   const next=await f.product.command('saveViewState',{...input,expectedVersion:first.version,position:read.position,selection:{draftVersion:later.version,start:0,end:9,direction:'forward'}});assert.equal(next.version,2);assert.equal(next.selection?.draftVersion,later.version);assert.deepEqual(await f.product.command('readDraft',{resourceId:c.resourceId}),later);
  }finally{await f.cleanup();}
+});
+
+test('a capture retired by a canonical message append leaves navigation and the next capture usable',async()=>{
+ const f=fixture();let release!:()=>void;
+ const gate=new Promise<void>(resolve=>release=resolve);
+ try{
+  const {c,draft,input}=await seed(f),first=await f.product.command('saveViewState',input);
+  const readStored=()=>f.db.prepare('SELECT version,json FROM cp_views WHERE resource_id=?').get(c.resourceId);
+  const original=readStored();let entered!:()=>void;const saving=new Promise<void>(resolve=>entered=resolve);
+  const attempts:number[]=[];let rejected:unknown;
+  const persistence=new ConversationViewPersistence({port:{
+   async command(name,request){
+    if(name==='saveViewState'){
+     attempts.push((request as ProductCommandMap['saveViewState']['input']).position!.conversationRevision);
+     if(attempts.length===1){entered();await gate;}
+    }
+    try{return await f.product.command(name,request);}catch(error){rejected=error;throw error;}
+   },
+  }});
+  await persistence.restore(c.resourceId);
+  const capture={resourceId:c.resourceId,position:{...input.position!,anchor:{...input.position!.anchor!,offsetY:19}},selection:input.selection,draftReady:true};
+  persistence.remember(capture);
+  await saving;
+  const appended=await f.core.command('addMessage',{resourceId:c.resourceId,role:'user',content:'SYNTHETIC append during view save',expectedRevision:2});
+  release();
+  await persistence.flush();
+  const destination={kind:'constellation' as const,projectId:null};
+  const arrived=await f.core.command('desktop',{type:'navigate',target:destination});
+  assert.deepEqual(arrived.navigation,destination);
+  assert.match(String(rejected),/stale_view_conversation_revision/);
+  assert.deepEqual(readStored(),original);
+  assert.deepEqual(await f.product.command('readDraft',{resourceId:c.resourceId}),draft);
+  assert.deepEqual(attempts,[2]);
+  persistence.remember({...capture,position:{conversationRevision:3,anchor:{messageId:appended.id,offsetY:5}}});
+  await persistence.flush();
+  const next=(await f.product.command('readViewState',{resourceId:c.resourceId})).view!;
+  assert.equal(next.version,first.version+1);
+  assert.equal(next.position?.anchor?.messageId,appended.id);
+  assert.deepEqual(attempts,[2,3]);
+ }finally{release();await f.cleanup();}
 });
 
 test('unrelated/inherited/revoked anchors and denied or archived selected resources cannot disclose old IDs or erase metadata',async()=>{

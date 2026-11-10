@@ -401,7 +401,7 @@ export interface VelaState {
   fileProposals?: VelaFileProposal[];
   recoverableProviderRequestIds?: string[];
   /** Bounded transient excerpt of the active conversational response. */
-  activeAnswer?: { requestId: string; text: string; truncated: boolean };
+  activeAnswer?: { requestId: string; providerId?: string; text: string; truncated: boolean };
   capabilities: CapabilityDescriptor[]; requests: VelaRequest[]; plans: VelaPlan[];
   receipts: ActionReceipt[]; preferences: AttentionPreferences; attention: AttentionItem[];
   lastPresenceAt: string | null; coverage: 'authorized-app-events-only';

@@ -10,6 +10,7 @@ export function createVelaClient(options: {
   command(name: string, input: unknown): Promise<unknown>;
   changed(name: string, result: unknown, mayPresent?: () => boolean): Promise<void>;
   presentationFence?(): () => boolean;
+  observationFence?(): () => boolean;
   observed(state: VelaState): void;
   presentation?(): WorkspacePresentationContext | null;
   activeCard?(): VelaActiveCard | undefined;
@@ -19,14 +20,18 @@ export function createVelaClient(options: {
       name === "request" || name === "apply"
         ? options.presentationFence?.()
         : undefined;
+    const observing = name === "state" || name === "open";
+    const current = observing ? options.observationFence?.() : undefined;
     const presentation = name === "apply" ? options.presentation?.() : null;
     const result = await options.command("vela", {
       name,
       input,
       ...(presentation ? { presentation: structuredClone(presentation) } : {}),
     });
-    if (name === "state" || name === "open")
+    if (observing) {
+      if (current && !current()) throw Error("vela_observation_superseded");
       options.observed(result as VelaState);
+    }
     if (
       [
         "native",

@@ -10,6 +10,7 @@ export type EventWindow = {
   earliest: number | null;
   latest: number;
   disconnected: boolean;
+  recoveredGap?: boolean;
   resources: readonly { id: string; projectId: string | null; title: string }[];
   workspaceResourceIds: readonly string[];
   workspaceId?: string | null;
@@ -446,6 +447,7 @@ export function mountEventExperience(
       window.events.some((event) => /gap|reorder|reopened/.test(event.type))
         ? "The captured window includes a recorded gap, reorder or reconnect marker."
         : "",
+      window.recoveredGap ? "Retained history had a gap. Current state was read from its source." : "",
       `Journal cursors ${window.earliest ?? "unavailable"}–${window.latest}.`,
     ]
       .filter(Boolean)

@@ -46,7 +46,7 @@ contextBridge.exposeInMainWorld(
         ![
           "desktop",
           "capabilities",
-          "replay",
+          "rendererEventPage",
           "executionStatus",
           "conversationActivity",
           "reconcileConversationTurn",
