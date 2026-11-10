@@ -1104,6 +1104,96 @@ test('AIR refuses invalid pins, execution through the conversation provider and 
   } finally { await f.close(); }
 });
 
+test('ordinary provider cannot admit local execution, while Codex and file mentions in advice stay conversational', async () => {
+  const f = fixture();
+  try {
+    const base = { adaptive: true as const, resourceIds: [] };
+    for (const intent of ['Patch parser.mjs to handle empty rows', 'Inspect the checkout logs for the exit code',
+      'Describe the parser failure, then patch parser.mjs.']) {
+      for (const pin of [undefined, providerId]) {
+        await assert.rejects(f.core.command('velaRequestPreview', { ...base, intent, providerId: pin }),
+          /vela_local_execution_unavailable/);
+      }
+    }
+    assert.equal(f.requests.length + f.codexCalls + f.secretReads, 0);
+    const intent = 'Could you show me how Codex could write parser.mjs without touching the file?';
+    const preview = await f.core.command('velaRequestPreview', { ...base, intent, providerId });
+    assert.equal(preview.providerId, providerId);
+    assert.equal(preview.route?.kind, 'conversational');
+    const scope = { previewId: preview.id, signature: preview.signature };
+    const review = await f.core.command('velaNativeReview', scope);
+    const grant = await f.core.command('authorizeVelaRequest', { ...scope, reviewDigest: review.reviewDigest });
+    f.responses.push(() => complete('resp-file-advice', 'Synthetic file-edit advice'));
+    const result = await f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId: grant.grantId,
+    } }) as VelaRequest;
+    assert.equal(result.state, 'failed', 'synthetic provider text cannot be adopted as real Vela provenance');
+    const snapshot = await f.core.command('snapshot', {});
+    const execution = Object.values(snapshot.executions)[0];
+    assert.equal(execution.state, 'provider_completed');
+    assert.equal(snapshot.messageEvidence[execution.outputMessageId!].classification, 'simulated');
+    assert.equal(result.providerId, providerId);
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.codexCalls, 0);
+  } finally { await f.close(); }
+});
+
+test('reviewed ordinary advice can read an attached canonical note without local execution', async () => {
+  const f = fixture();
+  try {
+    const created = await f.core.command('desktop', { type: 'createResource', kind: 'note',
+      title: 'Synthetic selected source', workspaceId: null });
+    const note = created.resources.find(resource => resource.title === 'Synthetic selected source')!;
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version,
+      content: 'Synthetic source observation: the pump cycles every six minutes.' });
+    const intent = 'Read the source note and summarize it.';
+    const resourceIds = [note.id];
+    const preview = await f.core.command('velaRequestPreview', { adaptive: true, intent, resourceIds, providerId });
+    assert.equal(preview.route?.kind, 'conversational');
+    const scope = { previewId: preview.id, signature: preview.signature };
+    const review = await f.core.command('velaNativeReview', scope);
+    const grant = await f.core.command('authorizeVelaRequest', { ...scope, reviewDigest: review.reviewDigest });
+    f.responses.push(() => complete('resp-selected-note'));
+    await f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds, authorizeProvider: true, previewId: preview.id, grantId: grant.grantId,
+    } });
+    assert.equal(f.requests.length, 1);
+    assert.match(JSON.stringify(f.requests[0].input), /pump cycles every six minutes/);
+    assert.equal(Object.values((await f.core.command('snapshot', {})).executions)[0].state, 'provider_completed');
+    assert.equal(f.codexCalls, 0);
+  } finally { await f.close(); }
+});
+
+test('a turn Codex destination replaces inherited Responses pins and admits only reviewed Codex', async () => {
+  const f = fixture(true);
+  try {
+    f.setListedModels([documentedModel]);
+    await f.core.command('ordinaryProviderCheck', {});
+    await f.core.command('vela', { name: 'saveRoutingSettings', input: { scope: 'global', id: null, expectedVersion: 0,
+      defaults: { providerId, model: documentedModel.id, reasoningEffort: 'medium' } } });
+    const intent = 'Audit the repository logs for the exit code';
+    const ask = { adaptive: true as const, intent, resourceIds: [], mode: 'codex' as const, reasoningEffort: 'high' as const };
+    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, providerId }), /vela_pinned_provider_cannot_execute/);
+    const preview = await f.core.command('velaRequestPreview', ask);
+    assert.equal(preview.providerId, 'codex-app-server');
+    assert.equal(preview.route?.kind, 'agentic');
+    assert.equal(preview.routingSettings?.effective.providerId, undefined);
+    assert.equal(preview.routingSettings?.effective.model, undefined);
+    assert.equal(preview.routingSettings?.effective.reasoningEffort, 'high');
+    assert.equal(preview.route.effort, 'high');
+    const scope = { previewId: preview.id, signature: preview.signature };
+    const review = await f.core.command('velaNativeReview', scope);
+    const grant = await f.core.command('authorizeVelaRequest', { ...scope, reviewDigest: review.reviewDigest });
+    const result = await f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId: grant.grantId,
+    } }) as VelaRequest;
+    assert.equal(result.state, 'responded', result.errorCode);
+    assert.equal(result.providerId, 'codex-app-server');
+    assert.equal((await f.core.command('providerActivity', {})).providerRequests, 1);
+    assert.equal(f.requests.length + f.secretReads, 0);
+  } finally { await f.close(); }
+});
+
 test('explicit Codex composite intent keeps its actual owner, selected-source fences and one reviewed execution',async()=>{
   const f=fixture(true);try{
     const created=await f.core.command('desktop',{type:'createResource',kind:'note',title:'Synthetic explicit inspection source',workspaceId:null}),note=created.resources.find(resource=>resource.title==='Synthetic explicit inspection source')!;
@@ -1120,6 +1210,22 @@ test('explicit Codex composite intent keeps its actual owner, selected-source fe
     const request=await f.core.command('vela',{name:'request',input:{intent,resourceIds:[note.id],authorizeProvider:true,previewId:fresh.id,grantId:grant.grantId}}) as VelaRequest;
     assert.equal(request.state,'responded',request.errorCode);assert.equal(request.providerId,'codex-app-server');assert.equal((await f.core.command('providerActivity',{})).providerRequests,1);assert.equal(f.requests.length,0);assert.equal(f.secretReads,0);
   }finally{await f.close();}
+});
+
+test('automatic routing keeps exact workspace navigation local with a qualified API', async () => {
+  const f = fixture();
+  try {
+    const api = f.owner.velaApiRuntime;
+    api.authorized = () => true;
+    api.configurationVersion = () => 1;
+    const workspace = await f.core.command('workspace', { title: 'Synthetic exact navigation' });
+    const result = await f.core.command('velaRouteNative', { intent: 'Could you open the workspace Synthetic exact navigation?' });
+    assert(result.matched);
+    assert.equal(result.request.state, 'completed');
+    assert.equal(result.request.providerId, null);
+    assert.equal((await f.core.command('desktop', { type: 'snapshot' })).activeWorkspaceId, workspace.id);
+    assert.equal(f.requests.length + f.secretReads + f.codexCalls, 0);
+  } finally { await f.close(); }
 });
 
 test('a model-only pin keeps native checklist routing while automatic and explicit API retain their route', async () => {
