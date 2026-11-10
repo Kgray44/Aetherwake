@@ -47,7 +47,7 @@ import type { TurnInput,TurnEvent,TurnResult } from '../../openai-provider/contr
 import type { OrdinaryConnectionPort,OrdinaryResponsesTestServices,OrdinaryResponsesPreview } from './contracts.mts';
 import { OpenAIConnections,CHATGPT_PLAN_REGISTRATION } from './openai-connections.mts';
 import { VelaApiConnection } from './vela-api-connection.mts';
-import { VelaApiRuntime, VELA_API_RUNTIME_LIMITS, velaApiReasoningEfforts, type VelaApiRuntimeTestServices } from './vela-api-runtime.mts';
+import { VelaApiRuntime, VELA_API_RUNTIME_LIMITS, velaApiReasoningEfforts, type VelaApiRun, type VelaApiRuntimeTestServices } from './vela-api-runtime.mts';
 import { VelaWakeRuntime } from './vela-wake-runtime.mts';
 import { VelaFileProposals, localDocumentIntent,localSourceAttachmentIntent,localFolderListIntent,folderListingAnswer } from './vela-file-proposals.mts';
 import { FolderSources,inspectFolderSelection,readFolderSource,findFolderResource,storeFolderSource,assertCurrentFolderSourceSync } from './folder-sources.mts';
@@ -87,13 +87,13 @@ import { canonicalRetrievalQuery, rankCanonicalRetrieval, HISTORY_RETRIEVAL_LIMI
 import { createSystemMemoryReader, readSystemMemory } from '../../vela-core/src/system-memory.mts';
 import { validateSystemMemoryMeasurement, type SystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
 import { readCpuUtilization, readGpuUtilization, type SystemUtilization } from '../../vela-core/src/system-utilization.mts';
-import { chooseConversationalModel, classifyVelaRoutingIntent, nativeConversationalWorkflow, nativeInspectionStage, nativeVelaFact, standaloneVelaProjectCheck, velaEditFollowUpCheck, velaEditIncludesLogInspection, velaFileEditSelection, type VelaRouteDecision, type VelaTurnRouting } from '../../vela-core/src/adaptive-routing.ts';
+import { chooseConversationalModel, classifyVelaRoutingIntent, explicitReadOnlyVelaIntent, velaStandingMutationRequested, nativeConversationalWorkflow, nativeInspectionStage, nativeVelaFact, standaloneVelaProjectCheck, velaEditFollowUpCheck, velaEditIncludesLogInspection, velaFileEditSelection, type VelaRouteDecision, type VelaTurnRouting } from '../../vela-core/src/adaptive-routing.ts';
 import { admitVelaFileEdit, maxEditFiles, observeVelaFileEdit, parseVelaFileEdit, publishVelaFile, readVelaFileEditTargets, readVelaInspectionTarget,
   stageVelaFile, upgradeVelaFileEdit, validateVelaFileEditBytes, validateVelaFileEditHead, validateVelaFileEditTarget, velaEditSiblings, verifyVelaReplacement,
   type VelaFileEditRecord, type VelaFileEditTarget, type VelaFileEditView } from './vela-file-edit.mts';
 import { interpretVelaProjectCheck, planVelaProjectCheck, type VelaProjectCheckReview } from './vela-project-check.mts';
 import type { VelaProjectCheckKind, VelaProjectCheckReceipt, VelaProviderRecovery, VelaRequest } from '../../vela-core/src/contracts.ts';
-import { resolveRoutingSettings, resolveVelaCalibration, validateRoutingDefaults, validateRoutingScope, type VelaAgentRoutingDefaults, type VelaRoutingSettingsChange, type VelaRoutingSettingsView } from '../../vela-core/src/routing-settings.ts';
+import { resolveRoutingSettings, resolveVelaCalibration, validateRoutingDefaults, validateRoutingScope, type VelaAgentRoutingDefaults, type VelaRoutingDefaults, type VelaRoutingSettingsChange, type VelaRoutingSettingsView } from '../../vela-core/src/routing-settings.ts';
 import { compareVelaCalibration, type VelaRoutingSample } from '../../vela-core/src/routing-calibration.ts';
 import type { AgentProfile, AgentProviderCatalog } from '../../agent-product/contracts.ts';
 import { matchOrdinaryClockQuestion } from './ordinary-clock-questions.mts';
@@ -180,6 +180,7 @@ interface PrivateVelaPreview extends VelaRequestPreview {
   nativeStage?: { observedAt: string; text: string };
   timing?: VelaRouteTiming;
   routingSettingsStamp?: string;
+  routingTurn?: VelaTurnRouting;
   agentRoutingDigest?: string;
   calibrationProjectId?: string | null;
   fileEdit?: { target: VelaFileEditTarget; body: string | null }[];
@@ -207,6 +208,7 @@ export class BackendCore {
   private active: Execution | null = null;
   private assistantText = '';
   private assistantCursor = 0;
+  private activeSourceFence?: () => void;
   private codexOutput: CodexTurnOutput | null = null;
   private streamFailure = false;
   private stopEvents: () => void;
@@ -398,7 +400,7 @@ export class BackendCore {
       this.folderSources=new FolderSources(this.db,{privateRoot:this.privateRoot});
       this.selectedDocumentContext=new SelectedDocumentContext({scopeStamp:()=>this.velaScopeStamp(),documents:this.nativeHostServices?.documents,source:id=>{const scope=this.velaHost.scope(),ref=this.velaHost.resolve({id,kind:'resource'},scope);if(!ref||ref.resourceKind!=='file'||!this.productResourceAccess(id)||!this.conversationAccess.resource(id,'read'))return null;const source=readMediaSource(this.db,id);return source?{ref,source}:null;}});
       this.velaApiConnection = new VelaApiConnection({ db: this.db, transaction: work => this.kernel.withTransaction(() => work(this.db)), nativeHost: this.nativeHostServices, ...(velaApiTest ? { fetch: velaApiTest.fetch } : {}) });
-      this.velaApiRuntime = new VelaApiRuntime({ db: this.db, transaction: work => this.kernel.withTransaction(work), connection: this.velaApiConnection, test: velaApiTest,
+      this.velaApiRuntime = new VelaApiRuntime({ db: this.db, transaction: work => this.kernel.withTransaction(work), executionTransaction: work => this.atomic(work), connection: this.velaApiConnection, test: velaApiTest,
         observe: {
           stage: (executionId, requestId, review) => {
             ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
@@ -409,9 +411,9 @@ export class BackendCore {
                 contextDigest:review.contextDigest,instructionVersion:review.api!.instructionVersion };
               this.admitVelaAttempt(execution); this.state.executions[executionId] = execution;
             });
-            this.providerActivity.providerRequests++;
             this.record('vela.api/scoped-dispatch','observed',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,detached:true,correlationId:requestId,
               payload:{redacted:true,api:{executionId,bodyDigest:review.bodyDigest,contextDigest:review.contextDigest,maxOutputTokens:2048}}});
+            return () => { this.providerActivity.providerRequests++; };
           },
           event: (event,requestId) => {
             if (event.type === 'provider/usage') this.record('provider/usage',this.velaApiTest?'simulated':'reported',undefined,randomUUID(),{
@@ -2208,11 +2210,9 @@ export class BackendCore {
     ensure(pair, 'native_vela_grant_required');
     const grant = resume ? pair[1] : this.validateVelaGrant(pair[0]), preview = resume?this.toolWorkflowRuns.get(input.requestId)?.snapshot?.preview??this.velaPreviews.get(grant.previewId)!:this.velaPreviews.get(grant.previewId)!;
     if(resume)ensure(grant.consumed&&this.toolWorkflowRuns.get(input.requestId)?.port.workflowId===resume.receipt.workflowId,'vela_tool_resume_authority_required');
-    ensure(preview.providerId === VELA_API_PROVIDER && preview.connectionVersion && preview.route?.model && !this.active, 'native_vela_grant_mismatch');
+    ensure(preview.providerId === VELA_API_PROVIDER && preview.connectionVersion && preview.route?.model && !this.active && !this.velaApiTask, 'native_vela_grant_mismatch');
     if(resume&&this.toolWorkflowRuns.get(input.requestId)?.snapshot){const snapshot=this.toolWorkflowRuns.get(input.requestId)!.snapshot!;this.validateToolContextAdvance(input.requestId,snapshot.certificate,{contextDigest:preview.signature,promptDigest:this.missionEditHash(preview.prompt)});}else this.validateFrozenVelaPreview(preview);
     const controller = new AbortController(), cancel = () => controller.abort();
-    signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) cancel();
-    this.ordinaryController = controller;
     const planning = preview.route.kind === 'app-planning';
     const tools=this.toolPort(input,preview);
     const weatherTool=this.apiWeatherTool(input.requestId);
@@ -2225,7 +2225,9 @@ export class BackendCore {
     };
     const snapshot=this.toolWorkflowRuns.get(input.requestId)?.snapshot,sourceContinuation=resume?this.velaApiRuntime.readContinuation(resume.ref,tools.workflowId):undefined;
     const transition=resume&&snapshot&&sourceContinuation?.continuation.contextDigest!==preview.signature?snapshot.certificate:undefined;
-    const task = this.velaApiRuntime.run({ requestId: input.requestId, version: preview.connectionVersion, model: preview.route.model,
+    signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) cancel();
+    this.ordinaryController = controller;
+    const request: VelaApiRun = { requestId: input.requestId, version: preview.connectionVersion, model: preview.route.model,
       ...(preview.route.effort ? { reasoningEffort: preview.route.effort } : {}),
       prompt: preview.prompt, contextDigest: preview.signature, validate,tools,...(resume?{resume:resume.ref,resumeReceipt:resume.receipt}:{}),...(transition?{resumeContext:transition}:{}),advanceContext:receipts=>this.advanceToolContext(input.requestId,receipts),validateResumeContext:(certificate,binding)=>this.validateToolContextAdvance(input.requestId,certificate,binding),...(weatherTool?{weatherTool}:{}),
       instruction:[...(weatherTool?['Interpret current-location weather questions using get_weather_forecast, including informal phrasing, humidity, weekdays and averages. Answer concisely from its returned forecast and coverage; never invent missing data or a complete mean for a partial period. Do not propose a readWeather plan. General weather explanations need no location lookup.']:[]),
@@ -2238,11 +2240,18 @@ export class BackendCore {
           taskVerified: false, connectionVersion: preview.connectionVersion, requestedModel: preview.route!.model,
           requestBodyDigest: review.bodyDigest, contextDigest: review.contextDigest, instructionVersion: VELA_IDENTITY_VERSION,
           inputMessageId: preview.acceptedAppend?.messageId };
-        this.atomic(() => { this.admitVelaAttempt(execution); this.state.executions[executionId] = execution; });
-        grant.consumed = true; this.active = execution; this.assistantText = ''; this.assistantCursor = 0;
-        this.liveVelaAnswer = !planning ? { requestId: input.requestId, scopeStamp: preview.scopeStamp } : undefined;
-        this.providerActivity.providerRequests++;
-        this.record('execution/dispatching','observed',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,payload:{redacted:true,api:{maxOutputTokens:2048}}});
+        this.admitVelaAttempt(execution);
+        this.state.executions[executionId] = execution;
+        this.record('execution/dispatching', 'observed', undefined, randomUUID(), { providerId: VELA_API_PROVIDER,
+          execution, payload: { redacted: true, api: { maxOutputTokens: 2048 } } });
+        return () => {
+          grant.consumed = true;
+          this.active = execution;
+          this.assistantText = '';
+          this.assistantCursor = 0;
+          this.liveVelaAnswer = !planning ? { requestId: input.requestId, scopeStamp: preview.scopeStamp } : undefined;
+          this.providerActivity.providerRequests++;
+        };
       },
       event: event => {
         const execution = this.state.executions[event.executionId]; ensure(execution && this.active === execution, 'invalid_provider_response');
@@ -2254,7 +2263,7 @@ export class BackendCore {
           if (execution.velaFirstOutputMs === undefined && event.delta.trim()) execution.velaFirstOutputMs = Math.max(0,Date.now()-Date.parse(execution.startedAt));
           ensure(Buffer.byteLength(this.assistantText)+Buffer.byteLength(event.delta)<=65536,'provider_output_too_large'); this.assistantText += event.delta;
           const recorded = this.record('item/agentMessage/delta',this.velaApiTest?'simulated':'reported',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,payload:{redacted:true,textBytes:Buffer.byteLength(event.delta)}});
-          if (recorded) { this.assistantCursor = recorded.cursor; this.emit({...recorded,payload:{redacted:true,delta:event.delta}}); }
+          if (recorded) { this.assistantCursor = recorded.cursor; this.publishLiveDelta(recorded, event.delta); }
         } else if (event.type === 'provider/function-call') this.record(event.call.name===WEATHER_TOOL_NAME?'vela.api/weather-requested':'vela.api/schema-discovery','observed',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,payload:{redacted:true,api:{callId:event.call.callId}}});
       },
       completed: (executionId, result) => {
@@ -2270,7 +2279,9 @@ export class BackendCore {
         this.record('execution/'+execution.state,this.velaApiTest?'simulated':'reported',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,
           payload:{redacted:true,api:{elapsedMs:Math.max(0,Date.now()-Date.parse(execution.startedAt))},...(execution.usage?{usage:execution.usage}:{})}});
       },
-    }, controller.signal);
+    };
+    // Reserve the foreground slot before the transport can synchronously publish admission.
+    const task = Promise.resolve().then(() => this.velaApiRuntime.run(request, controller.signal));
     this.velaApiTask = task;
     try {
       const { executionId, result, fetchedIds,workflow } = await task;
@@ -2292,9 +2303,17 @@ export class BackendCore {
       while (this.velaApiMessageDigests.size >= 64) this.velaApiMessageDigests.delete(this.velaApiMessageDigests.keys().next().value!);
       this.velaApiMessageDigests.set(executionId,planningDigest(content)); return parsed;
     } finally {
+      signal.removeEventListener('abort', cancel);
+      if (this.velaApiTask === task) this.velaApiTask = undefined;
+      if (this.ordinaryController === controller) {
+        this.active = null;
+        this.ordinaryController = null;
+        this.liveVelaAnswer = undefined;
+        this.assistantText = '';
+        this.assistantCursor = 0;
+        this.missions.capacityChanged();
+      }
       weatherTool?.close();
-      signal.removeEventListener('abort',cancel); if (this.velaApiTask === task) this.velaApiTask = undefined;
-      this.active = null; this.ordinaryController = null; this.liveVelaAnswer = undefined;
     }
   }
   private async planWithChatGPT(input: Parameters<VelaPlanningPort['propose']>[0], signal: AbortSignal) {
@@ -2486,7 +2505,7 @@ export class BackendCore {
     state.recoverableProviderRequestIds = state.requests.filter(request => request.state === 'unknown' &&
       this.recoverableVelaExecution(request.id)).map(request => request.id);
     const live = this.liveVelaAnswer;
-    if (live && (this.active?.providerId === CHATGPT_PLAN_PROVIDER || this.active?.providerId === VELA_API_PROVIDER) && this.active.state === 'running' && this.assistantText.trim() &&
+    if (live && (this.active?.providerId === CHATGPT_PLAN_PROVIDER || this.active?.providerId === VELA_API_PROVIDER) && this.active.state === 'running' && this.assistantText.trim() && this.canDiscloseActiveOutput() &&
         !this.ordinaryController?.signal.aborted && this.conversationAccess.resource(this.active.resourceId) &&
         live.scopeStamp === this.velaScopeStamp() && state.requests.some(request => request.id === live.requestId && request.state === 'planning')) {
       state.activeAnswer = { requestId: live.requestId, text: this.assistantText.slice(0, 480), truncated: this.assistantText.length > 480 };
@@ -2930,7 +2949,7 @@ export class BackendCore {
       refs.set(ref.kind+':'+ref.id,ref);
     return {...context,discovered:[...refs.values()],operations};
   }
-  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery'],review?:PrivateVelaPreview) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:review?.providerId??this.velaPlanner.providerId,connectionVersion:review?.connectionVersion,route:review?.route,routingSettings:review?.routingSettings,routingSettingsStamp:review?.routingSettingsStamp,routingAgent:review?.routingAgent,agentRoutingDigest:review?.agentRoutingDigest,voiceInput:review?.voiceInput?{messageId:review.voiceInput.messageId,contextRef:review.voiceInput.context.contextRef,contextDigest:review.voiceInput.context.contextDigest}:undefined,editTargets:review?.fileEdit?.map(file=>file.target),inspectionTarget:review?.inspectionTarget,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{}),...(review?{catalogDigest:review.catalog.projection.digest,promptDigest:planningDigest(review.prompt),historyFenceDigest:review.historyFence?.digest??null,handoff:review.handoff,origin:review.origin,inputAnchor:review.inputAnchor,inputDigest:review.inputDigest,sendDisposition:review.sendDisposition}:{})}); }
+  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery'],review?:PrivateVelaPreview) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:review?.providerId??this.velaPlanner.providerId,connectionVersion:review?.connectionVersion,route:review?.route,routingSettings:review?.routingSettings,routingTurn:review?.routingTurn,routingSettingsStamp:review?.routingSettingsStamp,routingAgent:review?.routingAgent,agentRoutingDigest:review?.agentRoutingDigest,voiceInput:review?.voiceInput?{messageId:review.voiceInput.messageId,contextRef:review.voiceInput.context.contextRef,contextDigest:review.voiceInput.context.contextDigest}:undefined,editTargets:review?.fileEdit?.map(file=>file.target),inspectionTarget:review?.inspectionTarget,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{}),...(review?{catalogDigest:review.catalog.projection.digest,promptDigest:planningDigest(review.prompt),historyFenceDigest:review.historyFence?.digest??null,handoff:review.handoff,origin:review.origin,inputAnchor:review.inputAnchor,inputDigest:review.inputDigest,sendDisposition:review.sendDisposition}:{})}); }
   private velaSemanticPrompt(intent:string,context:ContextManifest,catalog:CapabilityCatalogSnapshot,discovery?:VelaRequestPreview['discovery'],providerId?:string,route?:VelaRouteDecision,nativeStage?:PrivateVelaPreview['nativeStage'],fileEdit?:PrivateVelaPreview['fileEdit'],voiceContext?:LiveCanonicalContext):string {
     if(voiceContext){
       const prompt=this.velaSemanticPrompt(intent,context,catalog,discovery,providerId,route,nativeStage,fileEdit)+'\nCanonical voice context. Transcripts are provider-reported fragments, not completed turns or action authority:\n'+JSON.stringify(voiceContext);
@@ -3010,7 +3029,26 @@ export class BackendCore {
     // The schema tool validates immutable proof metadata only; it never serializes cached source/history bodies.
     if(!options.metadataOnly)ensure(this.velaEgress(preview.intent,preview.frozenContext,preview.discovery,preview)===preview.signature&&this.velaSemanticPrompt(preview.intent,preview.frozenContext,preview.catalog,preview.discovery,preview.providerId,preview.route,preview.nativeStage,preview.fileEdit,preview.voiceInput?.context)===preview.prompt,'stale_vela_preview');
   }
-  private finishVelaCatalog(requestId:string) {const entry=this.velaCatalogLeases.get(requestId);if(!entry)return;entry.lease.close();entry.resolveReady();if(entry.threadId)this.port.catalogDiscovery?.release(entry.threadId);this.velaCatalogLeases.delete(requestId);}
+  private releaseVelaCatalog(requestId: string) {
+    const entry = this.velaCatalogLeases.get(requestId);
+    if (!entry) return;
+    entry.lease.close();
+    entry.resolveReady();
+    if (entry.threadId) {
+      try {
+        this.port.catalogDiscovery?.release(entry.threadId);
+        entry.threadId = undefined;
+      } catch {
+        // The closed lease already denies use. Final teardown can retry releasing its handler.
+        try { this.recordVelaRoute('catalog_release_failed', requestId, this.port.id, {}); }
+        catch { /* Diagnostic storage cannot change a committed provider result. */ }
+      }
+    }
+  }
+  private finishVelaCatalog(requestId: string) {
+    try { this.releaseVelaCatalog(requestId); }
+    finally { this.velaCatalogLeases.delete(requestId); }
+  }
   private async readVelaCatalog(requestId:string,call:CapabilityNativeCall):Promise<CapabilityToolReply> {
     const entry=this.velaCatalogLeases.get(requestId);if(!entry)return capabilityToolFailure('capability_discovery_lease_unavailable');
     // A request may arrive before turn/start's response. Only the actual returned identity can bind authority.
@@ -3210,9 +3248,13 @@ export class BackendCore {
     }finally{this.toolOwnerExecutionId=null;}
   }
   private assertToolRoutingControls(preview:PrivateVelaPreview){
-    const effective=resolveRoutingSettings(this.velaRoutingProfiles()).effective;
-    ensure(effective.mode!=='codex'&&(!effective.providerId||effective.providerId===VELA_API_PROVIDER)&&(!effective.model||effective.model===preview.route?.model)&&(!effective.reasoningEffort||'effort'in (preview.route??{})&&effective.reasoningEffort===(preview.route as any).effort),'vela_tool_routing_changed');
-    if(preview.routingAgent)ensure(planningDigest(this.velaAgentRouting(preview.routingAgent.resourceId))===preview.agentRoutingDigest,'stale_vela_agent_routing');
+    const agent = preview.routingAgent && this.velaAgentRouting(preview.routingAgent.resourceId);
+    if (agent) ensure(planningDigest(agent) === preview.agentRoutingDigest, 'stale_vela_agent_routing');
+    const { effective } = resolveRoutingSettings(this.velaRoutingProfiles(), preview.routingTurn, agent?.defaults);
+    ensure(effective.mode !== 'codex' && (!effective.providerId || effective.providerId === VELA_API_PROVIDER) &&
+      (!effective.model || effective.model === preview.route?.model) &&
+      (!effective.reasoningEffort || preview.route && 'effort' in preview.route && effective.reasoningEffort === preview.route.effort),
+      'vela_tool_routing_changed');
   }
   private advanceToolContext(requestId:string,receipts:readonly VelaToolReceipt[]){
     const run=this.toolWorkflowRuns.get(requestId);if(!run?.advances?.length)return;const base=run.snapshot?.preview??this.velaPreviews.get(run.previewId)!;
@@ -3232,6 +3274,72 @@ export class BackendCore {
     this.vela.validateProviderHistory({context:snapshot.preview.frozenContext,...(snapshot.preview.historyFence?{historyFence:snapshot.preview.historyFence}:{})});
   }
   private toolCompletionContext(requestId:string){const snapshot=this.toolWorkflowRuns.get(requestId)?.snapshot;if(!snapshot)return;const c=this.velaContext();return {context:snapshot.preview.frozenContext,...(snapshot.preview.historyFence?{historyFence:snapshot.preview.historyFence}:{}),navigation:{currentProjectId:c.currentProjectId,currentWorkspaceId:c.currentWorkspaceId},validate:()=>this.validateToolContextAdvance(requestId,snapshot.certificate,{contextDigest:snapshot.preview.signature,promptDigest:this.missionEditHash(snapshot.preview.prompt)})};}
+  private standingVelaActionKind(action: VelaNativeAction | VelaPlan['steps'][number]['action']) {
+    return action.type === 'createResource' ? 'createResource:' + action.kind : action.type;
+  }
+  private canConsiderStandingVelaAction(requestId: string, intent: string, action: VelaNativeAction) {
+    if (!velaStandingMutationRequested(intent)) return false;
+    if (action.type === 'search' || action.type === 'readLocalFact' || action.type === 'inspectVelaOperation') return true;
+    const subjects: Partial<Record<VelaNativeAction['type'], RegExp>> = {
+      createProject: /\bproject$/u, createWorkspace: /\bworkspace$/u,
+      createConversation: /\b(?:chat|conversation)$/u, createCollection: /\b(?:collection|folder)$/u,
+      clockTimer: /\btimer$/u,
+    };
+    const subject = action.type === 'createResource'
+      ? { note: /\bnote$/u, task: /\btask$/u, task_group: /\btask group$/u, checklist: /\bchecklist$/u }[action.kind]
+      : subjects[action.type];
+    if (!subject) return false;
+    const current = this.velaContext();
+    if ('projectId' in action && action.projectId !== current.currentProjectId ||
+        'workspaceId' in action && action.workspaceId !== null && action.workspaceId !== current.currentWorkspaceId) return false;
+
+    const text = intent.normalize('NFKC').toLowerCase().trim().replace(/^vela[,:]?\s+/u, '');
+    const clauses = text.split(/\s*(?:,|;|[.!?](?=\s|$))\s*|\s+(?:and|then)\s+/u).filter(Boolean);
+    const creation = /^(?:(?:and|then|please|can you|could you|would you)\s+)*(?:create|make|add|build|set up|put(?: together)?)\s+((?:a|an|one|new)\s+.+)$/u;
+    const creationSubject = /^(?:a|an|one|new)\s+(?<modifiers>(?:[\p{L}\p{N}][\p{L}\p{N}-]*\s+){0,3})(?<kind>project|workspace|chat|conversation|collection|folder|timer|note|task|task group|checklist)$/u;
+    let matched = false;
+    for (const clause of clauses) {
+      if (/^(?:then )?(?:describe what was created|confirm its (?:saved|stored) result)$/u.test(clause)) continue;
+      const body = creation.exec(clause)?.[1];
+      if (!body) return false;
+      const finalPlacement = /\s+(here|there)$/u.exec(body);
+      const withoutFinalPlacement = finalPlacement ? body.slice(0, finalPlacement.index) : body;
+      const title = /\s+(?:named|called|titled)\s+("[^"]+"|“[^”]+”|[\p{L}\p{N}_ -]+)$/u.exec(withoutFinalPlacement);
+      const described = title ? withoutFinalPlacement.slice(0, title.index) : withoutFinalPlacement;
+      const earlierPlacement = /\s+(here|there)$/u.exec(described);
+      if (finalPlacement && earlierPlacement) return false;
+      const placement = finalPlacement?.[1] ?? earlierPlacement?.[1];
+      const description = earlierPlacement ? described.slice(0, earlierPlacement.index) : described;
+      if (/\b(?:if|unless|until|when|once|after|before|provided|assuming|but|only|except|no|not|never|without|in|inside|under)\b/u.test(description)) return false;
+      if (title && !/^["“]/u.test(title[1]) &&
+          /\b(?:if|unless|until|when|once|after|before|provided|assuming|but|only|except|no|not|never|without)\b/u.test(title[1])) return false;
+      const object = description.replace(/(?<=\btimer)\s+for\s+.+$/u, '');
+      const phrase = creationSubject.exec(object)?.groups;
+      if (!phrase || /\b(?:a|an|about|as|at|by|for|from|into|like|of|on|to|using|with|project|workspace|chat|conversation|collection|folder|timer|note|task|checklist)\b/u.test(phrase.modifiers)) return false;
+      if (!subject.test(phrase.kind)) continue;
+      if (placement === 'here' && (!('workspaceId' in action) || !current.currentWorkspaceId ||
+          action.workspaceId !== current.currentWorkspaceId)) continue;
+      if (placement === 'there' && (!('workspaceId' in action) || !action.workspaceId ||
+          !this.vela.state().receipts.some(receipt => receipt.requestId === requestId &&
+            receipt.state === 'applied' && receipt.createdWorkspaceId === action.workspaceId))) continue;
+
+      if (action.type === 'clockTimer') {
+        const request = action.request;
+        const operation = request.name === 'create' && (request.input.projectId ?? null) === current.currentProjectId &&
+          action.workspaceId === current.currentWorkspaceId && request.input.operations.length === 1
+          ? request.input.operations[0] : undefined;
+        const timerIntent = description.replace(/^(?:a|an|one|new)\s+(?:paused\s+)?/u, 'a ') + (title?.[0] ?? '');
+        const parsed = parseVelaTimerIntent('create ' + timerIntent.replace(/-(?=(?:milliseconds?|seconds?|minutes?|hours?|days?|weeks?)\b)/gu, ' '), { documents: [] });
+        const expected = parsed.kind === 'create' && parsed.operations.length === 1 ? parsed.operations[0] : undefined;
+        if (operation?.type !== 'createTimer' || operation.start || expected?.type !== 'createTimer' ||
+            operation.durationMs !== expected.durationMs ||
+            (title || expected.name !== 'Timer') && operation.name.normalize('NFKC').toLowerCase() !== expected.name.toLowerCase()) continue;
+      } else if (title && (!('title' in action) ||
+          action.title.normalize('NFKC').toLowerCase() !== title[1].replace(/^["“]|["”]$/gu, ''))) continue;
+      matched = true;
+    }
+    return matched;
+  }
   private toolOwners(requestId:string):VelaToolOwner[] {
     const request=this.vela.state().requests.find(r=>r.id===requestId);ensure(request,'vela_tool_request_unavailable');
     const observed=(output:unknown,refs:string[]=[]):import('./vela-tool-workflows.mts').VelaToolOwnerResult=>({state:'observed',output,verification:{kind:'owner-observed',evidenceRefs:refs}});
@@ -3243,7 +3351,13 @@ export class BackendCore {
           if(action.type==='search')return observed({resources:this.vela.search(action.query).slice(0,12)});
           if(action.type==='readLocalFact')return observed(evaluateLocalCapability(action.capabilityId,this.localVelaHost()));
           if(action.type==='inspectVelaOperation')return observed(this.vela.operationContext(this.inspectVelaOperationWorkspace,{query:action.receiptId}));
-          if(this.vela.canExecuteToolActions([action]))return await this.executeStandingToolActions(requestId,[action],capability.label);
+          if (explicitReadOnlyVelaIntent(request.intent)) return { state: 'denied', output: { reason: 'request-read-only' } };
+          const kind = this.standingVelaActionKind(action);
+          const prior = this.vela.state().plans.some(plan => plan.requestId === requestId &&
+            ['approved', 'applying', 'applied', 'unknown'].includes(plan.state) &&
+            plan.steps.some(step => this.standingVelaActionKind(step.action) === kind));
+          if (!prior && this.canConsiderStandingVelaAction(requestId, request.intent, action) && this.vela.canExecuteToolActions([action]))
+            return await this.executeStandingToolActions(requestId, [action], capability.label);
           const plan=this.vela.prepareToolAction(requestId,action,capability.label);return this.toolWorkflows.prepareOwnerOperation(this.toolWorkflowRuns.get(requestId)!.port.workflowId,'application.'+capability.id,'application-plan',{id:plan.id,digest:plan.fingerprint},plan.summary,'Review the exact source-owned application actions before applying.');
         }};
     });
@@ -3351,11 +3465,32 @@ export class BackendCore {
     const plan=this.vela.native({intent,action});this.recordVelaRoute('route_selected',plan.requestId,'aerynth-native',{route:'native',capabilityId:action.type});
     await this.vela.apply(plan.id);return {matched:true,request:this.vela.state().requests.find(request=>request.id===plan.requestId)!};
   }
+  private routesToVelaApi(input: VelaTurnRouting | VelaRoutingDefaults) {
+    return input.mode !== 'codex' && input.providerId !== 'codex-app-server' &&
+      (input.providerId === VELA_API_PROVIDER ||
+        !input.providerId && !input.model && !input.reasoningEffort && this.velaApiRuntime.authorized());
+  }
+  private velaWorkspaceTitleMatches(title: string) {
+    const scope = this.velaHost.scope();
+    return scope.workspaceIds.filter(id =>
+      this.velaHost.resolve({ id, kind: 'workspace' }, scope)?.title.normalize('NFKC').toLowerCase() === title);
+  }
   private async routeVelaNative(intent: string, settings?: VelaTurnRouting,activeCard?:import('../../vela-core/src/contracts.ts').VelaActiveCard,resourceIds:string[]=[],resourceRefs?:ResourceRef[]): Promise<CommandMap['velaRouteNative']['output']> {
     ensure(Array.isArray(resourceIds)&&resourceIds.length<=128&&resourceIds.every(identifier)&&new Set(resourceIds).size===resourceIds.length,'invalid_vela_context');
-    const destination=resolveRoutingSettings(this.velaRoutingProfiles(),settings).effective;
-    if(this.velaApiRuntime.authorized()&&destination.mode!=='codex'&&(!destination.providerId||destination.providerId===VELA_API_PROVIDER)&&
-      !pureCourtesyReply(intent)&&!nativeVelaFact(intent)&&!matchOrdinaryClockQuestion(intent))return {matched:false};
+    const profiles = this.velaRoutingProfiles();
+    const { effective } = resolveRoutingSettings(profiles, settings);
+    const text = intent.normalize('NFKC').trim().replace(/^vela[,:]?\s+/iu, '')
+      .replace(/^(?:(?:please|(?:can|could|would) you)\s+)+/iu, '').replace(/[?.!]+$/u, '').replace(/,?\s+please$/iu, '');
+    const workspace = /^(?:open|go to)\s+(?:the\s+)?(?:(?:workspace)\s+(.+?)|(.+?)\s+workspace)$/iu.exec(text);
+    const folderList = localFolderListIntent(intent);
+    if (this.velaApiRuntime.authorized() && this.routesToVelaApi(effective) &&
+        !pureCourtesyReply(intent) && !nativeVelaFact(intent) && !matchOrdinaryClockQuestion(intent)) {
+      const unpinned = !effective.providerId && !effective.model && !effective.reasoningEffort &&
+        !settings?.routingAgentId && !settings?.handoffSourceRequestId;
+      const exactWorkspace = unpinned && !resourceIds.length && workspace &&
+        this.velaWorkspaceTitleMatches((workspace[1] ?? workspace[2]).toLowerCase()).length === 1;
+      if (!exactWorkspace && !(unpinned && folderList)) return { matched: false };
+    }
     if(this.apiSelectedFileEdit(intent,settings)){
       if(!resourceIds.length&&activeCard&&activeCard.workspaceId===this.velaContext().currentWorkspaceId){
         const block=this.db.prepare('SELECT resource_id FROM blocks WHERE id=? AND workspace_id=?').get(activeCard.blockId,activeCard.workspaceId);
@@ -3368,7 +3503,7 @@ export class BackendCore {
         return {matched:true,request:this.vela.nativeResponse(intent,'Select an existing .mjs file of at most 8 KiB that is attached to this workspace. No file was changed.','inability')};
       return {matched:false,apiFileEdit:true,selectedEditSource:ref};
     }
-    if(localFolderListIntent(intent)){
+    if (folderList) {
       if(resourceIds.length!==1)return {matched:true,request:this.vela.nativeResponse(intent,'Select one connected folder to list its contents.','clarification')};
       const refs=this.attachmentReferences(resourceIds,resourceRefs);if(refs[0].resourceKind!=='folder')return {matched:true,request:this.vela.nativeResponse(intent,'Select a connected folder, rather than a file, to list its contents.','clarification')};
       const ref=refs[0],source=this.scopedFolder(ref.id),binding=this.folderBinding(ref.id),stamp=this.velaScopeStamp(),listing=await this.folderSources.list({resourceId:ref.id},source.projectId);
@@ -3402,9 +3537,7 @@ export class BackendCore {
       this.standaloneCheckRouting(settings);
       return { matched: false, projectCheck };
     }
-    const profiles = this.velaRoutingProfiles();
     // Pins govern inference when needed. Clear native tools retain the same configured pins without a model call.
-    const { effective } = resolveRoutingSettings(profiles, settings);
     const courtesy = pureCourtesyReply(intent);
     if (courtesy) {
       if (settings?.routingAgentId || settings?.handoffSourceRequestId || effective.mode !== 'auto' ||
@@ -3450,12 +3583,9 @@ export class BackendCore {
         }
       }
     }
-    const text = intent.normalize('NFKC').trim().replace(/^vela[,:]?\s+/iu, '')
-      .replace(/^(?:(?:please|(?:can|could|would) you)\s+)+/iu, '').replace(/[?.!]+$/u, '').replace(/,?\s+please$/iu, '');
     const currentScope = this.velaHost.scope();
     const construction = matchWorkspaceConstruction(intent,currentScope.projectIds.map(id=>
       this.velaHost.resolve({id,kind:'project'},currentScope)).filter((ref):ref is ResourceRef=>!!ref),this.velaContext().currentProjectId);
-    const workspace = /^(?:open|go to)\s+(?:the\s+)?(?:(?:workspace)\s+(.+?)|(.+?)\s+workspace)$/iu.exec(text);
     const checklist = /^(?:create|add|make)\s+(?:a\s+)?(?:new\s+)?checklist(?:\s+block)?(?:\s+(?:called|named)\s+(.{1,200}?))?(?:\s+here)?$/iu.exec(text);
     const resource = /^(find|open)\s+(?:the\s+|a\s+|my\s+)?(?:aerynth\s+)?resource\s+(?:named|called)\s+(.{1,200})$/iu.exec(text);
     if (!workspace && !checklist && !resource && !construction) return { matched: false };
@@ -3468,8 +3598,7 @@ export class BackendCore {
       action = { type: resource[1].toLowerCase() === 'find' ? 'search' : 'openResource', query: resource[2].trim() };
     } else if (workspace) {
       const title = (workspace[1] ?? workspace[2]).toLowerCase();
-      const matches = scope.workspaceIds.filter(id =>
-        this.velaHost.resolve({ id, kind: 'workspace' }, scope)?.title.normalize('NFKC').toLowerCase() === title);
+      const matches = this.velaWorkspaceTitleMatches(title);
       ensure(matches.length === 1, matches.length ? 'vela_workspace_ambiguous' : 'vela_workspace_unavailable');
       action = { type: 'navigate', target: { kind: 'workspace', workspaceId: matches[0] } };
     } else {
@@ -3488,9 +3617,10 @@ export class BackendCore {
     ensure(capability.authentication === 'available', 'vela_planner_sign_in_required');
     const models = capability.selectableModels ?? capability.models;
     ensure(input.model === undefined || models.includes(input.model), 'unsupported_model');
-    ensure(input.reasoningEffort === undefined || !!input.model &&
-      capability.modelEfforts?.[input.model]?.includes(input.reasoningEffort), 'unsupported_reasoning_effort');
-    const model = input.model ?? (capability.defaultModel && models.includes(capability.defaultModel) ? capability.defaultModel : models[0]);
+    const effortPin = input.reasoningEffort;
+    const qualified = effortPin === undefined ? models : models.filter(model => capability.modelEfforts?.[model]?.includes(effortPin));
+    const model = input.model ?? (capability.defaultModel && qualified.includes(capability.defaultModel) ? capability.defaultModel : qualified[0]);
+    ensure(effortPin === undefined || model && qualified.includes(model), 'unsupported_reasoning_effort');
     ensure(model, 'vela_codex_model_unavailable');
     const defaultEffort = capability.defaultModelEfforts?.[model];
     const effort = input.reasoningEffort ?? (defaultEffort && ['none', 'low', 'medium', 'high', 'xhigh', 'max'].includes(defaultEffort) &&
@@ -3510,7 +3640,7 @@ export class BackendCore {
     ensure(input.budgetLimit === undefined, 'vela_budget_unverifiable');
     ensure(!this.active, 'vela_planner_busy');
     const codex = input.mode === 'codex' || input.providerId === 'codex-app-server';
-    const api = !codex&&(input.providerId === VELA_API_PROVIDER || !input.providerId && !input.model && !input.reasoningEffort && this.velaApiRuntime.authorized());
+    const api = this.routesToVelaApi(input);
     // Retain the reviewed legacy analysis/handoff only for hosts without an
     // authorized primary API. Explicit Codex goes directly to its scoped owner.
     const workflow = !codex&&!this.velaApiRuntime.authorized()?nativeConversationalWorkflow(input.intent):undefined;
@@ -3569,6 +3699,10 @@ export class BackendCore {
       const effort = input.reasoningEffort ?? (controls.length ? depth === 'deep' ? 'medium' : intent === 'app-planning' ? 'low' : controls.includes('none') ? 'none' : 'low' : undefined);
       return { providerId: VELA_API_PROVIDER, route: { kind: 'conversational', depth, reason: depth === 'deep' ? 'complex-analysis' : 'routine-answer', model, ...(effort?{effort}:{}) } };
     }
+    const attachedRead = intent === 'local-read' && input.resourceIds.length > 0 &&
+      /\b(?:selected|attached|source)\s+(?:note|document|file|text|excerpt)\b/iu.test(input.intent) &&
+      !/\b(?:repo(?:sitory)?|checkout|working tree|codebase|git diff)\b/iu.test(input.intent);
+    ensure(intent !== 'local-write' && (intent !== 'local-read' || attachedRead), 'vela_local_execution_unavailable');
     await observeCapabilities(() => this.maintainOrdinarySession());
     if (!this.ordinaryAuthorized() && intent === 'app-planning' && !input.providerId && !input.model && !input.reasoningEffort) {
       const model = await observeCapabilities(() => this.selectVelaCodexModel(input));
@@ -3617,6 +3751,8 @@ export class BackendCore {
     const agentRoutingDigest = agent && planningDigest(agent);
     const routingSettings = profiles && resolveRoutingSettings(profiles, input, agent?.defaults);
     const routingSettingsStamp = profiles && this.velaRoutingSettingsStamp(profiles);
+    const routingTurn = profiles && { mode: input.mode, providerId: input.providerId, model: input.model,
+      reasoningEffort: input.reasoningEffort, overrideDefaults: input.overrideDefaults };
     const initialScope = profiles && this.velaScopeStamp();
     const effective = routingSettings?.effective;
     const routeStarted = performance.now(), timing = { capabilityMs: 0, routingMs: 0, contextMs: 0, previewMs: 0 };
@@ -3717,6 +3853,11 @@ export class BackendCore {
         return fits(operations);
       }});
     selected.context=this.withVelaOperations(selected.context,operations);
+    if (usingChatGPT && route?.kind === 'conversational' && !route.nativeLog && !route.nativeMetric &&
+        classifyVelaRoutingIntent(input.intent) === 'local-read') {
+      ensure(input.resourceIds.every(id => selected.context.included.some(item => item.id === id)),
+        'vela_selected_context_unavailable');
+    }
     if (route?.kind === 'file-edit' && route.inspectSelectedLogs || route?.kind === 'conversational' && route.nativeLog)
       ensure(selected.context.included.length === 1 && selected.context.included[0].resourceKind === 'note' &&
         selected.context.included[0].id === input.resourceIds[0] && selected.context.included[0].content.trim(), 'vela_edit_log_source_required');
@@ -3724,7 +3865,7 @@ export class BackendCore {
     const publicPreview:VelaRequestPreview={id:randomUUID(),intent:input.intent,resourceIds:[...input.resourceIds],context,providerId,signature:'',scopeStamp:this.velaScopeStamp(),expiresAt:new Date(Date.now()+300000).toISOString(),...(route?{route,routingSettings}:{}),...(discovery?{discovery}:{}),...(summary?{history:summary}:{}),...(selected.handoff?{handoff:selected.handoff}:{}),...(includeHistory||selected.handoff||context.activeResourceId||usingApi||usingChatGPT||agentic?{nativeReviewRequired:true}:{})};
     const conversationId=this.state.vela!.conversationId,inputAnchor={conversationId,revision:conversationId?this.velaHost.conversationRevision?.(conversationId)??null:null};
     if (workflowScope && !context.activeResourceId) publicPreview.workflowScope = workflowScope;
-    const preview:PrivateVelaPreview={...publicPreview,...(usingApi?{connectionVersion:this.velaApiRuntime.configurationVersion()!}:usingChatGPT?{connectionVersion:this.ordinaryStatus.registrationVersion!}:{}),...(nativeStage?{nativeStage}:{}),...(fileEdit?{fileEdit}:{}),...(routingSettingsStamp?{routingSettingsStamp}:{}),frozenContext:structuredClone(selected.context),origin:selected.origin,...(selected.historyFence?{historyFence:selected.historyFence}:{}),historyOmissions:selected.historyOmissions,catalog,prompt:this.velaSemanticPrompt(input.intent,selected.context,catalog,discovery,providerId,route,nativeStage,fileEdit),nativeReviewed:false,inputAnchor,inputDigest:historyDigest(input.intent)};
+    const preview:PrivateVelaPreview={...publicPreview,...(usingApi?{connectionVersion:this.velaApiRuntime.configurationVersion()!}:usingChatGPT?{connectionVersion:this.ordinaryStatus.registrationVersion!}:{}),...(nativeStage?{nativeStage}:{}),...(fileEdit?{fileEdit}:{}),...(routingSettingsStamp?{routingSettingsStamp,routingTurn}:{}),frozenContext:structuredClone(selected.context),origin:selected.origin,...(selected.historyFence?{historyFence:selected.historyFence}:{}),historyOmissions:selected.historyOmissions,catalog,prompt:this.velaSemanticPrompt(input.intent,selected.context,catalog,discovery,providerId,route,nativeStage,fileEdit),nativeReviewed:false,inputAnchor,inputDigest:historyDigest(input.intent)};
     if (agent) {
       preview.agentRoutingDigest = agentRoutingDigest;
       preview.routingAgent = publicPreview.routingAgent = agent.agent;
@@ -3877,9 +4018,13 @@ export class BackendCore {
       (!preview.frozenContext.history || !!preview.historyFence) ? 'routine' : 'review-required';
   }
   private canAutoApplyVelaApiPlan(preview: PrivateVelaPreview, plan: VelaPlan): boolean {
-    if (plan.steps.length > 6 || preview.resourceIds.length || preview.context.included.length || preview.handoff || preview.routingAgent) return false;
+    if (plan.steps.length > 6 || preview.resourceIds.length || preview.context.included.length || preview.handoff || preview.routingAgent ||
+        explicitReadOnlyVelaIntent(preview.intent) || !velaStandingMutationRequested(preview.intent)) return false;
+    const kinds = plan.steps.map(step => this.standingVelaActionKind(step.action));
+    if (new Set(kinds).size !== kinds.length) return false;
     const intent = preview.intent.normalize('NFKC').toLowerCase(), current = this.velaContext();
     return plan.steps.every(({action}) => {
+      if (action.type === 'delegateTask' || !this.canConsiderStandingVelaAction(plan.requestId, preview.intent, action)) return false;
       if ('projectId' in action && action.projectId !== current.currentProjectId ||
           'workspaceId' in action && action.workspaceId !== null && action.workspaceId !== current.currentWorkspaceId) return false;
       let allowed = false;
@@ -4752,7 +4897,7 @@ export class BackendCore {
     const latest=new Map<string,Execution>();for(const execution of Object.values(this.state.executions))if(allowed.has(execution.resourceId))latest.set(execution.resourceId,execution);
     if(current&&allowed.has(current.resourceId))latest.set(current.resourceId,current);
     const executions=[...latest.values()].map(publicExecution);
-    const preview=current&&allowed.has(current.resourceId)&&this.conversationAccess.resource(current.resourceId)&&['dispatching','running'].includes(current.state)&&this.assistantCursor>0&&this.assistantText
+    const preview=current&&allowed.has(current.resourceId)&&this.conversationAccess.resource(current.resourceId)&&['dispatching','running'].includes(current.state)&&this.assistantCursor>0&&this.assistantText&&this.canDiscloseActiveOutput()
       ? {resourceId:current.resourceId,executionId:current.id,providerId:current.providerId,cursor:this.assistantCursor,text:this.assistantText,classification:this.port.mock?'simulated' as const:'reported' as const}
       : null;
     return {contract:'aerynth.conversation-activity@1',resources,executions,preview};
@@ -4865,7 +5010,7 @@ export class BackendCore {
     if(pending.length||continued){const r=pending[0]??continued!;ensure(!!continued||r.state==='approved'||r.state==='dispatching'&&r.id===dispatchingHandoffId,'handoff_not_approved');
       const raw=this.state.graph.handoffs.find(h=>h.id===r.id);ensure(raw,'handoff_not_found');
       const sources=raw.items.map(i=>{const m=this.state.graph.messages.find(m=>m.id===i.sourceMessageId&&m.conversationId===i.sourceConversationId);ensure(m,'source_unavailable');return {resourceId:this.publicId(i.sourceConversationId),messageId:i.sourceMessageId,sensitivity:m.sensitivity};});
-      if(c.providerId===CHATGPT_PLAN_PROVIDER)await this.conversations.authorizeContextSources(input.resourceId,sources);
+      this.conversations.nativeAuthorizeContextSources(input.resourceId,sources);
       for(const source of sources)ensure(this.conversationAccess.access(source.resourceId,source.messageId),'source_unavailable');
       const h=continued?this.graph.inspectHandoff(r.id):this.validateReview(r);ensure(h.staleMessageIds.length===0,'stale_context');
       for(const item of h.items)ensure(this.conversationAccess.access(this.publicId(item.sourceConversationId),item.sourceMessageId),'source_unavailable');
@@ -4897,7 +5042,13 @@ export class BackendCore {
     const grant=this.sendGrants.get(input.grantId);ensure(grant,'native_send_grant_required');ensure(!grant.consumed,'native_send_grant_consumed');ensure(Date.parse(grant.expiresAt)>Date.now(),'native_send_grant_expired');
     ensure(grant.previewId===input.previewId&&grant.fingerprint===input.fingerprint&&grant.commandId===input.commandId,'approval_scope_mismatch');
     const entry=this.sendPreviews.get(input.previewId);ensure(entry&&Date.parse(entry.preview.expiresAt)>Date.now(),'send_preview_expired');
-    const current=await this.prepareConversationSend(entry.input,0,undefined,entry.preview.responses);ensure(current.fingerprint===input.fingerprint,'stale_send_preview');ensure(!this.active,'execution_busy');ensure(!grant.consumed,'native_send_grant_consumed');grant.consumed=true;
+    const current = await this.prepareConversationSend(entry.input, 0, undefined, entry.preview.responses);
+    ensure(current.fingerprint === input.fingerprint, 'stale_send_preview');
+    ensure(!this.active && !this.velaApiTask, 'execution_busy');
+    ensure(!grant.consumed, 'native_send_grant_consumed');
+    ensure(this.sendGrants.get(input.grantId) === grant && Date.parse(grant.expiresAt) > Date.now(), 'native_send_grant_expired');
+    ensure(this.sendPreviews.get(input.previewId) === entry && Date.parse(entry.preview.expiresAt) > Date.now(), 'send_preview_expired');
+    grant.consumed = true;
     if(current.responses){const task=this.runOrdinary(entry.input,current);this.ordinaryTask=task;try{return await task;}finally{if(this.ordinaryTask===task)this.ordinaryTask=null;}}
     return this.runExecution({resourceId:entry.input.resourceId,prompt:entry.input.content,commandId:entry.input.commandId,expectedRevision:entry.input.expectedRevision,authorized:true,...(entry.input.model?{model:entry.input.model}:{}),...(current.handoff?{handoffId:current.handoff.id}:{})},{input:entry.input,preview:current});
   }
@@ -5069,11 +5220,12 @@ export class BackendCore {
     const observed = mission.events.find(entry => event.type === 'vela.mission/' + entry.kind && dedupe === `mission:${id}:${entry.seq}`);
     if (observed) return { ...event, ...this.missionStreamFields(mission, observed) };
   }
-  private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;detached?:boolean;resourceId?:string;correlationId?:string;payload?:StreamEvent['payload'];nativeEventId?:string;providerTime?:number;providerTimeSource?:string;externalEvidence?:GitHubCommitEvidence;externalCoverage?:TimelineSourceCoverage;mission?:StreamEvent['mission'];status?:string|null}, acknowledge?: () => void) {
-    const e: StreamEvent = { schemaVersion: 1, eventId: randomUUID(), cursor: 0, resourceId: override?.resourceId??(override?.detached?null:this.active?.resourceId ?? null), executionId: override?.detached?null:this.active?.id ?? null,
+  private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;execution?:Execution;detached?:boolean;resourceId?:string;correlationId?:string;payload?:StreamEvent['payload'];nativeEventId?:string;providerTime?:number;providerTimeSource?:string;externalEvidence?:GitHubCommitEvidence;externalCoverage?:TimelineSourceCoverage;mission?:StreamEvent['mission'];status?:string|null}, acknowledge?: () => void) {
+    const execution = override?.execution ?? this.active;
+    const e: StreamEvent = { schemaVersion: 1, eventId: randomUUID(), cursor: 0, resourceId: override?.resourceId??(override?.detached?null:execution?.resourceId ?? null), executionId: override?.detached?null:execution?.id ?? null,
       providerId: override?.providerId??this.port.id, providerInstanceId: override?.providerId===VELA_API_PROVIDER?'aerynth.vela-api.responses':override?.providerId===CHATGPT_PLAN_PROVIDER?'aerynth.responses':override?.providerId==='aerynth-native'?'aerynth.canonical':override?.providerId==='github'?'github.public-rest':this.port.instanceId, connectionId: this.connectionId,
-      nativeEventId: override?.nativeEventId??null, nativeSequence: native?.sequence ?? null, threadId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER||override?.providerId===VELA_API_PROVIDER?null:native?.providerThreadId ?? this.active?.binding?.nativeThreadId ?? null,
-      turnId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER||override?.providerId===VELA_API_PROVIDER?null:native?.providerTurnId ?? this.active?.turnId ?? null, correlationId: override?.correlationId??(override?.detached?null:this.active?.commandId ?? null), causationId: override?.detached?null:this.active?.id ?? null,
+      nativeEventId: override?.nativeEventId ?? native?.eventId ?? null, nativeSequence: native?.sequence ?? null, threadId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER||override?.providerId===VELA_API_PROVIDER?null:native?.providerThreadId ?? execution?.binding?.nativeThreadId ?? null,
+      turnId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER||override?.providerId===VELA_API_PROVIDER?null:native?.providerTurnId ?? execution?.turnId ?? null, correlationId: override?.correlationId??(override?.detached?null:execution?.commandId ?? null), causationId: override?.detached?null:execution?.id ?? null,
       receivedAt: now(), providerTime: override?.providerTime??native?.providerTime??null, providerTimeSource: override?.providerTimeSource??native?.providerTimeSource??null,
       type, classification, status: override?.status ?? native?.terminalStatus ?? null, payload: { redacted: true, ...(typeof native?.payload.delta === 'string' ? { textBytes: Buffer.byteLength(native.payload.delta) } : {}), ...(native?.payload.item ? { itemType: itemType((native.payload.item as any).type) } : {}),...override?.payload },
       ...(override?.mission ? { mission: override.mission } : {}) };
@@ -5111,6 +5263,15 @@ export class BackendCore {
       this.deliveringRecordedEvents = false;
     }
   }
+  private canDiscloseActiveOutput() {
+    try { this.activeSourceFence?.(); return true; }
+    catch { return false; }
+  }
+  private publishLiveDelta(event: StreamEvent, delta: string) {
+    if (!this.canDiscloseActiveOutput()) return;
+    try { this.emit({ ...event, payload: { redacted: true, delta } }); }
+    catch { /* Canonical output and cursor replay do not depend on the live subscriber. */ }
+  }
   private publishRecordedEvent(e:StreamEvent) {
     try {
       if (!e.type.startsWith('vela.mission/') || this.missionLiveScopeAllowed(e)) this.emit(e);
@@ -5124,7 +5285,17 @@ export class BackendCore {
         this.capabilityCache.clear();
       if(this.active&&this.active.providerId!==this.port.id)return;
       ensure(e.schemaVersion === 1 && Number.isInteger(e.sequence) && e.sequence > 0 && typeof e.method === 'string', 'invalid_provider_event');
-      if (this.active?.binding && e.providerThreadId && e.providerThreadId !== this.active.binding.nativeThreadId) return;
+      const active = this.active;
+      if (active?.binding && e.providerThreadId && e.providerThreadId !== active.binding.nativeThreadId) return;
+      if (active && e.providerTurnId && (active.turnId
+        ? e.providerTurnId !== active.turnId
+        : Object.values(this.state.executions).some(previous => previous !== active && previous.turnId === e.providerTurnId &&
+          (e.providerThreadId === null || previous.binding?.nativeThreadId === e.providerThreadId)))) {
+        // The bridge sequence spans turns. An adjacent retired event fills a known
+        // position, but cannot report reorder or move the cursor across a hole.
+        if (e.sequence === this.sequence + 1) this.sequence = e.sequence;
+        return;
+      }
       const dedupe = `${this.port.id}:${this.connectionId}:${e.eventId}`;
       if (this.db.prepare('SELECT 1 FROM intelligence_events WHERE dedupe=?').get(dedupe)) return;
       if (e.sequence > this.sequence + 1 || e.sequence <= this.sequence) this.record('stream/gap-or-reorder', 'inferred');
@@ -5151,9 +5322,16 @@ export class BackendCore {
   }
   async execute(input: CommandMap['execute']['input']): Promise<Execution> { return this.runExecution(input); }
   private finalOrdinaryFence(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>):void {
-    const p=preview.responses!;ensure(this.conversationAccess.resource(input.resourceId)&&this.state.revisions[input.resourceId]===input.expectedRevision+1,'stale_send_preview');ensure(this.ordinaryAvailable()&&this.ordinaryCatalog!.version===p.connectionVersion&&this.ordinaryCatalog!.models.some(m=>m.id===p.model),'ordinary_connection_changed');
+    const p = preview.responses!;
+    ensure(this.ordinaryAvailable() && this.ordinaryCatalog!.version === p.connectionVersion &&
+      this.ordinaryCatalog!.models.some(m => m.id === p.model), 'ordinary_connection_changed');
+    this.finalConversationSourceFence(input, preview);
+  }
+  private finalConversationSourceFence(input: ConversationSendInput, preview: Omit<ConversationSendPreview, 'id' | 'expiresAt'>) {
+    ensure(this.conversationAccess.resource(input.resourceId) &&
+      this.state.revisions[input.resourceId] === input.expectedRevision + 1, 'stale_send_preview');
     const checkSource=(resourceId:string,messageId:string,digest:string)=>{ensure(this.conversationReadAccess(resourceId,messageId),'source_unavailable');const m=this.state.graph.messages.find(m=>m.id===messageId&&m.conversationId===this.state.resources[resourceId]);ensure(m&&!this.state.graph.unavailableMessageIds.includes(messageId),'source_unavailable');ensure(createHash('sha256').update(m.content).digest('hex')===digest,'stale_context');return {resourceId,messageId,sensitivity:m.sensitivity};};
-    for(const item of p.history)checkSource(item.resourceId,item.messageId,item.digest);
+    for(const item of preview.responses?.history ?? [])checkSource(item.resourceId,item.messageId,item.digest);
     const sources:{resourceId:string;messageId:string;sensitivity:string;evidence?:AttachedContext['evidence']}[]=(preview.handoff?.items??[]).map(i=>checkSource(this.publicId(i.sourceConversationId),i.sourceMessageId,i.digest));
     for(const item of preview.context){
       const share=this.db.prepare('SELECT s.revoked,s.digest,a.attached_at FROM cp_shares s JOIN cp_adoptions a ON a.share_id=s.id AND a.target_id=? WHERE s.id=?').get(input.resourceId,item.shareId);ensure(share?.revoked===0&&share.digest===item.digest&&!!share.attached_at&&!this.db.prepare('SELECT 1 FROM cp_shares WHERE supersedes=?').get(item.shareId),'stale_context');
@@ -5163,7 +5341,7 @@ export class BackendCore {
   }
   private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer']}):Promise<Execution> {
     const measuredStart = authority?.measure ? performance.now() : undefined;
-    const p=preview.responses;ensure(p&&preview.providerId===CHATGPT_PLAN_PROVIDER&&!this.active&&this.missionSpecialistsInFlight<2,'ordinary_execution_unavailable');
+    const p=preview.responses;ensure(p&&preview.providerId===CHATGPT_PLAN_PROVIDER&&!this.active&&!this.velaApiTask&&this.missionSpecialistsInFlight<2,'ordinary_execution_unavailable');
     ensure(this.conv(input.resourceId).providerId===CHATGPT_PLAN_PROVIDER&&!this.state.bindings[input.resourceId]?.length,'invalid_cross_provider_reference');
     ensure(this.state.revisions[input.resourceId]===input.expectedRevision,'stale_resource_version');
     const fingerprint=hash({type:'ordinary-responses',...input}),prior=this.state.receipts[input.commandId];
@@ -5175,23 +5353,34 @@ export class BackendCore {
     this.atomic(()=>{if(authority?.countVelaAttempt)this.admitVelaAttempt(e);e.inputMessageId=this.graph.addMessage(this.gid(e.resourceId),'user',input.content,{provenance:'user'}).id;this.state.revisions[e.resourceId]++;this.state.executions[e.id]=e;this.state.receipts[input.commandId]={fingerprint,result:e.id};if(handoff)handoff.state='dispatching';});
     this.active=e;this.assistantText='';this.assistantCursor=0;this.ordinaryController=controller;
     this.liveVelaAnswer = authority?.liveVelaAnswer;
+    this.activeSourceFence = () => { this.finalOrdinaryFence(input, preview); authority?.validate(); };
     const catalog=this.ordinaryCatalog!,classification=this.ordinaryTest?'simulated' as const:'reported' as const;
     const fence=async()=>{authority?.validate();ensure(this.active?.id===e.id&&this.conversationAccess.resource(e.resourceId),'source_unavailable');const current=await this.prepareConversationSend(input,1,preview.handoff?.id,p);ensure(current.fingerprint===preview.fingerprint,'stale_send_preview');await this.ordinaryConnections.revalidateCredential(p.connectionVersion,catalog.boundaryDigest);this.finalOrdinaryFence(input,preview);authority?.validate();};
     const supply=async(responseId:string)=>{
       this.atomic(()=>{e.responseId=responseId;e.state='running';this.state.contextSupplies![e.id]={resourceId:e.resourceId,responseId,suppliedAt:now(),items:preview.context.map(i=>({shareId:i.shareId,digest:i.digest,sourceResourceId:i.sourceResourceId,sourceMessageId:i.sourceMessageId}))};});
       for(const item of preview.context)await this.conversations.confirmSupplied(e.resourceId,item.shareId,e.id);
     };
+    const ownsTurn = () => this.active === e && this.ordinaryController === controller;
     const onEvent=async(event:TurnEvent)=>{
       ensure(event.executionId===e.id&&event.providerId===CHATGPT_PLAN_PROVIDER,'invalid_provider_response');
+      if (!ownsTurn() || controller.signal.aborted) return;
       if(!this.conversationAccess.resource(e.resourceId)){controller.abort();throw new ServiceError('source_unavailable');}
-      if(event.type==='provider/response-created'){await supply(event.responseId);this.record(event.type,'observed',undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER,payload:{redacted:true,responseId:event.responseId}});}
+      if (event.type === 'provider/response-created') {
+        await supply(event.responseId);
+        // A cancelled transport can stop waiting for this callback.
+        if (!ownsTurn() || controller.signal.aborted || e.state !== 'running') return;
+        this.record(event.type, 'observed', undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER,
+          payload: { redacted: true, responseId: event.responseId } });
+      }
       else if(event.type==='provider/usage'){this.atomic(()=>{e.usage=event.usage;});this.record(event.type,classification,undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER,payload:{redacted:true,usage:event.usage}});}
       else{
         if (measuredStart !== undefined && e.velaFirstOutputMs === undefined && event.delta.trim())
           e.velaFirstOutputMs = Math.round(performance.now() - measuredStart);
         ensure(Buffer.byteLength(this.assistantText)+Buffer.byteLength(event.delta)<=65536,'provider_output_too_large');this.assistantText+=event.delta;
         const recorded=this.record('item/agentMessage/delta',classification,undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER,payload:{redacted:true,textBytes:Buffer.byteLength(event.delta)}});
-        ensure(recorded,'provider_event_not_recorded');this.assistantCursor=recorded.cursor;this.emit({...recorded,payload:{redacted:true,delta:event.delta}});
+        ensure(recorded,'provider_event_not_recorded');
+        this.assistantCursor = recorded.cursor;
+        this.publishLiveDelta(recorded, event.delta);
       }
     };
     let result:TurnResult|undefined;
@@ -5207,7 +5396,10 @@ export class BackendCore {
       this.providerActivity.providerRequests=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.providerRequests+1);
       result=await transport.turn({executionId:e.id,requestId:input.commandId,configurationId:p.configurationId,providerId:CHATGPT_PLAN_PROVIDER,assistant:'ordinary',model:p.model,instructions:p.instructions,messages:p.messages,contextDigest:p.contextDigest,...(p.reasoningEffort === undefined ? {} : { reasoningEffort: p.reasoningEffort }),...(p.webSearch?{webSearch:true}:{})},controller.signal);
       let valid=true;try{await fence();}catch{valid=false;}
-      if(result.responseId&&!e.responseId&&valid)await supply(result.responseId);
+      if (result.responseId && !e.responseId && valid) {
+        await supply(result.responseId);
+        try { this.finalOrdinaryFence(input, preview); authority?.validate(); } catch { valid = false; }
+      }
       this.atomic(()=>{
         e.responseOutcome=result!.outcome;e.cancellation=result!.cancellation;if(result!.incompleteReason)e.incompleteReason=result!.incompleteReason;if(result!.httpDiagnostic)e.httpDiagnostic=projectTurnHttpDiagnostic(result!.httpDiagnostic);if(result!.responseId)e.responseId=result!.responseId;if(result!.usage)e.usage=result!.usage;if(result!.reportedModel)e.reportedModel=result!.reportedModel;
         e.state=!valid?(result!.dispatched?'unknown':'failed'):result!.outcome==='completed'?'provider_completed':result!.outcome==='unknown'?'unknown':result!.outcome==='cancelled-before-dispatch'?'interrupted':'failed';
@@ -5218,14 +5410,41 @@ export class BackendCore {
           this.state.messageEvidence[message.id]={classification,executionId:e.id,providerId:CHATGPT_PLAN_PROVIDER,...(e.responseId?{responseId:e.responseId}:{}),outputState:complete?'complete':'partial',...(complete&&result!.webSearch?{webSearch:result!.webSearch}:{})};
         }
         this.state.revisions[e.resourceId]++;if(handoff)handoff.state=e.state==='provider_completed'?'applied':e.state==='unknown'?'unknown':e.state==='interrupted'?'interrupted':'failed';
+        this.record('execution/' + e.state, e.state === 'provider_completed' ? classification : 'inferred',
+          undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER });
       });
-    }catch(error){this.atomic(()=>{e.state=result?.dispatched?'unknown':'failed';e.errorCode=error instanceof ServiceError?error.code:'ordinary_provider_unavailable';e.endedAt=now();if(handoff)handoff.state=e.state==='unknown'?'unknown':'failed';});}
-    finally{authority?.signal.removeEventListener('abort',cancel);this.record('execution/'+e.state,e.state==='provider_completed'?classification:'inferred',undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER});this.active=null;this.ordinaryController=null;this.liveVelaAnswer=undefined;this.missions.capacityChanged();}
+    } catch (error) {
+      try {
+        this.atomic(() => {
+          e.state = result?.dispatched ? 'unknown' : 'failed';
+          e.errorCode = error instanceof ServiceError ? error.code : result ? 'ordinary_settlement_unavailable' : 'ordinary_provider_unavailable';
+          e.endedAt = now();
+          if (result?.responseId) e.responseId = result.responseId;
+          if (result) e.cancellation = result.cancellation;
+          if (handoff) handoff.state = e.state === 'unknown' ? 'unknown' : 'failed';
+          this.record('execution/' + e.state, 'inferred', undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER });
+        });
+      } catch {
+        // The durable admission still prevents replay and restart reconciles it as unknown.
+        throw error;
+      }
+    } finally {
+      authority?.signal.removeEventListener('abort', cancel);
+      if (ownsTurn()) {
+        this.active = null;
+        this.ordinaryController = null;
+        this.liveVelaAnswer = undefined;
+        this.activeSourceFence = undefined;
+        this.assistantText = '';
+        this.assistantCursor = 0;
+        this.missions.capacityChanged();
+      }
+    }
     return structuredClone(e);
   }
   private async runExecution(input: CommandMap['execute']['input'],managed?:{input:ConversationSendInput;preview:Omit<ConversationSendPreview,'id'|'expiresAt'>},discovery?:{requestId:string;previewId:string;expiresAt:string;sourceConversationId:string},inspection?:{signal?:AbortSignal;validate:()=>void;effort?:string;cwd?:string}, countVelaAttempt = false): Promise<Execution> {
     ensure(!this.missionEditQuarantined(),'mission_edit_check_reconciliation_required');
-    ensure(!this.active, 'execution_busy');
+    ensure(!this.active && !this.velaApiTask, 'execution_busy');
     ensure(this.kernel.getResource(input.resourceId).resource.state === 'active', 'resource_archived');
     ensure(input.authorized === true, 'authorization_required');
     ensure(typeof input.prompt === 'string' && input.prompt.length > 0 && Buffer.byteLength(input.prompt) <= 16384, 'invalid_prompt');
@@ -5262,6 +5481,7 @@ export class BackendCore {
       }
     });
     this.active = e; this.assistantText = ''; this.assistantCursor=0; this.streamFailure = false;
+    if (managed) this.activeSourceFence = () => this.finalConversationSourceFence(managed.input, managed.preview);
     let remoteDispatched = false;
     const interruptInspection = () => {
       if (this.active?.id === e.id && e.binding && e.turnId)
@@ -5307,12 +5527,13 @@ export class BackendCore {
       this.atomic(() => { e.state = 'running'; });
       if(managed){const current=await this.prepareConversationSend(managed.input,1,managed.preview.handoff?.id);ensure(current.fingerprint===managed.preview.fingerprint,'stale_send_preview');}
       inspection?.validate();
+      this.activeSourceFence?.();
       const output = new CodexTurnOutput(binding.nativeThreadId, (delta, recorded) => {
         this.assistantText += delta;
         this.assistantCursor = recorded.cursor;
         // Only assistant output is forwarded live. Durable events remain metadata-only.
         if (this.conversationAccess.resource(e.resourceId))
-          this.emit({ ...recorded, payload: { redacted: true, delta } });
+          this.publishLiveDelta(recorded, delta);
       });
       this.codexOutput = output;
       remoteDispatched = true;
@@ -5341,6 +5562,7 @@ export class BackendCore {
       const terminal = await this.port.terminal(binding.nativeThreadId, turnId);
       ensure(terminal && terminal.providerTurnId === turnId && terminal.providerThreadId === binding.nativeThreadId && ['completed','interrupted','failed'].includes(terminal.terminalStatus ?? ''), 'invalid_provider_response');
       ensure(!this.streamFailure, 'event_ingestion_failed');
+      ensure(!managed || this.canDiscloseActiveOutput(), 'source_unavailable');
       const finalText = terminal.terminalStatus === 'completed' ? output.finish(terminal) : '';
       this.atomic(() => {
         e.state = terminal.terminalStatus === 'completed' ? 'provider_completed' : terminal.terminalStatus === 'interrupted' ? 'interrupted' : 'failed';
@@ -5357,9 +5579,20 @@ export class BackendCore {
     } catch (error) {
       const code = error instanceof ServiceError ? error.code : (error as any)?.kind ?? 'provider_unavailable';
       e = this.state.executions[e.id]; r = input.handoffId ? this.package(input.handoffId) : null;
-      this.atomic(() => { e.state = remoteDispatched ? 'unknown' : 'failed'; e.errorCode = code; e.endedAt = now(); if (r) r.state = e.state === 'unknown' ? 'unknown' : 'failed'; });
-      this.record('execution/' + e.state, 'inferred');
-    } finally { inspection?.signal?.removeEventListener('abort', interruptInspection);if(discovery){const entry=this.velaCatalogLeases.get(discovery.requestId);if(entry){entry.lease.close();entry.resolveReady();if(entry.threadId)this.port.catalogDiscovery?.release(entry.threadId);}}this.codexOutput = null; this.active = null; }
+      this.atomic(() => {
+        e.state = remoteDispatched ? 'unknown' : 'failed';
+        e.errorCode = code;
+        e.endedAt = now();
+        if (r) r.state = e.state === 'unknown' ? 'unknown' : 'failed';
+        this.record('execution/' + e.state, 'inferred');
+      });
+    } finally {
+      inspection?.signal?.removeEventListener('abort', interruptInspection);
+      this.codexOutput = null;
+      this.activeSourceFence = undefined;
+      this.active = null;
+      if (discovery) this.releaseVelaCatalog(discovery.requestId);
+    }
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {

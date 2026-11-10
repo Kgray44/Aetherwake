@@ -413,6 +413,32 @@ test('same authorized protocol turn discovers exact schemas from a frozen resour
     await f.close();
   }
 });
+test('catalog release failure preserves a committed Codex result and retries handler teardown', async () => {
+  const f = fixture('early-call');
+  try {
+    const authorization = await f.granted();
+    const catalog = f.port().catalogDiscovery!;
+    const release = catalog.release.bind(catalog);
+    let releaseAttempts = 0;
+    catalog.release = threadId => {
+      if (++releaseAttempts === 1) throw Error('synthetic catalog release failure');
+      release(threadId);
+    };
+    const request = await f.vela('request', authorization.input) as { id: string; state: string; planId?: string };
+    assert.equal(request.state, 'awaiting-review');
+    assert(request.planId);
+    assert.equal(releaseAttempts, 2);
+    assert.equal(f.leases(), 0);
+    const [execution] = Object.values((await f.core.command('snapshot', {})).executions);
+    assert.equal(execution.state, 'provider_completed');
+    assert.equal(execution.taskVerified, false);
+    assert.equal(f.presented.filter(event => event.type === 'vela.routing.catalog_release_failed' && event.correlationId === request.id).length, 1);
+    await f.reopen();
+    assert.equal((await f.core.command('snapshot', {})).executions[execution.id].state, 'provider_completed');
+    assert.equal(f.leases(), 0);
+  } finally { await f.close(); }
+});
+
 test('default-off transport supplies the complete approved legacy catalog and leaves ordinary native thread parameters unchanged', async () => {
   const f = fixture('normal', false);
   try {

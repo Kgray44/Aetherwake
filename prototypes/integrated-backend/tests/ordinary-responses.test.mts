@@ -1104,6 +1104,100 @@ test('AIR refuses invalid pins, execution through the conversation provider and 
   } finally { await f.close(); }
 });
 
+test('ordinary provider cannot admit local execution, while Codex and file mentions in advice stay conversational', async () => {
+  const f = fixture();
+  try {
+    const base = { adaptive: true as const, resourceIds: [] };
+    for (const intent of ['Patch parser.mjs to handle empty rows', 'Inspect the checkout logs for the exit code',
+      'Describe the parser failure, then patch parser.mjs.',
+      'Describe the parser failure, and patch parser.mjs.',
+      'Describe the parser failure and patch parser.mjs.',
+      'Describe the parser failure. Patch parser.mjs.',
+      'Describe the parser failure, then save the fix in parser.mjs.']) {
+      for (const pin of [undefined, providerId]) {
+        await assert.rejects(f.core.command('velaRequestPreview', { ...base, intent, providerId: pin }),
+          /vela_local_execution_unavailable/);
+      }
+    }
+    assert.equal(f.requests.length + f.codexCalls + f.secretReads, 0);
+    const intent = 'Could you show me how Codex could write parser.mjs without touching the file?';
+    const preview = await f.core.command('velaRequestPreview', { ...base, intent, providerId });
+    assert.equal(preview.providerId, providerId);
+    assert.equal(preview.route?.kind, 'conversational');
+    const scope = { previewId: preview.id, signature: preview.signature };
+    const review = await f.core.command('velaNativeReview', scope);
+    const grant = await f.core.command('authorizeVelaRequest', { ...scope, reviewDigest: review.reviewDigest });
+    f.responses.push(() => complete('resp-file-advice', 'Synthetic file-edit advice'));
+    const result = await f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId: grant.grantId,
+    } }) as VelaRequest;
+    assert.equal(result.state, 'failed', 'synthetic provider text cannot be adopted as real Vela provenance');
+    const snapshot = await f.core.command('snapshot', {});
+    const execution = Object.values(snapshot.executions)[0];
+    assert.equal(execution.state, 'provider_completed');
+    assert.equal(snapshot.messageEvidence[execution.outputMessageId!].classification, 'simulated');
+    assert.equal(result.providerId, providerId);
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.codexCalls, 0);
+  } finally { await f.close(); }
+});
+
+test('reviewed ordinary advice can read an attached canonical note without local execution', async () => {
+  const f = fixture();
+  try {
+    const created = await f.core.command('desktop', { type: 'createResource', kind: 'note',
+      title: 'Synthetic selected source', workspaceId: null });
+    const note = created.resources.find(resource => resource.title === 'Synthetic selected source')!;
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version,
+      content: 'Synthetic source observation: the pump cycles every six minutes.' });
+    const intent = 'Read the source note and summarize it.';
+    const resourceIds = [note.id];
+    const preview = await f.core.command('velaRequestPreview', { adaptive: true, intent, resourceIds, providerId });
+    assert.equal(preview.route?.kind, 'conversational');
+    const scope = { previewId: preview.id, signature: preview.signature };
+    const review = await f.core.command('velaNativeReview', scope);
+    const grant = await f.core.command('authorizeVelaRequest', { ...scope, reviewDigest: review.reviewDigest });
+    f.responses.push(() => complete('resp-selected-note'));
+    await f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds, authorizeProvider: true, previewId: preview.id, grantId: grant.grantId,
+    } });
+    assert.equal(f.requests.length, 1);
+    assert.match(JSON.stringify(f.requests[0].input), /pump cycles every six minutes/);
+    assert.equal(Object.values((await f.core.command('snapshot', {})).executions)[0].state, 'provider_completed');
+    assert.equal(f.codexCalls, 0);
+  } finally { await f.close(); }
+});
+
+test('a turn Codex destination replaces inherited Responses pins and admits only reviewed Codex', async () => {
+  const f = fixture(true);
+  try {
+    f.setListedModels([documentedModel]);
+    await f.core.command('ordinaryProviderCheck', {});
+    await f.core.command('vela', { name: 'saveRoutingSettings', input: { scope: 'global', id: null, expectedVersion: 0,
+      defaults: { providerId, model: documentedModel.id, reasoningEffort: 'medium' } } });
+    const intent = 'Audit the repository logs for the exit code';
+    const ask = { adaptive: true as const, intent, resourceIds: [], mode: 'codex' as const, reasoningEffort: 'high' as const };
+    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, providerId }), /vela_pinned_provider_cannot_execute/);
+    const preview = await f.core.command('velaRequestPreview', ask);
+    assert.equal(preview.providerId, 'codex-app-server');
+    assert.equal(preview.route?.kind, 'agentic');
+    assert.equal(preview.routingSettings?.effective.providerId, undefined);
+    assert.equal(preview.routingSettings?.effective.model, undefined);
+    assert.equal(preview.routingSettings?.effective.reasoningEffort, 'high');
+    assert.equal(preview.route.effort, 'high');
+    const scope = { previewId: preview.id, signature: preview.signature };
+    const review = await f.core.command('velaNativeReview', scope);
+    const grant = await f.core.command('authorizeVelaRequest', { ...scope, reviewDigest: review.reviewDigest });
+    const result = await f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId: grant.grantId,
+    } }) as VelaRequest;
+    assert.equal(result.state, 'responded', result.errorCode);
+    assert.equal(result.providerId, 'codex-app-server');
+    assert.equal((await f.core.command('providerActivity', {})).providerRequests, 1);
+    assert.equal(f.requests.length + f.secretReads, 0);
+  } finally { await f.close(); }
+});
+
 test('explicit Codex composite intent keeps its actual owner, selected-source fences and one reviewed execution',async()=>{
   const f=fixture(true);try{
     const created=await f.core.command('desktop',{type:'createResource',kind:'note',title:'Synthetic explicit inspection source',workspaceId:null}),note=created.resources.find(resource=>resource.title==='Synthetic explicit inspection source')!;
@@ -1120,6 +1214,44 @@ test('explicit Codex composite intent keeps its actual owner, selected-source fe
     const request=await f.core.command('vela',{name:'request',input:{intent,resourceIds:[note.id],authorizeProvider:true,previewId:fresh.id,grantId:grant.grantId}}) as VelaRequest;
     assert.equal(request.state,'responded',request.errorCode);assert.equal(request.providerId,'codex-app-server');assert.equal((await f.core.command('providerActivity',{})).providerRequests,1);assert.equal(f.requests.length,0);assert.equal(f.secretReads,0);
   }finally{await f.close();}
+});
+
+test('automatic routing keeps exact workspace navigation local with a qualified API', async () => {
+  const f = fixture();
+  try {
+    const api = f.owner.velaApiRuntime;
+    api.authorized = () => true;
+    api.configurationVersion = () => 1;
+    const workspace = await f.core.command('workspace', { title: 'Synthetic exact navigation' });
+    const result = await f.core.command('velaRouteNative', { intent: 'Could you open the workspace Synthetic exact navigation?' });
+    assert(result.matched);
+    assert.equal(result.request.state, 'completed');
+    assert.equal(result.request.providerId, null);
+    assert.equal((await f.core.command('desktop', { type: 'snapshot' })).activeWorkspaceId, workspace.id);
+    assert.equal(f.requests.length + f.secretReads + f.codexCalls, 0);
+  } finally { await f.close(); }
+});
+
+test('a model-only pin keeps native checklist routing while automatic and explicit API retain their route', async () => {
+  const f = fixture();
+  try {
+    const runtime = f.owner.velaApiRuntime;
+    runtime.authorized = () => true;
+    runtime.configurationVersion = () => 1;
+    runtime.models = async () => ['gpt-6-luna'];
+    const workspace = await f.core.command('workspace', { title: 'Synthetic pinned routing workspace' });
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
+    const intent = 'Could you add a checklist called Shopping here?';
+    for (const settings of [undefined, { providerId: 'openai-api-vela' as const, model: 'gpt-6-luna' }]) {
+      assert.equal((await f.core.command('velaRouteNative', { intent, settings })).matched, false);
+      const selected = await f.owner.selectVelaRoute({ intent, resourceIds: [], adaptive: true, ...settings }, { capabilityMs: 0 });
+      assert.equal(selected.providerId, 'openai-api-vela');
+    }
+    const native = await f.core.command('velaRouteNative', { intent, settings: { model: 'gpt-6.1-sol' } });
+    assert(native.matched && native.request.planId);
+    assert.equal(native.request.providerId, null);
+    assert.equal(f.requests.length + f.codexCalls + f.secretReads, 0);
+  } finally { await f.close(); }
 });
 
 test('an authorized primary API never enters the legacy regex analysis/handoff workflow',async()=>{
@@ -1522,6 +1654,103 @@ test('a provider terminal error preserves its safe category and an explicit new 
  }finally{await f.close();}
 });
 
+for (const failUnknown of [false, true]) {
+  test(`ordinary terminal journal failure releases admission (unknown journal failure: ${failUnknown})`, async () => {
+    const f = fixture();
+    try {
+      await f.core.command('ordinaryProviderCheck', {});
+      const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+      const first = await prepare(f, chat.resourceId, 'Synthetic terminal transaction question');
+      const id = first.preview.responses!.executionId;
+      const authorization = await grant(f, first.preview);
+      f.owner.db.exec(`
+        CREATE TEMP TRIGGER reject_ordinary_terminal BEFORE INSERT ON intelligence_events
+        WHEN json_extract(NEW.json, '$.type') = 'execution/provider_completed'
+        BEGIN SELECT RAISE(ABORT, 'synthetic completion journal failure'); END;
+      `);
+      if (failUnknown) {
+        f.owner.db.exec(`
+          CREATE TEMP TRIGGER reject_ordinary_unknown BEFORE INSERT ON intelligence_events
+          WHEN json_extract(NEW.json, '$.type') = 'execution/unknown'
+          BEGIN SELECT RAISE(ABORT, 'synthetic unknown journal failure'); END;
+        `);
+      }
+      f.responses.push(() => complete('resp-terminal-transaction', 'Uncommitted synthetic answer'));
+      const sending = f.core.command('conversationSend', authorization);
+      if (failUnknown) {
+        await assert.rejects(sending, /synthetic completion journal failure/);
+      } else {
+        const result = await sending;
+        assert.equal(result.state, 'unknown');
+        assert.equal(result.errorCode, 'ordinary_settlement_unavailable');
+        assert.equal(result.responseId, 'resp-terminal-transaction');
+      }
+      assert.equal(f.owner.active, null);
+      assert.equal(f.owner.ordinaryController, null);
+      assert.equal(f.owner.liveVelaAnswer, undefined);
+      assert.equal(f.owner.ordinaryTask, null);
+      assert.equal(f.requests.length, 1);
+      assert.equal(f.codexCalls, 0);
+
+      const persisted = JSON.parse(String(f.owner.db.prepare('SELECT json FROM integration_state WHERE id=1').get().json));
+      assert.equal(persisted.executions[id].state, failUnknown ? 'running' : 'unknown');
+      assert.equal(persisted.executions[id].outputMessageId, undefined);
+      assert.deepEqual(persisted.graph.messages.map((message: { role: string }) => message.role), ['user']);
+      const replay = (await f.core.command('replay', {})).events.filter(event => event.executionId === id);
+      assert.deepEqual(replay.filter(event => event.type.startsWith('execution/')).map(event => event.type),
+        failUnknown ? [] : ['execution/unknown']);
+      assert(!replay.some(event => event.payload.delta));
+      await assert.rejects(f.core.command('conversationSend', authorization), /native_send_grant_consumed/);
+      assert.equal(f.requests.length, 1);
+
+      await f.reopen();
+      const restored = await f.core.command('snapshot', {});
+      assert.equal(restored.executions[id].state, 'unknown');
+      assert.equal(restored.executions[id].responseId, 'resp-terminal-transaction');
+      assert.equal(restored.executions[id].outputMessageId, undefined);
+      const followup = await prepare(f, chat.resourceId, 'Synthetic explicit follow-up');
+      f.responses.push(() => complete('resp-fresh-after-terminal-fault'));
+      assert.equal((await f.core.command('conversationSend', await grant(f, followup.preview))).state, 'provider_completed');
+      assert.equal(f.requests.length, 2);
+    } finally { await f.close(); }
+  });
+}
+
+test('ordinary live observer failure cannot change provider completion or reconnect replay', async () => {
+  const f = fixture();
+  try {
+    await f.core.command('ordinaryProviderCheck', {});
+    const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+    const first = await prepare(f, chat.resourceId, 'Synthetic observer question');
+    const before = (await f.core.command('replay', {})).latest;
+    const emit = f.owner.emit;
+    let dropped = 0;
+    f.owner.emit = (event: StreamEvent) => {
+      if (event.payload.delta || event.type === 'execution/provider_completed') {
+        dropped++;
+        throw Error('synthetic observer disconnected');
+      }
+      emit(event);
+    };
+    f.responses.push(() => complete('resp-observer-failure'));
+    const result = await f.core.command('conversationSend', await grant(f, first.preview));
+    assert.equal(result.state, 'provider_completed');
+    assert.equal(result.taskVerified, false);
+    assert.equal(f.owner.active, null);
+    assert.equal(dropped, 2);
+    await f.reopen();
+    const restored = await f.core.command('snapshot', {});
+    assert.deepEqual(restored.executions[result.id], result);
+    assert.equal(restored.messageEvidence[result.outputMessageId!].outputState, 'complete');
+    const replay = (await f.core.command('replay', { after: before })).events.filter(event => event.executionId === result.id);
+    assert(replay.every((event, index) => index === 0 || event.cursor > replay[index - 1].cursor));
+    assert.deepEqual(replay.filter(event => event.type.startsWith('execution/')).map(event => event.type), ['execution/provider_completed']);
+    assert(replay.some(event => event.type === 'item/agentMessage/delta' && event.payload.textBytes));
+    assert(!replay.some(event => event.payload.delta));
+    assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});
+
 test('ordinary unknown non-stream HTTP facts persist without response bodies, false completion or retry',async()=>{
  const f=fixture();try{
   await f.core.command('ordinaryProviderCheck',{});const c=await f.core.command('createConversation',{commandId:randomUUID()}),p=await prepare(f,c.resourceId,'Synthetic inspectable transport test'),g=await grant(f,p.preview);
@@ -1680,6 +1909,82 @@ test('ordinary cancellation requests actual abort, retains unknown outcome/parti
   const p=await prepare(f,c.resourceId,'Synthetic cancel request');pending=f.core.command('conversationSend',await grant(f,p.preview));for(let i=0;i<100&&(!started||!f.owner.assistantText);i++)await new Promise(resolve=>setTimeout(resolve,2));assert(started);const execution=f.owner.active;assert(execution);
   assert.deepEqual(await f.core.command('interrupt',{executionId:execution.id}),{requested:true,confirmed:false});const result=await pending as any;pending=undefined;assert.equal(result.state,'unknown');assert.equal(result.cancellation.requested,true);assert.equal(result.cancellation.serverConfirmed,false);assert.equal(f.codexCalls,0);assert.equal((await f.core.command('conversation',{name:'detail',input:{resourceId:c.resourceId}}) as any).messages.items.at(-1).outputState,'partial');
  }finally{if(pending){f.owner.ordinaryController?.abort();await pending;}await f.close();}
+});
+
+test('a retired ordinary response-created callback cannot journal against a newer send', async () => {
+  const f = fixture();
+  let enterConfirmation!: () => void, releaseConfirmation!: () => void, finishConfirmation!: () => void;
+  let enterNextPost!: () => void, releaseNextPost!: () => void;
+  const confirming = new Promise<void>(resolve => { enterConfirmation = resolve; });
+  const allowConfirmation = new Promise<void>(resolve => { releaseConfirmation = resolve; });
+  const confirmationFinished = new Promise<void>(resolve => { finishConfirmation = resolve; });
+  const nextPost = new Promise<void>(resolve => { enterNextPost = resolve; });
+  const allowNextPost = new Promise<void>(resolve => { releaseNextPost = resolve; });
+  let firstSend: ReturnType<BackendCore['execute']> | undefined;
+  let nextSend: ReturnType<BackendCore['execute']> | undefined;
+  try {
+    await f.core.command('ordinaryProviderCheck', {});
+    const parent = await f.core.command('createConversation', { providerId: 'local', commandId: randomUUID() });
+    const source = await f.core.command('addMessage', { resourceId: parent.resourceId, role: 'user',
+      content: 'Synthetic selected source', expectedRevision: 1 });
+    const branch = await f.core.command('branch', { resourceId: parent.resourceId, messageId: source.id,
+      includeMessageIds: [source.id], providerId, title: 'Synthetic reviewed branch', commandId: randomUUID(), tokenBudget: 32768 });
+    await f.core.command('review', { handoffId: branch.handoff.id, fingerprint: branch.handoff.fingerprint, approve: true });
+    const firstResource = branch.conversation.resourceId;
+    const share = await f.core.command('conversation', { name: 'publish',
+      input: { sourceResourceId: parent.resourceId, sourceMessageId: source.id, evidence: 'excerpt' } }) as { id: string };
+    await f.core.command('conversation', { name: 'inspectShare', input: { resourceId: firstResource, shareId: share.id } });
+    await f.core.command('conversation', { name: 'attachShare', input: { resourceId: firstResource, shareId: share.id, attach: true } });
+    const next = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+
+    const confirmSupplied = f.owner.conversations.confirmSupplied.bind(f.owner.conversations);
+    f.owner.conversations.confirmSupplied = async (resourceId: string, shareId: string, executionId: string) => {
+      enterConfirmation();
+      await allowConfirmation;
+      try { await confirmSupplied(resourceId, shareId, executionId); }
+      finally { finishConfirmation(); }
+    };
+    const retiredResponseId = 'resp-synthetic-retired';
+    const nextResponseId = 'resp-synthetic-successor';
+    f.responses.push(
+      () => sse([{ type: 'response.created', response: { id: retiredResponseId } }]),
+      async () => { enterNextPost(); await allowNextPost; return complete(nextResponseId); },
+    );
+    const first = await prepare(f, firstResource, 'Synthetic first question');
+    firstSend = f.core.command('conversationSend', await grant(f, first.preview));
+    await Promise.race([confirming, firstSend.then(() => { throw Error('First send settled before confirmation was held'); })]);
+    const firstExecutionId = first.preview.responses!.executionId;
+    assert.deepEqual(await f.core.command('interrupt', { executionId: firstExecutionId }), { requested: true, confirmed: false });
+    const retired = await firstSend;
+    assert.equal(retired.state, 'unknown');
+    assert.equal(retired.responseId, retiredResponseId);
+
+    const successor = await prepare(f, next.resourceId, 'Synthetic successor question');
+    nextSend = f.core.command('conversationSend', await grant(f, successor.preview));
+    await Promise.race([nextPost, nextSend.then(() => { throw Error('Successor settled before its POST was held'); })]);
+    const nextExecutionId = successor.preview.responses!.executionId;
+    assert.equal(f.owner.active?.id, nextExecutionId);
+    releaseConfirmation();
+    await confirmationFinished;
+    // Drain the retired callback's continuations while the successor still owns the lane.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(f.owner.active?.id, nextExecutionId);
+    releaseNextPost();
+    assert.equal((await nextSend).state, 'provider_completed');
+
+    const replay = await f.core.command('replay', { after: 0 });
+    for (const events of [replay.events, f.events]) {
+      const observed = events.filter(event => event.type === 'provider/response-created' && event.executionId === nextExecutionId);
+      assert.deepEqual(observed.map(event => [event.resourceId, event.payload.responseId]), [[next.resourceId, nextResponseId]]);
+    }
+    assert.equal(f.requests.length, 2);
+  } finally {
+    releaseConfirmation();
+    releaseNextPost();
+    f.owner.ordinaryController?.abort();
+    await Promise.allSettled([firstSend, nextSend]);
+    await f.close();
+  }
 });
 
 test('native auth finish returns pending promptly, suppresses secret URL in public state and closes the caught background task',async()=>{

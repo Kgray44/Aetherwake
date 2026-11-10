@@ -3,7 +3,7 @@ import {knownRemoteCode} from '../../openai-provider/common.mts';
 
 /** Native receipt metadata only. Unknown strings are never diagnostics authority. */
 const localCodes=new Set([
-  'api_process_interrupted','provider_failed','provider_incomplete','provider_timeout','provider_transport_unavailable','cancellation_unconfirmed','operation_aborted',
+  'api_process_interrupted','vela_api_settlement_unavailable','provider_failed','provider_incomplete','provider_timeout','provider_transport_unavailable','cancellation_unconfirmed','operation_aborted',
   'invalid_stream_response','invalid_stream_json','invalid_stream_event','invalid_created_response','invalid_text_delta','stream_event_type_mismatch','stream_terminal_unobserved',
   'response_identity_mismatch','response_terminal_mismatch','event_capacity_exceeded','stream_capacity_exceeded','output_capacity_exceeded','response_capacity_exceeded','response_body_unavailable','invalid_json_response',
   'unsupported_provider_output','api_terminal_items_mismatch','api_response_identity_unobserved','invalid_api_response_item','api_json_capacity_exceeded','invalid_api_json',

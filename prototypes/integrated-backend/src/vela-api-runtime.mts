@@ -31,10 +31,12 @@ export interface VelaApiWeatherTool {run(input:WeatherQuery,signal:AbortSignal):
 export interface VelaApiRuntimeTestServices { fetch: typeof fetch; voice?: {fetch:typeof fetch;acknowledgementMs?:number};wake?:import('./vela-wake-runtime.mts').VelaWakeTestServices }
 export interface VelaApiRuntimeOptions {
   db: DatabaseSync; transaction<T>(work: () => T): T; connection: VelaApiConnection;
+  /** Shares the outer commit with canonical execution callbacks when present. */
+  executionTransaction?<T>(work: () => T): T;
   /** Native synthetic-only constructor injection, never a serialized option. */
   test?: VelaApiRuntimeTestServices;
   observe?: {
-    stage(executionId: string, requestId: string, review: DispatchReview): void;
+    stage(executionId: string, requestId: string, review: DispatchReview): void | (() => void);
     event(event: TurnEvent, requestId: string): void;
     completed(executionId: string, requestId: string, result: TurnResult, elapsedMs: number): void;
   };
@@ -56,7 +58,7 @@ export interface VelaApiRun {
   lane?: 'mission-specialist';
   oneUse?: true;
   validate(): void;
-  stage?(executionId: string, review: DispatchReview): void;
+  stage?(executionId: string, review: DispatchReview): void | (() => void);
   event?(event: TurnEvent): void;
   completed?(executionId: string, result: TurnResult): void;
 }
@@ -233,6 +235,7 @@ export class VelaApiRuntime {
             ...(continuation ? { continuation } : {}) } };
         const expected = prepareResponsesTurn(turn).review;
         let admitted = false;
+        const commitExecution = <T,>(work: () => T) => (this.options.executionTransaction ?? this.options.transaction)(work);
         const exactReview = (review: DispatchReview) => {
           check(JSON.stringify(review) === JSON.stringify(expected), 'approval_scope_mismatch'); fence();
           for (const output of review.api?.continuation?.toolOutputs ?? []) {
@@ -249,14 +252,22 @@ export class VelaApiRuntime {
           onEvent: event => { fence(); if (input.event) input.event(event); else this.options.observe?.event(event,input.requestId); }, native: {
             authorize: async review => {
               exactReview(review); check(!admitted, 'api_execution_already_dispatched');
-              this.options.transaction(() => {
-                fence(); check(this.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay, 'vela_api_daily_limit_reached');
-                if(semantic){check(semantic.budget.providerRequests<semantic.budget.maxProviderRequests,'vela_workflow_budget_exhausted');semantic.budget.providerRequests++;fence();checkpoint('running');}
-                this.options.db.prepare('INSERT INTO vela_api_runs(execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state) VALUES(?,?,?,?,?,?,?)')
-                  .run(executionId,input.requestId,input.version,new Date().toISOString().slice(0,10),review.bodyDigest,currentContext,'dispatching');
-                if (input.stage) input.stage(executionId,review); else this.options.observe?.stage(executionId,input.requestId,review);
-                admitted = true;
-              });
+              const before = semantic?.budget.providerRequests;
+              let afterCommit: void | (() => void);
+              try {
+                afterCommit = commitExecution(() => {
+                  fence(); check(this.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay, 'vela_api_daily_limit_reached');
+                  if(semantic){check(semantic.budget.providerRequests<semantic.budget.maxProviderRequests,'vela_workflow_budget_exhausted');semantic.budget.providerRequests++;fence();checkpoint('running');}
+                  this.options.db.prepare('INSERT INTO vela_api_runs(execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state) VALUES(?,?,?,?,?,?,?)')
+                    .run(executionId,input.requestId,input.version,new Date().toISOString().slice(0,10),review.bodyDigest,currentContext,'dispatching');
+                  return input.stage ? input.stage(executionId, review) : this.options.observe?.stage(executionId, input.requestId, review);
+                });
+              } catch (error) {
+                if (semantic && before !== undefined) semantic.budget.providerRequests = before;
+                throw error;
+              }
+              admitted = true;
+              afterCommit?.();
             },
             resolveCredential: async (configurationId, providerId) => {
               fence(); check(configurationId === VELA_API_CONFIGURATION_ID && providerId === VELA_API_PROVIDER, 'credential_boundary_mismatch');
@@ -275,14 +286,31 @@ export class VelaApiRuntime {
             },
             revalidate: async (review, boundaryDigest) => { exactReview(review); await this.options.connection.revalidate(input.version,boundaryDigest); fence(); },
           } });
-        const result = await transport.turn(turn, combined);
-        if (admitted) this.options.transaction(() => {
-          const diagnostic=apiRunDiagnostics(result);
+        let result = await transport.turn(turn, combined);
+        const settle = (receipt: TurnResult) => commitExecution(() => {
+          const diagnostic = apiRunDiagnostics(receipt);
+          const elapsed = Math.round(performance.now() - started);
           this.options.db.prepare('UPDATE vela_api_runs SET state=?,result_digest=?,response_id=?,usage_json=?,elapsed_ms=?,error_code=?,http_diagnostic_json=? WHERE execution_id=?')
-            .run(result.outcome,result.outcome === 'completed' ? digest(result.partialText) : null,result.responseId ?? null,result.usage ? JSON.stringify(result.usage) : null,Math.round(performance.now()-started),diagnostic.errorCode??null,diagnostic.httpDiagnostic?JSON.stringify(diagnostic.httpDiagnostic):null,executionId);
-          if (input.completed) input.completed(executionId,result);
-          else this.options.observe?.completed(executionId,input.requestId,result,Math.round(performance.now()-started));
+            .run(receipt.outcome, receipt.outcome === 'completed' ? digest(receipt.partialText) : null, receipt.responseId ?? null,
+              receipt.usage ? JSON.stringify(receipt.usage) : null, elapsed, diagnostic.errorCode ?? null,
+              diagnostic.httpDiagnostic ? JSON.stringify(diagnostic.httpDiagnostic) : null, executionId);
+          if (input.completed) input.completed(executionId, receipt);
+          else this.options.observe?.completed(executionId, input.requestId, receipt, elapsed);
         });
+        if (admitted) {
+          try {
+            settle(result);
+          } catch {
+            // The previous commit rolled back. Discard uncommitted output and tool calls.
+            const { api: _api, webSearch: _webSearch, ...facts } = result;
+            result = { ...facts, partialText: '', outcome: result.dispatched ? 'unknown' : 'failed',
+              errorCode: 'vela_api_settlement_unavailable' };
+            // A failed fallback must not return a previous tool stage as this one's result.
+            final = undefined;
+            try { settle(result); }
+            catch { throw new VelaError(result.errorCode!, result.dispatched ? 'unknown' : undefined); }
+          }
+        }
         final = { executionId, result, fetchedIds: [...fetched] };
         if (result.outcome !== 'completed') return semantic?outputFinal(result.outcome==='unknown'?'unknown':'blocked',result.errorCode):final;
         fence();
@@ -344,7 +372,12 @@ export class VelaApiRuntime {
         if(pending.length)return pause();
       }
       throw new VelaError('api_tool_call_limit');
-    } catch(error){if(semantic){const code=String((error as {code?:string})?.code??''),reason=code==='vela_workflow_budget_exhausted'?code:invoking?'vela_tool_owner_unknown':/^vela_tool_[a-z_]{1,64}$/.test(code)?code:'vela_tool_rejected',phase=reason==='vela_workflow_budget_exhausted'?'budget-exhausted':invoking?'unknown':'blocked';checkpoint(phase,reason);if(final)return {...final,workflow:{workflowId:semantic.workflowId,phase,reason}};}throw error;
+    } catch(error){
+      // A workflow checkpoint cannot downgrade an uncertain dispatched stage.
+      if (error instanceof VelaError && error.outcome === 'unknown') throw error;
+      if (final?.result.outcome === 'unknown')
+        throw new VelaError(final.result.errorCode ?? 'vela_api_unknown', 'unknown');
+      if(semantic){const code=String((error as {code?:string})?.code??''),reason=code==='vela_workflow_budget_exhausted'?code:invoking?'vela_tool_owner_unknown':/^vela_tool_[a-z_]{1,64}$/.test(code)?code:'vela_tool_rejected',phase=reason==='vela_workflow_budget_exhausted'?'budget-exhausted':invoking?'unknown':'blocked';checkpoint(phase,reason);if(final)return {...final,workflow:{workflowId:semantic.workflowId,phase,reason}};}throw error;
     } finally { this.running.delete(input.requestId); }
   }
   async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;validate(): void }, signal: AbortSignal): Promise<unknown> {
