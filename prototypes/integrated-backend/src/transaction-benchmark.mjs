@@ -183,7 +183,7 @@ async function run([name, messages, bytes, resources, events]) {
     await repeat('unchangedIntegrationSave', () => core.atomic(() => {}));
     let messageId;
     await repeat('substantialSave', async i => { messageId = await append(String(i % 10).repeat(32768)); });
-    const expected = await call('snapshot', {});
+    const expectedGraph = JSON.parse(JSON.stringify((await call('snapshot', {})).graph));
     const after = sizes();
     assert(after.integrationBytes < 8 * 1024 * 1024);
     assert(after.databaseBytes <= 128 * 1024 * 1024);
@@ -197,7 +197,7 @@ async function run([name, messages, bytes, resources, events]) {
       core = open();
       const restored = await call('snapshot', {});
       const operationMs = performance.now() - start;
-      assert.deepEqual(restored.graph, expected.graph);
+      assert.deepEqual(restored.graph, expectedGraph);
       assert.equal(restored.graph.messages.at(-1).id, messageId);
       assert.equal((await call('openWorkspace', { workspaceId: workspace.id })).workspace.id, workspace.id);
       assert.equal(core.missions.read(missionId, scope).disposition, 'cancelled');

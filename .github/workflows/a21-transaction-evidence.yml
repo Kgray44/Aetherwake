@@ -27,7 +27,7 @@ jobs:
           node "$path" | tee "$RUNNER_TEMP/baseline.jsonl"
       - name: Run focused transaction assertions
         if: always()
-        run: node --test prototypes/integrated-backend/tests/canonical-event-commit.test.mts
+        run: node --test prototypes/integrated-backend/tests/canonical-event-commit.test.mts prototypes/integrated-backend/tests/transaction-coordination.test.mts
       - name: Run candidate with identical fixtures
         if: always()
         shell: bash
