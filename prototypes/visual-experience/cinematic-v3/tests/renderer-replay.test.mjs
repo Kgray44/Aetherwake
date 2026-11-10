@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reconcileRendererReplay } from "../src/renderer-replay.ts";
+import { reconcileRendererReplay, rendererAccessChanged, rendererResourceAccessChanged } from "../src/renderer-replay.ts";
 
 const event = cursor => ({ cursor, eventId: "event-" + cursor });
 const page = (options = {}) => ({
@@ -61,4 +61,15 @@ test("a page resolved after invalidation cannot publish", async () => {
     accept: () => assert.fail("an old generation must not publish"),
   });
   assert.deepEqual(outcome, { status: "obsolete" });
+});
+
+test("provider-only invalidation leaves the current workspace visible", () => {
+  for (const type of ["provider/connection", "vela.api/usage-authorization"]) {
+    assert.equal(rendererAccessChanged(type), true);
+    assert.equal(rendererResourceAccessChanged(type), false);
+  }
+  for (const type of ["policy/share-revoked", "application/archiveWorkspace", "source/revoked"]) {
+    assert.equal(rendererAccessChanged(type), true);
+    assert.equal(rendererResourceAccessChanged(type), true);
+  }
 });

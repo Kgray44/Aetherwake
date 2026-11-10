@@ -18,8 +18,13 @@ type ReplayOutcome =
 const WINDOW = 250;
 const MAX_PAGES = 12;
 
+export function rendererResourceAccessChanged(type: string) {
+  return /^(?:policy[./]|application\/(?:archiveSubject|archiveWorkspace)$|source\/(?:revoked|unavailable)$)/.test(type);
+}
+
 export function rendererAccessChanged(type: string) {
-  return /^(?:policy[./]|application\/(?:archiveSubject|archiveWorkspace)$|source\/(?:revoked|unavailable)$|vela\.api\/usage-authorization$|provider\/connection$)/.test(type);
+  return rendererResourceAccessChanged(type) ||
+    type === "vela.api/usage-authorization" || type === "provider/connection";
 }
 
 /** Only a scoped replay page can advance the scan. History seeds presentation. */

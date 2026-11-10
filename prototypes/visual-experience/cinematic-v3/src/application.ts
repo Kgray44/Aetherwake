@@ -240,7 +240,12 @@ const escape = (s: string) =>
       ]!,
   );
 
-import { reconcileRendererReplay, rendererAccessChanged, type RendererEventPage } from "./renderer-replay.ts";
+import {
+  reconcileRendererReplay,
+  rendererAccessChanged,
+  rendererResourceAccessChanged,
+  type RendererEventPage,
+} from "./renderer-replay.ts";
 
 export function installApplication(hooks: Hooks) {
   const host = window.aerynthHost!;
@@ -4724,9 +4729,9 @@ export function installApplication(hooks: Hooks) {
       : state?.workspaces.find((workspace) => workspace.id === workspaceId)?.project_id ?? null;
     return { workspaceId, projectId };
   }
-  function invalidateEventAccess(cursor: number) {
+  function invalidateEventAccess(type: string, cursor: number) {
     requiredAccessCursor = Math.max(requiredAccessCursor, cursor);
-    if ((eventBoundary?.cursor ?? -1) < requiredAccessCursor)
+    if (rendererResourceAccessChanged(type) && (eventBoundary?.cursor ?? -1) < requiredAccessCursor)
       document.body.dataset.applicationAccessPending = "true";
     visualMission = null;
     visualEvidence.panelPhase = undefined;
@@ -4871,7 +4876,7 @@ export function installApplication(hooks: Hooks) {
               event.cursor > Math.max(boundary.cursor, requiredAccessCursor) &&
               rendererAccessChanged(event.type));
             if (missedAccessChange) {
-              invalidateEventAccess(missedAccessChange.cursor);
+              invalidateEventAccess(missedAccessChange.type, missedAccessChange.cursor);
               conversationExecution.invalidate();
               eventReadAgain = true;
               return;
@@ -4996,7 +5001,7 @@ export function installApplication(hooks: Hooks) {
       hooks.wake();
     }
     if (accessChanged) {
-      invalidateEventAccess(e.cursor ?? requiredAccessCursor);
+      invalidateEventAccess(e.type, e.cursor ?? requiredAccessCursor);
       requestEventRefresh();
     }
     const sourceChanged = !e.payload?.delta && /^(resource|note|conversation|source)[./]/.test(e.type);
@@ -5652,9 +5657,10 @@ export function installApplication(hooks: Hooks) {
       )
         return;
       blockPresentations.set(id, { visible, usable, presentation });
-      if (visible && !previous?.visible && streamBlockIds.includes(id)) requestEventRefresh();
-      if (visible && !previous?.visible && streamBlockIds.includes(id))
+      if (visible && !previous?.visible && streamBlockIds.includes(id)) {
+        requestEventRefresh();
         scheduleStreamRefresh();
+      }
       const article = document.querySelector<HTMLElement>(
         `[data-block="${id}"]`,
       );
