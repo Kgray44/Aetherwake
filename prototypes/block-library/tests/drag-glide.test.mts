@@ -9,9 +9,12 @@ import { readFileSync,mkdtempSync,writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { prepareDragGlide } from '../prepare-drag-glide-native.mts';
 import { BackendCore } from '../../integrated-backend/src/core.mts';
+import { workspaceNativePreparationSkip } from './workspace-native-prerequisites.mts';
 const require=createRequire(import.meta.url),helper=require('./drag-glide-native.cjs'),{expressions:x,preflight}=require('./drag-glide-expressions.cjs');
 
-test('canonical drag fixture reopens exact known separated geometry, real settings and independent recovery without execution',async()=>{
+test('canonical drag fixture reopens exact known separated geometry, real settings and independent recovery without execution',{
+ skip: process.platform === 'win32' && workspaceNativePreparationSkip,
+},async()=>{
  const profile=join(tmpdir(),'aerynth-drag-glide-test-'+randomUUID()),seed=await prepareDragGlide(profile);
  const db=join(profile,'aerynth.sqlite'),core=new BackendCore({path:db,privateRoot:profile,cwd:process.cwd(),provider:'codex',contentPolicy:'local-private',retention:{maxEvents:10000}});
  try{const actual=await core.command('desktop',{type:'snapshot'});assert.deepEqual(actual,seed.expected);assert.deepEqual([actual.blocks.find(b=>b.id===seed.movingBlockId)!.x,actual.blocks.find(b=>b.id===seed.movingBlockId)!.y],[128,272]);assert.deepEqual((await core.command('notes',{name:'readNote',input:seed.document.resource.id})).result,seed.document);assert(seed.document.draft&&seed.document.draft.content!==seed.document.resource.content);assert.equal(Object.keys((await core.command('snapshot',{})).executions).length,0);assert.equal(actual.resources.length,3);assert.equal(Buffer.byteLength(JSON.stringify(seed))<262144,true);

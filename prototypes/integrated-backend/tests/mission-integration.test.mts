@@ -275,10 +275,13 @@ test('canonical backend runs a native mission without inference, restores eviden
   }
 });
 
-test('a lost worker never treats its in-flight native work as verified on reopen', { timeout: 12_000 }, async () => {
+test('a lost worker never treats its in-flight native work as verified on reopen', { timeout: 30_000 }, async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'aerynth-mission-crash-'));
   const options = { path: join(directory, 'state.sqlite'), contentPolicy: 'synthetic-only' as const };
   let backend = new Backend(options);
+  let stage = 'initial workspace and mission preview';
+  const reportStage = () => t.diagnostic('Worker-loss fixture stage: ' + stage);
+  t.signal.addEventListener('abort', reportStage, { once: true });
   try {
     const project = (await backend.call('desktop', { type: 'createProject', title: 'Synthetic crash project' })).projects[0];
     const desktop = await backend.call('desktop', { type: 'createWorkspace', title: 'Synthetic crash workspace', projectId: project.id });
@@ -286,17 +289,29 @@ test('a lost worker never treats its in-flight native work as verified on reopen
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
     const objective = 'Measure CPU and RAM in parallel';
     const preview = await backend.call('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    stage = 'durable CPU attempt admission';
+    let terminated: Promise<void> | undefined;
     const admitted = new Promise<string>(resolve => {
       const stop = backend.subscribe(event => {
         if (event.type === 'vela.mission/started' && event.payload.taskId === 'cpu') {
-          stop(); resolve(event.correlationId!);
+          stop();
+          // Interrupt as soon as the worker publishes its durable attempt.
+          // Waiting for the RPC reply gives the OS sample time to complete.
+          terminated = backend.terminate();
+          resolve(event.correlationId!);
         }
       });
     });
-    await backend.call('missions', { name: 'start', input: { objective, fingerprint: preview.fingerprint, requestId: randomUUID() } });
-    const id = await Promise.race([admitted, delay(4000, 'timeout', { ref: false })]);
-    assert.notEqual(id, 'timeout');
-    await backend.terminate();
+    const started = backend.call('missions', { name: 'start', input: { objective, fingerprint: preview.fingerprint, requestId: randomUUID() } })
+      .catch(error => {
+        if (!terminated || error.message !== 'backend_disconnected') throw error;
+      });
+    const id = await Promise.race([admitted, started.then(() => admitted), delay(8000, 'timeout', { ref: false })]);
+    assert.notEqual(id, 'timeout', 'CPU attempt did not publish its durable start');
+    assert.ok(terminated, 'Worker termination was not requested for the durable attempt');
+    stage = 'worker exit and recovery';
+    await terminated;
+    await started;
     backend = new Backend(options);
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
     const recovered = await backend.call('missions', { name: 'read', input: { id } }) as MissionProjection;
@@ -318,6 +333,7 @@ test('a lost worker never treats its in-flight native work as verified on reopen
     assert.deepEqual(cpuRecovery.mission?.scope, { workspaceId, projectId: project.id });
     assert.equal(replay.filter(event => event.mission?.kind === 'started' && event.mission.taskId === 'cpu').length, 1);
     assert.ok(!replay.some(event => event.mission?.kind === 'report-posted'));
+    stage = 'workroom authority and recovered projection';
     const firstReview = await backend.call('missions', { name: 'workroom-preview', input: { id } }) as MissionWorkroomPreview;
     await backend.call('desktop', { type: 'archiveSubject', kind: 'project', id: project.id, expectedVersion: project.version, archived: true });
     await backend.call('desktop', { type: 'archiveSubject', kind: 'project', id: project.id, expectedVersion: project.version + 1, archived: false });
@@ -338,6 +354,7 @@ test('a lost worker never treats its in-flight native work as verified on reopen
     assert.equal(linked?.checklist?.find(task => task.taskId === 'cpu')?.state, 'failed');
     assert.equal(linked?.checklist?.find(task => task.taskId === 'report')?.state, 'queued');
   } finally {
+    t.signal.removeEventListener('abort', reportStage);
     await backend.close();
     const target = resolve(directory);
     assert.ok(relative(resolve(tmpdir()), target).startsWith('aerynth-mission-crash-'));

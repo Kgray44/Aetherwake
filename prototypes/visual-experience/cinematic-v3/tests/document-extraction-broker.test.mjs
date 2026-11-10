@@ -2,15 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {pdfFixture} from '../../../block-library/tests/media-fixtures.mts';
 import {extractDocumentText} from '../src/document-text-worker.ts';
 const {createDocumentExtractionBroker}=createRequire(import.meta.url)('../native/document-extraction-broker.cjs');
+const fixturePath = name => fileURLToPath(new URL('fixed/' + name, import.meta.url));
 function fixture({hold=false,oversize=false}={}){const ipcMain=new EventEmitter(),windows=[],replies=[],calls=[],bytes=pdfFixture();let start;const started=new Promise(resolve=>start=resolve);let privateBytes;
   class Window extends EventEmitter{constructor(options){super();this.options=options;this.destroyed=false;this.webContents=new EventEmitter();this.webContents.mainFrame={};this.webContents.session={setPermissionRequestHandler:fn=>{this.permission=fn;},webRequest:{onBeforeRequest:(_filter,fn)=>{this.network=fn;}}};this.webContents.setWindowOpenHandler=fn=>{this.openHandler=fn;};this.webContents.send=(_channel,input)=>{privateBytes=input.bytes;start(input);if(hold)return;
       void extractDocumentText(input.bytes,'pdf',input.maxTextBytes).then(result=>{const payload={token:input.token,jobId:input.jobId,result};ipcMain.emit('vela-private-document-result',{sender:{},senderFrame:this.webContents.mainFrame},payload);ipcMain.emit('vela-private-document-result',{sender:this.webContents,senderFrame:{}},payload);ipcMain.emit('vela-private-document-result',{sender:this.webContents,senderFrame:this.webContents.mainFrame},payload);});};windows.push(this);}
     loadFile(path){this.path=path;return Promise.resolve();}isDestroyed(){return this.destroyed;}destroy(){if(!this.destroyed){this.destroyed=true;this.emit('closed');}}}
-  const broker=createDocumentExtractionBroker({BrowserWindow:Window,ipcMain,preloadPath:'C:\\fixed\\vela-document-text-preload.cjs',htmlPath:'C:\\fixed\\document-text.html',call:async(command,input)=>{calls.push({command,input});if(command==='mediaDescribe')return {metadata:{source:'file',format:'pdf',sourceRevision:'a'.repeat(64),byteLength:oversize?9*1024*1024:bytes.length}};assert.equal(command,'mediaReadChunk');assert.equal(input.expectedVersion,2);assert.equal(input.sourceRevision,'a'.repeat(64));return {base64:Buffer.from(bytes.subarray(input.offset,input.offset+input.length)).toString('base64')};},send:wire=>replies.push(wire)});
+  const broker=createDocumentExtractionBroker({BrowserWindow:Window,ipcMain,preloadPath:fixturePath('vela-document-text-preload.cjs'),htmlPath:fixturePath('document-text.html'),call:async(command,input)=>{calls.push({command,input});if(command==='mediaDescribe')return {metadata:{source:'file',format:'pdf',sourceRevision:'a'.repeat(64),byteLength:oversize?9*1024*1024:bytes.length}};assert.equal(command,'mediaReadChunk');assert.equal(input.expectedVersion,2);assert.equal(input.sourceRevision,'a'.repeat(64));return {base64:Buffer.from(bytes.subarray(input.offset,input.offset+input.length)).toString('base64')};},send:wire=>replies.push(wire)});
   const input={jobId:randomUUID(),resourceId:randomUUID(),expectedVersion:2,sourceRevision:'a'.repeat(64),format:'pdf',maxTextBytes:11600},request={documentHost:{version:1,kind:'request',id:randomUUID(),input}};
   const wait=async()=>{for(let i=0;i<100&&!replies.length;i++)await new Promise(resolve=>setTimeout(resolve,5));assert.ok(replies.length);return replies.at(-1).documentHost;};
   return {broker,windows,ipcMain,calls,request,input,started,wait,get privateBytes(){return privateBytes;}};

@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
 const { createDriver } = require('../../visual-experience/cinematic-v3/native/desktop-verify.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve,ms));
 const sha = data => createHash('sha256').update(data).digest('hex');
@@ -66,7 +67,13 @@ exports.verify = async ({win,app,privateRoot,source}) => {
    receipt.partial.overviewBounds={last,samples};assert.fail('overview_vela_gpu_bounds_not_settled_top_right');
   };
   const capture=async(name)=>{assert(budget.count<4,'Combined four-PNG profile budget exhausted');await focus();const before=await js('(()=>{const s=window.__aerynth.snapshot();return {frames:s.gpu?.framesRendered,draws:s.metrics.draws}})()');assert(Number.isFinite(before.frames),'Actual GPU renderer unavailable');let acknowledgement;const end=Date.now()+6000;while(Date.now()<end){await pause(80);const next=await js('(()=>{const s=window.__aerynth.snapshot();return {frames:s.gpu?.framesRendered,draws:s.metrics.draws,active:s.active,failed:s.graphicsFailed}})()');if(win.isFocused()&&next.active&&!next.failed&&next.frames>before.frames&&next.draws>before.draws){acknowledgement=next;break;}}assert(acknowledgement,'new_focused_gpu_draw_not_acknowledged');const overview=await overviewBounds();assert(win.isFocused(),'Focus lost before capture');const png=(await win.webContents.capturePage()).toPNG();assert(win.isFocused(),'Focus lost during capture');assert(budget.bytes+png.length<=8*1024*1024,'Combined PNG byte budget exceeded');const file=path.join(out,name+'.png');await fs.writeFile(file,png);const item={file,bytes:png.length,sha256:sha(png),focused:true,before,acknowledgement,overview};budget.count++;budget.bytes+=png.length;budget.files.push(item);receipt.captures.push(item);await fs.writeFile(budgetFile,encode(budget));};
-  const verifyPanelConversation=async state=>{assert.deepEqual(await js('[...document.querySelectorAll(".vela-core-message")].map(e=>e.querySelector("p").textContent)'),state.conversation.messages.slice(-80).map(m=>m.content),'Panel presents exact canonical conversation content');};
+  const verifyPanelConversation = async state => {
+    const expected = state.conversation.messages.slice(-80).map(message => message.content);
+    await until(async () => {
+      const rendered = await js('[...document.querySelectorAll(".vela-core-message")].map(e=>e.querySelector("p").textContent)');
+      return isDeepStrictEqual(rendered, expected);
+    }, 'Panel presents exact canonical conversation content');
+  };
   const initial=await readVela(),initialReview=reviews(initial);await focus();await open();let state=await readVela();assert.deepEqual(state.identity,{id:'system:vela',name:'Vela',role:'application-assistant'});assert(state.conversation.resourceId);const velaResource=(await desktop()).resources.find(r=>r.id===state.conversation.resourceId);assert(velaResource&&velaResource.kind==='conversation'&&velaResource.providerId==='local','Vela has its own canonical local conversation, never a forwarded provider identity');assert.deepEqual(reviews(state),initialReview,'Opening is not attention review');await offline();
   if(process.argv.includes('--verify-air-local')){
     assert(!restore && state.requests.length === 0, 'Fresh offline AIR profile required');

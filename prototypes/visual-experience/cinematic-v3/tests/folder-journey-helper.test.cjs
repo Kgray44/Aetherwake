@@ -16,6 +16,11 @@ test('native dialog selection is limited to the exact neutral Documents fixture 
  assert.throws(()=>assertFixtureTarget(documents,path.join(documents,'ExistingUserFolder'),target,'folder'),/owned_folder_fixture_required/);
  assert.throws(()=>sourceDialogScript({pid:0,ownerHwnd:'123',documents,fixtureRoot,target,kind:'folder'}),/owned_source_pid_required/);
  assert.throws(()=>sourceDialogScript({pid:123,ownerHwnd:'0',documents,fixtureRoot,target,kind:'folder'}),/owned_source_hwnd_required/);
+});
+test('Windows PowerShell parses the owned source dialog script',{
+ skip:process.platform!=='win32'&&'requires Windows PowerShell',
+},()=>{
+ const documents=path.resolve('C:/OwnedFixture/Documents'),fixtureRoot=path.join(documents,'Aerynth-Folder-Review-1793810000000'),target=path.join(fixtureRoot,'Neutral optics folder');
  const script=sourceDialogScript({pid:123,ownerHwnd:'456',documents,fixtureRoot,target,kind:'folder'});
  // Parse only. No dialog, UIAutomation invocation, permission, microphone, or process selection occurs.
  const parser="$ProgressPreference='SilentlyContinue';$tokens=$null;$errors=$null;[void][System.Management.Automation.Language.Parser]::ParseInput([Console]::In.ReadToEnd(),[ref]$tokens,[ref]$errors);if($errors.Count){throw 'source_dialog_script_parse_failed'};Write-Output 'PARSE_OK'";

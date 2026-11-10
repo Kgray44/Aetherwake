@@ -10,7 +10,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { LIMITS, NATIVE_RUNTIME_ENTRIES, JOSE_RUNTIME, joseRuntime, contained, runtimeSource, electronRuntimeFile, allocation, destination, nodeClosure, bootstrap, readme, argumentsFor } from './review-build.mjs';
 import { readRendererReceipt, rendererReceiptName, reviewRendererReceipt } from './review-renderer.mjs';
 
-async function fixture(work){const dir=await fs.mkdtemp(path.join(tmpdir(),'aerynth-review-packager-'));try{return await work(dir);}finally{const rel=path.relative(path.resolve(tmpdir()),path.resolve(dir));assert(rel&&!rel.startsWith('..')&&!path.isAbsolute(rel)&&path.basename(dir).startsWith('aerynth-review-packager-'));await fs.rm(dir,{recursive:true,force:true});}}
+async function fixture(work) {
+  // Windows runners may expose TEMP through an 8.3 alias. Match the
+  // packager's canonical root while keeping cleanup limited to this fixture.
+  const parent = await fs.realpath(tmpdir());
+  const dir = await fs.mkdtemp(path.join(parent, 'aerynth-review-packager-'));
+  try {
+    return await work(dir);
+  } finally {
+    assert.equal(path.dirname(dir), parent);
+    assert(path.basename(dir).startsWith('aerynth-review-packager-'));
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
 
 test('renderer review requires a completed build for the same clean candidate and exact asset bytes', async () => {
   await fixture(async root => {

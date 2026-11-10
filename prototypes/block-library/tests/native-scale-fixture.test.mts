@@ -13,6 +13,7 @@ import {
   SCALE_COUNTS,
 } from "../prepare-native-scale.mts";
 import type { BlockInstanceSettings } from "../contracts.ts";
+import { workspaceNativePreparationSkip } from "./workspace-native-prerequisites.mts";
 const require = createRequire(import.meta.url);
 const {
   options,
@@ -42,7 +43,9 @@ test("native scale entry requires one supported count, a bounded sample and an e
   );
 });
 
-test("offline native-scale profiles use actual canonical identities and restore all six required mixed-resource counts", async (t) => {
+test("offline native-scale profiles use actual canonical identities and restore all six required mixed-resource counts", {
+  skip: process.platform === "win32" && workspaceNativePreparationSkip,
+}, async (t) => {
   for (const count of SCALE_COUNTS) {
     await t.test(String(count), async () => {
       const profile = join(

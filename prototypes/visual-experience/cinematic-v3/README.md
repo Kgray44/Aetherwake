@@ -1,6 +1,6 @@
 # Aerynth / Cinematic Experience V3.5
 
-An isolated, executable visual experiment. **Synthetic content; no AI backend connected.** The owner positively reviewed the celestial background; whole-experience artistic acceptance remains open. Neither Electron nor Tauri is selected as the production host.
+This package contains the connected Electron desktop and the Cinematic V3.5 visual harness. For canonical workspaces, conversations, Vela, and native provider review, use the [connected application guide](APPLICATION.md). This page describes the visual harness and its synthetic fixtures. The owner positively reviewed the historical celestial background. Whole-experience artistic acceptance and final host selection remain open.
 
 The current [material continuity correction](MATERIAL-CONTINUITY-V3.5.md) keeps glass visible through overlap and selection and removes the logo's dark raster background. Review the [native workspace](evidence-material-continuity/review-final/01-unselected-three.png), [overlap recording](evidence-material-continuity/review-final/continuous-overlap.webm), and [47-check native receipt](evidence-material-continuity/review-final/verification.json). `npx --no-install electron native/material-preview.cjs` opens the canonical application in a fresh synthetic Freeform workspace for interactive review.
 
@@ -8,16 +8,15 @@ V3 is preserved at `9c8df82` on `codex/cinematic-experience-v3`. V3.5 extends it
 
 ## Run
 
-Requires Node 24 and npm on Windows. From this directory:
+See the [Windows build prerequisites and dependency setup](APPLICATION.md#launch). From this directory, open the visual harness with:
 
 ```powershell
-npm ci
-npm start
+npm run preview
 ```
 
-`npm run preview` opens **Luminous Architecture** with Starlit Ring lighting and Optical Glass resources in a separate local profile, with Expressive Vela ambience. The header switches directly to Living Intelligence. Scene controls expose three instrument material studies, three celestial lighting studies and three orbital geometry concepts, and preserve Aetheric Observatory. This review keeps animating while another window has focus; minimize or choose Quiet to still it. `npm start` also pauses on blur.
+`npm run preview` opens **Luminous Architecture** with Starlit Ring lighting and Optical Glass resources in a separate local profile, with Expressive Vela ambience. The header switches directly to Living Intelligence. Scene controls expose three instrument material studies, three celestial lighting studies and three orbital geometry concepts, and preserve Aetheric Observatory. This review keeps animating while another window has focus. Minimize or choose Quiet to still it.
 
-Keep the host's per-drive storage reserve before installing/building/capturing. A fresh dependency install and verification should be admitted as a bounded 2 GiB C: step, with no D: writes, using the host ReserveGuard. Dependencies/builds/profiles/raw captures are ignored. There is no installer, updater, remote connection, or production deployment.
+Run the host ReserveGuard before installs, builds and captures with a separate estimate for each drive. Include the checkout, npm cache, temporary directories, profile and evidence destination. Keep raw captures and private profiles out of Git.
 
 ## Review the experience
 
@@ -47,6 +46,8 @@ Tab/Enter operate the controls; Escape closes the foremost utility surface or re
 
 ## Verify
 
+`npm test` runs package tests. `npm run verify`, `npm run record`, and `npm run soak` invoke `native/main.cjs` with the visual harness profile. Use `npm run verify:application` for the connected desktop journey.
+
 ```powershell
 npm run typecheck
 npm test
@@ -55,7 +56,7 @@ npm run record
 npm run soak
 ```
 
-`electron . --record --ambient-study --celestial-study=shadow` records a separate 30-second actual-clock study of slow rotation and fixed-light reflections, without scripted pointer input. The former spatial visibility veil has been removed. It uses the same exact-window, no-audio limits as the walkthrough. Held orientation overrides are reset before recordings.
+`npm run record -- --ambient-study --celestial-study=shadow` records a separate 30-second actual-clock study of slow rotation and fixed-light reflections, without scripted pointer input. The former spatial visibility veil has been removed. It uses the same exact-window, no-audio limits as the walkthrough. Held orientation overrides are reset before recordings.
 
 Each native verification creates a fresh evidence directory and refuses to overwrite an existing receipt. Set `AERYNTH_EVIDENCE_DIR` to a new directory when needed. Generate the current performance report with `node scripts/summarize-v3-5.mjs evidence-instruments/<your-run>`. Historical V3 scripts do not regenerate current reports. The fresh-process soak verifies live rendering before measurement, uses no screenshots, and reports an exploratory memory journey rather than prolonged leak qualification.
 
@@ -65,6 +66,6 @@ The recording command captures only its exact application window, with no audio,
 
 ## Scope and ownership
 
-The material correction is developed on `codex/glass-continuity`. It consumes coordinated application, workspace-engine and Constellation integration while keeping rendering ownership here. Governance is unchanged. The exact master PNG is preserved without alteration; SHA-256 remains `89bd614656667f1178603afa3a23debc5a4e96fe61ccfbb957d7ef27cbf76658`.
+The historical material correction was developed on `codex/glass-continuity`. Its rendering work consumed coordinated application, workspace-engine and Constellation integration. The exact master PNG is preserved without alteration; SHA-256 remains `89bd614656667f1178603afa3a23debc5a4e96fe61ccfbb957d7ef27cbf76658`.
 
-GPU geometry/shaders, accessible DOM content, canonical resources/events, coordinator, native adapter, and verification are separate. There is no backend lock-in in the scene. A real Codex path, complete application architecture, production security review, detached displays, and owner artistic acceptance remain outside this experiment's demonstrated scope.
+The visual harness exercises GPU geometry and shaders, accessible DOM content, the Motion Coordinator and its native window. The connected application uses the same renderer with canonical resources, events and the native Codex bridge. Evidence from the visual harness applies to its synthetic scene.

@@ -293,6 +293,19 @@ test('DOM binding cancels safely, suppresses selection only during drag and skip
   const doc = Object.assign(new EventTarget(), { documentElement: { style: { userSelect: 'text' } } });
   class Target extends EventTarget {
     style = { touchAction: '' }; ownerDocument = doc; captured = new Set<number>();
+    override addEventListener(...args: Parameters<EventTarget['addEventListener']>) {
+      const [type, listener, options] = args;
+      if (!options || typeof options !== 'object' || !options.signal) {
+        super.addEventListener(...args);
+        return;
+      }
+      const { signal, ...listenerOptions } = options;
+      if (signal.aborted) return;
+      // Model DOM abort cleanup explicitly. Node can collect earlier abort
+      // callbacks when the same EventTarget registers several with one signal.
+      super.addEventListener(type, listener, listenerOptions);
+      signal.addEventListener('abort', () => this.removeEventListener(type, listener, listenerOptions), { once: true });
+    }
     setPointerCapture(id: number) { this.captured.add(id); }
     hasPointerCapture(id: number) { return this.captured.has(id); }
     releasePointerCapture(id: number) { this.captured.delete(id); this.dispatchEvent(new Event('lostpointercapture')); }

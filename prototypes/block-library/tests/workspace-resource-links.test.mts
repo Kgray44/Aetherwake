@@ -11,6 +11,7 @@ import { prepareWorkspaceNative } from '../prepare-workspace-native.mts';
 import { BackendCore } from '../../integrated-backend/src/core.mts';
 import { NoteSession } from '../note-session.ts';
 import type { NoteDocument } from '../note-contracts.ts';
+import { workspaceNativePreparationSkip } from './workspace-native-prerequisites.mts';
 const require = createRequire(import.meta.url), helper = require('./workspace-resource-links.cjs'), { expressions: x, preflight } = require('./workspace-resource-links-expressions.cjs');
 
 test('Related native expressions exhaust all user link kinds and inherited branches before dispatch, without JS input substitutes', () => {
@@ -113,7 +114,7 @@ test('a consumed initial Related profile is rejected before JS or native input r
   } finally { process.argv = argv; }
 });
 
-test('explicit recovery-special preparation uses existing Core/SQLite, preserves separate Note/Task recovery through automatic flush and reopening, and never starts execution', async t => {
+test('explicit recovery-special preparation uses existing Core/SQLite, preserves separate Note/Task recovery through automatic flush and reopening, and never starts execution', { skip: workspaceNativePreparationSkip }, async t => {
   const profile = join(tmpdir(), 'review-workspace-native-related-source-' + randomUUID()), seed = await prepareWorkspaceNative(profile, { relatedResources: true }), fixture = helper.fixture(seed);
   assert.equal(seed.cases.length, 11); assert(seed.cases.some(entry=>entry.kind==='clock_timer'&&entry.resourceId&&entry.blockId));
   assert.equal(seed.shapeCases.length, 3); assert.equal(seed.expected.workspaces.length, 14); assert.equal(seed.cases.filter(entry => !entry.blockId).length, 1, 'Only Chat remains for native creation in this explicitly specialized fixture');

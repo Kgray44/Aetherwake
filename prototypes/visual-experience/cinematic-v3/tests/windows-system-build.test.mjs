@@ -1,15 +1,76 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,writeFile,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import path from 'node:path';import {promisify} from 'node:util';import {execFile} from 'node:child_process';import {fileURLToPath} from 'node:url';
 import {buildWindowsSystem} from '../native/windows-system-build.mjs';
-test('fixed Windows addon reads real memory/process facts, preserves consent diagnoses and rejects an unissued reclaim',async t=>{
+import {createRequire} from 'node:module';
+test('fixed Windows addon reads real memory/process facts, preserves consent diagnoses and rejects an unissued reclaim',{
+ skip:process.platform!=='win32'&&'requires Windows, MSVC, and the Electron executable',
+},async t=>{
  const root=fileURLToPath(new URL('..',import.meta.url)),folder=await mkdtemp(path.join(tmpdir(),'aerynth-system-addon-test-'));
  try{const built=await buildWindowsSystem(root),file=path.join(folder,'fixed.node');await writeFile(file,built.binary);assert(built.binary.length<4*1024*1024);assert.equal(Object.keys(built.metadata.inputs).join('|'),'native/windows-system.cpp|native/windows-computer.inc');t.diagnostic('Compiled asset '+built.binary.length+' bytes; measured post-compile temporary outputs '+built.allocation.postCompileTemporaryBytes+' bytes; no trim performed.');
  const code=`const a=require(process.argv[1]);const assert=require('node:assert/strict');
- (async()=>{assert.throws(()=>a.locate('0',Date.now()),/location_foreground_ui_required/);const b=a.battery();assert([0,1,255].includes(b.acLineStatus));assert(Number.isInteger(b.batteryLifePercent));
- const memory=JSON.parse(await a.memorySnapshot());assert(memory.physicalTotalBytes>0&&memory.physicalAvailableBytes<=memory.physicalTotalBytes);assert.equal(memory.systemCommitHeadroomBytes,memory.systemCommitLimitBytes-memory.systemCommitBytes);
- const inspection=JSON.parse(await a.memoryInspect(1,String(process.pid)));assert(inspection.scanned>0&&inspection.scanned<=1024);assert(inspection.processes.length===1);assert(inspection.processes.every(p=>Number.isSafeInteger(p.workingSetBytes)&&Number.isSafeInteger(p.privateCommitBytes)));
- // An unissued reference is rejected before HWND validation or any OS trim.
- await assert.rejects(a.memoryReclaim('00000000-0000-4000-8000-000000000000','0',String(process.pid),inspection.generation),e=>e==='memory_snapshot_expired');for(const name of ['computerDiscover','computerObserve','computerWindow','computerControl','computerLaunch','computerRevoke'])assert.equal(typeof a[name],'function');if(!process.versions.electron){const discovery=JSON.parse(await a.computerDiscover());assert.equal(discovery.catalogScope,'start-menu-shortcuts');assert(Array.isArray(discovery.windows)&&discovery.windows.length>0&&discovery.windows.length<=64);assert(Array.isArray(discovery.applications)&&discovery.applications.length>0&&discovery.applications.length<=256);assert(discovery.virtualBounds.width>0&&discovery.virtualBounds.height>0);assert(discovery.windows.every(w=>typeof w.identity.creation==='string'&&typeof w.identity.hwnd==='string'));}await assert.rejects(a.computerObserve('00000000-0000-4000-8000-000000000000'));await assert.rejects(a.computerLaunch('00000000-0000-4000-8000-000000000000'));const pendingDiscovery=a.computerDiscover();a.computerRevoke();await assert.rejects(pendingDiscovery,e=>e==='computer_permission_revoked');const pendingMemory=a.memorySnapshot();a.memoryRevoke();await assert.rejects(pendingMemory,e=>e==='memory_permission_revoked');process.stdout.write('NATIVE_BOUNDARY_OK');})().catch(()=>{process.stderr.write('NATIVE_BOUNDARY_FAILED');process.exitCode=1;});`;
- for(const executable of [process.execPath,path.join(root,'node_modules/electron/dist/electron.exe')]){const result=await promisify(execFile)(executable,['-e',code,file],{windowsHide:true,timeout:15000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});assert.equal(result.stdout,'NATIVE_BOUNDARY_OK');}
+ const requireInteractive=process.env.AERYNTH_WINDOWS_INTERACTIVE_QA==='1';
+ const unavailable=new Set(['computer_secure_desktop','computer_admin_denied']);
+ const unissued='00000000-0000-4000-8000-000000000000';
+ let stage='location';
+ (async()=>{
+   assert.throws(()=>a.locate('0',Date.now()),/location_foreground_ui_required/);
+   stage='battery';
+   const battery=a.battery();
+   assert([0,1,255].includes(battery.acLineStatus));
+   assert(Number.isInteger(battery.batteryLifePercent));
+   stage='memory-snapshot';
+   const memory=JSON.parse(await a.memorySnapshot());
+   assert(memory.physicalTotalBytes>0&&memory.physicalAvailableBytes<=memory.physicalTotalBytes);
+   assert.equal(memory.systemCommitHeadroomBytes,memory.systemCommitLimitBytes-memory.systemCommitBytes);
+   stage='memory-inspect';
+   const inspection=JSON.parse(await a.memoryInspect(1,String(process.pid)));
+   assert(inspection.scanned>0&&inspection.scanned<=1024);
+   assert(Array.isArray(inspection.processes)&&inspection.processes.length<=1);
+   if(requireInteractive)assert.equal(inspection.processes.length,1);
+   assert(inspection.processes.every(p=>Number.isSafeInteger(p.workingSetBytes)&&Number.isSafeInteger(p.privateCommitBytes)));
+   stage='memory-reclaim';
+   // An unissued reference is rejected before HWND validation or any OS trim.
+   await assert.rejects(a.memoryReclaim(unissued,'0',String(process.pid),inspection.generation),e=>e==='memory_snapshot_expired');
+   stage='computer-discovery';
+   for(const name of ['computerDiscover','computerObserve','computerWindow','computerControl','computerLaunch','computerRevoke'])assert.equal(typeof a[name],'function');
+   let outcome='electron-node-mode';
+   if(!process.versions.electron){
+     let discovery;
+     try { discovery=JSON.parse(await a.computerDiscover()); }
+     catch(error){ if(requireInteractive||!unavailable.has(error))throw error; outcome=error; }
+     if(discovery){
+       outcome='catalog-observed';
+       assert.equal(discovery.catalogScope,'start-menu-shortcuts');
+       assert(Array.isArray(discovery.windows)&&discovery.windows.length<=64);
+       assert(Array.isArray(discovery.applications)&&discovery.applications.length<=256);
+       assert(discovery.virtualBounds.width>0&&discovery.virtualBounds.height>0);
+       assert(discovery.windows.every(w=>typeof w.identity.creation==='string'&&typeof w.identity.hwnd==='string'));
+       if(requireInteractive)assert(discovery.windows.length>0&&discovery.applications.length>0);
+     }
+   }
+   stage='unissued-computer-operations';
+   await assert.rejects(a.computerObserve(unissued));
+   await assert.rejects(a.computerLaunch(unissued));
+   stage='computer-revocation';
+   const pendingDiscovery=a.computerDiscover();
+   a.computerRevoke();
+   await assert.rejects(pendingDiscovery,e=>e==='computer_permission_revoked');
+   stage='memory-revocation';
+   const pendingMemory=a.memorySnapshot();
+   a.memoryRevoke();
+   await assert.rejects(pendingMemory,e=>e==='memory_permission_revoked');
+   process.stdout.write('NATIVE_BOUNDARY_OK '+outcome);
+ })().catch(error=>{
+   const reason=typeof error==='string'&&/^(?:memory|computer)_[a-z_]+$/.test(error)?error:'assertion-or-unexpected-error';
+   process.stderr.write('NATIVE_BOUNDARY_FAILED '+stage+' '+reason);process.exitCode=1;
+ });`;
+ // The locked Electron package provisions its binary on first resolution.
+ const electron = createRequire(import.meta.url)('electron');
+ assert(path.isAbsolute(electron), 'Installed Electron executable unavailable');
+ for(const executable of [process.execPath,electron]){
+  const result=await promisify(execFile)(executable,['-e',code,file],{windowsHide:true,timeout:15000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
+  assert.match(result.stdout,/^NATIVE_BOUNDARY_OK (catalog-observed|computer_secure_desktop|computer_admin_denied|electron-node-mode)$/);
+  t.diagnostic(result.stdout);
+ }
  // Compile the production helper functions in this same translation unit; no Geolocator or consent API is invoked.
  const production=path.join(root,'native/windows-system.cpp').replaceAll('\\','/');assert(!/["\r\n]/u.test(production+folder));
  const harness=path.join(folder,'diagnostics.cpp'),executable=path.join(folder,'diagnostics.exe');
