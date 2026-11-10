@@ -250,7 +250,8 @@ test('canonical backend runs a native mission without inference, restores eviden
         await delay(25);
         result = await backend.call('missions', { name: 'read', input: { id: result.id } }) as MissionProjection;
       }
-      assert.equal(result.outcome, 'verified');
+      assert.equal(result.outcome, 'verified', JSON.stringify(result.tasks.map(task =>
+        [task.id, task.state, task.detail, task.attempts.at(-1)?.timing])));
       return result;
     };
     const measured = await measure(), measuredAgain = await measure(), single = await measure('Run a mission to measure CPU');
