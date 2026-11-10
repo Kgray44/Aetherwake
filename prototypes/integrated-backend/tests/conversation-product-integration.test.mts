@@ -222,6 +222,19 @@ test('a bound Codex turn cannot inherit late journal events from a prior turn on
       await releaseTerminal.promise;
       return terminal(threadId, turnId);
     };
+    const connect = port.connect.bind(port);
+    const prebindId = crypto.randomUUID();
+    port.connect = async () => {
+      assert.equal(core.active.binding, null);
+      core.ingest({
+        schemaVersion: 1, eventId: prebindId, sequence: core.sequence,
+        provider: 'codex-app-server', providerThreadId: first.binding!.nativeThreadId, providerTurnId: first.turnId,
+        method: 'item/agentMessage/delta', observedAt: new Date().toISOString(), observedAtSource: 'bridge-clock',
+        providerTime: null, providerTimeSource: null, evidence: 'observed', terminalStatus: null,
+        payload: { delta: 'Synthetic retired text before binding' },
+      });
+      await connect();
+    };
     sending = execute('Synthetic successor Codex turn');
     await Promise.race([waitingForTerminal.promise, sending.then(() => { throw Error('Successor settled before terminal was held'); })]);
     const snapshot = await f.core.command('snapshot', {});
@@ -231,21 +244,44 @@ test('a bound Codex turn cannot inherit late journal events from a prior turn on
     assert.equal(next.binding.nativeThreadId, first.binding.nativeThreadId);
     assert.notEqual(next.turnId, first.turnId);
 
-    core.ingest({
-      schemaVersion: 1, eventId: crypto.randomUUID(), sequence: core.sequence + 1,
-      provider: 'codex-app-server', providerThreadId: first.binding.nativeThreadId, providerTurnId: first.turnId,
+    const eventBase = {
+      schemaVersion: 1, provider: 'codex-app-server', providerThreadId: first.binding.nativeThreadId,
       method: 'item/agentMessage/delta', observedAt: new Date().toISOString(), observedAtSource: 'bridge-clock',
       providerTime: null, providerTimeSource: null, evidence: 'observed', terminalStatus: null,
-      payload: { delta: 'Synthetic retired turn text' },
-    });
+    };
+    const emit = core.emit;
+    const live: import('../src/contracts.mts').StreamEvent[] = [];
+    core.emit = (event: import('../src/contracts.mts').StreamEvent) => { live.push(event); emit(event); };
+    const ingest = (turnId: string, sequence: number, delta: string, threadless = false) => {
+      const eventId = crypto.randomUUID();
+      core.ingest({ ...eventBase, eventId, sequence, providerTurnId: turnId,
+        ...(threadless ? { providerThreadId: null } : {}), payload: { delta } });
+      return eventId;
+    };
+    const beforeInjection = await f.core.command('replay', { after: cursor });
+    assert(!beforeInjection.events.some(event => event.nativeEventId === prebindId || event.type === 'stream/gap-or-reorder'));
+    const afterBinding = beforeInjection.latest;
+    const sequence = core.sequence as number;
+    const staleFuture = ingest(first.turnId, sequence + 50, 'Synthetic retired future text', true);
+    const staleNext = ingest(first.turnId, sequence + 1, 'Synthetic retired next text');
+    const accepted = ingest(next.turnId, sequence + 2, ' Synthetic valid continuation');
+    const gap = ingest(next.turnId, sequence + 4, ' Synthetic valid after real gap');
     releaseTerminal.release();
     assert.equal((await sending).state, 'provider_completed');
 
-    const replay = await f.core.command('replay', { after: cursor });
-    const attributed = replay.events.filter(event => event.executionId === next.id && event.type === 'item/agentMessage/delta');
-    assert.deepEqual(attributed.map(event => event.turnId), [next.turnId]);
+    const replay = (await f.core.command('replay', { after: afterBinding })).events;
+    assert.deepEqual(replay.map(event => [event.type, event.nativeEventId, event.nativeSequence, event.executionId]), [
+      ['item/agentMessage/delta', accepted, sequence + 2, next.id],
+      ['stream/gap-or-reorder', null, null, next.id],
+      ['item/agentMessage/delta', gap, sequence + 4, next.id],
+    ]);
+    assert.deepEqual(live.filter(event => event.payload.delta).map(event => [event.nativeEventId, event.turnId]), [
+      [accepted, next.turnId], [gap, next.turnId],
+    ]);
+    assert(!live.some(event => event.nativeEventId === staleFuture || event.nativeEventId === staleNext));
     const after = await f.core.command('snapshot', {});
-    assert(!after.graph.messages.some(message => message.content.includes('Synthetic retired turn text')));
+    const last = after.graph.messages.filter(message => message.role === 'assistant').at(-1);
+    assert.equal(last?.content, 'INTEGRATION_OK Synthetic valid continuation Synthetic valid after real gap');
   } finally {
     releaseTerminal.release();
     await sending?.catch(() => {});

@@ -74,7 +74,13 @@ export function resolveRoutingSettings(
   function apply(layer: VelaRoutingDefaults | VelaAgentRoutingDefaults, origin: VelaRoutingScope | 'agent' | 'turn') {
     // A model and effort belong to their backend. A destination change clears
     // subordinate inherited pins before accepting any from the new layer.
-    if (layer.providerId !== undefined && layer.providerId !== effective.providerId) {
+    const overridesInheritedDestination = layer.mode === 'codex' && layer.providerId === undefined &&
+      (effective.providerId ? effective.providerId !== 'codex-app-server' : effective.mode !== 'codex');
+    if (overridesInheritedDestination) {
+      delete effective.providerId;
+      delete origins.providerId;
+    }
+    if (overridesInheritedDestination || layer.providerId !== undefined && layer.providerId !== effective.providerId) {
       delete effective.model;
       delete effective.reasoningEffort;
       delete origins.model;
