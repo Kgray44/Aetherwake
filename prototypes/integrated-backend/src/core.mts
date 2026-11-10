@@ -3282,8 +3282,9 @@ export class BackendCore {
     const subjects: Partial<Record<VelaNativeAction['type'], RegExp>> = {
       createProject: /\bprojects?$/u, createWorkspace: /\bworkspaces?$/u,
       createConversation: /\b(?:chats?|conversations?)$/u, createCollection: /\b(?:collections?|folders?)$/u,
-      ...(action.type === 'clockTimer' && action.request?.name === 'create'
-        ? { clockTimer: /\b(?:timers?|countdowns?)$/u } : {}),
+      ...(action.type === 'clockTimer' && action.request?.name === 'create' &&
+        action.request.input.operations.length === 1 && action.request.input.operations[0].type === 'createTimer' &&
+        !action.request.input.operations[0].start ? { clockTimer: /\b(?:timers?|countdowns?)$/u } : {}),
     };
     const subject = action.type === 'createResource'
       ? { note: /\bnotes?$/u, task: /\btasks?$/u, task_group: /\btask groups?$/u, checklist: /\bchecklists?$/u }[action.kind]

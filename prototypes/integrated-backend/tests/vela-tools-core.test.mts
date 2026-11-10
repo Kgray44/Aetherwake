@@ -124,7 +124,8 @@ test('conditional or different application actions require review before provide
 });
 
 test('a workspace or explicit no-change request cannot silently create an unrelated timer', async () => {
-  for (const intent of ["Create a new workspace for the sprint and don't add a timer.", 'Make no changes to the timer.']) {
+  for (const intent of ["Create a new workspace for the sprint and don't add a timer.", 'Make no changes to the timer.',
+    'Create a one-minute timer.']) {
     const f = fixture();
     try {
       await f.ready();
@@ -135,6 +136,8 @@ test('a workspace or explicit no-change request cannot silently create an unrela
           type: 'clockTimer', workspaceId: before.activeWorkspaceId,
           request: { name: 'create', input: { title: 'Unrequested timer', projectId: null, operations: [
             { type: 'createTimer', key: 'unrequested', name: 'Unrequested timer', durationMs: 60000, start: false },
+            ...(intent === 'Create a one-minute timer.'
+              ? [{ type: 'createTimer', key: 'extra', name: 'Extra running timer', durationMs: 60000, start: true }] : []),
           ] } },
           focus: { mode: 'timer', timerId: null, timerKey: 'unrequested' }, query: null,
         }),
