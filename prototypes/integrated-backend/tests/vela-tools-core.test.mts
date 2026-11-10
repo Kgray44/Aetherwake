@@ -64,7 +64,8 @@ test('provider failure between tool stages settles the same request visibly and 
 });
 
 test('informational and no-change requests deny an unsolicited standing workspace mutation', async () => {
-  for (const intent of ['What is a workspace used for?', 'Explain what a workspace is. Do not create or change anything.']) {
+  for (const intent of ['What is a workspace used for?', 'Explain what a workspace is. Do not create or change anything.',
+    'Make no changes to the timer.']) {
     const f = fixture();
     try {
       await f.ready();
@@ -99,7 +100,7 @@ test('informational and no-change requests deny an unsolicited standing workspac
 
 test('conditional or different application actions require review before provider-selected creation', async () => {
   for (const intent of ['Create a workspace only after I review it.', 'Rename the active workspace to Sprint Review.',
-    'Create a workspace named Sprint Review.']) {
+    'Create a workspace named Sprint Review.', 'Make the workspace easier to find.', 'Create no workspace.']) {
     const f = fixture();
     try {
       await f.ready();
@@ -122,28 +123,32 @@ test('conditional or different application actions require review before provide
   }
 });
 
-test('a workspace request cannot silently create an unrelated timer', async () => {
-  const f = fixture();
-  try {
-    await f.ready();
-    const before = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic current workspace', projectId: null });
-    f.replies.push(
-      catalog => tool(VELA_TOOL_SCHEMAS, { catalogDigest: catalog.digest, ids: ['application.clockTimer'] }),
-      catalog => invoke(catalog, 'application.clockTimer', {
-        type: 'clockTimer', workspaceId: before.activeWorkspaceId,
-        request: { name: 'create', input: { title: 'Unrequested timer', projectId: null, operations: [
-          { type: 'createTimer', key: 'unrequested', name: 'Unrequested timer', durationMs: 60000, start: false },
-        ] } },
-        focus: { mode: 'timer', timerId: null, timerKey: 'unrequested' }, query: null,
-      }),
-    );
-    const request = await f.send("Create a new workspace for the sprint and don't add a timer.");
-    assert.equal(request.state, 'awaiting-review');
-    assert.equal(f.requests.length, 2);
-    const after = await f.core.command('desktop', { type: 'snapshot' });
-    assert.deepEqual(after.workspaces, before.workspaces);
-    assert(!after.resources.some(resource => resource.kind === 'clock_timer'));
-  } finally { await f.close(); }
+test('a workspace or explicit no-change request cannot silently create an unrelated timer', async () => {
+  for (const intent of ["Create a new workspace for the sprint and don't add a timer.", 'Make no changes to the timer.']) {
+    const f = fixture();
+    try {
+      await f.ready();
+      const before = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic current workspace', projectId: null });
+      f.replies.push(
+        catalog => tool(VELA_TOOL_SCHEMAS, { catalogDigest: catalog.digest, ids: ['application.clockTimer'] }),
+        catalog => invoke(catalog, 'application.clockTimer', {
+          type: 'clockTimer', workspaceId: before.activeWorkspaceId,
+          request: { name: 'create', input: { title: 'Unrequested timer', projectId: null, operations: [
+            { type: 'createTimer', key: 'unrequested', name: 'Unrequested timer', durationMs: 60000, start: false },
+          ] } },
+          focus: { mode: 'timer', timerId: null, timerKey: 'unrequested' }, query: null,
+        }),
+      );
+      const readOnly = intent.startsWith('Make no changes');
+      if (readOnly) f.replies.push(() => answer('The timer was unchanged.'));
+      const request = await f.send(intent);
+      assert.equal(request.state, readOnly ? 'responded' : 'awaiting-review');
+      assert.equal(f.requests.length, readOnly ? 3 : 2);
+      const after = await f.core.command('desktop', { type: 'snapshot' });
+      assert.deepEqual(after.workspaces, before.workspaces);
+      assert(!after.resources.some(resource => resource.kind === 'clock_timer'));
+    } finally { await f.close(); }
+  }
 });
 
 test('unknown provider outcome after a receipted app effect preserves the effect and shows an observed inability',async()=>{

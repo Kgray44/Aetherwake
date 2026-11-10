@@ -104,7 +104,7 @@ const explanatoryVelaText = (text: string) =>
 
 export function explicitReadOnlyVelaIntent(intent: string): boolean {
   const text = fileEditIntent(intent);
-  if (/(?:^|[.!?;,]\s*)(?:please\s+)?(?:read[- ]only|no changes|(?:do not|don['’]t)\s+(?:make any changes|(?:create|change|modify|edit|write|touch)(?:\s+or\s+(?:create|change|modify|edit|write|touch))*\s+anything))(?:[.!?;,]|$)/u.test(text))
+  if (/(?:^|[.!?;,]\s*)(?:please\s+)?(?:read[- ]only|(?:make )?no changes(?: to [^.!?;,]+)?|(?:do not|don['’]t)\s+(?:make any changes|(?:create|change|modify|edit|write|touch)(?:\s+or\s+(?:create|change|modify|edit|write|touch))*\s+anything))(?:[.!?;,]|$)/u.test(text))
     return true;
   return explanatoryVelaText(text) && !velaStandingMutationRequested(intent);
 }
@@ -123,11 +123,12 @@ export function classifyVelaRoutingIntent(intent: string): VelaRoutingIntent {
   if (standaloneVelaProjectCheck(intent)) return 'project-check';
   if (explicitFileCreation(fileEditIntent(intent))) return 'local-write';
   const localObject = /\b(?:files?|code|repo(?:sitory)?|bug|tests?|commands?|scripts?|shell|build|branch|app|package|logs?)\b|\b[\w-]+\.(?:md|json|toml|tsx?|mjs|mts|jsx?|py|rs|cpp|h|css|html|log|txt)\b/u;
-  const localAction = /(?:^|[,;]\s*|\b(?:and|then)\s+)(?:(?:please|(?:can|could|would) you)\s+)*(?:fix|patch|edit|modify|update|delete|refactor|implement|run|execute|benchmark|test|build|deploy|install)\b[\s\S]*$/u.exec(text);
+  const localAction = /(?:^|[,;.!?]\s*(?:(?:and|then)\s+)?|\b(?:and|then)\s+)(?:(?:please|(?:can|could|would) you)\s+)*(?:fix|patch|edit|modify|update|delete|refactor|implement|run|execute|benchmark|test|build|deploy|install)\b[\s\S]*$/u.exec(text);
   const saveFile = /\b(?:write|save|add|remove|replace)\b[\s\S]*(?:\b(?:to|in|into|from)\s+(?:the\s+|a\s+|my\s+)?(?:files?|repo(?:sitory)?|workspace)\b|\b[\w-]+\.(?:md|json|toml|tsx?|mjs|mts|jsx?|py|rs|cpp|h|css|html|log|txt)\b)/u.test(text);
-  const independentAction = localAction && (!explanatory || /^(?:[,;]|then\s)/u.test(localAction[0])) &&
+  const independentAction = localAction && (!explanatory || /^(?:[,;.!?]|then\s)/u.test(localAction[0])) &&
     localObject.test(localAction[0]);
-  if (!explanatory && saveFile || independentAction) return 'local-write';
+  const independentSave = explanatory && /(?:[,;.!?]\s*(?:(?:and|then)\s+)?|\bthen\s+)(?:please\s+)?(?:write|save|add|remove|replace)\b/u.test(text);
+  if (saveFile && (!explanatory || independentSave) || independentAction) return 'local-write';
   if (!explanatory && /\b(?:inspect|read|review|search|check|scan|audit|look (?:at|through)|find)\b[\s\S]*(?:\b(?:files?|source|repo(?:sitory)?|checkout|working tree|logs?|codebase|git diff)\b|\b[\w-]+\.(?:md|json|toml|tsx?|mjs|mts|jsx?|py|rs|cpp|h|css|html|log|txt)\b)/u.test(text))
     return 'local-read';
   const appObject = /\b(?:timers?|stopwatch|world clocks?|workspaces?|constellation|blocks?|cards?|checklists?|tasks?|attention mode|conversations?|chats?|collections?|folders?|timelines?|notes?|projects?|resources?)\b/u;

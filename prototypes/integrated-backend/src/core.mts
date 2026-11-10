@@ -3280,13 +3280,13 @@ export class BackendCore {
     // Only unambiguous creation clauses opt into standing effects. Other
     // proposed mutations keep the existing exact native review path.
     const subjects: Partial<Record<VelaNativeAction['type'], RegExp>> = {
-      createProject: /\bprojects?\b/u, createWorkspace: /\bworkspaces?\b/u,
-      createConversation: /\b(?:chats?|conversations?)\b/u, createCollection: /\b(?:collections?|folders?)\b/u,
+      createProject: /\bprojects?$/u, createWorkspace: /\bworkspaces?$/u,
+      createConversation: /\b(?:chats?|conversations?)$/u, createCollection: /\b(?:collections?|folders?)$/u,
       ...(action.type === 'clockTimer' && action.request?.name === 'create'
-        ? { clockTimer: /\b(?:timers?|countdowns?)\b/u } : {}),
+        ? { clockTimer: /\b(?:timers?|countdowns?)$/u } : {}),
     };
     const subject = action.type === 'createResource'
-      ? { note: /\bnotes?\b/u, task: /\btasks?\b/u, task_group: /\btask groups?\b/u, checklist: /\bchecklists?\b/u }[action.kind]
+      ? { note: /\bnotes?$/u, task: /\btasks?$/u, task_group: /\btask groups?$/u, checklist: /\bchecklists?$/u }[action.kind]
       : subjects[action.type];
     if (!subject) return false;
     const current = this.velaContext();
@@ -3296,10 +3296,12 @@ export class BackendCore {
     const creation = /^(?:(?:vela|then|please|can you|could you|would you)[,:]?\s+)*(?:create|make|add|build|set up|start|put(?: together)?)\b(.*)$/u;
     const subjectsRequested = text.split(/[,.;!?]+|\s+(?:and|then)\s+/u).flatMap(clause => {
       const match = creation.exec(clause.trim());
-      if (!match || /\b(?:in|inside|under)\b/u.test(match[1])) return [];
+      if (!match || !/^\s+(?:a|an|one|new)\s+/u.test(match[1]) ||
+          /\b(?:no|not|never|without|in|inside|under)\b/u.test(match[1])) return [];
       const title = /\b(?:named|called|titled)\b\s*(.*)$/u.exec(match[1]);
       if (title && (!title[1] || !('title' in action) || action.title.normalize('NFKC').toLowerCase() !== title[1].trim())) return [];
-      return [match[1].split(/\b(?:named|called|titled|with|for|using|from)\b/u, 1)[0]];
+      return [match[1].split(/\b(?:named|called|titled|with|for|using|from)\b/u, 1)[0]
+        .trim().replace(/\s+(?:here|there)$/u, '')];
     });
     return subjectsRequested.some(clause => subject.test(clause));
   }

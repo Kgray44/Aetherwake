@@ -1109,7 +1109,10 @@ test('ordinary provider cannot admit local execution, while Codex and file menti
   try {
     const base = { adaptive: true as const, resourceIds: [] };
     for (const intent of ['Patch parser.mjs to handle empty rows', 'Inspect the checkout logs for the exit code',
-      'Describe the parser failure, then patch parser.mjs.']) {
+      'Describe the parser failure, then patch parser.mjs.',
+      'Describe the parser failure, and patch parser.mjs.',
+      'Describe the parser failure. Patch parser.mjs.',
+      'Describe the parser failure, then save the fix in parser.mjs.']) {
       for (const pin of [undefined, providerId]) {
         await assert.rejects(f.core.command('velaRequestPreview', { ...base, intent, providerId: pin }),
           /vela_local_execution_unavailable/);
