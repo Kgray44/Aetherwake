@@ -933,6 +933,7 @@ export class BackendCore {
     return { catalog, capabilities, selection, apiPlanner, offer };
   }
   private startMissionPlanning(request: Extract<MissionRequest, { name: 'plan' }>['input']): Promise<MissionResponse> {
+    const commandStartedMs = performance.now(), domain = this.missions.fullProfilingClock();
     ensure(request && Object.keys(request).length === 3 && identifier(request.requestId), 'invalid_mission_command');
     const { objective, fingerprint, requestId } = request;
     const offer = this.missionCommand({ name: 'preview', input: { objective } });
@@ -981,11 +982,13 @@ export class BackendCore {
       const plan = compileMissionProposal(proposal, objective, scope, catalog,partial);
       ensure(!plan.tasks.some(step => step.specialist?.provider === CHATGPT_PLAN_PROVIDER && step.dependencies.length), 'mission_proposal_unsupported_objective');
       validateMissionPlan(plan, this.missionExecutors);
+      const validatedMs = performance.now();
       plan.planning = { provider: apiPlanner?VELA_API_PROVIDER:CHATGPT_PLAN_PROVIDER, model: planner.model, effort: planner.effort,
         providerEvidence: (apiPlanner ? this.velaApiTest : this.ordinaryTest) ? 'simulated' : 'reported',
         responseId: result.responseId, executionId: result.executionId, startedAt,
-        timing: { ...stream.read(), providerResultMs: validatingAt - started, validationMs: performance.now() - validatingAt },
-        durationMs: performance.now() - started, ...(result.usage ? { usage: result.usage } : {}) };
+        timing: { ...stream.read(), providerResultMs: validatingAt - started, validationMs: validatedMs - validatingAt,
+          ...(domain ? { lifecycleClock: { domain, commandStartedMs, validatedMs } } : {}) },
+        durationMs: validatedMs - started, ...(result.usage ? { usage: result.usage } : {}) };
       this.missionProposals.set(requestId, { plan, expires: Date.now() + 5 * 60_000 });
       return this.missionCommand({ name: 'preview', input: { objective, proposalId: requestId } });
     }).finally(() => {

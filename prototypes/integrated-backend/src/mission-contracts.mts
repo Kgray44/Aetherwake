@@ -64,7 +64,8 @@ export interface MissionPlanningReceipt {
   startedAt: string;
   durationMs: number;
   /** Stream and result offsets use the planning start. Validation is an elapsed duration. */
-  timing?: ProviderStreamTiming & { providerResultMs: number; validationMs: number };
+  timing?: ProviderStreamTiming & { providerResultMs: number; validationMs: number;
+    lifecycleClock?: { domain: string; commandStartedMs: number; validatedMs: number } };
   providerEvidence?: 'reported' | 'simulated';
   usage?: ReportedUsage;
 }
