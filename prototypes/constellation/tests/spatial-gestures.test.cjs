@@ -8,6 +8,7 @@ function fixture({
   height = 1000,
   hit,
   bodies = [{ key: "resource:unit-moon", x: 400, y: 300, radius: 64 }],
+  pick = () => bodies[0]?.key ?? null,
   hidden = false,
   inert = false,
 } = {}) {
@@ -52,7 +53,10 @@ function fixture({
           `(${spatialDragPoint.toString()})(".aw-spatial-field",bodyKey,dx,dy)`,
           {
             document: doc,
-            window: { __aerynth: { snapshot: () => ({ spatial: { renderer: { projectedBodies: bodies } } }) } },
+            window: { __aerynth: {
+              snapshot: () => ({ spatial: { renderer: { projectedBodies: bodies } } }),
+              spatialPointerBodyForReview: pick,
+            } },
             innerWidth: width,
             innerHeight: height,
             bodyKey,
@@ -105,25 +109,81 @@ test("body Alt-drag requires an exposed projected body and never falls back to c
   const f = fixture();
   const target = f.read("resource:unit-moon", 42, 18);
   assert.deepEqual(target.point, { x: 400, y: 300 });
-  assert.equal(target.method, "isolated-projected-body");
+  assert.equal(target.method, "closest-mesh-body");
   assert.match(
     fixture({ bodies: [] }).read("resource:unit-moon").error,
     /missing from the renderer projection/,
   );
   const covered = fixture({ hit: (_x, _y, { label }) => label });
-  assert.match(covered.read("resource:unit-moon").error, /No exposed isolated/);
+  assert.match(covered.read("resource:unit-moon").error, /No exposed mesh hit/);
   assert.equal(covered.read("resource:unit-moon").point, undefined);
+  assert.match(fixture({ pick: null }).read("resource:unit-moon").error, /mesh picker is unavailable/);
 });
 
-test("Alt-drag avoids the nearer body's projected bound from the failed native receipt", () => {
+test("Alt-drag skips points that hit a nearer mesh and never accepts its key", () => {
   const moon = { key: "resource:unit-moon", x: 801, y: 501, radius: 64 };
   const foreground = { key: "resource:foreground", x: 845, y: 541, radius: 104 };
-  const { point, attempts } = fixture({ bodies: [foreground, moon] }).read(moon.key, 55, -30);
+  const { point, attempts } = fixture({
+    bodies: [foreground, moon],
+    pick: (x) => x >= moon.x ? foreground.key : moon.key,
+  }).read(moon.key, 55, -30);
   assert(attempts > 1 && attempts <= 73);
   assert(Math.hypot(point.x - moon.x, point.y - moon.y) < moon.radius);
-  assert(Math.hypot(point.x - foreground.x, point.y - foreground.y) > foreground.radius);
-  const fullyCovered = { ...foreground, x: moon.x, y: moon.y };
-  assert.match(fixture({ bodies: [fullyCovered, moon] }).read(moon.key).error, /No exposed isolated/);
+  assert(Math.hypot(point.x - foreground.x, point.y - foreground.y) < foreground.radius);
+  assert.match(fixture({ bodies: [foreground, moon] }).read(moon.key).error, /No exposed mesh hit/);
+});
+
+test("drag admission follows the real closest mesh across overlapping projected bounds", async () => {
+  const { MotionCoordinator } = await import("../../visual-experience/cinematic-v3/src/motion.ts");
+  const { ConstellationController } = await import("../controller.ts");
+  const { ConstellationScene } = await import("../renderer3d.ts");
+  const { SpatialNavigator } = await import("../spatial.ts");
+  const moon = "resource:conversation-block", project = "project:project";
+  const width = 1602, height = 1002;
+  const motion = new MotionCoordinator();
+  const controller = new ConstellationController({
+    motion,
+    navigate: async () => {},
+    snapshot: {
+      projects: [{ id: "project", title: "Synthetic project" }],
+      workspaces: [{ id: "workspace", title: "Synthetic workspace", project_id: "project" }],
+      resources: [{ id: "conversation", kind: "conversation", title: "Synthetic conversation", project_id: "project" }],
+      blocks: [{ id: "conversation-block", resource_id: "conversation", workspace_id: "workspace", x: 0, y: 0, width: 300, height: 200, z: 0 }],
+      relationships: [], activeWorkspaceId: null, navigation: { kind: "constellation", projectId: "project" },
+    },
+  });
+  const spatial = new SpatialNavigator(controller, () => {});
+  controller.spatial = spatial;
+  const scene = new ConstellationScene(controller, spatial, () => ({}));
+  try {
+    controller.state.anchors[moon].spatial = { x: 0, y: 0, z: 0 };
+    controller.state.anchors[project].spatial = { x: -265.919, y: 115.578, z: 379.698 };
+    controller.state.anchors["workspace:workspace"].spatial = { x: 2000, y: 0, z: 2000 };
+    controller.select(moon);
+    const camera = { ...spatial.bookmark(), target: { x: 0, y: 0, z: 0 }, distance: 550, yaw: 0.04, pitch: 0.305, neighborhood: moon };
+    const acquire = (pose) => {
+      spatial.target(pose);
+      for (let frame = 0; frame < 180; frame++) motion.step(1 / 60);
+      scene.update(width, height);
+      return fixture({ width, height, bodies: scene.diagnostics.projectedBodies,
+        pick: (x, y) => scene.pick(x, y, width, height)?.key ?? null });
+    };
+    const exposed = acquire(camera);
+    const body = scene.diagnostics.projectedBodies.find(({ key }) => key === moon);
+    const bound = scene.diagnostics.projectedBodies.find(({ key }) => key === project);
+    assert(Math.hypot(body.x - bound.x, body.y - bound.y) + body.radius < bound.radius,
+      "the other body's conservative bound contains the entire target");
+    const target = exposed.read(moon, 55, -30);
+    assert.deepEqual(target.point, { x: width / 2, y: height / 2 });
+    const blocked = acquire({ ...camera, yaw: -0.36, pitch: 0.065 });
+    assert.equal(scene.pick(width / 2, height / 2, width, height)?.key, project);
+    const rejected = blocked.read(moon, 55, -30);
+    assert.equal(rejected.point, undefined);
+    assert.equal(rejected.attempts, 73);
+  } finally {
+    scene.dispose();
+    controller.dispose();
+  }
 });
 
 test("inactive fields and paths leaving the actual viewport produce no native input coordinates", () => {
@@ -138,7 +198,7 @@ test("inactive fields and paths leaving the actual viewport produce no native in
   );
   assert.match(
     fixture({ width: 300, height: 200 }).read("resource:unit-moon").error,
-    /No exposed isolated/,
+    /No exposed mesh hit/,
   );
 });
 
@@ -146,7 +206,7 @@ test("camera fallback rechecks an occluded body after orbiting and stops at the 
   const moon = { key: "resource:unit-moon", x: 400, y: 300, radius: 64 };
   const cover = { key: "resource:foreground", x: 400, y: 300, radius: 120 };
   let orbits = 0;
-  const readTarget = () => fixture({ bodies: orbits ? [moon] : [moon, cover] }).read(moon.key);
+  const readTarget = () => fixture({ bodies: orbits ? [moon] : [cover, moon] }).read(moon.key);
   const result = await resolveSpatialDragTarget(readTarget, async () => { orbits++; });
   assert.equal(orbits, 1);
   assert.equal(result.cameraAdjustments, 1);
@@ -156,7 +216,7 @@ test("camera fallback rechecks an occluded body after orbiting and stops at the 
 test("camera fallback is bounded and propagates a lost native input owner", async () => {
   const moon = { key: "resource:unit-moon", x: 400, y: 300, radius: 64 };
   const cover = { key: "resource:foreground", x: 400, y: 300, radius: 120 };
-  const readTarget = () => fixture({ bodies: [moon, cover] }).read(moon.key);
+  const readTarget = () => fixture({ bodies: [cover, moon] }).read(moon.key);
   const result = await resolveSpatialDragTarget(readTarget, async () => {});
   assert.equal(result.cameraAdjustments, 4);
   assert.equal(result.target.point, undefined);

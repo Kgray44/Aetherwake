@@ -1820,6 +1820,10 @@ function controller() {
         }
       wake();
     },
+    spatialPointerBodyForReview: (x: number, y: number) =>
+      observeGeometry ? application?.spatialPointerBodyAt(x, y) ?? null : null,
+    spatialActiveDragKeyForReview: () =>
+      observeGeometry ? application?.spatialActiveDragKey() ?? null : null,
     application: () => application?.snapshot(),
     openResource: (input: ResourceOpeningInput) =>
       application?.openResource(input),

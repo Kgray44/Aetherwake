@@ -321,3 +321,78 @@ test("more than one activity batch stays scoped and bounded instead of polling a
   assert.deepEqual(f.counts(), { stopped: 1, unscheduled: 1 });
   f.port.dispose();
 });
+
+test("scope-free policy invalidation discards a stale pending preview before authorized readback", async () => {
+  let finishOldRead;
+  let reads = 0;
+  const oldRead = new Promise(resolve => { finishOldRead = resolve; });
+  const f = setup(async (_name, { resourceIds }) => {
+    if (reads++ === 0) return oldRead;
+    return activity(resourceIds, [], null, ["r"]);
+  });
+  const received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  f.emit(delta());
+  f.emit({ type: "policy/revoked" });
+  finishOldRead(activity(["r"], [execution()], {
+    resourceId: "r", executionId: "e", providerId: "codex-app-server",
+    cursor: 1, text: "old authorized preview", classification: "reported",
+  }));
+  await drain();
+  assert.equal(received.some(value => value.delta || value.preview), false);
+  assert.equal(received.at(-1).resourceAvailable, false);
+  assert.equal(reads, 2);
+  off();
+});
+
+test("an observed conversation retires busy from readback after a dropped terminal event", async () => {
+  let current = execution();
+  const f = setup(async () => [current]), received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  await drain();
+  assert.equal(received.at(-1).execution.state, "running");
+  current = execution({ state: "unknown", endedAt: "2026-11-02T00:00:01.000Z" });
+  f.poll();
+  await drain();
+  assert.equal(received.at(-1).execution.state, "unknown");
+  assert.equal(received.at(-1).execution.taskVerified, false);
+  off();
+});
+
+test("authoritative readback clears a previously visible preview for the same active execution", async () => {
+  let preview = {
+    resourceId: "r", executionId: "e", providerId: "codex-app-server",
+    cursor: 1, text: "visible until the reviewed source changes", classification: "reported",
+  };
+  const f = setup(async (_name, { resourceIds }) => activity(resourceIds, [execution()], preview));
+  const received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  await drain();
+  assert.equal(received.at(-1).preview.text, "visible until the reviewed source changes");
+  preview = null;
+  f.poll();
+  await drain();
+  assert.equal(received.at(-1).execution.state, "running");
+  assert.equal(received.at(-1).preview, null);
+  off();
+});
+
+test("revoking a still-active preview clears live-only text and rejects later deltas", async () => {
+  let previewAllowedFor = "r";
+  const f = setup(async (_name, { resourceIds }) => ({
+    ...activity(resourceIds), previewAllowedFor,
+  }));
+  const received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  await drain();
+  f.emit(delta());
+  assert.equal(received.at(-1).delta.text, "Actual observed assistant text");
+  previewAllowedFor = null;
+  f.poll();
+  await drain();
+  assert.equal(received.at(-1).preview, null);
+  f.emit(delta({ eventId: "after-revocation", cursor: 2 }));
+  await drain();
+  assert.equal(received.filter(value => value.delta).length, 1);
+  off();
+});

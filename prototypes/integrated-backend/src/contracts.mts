@@ -208,6 +208,8 @@ export interface Options {
   /** Trusted host opt-in only. Experimental wire fields remain disabled by default. */
   velaCatalogDiscovery?:boolean;
   nativeMedia?: boolean;
+  /** Trusted desktop transport applies current visibility before forwarding journal events. */
+  rendererEventTransport?: boolean;
   /** Trusted native-reviewed bounded context; disabled until native consent integration is qualified. */
   velaHistoryContext?:boolean;
   instanceId?: string; accountScope?: string;
@@ -335,6 +337,10 @@ export interface CommandMap {
   interrupt: { input: { executionId: string }; output: { requested: true; confirmed: false } };
   capabilities: { input: Record<string, never>; output: Capability };
   snapshot: { input: Record<string, never>; output: Snapshot };
+  rendererEventPage: {
+    input: { after?: number; limit?: number; recent?: boolean };
+    output: { events: StreamEvent[]; earliest: number | null; latest: number; scannedThrough: number; truncated: boolean; scope: string };
+  };
   replay: { input: { after?: number; limit?: number }; output: { events: StreamEvent[]; earliest: number | null; latest: number; truncated: boolean } };
   close: { input: Record<string, never>; output: null };
 }

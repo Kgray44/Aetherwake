@@ -471,7 +471,7 @@ app.whenReady().then(async () => {
       nodeIntegration: false,
       sandbox: true,
       ...(offscreenScale ? { offscreen: true, backgroundThrottling: false } : {}),
-      additionalArguments: process.argv.includes("--integration-drag-glide")
+      additionalArguments: process.argv.includes("--integration-drag-glide") || process.argv.includes("--integration-expanded")
         ? ["--aerynth-geometry-observation"]
         : [],
     },
@@ -541,6 +541,10 @@ app.whenReady().then(async () => {
     event.sender === win.webContents &&
     event.senderFrame === win.webContents.mainFrame &&
     event.senderFrame?.url === localURL;
+  // The renderer has one compose submission at a time. Core still owns its result.
+  const velaSubmissions = new WeakMap();
+  const isVelaSubmissionId = (id) => typeof id === "string" &&
+    /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(id);
   const trustedActiveFrame = (event) =>
     trustedApplicationFrame(event) &&
     win.isVisible() &&
@@ -667,6 +671,7 @@ app.whenReady().then(async () => {
       }
       if (
         ![
+          "rendererEventPage",
           "replay",
           "executionStatus",
           "conversationActivity",
@@ -677,7 +682,7 @@ app.whenReady().then(async () => {
         ].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
-        !(command === "vela" && isVelaRead(input)) &&
+        !(command === "vela" && (isVelaRead(input) || input?.name === "submissionStatus")) &&
         !(command === "missions" && ["preview", "list", "read", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
         !(command === "workspaceRecovery" && ["state", "preview"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
@@ -743,14 +748,15 @@ app.whenReady().then(async () => {
       else if (command === "viewState") result = await call("viewState", input);
       else if (command === "capabilities")
         result = await call("capabilities", {});
+      else if (command === "rendererEventPage")
+        result = await call("rendererEventPage", input);
       else if (command === "replay") {
-        const bounds = await call("replay", { after: 0, limit: 1 });
-        result = await call("replay", {
-          after: Math.max(0, bounds.latest - 250),
-          limit: 250,
-        });
-        result.truncated ||= bounds.latest > 250;
-      } else if (command === "conversationActivity")
+        // Legacy review callers receive the old bounded tail shape, still
+        // projected by Core under the current renderer authorization.
+        const { events, earliest, latest, truncated } = await call("rendererEventPage", { recent: true, limit: 250 });
+        result = { events, earliest, latest, truncated };
+      }
+      else if (command === "conversationActivity")
         result = await call("conversationActivity", input);
       else if (command === "media")
         result = await mediaCommand(input);
@@ -769,7 +775,18 @@ app.whenReady().then(async () => {
       } else if (command === "conversation") {
         result = await conversationCommand({ win, call, input,reviewSources:reviewProvider, openExternal: (url) => shell.openExternal(url) });
       } else if (command === "vela") {
-        if(input?.name==='hostOperation'){
+        if (input?.name === "submissionStatus") {
+          const submissionId = input.input?.submissionId;
+          if (!isVelaSubmissionId(submissionId)) throw Error("invalid_vela_submission");
+          const frame = event.senderFrame;
+          const submission = velaSubmissions.get(frame);
+          result = null;
+          if (submission?.id === submissionId && submission.requestId) {
+            const state = await call("vela", { name: "state", input: {} });
+            if (trustedApplicationFrame(event) && velaSubmissions.get(frame) === submission)
+              result = state.requests.find((request) => request.id === submission.requestId) ?? null;
+          }
+        } else if(input?.name==='hostOperation'){
           const request=input.input;
           if(!request||typeof request!=='object'||Array.isArray(request)||Object.keys(request).length!==1||
             typeof request.operationId!=='string'||!/^[a-z0-9][a-z0-9_.:-]{0,127}$/iu.test(request.operationId))throw Error('invalid_host_operation');
@@ -784,19 +801,32 @@ app.whenReady().then(async () => {
             else throw Error('invalid_host_operation');
           }
           finally{maintenanceReviewFrames.delete(request.operationId);}
-        }else result = input?.name==='missionFileEdit'?await missionFileEditBroker.command(event,input.input):await velaCommand({
-          win,
-          dialog:reviewDialogs,
-          call,
-          input,
-          reviewProvider,
-          missionFileEditRequest:request=>missionFileEditBroker.prepare(event,request),
-          observeNativeRequest: observeVelaRequest,
-          offerPlanningByDefault: !verify || verifyAirLocal,
-          directMessageSend: !verify || verifyAirLocal || verifyMissions && (process.argv.includes('--missions-api-live-only')||process.argv.includes('--missions-persistence-live-only')),
-          routeNative: true,
-          requireInspectionDirectory: !verify && process.platform === "win32",
-        });
+        } else if (input?.name === 'missionFileEdit') {
+          result = await missionFileEditBroker.command(event, input.input);
+        } else {
+          const { submissionId, ...brokerInput } = input ?? {};
+          const frame = event.senderFrame;
+          let submission;
+          if (submissionId !== undefined) {
+            if (input.name !== "request" || !isVelaSubmissionId(submissionId)) throw Error("invalid_vela_submission");
+            submission = { id: submissionId, requestId: null };
+            velaSubmissions.set(frame, submission);
+          }
+          result = await velaCommand({
+            win,
+            dialog:reviewDialogs,
+            call,
+            input: brokerInput,
+            reviewProvider,
+            missionFileEditRequest:request=>missionFileEditBroker.prepare(event,request),
+            observeNativeRequest: observeVelaRequest,
+            offerPlanningByDefault: !verify || verifyAirLocal,
+            directMessageSend: !verify || verifyAirLocal || verifyMissions && (process.argv.includes('--missions-api-live-only')||process.argv.includes('--missions-persistence-live-only')),
+            routeNative: true,
+            requireInspectionDirectory: !verify && process.platform === "win32",
+          });
+          if (submission && typeof result?.id === "string") submission.requestId = result.id;
+        }
       } else if (command === "githubTimeline") {
         if (input?.name === "openCommit") {
           const { url } = await call("githubTimeline", input);

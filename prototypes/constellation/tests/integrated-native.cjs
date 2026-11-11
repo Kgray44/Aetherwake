@@ -201,15 +201,17 @@ function spatialDragPoint(selector, bodyKey, dx, dy) {
     x + Math.max(0, dx) < Math.min(innerWidth, r.right) &&
     y + Math.max(0, dy) < Math.min(innerHeight, r.bottom);
   if (bodyKey) {
-    const bodies = window.__aerynth.snapshot().spatial?.renderer?.projectedBodies;
+    const review = window.__aerynth;
+    if (typeof review?.spatialPointerBodyForReview !== "function")
+      return { error: "Renderer mesh picker is unavailable", bodyKey };
+    const bodies = review.snapshot().spatial?.renderer?.projectedBodies;
     const valid = (body) =>
       [body.x, body.y, body.radius].every(Number.isFinite) && body.radius > 0;
     const body = bodies?.find((candidate) => candidate.key === bodyKey);
     if (!body || !valid(body))
       return { error: "Requested body is missing from the renderer projection", bodyKey };
-    const others = bodies.filter((candidate) => candidate.key !== bodyKey && valid(candidate));
-    // The renderer bounds include the body, but a closer body can cover its
-    // center. Probe only pixels outside every other body's conservative bound.
+    // A projected envelope is useful for sampling points, but only the
+    // renderer's closest mesh hit establishes which body owns a point.
     let attempts = 0;
     for (const fraction of [0, 0.35, 0.6, 0.8]) {
       const count = fraction === 0 ? 1 : 24;
@@ -219,13 +221,11 @@ function spatialDragPoint(selector, bodyKey, dx, dy) {
         const y = Math.round(r.top + body.y + fraction * body.radius * Math.sin(angle));
         attempts++;
         if (!inside(x, y) || !exposed(x, y)) continue;
-        if (others.some((other) =>
-          Math.hypot(x - r.left - other.x, y - r.top - other.y) <= other.radius + 2
-        )) continue;
-        return { point: { x, y }, method: "isolated-projected-body", attempts };
+        if (review.spatialPointerBodyForReview(x, y) !== bodyKey) continue;
+        return { point: { x, y }, method: "closest-mesh-body", attempts };
       }
     }
-    return { error: "No exposed isolated projected body drag path", bodyKey, attempts };
+    return { error: "No exposed mesh hit for native spatial drag", bodyKey, attempts };
   }
   const candidates = [
     [0.2, 0.7],
@@ -264,7 +264,7 @@ async function resolveSpatialDragTarget(readTarget, orbit) {
   let cameraAdjustments = 0;
   // Orbit on exposed background before attempting input on a covered body.
   for (const [x, y] of [[100, 0], [-200, 0], [100, 80], [100, -160]]) {
-    if (!orbit || target.error !== "No exposed isolated projected body drag path") break;
+    if (!orbit || target.error !== "No exposed mesh hit for native spatial drag") break;
     await orbit(x, y);
     cameraAdjustments++;
     target = await readTarget();
@@ -974,7 +974,16 @@ async function verifyJourney({
       target.point && !target.error,
       "Native spatial drag target: " + JSON.stringify(target),
     );
-    const p = target.point;
+    let p = target.point;
+    if (bodyKey) {
+      // Evidence capture above may span renderer frames. Acquire against the
+      // current camera again immediately before dispatching real input.
+      const current = await readTarget();
+      receipt.lastSpatialGesture.targetOnPress = current;
+      assert.ok(current.point && !current.error,
+        "Native spatial drag target changed before press: " + JSON.stringify(current));
+      p = current.point;
+    }
     send({ type: "mouseMove", ...p, modifiers });
     send({
       type: "mouseDown",
@@ -985,11 +994,15 @@ async function verifyJourney({
     });
     await pause(75);
     if (bodyKey) {
-      const selected = (await spatial()).selected;
+      const [selected, dragKey] = await js(
+        "[window.__aerynth.snapshot().spatial?.selected, window.__aerynth.spatialActiveDragKeyForReview?.()]",
+      );
       receipt.lastSpatialGesture.selectedOnPress = selected;
-      if (selected !== bodyKey) {
+      receipt.lastSpatialGesture.dragKeyOnPress = dragKey;
+      if (selected !== bodyKey || dragKey !== bodyKey) {
         send({ type: "mouseUp", ...p, button: "left", clickCount: 1, modifiers });
         assert.equal(selected, bodyKey, "Native pointer press must select the intended body before dragging");
+        assert.equal(dragKey, bodyKey, "Native pointer press must own the intended drag before movement");
       }
     }
     for (let i = 1; i <= 12; i++) {

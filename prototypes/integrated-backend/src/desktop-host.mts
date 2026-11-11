@@ -26,6 +26,7 @@ const backend = new Backend({
   provider: "codex",
   nativeMedia: flags.includes("--native-media"),
   retention: { maxEvents: 10000 },
+  rendererEventTransport: true,
 },nativeClient?{...nativeClient.services,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{}),...(maintenanceClient?{maintenance:maintenanceClient.services}:{}),...(computerClient?{computer:computerClient.services}:{})}:undefined);
 let closeTask:Promise<void>|null=null;
 const closeBackend=()=>{
@@ -84,6 +85,7 @@ lines.on("line", async (line) => {
         "interrupt",
         "capabilities",
         "replay",
+        "rendererEventPage",
         "close",
         "viewState",
         "branch",

@@ -1170,7 +1170,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   async function refresh() { const sequence = ++readSequence, state = await client.state(); if (sequence === readSequence) render(state); return state; }
   function observeLiveAnswer(answer: VelaState['activeAnswer']) {
     if (answer && observing && busy && status.dataset.requestState === 'submitting') {
-      const message = 'Live ChatGPT-plan response · ' + answer.text + (answer.truncated ? '…' : '');
+      const source = answer.providerId === 'chatgpt-plan-responses' ? 'ChatGPT-plan' :
+        answer.providerId === 'openai-api-vela' ? 'Vela API' : 'provider';
+      const message = 'Live ' + source + ' response · ' + answer.text + (answer.truncated ? '…' : '');
       if (status.textContent === message) return;
       status.dataset.liveAnswer = answer.requestId;
       status.setAttribute('aria-live', 'off');

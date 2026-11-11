@@ -10,6 +10,44 @@ const context = () => ({
   bounds: { x: -20, y: 10, width: 1200, height: 700 },
 });
 
+test("a completed Vela submission survives a lost reply without sending again", async () => {
+  const recorded = { id: "canonical-request", state: "responded" };
+  const changed = [];
+  let submissions = 0;
+  let token;
+  let reads = 0;
+  let deliverOriginal;
+  const original = new Promise(resolve => { deliverOriginal = resolve; });
+  const client = createVelaClient({
+    command: async (command, input) => {
+      assert.equal(command, "vela");
+      if (input.name === "request") {
+        submissions++;
+        token = input.submissionId;
+        assert.equal(typeof token, "string");
+        assert.equal(input.input.submissionId, undefined);
+        return original;
+      }
+      assert.equal(input.name, "submissionStatus");
+      assert.deepEqual(input.input, { submissionId: token });
+      return ++reads === 1 ? null : recorded;
+    },
+    changed: async (name, result) => { changed.push({ name, result }); },
+    observed() {},
+  });
+  const timeout = AbortSignal.timeout(2500);
+  const pending = client.request({ intent: "Check status", resourceIds: [], authorizeProvider: false });
+  assert.deepEqual(await Promise.race([
+    pending,
+    new Promise((_, reject) => timeout.addEventListener("abort", () => reject(timeout.reason), { once: true })),
+  ]), recorded);
+  deliverOriginal(recorded);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(submissions, 1);
+  assert.equal(reads, 2);
+  assert.deepEqual(changed, [{ name: "request", result: recorded }]);
+});
+
 test("durable response presentation uses its exact service CAS payload and is never a storage-exempt read", async () => {
   const { isVelaRead } = createRequire(import.meta.url)(
     "../native/vela-broker.cjs",

@@ -29,6 +29,8 @@ export interface CanonicalConversationHost {
  /** Uses existing canonical execution service, with context receipt after actual dispatch. */
  sendWithContext?(input: ProductCommandMap['send']['input'], context: AttachedContext[]): Promise<unknown>;
  contextReceipt?(executionId: string, resourceId: string, shareId: string, digest: string): boolean;
+ /** An owning host can commit revocation and publish access invalidation together. */
+ commitShareRevocation?(revoke: () => void): void;
 }
 export type AttachedContext = { shareId: string; sourceResourceId: string; sourceMessageId: string; digest: string; evidence: Evidence; content: string };
 export class ProductError extends Error { code: string; constructor(code: string) { super(code); this.code=code; } }
@@ -460,7 +462,22 @@ export class ConversationProduct implements ConversationProductPort {
     if(name==='attachShare'){check(typeof a.attach==='boolean','invalid_attachment');const adoption=this.db.prepare('SELECT inspected_at FROM cp_adoptions WHERE share_id=? AND target_id=?').get(a.shareId,a.resourceId);check(adoption?.inspected_at,'inspect_before_attachment');}
     this.tx(()=>{this.db.prepare('INSERT OR IGNORE INTO cp_adoptions(share_id,target_id) VALUES(?,?)').run(a.shareId,a.resourceId);if(name==='inspectShare')this.db.prepare('UPDATE cp_adoptions SET inspected_at=? WHERE share_id=? AND target_id=?').run(stamp(),a.shareId,a.resourceId);else this.db.prepare('UPDATE cp_adoptions SET attached_at=? WHERE share_id=? AND target_id=?').run(a.attach?stamp():null,a.shareId,a.resourceId);this.audit(name,a.shareId);});result=this.share(v,row,a.resourceId,name==='inspectShare');break;
    }
-   case 'revokeShare': {const row=this.db.prepare('SELECT * FROM cp_shares WHERE id=?').get(a.shareId);check(row,'share_missing');this.resource(v,String(row.source_resource_id));this.tx(()=>{this.db.prepare('UPDATE cp_shares SET revoked=1 WHERE id=?').run(a.shareId);this.db.prepare('UPDATE cp_adoptions SET attached_at=NULL WHERE share_id=?').run(a.shareId);this.audit('share.revoke',a.shareId);});result=null;break;}
+   case 'revokeShare': {
+    const row=this.db.prepare('SELECT * FROM cp_shares WHERE id=?').get(a.shareId);
+    check(row,'share_missing');
+    this.resource(v,String(row.source_resource_id));
+    if (!row.revoked) {
+     const revoke = () => {
+      this.db.prepare('UPDATE cp_shares SET revoked=1 WHERE id=?').run(a.shareId);
+      this.db.prepare('UPDATE cp_adoptions SET attached_at=NULL WHERE share_id=?').run(a.shareId);
+      this.audit('share.revoke',a.shareId);
+     };
+     if (this.host.commitShareRevocation) this.host.commitShareRevocation(revoke);
+     else this.tx(revoke);
+    }
+    result=null;
+    break;
+   }
    case 'export': {
     const detail=await this.command('detail',{resourceId:a.resourceId,limit:200});
     const current=await this.view();this.resource(current,a.resourceId,undefined,true);

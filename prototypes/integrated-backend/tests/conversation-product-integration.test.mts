@@ -179,7 +179,11 @@ test('managed Codex cannot disclose terminal output after its attached source is
     };
     sending = f.core.command('conversationSend', dispatch);
     await held.promise;
-    await core.conversations.command('revokeShare', { shareId: setup.share.id });
+    const beforeRevocation = await f.core.command('rendererEventPage', { recent: true });
+    await product(f.core, 'revokeShare', { shareId: setup.share.id });
+    const page = await f.core.command('rendererEventPage', { after: beforeRevocation.scannedThrough });
+    const revocation = page.events.find(event => event.type === 'policy/share-revoked');
+    assert(revocation && !revocation.resourceId && !JSON.stringify(revocation).includes(setup.share.id));
     assert.equal((await f.core.command('conversationActivity', { resourceIds: [setup.parent.resourceId] })).preview, null);
     resume.release();
     const execution = await sending as Awaited<ReturnType<BackendCore['execute']>>;

@@ -74,7 +74,11 @@ export class ConversationViewPersistence {
      if(saved?.resourceId!==id||saved.version!==expectedVersion+1)throw Error('invalid_conversation_view_receipt');
      this.observe(saved);if(this.versions.get(id)===saved.version)this.signatures.set(id,next.signature);this.failures.delete(id);
     }catch(reason){
-     const error=errorOf(reason);this.versions.delete(id);this.signatures.delete(id);this.fail(error,id);
+     const error=errorOf(reason);this.versions.delete(id);this.signatures.delete(id);
+     // The owner rejected an obsolete position, so keep the last saved view
+     // and let the next explicit capture use the current conversation.
+     if(this.active?.id===id&&next.capture.position&&error.message==='stale_view_conversation_revision')this.notify(error,id);
+     else this.fail(error,id);
      // Never replay the failed candidate. A distinct, later actual capture may
      // already be queued, and will get a fresh version before its own write.
      if(this.pending.get(id)===next)this.pending.delete(id);

@@ -4,6 +4,8 @@ import type {
   ConversationExecutionPort,
 } from "../../../conversation-product/src/chat.ts";
 
+import { rendererAccessChanged } from "./renderer-replay.ts";
+
 type Host = {
   command(
     name: "conversationActivity" | "interrupt" | "reconcileConversationTurn",
@@ -69,13 +71,14 @@ type Delta = {
  * data. Explicit Stop remains a separate native command; there is no second store. */
 export function createConversationExecutionPort(
   host: Host,
-): ConversationExecutionPort & { dispose(): void } {
+): ConversationExecutionPort & { dispose(): void; refresh(): Promise<void>; invalidate(): void } {
   const watchers = new Map<
     string,
     Set<(value: ConversationExecutionObservation) => void>
   >();
   const latest = new Map<string, ConversationExecution>();
   const availability = new Map<string, boolean>();
+  const previewBlocked = new Set<string>();
   const signatures = new Map<string, string>();
   const forceSnapshot = new Set<string>();
   const pending: Delta[] = [];
@@ -101,6 +104,7 @@ export function createConversationExecutionPort(
     if (
       !execution ||
       availability.get(delta.resourceId) !== true ||
+      previewBlocked.has(delta.resourceId) ||
       execution.id !== delta.executionId ||
       execution.providerId !== delta.providerId
     )
@@ -130,6 +134,7 @@ export function createConversationExecutionPort(
         const results: {
           resources: { resourceId: string; available: boolean }[];
           executions: ConversationExecution[];
+          previewAllowedFor?: string | null;
           preview: {
             resourceId: string;
             executionId: string;
@@ -186,6 +191,9 @@ export function createConversationExecutionPort(
               executions.length
           )
             invalid();
+          const previewAllowedFor = value.previewAllowedFor;
+          if (previewAllowedFor !== undefined && previewAllowedFor !== null &&
+              !executions.some(item => item !== null && item.resourceId === previewAllowedFor && active(item))) invalid();
           const preview = value.preview;
           if (
             preview !== null &&
@@ -211,6 +219,7 @@ export function createConversationExecutionPort(
           results.push({
             resources,
             executions: executions as ConversationExecution[],
+            previewAllowedFor,
             preview,
           });
         }
@@ -227,6 +236,9 @@ export function createConversationExecutionPort(
             const id = resource.resourceId;
             if (watchers.get(id) !== scopes.get(id)) continue;
             availability.set(id, resource.available);
+            if (result.previewAllowedFor !== undefined && result.previewAllowedFor !== id)
+              previewBlocked.add(id);
+            else previewBlocked.delete(id);
             const next = result.executions.find(
               (item) => item.resourceId === id,
             );
@@ -239,6 +251,7 @@ export function createConversationExecutionPort(
                 : null;
             const signature = JSON.stringify({
               available: resource.available,
+              previewAllowed: !previewBlocked.has(id),
               execution: next,
               preview,
             });
@@ -249,15 +262,11 @@ export function createConversationExecutionPort(
                 resourceAvailable: resource.available,
                 connection: "available",
                 ...(next ? { execution: next } : {}),
-                ...(preview
-                  ? {
-                      preview: {
-                        executionId: preview.executionId,
-                        cursor: preview.cursor,
-                        text: preview.text,
-                      },
-                    }
-                  : {}),
+                preview: preview ? {
+                  executionId: preview.executionId,
+                  cursor: preview.cursor,
+                  text: preview.text,
+                } : null,
               });
             }
           }
@@ -284,10 +293,8 @@ export function createConversationExecutionPort(
   function observeEvent(raw: unknown) {
     if (stopped || !raw || typeof raw !== "object") return;
     const event = raw as Record<string, any>;
-    if (event.type === "backend/disconnected") {
-      connectionEpoch++;
-      connection(false);
-      availability.clear();
+    if (event.type === "backend/disconnected" || rendererAccessChanged(String(event.type))) {
+      invalidate(event.type !== "backend/disconnected");
       return;
     }
     if (!watchers.has(event.resourceId) || !host.visible()) return;
@@ -310,6 +317,10 @@ export function createConversationExecutionPort(
         cursor: event.cursor,
         text: event.payload.delta,
       };
+      if (previewBlocked.has(delta.resourceId)) {
+        void refresh();
+        return;
+      }
       if (deliver(delta)) return;
       const bytes = new TextEncoder().encode(delta.text).byteLength;
       if (pending.length >= 256 || pendingBytes + bytes > 65536) {
@@ -331,6 +342,18 @@ export function createConversationExecutionPort(
     )
       void refresh();
   }
+  function invalidate(read = true) {
+    connectionEpoch++;
+    availability.clear();
+    previewBlocked.clear();
+    latest.clear();
+    signatures.clear();
+    pending.length = 0;
+    pendingBytes = 0;
+    seen.clear();
+    connection(false);
+    if (read) void refresh();
+  }
   function stopIdle() {
     if (watchers.size) return;
     connectionEpoch++;
@@ -339,6 +362,7 @@ export function createConversationExecutionPort(
     stopEvents = stopTimer = undefined;
     latest.clear();
     availability.clear();
+    previewBlocked.clear();
     signatures.clear();
     forceSnapshot.clear();
     pending.length = 0;
@@ -347,6 +371,8 @@ export function createConversationExecutionPort(
     connected = undefined;
   }
   return {
+    refresh,
+    invalidate,
     observe(resourceId, listener) {
       if (stopped || !text(resourceId))
         throw new Error("Conversation observation unavailable");
@@ -378,6 +404,7 @@ export function createConversationExecutionPort(
           watchers.delete(resourceId);
           latest.delete(resourceId);
           availability.delete(resourceId);
+          previewBlocked.delete(resourceId);
           signatures.delete(resourceId);
           forceSnapshot.delete(resourceId);
         }
