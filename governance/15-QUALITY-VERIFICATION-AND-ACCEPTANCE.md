@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document ID | **AW-GOV-015** |
-| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Version | 1.2.0 — owner-directed Fluid Intelligence amendment 2026-11-10 |
 | Status | **Owner-accepted and ratified governing charter; implementation verification separate** |
 | Prepared | 2026-11-01 |
 | Authority | Specialized subsystem charter, subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
@@ -27,7 +27,7 @@
 
 This charter defines the **common method for demonstrating compliance** with Aetherwake's governing requirements. Other charters own the behavior of their respective subsystems; this charter owns the cross-cutting **quality gates, evidence discipline, verification methodology, release decisions, and acceptance semantics**. It MUST NOT silently replace their domain-specific requirements.
 
-The [Constitution](00-AETHERWAKE-CONSTITUTION.md) is supreme. The repository owner retains final product-acceptance authority. Publication of this draft does not constitute owner ratification. Until accepted, it is a proposed governance baseline for review and implementation planning.
+The [Constitution](00-AETHERWAKE-CONSTITUTION.md) is supreme. The repository owner retains final product-acceptance authority. Publication alone does not constitute owner ratification. This charter was explicitly owner-ratified on 2026-11-05; the 2026-11-10 owner-directed amendment extends its requirements without certifying implementation or releasing any product capability.
 
 The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** have the meanings assigned by the Constitution. Requirements use stable identifiers in the **AW-QVA** namespace. When a related charter is not yet published or accepted, the applicable constitutional anchor remains authoritative and the open dependency MUST be documented.
 
@@ -656,3 +656,146 @@ Aerynth's defining promise is not that it can display code, launch agents, produ
 
 **Canonical acceptance catalog:** [CF-001 through CF-030](../docs/specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md). Reviewers MUST reconcile each claimed release capability with this catalog and the existing charter gates rather than treating the catalog as a replacement for them.
 
+
+
+---
+
+## Owner-directed Fluid Intelligence amendment FI-2026-11-10: AI-native, adaptive, resource-aware acceptance
+
+> **Authority and status:** This owner-directed amendment extends existing independent quality gates for AI-native cognition, intelligent planning, dynamic multi-agent execution, ARIE, adaptive AEP, experiential learning, and the Adaptive Intelligence Workspace. It ratifies neither an implementation nor numerical performance results. It supplements AW-QVA-055–088, AW-QVA-115–125, and AW-QVA-128–140, and reconciles with the canonical capability-first acceptance catalog rather than replacing it.
+
+### 22.1 Acceptance philosophy and evidence tiers
+
+**AW-QVA-141 — Fluid Intelligence acceptance scope.** Claims that Vela is intelligent, adaptive, parallel, faster, hardware-aware, learning or fully autonomous MUST each be verified against observable user outcomes and attributable execution evidence. API calls made, agent count, successful JSON parsing, a dashboard, or a claimed optimization are insufficient proof.
+
+**AW-QVA-142 — Capability-preserving optimization.** An optimization MUST NOT be called successful if it removes necessary reasoning, semantic context, tool capability, verification, accessibility, user agency or acceptance coverage, even if measured token use or median latency improves. Where a tradeoff is authorized, document the affected capability and secure the appropriate owner decision rather than silently relabeling the degraded baseline as equivalent.
+
+**AW-QVA-143 — Independent multi-dimensional gates.** Quality, correctness, security/permissions, context fidelity, accessibility, state durability, visual usability, foreground responsiveness and task completion MUST each meet its applicable gate; a weighted aggregate efficiency score MUST NOT compensate for failure of a critical dimension.
+
+**AW-QVA-144 — Evidence tiers remain distinct.** Design/charter review, schema validation, synthetic fixture, mocked provider integration, real API integration, packaged-native measurement, repeated benchmark, independent review, and owner product acceptance MUST be recorded separately. A model evaluator's favorable summary cannot certify a live native result.
+
+**AW-QVA-145 — Unseen-task generalization.** AI-native input/retrieval/planning, model routing and learned policies MUST be evaluated on previously unseen or held-out request families, unexpected wording, changing requirements and contradictory evidence. Tests tailored to prompts, keyword lists or known fixture answers do not demonstrate semantic robustness.
+
+### 22.2 AI-native cognition, planning and mission executive evaluation
+
+| Gate | Minimum independently observable evidence |
+|---|---|
+| **AI input/perception** | Actual model-supported interpretation of ambiguous references, multimodal constraints, intent, error/uncertainty; demonstrable distinction from keyword-only routing |
+| **CIE semantic investigation** | Evidence-driven iterative retrieval; inclusion of old critical facts, stale/corrected decisions, relevant source pointers and honest insufficiency |
+| **AIR plan selection** | Schema-valid proposed plan with model/tool/effort capabilities, required permissions, task graph, resource classes, agent right-sizing and deliverables |
+| **Plan validation** | Rejection of unsupported providers, invalid dependencies, cycles, malformed arguments, unavailable tools and unapproved operations |
+| **AI Mission Executive** | Evidence-based decision to request context, delegate, replan, escalate or terminate; deterministic authorization and task-state enforcement |
+| **Composite completion** | Verified code/files/images/documents/actions and coherent final response; artifact existence and independent postcondition checks where applicable |
+
+**AW-QVA-146 — Measured cognitive pipeline.** Evaluate actual input → context → planning → validation → execution → review → final delivery as a correlated mission, including initial interpretation accuracy, missing-context recovery, revision history, agent right-sizing, final fidelity and relevant tool/provider compatibility.
+
+**AW-QVA-147 — Real model invocation evidence.** Where a capability is advertised as AI-native or API-driven, the test MUST verify supported real model use, structured input/output or tool interactions, traceable provider/capability metadata and handling of timeout, partial response, invalid structured output or tool unavailability. A deterministic selector relabeled “AI” fails the claim.
+
+**AW-QVA-148 — Structured plan integrity.** Plans MUST be tested for schema conformance, dependency cycles, missing prerequisites, redundant/overlapping agents, model/tool compatibility, per-agent authority, resource budgets, artifact contract, idempotency, safe side-effect sequencing, and versioned revisions. The validator MUST reject unsafe or impossible proposals without relying on the proposing model's confidence.
+
+**AW-QVA-149 — Executive adaptation evidence.** A simulated or real complication MUST cause the AI Mission Executive to consider new evidence and, when warranted, request a justified revised plan. Tests MUST prove unchanged work is not needlessly repeated and new branches do not bypass canonical task authority or approvals.
+
+**AW-QVA-150 — Multi-agent versus single-agent comparison.** Representative tasks MUST compare appropriately configured sequential/single-agent and multi-agent strategies on verified quality, p50/p95 mission latency, critical-path duration, total work, agent overhead, conflict/rework, tool/provider usage, and accuracy. More agents or requests alone are not positive evidence.
+
+**AW-QVA-151 — API capability qualification.** Advanced transport, streaming, asynchronous tool calls, built-in tools, hosted code, model reasoning effort, cache options, background and batch processing MUST be checked against real model/provider/entitlement/version support. Unsupported features MUST degrade to a declared valid alternative without fabricated parity or silent task-quality loss.
+
+**AW-QVA-152 — Quality-aware model allocation.** Evaluations MUST include cases where a stronger model prevents downstream rework and where a lightweight model is sufficient. A policy that chooses only on token price, or changes a user's required reasoning quality because the machine is gaming, MUST fail.
+
+### 22.3 ARIE resource, concurrency and interference verification
+
+**AW-QVA-153 — Local-versus-remote attribution.** Tests MUST separate remote model/API inference from local async I/O, CPU-bound work, local GPU compute, rendering, disk indexing, RAM pressure and provider rate limits. A high number of asynchronous API calls MUST NOT be represented as equivalent to consuming that number of local CPU cores.
+
+**AW-QVA-154 — Native multithreading evidence.** Claims of parallel CPU execution MUST include thread/process trace or equivalent reliable OS measurement, useful overlap, scaling results, safe worker isolation, backpressure, cancellation and artifact integrity; declaring a pool size equal to logical CPU count is insufficient.
+
+**AW-QVA-155 — Foreground workload protection.** Benchmarks MUST reproduce foreground games or meaningful interactive loads and measure foreground p50/p95/p99 frame-time/input latency where available, plus Aerynth UI responsiveness, CPU/GPU/VRAM/RAM/disk contention and remote task progress, comparing ARIE enabled/disabled on the same configuration.
+
+**AW-QVA-156 — Gaming does not disable intelligence.** Under gaming/high-resource-pressure mode, tests MUST verify required model/tool capability, context fidelity, verification and task semantics are preserved; only independently authorized workload policies may defer, slow or pause eligible local work. Reduced graphics tier does not authorize cancelling Codex or reducing AI reasoning effort.
+
+**AW-QVA-157 — Idle scaling efficiency.** On stable resource headroom, increasing CPU worker concurrency MUST show useful throughput or critical-path benefit against measured contention, thermal/memory limits and OS responsiveness; an increased worker count with worse completion time or task quality MUST NOT count as improvement.
+
+**AW-QVA-158 — Anti-thrash, fairness and leases.** Fault-injection tests MUST cover sudden/oscillating load, stale sensors, pressure bursts, two simultaneous missions, starvation, resource-lease expiration, crash, resume and policy-change race conditions. Enforcement must preserve actual task state and release reservations after failure.
+
+**AW-QVA-159 — ARIE measurement legitimacy.** Machine-state tests MUST record source, unit, sampling cadence, hardware/driver/OS/monitor configuration, process scope, sensor coverage and missing signals. AI-written resource values, unlabeled estimates and simulated telemetry MUST NOT be counted as native proof.
+
+**AW-QVA-160 — Instrumentation interference.** AEP telemetry, ARIE polling and Intelligence Workspace rendering MUST be benchmarked for their own CPU/GPU/memory/IO overhead, frame-time impact and dropped-data behavior; observability MUST NOT materially impair the workload it purports to optimize.
+
+**AW-QVA-161 — Enforced resource-policy authorization.** Tests MUST attempt unauthorized model-suggested process priority changes, worker expansions, foreground-app inspection, mission cancellation, resource exhaustion and disclosure of private telemetry. The deterministic policy validator MUST reject prohibited operations and preserve a valid fallback.
+
+### 22.4 AEP experiments, experiential learning and strategy updates
+
+**AW-QVA-162 — Baseline and candidate comparability.** Adaptive experiments MUST predeclare task family, input/evidence equivalence, supported model/tool configurations, hardware and foreground conditions, sample/repeat plan, cold/warm and cache states, quality criteria, confidence/uncertainty, outlier treatment, and stop/rollback rules before interpreting gains.
+
+**AW-QVA-163 — Critical-path and percentile evidence.** Claims of speedup MUST report end-to-end time to first meaningful result, verified completion latency (at least p50/p95 when sample size permits), critical-path time, queue/API/tool/retry durations, concurrent overlap and provider/measurement uncertainty. Removing spans or redefining “complete” cannot manufacture a speedup.
+
+**AW-QVA-164 — Outcome and rework accounting.** AEP acceptance MUST pair latency/cost with objective correctness, independent verification, task-success rate, model-evaluator agreement/disagreement, error recovery, false completion, human correction and downstream rework. A low-cost run with an incorrect result MUST not count as an equal-quality success.
+
+**AW-QVA-165 — Holdout and drift safeguards.** Learned strategies MUST be tested on held-out mission families and relevant hardware/workload states, and periodically revalidated when model, API, OS, driver, hardware, usage patterns or governance change. Training/selection histories MUST NOT leak into the final unseen evaluation set.
+
+**AW-QVA-166 — Hypothesis-to-policy lifecycle.** Every AEP learning claim MUST show separately: source observations, hypothesis, predeclared experiment, execution data, analysis/uncertainty, independent quality check, approval/activation, subsequent observed effect, rollback criteria and eventual supersession as applicable.
+
+**AW-QVA-167 — No one-run permanent learning.** An isolated quick run, confident model explanation, anecdotal improvement, or synthetic benchmark MUST NOT be sufficient to promote a persistent global strategy. Policy scope and confidence MUST be proportional to evidence, with ability to reject ambiguous results.
+
+**AW-QVA-168 — Optimization restraint and negative result.** Acceptance tests MUST include a faster-but-less-correct candidate, excess-agents candidate, low-overhead candidate, hardware-specific strategy, and inconclusive experiment; Vela MUST reject, limit or decline to optimize when the data do not justify a change. “No change recommended” is a valid successful decision.
+
+**AW-QVA-169 — Policy versioning and rollback.** Activated strategies MUST retain identity, authority, evidence IDs, scope, version and change history. Tests MUST prove rollback/disable, conflicting policy handling, restart persistence, invalidated-evidence behavior and that correction does not silently erase historical provenance.
+
+**AW-QVA-170 — CIE learning boundaries.** Tests MUST separate user preferences, remembered observations, tool reports, hypotheses, accepted project requirements and approved execution policies. AEP-derived learning MUST NOT become binding governance, grant tool privileges, overwrite user correction or masquerade as underlying provider-model retraining.
+
+**AW-QVA-171 — Human feedback integration.** Tests MUST capture explicit corrections, declined optimization suggestions, recurring outcomes and task ratings where allowed, then verify adaptation honors relevance, chronology, source uncertainty and user control. The system MUST NOT assume silence equals approval.
+
+### 22.5 Intelligence Workspace and explainability acceptance
+
+**AW-QVA-172 — Real data, not theater.** The Adaptive Intelligence Workspace MUST prove that Decision Observatory, Resource Intelligence, Execution Profiler, Learning Observatory, Experiment Laboratory and Adaptation Timeline are backed by source-referenced canonical state, not sample figures, mock thoughts, fabricated percentages or disconnected cards. Fixtures must remain labeled.
+
+**AW-QVA-173 — Cross-surface identity and replay.** Selecting an agent decision, task, learning record or policy change across Vela Mind, project stream, workspace, history and replay MUST preserve identity, version, outcome, permissions and provenance; replay MUST NOT execute any model/tool side effects.
+
+**AW-QVA-174 — Explanation honesty.** Ask Vela to explain a model choice, resource throttle and rejected optimization with complete evidence, partial evidence and no recorded evidence. Test that model-authored explanations cite permitted observations, differentiate hypotheses, and never claim access to private chain-of-thought.
+
+**AW-QVA-175 — Workspace interaction completeness.** Native tests MUST cover discoverable navigation, reconfigurable block layouts, selection/filtering, comparison, inspection, policy controls with actual authorization, feedback, keyboard operation, reduced motion, readable dense datasets, multi-display and resource-constrained performance.
+
+**AW-QVA-176 — Privacy and export integrity.** Workspace and exported learning/telemetry reports MUST be tested for redaction, least-privilege viewing, private path/secret protection, retention/deletion propagation, inaccessible evidence handling and revocation. Public CI and pull requests MUST contain only sanitized representative data.
+
+### 22.6 Mandatory end-to-end Fluid Intelligence qualification
+
+The following FI acceptance scenarios are additive to C-01–C-15, OBS-A01–A42, OBS-FI-01–10, PLT-AT-01–20, PLT-ARIE-01–08 and the existing CF catalog. Each MUST have an identified owner, supported-hardware scope, versioned fixture, pass/fail oracle, evidence artifact and release disposition. Real native or real API cases are required to support corresponding live claims.
+
+| Case | Scenario | Minimum pass condition |
+|---|---|---|
+| **FI-QA-01** | Unseen ambiguous natural-language/multimodal input | AI interpretation resolves supported references from actual provenance; surfaces uncertainty otherwise, no keyword-specific hardcode |
+| **FI-QA-02** | Iterative historical context retrieval | Old relevant constraints recovered; stale/contradictory/private evidence handled correctly |
+| **FI-QA-03** | Structured AI mission planning | Real model output validated for model/tool/effort, agents, DAG, permissions, deliverables and verification |
+| **FI-QA-04** | Invalid, adversarial or unsupported plan | Deterministic guard rejects cycles, incompatible models, tool arguments and privilege expansion |
+| **FI-QA-05** | Adaptive executive replanning | Failure/new evidence triggers justified revision; completed safe work retained; no duplicate consequential effects |
+| **FI-QA-06** | Single-versus-multi-agent matched mission | Real overlap, quality parity or improvement, critical-path latency, coordination cost and rework independently measured |
+| **FI-QA-07** | Advanced API feature negotiation | Compatible tool/transport/processing modes used when beneficial; invalid or unavailable modes handled honestly |
+| **FI-QA-08** | Composite request with multiple deliverables | Required text, files, images, code/actions where supported actually produced, linked and independently verified |
+| **FI-QA-09** | Foreground game during local and remote work | ARIE reduces authorized local interference while preserving remote intelligence and truthful mission status |
+| **FI-QA-10** | Idle multithreaded acceleration | Useful task throughput increases with safe CPU concurrency; memory/thermal/interactive headroom retained |
+| **FI-QA-11** | ARIE sensor failure, oscillation, restart | Stable fallback, policy persistence, lease cleanup and no false process/device claims |
+| **FI-QA-12** | AEP discovery and controlled strategy experiment | Trace → hypothesis → baseline/trial → independent quality/latency evaluation → scoped decision |
+| **FI-QA-13** | Faster strategy that loses quality | Candidate rejected or explicitly gated; no optimization-success claim |
+| **FI-QA-14** | Inconclusive, stale or hardware-specific learning | No unjustified universal policy; revalidation, correct scoping, rollback and user correction work |
+| **FI-QA-15** | AEP Workspace decisions, learning, and ARIE view | Six spatial instruments display same canonical evidence with real policy controls and accessible alternatives |
+| **FI-QA-16** | Private reasoning, mocked telemetry and interrupted streams | No fabricated thoughts, progress or causality; unknown/stale/missing and redaction correctly displayed |
+| **FI-QA-17** | Long-running multi-mission, provider outage and resume | Persisted checkpoints and event recovery; no unintended repeated side effects; actual gaps disclosed |
+| **FI-QA-18** | Instrumentation and UI stress | AEP, ARIE and cinematic workspace remain within accepted overhead and responsiveness budgets |
+
+### 22.7 Benchmark design and release report contract
+
+**AW-QVA-177 — Predeclared thresholds and no invented numbers.** Before running acceptance, the approved test plan MUST specify numerical thresholds, hardware tier, workload, repetition count, statistical treatment, baseline, tool/protocol versions and expected tradeoffs. This charter mandates dimensions and methods, not fictional universal p95/FPS/CPU targets.
+
+**AW-QVA-178 — Full performance reporting.** The report MUST identify task family and success oracle; per-route model/tool config; measured time to first useful output and verified end-to-end completion; p50/p95 and p99 where feasible; provider/tool/resource/queue overhead; concurrency; retries; cache/warm states; UI responsiveness; foreground contention; instrumentation overhead; attribution quality; cost; and significant missing data.
+
+**AW-QVA-179 — Evidence-linked release matrix.** The release record MUST map AW-PLT-140–168, AW-OBS-148–178 and AW-QVA-141–179 to FI/ARIE/OBS scenario IDs, implementation commits, independent native/integration evidence and unresolved limitations. Deferrals MUST be explicit; passing only lint or governance-link checks is documentation verification, not feature acceptance.
+
+**AW-QVA-180 — Continuous nonregression.** Candidate improvements MUST be compared with last known accepted quality/performance baselines on representative and held-out workloads. Any material decline in required capability, data integrity, security, accessibility or confirmed task success MUST block qualification or require explicit authorized scope/waiver and re-evaluation under the existing release process.
+
+**AW-QVA-181 — Privacy and safe evaluation retention.** Benchmark output and longitudinal learning evaluations MUST minimize personal/user data, honor telemetry consent, use sanitized fixtures for public artifacts, retain reproducible environment/measurement metadata in authorized storage, and never publicly publish raw provider secrets, personal conversations or identifiable activity traces.
+
+**AW-QVA-182 — Closure versus publication.** Merged charters and illustrative test plans establish requirements. Only measured implementation and applicable native/provider evidence may establish “implemented,” “verified,” or “accepted” capabilities. Agents MUST not mark the Fluid Intelligence architecture complete merely because these documents passed review.
+
+### 22.8 Formal quality gate for “Vela learns”
+
+The phrase **Vela learns and adapts** is an accepted product claim only when representative evidence shows: (1) a real outcome was observed, (2) a useful improvement hypothesis was formed with provenance, (3) a controlled comparison assessed quality and latency, (4) the policy was promoted only in its justified scope under appropriate authorization, (5) future behavior measurably changed in that scope, (6) subsequent outcomes were monitored, and (7) the learned behavior was inspectable, correctable and reversible. Persistent user preferences, retrieval of prior facts and provider-model fine-tuning MUST be distinguished from this adaptive execution-policy learning.
+
+**Acceptance:** Vela becomes more capable and efficient by measured, reversible changes without optimizing intelligence out of the system. The evidence must demonstrate this across real, unfamiliar tasks, not merely repeat the phrase in a beautifully animated workspace.

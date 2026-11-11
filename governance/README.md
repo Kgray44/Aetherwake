@@ -79,6 +79,16 @@ The owner directed a coordinated major overhaul of **Charters 05, 06, 08 and 10*
 - **08 — AW-CIE-165–197:** iterative AI-supported evidence retrieval, provenance and permission boundaries, experiential memory, scoped strategy applicability, correction/rollback propagation and held-out semantic evaluation.
 - **10 — AW-AEP-138–178:** evidence-led optimization, critical-path and quality-adjusted performance measurement, controlled experiments/policy promotion, ARIE integration and the Adaptive Intelligence Workspace.
 
+### Complementary Fluid Intelligence governance overhauls: Charters 09, 13 and 15
+
+The owner separately directed the last three major charter revisions on 2026-11-10. Their **FI-2026-11-10** sections are binding design and independent-acceptance requirements, not a claim of operational native features or completed release certification.
+
+- **09 — AW-OBS-148–178:** AI-native decision and replan evidence; one source-backed Adaptive Intelligence Workspace with Decision, Resource, Profiler, Learning, Experiment and Timeline views; learning provenance; private-reasoning honesty; event replay and privacy; **OBS-FI-01–10**.
+- **13 — AW-PLT-140–168:** ARIE as an expansion of the existing Performance Governor, not a second scheduler; hardware-aware CPU/GPU/RAM/disk/network budgets; gaming/idle adaptation, foreground protection, AI advisory versus deterministic enforcement, resource leases, reversibility; **PLT-ARIE-01–08**.
+- **15 — AW-QVA-141–182:** Quality-preserving model/agent planning verification; real parallel and native resource benchmarks; AEP learning/holdout/policy rollback evidence; truthful workspace testing and live acceptance; **FI-QA-01–18**.
+
+These charters reconcile with the 05/06/08/10 Fluid Intelligence amendments, preserve the existing canonical owners, and belong to Full Aerynth Realization. Publishing documentation is not equivalent to delivering or verifying ARIE, AEP, semantic cognition, or the workspace.
+
 **Canonical ownership remains unchanged:** MissionService owns task state; AIR/Vela owns cognition; CIE owns context projections and retrieval; AEP owns measurements and experimental evidence; the existing Platform Governor/ARIE owns local resource-policy enforcement; Trust owns permission; observability owns event projections. The expanded work belongs to **Full Aerynth Realization**, not an unapproved enlargement of Architecture Recovery. Companion architecture, supporting-charter revisions, system tests and integration remain separate follow-on deliverables.
 
 The deterministic section-level Governance Context Router indexes normative requirement lines from the charter source files. Future agents must explicitly retrieve applicable FI requirements by task/path or stable requirement ID and validate substantive section sufficiency; a documentation merge is not an implementation test.

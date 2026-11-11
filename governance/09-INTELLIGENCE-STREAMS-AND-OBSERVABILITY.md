@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-009 |
-| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Version | 1.2.0 — owner-directed Fluid Intelligence amendment 2026-11-10 |
 | Status | **Owner-accepted and ratified governing charter; implementation separate** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem charter subordinate to [The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
@@ -773,3 +773,114 @@ Further implementation detail is in [Stream V2 specification](../docs/specificat
 **AW-OBS-147 — Non-executing replay.** Historical replay MUST restore only recorded representation and MUST NEVER re-trigger tools or billed model/agent effects.
 
 **Acceptance:** Real concurrent agent activity in Mind and timeline; duplicate webhook, crash and failed tool retain correct truth; demo fixtures cannot masquerade as execution.
+
+
+---
+
+## Owner-directed Fluid Intelligence amendment FI-2026-11-10: Adaptive Intelligence Observatory and truthful learning evidence
+
+> **Authority and status:** This owner-directed amendment extends the ratified Intelligence Stream/Spatial Intelligence contracts with inspectable AI-native orchestration, AEP/ARIE adaptation evidence, and an immersive **Adaptive Intelligence Workspace**. It does not assert those engines or views have been implemented. All prior event truth, private reasoning limitations, permissions, stable IDs, replay safety and owner boundaries remain in effect. Related authority: 03 Workspaces, 05 Agents, 06 Vela, 08 CIE, 10 AEP, 11 Timelines, 13 ARIE, 14 Trust, 15 Quality.
+
+### 22.1 Observable intelligence throughout a mission
+
+The execution pipeline is not a fabricated series of model thoughts: where observable, it includes multimodal input interpretation, AI-directed context investigation, capability discovery, model/effort selection, AI planning and critique, plan compilation, executive observation/replanning, agent/tool execution, verification, adaptive policy decisions, and final result composition. Charter 09 owns the observable evidence **across** these roles, never the substantive decision algorithms themselves.
+
+**AW-OBS-148 — Adaptive intelligence visibility.** Aerynth MUST expose an inspectable, source-grounded account of material decisions made across perception, retrieval, planning, delegation, execution, verification, resource adaptation and delivery. A decision explanation MUST distinguish captured rationale or permitted summary from a later model-generated hypothesis and from unavailable private reasoning.
+
+**AW-OBS-149 — No invented private thought.** Neither the Adaptive Intelligence Workspace, AEP nor ARIE may present purported verbatim internal model reasoning or continuously simulated inner monologues. Tool calls, structured model outputs, authorized summaries, observed state transitions and subsequent evidenced interpretations are valid inputs; hidden chains of thought are not.
+
+**AW-OBS-150 — Decision identity and causality.** Material model, tool, resource and agent decisions MUST be attributable to canonical mission/task/attempt/agent IDs, trace/span, model/provider/tool and execution-policy version where available. Causal links MUST distinguish observed trigger, inferred relationship, model-reported motivation, and verified effect.
+
+**AW-OBS-151 — Planning version history.** The stream MUST distinguish requested objective, candidate plan, validator verdict, accepted plan version, agent allocation, amended dependencies, rejected plan and replan outcome. Revision must not rewrite prior evidence or make an abandoned plan appear executed.
+
+**AW-OBS-152 — Cognitive and context events.** AI-guided retrieval SHOULD emit privacy-minimized evidence for the retrieval objective, query/retrieval strategy version, authorized sources accessed, evidence completeness, detected gaps, handoff/checkpoint references, and resulting plan context. Sensitive retrieved content MUST remain under CIE/Charter 14 access controls and not be duplicated into an unrestricted activity log.
+
+**AW-OBS-153 — Model and tool selection transparency.** Material routing changes SHOULD show the chosen capability/model class, available alternatives when known, requested/actual reasoning effort, compatibility constraints, execution transport, relevant outcome tradeoffs and policy evidence. Missing provider metadata MUST remain unknown, never guessed or backfilled from marketing labels.
+
+**AW-OBS-154 — AI Mission Executive events.** Observable executive decisions to delegate, request evidence, alter priority, replan, escalate, pause or resume MUST correlate with actual authorized mission-state transitions and their validator result. A proposed action is not an executed tool call or completed mission.
+
+**AW-OBS-155 — Parallelism fidelity.** Agent graphs, critical-path views, overlapping spans and concurrency displays MUST reflect actual time measurements, task dependencies and identity boundaries. An activity graph MUST NOT infer true concurrency from nominal agent count, assume provider clock synchronization, or turn overlapping timestamps into proof of causation.
+
+### 22.2 One immersive Adaptive Intelligence Workspace, not competing dashboards
+
+The **Adaptive Intelligence Workspace** is a first-class persistent, configurable Aerynth space whose panels and cinematic visualizations project the **same authoritative events and resources** used by the Intelligence Stream, AEP, ARIE and CIE. It SHOULD feel spatial, explorable and responsive, not like a series of unrelated modal dialogs. Charter 03 owns workspace block identity/layout; Charter 02 owns cinematic motion; Charter 10 owns optimization arithmetic and experiment rules; Charter 13 owns actual resource policy; Charter 09 owns evidence and inspectable projections.
+
+| View / instrument | Required observable purpose | Canonical origin |
+|---|---|---|
+| **Decision Observatory** | Inspect routing, planning versions, model/tool/agent choices, constraints, validation, and alternatives with evidence | AIR/AI Executive/mission events through 09 |
+| **Resource Intelligence** | Live/stale/unavailable machine signals, ARIE policy and budget transitions, workload impact, user overrides | 13 Performance Governor/ARIE |
+| **Execution Profiler** | Timing spans, concurrency/critical path, usage/cost provenance, quality-adjusted efficiency, regressions | 10 AEP metrics linked to 09 spans |
+| **Learning Observatory** | Candidate discoveries, confidence, scope, experiment provenance, accepted/rejected/superseded policies | 10 experiment ledger + 08 context retrieval |
+| **Experiment Laboratory** | Compare controlled alternatives with predeclared quality and latency criteria, sample size, environment | 10 AEP and 15 acceptance |
+| **Adaptation Timeline** | Replay versioned policy decisions, corrections, rollbacks and their evidence without reenactment | 09 events + 11 replay mechanics |
+
+**AW-OBS-156 — Workspace first-class status.** The Adaptive Intelligence Workspace MUST support persistent identity, navigable block relationships, selection, relevant layout controls, readable detail, search/filter and stable return navigation. It MUST NOT be presented as implemented merely because placeholder cards or static dashboard images exist.
+
+**AW-OBS-157 — Shared canonical projections.** Workspace instruments, Vela Mind, project Intelligence Stream, agent stream, resource HUD, timeline and replay MUST use one consistent canonical evidence/event identity. Local UI state MAY govern view choices but MUST NOT originate claimed model actions, hardware observations, task outcomes or learned policies.
+
+**AW-OBS-158 — Semantic and spatial continuity.** Moving from Vela Presence to a mission stream, a learning discovery, a policy revision or its profiler evidence SHOULD preserve selection, task identity, context and meaningful spatial continuity. Optional immersive rendering MUST degrade gracefully under ARIE or reduced-motion constraints without removing evidence or controls.
+
+**AW-OBS-159 — Inspectable decision chain.** Selecting a decision MUST expose, subject to permissions, the requested goal, active constraints, available/unknown inputs, selected and rejected alternatives when recorded, source references, validator/authorization result, actual action and measured outcome. Unobserved alternatives MUST NOT be fabricated retrospectively.
+
+**AW-OBS-160 — Live versus historical versus simulated.** Instruments MUST visibly distinguish live engine output, delayed/stale data, recorded history, derived aggregates, unverified recommendations and simulations. Demo/example values MUST remain labeled through navigation, exports, screenshots intended as evidence and replay.
+
+**AW-OBS-161 — Resource reason and effective policy.** ARIE budget transitions MUST reveal old/new limits, measured triggering signals with freshness, applied policy version, user override, affected resource classes and actual effect. A requested limit, a model recommendation and an enforced limit are distinct states.
+
+**AW-OBS-162 — Continuous work without fabricated percentages.** When a model or remote agent is active without fine-grained progress telemetry, the UI SHOULD show last observable update, available stages, dependency state and unknown progress. It MUST NOT synthesize percentages, output quality or interior reasoning from elapsed time or animation.
+
+### 22.3 Learning discoveries, experiments, and longitudinal change
+
+AEP may diagnose opportunities and recommend strategies; ARIE may apply validated resource policies; AIR may apply validated model/planning strategies; CIE may retrieve relevant experiential knowledge. The UI must preserve this ownership and let the user see **what changed, why it changed, how well it worked, and what can be reverted**.
+
+**AW-OBS-163 — Learning record lifecycle.** Discoveries MUST show distinct states: observed pattern, hypothesis, proposed experiment, running trial, evaluated result, rejected, approved/piloted, active, suspended, rolled back and superseded as applicable. A model hypothesis or a single successful run MUST NOT be labeled a learned fact.
+
+**AW-OBS-164 — Learning provenance.** A displayed discovery or adaptation MUST link to accessible experiment/measurement IDs, task family, sample size, baseline, conditions/hardware context, quality guardrails, statistical or qualitative uncertainty, policy version, evaluator, and scope. When details are unavailable, the omission MUST be explicit.
+
+**AW-OBS-165 — Outcome-aware optimization display.** Profiler views MUST present verified task-completion quality and latency jointly, including p50/p95 and available critical-path evidence, rework, failures, model/tool overhead, foreground impact, and cost provenance. Lower token use or more parallel calls alone MUST NOT earn an optimization-success label.
+
+**AW-OBS-166 — Rejection is useful evidence.** Rejected, failed or reverted optimization experiments SHOULD remain discoverable within applicable retention rules, with reasons and limitations, so recurring proposals can be assessed against prior evidence rather than repeated uncritically.
+
+**AW-OBS-167 — Scope and corrections.** The UI MUST reveal the conditions under which a learned strategy applies, its current confidence and review/expiry state. User corrections, declined suggestions and invalidated source evidence MUST propagate to displayed policy status; deleting a source MUST honor Charter 14 and 08 without retaining unauthorized derived content.
+
+**AW-OBS-168 — Approval, override and rollback controls.** Where the owning subsystem permits a policy change, the workspace MUST offer clear view/compare/approve/reject/revert actions with actual permission gates, before/after scope and outcome confirmation. A visual control MUST NOT claim success until the authoritative owner confirms the transition.
+
+**AW-OBS-169 — Adaptation visibility across sessions.** A permitted user SHOULD be able to compare past and current behavior over days/months by model choice, task type, resource mode, quality, latency and accepted policies. Comparisons MUST account for environment drift and data coverage; missing historical logs are not evidence of no change.
+
+**AW-OBS-170 — User-facing natural-language inspection.** Vela SHOULD answer questions such as “Why that model?”, “Why did the build slow during gaming?”, “Which optimizations improved quality-adjusted latency?”, and “What changed after my correction?” using accessible decision/event/experiment records, citing evidence and disclosing unknowns; it MUST NOT invent a rationale because the user requests one.
+
+### 22.4 Event transport, resilience, disclosure and privacy
+
+**AW-OBS-171 — Adaptive event taxonomy.** The canonical event pipeline MUST define versioned event families for: cognition request/interpretation, context strategy/retrieval, plan candidate/validation/revision, capability selection, agent allocation/handback, resource sample/lease/policy change, AEP evaluation/experiment, learning promotion/rejection/rollback, verified outcome, and user decision. Events SHOULD link source observations without storing private payloads unnecessarily.
+
+**AW-OBS-172 — Event ordering under concurrency.** Parallel events MUST carry stable IDs, source clocks, ingestion time, available monotonic durations, parent/causal references, and schema version. Deduplication, out-of-order arrival and clock drift MUST be handled without false total ordering; repairs/reconciliation add new evidence rather than silently rewriting history.
+
+**AW-OBS-173 — Privacy-aware observability budgets.** High-rate CPU/GPU sampling and model/tool traces MUST support bounded collection, summarization, redaction, role-based drilldown and retained aggregate provenance. Secret prompts, inaccessible chain-of-thought, unapproved foreground-app metadata and identifiable private local paths MUST NOT leak into public exports or telemetry.
+
+**AW-OBS-174 — Backpressure without falsification.** Heavy activity MAY be throttled, coalesced or aggregated for presentation. The system MUST distinguish lossy rendered projections from authoritative durable event records, preserve critical approvals/errors/decisions and disclose capture gaps. A high-frequency cinematic renderer MUST NOT be allowed to block or mutate canonical mission execution.
+
+**AW-OBS-175 — Degraded/offline workspace honesty.** When a provider is offline, ARIE sensors are absent, a model cannot disclose reasoning, or AEP has too little evidence, instruments MUST show partial/unknown/stale status and preserve navigation, source provenance and controls feasible offline. Source reconnection MUST reconcile gaps rather than synthesize missing events.
+
+**AW-OBS-176 — Nonexecuting history and model-authored summaries.** Replay, historical inspection and natural-language reports MUST be read-only unless the user explicitly initiates a separately authorized new action. AI-created analysis is a cited interpretation, not a modification of canonical event or experiment truth.
+
+### 22.5 Mandatory observability and workspace acceptance
+
+These tests supplement OBS-A01–A42 and the Charter 15 acceptance matrix. At least applicable live/native tests are required before production claims; deterministic synthetic fixtures must remain labeled.
+
+| Scenario ID | Required demonstration |
+|---|---|
+| **OBS-FI-01** | Trace one real ambiguous request from AI input interpretation through retrieval, plan revisions, delegation, verification and result; expose known and unknown decisions |
+| **OBS-FI-02** | Observe concurrent agent spans and independently compare actual overlap, dependencies, clock skew and critical path without fabricated causality |
+| **OBS-FI-03** | Observe ARIE reducing local contention during foreground load while eligible remote API work continues; separate proposed from applied budgets and prove actual workload impact |
+| **OBS-FI-04** | Compare an AEP hypothesis, experiment, quality validation, promotion, rollback and supersession, each referencing the same canonical evidence |
+| **OBS-FI-05** | Ask Vela why a model or policy was selected when no recorded rationale exists; Vela must state uncertainty, not manufacture explanation |
+| **OBS-FI-06** | Follow one mission/learning event across Mind, project stream, Adaptive Intelligence Workspace, list view and historical replay with identical identity/provenance |
+| **OBS-FI-07** | Subject events to duplication, reorder, disconnect, schema migration, stale sensors and retention deletion; verify honest reconstruction and redaction |
+| **OBS-FI-08** | Test reduced motion, keyboard-only controls, inaccessible sources, very large histories, and resource-constrained rendering without loss of essential meaning |
+| **OBS-FI-09** | Verify a simulated optimization and mocked sensor data cannot appear as a real learned outcome in live workspace, screenshots or exported review evidence |
+| **OBS-FI-10** | Demonstrate approved user reject/revert actions; effective policy changes only after authoritative confirmation and persists consistently across restart |
+
+**AW-OBS-177 — Evidence gate for workspace claims.** A release MUST NOT describe the Adaptive Intelligence Workspace as operational unless real engine signals, authorized actions, historical evidence, immersive interaction and the relevant OBS-FI scenarios have been demonstrated in a packaged native build. A beautiful mockup is a design artifact, not proof of intelligence.
+
+**AW-OBS-178 — Requirement traceability.** Each new AW-OBS-148–178 requirement and OBS-FI scenario MUST map to an owning implementation component, test fixture, native evidence/known gap and the corresponding Charter 15 release gate. Documentation-only completion remains a separate state.
+
+**Acceptance:** The user can inspect what Vela genuinely decided, observed, learned and changed without fabricated thoughts, success theater, unsafe disclosure or a second competing source of truth.

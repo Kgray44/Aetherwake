@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-013 |
-| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Version | 1.2.0 — owner-directed Fluid Intelligence amendment 2026-11-10 |
 | Status | **Owner-accepted and ratified governing charter; implementation verification separate** |
 | Prepared | 2026-11-01 |
 | Authority | Specialized subsystem charter subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
@@ -696,3 +696,101 @@ These are engineering research references, **not normative substitutions** for p
 **AW-PLT-139 — Native proof.** A GPU Mind acceptance receipt MUST show device/backend, real camera parallax and volumetric activity driven by real task events, performance/resource metrics and human review.
 
 **Acceptance:** Vela talks while two agents run under a moving real GPU Mind on external OLED; reduce render tier and traverse all spatial destinations while monitoring responsiveness and unchanged task outcomes.
+
+
+---
+
+## Owner-directed Fluid Intelligence amendment FI-2026-11-10: Adaptive Resource Intelligence Engine (ARIE)
+
+> **Authority and status:** This owner-directed governing amendment establishes the architectural and behavioral requirements for ARIE. It supplements AW-PLT-046–056, AW-PLT-115–122, and AW-PLT-132–139; it does not certify an implementation. Requirements remain subject to constitutional authority, Charter 14 permissions, Charter 05 task ownership, Charter 10 profiler measurement, Charter 09 observable evidence, and Charter 15 independent acceptance. Targets and model/tool compatibility require actual measurement, not assumptions.
+
+### 20.1 Purpose, single ownership, and execution boundaries
+
+The **Adaptive Resource Intelligence Engine (ARIE)** is the machine-aware resource-policy capability of the **existing Performance Governor**, not a second governor or task scheduler. It continually reconciles hardware conditions, foreground workload impact, user preferences, and independently verified mission requirements. Its goal is to minimize avoidable completion latency and local interference **without reducing the quality or availability of Vela's intelligence**. Remote model inference and local CPU/GPU execution are different resource classes; resource contention in one MUST NOT automatically degrade the other.
+
+**AW-PLT-140 — ARIE identity and canonical authority.** ARIE MUST extend the canonical Performance Governor and publish one authoritative versioned resource-policy state. Existing visual tier and per-display motion ownership remain under the platform; Charter 05/MissionService remains the authority over mission/task state, worker dispatch, cancellation, and completion. ARIE supplies enforceable resource budgets and proposals to the mission scheduler; it MUST NOT instantiate a competing job database, planning engine, or agent controller.
+
+**AW-PLT-141 — Capability-first resource doctrine.** Resource optimization MUST preserve useful model reasoning, context fidelity, verification, permissions, and required task deliverables. A visual-quality tier or gaming condition MUST NOT silently change model capability, reasoning effort, tool availability, acceptance criteria, or remote-agent task semantics. A deliberate task-scheduling change MUST follow an independently visible, authorized task-resource policy.
+
+**AW-PLT-142 — Separate execution classes.** ARIE MUST distinguish local CPU-bound workers, asynchronous network/API requests, remote provider execution, local GPU compute, renderer GPU work, disk/indexing, background polling, and mixed workloads. CPU thread-count settings MUST NOT be treated as API concurrency controls; API concurrency MUST also respect provider rate/concurrency limits and network budgets.
+
+**AW-PLT-143 — Source-attributed machine observations.** Authorized OS-backed observations SHOULD identify CPU topology/logical processors, per-process or process-tree utilization, scheduling contention, system and available RAM, GPU engine/VRAM where supported, disk I/O, foreground/focus state, power mode, thermals where available, and user preferences. Every observation MUST carry timestamp, source, units, sampling window, scope, freshness, authorization and unavailable/error states. An unavailable sensor MUST NOT be replaced with an invented AI observation.
+
+**AW-PLT-144 — Minimum necessary monitoring.** Foreground workload detection MUST be opt-in/controllable and limited to the minimum signal necessary to honor user policies. It MUST NOT require surveillance of game content, keystrokes, private files, application documents, screen capture, or invasive process inspection. Telemetry collection/retention MUST obey Charter 14 and be redactable for export.
+
+**AW-PLT-145 — Pressure, not utilization alone.** Decisions MUST consider sustained contention and user-visible impact, not simply high aggregate CPU percentages. Queueing delay, active foreground latency, UI frame pacing, memory pressure, thermal throttling, and workload type SHOULD inform the judgment. Hardcoded CPU-percent-only switching is insufficient for declaring an intelligent adaptation.
+
+**AW-PLT-146 — Fast deterministic enforcement and slower AI guidance.** High-frequency metering, admission decisions, user-set hard limits, work isolation, throttling, hysteresis and safety fallbacks MUST remain deterministic and fail safely without API connectivity. Appropriate model calls MAY interpret complex workload patterns, propose adaptive budgets, and explain tradeoffs, using structured evidence rather than raw high-rate telemetry. Model output is advisory until schema validation, policy checks and available-resource tests succeed.
+
+**AW-PLT-147 — Worker pools and CPU parallelism.** Local CPU-intensive work SHOULD use measurable bounded thread/process pools, queues, cancellation, and backpressure, isolated from UI rendering and input. ARIE MUST profile effective parallelism on the target CPU instead of equating logical processors with an optimal number of heavy jobs. CPU affinity, priority, and process-tree controls MUST be used only when supported, authorized and shown to improve behavior.
+
+**AW-PLT-148 — Adaptive work admission.** ARIE MUST publish distinct budgets for CPU-heavy jobs, disk-heavy jobs, GPU compute and API I/O, with priority, pressure reason, active leases, and expected reversal conditions. The scheduler MUST validate a resource lease or equivalent admission contract before starting a constrained local task; lease expiry and unexpected worker exit MUST release reservations reliably.
+
+**AW-PLT-149 — Foreground gaming protection.** Under user-chosen or lawfully detected gaming/focus policy, ARIE SHOULD first reduce nonessential rendering, indexing, expensive scans, compilation and other competing local work. It SHOULD preserve eligible remote AI reasoning, inexpensive asynchronous context activity and authorized mission continuity when network/provider conditions permit. Pausing an already running local mission step or altering its deadline requires the task-resource policy, not the mere selection of a visual tier.
+
+**AW-PLT-150 — Idle acceleration without resource theft.** During stable resource headroom ARIE SHOULD raise effective local concurrency where measured throughput improves, while reserving capacity for UI input, system responsiveness, thermal headroom, available memory and sudden foreground work. Unused resources do not imply permission to exceed user limits or run unrequested tasks.
+
+**AW-PLT-151 — Resource fairness across missions.** Concurrent missions MUST be scheduled with declared priorities, bounded waiting, resource leases and starvation prevention. User-initiated foreground interactions SHOULD take precedence over speculative/background tasks without falsifying or abandoning their actual execution state.
+
+**AW-PLT-152 — GPU workload separation.** Rendering, local AI/GPU compute and external applications MUST be accounted for as different observable workload classes where telemetry allows. GPU memory exhaustion, device loss or foreground frame-time pressure MUST trigger safe adaptation of optional graphics or local compute; they MUST NOT imply remote API work has consumed local GPU resources.
+
+**AW-PLT-153 — Memory, disk and network pressure.** Background indexing, compilation, large document work, local caches and artifact processing MUST respect available memory and disk space, bounded queues, safe failure/recovery and network/provider limits. Pressure SHOULD prefer backpressure, reduced concurrency, scoped suspension or deferral over memory exhaustion, swap thrash and storage corruption.
+
+**AW-PLT-154 — Hysteresis and recovery.** Policy transitions MUST use smoothing, dwell windows, cooldowns, minimum hysteresis and explicit return-to-normal criteria. Scheduling MUST respond to sustained pressure without oscillating on sampling noise or leaving performance degraded after the pressure clears.
+
+**AW-PLT-155 — Pausing versus stopping.** ARIE proposals MUST differentiate slowing admission, preempting an eligible checkpointable worker, pausing a mission step, cancellation, and termination. Each carries distinct permissions, resume requirements, timeout/recovery behavior and canonical task-state events. An uncheckpointable or consequential operation MUST NOT be arbitrarily suspended if doing so risks state integrity.
+
+**AW-PLT-156 — User controls and precedence.** Users MUST be able to inspect and override relevant profiles (such as Automatic, Gaming/Focus, Balanced, and Max-Throughput), constrain local worker counts/budgets, control monitoring consent, restore defaults, and distinguish a user-locked policy from an automatic suggestion. Safety, data integrity, accessibility and authorized task limits precede optional throughput goals; overrides MUST NOT silently bypass these protections.
+
+**AW-PLT-157 — Resource decision evidence.** Every material policy revision SHOULD emit structured, privacy-safe records containing triggering measurements, unavailable signals, old/new budgets, policy version, recommendation origin (deterministic/model/user), validation result, affected workers, time, and observed outcome. Charter 09 owns the canonical event envelope; Charter 10 owns performance attribution and adaptive experiment evidence.
+
+**AW-PLT-158 — Evidence-backed adaptation.** ARIE MAY learn hardware-specific scheduling preferences through the AEP experiment and approval lifecycle, but MUST distinguish hypothesis, proposed policy, test result, active policy, and rolled-back policy. A single faster run, self-reported model confidence, or idle-only benchmark MUST NOT automatically establish a universal resource rule.
+
+**AW-PLT-159 — Hardware and context scope.** Learned policies MUST carry applicable device/topology, power state, driver, workload family, model/tool availability, confidence, evidence references and expiration/revalidation conditions. A rule measured on one machine MUST NOT silently be generalized to other hardware or users.
+
+**AW-PLT-160 — Safe startup and degraded mode.** Before sensors, policies or remote intelligence are ready, ARIE MUST use bounded conservative local defaults and remain usable offline. Device errors, telemetry gaps, stale measurements, API failures and configuration corruption MUST preserve authoritative task state and expose truthful degraded-policy status.
+
+### 20.2 Typed integration contracts and precedence
+
+The implementation MUST define interoperable, versioned schemas for these conceptual records. Field names are illustrative; schema ownership and actual serialization belong to an approved design specification.
+
+| Record | Minimum semantic fields | Owner / consumer |
+|---|---|---|
+| **ResourceSnapshot** | machine/session scope; sample window; observation source; metric value/unit; freshness; confidence/availability; privacy scope | Platform telemetry → ARIE, AEP |
+| **ResourcePolicy** | policy ID/version; user limits; mode; priority; protected headroom; cooldown; permitted resource classes | Existing Performance Governor/ARIE |
+| **ResourceRecommendation** | current evidence; intended budget change; model/deterministic origin; rationale; uncertainty; authorization requirement | ARIE advisory → validator |
+| **ResourceLease** | task/attempt/worker identity; resource class; units/limits; acquisition/expiry/release; actual observed use | Mission scheduler ↔ ARIE |
+| **PolicyDecisionEvent** | previous/new policy; cause; permission; effect; source references; outcome and reversibility | Charter 09 event pipeline; Charter 10 profiler |
+
+**AW-PLT-161 — Stable cross-system identity.** Resource leases and policy changes MUST correlate with canonical mission/task/attempt/agent IDs and AEP traces; no renderer or assistant summary may independently declare task completion based on a lease or policy transition.
+
+**AW-PLT-162 — Model guidance does not grant authority.** AI recommendations MUST be structurally validated and bounded by user authorization, security policy, task/resource authority and hardware capability. Malformed, unsupported or adversarial model suggestions MUST fail closed without preventing an authorized safe fallback.
+
+**AW-PLT-163 — Consistent local-versus-remote accounting.** AEP and the ARIE workspace MUST not attribute remote inference compute to local CPU/GPU metrics; remote model latency, local network traffic, local tokenization/context work and local tool execution MUST be independently observable where possible.
+
+**AW-PLT-164 — Cross-charter contracts.** Charter 05 owns mission lifecycle/scheduling, 06 owns Vela's user-facing attention and preferences, 08 owns experiential context retrieval, 09 owns event provenance/presentation, 10 owns profiler metrics/experiments, 13 owns ARIE/platform budgets, 14 owns privacy/permission policy, and 15 owns independent validation. Inconsistencies MUST be reconciled rather than implemented as competing ownership.
+
+### 20.3 Mandatory native ARIE demonstration matrix
+
+These scenarios supplement PLT-AT-01–20 and the existing capability-first acceptance catalog; mock simulations may test adapters but do not constitute native product acceptance.
+
+| ID | Native scenario | Required verified result |
+|---|---|---|
+| **PLT-ARIE-01** | Foreground game or demanding user app plus remote reasoning, local build and cinematic UI | Render/local build pressure reduced as authorized; remote AI quality and active task truth preserved; foreground frame-time/input impact measured |
+| **PLT-ARIE-02** | Sustained idle headroom and independent CPU-bound workers | Concurrency increases only if measured throughput improves without unacceptable p95/p99 UI response, memory or thermal impact |
+| **PLT-ARIE-03** | Alternating transient and sustained CPU/GPU pressure | Hysteresis avoids rapid mode thrashing; return-to-headroom restores eligible capacity |
+| **PLT-ARIE-04** | GPU unavailable, sensor fault, network lost or power-state change | Bounded fallback, truthful unknowns, safe task continuation and recoverability |
+| **PLT-ARIE-05** | Concurrent missions and competing disk/RAM resources | Fair scheduling, enforced limits, lease cleanup, no starvation or corrupted artifacts |
+| **PLT-ARIE-06** | Unauthorized model-proposed budget/priority expansion | Rejected by deterministic validator and recorded with source/permission |
+| **PLT-ARIE-07** | Restart during deferred/checkpointed work | Policy/task recovery honors actual persisted state; no duplicate side effect or false completion |
+| **PLT-ARIE-08** | Learned performance policy versus baseline on held-out workload | Improvement and quality/resource effects measured; reject, revert and revalidate ineffective policies |
+
+**AW-PLT-165 — Benchmark design.** Native ARIE benchmarks MUST declare hardware/driver/OS, foreground workload, resource baselines, sampling overhead, provider conditions, repeats, target thresholds, noise and confidence before interpretation. Record p50/p95 mission and UI timing where applicable, concurrency, frame-time tails, actual contention, and quality/verification outcomes.
+
+**AW-PLT-166 — No optimization by capability removal.** Lower model effort, skipped verification, missing context, suppressed tool access or nonfunctioning visuals MUST NOT be counted as an efficiency success. Legitimate independent visual quality scaling remains permitted under AW-PLT-047 and AW-PLT-133.
+
+**AW-PLT-167 — AEP/ARIE compatibility gate.** Releasing adaptive resource learning requires valid experimental provenance, safe policy rollback, user-visible reasons, approved local permission boundaries, and the independent scenarios required by Charter 15. Instrumentation must demonstrate that it does not materially worsen foreground responsiveness.
+
+**AW-PLT-168 — Implementation evidence and no false status.** Documentation publication, planned interfaces and simulated resource dashboards MUST NOT be called an implemented ARIE. Native packaging, telemetry provenance, actual resource-policy enforcement and representative tests are necessary before claiming operational support.
+
+**Acceptance:** ARIE must demonstrably accelerate authorized work when real headroom exists, reduce interference when the user is busy, and preserve the capability, continuity, safety, observability and verification of Vela's underlying intelligence.
