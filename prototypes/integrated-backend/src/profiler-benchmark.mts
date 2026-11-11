@@ -1,7 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
-import { setImmediate as yieldToScheduler } from 'node:timers/promises';
+import { setImmediate as yieldToScheduler, setTimeout as delay } from 'node:timers/promises';
 import { MissionService, type MissionServiceHost } from './mission-service.mts';
 import { projectMissionExecution } from './execution-profiler.mts';
+import { nativeMissionExecutors, nativeMissionPlan } from './mission-native.mts';
 import type { MissionPlan, MissionTaskPlan } from './mission-contracts.mts';
 
 const modes = ['off', 'minimal', 'full'] as const;
@@ -9,11 +10,13 @@ const scope = { projectId: null, workspaceId: 'profiler-benchmark' };
 const task = (id: string, dependencies: string[] = []): MissionTaskPlan => ({
   id, dependencies, objective: id, criterion: id, claims: [], executor: 'fixture', maxAttempts: 1, timeoutMs: 2000,
 });
-const plan: MissionPlan = {
+const fixturePlan: MissionPlan = {
   scope, objective: 'Synthetic execution profiler load',
   tasks: [task('left'), task('right'), task('join', ['left', 'right'])], criteria: ['left', 'right', 'join'],
 };
-const missionsPerBatch = 24;
+const native = process.argv.includes('--native');
+const plan = native ? nativeMissionPlan('Measure CPU and RAM', scope)! : fixturePlan;
+const missionsPerBatch = native ? 3 : 24;
 
 async function sample(mode: typeof modes[number]) {
   const db = new DatabaseSync(':memory:');
@@ -30,7 +33,7 @@ async function sample(mode: typeof modes[number]) {
         throw error;
       }
     },
-    executors: {
+    executors: native ? nativeMissionExecutors : {
       fixture: {
         lane: 'native', replaySafe: true, available: () => true,
         async run() { return { source: 'synthetic-benchmark', value: true }; },
@@ -46,17 +49,39 @@ async function sample(mode: typeof modes[number]) {
       const { id } = service.create('bench-' + i, plan);
       ids.push(id);
       await yieldToScheduler();
-      if (service.read(id, scope).outcome !== 'verified') throw new Error('fixture mission did not verify');
+      let report = service.read(id, scope);
+      if (native) {
+        const deadline = performance.now() + 7000;
+        while (['queued', 'running'].includes(report.outcome) && performance.now() < deadline) {
+          await delay(10);
+          report = service.read(id, scope);
+        }
+      }
+      if (report.outcome !== 'verified' || report.profile.providerCalls !== 0) throw new Error('benchmark mission did not verify');
     }
     const executionMs = performance.now() - start;
     const cpu = process.cpuUsage(cpuStart);
     const projectingAt = performance.now();
-    const profiles = ids.map(id => projectMissionExecution(service.read(id, scope)));
+    const reports = ids.map(id => service.read(id, scope));
+    const profiles = reports.map(report => projectMissionExecution(report));
     const projectionMs = performance.now() - projectingAt;
     const { bytes } = db.prepare('SELECT sum(length(CAST(json AS BLOB))) AS bytes FROM vela_missions').get()!;
-    return { mode, executionMs, cpuMs: (cpu.user + cpu.system) / 1000, projectionMs, journalJsonBytes: bytes,
-      measuredAttempts: profiles.reduce((count, profile) => count + profile.attempts.filter(attempt => attempt.interval).length, 0),
-      phasedAttempts: profiles.reduce((count, profile) => count + profile.attempts.filter(attempt => attempt.phases?.verification).length, 0) };
+    if (native) for (const report of reports) {
+      const inputs = ['cpu', 'ram'].map(id => report.tasks.find(task => task.id === id)?.attempts.at(-1));
+      const join = report.tasks.find(task => task.id === 'report')?.attempts.at(-1);
+      if (inputs[0]?.evidence?.source !== 'node:os.cpus' || inputs[1]?.evidence?.source !== 'node:os.totalmem+freemem' ||
+        join?.evidence?.source !== 'aerynth.mission.journal' ||
+        ![...inputs, join].every(attempt => attempt?.verification?.passed && attempt.evidence && attempt.verification.evidenceIds.includes(attempt.evidence.id)) ||
+        JSON.stringify(join.evidence.value) !== JSON.stringify(inputs.map(attempt => ({ id: attempt!.evidence!.id,
+          source: attempt!.evidence!.source, attemptId: attempt!.id })))) throw new Error('native benchmark evidence did not verify');
+    }
+    const measuredAttempts = profiles.reduce((count, profile) => count + profile.attempts.filter(attempt => attempt.interval).length, 0);
+    const phasedAttempts = profiles.reduce((count, profile) => count + profile.attempts.filter(attempt => attempt.phases?.verification).length, 0);
+    const expectedAttempts = missionsPerBatch * plan.tasks.length;
+    if (measuredAttempts !== (mode === 'off' ? 0 : expectedAttempts) || phasedAttempts !== (mode === 'full' ? expectedAttempts : 0))
+      throw new Error('benchmark profile coverage did not match mode');
+    return { mode, executionMs, cpuMs: (cpu.user + cpu.system) / 1000, projectionMs, journalJsonBytes: Number(bytes),
+      verifiedMissions: reports.length, measuredAttempts, phasedAttempts };
   } finally {
     await service.close();
     db.close();
@@ -70,11 +95,13 @@ for (let batch = 0; batch < 9; batch++) {
 }
 const medians = modes.map(mode => {
   const group = samples.filter(row => row.mode === mode);
-  const median = (key: 'executionMs' | 'cpuMs' | 'projectionMs') =>
+  const median = (key: 'executionMs' | 'cpuMs' | 'projectionMs' | 'journalJsonBytes') =>
     group.map(row => row[key]).sort((a, b) => a - b)[Math.floor(group.length / 2)];
   return { mode, batches: group.length, executionMs: median('executionMs'), cpuMs: median('cpuMs'),
-    projectionMs: median('projectionMs'), measuredAttemptsPerBatch: group[0].measuredAttempts,
+    projectionMs: median('projectionMs'), journalJsonBytes: median('journalJsonBytes'), measuredAttemptsPerBatch: group[0].measuredAttempts,
     phasedAttemptsPerBatch: group[0].phasedAttempts };
 });
-console.log(JSON.stringify({ node: process.version, platform: process.platform, missionsPerBatch, samples, medians,
-  boundary: 'Synthetic verified three-task DAG on the real scheduler and in-memory SQLite. Off disables added lifecycle clock samples; existing receipts remain enabled. Projection time includes scoped readback.' }));
+console.log(JSON.stringify({ node: process.version, platform: process.platform, workload: native ? 'native-cpu-ram' : 'synthetic',
+  missionsPerBatch, samples, medians, providerCalls: 0,
+  boundary: (native ? 'Real host CPU and RAM reads with a verified join. ' : 'Synthetic verified three-task DAG. ') +
+    'Real scheduler with in-memory SQLite under ambient host load. Off disables added lifecycle clock samples. Projection time includes scoped readback. Renderer and physical disk overhead are unmeasured.' }));
