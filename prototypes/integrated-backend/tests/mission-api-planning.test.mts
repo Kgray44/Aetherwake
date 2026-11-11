@@ -19,9 +19,9 @@ import { docxFixture } from '../../block-library/tests/media-fixtures.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
 const marker='SYNTHETIC_ONLY_MISSION_API_KEY';
 const graph={tasks:[{capability:'cpu',after:[]},{capability:'ram',after:[]},{capability:'backend',after:['cpu','ram']}],unsupported:['Server tick timings and logs are unavailable.']};
-function response(content:string,model:string,terminal:string|null=content) {
+function response(content:string,model:string,terminal:string|null=content, fragments: readonly string[] = [content]) {
   const id='synthetic-'+randomUUID(),output=[{type:'message',id:'message-'+id,role:'assistant',status:'completed',content:terminal===null?[{type:'refusal',refusal:'Synthetic terminal refusal'}]:[{type:'output_text',text:terminal,annotations:[]}]}];
-  return new Response([{type:'response.created',response:{id,status:'in_progress'}},{type:'response.output_text.delta',delta:content},{type:'response.completed',response:{id,status:'completed',model,output,
+  return new Response([{type:'response.created',response:{id,status:'in_progress'}},...fragments.map(delta=>({type:'response.output_text.delta',delta})),{type:'response.completed',response:{id,status:'completed',model,output,
     usage:{input_tokens:100,output_tokens:40,total_tokens:140}}}].map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
 }
 function fixture(velaHistoryContext = false, nativeMedia = false, documents?: NativeDocumentTextServices, liveCredential?: string) {
@@ -741,11 +741,13 @@ test('native adaptive CIE requires qualified stages and reviews the resolved mod
   try {
     await f.ready();
     const intent = 'When should I inspect the fictional pump?';
+    let reviewChecks = 0;
     const admission = { configurationVersion: 1, models: ['gpt-6.1-sol', 'gpt-6-luna'], authorize: (review: {
       model: string; purpose: string; qualification?: { evidence: string };
     }) => {
       assert.equal(review.purpose, 'investigation');
       assert.equal(review.qualification?.evidence, 'simulated');
+      reviewChecks++;
       return review.model === 'gpt-6-luna';
     } };
     assert.equal((await f.core.investigateVelaHistory(intent, admission)).state, 'unavailable');
@@ -780,7 +782,8 @@ test('native adaptive CIE requires qualified stages and reviews the resolved mod
     f.replies.push(body => {
       elapsed += 61_000;
       assert.deepEqual(runtime.knownModels(), [], 'the model catalog expires after perception dispatch');
-      return reply(interpreted)(body);
+      const text = JSON.stringify(interpreted);
+      return response(text, body.model, text, [...text]);
     }, body => {
       assert.ok(runtime.knownModels().includes(body.model), 'assessment dispatch refreshes the expired catalog');
       return reply({ version: 3, clarification: '', assessment: [
@@ -790,6 +793,7 @@ test('native adaptive CIE requires qualified stages and reviews the resolved mod
     const result = await f.core.investigateVelaHistory(intent, { ...admission, ...callerMetadata });
     assert.equal(result.state, 'assessed');
     assert.equal(f.requests.length, 6);
+    assert.ok(reviewChecks < 100, 'buffered proposal deltas do not each rerun the source review');
     assert.equal(runtime.missionCognitiveReceipts(callerMetadata.planningRequestId, 'unrelated-mission'), undefined);
     f.replies.push(body => {
       elapsed += 61_000;

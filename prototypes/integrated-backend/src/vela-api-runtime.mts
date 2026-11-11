@@ -90,6 +90,7 @@ export interface VelaApiRun {
   /** Shares the canonical admission pool; never creates a second runtime or conversation. */
   lane?: 'mission-specialist';
   oneUse?: true;
+  bufferedText?: true;
   validate(): void;
   stage?(executionId: string, review: DispatchReview): void | (() => void);
   event?(event: TurnEvent): void;
@@ -331,10 +332,19 @@ export class VelaApiRuntime {
         const transport = new ResponsesTransport({ ...(this.options.test ? { fetch: this.options.test.fetch } : {}), limits: { outputBytes: 65536, timeoutMs: 45000 },
           ...(input.observeTransport ? { observeTiming: (timing: TurnTransportTiming) => input.observeTransport?.(executionId, timing) } : {}),
           onEvent: event => {
+            // Internal CIE text is buffered by the transport. Recheck full source proofs
+            // at dispatch and completion, and never publish these partial strings.
+            if (input.bufferedText && input.oneUse && input.outputSchema && !input.event && !input.tools && !input.weatherTool &&
+              (event.type === 'provider/text-delta' || event.type === 'provider/refusal-delta')) {
+              check(!combined.aborted, 'vela_execution_cancelled');
+              this.validate(input.version);
+              input.observeEventType?.(event.type);
+              return;
+            }
             fence();
             input.observeEventType?.(event.type);
             if (input.event) input.event(event);
-            else this.options.observe?.event(event,input.requestId);
+            else this.options.observe?.event(event, input.requestId);
           }, native: {
             authorize: async review => {
               exactReview(review); check(!admitted, 'api_execution_already_dispatched');
@@ -533,6 +543,7 @@ export class VelaApiRuntime {
   }
 
   async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;
+    bufferedText?: true;
     missionCognition?: VelaMissionCognitionAttribution;
     /** Native binding for a reviewed cognitive payload and its current source provenance. */
     binding?: { configurationVersion: number; contextDigest: string };
@@ -551,7 +562,7 @@ export class VelaApiRuntime {
     const { result } = await this.run({ requestId: input.requestId, version, model, prompt,
       instruction: input.instruction, ...(reasoningEffort ? { reasoningEffort } : {}),
       contextDigest: binding?.contextDigest ?? digest(prompt), ...(binding ? { oneUse: true as const } : {}),
-      missionCognition: input.missionCognition,
+      missionCognition: input.missionCognition, bufferedText: input.bufferedText,
       outputSchema: input.schema,...(input.weatherTool?{weatherTool:input.weatherTool}:{}),validate: input.validate,
       observeEventType: input.observeEventType, observeTransport: input.observeTransport }, signal);
     input.onResult?.(result);

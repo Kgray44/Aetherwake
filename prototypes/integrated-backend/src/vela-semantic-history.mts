@@ -122,7 +122,7 @@ export function investigateVelaHistoryWithApi(vela: Pick<VelaService, 'investiga
         (assessment && !api.isStructuredQualificationCurrent(assessment))) throw new Error('semantic_history_disclosure_denied');
     };
     const proposal = await api.structuredProposal({ requestId: randomUUID(), model, payload: call, instruction,
-      binding: { configurationVersion, contextDigest }, schema, validate, onResult: observations?.observeResult,
+      binding: { configurationVersion, contextDigest }, schema, validate, bufferedText: true, onResult: observations?.observeResult,
       ...(observations ? { missionCognition: {
         owner: { kind: 'planning', requestId: observations.planningRequestId },
         stage: call.stage === 'interpret' ? 'perception' : 'evidence-assessment',
@@ -168,7 +168,7 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
   const reviewedSourceTitles = discovery?.sources.map(source => source.title);
   const scoped: Pick<VelaService, 'investigateHistory'> = {
     investigateHistory(request, disclose, cancel) {
-      const current = (source: VelaSemanticHistorySource) => approved.has(source as ReviewedEvidenceSource) && authorize();
+      const isApproved = (source: VelaSemanticHistorySource) => approved.has(source as ReviewedEvidenceSource);
       return investigateSemanticHistory(request, {
         ...(discovery?.missionGap ? { timeBudgetMs: 75_000 } : {}),
         selected: () => ({ sources, scan: sources.some(source => source.partial) ? 'partial' : 'bounded' }),
@@ -178,11 +178,11 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
           return { sources: matches.slice(0, 3).map(id => candidates.get(id)!), scan: matches.length > 3 ? 'partial' : scan };
         },
         ...(discovery ? { recent: () => ({ sources: discovery.sources.slice(0, 2), scan }) } : {}),
-        isCurrent: current,
+        isCurrent: source => isApproved(source) && authorize(),
         disclose: (call, sources, abort) => disclose(
           call.stage === 'interpret' && reviewedSourceTitles ? { ...call, reviewedSourceTitles,
             ...(discovery?.missionGap ? { reviewedMissionGap: discovery.missionGap } : {}) } : call,
-          sources, abort, () => authorize() && sources.every(current)),
+          sources, abort, () => authorize() && sources.every(isApproved)),
       }, cancel);
     },
   };
