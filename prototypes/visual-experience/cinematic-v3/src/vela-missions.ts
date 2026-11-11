@@ -280,6 +280,10 @@ export function createVelaMissionView(
         "A reviewed note changed. Request a new plan before starting the mission.",
       mission_planning_context_unavailable:
         "Vela could not assess the selected sources. No mission was started.",
+      mission_planning_context_invalid:
+        "Vela could not verify the model’s assessment against the reviewed sources. No mission was started.",
+      mission_planning_context_timeout:
+        "The evidence review ran out of time before a plan could be prepared.",
       mission_team_not_found: "This team is no longer available. Refresh the team library.",
       mission_team_scope_denied: "Team templates are unavailable in this workspace.",
       mission_team_version_conflict: "This team changed. Reload its saved version before continuing.",
@@ -791,7 +795,7 @@ export function createVelaMissionView(
     if (!review) return null;
     const { preview, requestId, agentProfileId } = review;
     if ("kind" in preview) return renderPlanningOffer(preview);
-    const { plan, executors, externalReview, localReview } = preview;
+    const { plan, executors, externalReview, localReview, objectiveReview } = preview;
     const section = el("section", "vela-core-plan vela-mission-preview");
     const heading = el("h3", undefined, "Review mission");
     if (plan.team) {
@@ -799,7 +803,9 @@ export function createVelaMissionView(
       heading.dataset.missionFocus = "team-review-heading";
     }
     section.append(heading, el("p", undefined, plan.objective));
-    if(plan.coverage)section.append(el("p","vela-core-meta","Partial investigation: "+plan.coverage.limitations.join(' ')+' The original objective will remain blocked until the missing evidence is available.'));
+    if (objectiveReview) section.append(el("p", "vela-core-meta",
+      "On Start, confirm whether these results cover your full objective. Each result must pass verification."));
+    else if(plan.coverage)section.append(el("p","vela-core-meta","Partial investigation: "+plan.coverage.limitations.join(' ')+' The original objective will remain blocked until the missing evidence is available.'));
     if (plan.team) section.append(teamLabel(plan.team));
     if (localReview) section.append(el("p", "vela-core-meta",
       "Start opens a native picker for up to four tracked Node tests. You will review the exact checkout and command before it runs."));
@@ -929,13 +935,19 @@ export function createVelaMissionView(
     const plan = button("Review planning request", "plan-mission", () => { void preparePlan(offer); });
     plan.classList.add("vela-core-primary");
     plan.disabled = commandPending || !offer.planner;
-    controls.append(plan, button("Dismiss preview", "dismiss-preview", () => {
+    controls.append(plan);
+    if (offer.planner?.projectCheck) {
+      const choose = button("Choose tracked tests first", "plan-mission-with-tests", () => { void preparePlan(offer, true); });
+      choose.disabled = commandPending;
+      controls.append(choose);
+    }
+    controls.append(button("Dismiss preview", "dismiss-preview", () => {
       if (!commandPending) { review = null; render(); }
     }));
     section.append(controls);
     return section;
   }
-  async function preparePlan(offer: MissionPlanningOffer) {
+  async function preparePlan(offer: MissionPlanningOffer, chooseProjectTests?: true) {
     const pending = review;
     if (commandPending || !visible || pending?.preview !== offer || !offer.planner) return;
     const generation = epoch;
@@ -945,6 +957,7 @@ export function createVelaMissionView(
     try {
       const result = await command({ name: "plan",
         input: { objective: offer.objective, fingerprint: offer.fingerprint, requestId: pending.requestId,
+          ...(chooseProjectTests ? { chooseProjectTests } : {}),
           ...(offer.notes ? { noteIds: offer.notes.map(note => note.id) } : {}),
           ...(offer.files ? { fileIds: offer.files.map(file => file.id) } : {}),
           ...(offer.projectEvidence ? { projectEvidence: true } : {}) } });

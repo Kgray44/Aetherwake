@@ -9,8 +9,9 @@ import { missionCompletion, missionMeasurementAnswer } from './mission-native.mt
 import { buildMissionRevision } from './mission-revision.mts';
 import type { ResourceLease, ResourceLeaseRequest } from './resource-policy.mts';
 import { projectExecutiveCheckpoint } from './mission-executive.mts';
+import { reviewedMissionObjectiveVerified, reviewableMissionObjective } from './mission-objective-review.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
-  type MissionExecutionContext, type MissionExecutor, type MissionObjectiveAssessment, type MissionPlan, type MissionProjection,
+  type MissionExecutionContext, type MissionExecutor, type MissionObjectiveAssessment, type MissionObjectiveReview, type MissionPlan, type MissionProjection,
   type MissionAdmission, type MissionAttempt, type MissionAttemptPhaseTiming, type MissionReadyBlocker, type MissionReadyQueueEvidence,
   type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
   type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomCard, type MissionWorkroomDashboard,
@@ -46,6 +47,16 @@ const stamp = () => new Date().toISOString();
 const digest = (input: unknown) => createHash('sha256').update(JSON.stringify(input)).digest('hex');
 const makeTask = (plan: MissionTaskPlan): MissionTask => ({ ...plan, queuedAt: stamp(), state: 'queued', priority: 0, attempts: [] });
 const own = (table: object, key: string) => Object.hasOwn(table, key);
+function publicMissionTask(task: MissionTask): MissionTask {
+  if (task.executor !== 'codex.project-check') return task;
+  const { projectCheck: _localSelection, ...visible } = task;
+  return { ...visible, attempts: task.attempts.map(attempt => {
+    const evidence = attempt.evidence;
+    if (!evidence?.value || typeof evidence.value !== 'object') return attempt;
+    const { head: _checkout, inputDigest: _digest, ...value } = evidence.value as Record<string, unknown>;
+    return { ...attempt, evidence: { ...evidence, value } };
+  }) };
+}
 /** Shared scoped evidence summary. Evidence bodies and profile instructions stay with their owners. */
 function workroomEvidence(task: MissionTask, attempt?: MissionAttempt): Pick<MissionAgentAttempt,
   'evidenceId' | 'source' | 'observedAt' | 'verification' | 'passed' | 'findings' | 'citations'> {
@@ -279,13 +290,17 @@ export class MissionService {
       'mission_queue_full');
   }
 
-  create(requestId: string, plan: MissionPlan, intakeMonotonicMs?: number): MissionProjection {
+  create(requestId: string, plan: MissionPlan, intakeMonotonicMs?: number, objectiveReview?: MissionObjectiveReview): MissionProjection {
     this.requireOpen();
     check(identifier(requestId), 'invalid_mission_request');
     validateMissionPlan(plan, this.host.executors);
     check(this.host.authorized(plan.scope), 'mission_scope_denied');
     check(this.host.planningContextCurrent?.(plan) !== false, 'mission_planning_context_changed');
-    const fingerprint = digest(plan);
+    if (objectiveReview) {
+      const expected = reviewableMissionObjective(plan, objectiveReview.planFingerprint);
+      check(expected && digest(expected) === digest(objectiveReview), 'mission_objective_review_changed');
+    }
+    const fingerprint = digest(objectiveReview ? { ...plan, objectiveReview } : plan);
     let created = false;
     const m = this.host.atomic(() => {
       const existing = this.host.db.prepare('SELECT request_digest,json FROM vela_missions WHERE request_id=?').get(requestId);
@@ -294,7 +309,7 @@ export class MissionService {
         this.requireAccess(value, plan.scope);
         const { originConversationId: _origin, ...legacyPlan } = plan;
         check(existing.request_digest === fingerprint ||
-          value.originConversationId === undefined && existing.request_digest === digest(legacyPlan), 'mission_request_conflict');
+          !objectiveReview && value.originConversationId === undefined && existing.request_digest === digest(legacyPlan), 'mission_request_conflict');
         return value;
       }
       this.capacity();
@@ -303,6 +318,7 @@ export class MissionService {
         criteria: [...plan.criteria], createdAt: stamp(), disposition: 'active', revision: 0, planRevision: 1, concurrency: 2,
         tasks: plan.tasks.map(makeTask), events: [], ...(plan.planning ? { planning: plan.planning } : {}),
         ...(plan.coverage?{coverage:structuredClone(plan.coverage)}:{}),
+        ...(objectiveReview ? { objectiveReview: structuredClone(objectiveReview) } : {}),
         ...(plan.team ? { team: plan.team } : {}),
         ...(plan.originConversationId ? { originConversationId: plan.originConversationId } : {}) };
       this.event(value, { kind: 'created' }, intakeMonotonicMs);
@@ -334,7 +350,7 @@ export class MissionService {
           (!attempt.context || this.contextIsCurrent(mission, task, attempt, checked, true));
       })) return null;
     const assessment = mission.objectiveAssessment?.planRevision === mission.planRevision ? mission.objectiveAssessment : undefined;
-    return { ...missionCompletion(mission), ...(assessment ? { assessment: {
+    return { ...missionCompletion(mission.objectiveReview ? this.project(mission) : mission), ...(assessment ? { assessment: {
       model: assessment.model, planRevision: assessment.planRevision,
       gaps: assessment.findings.filter(finding => finding.status === 'unverified').map(finding => finding.statement),
     } } : {}) };
@@ -707,6 +723,8 @@ export class MissionService {
       ...(m.retiredTasks ? { retiredTasks: m.retiredTasks.map(visibleTask) } : {}) };
     if (m.objectiveAssessment && (m.planRevision !== m.objectiveAssessment.planRevision ||
       m.disposition === 'cancelled' || m.tasks.some(task => task.state !== 'verified'))) delete m.objectiveAssessment;
+    if (m.objectiveReview && m.tasks.every(task => task.state === 'verified') &&
+      this.host.planningContextCurrent?.(m) === true && reviewedMissionObjectiveVerified(m)) delete m.coverage;
     const outcome = m.tasks.some(t => t.state === 'cancelling') ? 'cancelling' :
       busy(m) ? 'running' : m.tasks.some(t => t.state === 'uncertain') ? 'uncertain' :
       m.disposition === 'cancelled' ? 'cancelled' : m.tasks.every(t => t.state === 'verified') ? m.coverage?'blocked':'verified' :
@@ -741,7 +759,9 @@ export class MissionService {
       Date.parse(m.events.findLast(event => event.kind !== 'workroom')!.time);
     const answer = missionMeasurementAnswer(m.tasks);
     const readyQueueObservation = includeReadyQueue ? this.projectReadyQueue(m, waits) : undefined;
-    return { ...m, outcome, ...(answer.length ? { answer } : {}), waits,
+    return { ...m, tasks: m.tasks.map(publicMissionTask),
+      ...(m.retiredTasks ? { retiredTasks: m.retiredTasks.map(publicMissionTask) } : {}),
+      outcome, ...(answer.length ? { answer } : {}), waits,
       ...(readyQueueObservation ? { readyQueueObservation } : {}),
       ...(admission ? { admission: structuredClone(admission) } : {}), profile: {
       elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0) +

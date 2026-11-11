@@ -11,7 +11,7 @@ import { runInNewContext } from "node:vm";
 test(
   "actual desktop stdio host carries private review to Core without granting or starting a provider turn",
   { timeout: 20000 },
-  async () => {
+  async ({ signal: testSignal }) => {
     const temporaryRoot = resolve(tmpdir()),
       directory = mkdtempSync(
         join(temporaryRoot, "aerynth-native-review-wire-"),
@@ -27,41 +27,54 @@ test(
       ],
       { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
     );
-    const pending = new Map<number, (value: any) => void>();
+    const pending = new Map<number, (error: Error | null, value?: any) => void>();
     let serial = 0,
-      errorText = "";
+      errorText = "",
+      terminalError: Error | undefined;
+    const failPending = (error: Error) => {
+      terminalError ??= error;
+      for (const settle of pending.values()) settle(terminalError);
+    };
+    child.on("error", failPending);
+    child.stdin.on("error", failPending);
     child.stderr.on("data", (chunk) => {
       errorText = (errorText + String(chunk)).slice(-4000);
     });
     const lines = createInterface({ input: child.stdout });
     lines.on("line", (line) => {
       const reply = JSON.parse(line);
-      if (typeof reply.id === "number") pending.get(reply.id)?.(reply);
+      if (typeof reply.id === "number") pending.get(reply.id)?.(null, reply);
     });
-    const request = (command: string, input: unknown) =>
+    const request = (command: string, input: unknown, startup = false) =>
       new Promise<any>((accept, reject) => {
         const id = ++serial,
-          // The initial reply also includes cold host startup.
-          replyTimeoutMs = id === 1 ? 10000 : 5000,
-          timer = setTimeout(() => {
-            pending.delete(id);
-            reject(Error("desktop_host_timeout (" + command + "): " + errorText));
-          }, replyTimeoutMs);
-        pending.set(id, (value) => {
-          clearTimeout(timer);
-          pending.delete(id);
-          accept(value);
+          deadline = startup ? testSignal : AbortSignal.any([testSignal, AbortSignal.timeout(5000)]);
+        const abort = () => pending.get(id)?.(Error(
+          `desktop_host_${startup ? "startup_" : ""}timeout (${command}): ${errorText}`,
+        ));
+        pending.set(id, (error, value) => {
+          if (!pending.delete(id)) return;
+          deadline.removeEventListener("abort", abort);
+          if (error) reject(error);
+          else accept(value);
         });
+        if (terminalError) return pending.get(id)?.(terminalError);
+        if (deadline.aborted) return abort();
+        deadline.addEventListener("abort", abort, { once: true });
         child.stdin.write(JSON.stringify({ id, command, input }) + "\n");
       });
     let closed = false;
     const exited = new Promise<void>((accept) =>
-      child.once("close", () => {
+      child.once("close", (code, signal) => {
         closed = true;
+        failPending(Error(`desktop_host_closed (${code ?? signal}): ${errorText}`));
         accept();
       }),
     );
     try {
+      // A Core-backed read proves the worker is ready before the RPC deadlines begin.
+      const startup = await request("snapshot", {}, true);
+      assert.equal(startup.result?.schemaVersion, 1);
       const rejected = await request("velaNativeReview", {
         previewId: "unknown-preview",
         signature: "not-a-grant",

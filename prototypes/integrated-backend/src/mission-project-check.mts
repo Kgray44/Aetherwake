@@ -1,12 +1,13 @@
 import type { ProviderPort } from './contracts.mts';
 import type { MissionExecutor } from './mission-contracts.mts';
-import { admitVelaFileEditAsync } from './vela-file-edit.mts';
+import { admitVelaFileEditAsync, type FileEditAdmission } from './vela-file-edit.mts';
 import { planMissionProjectCheck } from './mission-project-check-planner.mts';
 import { interpretVelaProjectCheck } from './vela-project-check.mts';
 
 interface ProjectCheckHost {
   runner: ProviderPort['projectChecks'];
   privateRoot?: string;
+  fileEditAdmission?: FileEditAdmission;
   digest(value: unknown): string;
   lease(): (() => void) | null;
 }
@@ -34,10 +35,11 @@ export function createMissionProjectCheck(host: ProjectCheckHost): MissionExecut
         stop.throwIfAborted();
         if (!await runner.ready()) return blocked('codex_read_only_sandbox_unavailable');
         stop.throwIfAborted();
-        await admitVelaFileEditAsync(selected, host.privateRoot, stop);
+        if (!host.fileEditAdmission) await admitVelaFileEditAsync(selected, host.privateRoot, stop);
         stop.throwIfAborted();
         const plan = await planMissionProjectCheck(target.paths, host.privateRoot);
         if (host.digest(plan) !== target.digest) return blocked('reviewed_check_changed');
+        host.fileEditAdmission?.(plan.cwd, host.privateRoot);
         validatePlanningContext?.();
         stop.throwIfAborted();
         dispatched = true;

@@ -2,17 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCipheriv,createDecipheriv,createHash,randomBytes,randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync,rmSync,writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { crc32, deflateSync } from 'node:zlib';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
 import { projectMissionExecution, type MissionExecutionProfile } from '../src/execution-profiler.mts';
 import { nativeMissionExecutors, missionResultAvailable } from '../src/mission-native.mts';
-import type { MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
+import type { MissionExecutor,MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
-import type { VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
+import type { ProviderPort, VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
+import { createMissionProjectCheck } from '../src/mission-project-check.mts';
+import { planningDigest } from '../../vela-core/src/codex-planning-adapter.mts';
 import type { VelaRequest } from '../../vela-core/src/contracts.ts';
 import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
 import type { NativeDocumentTextServices } from '../src/document-text-host.mts';
@@ -565,6 +568,54 @@ test('Executive reviews a real native mission checkpoint through the synthetic R
   } finally { await f.close(); }
 });
 
+test('native Executive specialist advice is visible without starting a specialist', async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    const { missionExecutors } = f.core as unknown as { missionExecutors: Record<string, MissionExecutor> };
+    const ram = missionExecutors['sample.ram'];
+    missionExecutors['sample.ram'] = {
+      ...ram,
+      verify: () => ({ passed: false, detail: 'Controlled failure of memory verification.' }),
+    };
+    const objective = 'Measure CPU and RAM';
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    const started = await f.core.command('missions', { name: 'start',
+      input: { objective, requestId: randomUUID(), fingerprint: preview.fingerprint } }) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id: started.id } }) as Promise<MissionProjection>;
+    let settled = await read();
+    for (let attempt = 0; attempt < 150 && ['queued', 'running'].includes(settled.outcome); attempt++) {
+      await new Promise(done => setTimeout(done, 10));
+      settled = await read();
+    }
+    const task = settled.tasks.find(row => row.executor === 'sample.ram')!;
+    assert.equal(task.state, 'failed');
+    const request = { id: started.id, revision: settled.revision, triggerSeq: settled.events.findLast(row => row.kind === 'settled')!.seq };
+    const review = await f.core.command('missionExecutiveReview', request);
+    const handle = review.packet.tasks.find(row => row.executor === 'sample.ram')!.handle;
+    f.replies.push(body => {
+      assert.ok(body.text.format.schema.properties.action.enum.includes('recommend-specialist'));
+      assert.equal(body.tools, undefined);
+      return response(JSON.stringify({ version: 1, action: 'recommend-specialist', target: handle, related: [],
+        reason: 'An operating-system diagnostics specialist could review the memory sample and verifier.' }), body.model);
+    });
+    const require = createRequire(import.meta.url);
+    const { reviewMissionExecutive } = require('../../visual-experience/cinematic-v3/native/mission-executive-broker.cjs');
+    const broker = { request, parent: {}, call: f.core.command.bind(f.core), isCurrent: () => true, allowWrite: async () => true };
+    await assert.rejects(reviewMissionExecutive({ ...broker, reviewProvider: async () => false }), /mission_review_declined/);
+    assert.equal(f.requests.length, 0);
+    const { result } = await reviewMissionExecutive({ ...broker, reviewProvider: async () => true }) as
+      Awaited<ReturnType<typeof f.core.command<'missionExecutiveReviewed'>>>;
+    assert.equal(result.state, 'advisory');
+    if (result.state !== 'advisory' || result.action !== 'recommend-specialist') assert.fail();
+    assert.equal(result.taskId, task.id);
+    assert.equal(f.requests.length, 1);
+    const after = await read();
+    assert.equal(after.revision, settled.revision);
+    assert.deepEqual(after.tasks, settled.tasks);
+  } finally { await f.close(); }
+});
+
 test('Executive assessment records canonical observations and unresolved objective gaps across restart', async () => {
   const f = fixture();
   try {
@@ -650,6 +701,232 @@ test('reviewed API mission planning rejects a terminal response that disagrees w
     await assert.rejects(f.plan(offer), /vela_api_proposal_unconfirmed/);
     assert.equal(f.requests.length, 1);
     assert.deepEqual(await f.core.command('missions', { name: 'list', input: {} }), []);
+  } finally { await f.close(); }
+});
+
+test('preselected tracked tests bind provider review and Start without disclosing local checkout data',
+  { skip: process.platform !== 'win32' }, async () => {
+  const f = fixture(true);
+  const base = resolve(homedir());
+  const repo = mkdtempSync(join(base, 'aerynth-reviewed-tests-'));
+  try {
+    const path = join(repo, 'harness.test.mjs'), secondPath = join(repo, 'alternative.test.mjs');
+    const source = 'export const observed = true;\n';
+    writeFileSync(path, source);
+    writeFileSync(secondPath, source);
+    const git = (...args: string[]) => execFileSync('git.exe', ['-C', repo, '-c', 'core.hooksPath=NUL', ...args],
+      { stdio: 'pipe', windowsHide: true, timeout: 5000 });
+    git('init', '-q', '--template=');
+    git('add', '.');
+    const commit = (message: string) => git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+      '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', message);
+    commit('Track two test fixtures');
+    await f.ready();
+    let effects = 0, storageAdmissions = 0;
+    const runner = { ready: async () => true, execute: async (argv: string[], cwd: string) => {
+      assert.equal(storageAdmissions, 1, 'storage admission must precede the simulated command');
+      effects++;
+      assert.equal(cwd.toLowerCase(), repo.toLowerCase());
+      assert.equal(argv.at(-1), './harness.test.mjs');
+      return { exitCode: 0, stderr: '', stdout: 'TAP version 13\nok 1 - fixture\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1\n' };
+    } };
+    const host = f.core as unknown as { port: ProviderPort; missionExecutors: Record<string, MissionExecutor> };
+    host.port.projectChecks = runner;
+    host.missionExecutors['codex.project-check'] = createMissionProjectCheck({
+      runner, digest: planningDigest, lease: () => () => {},
+      fileEditAdmission: cwd => {
+        assert.equal(cwd.toLowerCase(), repo.toLowerCase());
+        storageAdmissions++;
+      },
+    });
+    const objective = 'Plan a mission to run my chosen check and measure physical RAM.';
+    const workspace = await f.core.command('desktop', { type: 'snapshot' });
+    const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Check instructions',
+      workspaceId: workspace.activeWorkspaceId });
+    const note = created.resources.find(item => item.title === 'Check instructions')!;
+    const content = 'Run the operator-selected tracked test and measure physical RAM.';
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content });
+    const selection = { objective, noteIds: [note.id] };
+    const offer = await f.core.command('missions', { name: 'preview', input: selection }) as MissionPlanningOffer;
+    assert.equal(offer.planner?.projectCheck, true);
+    const check = await f.core.command('missionCheckReview', { paths: [path] });
+    const approvedProjectCheck = { paths: [path], digest: check.digest };
+    const baseReview = { ...selection, fingerprint: offer.fingerprint, approvedProjectCheck };
+    const reviewed = await f.core.command('missionPlanningReview', baseReview);
+    const checkContext = { files: ['harness.test.mjs'], commandKind: 'node-test',
+      commandState: 'validated-locally', requiresStartApproval: true };
+    assert.deepEqual(reviewed.projectCheck?.context, checkContext);
+    const requestId = randomUUID();
+    const input = { ...baseReview, requestId, projectCheckReviewFingerprint: reviewed.projectCheck!.fingerprint };
+    await assert.rejects(f.core.command('missionPlanReviewed', { ...input, projectCheckReviewFingerprint: 'f'.repeat(64) }),
+      /mission_project_check_scope_changed/);
+    await assert.rejects(f.core.command('missionPlanReviewed', { ...input, approvedProjectCheck: { ...approvedProjectCheck, paths: [secondPath] } }),
+      /mission_project_check_scope_changed/);
+    writeFileSync(path, 'export const observed = false;\n');
+    await assert.rejects(f.core.command('missionPlanReviewed', input), /mission_project_check_scope_changed/);
+    writeFileSync(path, source);
+    await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
+    await assert.rejects(f.core.command('missionPlanReviewed', input), /mission_preview_changed/);
+    assert.equal(f.requests.length, 0);
+    await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: true });
+    const freshCheck = await f.core.command('missionCheckReview', { paths: [path] });
+    const freshSelection = { paths: [path], digest: freshCheck.digest };
+    const freshReview = await f.core.command('missionPlanningReview', { ...baseReview, approvedProjectCheck: freshSelection });
+    const perceive = (key: string) => ({ version: 2, objective, clarification: '',
+      perception: { kind: 'plan', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: [{ key, question: 'Which requirements does the instruction record establish?', query: 'tracked test physical RAM' }] });
+    const assess = (key: string, quote: string) => ({ version: 3, clarification: '', assessment: [
+      { key, status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
+    ] });
+    const reply = (value: unknown, disclosed: boolean) => (body: any) => {
+      const payload = JSON.parse(body.input[0].content);
+      assert.deepEqual(payload.reviewedProjectCheck, disclosed ? checkContext : undefined);
+      if (payload.stage) assert.deepEqual(payload.reviewedMissionCapabilities, disclosed ? offer.planner?.capabilities : undefined);
+      for (const secret of [repo, freshCheck.digest, freshCheck.head, process.execPath])
+        assert.ok(!JSON.stringify(payload).includes(JSON.stringify(secret).slice(1, -1)));
+      return response(JSON.stringify(value), body.model);
+    };
+    f.replies.push(reply(perceive('day'), false), reply(assess('day', 'The pump inspection is on Tuesday.'), false),
+      reply(perceive('checks'), true), reply(assess('checks', content), true),
+      reply({ tasks: [{ capability: 'project-tests', after: [] }, { capability: 'ram', after: [] }], unsupported: [] }, true));
+    const plan = await f.core.command('missionPlanReviewed', { ...input, approvedProjectCheck: freshSelection,
+      projectCheckReviewFingerprint: freshReview.projectCheck!.fingerprint }) as MissionPreview;
+    assert.equal(plan.localReview?.preselected, true);
+    assert.ok(plan.objectiveReview);
+    assert.ok(!JSON.stringify(plan).includes(freshCheck.digest) && !JSON.stringify(plan).includes(repo));
+    const start = { objective, requestId, proposalId: requestId, fingerprint: plan.fingerprint };
+    await assert.rejects(f.core.command('missionStartReviewed', { ...start, approvedProjectCheck }), /mission_project_check_scope_changed/);
+    const checkAtStart = await f.core.command('missionCheckReview', { proposalId: requestId, fingerprint: plan.fingerprint });
+    assert.equal(checkAtStart.digest, freshCheck.digest);
+    const approvedStart = { ...start, approvedObjectiveDigest: plan.objectiveReview!.digest };
+    const started = await f.core.command('missionStartReviewed', approvedStart) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id: started.id } }) as Promise<MissionProjection>;
+    let settled = await read();
+    for (let index = 0; index < 150 && ['queued', 'running'].includes(settled.outcome); index++) {
+      await new Promise(done => setTimeout(done, 10));
+      settled = await read();
+    }
+    assert.deepEqual(settled.tasks.map(({ executor, state }) => [executor, state]), [
+      ['codex.project-check', 'verified'], ['sample.ram', 'verified'], ['join.samples', 'verified'],
+    ]);
+    assert.equal(settled.outcome, 'verified');
+    assert.ok(!JSON.stringify(settled).includes(freshCheck.digest) && !JSON.stringify(settled).includes(repo) &&
+      !JSON.stringify(settled).includes(freshCheck.head));
+    commit('Advance checkout after review');
+    await assert.rejects(f.core.command('missionStartReviewed', approvedStart), /mission_project_check_scope_changed/);
+    assert.equal(effects, 1);
+    assert.equal(storageAdmissions, 1, 'the synthetic checkout must pass storage admission before dispatch');
+    assert.equal(f.requests.length, 5);
+  } finally {
+    await f.close();
+    const part = relative(base, resolve(repo));
+    assert.ok(part.startsWith('aerynth-reviewed-tests-') && !part.startsWith('..') && !isAbsolute(part));
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('native Start review binds the complete objective to current host proofs across restart', async () => {
+  const f = fixture(true);
+  try {
+    await f.ready();
+    const workspace = await f.core.command('desktop', { type: 'snapshot' });
+    const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Meter card', workspaceId: workspace.activeWorkspaceId });
+    const note = created.resources.find(item => item.title === 'Meter card')!;
+    const quote = 'The meter card requires a CPU reading and a physical RAM reading.';
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: quote });
+    const objective = 'Could you tell me what the meters on the card actually read?';
+    const selection = { objective, noteIds: [note.id] };
+    const offer = await f.core.command('missions', { name: 'preview', input: selection }) as MissionPlanningOffer;
+    const perceive = (key: string) => ({ version: 2, objective, clarification: '',
+      perception: { kind: 'plan', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: [{ key, question: 'What reading is required?', query: 'meter reading' }] });
+    const assess = (key: string, text: string) => ({ version: 3, clarification: '', assessment: [
+      { key, status: 'supported', passages: [{ source: 'e1', quote: text }], query: '' },
+    ] });
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    const tasks = [{ capability: 'cpu', after: [] }, { capability: 'ram', after: [] }];
+    f.replies.push(reply(perceive('day')), reply(assess('day', 'The pump inspection is on Tuesday.')));
+    const plan = async (unsupported: string[]) => {
+      f.replies.push(body => {
+        assert.equal(JSON.parse(body.input[0].content).missionPlanning, true);
+        return reply(perceive('meters'))(body);
+      }, body => {
+        assert.equal(JSON.parse(body.input[0].content).missionPlanning, true);
+        return reply(assess('meters', quote))(body);
+      }, reply({ tasks, unsupported }));
+      const requestId = randomUUID();
+      const preview = await f.core.command('missionPlanReviewed', { ...selection, requestId, fingerprint: offer.fingerprint }) as MissionPreview;
+      return { preview, input: { objective, requestId, proposalId: requestId, fingerprint: preview.fingerprint } };
+    };
+    const unsupported = await plan(['The blue-card record itself cannot be written using the selected capabilities.']);
+    assert.equal(unsupported.preview.objectiveReview, undefined);
+    await assert.rejects(f.core.command('missionStartReviewed', { ...unsupported.input, approvedObjectiveDigest: 'a'.repeat(64) }), /mission_objective_review_changed/);
+    const { preview, input } = await plan([]);
+    assert.deepEqual(preview.objectiveReview?.obligations.map(row => row.taskId), ['cpu', 'ram']);
+    const rejectedId = randomUUID();
+    const invented = 'Invented quote about approval';
+    f.replies.push(reply(perceive('meters')), reply(assess('meters', invented)));
+    await assert.rejects(f.core.command('missionPlanReviewed', { ...selection, requestId: rejectedId, fingerprint: offer.fingerprint }),
+      /mission_planning_context_invalid/);
+    const db = (f.core as unknown as { db: import('node:sqlite').DatabaseSync }).db;
+    const row = db.prepare("SELECT json FROM intelligence_events WHERE json_extract(json, '$.type') = 'vela.mission/context-rejected' AND json_extract(json, '$.correlationId') = ?").get(rejectedId);
+    const event = JSON.parse(String(row?.json));
+    assert.equal(event.status, 'assessment-passage');
+    assert.deepEqual(event.payload, { redacted: true });
+    assert.ok(!String(row?.json).includes(invented));
+    assert.equal(f.requests.length, 10, 'invalid context cannot dispatch the graph planner');
+    const approvedObjectiveDigest = preview.objectiveReview!.digest;
+    await assert.rejects(f.core.command('missionStartReviewed', { ...input, approvedObjectiveDigest: 'a'.repeat(64) }), /mission_objective_review_changed/);
+    await assert.rejects(f.core.command('missionStartReviewed', { ...input, fingerprint: 'b'.repeat(64), approvedObjectiveDigest }), /mission_preview_changed/);
+    await f.core.command('desktop', { type: 'createWorkspace', title: 'Unrelated meter board', projectId: null });
+    await assert.rejects(f.core.command('missionStartReviewed', { ...input, approvedObjectiveDigest }), /mission_preview_changed/);
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.activeWorkspaceId! } });
+    const require = createRequire(import.meta.url);
+    const { startReviewedMission } = require('../../visual-experience/cinematic-v3/native/mission-start-broker.cjs');
+    const localURL = 'file:///fixture.html', frame = { url: localURL };
+    const webContents = { mainFrame: frame, isDestroyed: () => false, getURL: () => localURL };
+    const win = { webContents, isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => true };
+    const start = (choice: number, startInput = input) => startReviewedMission({ win, event: { sender: webContents, senderFrame: frame }, localURL,
+      storage: { allowWrite: async () => true }, call: f.core.command.bind(f.core),
+      dialog: { showMessageBox: async (_window: unknown, review: { detail: string }) => {
+        assert.match(review.detail, /physical|RAM/);
+        assert.ok(review.detail.includes(objective));
+        assert.match(review.detail, /operating system CPU counters/i);
+        assert.match(review.detail, /operating system memory counters/i);
+        assert.match(review.detail, /total and available physical memory/i);
+        return { response: choice };
+      } }, input: { name: 'start', input: startInput } }) as Promise<MissionProjection>;
+    const forged = { ...input, approvedObjectiveDigest };
+    await assert.rejects(start(2, forged), /mission_native_review_required/);
+    await assert.rejects(start(0), /mission_review_declined/);
+    const started = await start(1);
+    const read = () => f.core.command('missions', { name: 'read', input: { id: started.id } }) as Promise<MissionProjection>;
+    let settled = await read();
+    for (let index = 0; index < 150 && ['queued', 'running'].includes(settled.outcome); index++) {
+      await new Promise(done => setTimeout(done, 10));
+      settled = await read();
+    }
+    assert.equal(settled.outcome, 'verified');
+    assert.equal(settled.coverage, undefined);
+    assert.equal(settled.objectiveReview?.digest, approvedObjectiveDigest);
+    await f.core.command('missions', { name: 'post-report', input: { id: started.id } });
+    const report = async () => (await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState)
+      .conversation?.messages.find(message => message.missionReport?.missionId === started.id);
+    const complete = await report();
+    assert.match(complete?.content ?? '', /CPU .*\nRAM /);
+    assert.doesNotMatch(complete!.content, /incomplete|Still needed/);
+    assert.equal((await start(1)).id, started.id);
+    await f.reopen();
+    assert.deepEqual((await read()).tasks, settled.tasks);
+    assert.equal((await read()).outcome, 'verified');
+    assert.deepEqual(await report(), complete);
+    const snapshot = await f.core.command('desktop', { type: 'snapshot' });
+    const saved = snapshot.resources.find(item => item.id === note.id)!;
+    await f.core.command('desktop', { type: 'content', resourceId: saved.id, expectedVersion: saved.version, content: 'The meter card was withdrawn.' });
+    assert.equal((await read()).outcome, 'blocked');
+    assert.equal((await read()).coverage?.status, 'partial');
+    assert.equal((await report())?.missionReport?.stale, true);
+    assert.equal(f.requests.length, 10);
   } finally { await f.close(); }
 });
 

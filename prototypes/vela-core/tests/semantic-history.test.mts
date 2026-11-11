@@ -186,6 +186,7 @@ test('binds assessed passages to the original request and rejects invented quota
       assert.deepEqual(result.coverage[0].passages, [{ sourceId: candidate.sourceId, quote }]);
     } else {
       assert.equal(result.state, 'invalid');
+      assert.equal(result.failure, 'assessment-passage');
       assert.deepEqual(result.coverage, []);
     }
   }
@@ -201,4 +202,21 @@ test('overlapping passages from one source cannot establish a cross-source contr
     },
   });
   assert.equal(result.state, 'invalid');
+  assert.equal(result.failure, 'assessment-support');
+});
+
+test('distinguishes cancelling a reviewed assessment from an invalid model response', async () => {
+  const controller = new AbortController();
+  const result = await investigateSemanticHistory(request, {
+    search: () => ({ sources: [candidate], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      controller.abort();
+      return null;
+    },
+  }, controller.signal);
+  assert.equal(result.state, 'unavailable');
+  assert.equal(result.failure, 'cancelled');
+  assert.deepEqual(result.coverage, []);
 });

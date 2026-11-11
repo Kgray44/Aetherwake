@@ -17,6 +17,8 @@ The integration branch replays and reconciles the source changes. Its commit IDs
 
 The final handoff batch retains the AEP native-sample comparison alongside the ARIE read-only experiment preview. The preview resolves its hypothesis through the scoped mission and exact revision before using existing resource policy. FI-2 buffers internal text with cancellation and configuration checks, records event types and transport timing, and revalidates full source proofs at dispatch and completion. Its reviewed gap follow-up and the existing output presentation share the Vela reply contract.
 
+The follow-on batch starts from the green `dc64bd54` checkpoint. It applies the Mission 04 delta from `786d9ef4` through [PR #58](https://github.com/Kgray44/Aetherwake/pull/58) at `3796934de315206bfc38a7aa3bdc62d529832d1e`, plus its native startup fixture `f61bd90d79486a6740068acda5f7617bd28101a9`. It also includes the [FI-ACC-16 artifact handoff](FI-ACC-16-ARTIFACT-HANDOFF.md) at `f96d217484c1929d38fd005f5ce0c5d4fea2fd7a`. Start review keeps separate approval for the verified objective and image request. It retains AEP intake and transport timing and the existing asynchronous ARIE project-check admission. The exact producer live receipts cover a reviewed Codex and RAM objective and a separate real PNG, text file, and narrative mission. Packaged desktop and independent output quality remain open.
+
 ## Validation
 
 | Check | Evidence from the initial combined snapshot `fd35d035ae82c5c38952fb2c7b214a39f33bf9f6` |

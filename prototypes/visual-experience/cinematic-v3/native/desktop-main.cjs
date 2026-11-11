@@ -919,25 +919,47 @@ app.whenReady().then(async () => {
             isCurrent: () => trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized(),
             allowWrite: () => storage.allowWrite() });
         } else if (input?.name === "plan") {
-          const { objective, noteIds, fileIds, projectEvidence, fingerprint } = input.input ?? {};
+          const { objective, noteIds, fileIds, projectEvidence, fingerprint, requestId, chooseProjectTests } = input.input ?? {};
+          if (Object.keys(input.input ?? {}).some(key => !["objective", "noteIds", "fileIds", "projectEvidence", "fingerprint",
+            "requestId", "chooseProjectTests"].includes(key)) || (chooseProjectTests !== undefined && chooseProjectTests !== true))
+            throw Error("invalid_mission_command");
           const evidenceSelection = { objective, noteIds, fileIds, projectEvidence };
           const offer = await call("missions", { name: "preview", input: evidenceSelection });
           if (offer?.kind !== "planning-offer" || offer.fingerprint !== input.input?.fingerprint)
             throw Error("mission_preview_changed");
           if (!offer.planner) throw Error("mission_planner_unavailable");
           const { model, effort, capabilities, provider } = offer.planner;
-          let approved;
-          const hasSources = Boolean(offer.notes || offer.files || offer.projectEvidence);
+          let approved, approvedProjectCheck, projectCheckReviewFingerprint;
+          if (chooseProjectTests) {
+            if (!trustedActiveFrame(event)) throw Error("unauthorized_sender");
+            if (offer.planner.projectCheck !== true) throw Error("mission_project_check_unavailable");
+            const selected = await reviewDialogs.showOpenDialog(win, {
+              title: "Choose tracked Node tests for mission planning",
+              properties: ["openFile", "multiSelections"],
+              filters: [{ name: "Node test sources", extensions: ["js", "cjs", "mjs", "ts", "mts"] }],
+            });
+            if (!trustedActiveFrame(event)) throw Error("unauthorized_sender");
+            if (selected.canceled || !selected.filePaths.length) throw Error("mission_review_declined");
+            if (selected.filePaths.length > 4) throw Error("mission_project_check_selection_limit");
+            const check = await call("missionCheckReview", { paths: selected.filePaths });
+            if (!trustedActiveFrame(event)) throw Error("unauthorized_sender");
+            approvedProjectCheck = { paths: selected.filePaths, digest: check.digest };
+          }
+          const hasSources = Boolean(offer.notes || offer.files || offer.projectEvidence || approvedProjectCheck);
           if (hasSources) {
-            const reviewed = await call("missionPlanningReview", { ...evidenceSelection, fingerprint });
+            const reviewed = await call("missionPlanningReview", { ...evidenceSelection, fingerprint,
+              ...(approvedProjectCheck ? { approvedProjectCheck } : {}) });
             const matches = (sources, expected) => Array.isArray(sources) &&
               JSON.stringify(sources.map(({ text, ...ref }) => ref)) === JSON.stringify(expected ?? []);
             if (!trustedActiveFrame(event) || reviewed?.offer?.fingerprint !== fingerprint ||
               reviewed.offer.planner?.provider !== "openai-api-vela" ||
               !matches(reviewed.notes, offer.notes) || !matches(reviewed.files, offer.files) ||
-              !projectEvidenceMatches(offer.projectEvidence, reviewed.projectEvidence))
+              !projectEvidenceMatches(offer.projectEvidence, reviewed.projectEvidence) ||
+              Boolean(reviewed.projectCheck) !== Boolean(approvedProjectCheck))
               throw Error("mission_preview_changed");
-            const prompt = JSON.stringify({ objective, capabilities }, null, 2);
+            projectCheckReviewFingerprint = reviewed.projectCheck?.fingerprint;
+            const prompt = JSON.stringify({ objective, capabilities,
+              ...(reviewed.projectCheck ? { reviewedProjectCheck: reviewed.projectCheck.context } : {}) }, null, 2);
             approved = await reviewProvider({ parent: win, intent: objective, expiresAt: new Date(Date.now() + 90_000).toISOString(),
               review: { providerId: provider, semanticContext: true, missionPlanning: true, prompt,
                 promptDigest: createHash("sha256").update(JSON.stringify(prompt)).digest("hex"),
@@ -962,7 +984,8 @@ app.whenReady().then(async () => {
             throw Error("unauthorized_sender");
           if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
           if (hasSources && !trustedActiveFrame(event)) throw Error("unauthorized_sender");
-          result = await call("missionPlanReviewed", input.input);
+          result = await call("missionPlanReviewed", { ...evidenceSelection, fingerprint, requestId,
+            ...(approvedProjectCheck ? { approvedProjectCheck, projectCheckReviewFingerprint } : {}) });
         } else if (input?.name === "revision-apply") {
           const { fingerprint, ...revisionInput } = input.input ?? {};
           const preview = await call("missions", { name: "revision-preview", input: revisionInput });

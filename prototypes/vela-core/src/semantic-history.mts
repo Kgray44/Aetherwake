@@ -58,10 +58,17 @@ export interface SemanticHistorySource {
 interface Passage { source: string; quote: string }
 interface Assessment { key: string; status: Status; sources: string[]; query: string; passages?: Passage[] }
 interface EvidenceReview { rows: Assessment[]; clarification: string }
-export type SemanticHistoryCall =
+export interface ReviewedProjectCheckContext {
+  files: readonly string[];
+  commandKind: 'node-test';
+  commandState: 'validated-locally';
+  requiresStartApproval: true;
+}
+export type SemanticHistoryCall = (
   | { stage: 'interpret'; request: string; reviewedSourceTitles?: readonly string[]; reviewedMissionGap?: string }
   | { stage: 'assess'; request: string; proposedClarification?: string; needs: readonly Need[];
-    excerpts: readonly { handle: string; text: string; title?: string; partial?: true; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number };
+    excerpts: readonly { handle: string; text: string; title?: string; partial?: true; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number }
+) & { missionPlanning?: true; reviewedProjectCheck?: ReviewedProjectCheckContext; reviewedMissionCapabilities?: readonly string[] };
 
 interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan }
 interface SemanticHistoryOwner<T extends SemanticHistorySource> {
@@ -78,12 +85,17 @@ interface SemanticHistoryOwner<T extends SemanticHistorySource> {
 }
 interface Result<T> {
   state: 'assessed' | 'unavailable' | 'invalid' | 'stale';
+  failure?: AssessmentRejection | 'invalid-request' | 'invalid-perception' | 'no-provider-result' |
+    'source-changed' | 'deadline' | 'cancelled' | 'investigation-unavailable';
   proposal?: Proposal;
   clarification?: string;
   rounds: number;
   searchCoverage: SemanticHistoryScan | null;
   coverage: { key: string; status: Status; sources: T[]; passages?: { sourceId: string; quote: string }[] }[];
 }
+
+type AssessmentRejection = 'assessment-shape' | 'assessment-need' | 'assessment-query' |
+  'assessment-passage' | 'assessment-source' | 'assessment-support';
 
 function exact(value: unknown, keys: string[]): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value) &&
@@ -132,26 +144,29 @@ function parsePassages(value: unknown, evidence: ReadonlyMap<string, { text: str
 }
 
 export function parseSemanticHistoryAssessment(value: unknown, needs: readonly Need[],
-  evidence: ReadonlyMap<string, { text: string }>): EvidenceReview | undefined {
+  evidence: ReadonlyMap<string, { text: string }>, onReject?: (reason: AssessmentRejection) => void): EvidenceReview | undefined {
+  const reject = (reason: AssessmentRejection) => { onReject?.(reason); return undefined; };
   const legacy = exact(value, ['version', 'assessment']) && value.version === 1;
   const versioned = exact(value, ['version', 'assessment', 'clarification']) &&
     (value.version === 2 || value.version === 3) && bounded(value.clarification, 512, true);
-  if (!(legacy || versioned) || !Array.isArray(value.assessment) || value.assessment.length !== needs.length) return;
+  if (!(legacy || versioned) || !Array.isArray(value.assessment)) return reject('assessment-shape');
+  if (value.assessment.length !== needs.length) return reject('assessment-need');
   const remaining = new Set(needs.map(need => need.key));
   const rows: Assessment[] = [];
   const quoted = value.version === 3;
   for (const row of value.assessment) {
     if (!exact(row, ['key', 'status', quoted ? 'passages' : 'sources', 'query']) ||
-      typeof row.key !== 'string' || !remaining.delete(row.key) || !statuses.includes(row.status as Status) ||
-      !bounded(row.query, 512, true) || (row.query && !canonicalRetrievalQuery(row.query))) return;
+      !statuses.includes(row.status as Status)) return reject('assessment-shape');
+    if (typeof row.key !== 'string' || !remaining.delete(row.key)) return reject('assessment-need');
+    if (!bounded(row.query, 512, true) || (row.query && !canonicalRetrievalQuery(row.query))) return reject('assessment-query');
     const checkedPassages = quoted ? parsePassages(row.passages, evidence) : undefined;
-    if (quoted && !checkedPassages) return;
+    if (quoted && !checkedPassages) return reject('assessment-passage');
     const passages = checkedPassages && (row.status === 'missing' || row.status === 'inaccessible' ? [] : checkedPassages);
     const sources = passages ? [...new Set(passages.map(passage => passage.source))] : row.sources;
     if (!Array.isArray(sources) || sources.length > maxCandidates || new Set(sources).size !== sources.length ||
-      !sources.every(id => typeof id === 'string' && evidence.has(id))) return;
+      !sources.every(id => typeof id === 'string' && evidence.has(id))) return reject('assessment-source');
     if ((['supported', 'partial'].includes(row.status as string) && sources.length < 1) ||
-      (row.status === 'contradicted' && sources.length < 2)) return;
+      (row.status === 'contradicted' && sources.length < 2)) return reject('assessment-support');
     rows.push({ key: row.key, status: row.status as Status, sources: [...sources], query: row.query,
       ...(passages ? { passages } : {}) });
   }
@@ -167,7 +182,8 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
   const signal = cancel ? AbortSignal.any([cancel, timeout]) : timeout;
   let rounds = 0;
   let searchCoverage: SemanticHistoryScan | null = null;
-  const empty = (state: Result<T>['state']): Result<T> => ({ state, rounds, searchCoverage, coverage: [] });
+  const empty = (state: Result<T>['state'], failure?: Result<T>['failure']): Result<T> =>
+    ({ state, ...(failure ? { failure } : {}), rounds, searchCoverage, coverage: [] });
   const disclose = async (call: SemanticHistoryCall, sources: readonly T[]) => {
     signal.throwIfAborted();
     const value = await owner.disclose(call, sources, signal);
@@ -176,11 +192,11 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
   };
 
   try {
-    if (!bounded(request, 8192)) return empty('invalid');
+    if (!bounded(request, 8192)) return empty('invalid', 'invalid-request');
     const raw = await disclose({ stage: 'interpret', request }, []);
-    if (raw == null) return empty('unavailable');
+    if (raw == null) return empty('unavailable', 'no-provider-result');
     const proposal = parseSemanticHistoryProposal(raw);
-    if (!proposal) return empty('invalid');
+    if (!proposal) return empty('invalid', 'invalid-perception');
     const pendingClarification = !proposal.needs.length ? proposal.clarification.trim() : '';
     if (!proposal.needs.length && !pendingClarification) return { ...empty('assessed'), proposal };
     const needs = pendingClarification
@@ -238,13 +254,13 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         addCandidates(owner.recent());
       }
       if (priorAssessment && evidence.size === priorCount) {
-        if (![...evidence.values()].every(owner.isCurrent)) return empty('stale');
+        if (![...evidence.values()].every(owner.isCurrent)) return empty('stale', 'source-changed');
         return assessed(priorAssessment);
       }
 
       if (pendingClarification && !evidence.size) return { ...empty('assessed'), proposal, clarification: pendingClarification };
       const sources = [...evidence.values()];
-      if (!sources.every(source => owner.isCurrent(source))) return empty('stale');
+      if (!sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
       const reviewed = await disclose({ stage: 'assess', request, needs: structuredClone(needs), round: rounds,
         ...(pendingClarification ? { proposedClarification: pendingClarification } : {}),
         excerpts: [...evidence].map(([handle, source]) => ({
@@ -252,10 +268,11 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
           ...(bounded(source.title, 512) ? { title: source.title } : {}),
           ...(source.partial ? { partial: true as const } : {}),
         })) }, sources);
-      if (!sources.every(source => owner.isCurrent(source))) return empty('stale');
-      if (reviewed == null) return empty('unavailable');
-      const assessment = parseSemanticHistoryAssessment(reviewed, needs, evidence);
-      if (!assessment) return empty('invalid');
+      if (!sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
+      if (reviewed == null) return empty('unavailable', 'no-provider-result');
+      let rejection: AssessmentRejection = 'assessment-shape';
+      const assessment = parseSemanticHistoryAssessment(reviewed, needs, evidence, reason => { rejection = reason; });
+      if (!assessment) return empty('invalid', rejection);
       priorAssessment = assessment;
       const gaps = assessment.rows.filter(row => row.status !== 'supported');
       next = gaps.filter(row => row.query && !queries.has(canonicalRetrievalQuery(row.query)!.digest)).map(row => row.query);
@@ -264,8 +281,10 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       if ((next.length || investigateAnchors) && budgetExhausted) partial();
       if ((!next.length && !investigateAnchors) || budgetExhausted) return assessed(assessment);
     }
-    return empty('invalid');
+    return empty('invalid', 'assessment-shape');
   } catch {
-    return empty('unavailable');
+    if (signal.aborted) return empty('unavailable',
+      timeout.aborted || signal.reason instanceof DOMException && signal.reason.name === 'TimeoutError' ? 'deadline' : 'cancelled');
+    return empty('unavailable', 'investigation-unavailable');
   }
 }

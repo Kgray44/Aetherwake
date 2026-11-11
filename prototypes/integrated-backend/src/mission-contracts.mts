@@ -54,6 +54,15 @@ export interface MissionPlan {
   coverage?: MissionCoverage;
 }
 export interface MissionCoverage { status: 'partial'; limitations: string[] }
+export interface MissionObjectiveReview {
+  digest: string;
+  planFingerprint: string;
+  planRevision: 1;
+  obligations: { taskId: string; objective: string; executor: string; criterion: string; evidenceSource: string }[];
+}
+export interface MissionObjectiveReviewPreview extends MissionObjectiveReview {
+  obligations: (MissionObjectiveReview['obligations'][number] & { proofDescription: string })[];
+}
 export interface MissionObjectiveAssessment {
   model: string;
   requestId: string;
@@ -185,6 +194,7 @@ export interface Mission {
   team?: MissionTeamBinding;
   originConversationId?: string;
   coverage?: MissionCoverage;
+  objectiveReview?: MissionObjectiveReview;
   objectiveAssessment?: MissionObjectiveAssessment;
   workroom?: MissionWorkroom;
   tasks: MissionTask[];
@@ -260,7 +270,7 @@ export interface MissionExecutiveReview {
 export type MissionRequest =
   | { name: 'executive-review'; input: MissionExecutiveRequest }
   | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string; teamId?: string } & MissionPlanningEvidenceSelection }
-  | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string } & MissionPlanningEvidenceSelection }
+  | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string; chooseProjectTests?: true } & MissionPlanningEvidenceSelection }
   | { name: 'start'; input: { objective: string; fingerprint: string; requestId: string; agentProfileId?: string; proposalId?: string; teamId?: string } }
   | { name: 'team-library'; input: Record<string, never> }
   | { name: 'team-save'; input: MissionTeamSave }
@@ -284,7 +294,8 @@ export interface MissionPreview {
   plan: MissionPlan;
   executors: { id: string; available: boolean }[];
   externalReview?: { provider: string; model: string; effort?: ReasoningEffort; calls: number };
-  localReview?: { kind: 'node-test'; maxFiles: number };
+  localReview?: { kind: 'node-test'; maxFiles: number; preselected?: true };
+  objectiveReview?: MissionObjectiveReviewPreview;
   artifactReview?: { prompt: string; digest: string; model: string; width: number; height: number; files: readonly string[] };
   proposalId?: string;
 }
@@ -296,7 +307,7 @@ export interface MissionPlanningOffer {
   notes?: MissionPlanningSourceRef[];
   files?: MissionPlanningSourceRef[];
   projectEvidence?: import('./contracts.mts').VelaProjectEvidencePreview;
-  planner?: { provider?: 'chatgpt-plan-responses' | 'openai-api-vela'; model: string; effort?: ReasoningEffort; capabilities: string[] };
+  planner?: { provider?: 'chatgpt-plan-responses' | 'openai-api-vela'; model: string; effort?: ReasoningEffort; capabilities: string[]; projectCheck?: true };
 }
 export interface MissionWorkroom {
   kind: 'workroom';
