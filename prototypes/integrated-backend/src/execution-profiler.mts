@@ -282,6 +282,18 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
         [...attempt.verification.evidenceIds] : [],
     };
   });
+  const traceByAttempt = new Map(attempts.map(attempt => [attempt.id, attempt]));
+  const retries = Array.from(byAttempt.values()).flatMap(({ task, attempt, previous }) => {
+    if (!previous) return [];
+    const prior = traceByAttempt.get(previous), retry = traceByAttempt.get(attempt.id);
+    const previousSettlement = prior?.end ?? null, retryDispatch = retry?.start ?? null;
+    const gap = !prior?.interrupted && previousSettlement && retryDispatch && previousSettlement.eventSeq < retryDispatch.eventSeq ?
+      interval(attempt.id, previousSettlement, retryDispatch) : null;
+    return [{ taskId: task.id, previousAttemptId: previous, attemptId: attempt.id,
+      previousOutcome: byAttempt.get(previous)?.attempt.outcome ?? null, previousSettlement, retryDispatch,
+      previousOccupiedMs: prior?.interval ? prior.interval.end - prior.interval.start : null,
+      settlementToDispatchMs: gap ? gap.end - gap.start : null }];
+  });
   const segments = new Map<string, Interval[]>();
   for (const { interval: measured } of attempts) {
     if (!measured) continue;
@@ -393,6 +405,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     work: {
       causalBoundary: 'attempt-dependencies-and-retries' as const,
       openAttempts: attempts.filter(attempt => attempt.state === 'running' && !attempt.end).map(attempt => attempt.id),
+      retries,
       clockSegments, workerMs: total?.workerMs ?? null, activeMs: total?.activeMs ?? null,
       overlapMs: total?.overlapMs ?? null, peakWorkers: total?.peakWorkers ?? null,
       intervalCoverage: { measured: clockSegments.reduce((count, segment) => count + segment.attemptIds.length, 0),

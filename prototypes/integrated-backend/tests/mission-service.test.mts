@@ -596,7 +596,21 @@ test('verification failure, paused admission, evidence-bound amendment, and repl
     await flush();
     assert.equal(read(m.id).outcome, 'verified');
     assert.equal(read(m.id).tasks[0].attempts.length, 2);
-    const [first, retry, dependent] = projectMissionExecution(read(m.id)).attempts;
+    const final = read(m.id), profile = projectMissionExecution(final);
+    const [first, retry, dependent] = profile.attempts;
+    assert.deepEqual(profile.work.retries, [{ taskId: 'inspect', previousAttemptId: first.id, attemptId: retry.id,
+      previousOutcome: 'failed', previousSettlement: first.end, retryDispatch: retry.start,
+      previousOccupiedMs: first.interval!.end - first.interval!.start,
+      settlementToDispatchMs: retry.start.monotonicMs! - first.end!.monotonicMs! }]);
+    const withoutPriorEvents = projectMissionExecution({ ...final, events: final.events.filter(event => event.attemptId !== first.id) });
+    assert.equal(withoutPriorEvents.work.retries[0]?.previousAttemptId, first.id);
+    assert.equal(withoutPriorEvents.work.retries[0]?.previousOccupiedMs, null);
+    assert.equal(withoutPriorEvents.work.retries[0]?.settlementToDispatchMs, null);
+    const crossClock = structuredClone(final);
+    crossClock.events.find(event => event.seq === retry.start.eventSeq)!.timing!.domain = 'after-restart';
+    const separated = projectMissionExecution(crossClock).work.retries[0];
+    assert.equal(separated?.previousOccupiedMs, profile.work.retries[0].previousOccupiedMs);
+    assert.equal(separated?.settlementToDispatchMs, null);
     assert.ok(retry.phases!.readyQueue!.firstObservedMs >= first.end!.monotonicMs!);
     assert.ok(dependent.phases!.readyQueue!.firstObservedMs >= retry.end!.monotonicMs!);
   } finally { await service.close(); f.db.close(); }
