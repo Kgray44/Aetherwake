@@ -248,9 +248,10 @@ export class BackendCore {
   private velaApiPlanner!:VelaPlanningPort;
   private velaApiTask?: Promise<unknown>;
   private velaApiMessages = new Map<string, { digest: string;
-    timing?: Omit<ConversationOutputTiming, 'messageId' | 'stagedMs' | 'fromPreview'> & {
+    timing?: Omit<ConversationOutputTiming, 'messageId' | 'stagedMs' | 'fromPreview' | 'requestToStagingMs'> & {
       elapsed(observedAt?: number): number;
       previewOrigin?: ReturnType<typeof observeConversationProvider>['previewOrigin'];
+      inputStaging?: PrivateVelaPreview['inputStaging'];
     } }>();
   private readonly velaApiTest?: VelaApiRuntimeTestServices;
   private ordinaryTest?:OrdinaryResponsesTestServices;
@@ -2130,11 +2131,15 @@ export class BackendCore {
     const {role:_role,content:_content,...metadata}=message;
     this.state.vela!.messages[entry.id]=metadata;this.state.revisions[id]++;
     if (apiExecution && prepared?.timing) {
-      const { elapsed, previewOrigin, ...timing } = prepared.timing;
+      const { elapsed, previewOrigin, inputStaging, ...timing } = prepared.timing;
       const stagedAt = performance.now(), stagedMs = elapsed(stagedAt);
-      apiExecution.outputTiming = { ...timing, messageId: entry.id, stagedMs,
-        ...(previewOrigin ? { fromPreview: { id: previewOrigin.id, toStagingMs: previewOrigin.toAdapterMs + stagedMs } } : {}) };
       const domain = this.missions.fullProfilingClock();
+      const requestToStagingMs = inputStaging && domain === inputStaging.domain &&
+        inputStaging.requestStartedMs <= inputStaging.stagedMs && inputStaging.stagedMs <= stagedAt ?
+        stagedAt - inputStaging.requestStartedMs : undefined;
+      apiExecution.outputTiming = { ...timing, messageId: entry.id, stagedMs,
+        ...(requestToStagingMs !== undefined ? { requestToStagingMs } : {}),
+        ...(previewOrigin ? { fromPreview: { id: previewOrigin.id, toStagingMs: previewOrigin.toAdapterMs + stagedMs } } : {}) };
       if (domain) apiExecution.outputStagingClock = { domain, monotonicMs: stagedAt };
     }
     const observe=observeSpeech&&message.role==='assistant'?this.velaVoiceRuntime?.captureReplyObserver():undefined;
@@ -2191,6 +2196,9 @@ export class BackendCore {
         timing.presentation = { ...presentation, ...(timing.fromPreview ? {
           previewToReceiptMs: presentation.stagingToReceiptMs === null ? null :
             timing.fromPreview.toStagingMs + presentation.stagingToReceiptMs,
+        } : {}), ...(timing.requestToStagingMs !== undefined ? {
+          requestToReceiptMs: presentation.stagingToReceiptMs === null ? null :
+            timing.requestToStagingMs + presentation.stagingToReceiptMs,
         } : {}) };
       });
     }
@@ -2724,6 +2732,7 @@ export class BackendCore {
         ...(elapsed && compositionStartedMs !== undefined ? { timing: {
           elapsed, compositionStartedMs, readyMs: elapsed(), parentRequestId: input.requestId,
           previewOrigin: providerTiming?.previewOrigin,
+          inputStaging: preview.inputStaging,
           source: this.velaApiTest ? 'simulated' : 'observed',
         } } : {}) });
       return parsed;
