@@ -214,11 +214,18 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       }
     }
   }
+  function remainingRamReservationBytes(reserved = reservedRam()) {
+    return disposed || now() > localFreshUntil ? null : Math.max(0, freeForReservations - reserved);
+  }
+  function canReserveRam(bytes: number) {
+    const remaining = remainingRamReservationBytes();
+    return remaining !== null && bytes <= remaining;
+  }
   function canLease(kind: ResourceKind, bytes = 0) {
     return !disposed && used(kind) < effective[kind] &&
       (kind !== 'gpu' || !!freshGpuBudget()) &&
       (kind !== 'build' || used('cpu') < effective.cpu) &&
-      (kind === 'remote' || now() <= localFreshUntil && bytes <= Math.max(0, freeForReservations - reservedRam()));
+      (kind === 'remote' || canReserveRam(bytes));
   }
   function commit(expectedVersion: number, current: PolicyPreference, prior: PolicyPreference | null) {
     if (disposed || expectedVersion !== configVersion) throw Error('stale_resource_policy');
@@ -252,9 +259,11 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     externalActivityProtection: () => preference.config.protectExternalActivity ?? false,
     inspect() {
       const { config, origin } = preference;
+      const reservedRamBytes = reservedRam();
       return { schemaVersion: 1 as const, epoch, revision, configVersion, mode: config.mode,
         limits: { ...config.limits }, effective: { ...effective }, previous: previous && { ...previous }, reason,
-        active: Object.fromEntries(kinds.map(kind => [kind, used(kind)])), reservedRamBytes: reservedRam(),
+        active: Object.fromEntries(kinds.map(kind => [kind, used(kind)])), reservedRamBytes,
+        remainingRamReservationBytes: remainingRamReservationBytes(reservedRamBytes),
         origin, configurationHealth, maxCpuWorkers: maxWorkers, canRollback: !!previousPreference,
         windowsMonitoring: config.monitorWindows ?? true, externalActivityProtection: config.protectExternalActivity ?? false, appliedAtUtc,
         previousMode: previousPreference?.config.mode ?? null };

@@ -10,6 +10,7 @@ test("native resource controls submit only a confirmed versioned selection", asy
     dedicatedVramEstimate: { bytes: 2 * 1024 ** 3, ageMs: 2200 },
     windowsLowMemory: { active: false, ageMs: 2000 },
     windowsCommitHeadroom: { bytes: 5 * 2 ** 30, ageMs: 1200 },
+    remainingRamReservationBytes: 1.5 * 2 ** 30,
     nvidiaGpuThermals: { temperatureCelsius: 60.81, slowdown: false, ageMs: 280 },
     effective: { cpu: 2, build: 1, host_io: 3, gpu: 0, remote: 3 },
   };
@@ -26,6 +27,7 @@ test("native resource controls submit only a confirmed versioned selection", asy
   assert.match(dialogs[0].detail, /Estimated dedicated VRAM headroom: 2\.00 GiB \(3 s old\)/u);
   assert.match(dialogs[0].detail, /Windows low-memory notification: Clear \(2 s old\)/u);
   assert.match(dialogs[0].detail, /Windows commit headroom: 5\.00 GiB \(2 s old\)/u);
+  assert.match(dialogs[0].detail, /RAM available for new reservations: 1\.50 GiB/u);
   assert.match(dialogs[0].detail, /NVIDIA GPU thermals: 60\.81 °C, slowdown clear \(1 s old\)/u);
   assert.equal(dialogs[0].defaultId, dialogs[0].cancelId);
   response = 1;

@@ -258,10 +258,13 @@ test('Windows commit headroom caps RAM reservations and can hold local admission
     await yieldToProbe();
     assert.equal(admission.read(true).readings.windowsCommitHeadroomBytes?.value, 768 * mib);
     assert.equal(admission.telemetry().metrics.windowsCommitHeadroomBytes.availability, 'derived');
+    assert.equal(admission.inspectPolicy().remainingRamReservationBytes, 256 * mib);
     assert.equal(admission.tryLease({ ...request, estimatedRamBytes: 257 * mib }), undefined);
     const lease = admission.tryLease({ ...request, estimatedRamBytes: 256 * mib });
     assert.ok(lease);
+    assert.equal(admission.inspectPolicy().remainingRamReservationBytes, 0);
     lease.release();
+    assert.equal(admission.inspectPolicy().remainingRamReservationBytes, 256 * mib);
 
     commitMiB = 480;
     for (time = 6000; time <= 22_000; time += 4000) admission.read(true);
@@ -272,9 +275,11 @@ test('Windows commit headroom caps RAM reservations and can hold local admission
     assert.deepEqual(held.reasons, ['windows-commit-pressure']);
     assert.equal(held.workerLimit, 0);
     assert.equal(admission.inspectPolicy().reason, 'windows_commit_pressure');
+    assert.equal(admission.inspectPolicy().remainingRamReservationBytes, 0);
     assert.equal(admission.canLease('remote'), true);
     assert.equal(admission.canLease('cpu'), false);
     time = 52_001;
+    assert.equal(admission.inspectPolicy().remainingRamReservationBytes, null);
     assert.equal(admission.read(true).readings.windowsCommitHeadroomBytes, undefined);
     assert.equal(admission.canLease('host_io'), true);
   } finally { admission.dispose(); }
