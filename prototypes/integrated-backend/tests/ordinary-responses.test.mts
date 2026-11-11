@@ -183,8 +183,11 @@ test('reviewed mission runs two isolated stateless specialists concurrently and 
     assert.ok(f.requests.every(req => !req.tools && req.store === false && req.reasoning?.effort === 'low'));
     release();
     const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
+    // Dispatch and post-release verification have separate bounded waits.
+    // A slow dispatch must not spend the native follow-up/report settlement budget.
+    const settledUntil = performance.now() + 5000;
     let completed = await read();
-    while (['queued', 'running'].includes(completed.outcome) && performance.now() < until) {
+    while (['queued', 'running'].includes(completed.outcome) && performance.now() < settledUntil) {
       await wait(25); completed = await read();
     }
     assert.equal(completed.outcome, 'verified', JSON.stringify(completed.tasks.map(t => [t.id, t.state, t.detail])));
