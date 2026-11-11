@@ -1,4 +1,4 @@
-import type { MissionAttemptPhaseTiming, MissionEvent, MissionProjection } from './mission-contracts.mts';
+import type { MissionAdmission, MissionAdmissionReason, MissionAttemptPhaseTiming, MissionEvent, MissionProjection } from './mission-contracts.mts';
 import type { ConversationProviderTiming, MissionReportTiming, ProviderStreamTiming, StreamEvent, VelaRouteTiming } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
 import type { TurnEvent, TurnTransportTiming } from '../../openai-provider/contracts.mts';
@@ -55,6 +55,16 @@ export function observeConversationProvider(origin: ConversationProviderTiming['
 function boundary(event: MissionEvent) {
   return { eventSeq: event.seq, utc: event.time, clock: event.timing?.domain ?? null,
     monotonicMs: event.timing?.monotonicMs ?? null };
+}
+
+function projectResourceAdmission(admission: MissionAdmission | undefined) {
+  if (!admission) return null;
+  const { cpuPercent, availableMemoryBytes, gpuEnginePercent, diskQueueLength } = admission.readings;
+  return { workerLimit: admission.workerLimit, reasons: [...admission.reasons],
+    cpuPercent: cpuPercent?.value ?? null, availableMemoryBytes: availableMemoryBytes?.value ?? null,
+    gpuEnginePercent: gpuEnginePercent?.value ?? null, diskQueueLength: diskQueueLength?.value ?? null,
+    observedAt: { cpuPercent: cpuPercent?.observedAt ?? null, availableMemoryBytes: availableMemoryBytes?.observedAt ?? null,
+      gpuEnginePercent: gpuEnginePercent?.observedAt ?? null, diskQueueLength: diskQueueLength?.observedAt ?? null } };
 }
 
 type AttemptBoundary = ReturnType<typeof boundary>;
@@ -216,7 +226,6 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       ...(previous ? [previous] : []), ...dependencies.map(dependency => dependency.attemptId),
     ])] : null;
     const measured = matched?.kind === 'settled' ? interval(id, start, end) : null;
-    const readings = attempt.admission?.readings;
     const phases = attempt.timing?.phases;
     const readyQueueMs = phases?.readyQueue ? phases.contextAssembly[0] - phases.readyQueue.firstObservedMs : NaN;
     return {
@@ -231,13 +240,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       readyQueueMs: Number.isFinite(readyQueueMs) && readyQueueMs >= 0 ? readyQueueMs : null,
       executionMs: attempt.timing?.executionMs ?? null, verificationMs: attempt.timing?.verificationMs ?? null,
       queueWallClockMs: attempt.timing?.queueMs ?? null,
-      resourceAdmission: attempt.admission && readings ? {
-        workerLimit: attempt.admission.workerLimit,
-        cpuPercent: readings.cpuPercent ?? null,
-        gpuEnginePercent: readings.gpuEnginePercent ?? null,
-        availableMemoryBytes: readings.availableMemoryBytes ?? null,
-        diskQueueLength: readings.diskQueueLength ?? null,
-      } : null,
+      resourceAdmission: projectResourceAdmission(attempt.admission),
       providerCalls: attempt.telemetry?.providerCalls ?? null,
       providerEvidence: attempt.telemetry?.providerEvidence ?? null,
       providerExecutionId: attempt.telemetry?.providerExecutionId ?? null,
@@ -306,11 +309,21 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const longestOnPath = attempts.filter(attempt => pathIds.has(attempt.id) && attempt.interval)
     .sort((a, b) => (b.interval!.end - b.interval!.start) - (a.interval!.end - a.interval!.start))[0];
   const intakeToReportStagedMs = timeToReportStaging(reportPublication?.timing, intake);
+  const attemptsByReason: Partial<Record<MissionAdmissionReason, number>> = {};
+  let admittedAttemptsWithSample = 0, admittedAttemptsWithReasons = 0;
+  for (const { attempt } of byAttempt.values()) {
+    if (!attempt.admission) continue;
+    admittedAttemptsWithSample++;
+    if (attempt.admission.reasons.length) admittedAttemptsWithReasons++;
+    for (const reason of new Set(attempt.admission.reasons)) attemptsByReason[reason] = (attemptsByReason[reason] ?? 0) + 1;
+  }
   return {
     contract: 'aerynth.mission-execution-profile@1' as const,
     kind: 'execution-profile' as const, missionId: mission.id, revision: mission.revision, outcome: mission.outcome,
     admission: initial, firstVerifiedTask: firstVerified, lastSettlement, reportPublication,
     verifiedTaskMilestones: { first: verifiedMilestones[0] ?? null, last: verifiedMilestones.at(-1) ?? null },
+    resourcePolicy: { currentAdmission: projectResourceAdmission(mission.admission), admittedAttemptsWithSample,
+      admittedAttemptsWithoutSample: byAttempt.size - admittedAttemptsWithSample, admittedAttemptsWithReasons, attemptsByReason },
     settlementToReportStagedMs: complete ? timeToReportStaging(reportPublication?.timing, lastSettlement) : null,
     intakeToReportStagedMs,
     requestIntake: intake, firstMeaningfulOutput: null, userDelivery,

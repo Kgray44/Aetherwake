@@ -11,6 +11,7 @@ import type { TimelineDocument } from '../../timeline-product/contracts.ts';
 import type { NoteDocument } from '../../block-library/note-contracts.ts';
 import type { VelaState } from '../../vela-core/src/contracts.ts';
 import type { MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomDashboard, MissionWorkroomPreview, MissionWorkroomResource } from '../src/mission-contracts.mts';
+import type { MissionExecutionProfile } from '../src/execution-profiler.mts';
 
 type EvidenceRow = Extract<MissionWorkroomDashboard, { kind: 'evidence' }>['rows'][number];
 
@@ -148,6 +149,15 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
     assert.deepEqual(profile.attempts.map(attempt => attempt.id).sort(),
       mission.tasks.flatMap(task => task.attempts.map(attempt => attempt.id)).sort());
+    assert.equal(profile.resourcePolicy.admittedAttemptsWithSample, profile.attempts.length);
+    assert.equal(profile.resourcePolicy.currentAdmission, null);
+    for (const task of mission.tasks) for (const attempt of task.attempts) {
+      const admission: MissionExecutionProfile['attempts'][number]['resourceAdmission'] | undefined =
+        profile.attempts.find(item => item.id === attempt.id)?.resourceAdmission;
+      assert.ok(admission && attempt.admission?.readings.availableMemoryBytes);
+      assert.deepEqual(admission.reasons, attempt.admission.reasons);
+      assert.equal(admission.observedAt.availableMemoryBytes, attempt.admission.readings.availableMemoryBytes.observedAt);
+    }
     assert.equal(profile.economics.usageCoverage, 'not-applicable');
     assert.ok(profile.work.criticalPath);
     const readiness = profile.work.dependencyReadinessPath;
