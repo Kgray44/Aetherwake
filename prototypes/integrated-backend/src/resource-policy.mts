@@ -361,3 +361,19 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     },
   };
 }
+
+/** Consumes only the host-resolved AEP observation from the authorized mission command. */
+export function previewWorkerBudgetExperiment(
+  policy: Pick<ReturnType<typeof createResourcePolicy>, 'inspect' | 'previewAdjustment'>,
+  observed: NonNullable<ReturnType<typeof import('./execution-profiler.mts').resolveMissionHypothesis>>,
+  cpuSlots: number,
+  nowMs: number,
+) {
+  const state = policy.inspect();
+  if (!finiteCount(cpuSlots, state.maxCpuWorkers) || cpuSlots === 0) return { status: 'invalid_proposal' as const };
+  if (cpuSlots === state.effective.cpu) return { status: 'no_effective_change' as const };
+  const preview = policy.previewAdjustment({ schemaVersion: 1, policyEpoch: state.epoch, baseRevision: state.revision,
+    evidenceRefs: [observed.hypothesis.id], expiresAtMs: nowMs + 30_000,
+    changes: { cpu: cpuSlots - state.effective.cpu } });
+  return preview.status === 'preview' ? { ...preview, kind: 'resource-experiment-preview' as const, observed } : preview;
+}
