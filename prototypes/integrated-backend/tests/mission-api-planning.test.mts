@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCipheriv,createDecipheriv,randomBytes,randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { mkdtempSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join,relative,resolve,isAbsolute } from 'node:path';
@@ -10,6 +11,7 @@ import { nativeMissionExecutors, missionResultAvailable } from '../src/mission-n
 import type { MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
 import type { VelaBackendState } from '../src/contracts.mts';
+import type { VelaRequest } from '../../vela-core/src/contracts.ts';
 const objective='Can you investigate why the Minecraft server is lagging?';
 const marker='SYNTHETIC_ONLY_MISSION_API_KEY';
 const graph={tasks:[{capability:'cpu',after:[]},{capability:'ram',after:[]},{capability:'backend',after:['cpu','ram']}],unsupported:['Server tick timings and logs are unavailable.']};
@@ -249,6 +251,93 @@ test('reviewed API mission planning rejects a terminal response that disagrees w
     await assert.rejects(f.plan(offer), /vela_api_proposal_unconfirmed/);
     assert.equal(f.requests.length, 1);
     assert.deepEqual(await f.core.command('missions', { name: 'list', input: {} }), []);
+  } finally { await f.close(); }
+});
+
+test('a reviewed Vela turn investigates selected notes and composes from checked passages', async () => {
+  const f = fixture(true);
+  try {
+    await f.ready();
+    const noteText = 'The west lift returns to service after an inspection. Unrelated serial 031.';
+    const workspace = await f.core.command('desktop', { type: 'snapshot' });
+    const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Lift handoff', workspaceId: workspace.activeWorkspaceId });
+    const note = created.resources.find(item => item.title === 'Lift handoff')!;
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: noteText });
+    const intent = 'When can the west lift go back into service, and who signs off?';
+    const preview = await f.core.command('velaRequestPreview', { intent, resourceIds: [note.id],
+      providerId: 'openai-api-vela', model: 'gpt-6-luna', adaptive: true, semanticContext: true });
+    assert.equal(preview.semanticContext, true);
+    assert.equal(preview.sendDisposition, 'review-required');
+    await assert.rejects(f.core.command('velaRequestPreview', { intent: 'Create a workspace for this note.', resourceIds: [note.id],
+      providerId: 'openai-api-vela', model: 'gpt-6-luna', adaptive: true, semanticContext: true }), /vela_semantic_context_ineligible/);
+    assert.equal(f.requests.length, 0);
+    const review = await f.core.command('velaNativeReview', { previewId: preview.id, signature: preview.signature });
+    assert.equal(review.semanticContext, true);
+    await assert.rejects(f.core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature, reviewDigest: review.reviewDigest, directSend: true }));
+    const require = createRequire(import.meta.url);
+    const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    const { reviewPage } = require('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+    const send = (allow: boolean) => velaCommand({
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      directMessageSend: true, routeNative: true, dialog: {},
+      call: f.core.command.bind(f.core),
+      reviewProvider: async (reviewed: { review: typeof review }) => {
+        assert.equal(reviewed.review.semanticContext, true);
+        assert.match(reviewPage(reviewed.review, intent), /up to six API calls/);
+        return allow;
+      },
+      input: { name: 'request', input: { intent, resourceIds: [note.id], authorizeProvider: true,
+        providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
+    });
+    await assert.rejects(send(false), /authorization_cancelled/);
+    assert.equal(f.requests.length, 0);
+    const interpreted = { version: 2, objective: 'Find the return condition', clarification: '', perception: {
+      kind: 'answer', explicitGoals: ['Find the condition'], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [],
+    }, needs: [
+      { key: 'condition', question: 'When can the lift return?', query: 'lift service return' },
+      { key: 'signoff', question: 'Who signs off on the return?', query: 'lift sign off' },
+    ] };
+    const qualification = { ...interpreted, needs: [{ key: 'day', question: 'Which weekday?', query: 'inspection weekday' }] };
+    const assess = (key: string, quote: string) => ({ version: 3, clarification: '', assessment: [
+      { key, status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
+      ...(key === 'condition' ? [{ key: 'signoff', status: 'missing', passages: [], query: '' }] : []),
+    ] });
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    f.replies.push(reply(qualification), reply(assess('day', 'The pump inspection is on Tuesday.')),
+      reply(interpreted), reply(assess('condition', 'The west lift returns to service after an inspection.')),
+      body => {
+        assert.equal(body.tools, undefined);
+        assert.match(JSON.stringify(body.input), /returns to service after an inspection/);
+        const packet = JSON.parse(body.input[0].content).evidence;
+        assert.equal(packet.searchCoverage, 'bounded');
+        assert.deepEqual(packet.coverage[1], { key: 'signoff', question: 'Who signs off on the return?', status: 'missing', passages: [] });
+        assert.doesNotMatch(JSON.stringify(body), /Unrelated serial/);
+        return response('The west lift can return after inspection.', body.model);
+      });
+    const result = await send(true) as VelaRequest;
+    assert.equal(result.state, 'responded');
+    assert.equal(f.requests.length, 5);
+    const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
+    assert.equal(state.conversation?.messages.find(message => message.id === result.response?.messageId)?.content, 'The west lift can return after inspection.');
+    f.replies.push(reply(interpreted), async body => {
+      const snapshot = await f.core.command('desktop', { type: 'snapshot' });
+      const current = snapshot.resources.find(item => item.id === note.id)!;
+      await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: current.version,
+        content: 'Correction: wait for a replacement cable.' });
+      return reply(assess('condition', 'The west lift returns to service after an inspection.'))(body);
+    });
+    const rejected = await send(true) as VelaRequest;
+    assert.equal(rejected.state, 'failed');
+    assert.equal(f.requests.length, 7, 'a corrected note must block answer composition');
+    f.replies.push(reply({ ...interpreted, needs: [] }));
+    const skipped = await send(true) as VelaRequest;
+    assert.equal(skipped.state, 'failed');
+    assert.equal(f.requests.length, 8, 'skipping note assessment must block answer composition');
+    f.replies.push(reply(interpreted), reply(assess('condition', 'wait for a replacement cable.')),
+      () => response('An unconfirmed answer.', 'other-model'));
+    const unconfirmed = await send(true) as VelaRequest;
+    assert.equal(unconfirmed.state, 'failed');
+    assert.equal(unconfirmed.errorCode, 'vela_semantic_answer_unconfirmed');
   } finally { await f.close(); }
 });
 

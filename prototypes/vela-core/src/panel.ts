@@ -257,6 +257,14 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   routeEscalation.type = 'checkbox';
   const routeHistory = el('input');
   routeHistory.type = 'checkbox';
+  const semanticContext = el('input');
+  semanticContext.type = 'checkbox';
+  function updateSemanticContext() {
+    semanticContext.disabled = !current?.planningProviders || chosenProviderId !== 'openai-api-vela' ||
+      !selected.size || selected.size > 4 || [...selected.values()].some(ref => ref.resourceKind !== 'note') ||
+      !!handoffSelection || !!routingAgentSelection;
+    if (semanticContext.disabled) semanticContext.checked = false;
+  }
   const modes = [['auto', 'Auto'], ['fast', 'Fast'], ['deep', 'Deep'], ['codex', 'Codex'], ['custom', 'Custom']] as const;
   function setOptions(select: HTMLSelectElement, values: readonly (readonly [string, string])[]) {
     select.replaceChildren(...values.map(([id, title]) => {
@@ -316,6 +324,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   if (client.routingOptions) providerRoutes.append(label('Routing mode', routeMode), refreshModels, label('Model', routeModel),
     label('Reasoning effort', routeEffort), label('Allow one deeper attempt if Auto hits an output limit', routeEscalation));
   providerRoutes.append(label('Start fresh for this send', routeHistory));
+  providerRoutes.append(label('Investigate selected notes before answering', semanticContext));
   const savedRoutes = disclosure('Saved routing defaults', 'vela-core-routing-defaults');
   const scopeChoice = el('select', 'vela-core-input');
   const effectiveRoute = el('p', 'vela-core-meta');
@@ -453,11 +462,12 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     ...(connected && routeEffort.value ? { reasoningEffort: routeEffort.value as import('../../openai-provider/model-controls.ts').ReasoningEffort } : {}),
     ...(connected && !routeEscalation.disabled && routeEscalation.checked ? { allowEscalation: true as const } : {}),
     ...(connected && routeHistory.checked ? { includeRecentHistory: false as const } : {}),
+    ...(connected && !semanticContext.disabled && semanticContext.checked ? { semanticContext: true as const } : {}),
     ...(connected && handoffSelection ? { handoffSourceRequestId: handoffSelection.requestId } : {}),
     ...(connected && routingAgentSelection ? { routingAgentId: routingAgentSelection.id } : {}),
     ...(connected && (useAutomaticOnce || handoffSelection && !routingAgentSelection) ? { overrideDefaults: true as const } : {}),
   }, revision = draftRevision, submittedView = ++viewRevision;
-    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
+    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; semanticContext.checked = routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
       try {
         const recorded = await client.request(submitted);
@@ -485,6 +495,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function closeContext(restoreFocus = true) { if (more.hidden) return; const previous = contextTrigger; for (const entry of contextPanels.values()) { entry.panel.node.hidden = true; entry.trigger.setAttribute('aria-expanded', 'false'); } activeContext = null; more.hidden = true; lastDisclosure = null; options.missions?.setVisible(false); options.voice?.setVisible(false); options.permissions?.setVisible(false); updatePresence(); if (restoreFocus) previous?.focus(); present(); }
   shell.addEventListener('keydown', event => { if (event.key !== 'Escape') return; const target = event.target as HTMLElement, opened = target.closest<HTMLDetailsElement>('details[open]') ?? (lastDisclosure?.open && shell.contains(lastDisclosure) && !lastDisclosure.closest('[hidden]') ? lastDisclosure : null); if (!more.hidden && (!opened || opened === contextPanels.get(activeContext!)?.panel.node)) { event.preventDefault(); event.stopPropagation(); closeContext(); } else if (opened) { event.preventDefault(); event.stopPropagation(); opened.open = false; opened.querySelector('summary')?.focus(); } });
   function renderSelection() {
+    updateSemanticContext();
     selection.replaceChildren(); selection.hidden = !selected.size && !handoffSelection && !routingAgentSelection;
     routeHistory.disabled = !!handoffSelection;
     if (handoffSelection) {
@@ -513,6 +524,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     updateWorkspaceAvailability();
   }
   function renderProviderChoice() {
+    updateSemanticContext();
     const connected = current?.planningProviders;
     refreshModels.disabled = !connected || (!chosenProviderId && routeMode.value !== 'codex');
     routeEscalation.disabled = !connected || !!chosenProviderId || (!!routeMode.value && routeMode.value !== 'auto');

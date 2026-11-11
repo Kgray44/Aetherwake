@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { historyDigest } from '../../vela-core/src/bounded-history.mts';
-import { parseSemanticHistoryAssessment, parseSemanticHistoryProposal, semanticHistoryFormats } from '../../vela-core/src/semantic-history.mts';
+import { investigateSemanticHistory, parseSemanticHistoryAssessment, parseSemanticHistoryProposal, semanticHistoryFormats } from '../../vela-core/src/semantic-history.mts';
 import type { SemanticHistoryCall } from '../../vela-core/src/semantic-history.mts';
 import type { VelaSemanticHistorySource, VelaService } from '../../vela-core/src/service.mts';
 import type { VelaApiRuntime, VelaStructuredQualification } from './vela-api-runtime.mts';
@@ -66,7 +66,7 @@ export async function qualifyVelaHistoryModelWithApi(api: VelaApiRuntime, admiss
 
 /** Opt-in native shadow port. Runs through the existing API admission, credentials,
  * execution ledger and Responses transport. No tools or external effects are proposed. */
-export function investigateVelaHistoryWithApi(vela: VelaService, api: VelaApiRuntime, intent: string,
+export function investigateVelaHistoryWithApi(vela: Pick<VelaService, 'investigateHistory'>, api: VelaApiRuntime, intent: string,
   admission: SemanticHistoryAdmission, signal?: AbortSignal) {
   const { configurationVersion, authorize } = admission;
   const allowed = admission.models ? [...admission.models] : [];
@@ -97,4 +97,39 @@ export function investigateVelaHistoryWithApi(vela: VelaService, api: VelaApiRun
     if (call.stage === 'assess' && (proposal as { version?: unknown } | null)?.version !== 3) return null;
     return proposal;
   }, signal, admission.selectedNoteIds);
+}
+
+/** A reviewed foreground turn cannot discover anything outside its frozen source envelope. */
+export async function investigateReviewedVelaNotes(api: VelaApiRuntime, intent: string,
+  notes: readonly (VelaSemanticHistorySource & { title: string })[], configurationVersion: number, model: string,
+  validate: () => void, signal: AbortSignal) {
+  const authorize = () => { validate(); return !signal.aborted; };
+  const ready = (['interpret', 'assess'] as const).every(stage =>
+    api.qualifiedStructuredRoute(configurationVersion, [model], semanticHistoryFormats[stage].schema, instructions[stage]));
+  if (!ready) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize }, signal);
+  const scoped: Pick<VelaService, 'investigateHistory'> = {
+    investigateHistory(request, disclose, cancel) {
+      const current = (source: VelaSemanticHistorySource) => notes.includes(source as typeof notes[number]) && authorize();
+      return investigateSemanticHistory(request, {
+        selected: () => ({ sources: notes, scan: 'bounded' }),
+        search: () => ({ sources: [], scan: 'bounded' }),
+        isCurrent: current,
+        disclose: (call, sources, abort) => disclose(call, sources, abort, () => authorize() && sources.every(current)),
+      }, cancel);
+    },
+  };
+  const result = await investigateVelaHistoryWithApi(scoped, api, intent, { configurationVersion, models: [model], authorize }, signal);
+  validate();
+  const titles = new Map(notes.map(note => [note.sourceId, note.title]));
+  const questions = new Map(result.proposal?.needs.map(need => [need.key, need.question]));
+  if (!questions.size && result.proposal?.clarification) questions.set('clarification', result.proposal.clarification);
+  return {
+    state: result.state,
+    searchCoverage: result.searchCoverage,
+    clarification: result.clarification,
+    coverage: result.coverage.map(need => ({
+      key: need.key, question: questions.get(need.key), status: need.status,
+      passages: need.passages?.map(({ sourceId, quote }) => ({ sourceId, title: titles.get(sourceId), quote })) ?? [],
+    })),
+  };
 }
