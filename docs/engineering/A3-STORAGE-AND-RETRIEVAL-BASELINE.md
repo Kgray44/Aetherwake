@@ -36,8 +36,22 @@ Run `node prototypes/integrated-backend/src/transaction-benchmark.mjs event-heav
 
 The backup regression uses the existing SQLite online backup and opens the copy through Core. It checks the exact conversation, message, event ID and cursor, and verifies that a source appended after backup is absent from the restored copy.
 
+The [native protected backup probe](../../prototypes/visual-experience/cinematic-v3/native/protected-backup-verify.cjs) also exercises the existing Vela API credential owner, native-host protocol, and Electron protected-storage broker. On Windows with Electron 45.2.1, one process sealed a synthetic credential, backed up the database, and disconnected the source. A second Electron process under the same OS account recovered the original version and authorization boundary from the 159,744-byte backup. The synthetic bearer was absent from the raw backup bytes and the public connection view. Opening the same backup with native custody unavailable denied credential resolution. The probe uses no provider network calls.
+
+From the repository root, run the following with the installed Electron executable and a fresh scratch directory.
+
+```powershell
+$scratch = (New-Item -ItemType Directory (Join-Path ([IO.Path]::GetTempPath()) ("aerynth-native-backup-" + [guid]::NewGuid()))).FullName
+$probe = 'prototypes/visual-experience/cinematic-v3/native/protected-backup-verify.cjs'
+$electron = './prototypes/visual-experience/cinematic-v3/node_modules/electron/dist/electron.exe'
+& $electron $probe $scratch seed | Out-Host
+if ($LASTEXITCODE -ne 0) { throw 'Native backup seed failed' }
+& $electron $probe $scratch restore | Out-Host
+if ($LASTEXITCODE -ne 0) { throw 'Native backup restore failed' }
+```
+
 Run `node prototypes/vela-core/tests/mission-context-evaluation.mts` for the frozen starter corpus. The current lexical compiler found five of six expected source IDs, including both conflicting records, and missed the paraphrase about the night shift. The fixture denied a superseded source and a restricted source at their owner boundary. It also verified rejection of an old policy-stamped package, reconstruction with the same source identities under a new stamp and denial after revocation. Two 150-sample runs measured p50 0.20–0.33 ms and p95 1.53–16.46 ms under concurrent host load. The fixture adapter supplies its own authorization and policy stamps. These results establish a regression baseline for the compiler and proof checks. Live provider continuity and independently labeled semantic quality require separate evidence.
 
 ## Remaining acceptance evidence
 
-The current lexical baseline uses [bounded history retrieval](../../prototypes/vela-core/src/history-retrieval.mts) and scoped [mission context](../../prototypes/vela-core/src/mission-context.mts). The [semantic CIE specification](../specifications/CIE-SEMANTIC-INTERPRETATION-AND-EVIDENCE-RETRIEVAL.md) requires an independently labeled split for paraphrase, conflict, correction, permissions, revocation and provider continuity. A3 still needs that comparative evaluation, encrypted backup recovery with native key custody, repeated disk-backed retrieval and replay baselines, and a qualified native profile. No independent CIE database or transcript copy is introduced.
+The current lexical baseline uses [bounded history retrieval](../../prototypes/vela-core/src/history-retrieval.mts) and scoped [mission context](../../prototypes/vela-core/src/mission-context.mts). The [semantic CIE specification](../specifications/CIE-SEMANTIC-INTERPRETATION-AND-EVIDENCE-RETRIEVAL.md) requires an independently labeled split for paraphrase, conflict, correction, permissions, revocation and provider continuity. A3 still needs that comparative evaluation, repeated disk-backed retrieval and replay baselines, and a qualified native profile. The native backup probe covers the integrated Vela API credential schema and same-account Windows custody. Encrypted Personal Context recovery, full-profile protection, and portability across OS accounts require separate evidence. No independent CIE database or transcript copy is introduced.
