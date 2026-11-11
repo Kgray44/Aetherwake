@@ -1874,7 +1874,11 @@ export class BackendCore {
   private validateVoiceContext(ref:string,digest:string):void {
     const entry=this.voiceContexts.get(ref);ensure(entry&&entry.value.contextDigest===digest&&entry.expires>Date.now()&&entry.scopeStamp===this.velaScopeStamp(),'live_context_changed');
     this.requireVelaConversation(entry.value.conversationId);
-    for(const source of entry.sources){const message=this.state.graph.messages.find(message=>message.id===source.id);ensure(message&&planningDigest(message.content)===source.digest&&!this.state.graph.unavailableMessageIds.includes(source.id),'live_context_changed');}
+    for (const source of entry.sources) {
+      ensure(this.conversationAccess.access(entry.value.conversationId, source.id), 'live_context_changed');
+      const message = this.state.graph.messages.find(message => message.id === source.id);
+      ensure(message && planningDigest(message.content) === source.digest, 'live_context_changed');
+    }
     if(entry.operations)this.vela.validateOperationContext(entry.operations,this.inspectVelaOperationWorkspace);
   }
   private appendVoiceFragment(fragment:LiveTranscriptFragment,existingMessageId?:string):string {

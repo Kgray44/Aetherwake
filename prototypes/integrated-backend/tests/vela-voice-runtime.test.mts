@@ -40,6 +40,10 @@ test('live voice revalidates the exact messages sent in its bounded canonical co
       owner.graph.markUnavailable(excluded.id);
     });
     owner.validateVoiceContext(context.contextRef, context.contextDigest);
+    const sourceAllowed = owner.missionConversations.sourceAllowed.bind(owner.missionConversations);
+    owner.missionConversations.sourceAllowed = (id: string) => id !== included.id && sourceAllowed(id);
+    assert.throws(() => owner.validateVoiceContext(context.contextRef, context.contextDigest), /live_context_changed/);
+    owner.missionConversations.sourceAllowed = sourceAllowed;
     owner.atomic(() => owner.graph.markUnavailable(included.id));
     assert.throws(() => owner.validateVoiceContext(context.contextRef, context.contextDigest), /live_context_changed/);
   } finally {
