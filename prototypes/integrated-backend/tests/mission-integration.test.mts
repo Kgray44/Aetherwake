@@ -360,6 +360,9 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.equal(beforeReopen.intakeToUserDeliveryMs,
       beforeReopen.intakeToReportStagedMs! + beforeReopen.userDelivery.stagingToReceiptMs);
     assert.equal(beforeReopen.reportLatency?.stagingToRendererReceiptMs, beforeReopen.userDelivery.stagingToReceiptMs);
+    assert.equal(beforeReopen.wallTime?.from, 'mission-start-command');
+    assert.equal(beforeReopen.wallTime?.through, 'renderer-receipt');
+    assert.equal(beforeReopen.wallTime?.elapsedMs, beforeReopen.intakeToUserDeliveryMs);
     assert.deepEqual(beforeReopen.firstMeaningfulOutput, {
       kind: 'mission-report', source: 'renderer-visible-frame', messageId: latestReport.id,
       publicationEventId: beforeReopen.reportPublication!.eventId, receivedAt: beforeReopen.userDelivery.receivedAt,
@@ -381,6 +384,8 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.ok(pruned && 'kind' in pruned && pruned.kind === 'execution-profile');
     assert.equal(pruned.reportPublication, null);
     assert.equal(pruned.intakeToUserDeliveryMs, null);
+    assert.equal(pruned.wallTime?.through, 'last-settlement');
+    assert.equal(pruned.wallTime?.publicationEventId, null);
     assert.deepEqual(pruned.userDelivery, beforeReopen.userDelivery);
     assert.deepEqual(pruned.firstMeaningfulOutput, { ...beforeReopen.firstMeaningfulOutput, intakeToReceiptMs: null });
     assert.deepEqual(pruned.verifiedTaskMilestones, beforeReopen.verifiedTaskMilestones);

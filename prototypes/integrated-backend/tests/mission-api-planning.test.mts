@@ -229,6 +229,15 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
     assert.ok(delivered && 'kind' in delivered && delivered.kind === 'execution-profile' && delivered.userDelivery?.stagingToReceiptMs != null);
     assert.equal(delivered.planning?.lifecycle?.planningCommandToRendererReceiptMs,
       profile.planning!.lifecycle!.planningCommandToReportStagedMs! + delivered.userDelivery.stagingToReceiptMs);
+    assert.equal(profile.wallTime?.through, 'report-staged');
+    const wall = delivered.wallTime;
+    assert.ok(wall);
+    assert.equal(wall.from, 'planning-command');
+    assert.equal(wall.through, 'renderer-receipt');
+    assert.equal(wall.publicationEventId, delivered.reportPublication!.eventId);
+    assert.equal(wall.elapsedMs, delivered.planning!.lifecycle!.planningCommandToRendererReceiptMs);
+    const segmentSum = Object.values(wall.segments).reduce<number>((sum, duration) => sum + (duration ?? 0), 0);
+    assert.ok(Math.abs(segmentSum - wall.elapsedMs) < 1e-6);
     await f.reopen();const restored=await f.core.command('missions',{name:'read',input:{id:running.id}}) as MissionProjection;
     assert.equal(restored.outcome,'blocked');assert.deepEqual(restored.coverage,settled.coverage);assert.equal(f.requests.length,1);
     const restoredProfile=await readProfile();
@@ -244,12 +253,16 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
       assert.equal(projected?.policyRevision, receipt?.policyRevision);
     }
     assert.deepEqual(restoredProfile.planning,delivered.planning);
+    assert.deepEqual(restoredProfile.wallTime, wall);
     const publication = delivered.reportPublication!;
     const unrelatedPublication = { ...publication, timing: { ...publication.timing!, clock: 'unrelated-report-clock' } };
     const unrelatedDelivery = projectMissionExecution(restored, unrelatedPublication, delivered.userDelivery).planning?.lifecycle;
     assert.equal(unrelatedDelivery?.planningCommandToAdmissionMs, profile.planning!.lifecycle!.planningCommandToAdmissionMs);
     assert.equal(unrelatedDelivery?.planningCommandToReportStagedMs, null);
     assert.equal(unrelatedDelivery?.planningCommandToRendererReceiptMs, null);
+    assert.equal(projectMissionExecution(restored, unrelatedPublication, delivered.userDelivery).wallTime?.through, 'last-settlement');
+    const differentReceipt = { ...delivered.userDelivery, publicationEventId: 'unrelated-publication' };
+    assert.equal(projectMissionExecution(restored, publication, differentReceipt).wallTime?.through, 'report-staged');
     const unlinked = structuredClone(restored);
     const unlinkedClock = unlinked.planning!.timing!.lifecycleClock!;
     unlinkedClock.domain = 'unrelated-clock-fixture';
