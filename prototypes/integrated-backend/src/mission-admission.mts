@@ -32,8 +32,12 @@ const windowsMetrics = {
   physicalCores: ['cores', 'Win32_Processor.NumberOfCores (sum across packages)'],
   pagesPerSecond: ['pages/s', 'Windows Memory.PagesPersec'],
   windowsLowMemory: ['0=clear, 1=low physical memory', 'Windows QueryMemoryResourceNotification'],
+  windowsCommitHeadroomBytes: ['bytes', 'Windows GetPerformanceInfo commit limit minus committed pages'],
 } as const;
 type WindowsPressure = Partial<Record<keyof typeof windowsMetrics, number>>;
+const earlyMemoryMetrics = ['windowsLowMemory', 'windowsCommitHeadroomBytes'] as const;
+type EarlyMemoryMetric = typeof earlyMemoryMetrics[number];
+type WindowsMemoryPressure = Pick<WindowsPressure, EarlyMemoryMetric>;
 type TimedReading = { reading: MissionAdmissionReading; time: number };
 type MetricValue = number | readonly number[];
 type MetricSample = { value: MetricValue; observedAt: string; time: number; windowMs: number | null };
@@ -46,7 +50,7 @@ type AdmissionOptions = {
   wallNow?(): number;
   availableMemory?(): number;
   cpuCounters?(): CpuCounters;
-  readWindowsPressure?: ((signal: AbortSignal, observeMemory: (value: unknown) => void) => Promise<WindowsPressure>) | null;
+  readWindowsPressure?: ((signal: AbortSignal, observeMemory: (value: WindowsMemoryPressure) => void) => Promise<WindowsPressure>) | null;
   resourcePolicy?: ResourcePolicyConfig;
   resourcePolicyPersistence?: ResourcePolicyPersistence;
 };
@@ -64,11 +68,23 @@ $network = $null
 $cores = $null
 $pages = $null
 $memoryPressure = $null
+$commitHeadroom = $null
 try {
   Add-Type -TypeDefinition @'
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 public static class AerynthMemoryPressure {
+  [StructLayout(LayoutKind.Sequential)]
+  private struct PerformanceInformation {
+    public uint Size;
+    public System.UIntPtr CommitTotal, CommitLimit, CommitPeak, PhysicalTotal, PhysicalAvailable, SystemCache;
+    public System.UIntPtr KernelTotal, KernelPaged, KernelNonpaged, PageSize;
+    public uint HandleCount, ProcessCount, ThreadCount;
+  }
+  [DllImport("kernel32.dll", ExactSpelling = true)]
+  [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool K32GetPerformanceInfo(out PerformanceInformation information, uint size);
   [DllImport("kernel32.dll", ExactSpelling = true)]
   [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
   private static extern SafeWaitHandle CreateMemoryResourceNotification(int notificationType);
@@ -83,11 +99,20 @@ public static class AerynthMemoryPressure {
       return low ? 1 : 0;
     }
   }
+  public static ulong? ReadCommitHeadroom() {
+    PerformanceInformation information;
+    if (!K32GetPerformanceInfo(out information, (uint)Marshal.SizeOf(typeof(PerformanceInformation)))) return null;
+    ulong limit = information.CommitLimit.ToUInt64(), total = information.CommitTotal.ToUInt64();
+    ulong pageSize = information.PageSize.ToUInt64();
+    if (limit == 0 || pageSize == 0) return null;
+    return checked((limit > total ? limit - total : 0UL) * pageSize);
+  }
 }
 '@
   $memoryPressure = [AerynthMemoryPressure]::ReadLow()
 } catch {}
-ConvertTo-Json -InputObject @{windowsLowMemory=$memoryPressure} -Compress
+try { $commitHeadroom = [AerynthMemoryPressure]::ReadCommitHeadroom() } catch {}
+ConvertTo-Json -InputObject @{windowsLowMemory=$memoryPressure; windowsCommitHeadroomBytes=$commitHeadroom} -Compress
 try {
   $gpu = @(Get-CimInstance -ClassName Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine | Select-Object -First 8193 -Property Name,UtilizationPercentage)
 } catch {}
@@ -122,7 +147,7 @@ ConvertTo-Json -InputObject @{gpuMemory=$gpuMemory} -Compress
 `;
 
 async function sampleWindowsPressure(signal: AbortSignal, topology: ReturnType<typeof createWindowsGpuCapacityCache>,
-  observeMemory: (value: unknown) => void): Promise<WindowsPressure> {
+  observeMemory: (value: WindowsMemoryPressure) => void): Promise<WindowsPressure> {
   const windows = process.env.SystemRoot;
   if (!windows || !isAbsolute(windows)) return {};
   const powershell = join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
@@ -139,7 +164,7 @@ async function sampleWindowsPressure(signal: AbortSignal, topology: ReturnType<t
     firstLine += end === -1 ? chunk.slice(0, 1024) : chunk.slice(0, Math.min(end, 1024));
     if (end === -1 && firstLine.length < 1024) return;
     execution.child.stdout?.off('data', receive);
-    if (firstLine.length < 1024) observeMemory(parse(firstLine).windowsLowMemory);
+    if (firstLine.length < 1024) observeMemory(parse(firstLine));
   };
   execution.child.stdout?.on('data', receive);
   const { stdout } = await execution.catch((error: { killed?: boolean; stdout?: string }) => {
@@ -182,7 +207,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
   const readCpu = options.cpuCounters ?? readCpuCounters;
   const topology = platform() === 'win32' && options.readWindowsPressure === undefined ? createWindowsGpuCapacityCache() : undefined;
   const readWindows = options.readWindowsPressure ?? (topology ?
-    (signal: AbortSignal, observeMemory: (value: unknown) => void) => sampleWindowsPressure(signal, topology, observeMemory) : undefined);
+    (signal: AbortSignal, observeMemory: (value: WindowsMemoryPressure) => void) => sampleWindowsPressure(signal, topology, observeMemory) : undefined);
   let memory: TimedReading | undefined;
   let cpu: Pressure = { highSamples: 0, pressured: false };
   let gpu: Pressure = { highSamples: 0, pressured: false };
@@ -255,7 +280,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
     const gpuReading = numeric(result.gpuEnginePercent, 100) ? windowsReading(result.gpuEnginePercent) : undefined;
     const diskReading = numeric(result.diskQueueLength, Number.MAX_SAFE_INTEGER) ? windowsReading(result.diskQueueLength) : undefined;
     for (const name of Object.keys(windowsMetrics) as (keyof typeof windowsMetrics)[]) {
-      if (name === 'windowsLowMemory') continue;
+      if (name === 'windowsLowMemory' || name === 'windowsCommitHeadroomBytes') continue;
       const value = result[name];
       capture(name, numeric(value, name === 'gpuEnginePercent' ? 100 : Number.MAX_SAFE_INTEGER) ? value : undefined,
         startedAt, null, startedAtUtc);
@@ -273,15 +298,21 @@ export function createMissionAdmission(options: AdmissionOptions) {
     probe = controller;
     lastProbe = time;
     let memoryReported = false;
-    const observeMemory = (value: unknown) => {
+    const observeMemory = (observation: WindowsMemoryPressure) => {
       if (memoryReported || controller.signal.aborted || disposed) return;
       memoryReported = true;
-      const previous = samples.get('windowsLowMemory');
       const observedAt = now();
-      const before = previous && observedAt - previous.time <= windowsFreshMs ? previous.value : undefined;
-      const valid = value === 0 || value === 1;
-      capture('windowsLowMemory', valid ? value : undefined, time, 0, startedAtUtc);
-      if (valid && value !== before && observedAt - lastDemand <= demandGapMs) {
+      let changed = false;
+      for (const name of earlyMemoryMetrics) {
+        const value = observation[name];
+        const previous = samples.get(name);
+        const before = previous && observedAt - previous.time <= windowsFreshMs ? previous.value : undefined;
+        const valid = name === 'windowsLowMemory' ? value === 0 || value === 1 :
+          numeric(value, Number.MAX_SAFE_INTEGER) && Number.isSafeInteger(value);
+        capture(name, valid ? value : undefined, time, 0, startedAtUtc);
+        if (valid && value !== before) changed = true;
+      }
+      if (changed && observedAt - lastDemand <= demandGapMs) {
         try { options.onChange?.(); } catch { /* Optional telemetry cannot break the host. */ }
       }
     };
@@ -290,7 +321,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
       return readWindows(controller.signal, observeMemory);
     }).catch((): WindowsPressure => ({})).then(result => {
       if (!controller.signal.aborted) {
-        observeMemory(result.windowsLowMemory);
+        observeMemory(result);
         applyWindowsPressure(result, time, startedAtUtc);
       }
     }).catch(() => {
@@ -324,6 +355,12 @@ export function createMissionAdmission(options: AdmissionOptions) {
     return !focused && power.value.idleSeconds * 1000 < inputFreshMs;
   }
 
+  function windowsMemoryReading(name: EarlyMemoryMetric, time: number) {
+    const sample = samples.get(name);
+    return sample && time - sample.time <= windowsFreshMs && typeof sample.value === 'number' ?
+      { value: sample.value, observedAt: sample.observedAt } : undefined;
+  }
+
   const governor = {
     read(demand: boolean): MissionAdmission {
       if (disposed) return { workerLimit: options.maxWorkers, reasons: [], readings: {} };
@@ -346,9 +383,8 @@ export function createMissionAdmission(options: AdmissionOptions) {
       }
       const cpuPercent = fresh(cpu.sample, time, demandGapMs)?.reading;
       const availableMemoryBytes = fresh(memory, time, demandGapMs)?.reading;
-      const osMemory = samples.get('windowsLowMemory');
-      const windowsLowMemory = osMemory && time - osMemory.time <= windowsFreshMs && typeof osMemory.value === 'number' ?
-        { value: osMemory.value, observedAt: osMemory.observedAt } : undefined;
+      const windowsLowMemory = windowsMemoryReading('windowsLowMemory', time);
+      const windowsCommitHeadroomBytes = windowsMemoryReading('windowsCommitHeadroomBytes', time);
       const gpuEnginePercent = fresh(gpu.sample, time, windowsFreshMs)?.reading;
       const diskQueueLength = fresh(disk.sample, time, windowsFreshMs)?.reading;
       const rendererFrameP95Ms = fresh(frame?.timing, time, rendererFreshMs)?.reading;
@@ -356,6 +392,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
       const reasons: MissionAdmission['reasons'] = [];
       if (availableMemoryBytes && availableMemoryBytes.value < memoryFloorBytes) reasons.push('physical-memory');
       if (windowsLowMemory?.value === 1) reasons.push('os-memory-pressure');
+      if (windowsCommitHeadroomBytes && windowsCommitHeadroomBytes.value < memoryFloorBytes) reasons.push('windows-commit-pressure');
       if (cpuPercent && cpu.pressured) reasons.push('cpu-load');
       if (gpuEnginePercent && gpu.pressured) reasons.push('gpu-load');
       if (diskQueueLength && disk.pressured) reasons.push('disk-io');
@@ -367,12 +404,14 @@ export function createMissionAdmission(options: AdmissionOptions) {
         if (time - lastInput <= inputFreshMs) reasons.push('active-input');
         if (externalDesktopActivity(time)) reasons.push('external-desktop-activity');
       }
-      const workerLimit = reasons.includes('physical-memory') || reasons.includes('os-memory-pressure') || reasons.includes('suspended') ?
+      const workerLimit = reasons.includes('physical-memory') || reasons.includes('os-memory-pressure') ||
+        reasons.includes('windows-commit-pressure') || reasons.includes('suspended') ?
         0 : reasons.length ? Math.min(1, options.maxWorkers) : options.maxWorkers;
       const snapshot = { workerLimit, reasons, readings: {
         ...(cpuPercent ? { cpuPercent: { ...cpuPercent } } : {}),
         ...(availableMemoryBytes ? { availableMemoryBytes: { ...availableMemoryBytes } } : {}),
         ...(windowsLowMemory ? { windowsLowMemory } : {}),
+        ...(windowsCommitHeadroomBytes ? { windowsCommitHeadroomBytes } : {}),
         ...(gpuEnginePercent ? { gpuEnginePercent: { ...gpuEnginePercent } } : {}),
         ...(diskQueueLength ? { diskQueueLength: { ...diskQueueLength } } : {}),
         ...(rendererFrameP95Ms ? { rendererFrameP95Ms: { ...rendererFrameP95Ms } } : {}),

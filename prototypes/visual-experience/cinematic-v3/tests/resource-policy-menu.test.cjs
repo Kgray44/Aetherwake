@@ -9,6 +9,7 @@ test("native resource controls submit only a confirmed versioned selection", asy
     windowsMonitoring: true, windowsCountersSupported: true, limits: { cpu: 3 },
     dedicatedVramEstimate: { bytes: 2 * 1024 ** 3, ageMs: 2200 },
     windowsLowMemory: { active: false, ageMs: 2000 },
+    windowsCommitHeadroom: { bytes: 5 * 2 ** 30, ageMs: 1200 },
     effective: { cpu: 2, build: 1, host_io: 3, gpu: 0, remote: 3 },
   };
   let response = 3, admitted = true;
@@ -23,6 +24,7 @@ test("native resource controls submit only a confirmed versioned selection", asy
   assert.match(dialogs[0].detail, /CPU worker limit: 2 effective, 3 configured/u);
   assert.match(dialogs[0].detail, /Estimated dedicated VRAM headroom: 2\.00 GiB \(3 s old\)/u);
   assert.match(dialogs[0].detail, /Windows low-memory notification: Clear \(2 s old\)/u);
+  assert.match(dialogs[0].detail, /Windows commit headroom: 5\.00 GiB \(2 s old\)/u);
   assert.equal(dialogs[0].defaultId, dialogs[0].cancelId);
   response = 1;
   await menu.submenu[0].click();

@@ -27,6 +27,7 @@ export type ResourcePolicyNativeView = ReturnType<ReturnType<typeof createResour
   dedicatedVramEstimate: { bytes: number; ageMs: number } | null;
   externalDesktopActivity: { active: boolean; ageMs: number } | null;
   windowsLowMemory: { active: boolean; ageMs: number } | null;
+  windowsCommitHeadroom: { bytes: number; ageMs: number } | null;
 };
 export type ResourceAdjustment = {
   schemaVersion: 1;
@@ -147,10 +148,12 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     const readings = admission?.readings ?? {};
     const reasons: readonly MissionAdmission['reasons'][number][] = admission?.reasons ?? [];
     const free = readings.availableMemoryBytes?.value;
+    const commit = readings.windowsCommitHeadroomBytes?.value;
     const suspended = reasons.includes('suspended');
     const osMemoryPressure = reasons.includes('os-memory-pressure');
-    const critical = suspended || osMemoryPressure || free === undefined || free < memoryFloor || reasons.includes('storage-reserve');
-    freeForReservations = critical ? 0 : free - memoryFloor;
+    const commitPressure = commit !== undefined && commit < memoryFloor;
+    const critical = suspended || osMemoryPressure || commitPressure || free === undefined || free < memoryFloor || reasons.includes('storage-reserve');
+    freeForReservations = critical ? 0 : Math.min(free, commit ?? Infinity) - memoryFloor;
     const rendererPressure = reasons.includes('renderer-latency');
     const gpuPressure = reasons.includes('gpu-load');
     const externalActivity = config.protectExternalActivity && reasons.includes('external-desktop-activity');
@@ -174,6 +177,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       remote: config.limits.remote,
     };
     const nextReason = suspended ? 'system_suspended' : osMemoryPressure ? 'os_memory_pressure' :
+      commitPressure ? 'windows_commit_pressure' :
       critical ? (free === undefined ? 'memory_unavailable' : 'safety_floor') :
       rendererPressure ? 'renderer_latency' : externalActivity ? 'external_desktop_activity' : protecting ? 'foreground_protection' :
         powerLimited ? 'power_protection' : recovering && !contention ? 'recovery_dwell' : cpuLimited ? 'cpu_conservative' :
