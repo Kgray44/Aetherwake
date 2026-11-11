@@ -94,6 +94,16 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     const live = readProfile();
     assert.deepEqual(live.attempts.map(a => a.state), ['running', 'running']);
     assert.equal(live.work.criticalPath, null);
+    const snapshot = service.read(mission.id, scope);
+    const [firstOpen, secondOpen] = live.attempts;
+    const observation = { clock: firstOpen.start.clock!, monotonicMs: secondOpen.start.monotonicMs! + 5 };
+    const liveWork = projectMissionExecution(snapshot, null, null, observation).work;
+    assert.deepEqual(liveWork.live?.observation, observation);
+    assert.deepEqual(liveWork.live?.attempts.map(attempt => [attempt.attemptId, attempt.elapsedSinceDispatchMs]),
+      live.attempts.map(attempt => [attempt.id, observation.monotonicMs - attempt.start.monotonicMs!]));
+    assert.ok(projectMissionExecution(snapshot, null, null, { ...observation, clock: 'other' }).work.live?.attempts
+      .every(attempt => attempt.elapsedSinceDispatchMs === null));
+    assert.equal(liveWork.workerMs, null);
     await new Promise(resolve => setTimeout(resolve, 10));
     f.active.get('left')!.release();
     f.active.get('right')!.release();
@@ -708,7 +718,10 @@ test('pressure defers admission and cancelling a branch preserves an independent
     service.control(m.id, scope, waiting.revision, { type: 'concurrency', concurrency: 2 });
     await flush();
     assert.equal(f.active.size, 2);
-    service.control(m.id, scope, service.read(m.id, scope).revision, { type: 'cancel-branch', taskId: 'branch' });
+    const cancelling = service.control(m.id, scope, service.read(m.id, scope).revision, { type: 'cancel-branch', taskId: 'branch' });
+    const open = projectMissionExecution(cancelling).work.live;
+    assert.deepEqual(open?.attempts.map(attempt => [attempt.taskId, attempt.state, attempt.elapsedSinceDispatchMs]),
+      [['branch', 'cancelling', null], ['independent', 'running', null]]);
     f.active.get('independent')!.release();
     await flush();
     const outcome = service.read(m.id, scope);

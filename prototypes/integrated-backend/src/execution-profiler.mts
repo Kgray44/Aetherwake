@@ -234,7 +234,7 @@ function dependencyReadinessPath(attempts: {
 
 /** Read model of already-authorized mission receipts. No independent journal or content retention. */
 export function projectMissionExecution(mission: MissionProjection, reportPublication: ReportPublication | null = null,
-  userDelivery: ReportDelivery | null = null) {
+  userDelivery: ReportDelivery | null = null, observation: { clock: string; monotonicMs: number } | null = null) {
   const events = [...new Map(mission.events.map(event => [event.seq, event])).values()].sort((a, b) => a.seq - b.seq);
   const byAttempt = new Map([...mission.tasks, ...(mission.retiredTasks ?? [])].flatMap(task =>
     task.attempts.map((attempt, i) => [attempt.id, { task, attempt, previous: task.attempts[i - 1]?.id }] as const)));
@@ -283,6 +283,15 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     };
   });
   const traceByAttempt = new Map(attempts.map(attempt => [attempt.id, attempt]));
+  const openAttempts = attempts.filter(attempt => attempt.state === 'running' && !attempt.end);
+  const liveAttempts = openAttempts.flatMap(({ id, taskId, start }) => {
+    const task = byAttempt.get(id)?.task;
+    if (!task || (task.state !== 'running' && task.state !== 'cancelling') || task.attempts.at(-1)?.id !== id) return [];
+    const elapsedSinceDispatchMs = observation && observation.clock === start.clock && start.monotonicMs !== null &&
+      Number.isFinite(observation.monotonicMs) && observation.monotonicMs >= start.monotonicMs ?
+      observation.monotonicMs - start.monotonicMs : null;
+    return [{ attemptId: id, taskId, state: task.state, elapsedSinceDispatchMs }];
+  });
   const cancellations = events.flatMap(event => {
     if (event.kind !== 'control' || (event.detail !== 'cancel' && event.detail !== 'cancel-branch')) return [];
     const request = boundary(event);
@@ -417,7 +426,8 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     attempts, waits: mission.waits,
     work: {
       causalBoundary: 'attempt-dependencies-and-retries' as const,
-      openAttempts: attempts.filter(attempt => attempt.state === 'running' && !attempt.end).map(attempt => attempt.id),
+      openAttempts: openAttempts.map(attempt => attempt.id),
+      live: liveAttempts.length ? { observation: observation ? { ...observation } : null, attempts: liveAttempts } : null,
       retries,
       cancellations,
       clockSegments, workerMs: total?.workerMs ?? null, activeMs: total?.activeMs ?? null,
