@@ -67,3 +67,42 @@ test('same-revision evidence invalidation prevents stale Executive proposals', a
   });
   assert.equal(result.state, 'stale');
 });
+
+test('Executive specialist advice is scoped to an unresolved task and never requests a revision', async () => {
+  const advice = {
+    ...model,
+    action: 'recommend-specialist',
+    reason: 'A test infrastructure specialist could examine the verification failure.',
+  };
+  for (const scenario of ['failed', 'blocked', 'unknown', 'prior-unknown', 'verified', 'foreign', 'extra', 'stale'] as const) {
+    const mission = snapshot();
+    if (scenario === 'blocked') mission.tasks[1].state = 'blocked';
+    if (scenario === 'unknown') mission.tasks[1].state = 'uncertain';
+    if (scenario === 'prior-unknown') mission.tasks[1].attempts[0].outcome = 'uncertain';
+    const before = structuredClone(mission.tasks);
+    const result = await proposeMissionExecutiveRevision(7, {
+      read: () => structuredClone(mission),
+      disclose: async () => {
+        if (scenario === 'stale') mission.revision++;
+        return {
+          ...advice,
+          target: scenario === 'verified' ? 't1' : scenario === 'foreign' ? 't9' : 't2',
+          related: scenario === 'extra' ? ['t1'] : [],
+        };
+      },
+      preview: () => assert.fail('specialist advice cannot revise a mission'),
+    });
+    if (scenario === 'failed' || scenario === 'blocked') {
+      assert.equal(result.state, 'advisory');
+      if (result.state !== 'advisory') assert.fail();
+      assert.equal(result.action, 'recommend-specialist');
+      assert.equal(result.reason, advice.reason);
+      assert.equal(result.checkpoint.revision, 8);
+      assert.equal(result.checkpoint.triggerSequence, 7);
+      assert.equal('taskId' in result ? result.taskId : undefined, 'failed');
+    } else {
+      assert.equal(result.state, scenario === 'stale' ? 'stale' : 'rejected');
+    }
+    assert.deepEqual(mission.tasks, before);
+  }
+});

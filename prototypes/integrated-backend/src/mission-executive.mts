@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { MISSION_LIMITS, type MissionObjectiveAssessment, type MissionProjection, type MissionRevisionChange, type MissionRevisionPreview } from './mission-contracts.mts';
 import { missionMeasurementAnswer } from './mission-native.mts';
 
-const actions = ['continue', 'request-context', 'request-completion-review', 'replace', 'dependencies', 'retire'] as const;
+const actions = ['continue', 'request-context', 'request-completion-review', 'recommend-specialist', 'replace', 'dependencies', 'retire'] as const;
 type Action = typeof actions[number];
 export const missionExecutiveSchema = {
   type: 'object', additionalProperties: false, required: ['version', 'action', 'target', 'related', 'reason'],
@@ -10,9 +10,9 @@ export const missionExecutiveSchema = {
     version: { type: 'integer', enum: [1] },
     action: { type: 'string', enum: actions,
       description: 'Replace can propose retry of a known failed task in a paused mission. Unknown effects require reconciliation. Use advice when no safe change is supported.' },
-    target: { type: 'string', description: 'Exact supplied task handle, such as t2. Empty for advice.' },
+    target: { type: 'string', description: 'Exact supplied task handle for a revision or specialist recommendation. Empty for other advice.' },
     related: { type: 'array', items: { type: 'string' },
-      description: 'Empty for advice and replace. For dependencies, list prerequisite handles. For retire, supply one equivalent successor handle.' },
+      description: 'Empty except for dependencies or retire. For dependencies, list prerequisite handles. For retire, supply one equivalent successor handle.' },
     reason: { type: 'string' },
   },
 } as const;
@@ -60,6 +60,7 @@ export type ExecutiveResult =
   | { state: 'rejected'; reasonCode: 'invalid-proposal' | 'invalid-arguments' | 'uneditable-checkpoint' | 'canonical-revision-rejected';
     action?: Action; canonicalCode?: string }
   | { state: 'advisory'; checkpoint: ExecutiveCheckpoint; action: 'continue' | 'request-context' | 'request-completion-review'; reason: string }
+  | { state: 'advisory'; checkpoint: ExecutiveCheckpoint; action: 'recommend-specialist'; taskId: string; reason: string }
   | { state: 'completion-assessed'; checkpoint: ExecutiveCheckpoint; findings: MissionObjectiveAssessment['findings'] }
   | { state: 'reviewable'; checkpoint: ExecutiveCheckpoint; change: MissionRevisionChange; preview: MissionRevisionPreview; reason: string };
 
@@ -195,6 +196,12 @@ export async function proposeMissionExecutiveRevision(triggerSeq: number, owner:
       return !target && !related.length ? { state: 'advisory', checkpoint, action, reason } : { state: 'rejected', reasonCode: 'invalid-arguments', action };
     }
     const task = mission.tasks.find(item => handles.get(item.id) === target);
+    if (action === 'recommend-specialist') {
+      if (!task || related.length) return { state: 'rejected', reasonCode: 'invalid-arguments', action };
+      if ((task.state !== 'failed' && task.state !== 'blocked') || task.attempts.some(attempt => attempt.outcome === 'uncertain'))
+        return { state: 'rejected', reasonCode: 'uneditable-checkpoint', action };
+      return { state: 'advisory', checkpoint, action, taskId: task.id, reason };
+    }
     if (mission.disposition !== 'paused' || !task || task.state === 'verified' ||
       packet.tasks.some(item => item.unknown || item.state === 'running' || item.state === 'cancelling')) return { state: 'rejected', reasonCode: 'uneditable-checkpoint', action };
     const refs = related.map(handle => mission.tasks.find(item => handles.get(item.id) === handle)?.id);

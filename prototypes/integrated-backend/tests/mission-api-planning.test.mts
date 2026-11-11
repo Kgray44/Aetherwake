@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
 import { nativeMissionExecutors, missionResultAvailable } from '../src/mission-native.mts';
-import type { MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
+import type { MissionExecutor,MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
 import type { VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
 import type { VelaRequest } from '../../vela-core/src/contracts.ts';
@@ -227,6 +227,54 @@ test('Executive reviews a real native mission checkpoint through the synthetic R
     assert.deepEqual(after.cognitiveReceipts?.runs.map(run => run.attribution.stage), ['executive']);
     assert.deepEqual(after.cognitiveReceipts?.runs[0].attribution.owner,
       { kind: 'checkpoint', missionId: started.id, revision: settled.revision, planRevision: settled.planRevision, triggerSeq: trigger.seq });
+  } finally { await f.close(); }
+});
+
+test('native Executive specialist advice is visible without starting a specialist', async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    const { missionExecutors } = f.core as unknown as { missionExecutors: Record<string, MissionExecutor> };
+    const ram = missionExecutors['sample.ram'];
+    missionExecutors['sample.ram'] = {
+      ...ram,
+      verify: () => ({ passed: false, detail: 'Controlled failure of memory verification.' }),
+    };
+    const objective = 'Measure CPU and RAM';
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    const started = await f.core.command('missions', { name: 'start',
+      input: { objective, requestId: randomUUID(), fingerprint: preview.fingerprint } }) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id: started.id } }) as Promise<MissionProjection>;
+    let settled = await read();
+    for (let attempt = 0; attempt < 150 && ['queued', 'running'].includes(settled.outcome); attempt++) {
+      await new Promise(done => setTimeout(done, 10));
+      settled = await read();
+    }
+    const task = settled.tasks.find(row => row.executor === 'sample.ram')!;
+    assert.equal(task.state, 'failed');
+    const request = { id: started.id, revision: settled.revision, triggerSeq: settled.events.findLast(row => row.kind === 'settled')!.seq };
+    const review = await f.core.command('missionExecutiveReview', request);
+    const handle = review.packet.tasks.find(row => row.executor === 'sample.ram')!.handle;
+    f.replies.push(body => {
+      assert.ok(body.text.format.schema.properties.action.enum.includes('recommend-specialist'));
+      assert.equal(body.tools, undefined);
+      return response(JSON.stringify({ version: 1, action: 'recommend-specialist', target: handle, related: [],
+        reason: 'An operating-system diagnostics specialist could review the memory sample and verifier.' }), body.model);
+    });
+    const require = createRequire(import.meta.url);
+    const { reviewMissionExecutive } = require('../../visual-experience/cinematic-v3/native/mission-executive-broker.cjs');
+    const broker = { request, parent: {}, call: f.core.command.bind(f.core), isCurrent: () => true, allowWrite: async () => true };
+    await assert.rejects(reviewMissionExecutive({ ...broker, reviewProvider: async () => false }), /mission_review_declined/);
+    assert.equal(f.requests.length, 0);
+    const { result } = await reviewMissionExecutive({ ...broker, reviewProvider: async () => true }) as
+      Awaited<ReturnType<typeof f.core.command<'missionExecutiveReviewed'>>>;
+    assert.equal(result.state, 'advisory');
+    if (result.state !== 'advisory' || result.action !== 'recommend-specialist') assert.fail();
+    assert.equal(result.taskId, task.id);
+    assert.equal(f.requests.length, 1);
+    const after = await read();
+    assert.equal(after.revision, settled.revision);
+    assert.deepEqual(after.tasks, settled.tasks);
   } finally { await f.close(); }
 });
 
