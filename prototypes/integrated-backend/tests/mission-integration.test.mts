@@ -146,6 +146,9 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.ok(mission.profile.peakWorkers >= 2);
     assert.equal(mission.profile.reportedTotalTokens, null);
     const readProfile = () => backend.call('missions', { name: 'execution-profile', input: { id } });
+    const lookupHypothesis = () => backend.call('missions', { name: 'experiment-hypothesis',
+      input: { id, hypothesisId: 'unrelated-hypothesis', expectedRevision: mission.revision } });
+    assert.equal(await lookupHypothesis(), null);
     const profile = await readProfile();
     assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
     assert.deepEqual(profile.attempts.map(attempt => attempt.id).sort(),
@@ -194,6 +197,7 @@ test('canonical backend runs a native mission without inference, restores eviden
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: other.workspaces.find(w => w.id !== workspaceId)!.id } });
     await assert.rejects(read(), /mission_not_found/);
     await assert.rejects(readProfile(), /mission_not_found/);
+    await assert.rejects(lookupHypothesis(), /mission_not_found/);
     await backend.close();
     backend = new Backend(options);
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });

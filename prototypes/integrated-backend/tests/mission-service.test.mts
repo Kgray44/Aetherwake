@@ -5,7 +5,7 @@ import { setImmediate as flush } from 'node:timers/promises';
 import { MissionService, validateMissionPlan, type MissionServiceHost } from '../src/mission-service.mts';
 import { proposeMissionExecutiveRevision } from '../src/mission-executive.mts';
 import { nativeMissionPlan, replanNativeMission } from '../src/mission-native.mts';
-import { projectMissionExecution } from '../src/execution-profiler.mts';
+import { projectMissionExecution, resolveMissionHypothesis } from '../src/execution-profiler.mts';
 import { MISSION_LIMITS, type Mission, type MissionAdmission, type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionScope,
   type MissionTaskPlan } from '../src/mission-contracts.mts';
 import type { MissionContextSource } from '../../vela-core/src/mission-context.mts';
@@ -247,6 +247,11 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.deepEqual(hypothesis.evidence.blockers, blockers);
     assert.deepEqual(hypothesis.evidence.verifiedEvidenceIds, join.verifiedEvidenceIds);
     assert.ok(experiment.blockers.includes('no-independent-quality-evaluation'));
+    assert.deepEqual(resolveMissionHypothesis(constrained, hypothesis.id, constrained.revision), {
+      kind: 'experiment-hypothesis', missionRevision: constrained.revision, hypothesis,
+    });
+    assert.equal(resolveMissionHypothesis(constrained, hypothesis.id, constrained.revision + 1), null);
+    assert.equal(resolveMissionHypothesis(constrained, 'unrelated-hypothesis', constrained.revision), null);
     assert.deepEqual(projectMissionExecution(structuredClone(constrained)).experiment.hypothesis, hypothesis);
     assert.equal(projectMissionExecution({ ...constrained, criteria: [...constrained.criteria, 'missing'] }).experiment.hypothesis, null);
     blockers['worker-budget']!.lastObservedMs = 11.25;

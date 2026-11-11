@@ -722,3 +722,12 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
 }
 
 export type MissionExecutionProfile = ReturnType<typeof projectMissionExecution>;
+
+/** Resolve a hypothesis against the caller's already-authorized mission snapshot. */
+export function resolveMissionHypothesis(mission: MissionProjection, hypothesisId: string, expectedRevision: number) {
+  if (mission.revision !== expectedRevision) return null;
+  const { hypothesis } = projectMissionExecution(mission).experiment;
+  return hypothesis?.id === hypothesisId ? {
+    kind: 'experiment-hypothesis' as const, missionRevision: mission.revision, hypothesis,
+  } : null;
+}
