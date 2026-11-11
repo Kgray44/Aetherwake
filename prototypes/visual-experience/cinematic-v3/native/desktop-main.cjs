@@ -738,7 +738,7 @@ app.whenReady().then(async () => {
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && (isVelaRead(input) || input?.name === "submissionStatus")) &&
-        !(command === "missions" && ["preview", "list", "read", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
+        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experiment-hypothesis", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
         !(command === "workspaceRecovery" && ["state", "preview"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&

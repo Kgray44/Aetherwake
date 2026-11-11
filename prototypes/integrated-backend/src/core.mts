@@ -5,7 +5,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
-import { observeConversationProvider, observeProviderStream, projectMissionExecution, type ProviderStreamObserver, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
+import { observeConversationProvider, observeProviderStream, projectMissionExecution, resolveMissionHypothesis, type ProviderStreamObserver, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
 import { missionExecutiveSchema, projectExecutiveCheckpoint, proposeMissionExecutiveRevision, type ExecutivePacket } from './mission-executive.mts';
 import { maxReviewedFileBytes, maxReviewedStateBytes } from '../../vela-core/src/semantic-history.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
@@ -1232,6 +1232,12 @@ export class BackendCore {
       case 'list':
         ensure(!Object.keys(request.input).length, 'invalid_mission_command');
         return this.missions.list(scope);
+      case 'experiment-hypothesis': {
+        const { id, hypothesisId, expectedRevision } = request.input;
+        ensure(Object.keys(request.input).length === 3 && identifier(id) && identifier(hypothesisId) &&
+          Number.isSafeInteger(expectedRevision) && expectedRevision > 0, 'invalid_mission_command');
+        return resolveMissionHypothesis(this.missions.read(id, scope), hypothesisId, expectedRevision);
+      }
       case 'execution-profile': {
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
         const mission = this.missions.read(request.input.id, scope, { includeReadyQueue: true });
