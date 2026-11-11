@@ -259,6 +259,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   routeHistory.type = 'checkbox';
   const semanticContext = el('input');
   semanticContext.type = 'checkbox';
+  const workspaceState = el('input');
+  workspaceState.type = 'checkbox';
   let preparingNotePlan = false;
   const planWithNotes: HTMLButtonElement | undefined = options.missions && button('Plan mission with selected notes', async () => {
     const missions = options.missions!;
@@ -279,10 +281,13 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   });
   if (planWithNotes) sourcePanel.body.append(planWithNotes);
   function updateSemanticContext() {
-    const ineligible = !selected.size || selected.size > 4 || [...selected.values()].some(ref => ref.resourceKind !== 'note') ||
-      !!handoffSelection || !!routingAgentSelection;
-    semanticContext.disabled = !current?.planningProviders || chosenProviderId !== 'openai-api-vela' || ineligible;
+    const incompatibleSource = [...selected.values()].some(ref => ref.resourceKind !== 'note') || !!handoffSelection || !!routingAgentSelection;
+    const apiUnavailable = !current?.planningProviders || chosenProviderId !== 'openai-api-vela';
+    const ineligible = !selected.size || selected.size > 4 || incompatibleSource;
+    semanticContext.disabled = apiUnavailable || ineligible;
     if (semanticContext.disabled) semanticContext.checked = false;
+    workspaceState.disabled = apiUnavailable || incompatibleSource || selected.size > 3 || !current?.applicationContext?.currentWorkspaceId;
+    if (workspaceState.disabled) workspaceState.checked = false;
     if (planWithNotes) planWithNotes.disabled = ineligible || busy || preparingNotePlan || !intent.value.trim();
   }
   updateSemanticContext();
@@ -346,6 +351,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     label('Reasoning effort', routeEffort), label('Allow one deeper attempt if Auto hits an output limit', routeEscalation));
   providerRoutes.append(label('Start fresh for this send', routeHistory));
   providerRoutes.append(label('Investigate selected notes before answering', semanticContext));
+  providerRoutes.append(label('Review current workspace state', workspaceState));
   const savedRoutes = disclosure('Saved routing defaults', 'vela-core-routing-defaults');
   const scopeChoice = el('select', 'vela-core-input');
   const effectiveRoute = el('p', 'vela-core-meta');
@@ -477,18 +483,20 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       void run(async () => { await starting; if (draftRevision === revision && intent.value === text) { intent.value = ''; draftRevision++; send.disabled = true; } await refresh(); });
       return;
     }
-    const connected = !!current?.planningProviders, submitted = { intent: intent.value, resourceIds: [...selected.keys()],...(selected.size?{resourceRefs:[...selected.values()].map(ref=>({...ref}))}:{}), authorizeProvider: connected || allowProvider.checked && chosenProviderId === current?.planner.providerId, ...(connected && chosenProviderId ? { providerId: chosenProviderId } : {}),
+    const connected = !!current?.planningProviders, reviewWorkspace = connected && !workspaceState.disabled && workspaceState.checked;
+    const submitted = { intent: intent.value, resourceIds: [...selected.keys()],...(selected.size?{resourceRefs:[...selected.values()].map(ref=>({...ref}))}:{}), authorizeProvider: connected || allowProvider.checked && chosenProviderId === current?.planner.providerId, ...(connected && chosenProviderId ? { providerId: chosenProviderId } : {}),
     ...(connected && routeMode.value && routeMode.value !== 'auto' ? { mode: routeMode.value as typeof modes[number][0] } : {}),
     ...(connected && routeModel.value ? { model: routeModel.value } : {}),
     ...(connected && routeEffort.value ? { reasoningEffort: routeEffort.value as import('../../openai-provider/model-controls.ts').ReasoningEffort } : {}),
     ...(connected && !routeEscalation.disabled && routeEscalation.checked ? { allowEscalation: true as const } : {}),
     ...(connected && routeHistory.checked ? { includeRecentHistory: false as const } : {}),
-    ...(connected && !semanticContext.disabled && semanticContext.checked ? { semanticContext: true as const } : {}),
+    ...(reviewWorkspace || connected && !semanticContext.disabled && semanticContext.checked ? { semanticContext: true as const } : {}),
+    ...(reviewWorkspace ? { workspaceState: true as const } : {}),
     ...(connected && handoffSelection ? { handoffSourceRequestId: handoffSelection.requestId } : {}),
     ...(connected && routingAgentSelection ? { routingAgentId: routingAgentSelection.id } : {}),
     ...(connected && (useAutomaticOnce || handoffSelection && !routingAgentSelection) ? { overrideDefaults: true as const } : {}),
   }, revision = draftRevision, submittedView = ++viewRevision;
-    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; semanticContext.checked = routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
+    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; workspaceState.checked = semanticContext.checked = routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
       try {
         const recorded = await client.request(submitted);

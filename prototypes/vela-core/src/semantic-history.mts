@@ -8,7 +8,7 @@ const maxNeeds = 4;
 const maxCandidates = 8;
 const maxRounds = 2;
 const maxExcerptBytes = 2048;
-export const maxMissionCheckpointBytes = 4096;
+export const maxReviewedStateBytes = 4096;
 const string = { type: 'string' } as const;
 const list = <T extends object>(items: T) => ({ type: 'array', items });
 const object = <T extends Record<string, object>>(properties: T) =>
@@ -48,7 +48,7 @@ type Proposal = { objective: string; clarification: string; needs: Need[] } &
 export type SemanticHistoryScan = 'bounded' | 'partial' | 'unavailable';
 export interface SemanticHistorySource {
   sourceId: string;
-  sourceKind?: 'conversation-exchange' | 'note' | 'mission-checkpoint';
+  sourceKind?: 'conversation-exchange' | 'note' | 'mission-checkpoint' | 'workspace-state';
   revision: string;
   text: string;
   title?: string;
@@ -202,7 +202,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       if (sources.length > 2 * maxCandidates) partial();
       for (const source of sources.slice(0, 2 * maxCandidates)) {
         if (observed.has(source.sourceId)) continue;
-        const textLimit = source.sourceKind === 'mission-checkpoint' ? maxMissionCheckpointBytes : maxExcerptBytes;
+        const textLimit = source.sourceKind === 'mission-checkpoint' || source.sourceKind === 'workspace-state' ? maxReviewedStateBytes : maxExcerptBytes;
         if (evidence.size === maxCandidates || !bounded(source.text, textLimit) || !owner.isCurrent(source)) {
           partial();
           if (evidence.size === maxCandidates) break;
