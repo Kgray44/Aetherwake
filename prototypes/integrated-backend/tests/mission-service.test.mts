@@ -746,6 +746,25 @@ test('restart reconciles a committed in-flight nonreplayable attempt as uncertai
   } finally { await service.close(); f.db.close(); }
 });
 
+test('a saturated worker budget is observed by every ready mission deferred in that scheduler pass', async () => {
+  const f = fixture();
+  const service = new MissionService({ ...f.host, admission: () => ({ workerLimit: 1, reasons: [], readings: {} }) });
+  try {
+    service.create('budget-running', plan(task('running')));
+    await flush();
+    const first = service.create('budget-first', plan(task('first')));
+    const second = service.create('budget-second', plan(task('second')));
+    await flush();
+    assert.deepEqual([...f.active.keys()], ['running']);
+    for (const mission of [first, second]) {
+      const profile = projectMissionExecution(service.read(mission.id, scope, { includeReadyQueue: true }));
+      const [queued] = profile.work.liveReadyQueue!.tasks;
+      assert.equal(queued.wait, 'resource-pressure');
+      assert.equal(queued.blockers['worker-budget']?.samples, 1);
+    }
+  } finally { await service.close(); f.db.close(); }
+});
+
 test('pressure defers admission and cancelling a branch preserves an independent branch', async () => {
   const f = fixture(), service = f.create();
   try {
