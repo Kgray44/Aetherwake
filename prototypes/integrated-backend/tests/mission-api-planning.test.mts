@@ -564,3 +564,82 @@ test('Vela answers from an explicitly reviewed mission checkpoint and rechecks i
     await f.close();
   }
 });
+
+test('reviewed workspace inventory uses active placements and fences changed resources', async () => {
+  const f = fixture(true);
+  try {
+    await f.ready();
+    const original = await f.core.command('desktop', { type: 'snapshot' });
+    const other = await f.core.command('desktop', { type: 'createWorkspace', title: 'Other synthetic workspace', projectId: null });
+    await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Foreign-only resource', workspaceId: other.activeWorkspaceId! });
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: original.activeWorkspaceId! } });
+    const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Release checklist', workspaceId: original.activeWorkspaceId! });
+    const note = created.resources.find(item => item.title === 'Release checklist')!;
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: 'NOTE-BODY-EXCLUDED' });
+    const intent = 'Which of the materials already on this board could help us prepare a release?';
+    const input = { intent, resourceIds: [], authorizeProvider: true, providerId: 'openai-api-vela', model: 'gpt-6-luna',
+      semanticContext: true as const, workspaceState: true as const };
+    const preview = await f.core.command('velaRequestPreview', { ...input, adaptive: true });
+    assert.equal(preview.sendDisposition, 'review-required');
+    assert.equal(preview.workspaceState?.id, original.activeWorkspaceId);
+    assert.doesNotMatch(JSON.stringify(preview.workspaceState), /Release checklist|Foreign-only resource/);
+    const require = createRequire(import.meta.url);
+    const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    const { reviewPage } = require('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+    const send = (allow: boolean) => velaCommand({
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      directMessageSend: true, routeNative: true, dialog: {}, call: f.core.command.bind(f.core),
+      async reviewProvider({ review }: { review: VelaNativeReview }) {
+        assert.ok(review.workspaceState);
+        const packet = JSON.parse(review.workspaceState.text);
+        assert.ok(packet.placedResources.some((item: { title: string }) => item.title === 'Release checklist'));
+        assert.doesNotMatch(review.workspaceState.text, /NOTE-BODY-EXCLUDED|Foreign-only resource/);
+        assert.match(reviewPage(review, intent), /Workspace state/);
+        return allow;
+      },
+      input: { name: 'request', input },
+    });
+    await assert.rejects(send(false), /authorization_cancelled/);
+    assert.equal(f.requests.length, 0);
+    const interpretation = (key: string, question: string) => ({ version: 2, objective: question, clarification: '',
+      perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: [{ key, question, query: 'release preparation' }] });
+    const assessment = (key: string, quote: string) => ({ version: 3, clarification: '', assessment: [
+      { key, status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
+    ] });
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    const answerAssessment = reply(assessment('materials', 'Release checklist'));
+    f.replies.push(reply(interpretation('day', 'Which weekday?')), reply(assessment('day', 'The pump inspection is on Tuesday.')),
+      reply(interpretation('materials', intent)), body => {
+        const excerpts = JSON.parse(body.input[0].content).excerpts;
+        assert.equal(excerpts.length, 1);
+        assert.equal(excerpts[0].sourceKind, 'workspace-state');
+        assert.doesNotMatch(excerpts[0].text, /NOTE-BODY-EXCLUDED|Foreign-only resource/);
+        return answerAssessment(body);
+      }, body => {
+        const packet = JSON.parse(body.input[0].content).evidence;
+        assert.deepEqual(packet.coverage[0].passages, [{ sourceId: original.activeWorkspaceId, title: 'Workspace state', quote: 'Release checklist' }]);
+        assert.equal(body.tools, undefined);
+        return response('The Workspace state lists a Release checklist.', body.model);
+      });
+    assert.equal((await send(true)).state, 'responded');
+    assert.equal(f.requests.length, 5);
+    f.replies.push(reply(interpretation('materials', intent)), async body => {
+      const current = (await f.core.command('desktop', { type: 'snapshot' })).resources.find(item => item.id === note.id)!;
+      await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: current.version, content: 'New canonical version' });
+      return answerAssessment(body);
+    });
+    assert.equal((await send(true)).state, 'failed');
+    assert.equal(f.requests.length, 7, 'changed resource version must prevent answer composition');
+    for (let index = 0; index < 24; index++)
+      await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Synthetic placement ' + index, workspaceId: original.activeWorkspaceId! });
+    const bounded = await f.core.command('velaRequestPreview', { ...input, adaptive: true });
+    const boundedReview = await f.core.command('velaNativeReview', { previewId: bounded.id, signature: bounded.signature });
+    assert.equal(bounded.workspaceState?.partial, true);
+    assert.equal(JSON.parse(boundedReview.workspaceState!.text).coverage, 'partial');
+    assert.equal(JSON.parse(boundedReview.workspaceState!.text).placedResources.length, 24);
+    assert.equal(f.requests.length, 7);
+  } finally {
+    await f.close();
+  }
+});

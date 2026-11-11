@@ -9,7 +9,7 @@ import type { TurnResult } from '../../openai-provider/contracts.mts';
 const instructions = {
   interpret: [
     'Interpret the request and distinguish explicit goals from inferred goals. Propose constraints, capability hints, expected deliverables and checks without granting authority or performing work.',
-    'Identify evidence needed from prior conversation or selected sources such as notes and mission checkpoints. Include evidence that could resolve ambiguity. Split independent requested facts into separate needs. Keep competing accounts of one requested fact together unless the user asks for each account. Preserve entity, time and scope qualifiers.',
+    'Identify evidence needed from prior conversation or selected sources such as notes, workspace state or mission checkpoints. Include evidence that could resolve ambiguity. Split independent requested facts into separate needs. Keep competing accounts of one requested fact together unless the user asks for each account. Preserve entity, time and scope qualifiers.',
     'Return at most four needs. Use a unique key of at most 24 ASCII letters, digits, underscores or hyphens for each, with a short search query containing concrete terms. Use at most five short entries per perception list and no duplicate deliverables. Leave clarification empty when unnecessary and needs empty when contextual evidence cannot help.',
   ].join(' '),
   assess: [
@@ -129,7 +129,7 @@ export function investigateVelaHistoryWithApi(vela: Pick<VelaService, 'investiga
 
 /** A reviewed foreground turn cannot discover anything outside its frozen source envelope. */
 export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, intent: string,
-  sources: readonly (VelaSemanticHistorySource & { title: string })[], configurationVersion: number, model: string,
+  sources: readonly (VelaSemanticHistorySource & { title: string; partial?: true })[], configurationVersion: number, model: string,
   validate: () => void, signal: AbortSignal, observations?: MissionCognitionObservations) {
   const authorize = () => { validate(); return !signal.aborted; };
   validate();
@@ -142,7 +142,7 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
     investigateHistory(request, disclose, cancel) {
       const current = (source: VelaSemanticHistorySource) => sources.includes(source as typeof sources[number]) && authorize();
       return investigateSemanticHistory(request, {
-        selected: () => ({ sources, scan: 'bounded' }),
+        selected: () => ({ sources, scan: sources.some(source => source.partial) ? 'partial' : 'bounded' }),
         search: () => ({ sources: [], scan: 'bounded' }),
         isCurrent: current,
         disclose: (call, sources, abort) => disclose(call, sources, abort, () => authorize() && sources.every(current)),

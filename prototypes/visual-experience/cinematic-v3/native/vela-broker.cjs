@@ -219,6 +219,7 @@ exports.velaCommand = async ({
       (value.allowEscalation !== undefined && value.allowEscalation !== true) ||
       (value.includeRecentHistory !== undefined && typeof value.includeRecentHistory !== "boolean") ||
       (value.semanticContext !== undefined && (!directMessageSend || value.semanticContext !== true || !value.authorizeProvider)) ||
+      (value.workspaceState !== undefined && (value.workspaceState !== true || value.semanticContext !== true)) ||
       (value.missionCheckpoint !== undefined && (value.semanticContext !== true || !value.missionCheckpoint ||
         Object.keys(value.missionCheckpoint).length !== 3 || !/^[a-f0-9-]{36}$/.test(value.missionCheckpoint.id) ||
         !Number.isSafeInteger(value.missionCheckpoint.revision) || !Number.isSafeInteger(value.missionCheckpoint.triggerSeq))) ||
@@ -307,6 +308,7 @@ exports.velaCommand = async ({
         ...(providerId === undefined ? {} : { providerId }),
         ...(directMessageSend ? { adaptive: true, model, reasoningEffort, mode, budgetLimit, allowEscalation, includeRecentHistory, overrideDefaults } : {}),
         ...(value.semanticContext ? { semanticContext: true } : {}),
+        ...(value.workspaceState ? { workspaceState: true } : {}),
         ...(value.missionCheckpoint ? { missionCheckpoint: value.missionCheckpoint } : {}),
         ...(directMessageSend && requireInspectionDirectory ? { requireInspectionDirectory: true } : {}),
         ...(request.handoffSourceRequestId ? { handoffSourceRequestId: request.handoffSourceRequestId } : {}),
@@ -338,6 +340,7 @@ exports.velaCommand = async ({
     if (preview.handoff?.sourceRequestId !== request.handoffSourceRequestId) throw Error("invalid_native_vela_review");
     if (preview.routingAgent?.resourceId !== request.routingAgentId) throw Error("invalid_native_vela_review");
     if (preview.semanticContext !== value.semanticContext) throw Error("invalid_native_vela_review");
+    if (!!preview.workspaceState !== !!value.workspaceState) throw Error("invalid_native_vela_review");
     const checkpoint = preview.missionCheckpoint?.selection, requestedCheckpoint = value.missionCheckpoint;
     if (checkpoint?.id !== requestedCheckpoint?.id || checkpoint?.revision !== requestedCheckpoint?.revision ||
       checkpoint?.triggerSeq !== requestedCheckpoint?.triggerSeq) throw Error("invalid_native_vela_review");

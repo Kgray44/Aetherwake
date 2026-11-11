@@ -328,6 +328,36 @@ test('terminal status survives request completion and refresh; connection probe 
   panel.dispose(); assert.equal(root.children.length, 0);
 });
 
+test('workspace evidence is an explicit dedicated API composer choice', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  canonical.applicationContext = { currentProjectId: null, currentWorkspaceId: 'workspace:synthetic', references: [] };
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => { turns.push(input); throw Error('authorization_cancelled'); },
+  }));
+  try {
+    await settles(() => !!named(root, 'Vela API'));
+    await panel.refresh();
+    const option = root.find(node => node.tagName === 'label' && node.textContent === 'Review current workspace state')!.querySelector('input')!;
+    assert.equal(option.disabled, true);
+    named(root, 'Vela API').fire('click');
+    assert.equal(option.disabled, false);
+    assert.equal(option.checked, false);
+    option.checked = true;
+    const composer = root.find(node => node.tagName === 'textarea')!;
+    composer.value = 'Which placed material supports a release?';
+    composer.fire('input');
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => turns.length === 1);
+    assert.equal(turns[0].semanticContext, true);
+    assert.equal(turns[0].workspaceState, true);
+    assert.equal(turns[0].providerId, 'openai-api-vela');
+    assert.deepEqual(turns[0].resourceIds, []);
+    assert.equal(option.checked, false);
+  } finally { panel.dispose(); }
+});
+
 test('a timed-out API reply stays unknown with concise visible text and no fabricated completion', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.requests = [request({state:'unknown',errorCode:'provider_timeout',providerId:'openai-api-vela',

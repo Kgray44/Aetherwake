@@ -56,6 +56,14 @@ function validateFileEditReview(requestId, review) {
 }
 const css = `:root{color-scheme:dark;font:14px/1.5 system-ui,sans-serif;color:#ece9f4;background:#0c0d17}*{box-sizing:border-box}body{margin:0}.review{height:100vh;padding:24px;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:16px}.review>*{min-width:0}h1{font-size:22px;font-weight:550;margin:0 0 6px}header p{margin:0;color:#bcb7cb}.intent{margin:0 0 16px;white-space:pre-wrap;overflow-wrap:anywhere}.content{overflow:auto;min-height:0;scrollbar-gutter:stable}details{margin:8px 0;border:1px solid #c6bce72a;border-radius:12px;background:linear-gradient(145deg,#c5b4ff0c,#c1deff04);overflow:hidden}summary{padding:12px 14px;cursor:pointer;color:#d9d1ed}section{padding:0 14px 14px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 ui-monospace,Consolas,monospace;margin:8px 0}article+article{border-top:1px solid #c6bce724;margin-top:14px;padding-top:14px}h2{font-size:13px;font-weight:550;color:#c9bfdf;margin:0}footer{display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #c6bce724;padding-top:16px}button{font:inherit;color:inherit;padding:8px 18px;border:1px solid #c6bce744;border-radius:10px;background:#c3b0ff0c;cursor:pointer}button:focus-visible,summary:focus-visible{outline:2px solid #c2a7ff;outline-offset:3px}#approve{background:#b59ae725}small{color:#a8a2ba;overflow-wrap:anywhere}`;
 
+function reviewedStateMatches(preview, review) {
+  if (!preview) return review === undefined;
+  if (!review) return false;
+  const { text, ...reference } = review;
+  return JSON.stringify(reference) === JSON.stringify(preview) && typeof text === "string" &&
+    !!text.trim() && Buffer.byteLength(text) <= 4096;
+}
+
 /** Read-only native disclosure. No renderer receives approval authority. */
 function validateReview(preview, review) {
   if (
@@ -65,14 +73,11 @@ function validateReview(preview, review) {
     review.signature !== preview.signature ||
     review.providerId !== preview.providerId ||
     review.semanticContext !== preview.semanticContext ||
-    (preview.missionCheckpoint && (!review.semanticContext || !review.missionCheckpoint ||
-      review.missionCheckpoint.digest !== preview.missionCheckpoint.digest ||
-      JSON.stringify(review.missionCheckpoint.selection) !== JSON.stringify(preview.missionCheckpoint.selection) ||
-      typeof review.missionCheckpoint.text !== "string" || !review.missionCheckpoint.text.trim() ||
-      Buffer.byteLength(review.missionCheckpoint.text) > 4096)) ||
-    (!preview.missionCheckpoint && review.missionCheckpoint !== undefined) ||
+    !reviewedStateMatches(preview.missionCheckpoint, review.missionCheckpoint) ||
+    !reviewedStateMatches(preview.workspaceState, review.workspaceState) ||
+    ((preview.missionCheckpoint || preview.workspaceState) && !review.semanticContext) ||
     (review.semanticContext && (review.providerId !== "openai-api-vela" || review.history || review.handoff ||
-      !Array.isArray(review.context?.included) || (!review.context.included.length && !review.missionCheckpoint) ||
+      !Array.isArray(review.context?.included) || (!review.context.included.length && !review.missionCheckpoint && !review.workspaceState) ||
       review.context.included.some(source => source?.resourceKind !== "note"))) ||
     (preview.workingDirectory !== undefined && review.workingDirectory !== preview.workingDirectory) ||
     JSON.stringify(review.route) !== JSON.stringify(preview.route) ||
@@ -241,10 +246,12 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
       ? "<p>Vela will interpret your question and check the selected evidence using this model. The answer uses checked passages. This read-only request excludes conversation history and tools. It can use up to six API calls, including synthetic compatibility checks.</p>" : "";
   const checkpointDetails = review.missionCheckpoint
     ? `<details open><summary>Mission checkpoint</summary><section><pre>${escape(review.missionCheckpoint.text)}</pre></section></details>` : "";
+  const workspaceDetails = review.workspaceState
+    ? `<details open><summary>Workspace state</summary><section><p>Placed resource titles and types.</p><pre>${escape(review.workspaceState.text)}</pre></section></details>` : "";
   const executiveDetails = review.missionExecutive
     ? "<p>Vela will send one request with the mission objective, task states and verification summaries shown below. A suggested revision needs a separate decision before it can take effect.</p>" : "";
   const styleHash = createHash("sha256").update(css).digest("base64");
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">${workflow ? "Run this workflow?" : review.missionExecutive ? "Review this mission checkpoint?" : "Send to " + escape(provider) + "?"}</h1><p>${workflow ? "Review once to share the selected evidence, make the listed edits, and run the check." : escape(view.subtitle)}</p>${routeSummary ? `<p>${escape(routeSummary)}</p>` : ""}</header><div class="content" tabindex="0" aria-label="Review what will be shared"><p class="intent">${escape(intent)}</p>${agentInstructions}${workflowScope}${semanticDetails}${executiveDetails}${checkpointDetails}<details${sources ? " open" : ""}><summary>Shared resources (${resources.length})</summary><section>${sources || "No selected source content."}</section></details><details${history ? " open" : ""}><summary>${escape(historyLabel)} (${review.history?.messages.length ?? 0})</summary><section>${history || escape(view.emptyHistory)}</section></details><details${review.missionExecutive ? " open" : ""}><summary>${review.semanticContext ? "Reviewed source envelope" : "Exact provider request"}</summary><section><pre>${escape(review.prompt)}</pre><small>Request digest: ${escape(review.promptDigest)}</small></section></details></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">${workflow ? "Run workflow" : review.missionExecutive ? "Request review" : "Send once"}</button></footer></main></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">${workflow ? "Run this workflow?" : review.missionExecutive ? "Review this mission checkpoint?" : "Send to " + escape(provider) + "?"}</h1><p>${workflow ? "Review once to share the selected evidence, make the listed edits, and run the check." : escape(view.subtitle)}</p>${routeSummary ? `<p>${escape(routeSummary)}</p>` : ""}</header><div class="content" tabindex="0" aria-label="Review what will be shared"><p class="intent">${escape(intent)}</p>${agentInstructions}${workflowScope}${semanticDetails}${executiveDetails}${checkpointDetails}${workspaceDetails}<details${sources ? " open" : ""}><summary>Shared resources (${resources.length})</summary><section>${sources || "No selected source content."}</section></details><details${history ? " open" : ""}><summary>${escape(historyLabel)} (${review.history?.messages.length ?? 0})</summary><section>${history || escape(view.emptyHistory)}</section></details><details${review.missionExecutive ? " open" : ""}><summary>${review.semanticContext ? "Reviewed source envelope" : "Exact provider request"}</summary><section><pre>${escape(review.prompt)}</pre><small>Request digest: ${escape(review.promptDigest)}</small></section></details></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">${workflow ? "Run workflow" : review.missionExecutive ? "Request review" : "Send once"}</button></footer></main></body></html>`;
   if (Buffer.byteLength(html) > view.htmlBytes)
     throw Error(experience === "vela" ? "native_vela_review_capacity_exceeded" : "native_ordinary_review_capacity_exceeded");
   return html;
