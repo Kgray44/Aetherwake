@@ -56,12 +56,14 @@ $pages = $null
 try {
   $gpu = @(Get-CimInstance -ClassName Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine | Select-Object -First 8193 -Property Name,UtilizationPercentage)
 } catch {}
-ConvertTo-Json -InputObject @{gpu=$gpu; disk=$disk; diskBytesPerSecond=$diskRate} -Compress
 try {
   $disks = @(Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_PhysicalDisk | Select-Object -First 130 -Property Name,AvgDiskQueueLength,DiskBytesPersec)
-  $disk = @($disks | Where-Object Name -ne '_Total' | Select-Object -ExpandProperty AvgDiskQueueLength)
-  if ($disks.Count -lt 130) { $diskRate = $disks | Where-Object Name -eq '_Total' | Select-Object -First 1 -ExpandProperty DiskBytesPersec }
+  if ($disks.Count -lt 130) {
+    $disk = @($disks | Where-Object Name -ne '_Total' | Select-Object -ExpandProperty AvgDiskQueueLength)
+    $diskRate = $disks | Where-Object Name -eq '_Total' | Select-Object -First 1 -ExpandProperty DiskBytesPersec
+  }
 } catch {}
+ConvertTo-Json -InputObject @{gpu=$gpu; disk=$disk; diskBytesPerSecond=$diskRate} -Compress
 try {
   $interfaces = @(Get-CimInstance -ClassName Win32_PerfFormattedData_Tcpip_NetworkInterface | Select-Object -First 129 -ExpandProperty BytesTotalPersec)
   if ($interfaces.Count -gt 0 -and $interfaces.Count -le 128) { $network = ($interfaces | Measure-Object -Maximum).Maximum }
@@ -83,7 +85,7 @@ async function sampleWindowsPressure(signal: AbortSignal): Promise<WindowsPressu
   if (!windows || !isAbsolute(windows)) return {};
   const powershell = join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const { stdout } = await exec(powershell, ['-NoProfile', '-NonInteractive', '-Command', countersScript],
-    { windowsHide: true, timeout: 4_000, maxBuffer: 1024 * 1024, encoding: 'utf8', signal })
+    { windowsHide: true, timeout: 15_000, maxBuffer: 1024 * 1024, encoding: 'utf8', signal })
     .catch((error: { killed?: boolean; stdout?: string }) => {
       if (!signal.aborted && error.killed && typeof error.stdout === 'string') return { stdout: error.stdout };
       throw error;
@@ -141,9 +143,10 @@ export function createMissionAdmission(options: AdmissionOptions) {
   const errors = new Set<string>();
   let processBaseline: { usage: NodeJS.CpuUsage; time: number } | undefined;
 
-  function capture(name: string, value: MetricValue | undefined, time: number, windowMs: number | null = 0) {
+  function capture(name: string, value: MetricValue | undefined, time: number, windowMs: number | null = 0,
+    observedAt = new Date(wallNow()).toISOString()) {
     if (value === undefined) { errors.add(name); return; }
-    samples.set(name, { value, time, windowMs, observedAt: new Date(wallNow()).toISOString() });
+    samples.set(name, { value, time, windowMs, observedAt });
     errors.delete(name);
   }
 
@@ -184,16 +187,18 @@ export function createMissionAdmission(options: AdmissionOptions) {
     }
   }
 
-  function applyWindowsPressure(result: WindowsPressure) {
+  function applyWindowsPressure(result: WindowsPressure, startedAt: number, startedAtUtc: string) {
     if (disposed) return;
     const time = now(), recentDemand = time - lastDemand <= demandGapMs;
     const previousGpu = fresh(gpu.sample, time, windowsFreshMs);
     const previousDisk = fresh(disk.sample, time, windowsFreshMs);
-    const gpuReading = numeric(result.gpuEnginePercent, 100) ? reading(result.gpuEnginePercent, time) : undefined;
-    const diskReading = numeric(result.diskQueueLength, Number.MAX_SAFE_INTEGER) ? reading(result.diskQueueLength, time) : undefined;
+    const windowsReading = (value: number) => ({ reading: { value, observedAt: startedAtUtc }, time: startedAt });
+    const gpuReading = numeric(result.gpuEnginePercent, 100) ? windowsReading(result.gpuEnginePercent) : undefined;
+    const diskReading = numeric(result.diskQueueLength, Number.MAX_SAFE_INTEGER) ? windowsReading(result.diskQueueLength) : undefined;
     for (const name of Object.keys(windowsMetrics) as (keyof typeof windowsMetrics)[]) {
       const value = result[name];
-      capture(name, numeric(value, name === 'gpuEnginePercent' ? 100 : Number.MAX_SAFE_INTEGER) ? value : undefined, time, null);
+      capture(name, numeric(value, name === 'gpuEnginePercent' ? 100 : Number.MAX_SAFE_INTEGER) ? value : undefined,
+        startedAt, null, startedAtUtc);
     }
     gpu = observePressure(previousGpu ? gpu : { highSamples: 0, pressured: false }, gpuReading, 95, 85);
     disk = observePressure(previousDisk ? disk : { highSamples: 0, pressured: false }, diskReading, 8, 4);
@@ -203,13 +208,14 @@ export function createMissionAdmission(options: AdmissionOptions) {
   function refreshWindows(time: number) {
     if (!readWindows || probe || time - demandSince < windowsWarmupMs || time - lastProbe < windowsIntervalMs) return;
     const controller = new AbortController();
+    const startedAtUtc = new Date(wallNow()).toISOString();
     probe = controller;
     lastProbe = time;
     void Promise.resolve().then(() => {
       controller.signal.throwIfAborted();
       return readWindows(controller.signal);
     }).catch((): WindowsPressure => ({})).then(result => {
-      if (!controller.signal.aborted) applyWindowsPressure(result);
+      if (!controller.signal.aborted) applyWindowsPressure(result, time, startedAtUtc);
     }).catch(() => {
       // Optional telemetry and a failed observer cannot stall scheduler admission.
     }).finally(() => { probe = undefined; });
