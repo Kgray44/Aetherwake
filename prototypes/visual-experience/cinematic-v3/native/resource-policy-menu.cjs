@@ -45,6 +45,8 @@ function describe(view) {
     `Supplemental Windows counters: ${!view.windowsCountersSupported ? "Unavailable" : view.windowsMonitoring ? "Enabled" : "Disabled"}`,
     `Windows low-memory notification: ${lowMemory ? `${lowMemory.active ? "Active" : "Clear"} (${Math.ceil(lowMemory.ageMs / 1000)} s old)` : "Unavailable"}`,
     `Windows commit headroom: ${commit ? `${(commit.bytes / 2 ** 30).toFixed(2)} GiB (${Math.ceil(commit.ageMs / 1000)} s old)` : "Unavailable"}`,
+    `RAM available for new reservations: ${Number.isFinite(view.remainingRamReservationBytes) ?
+      `${(view.remainingRamReservationBytes / 2 ** 30).toFixed(2)} GiB` : "Unavailable"}`,
     `Other desktop activity protection (system idle time and Aerynth focus): ${view.externalActivityProtection ? "On" : "Off"}`,
   ];
   if (thermals) {
