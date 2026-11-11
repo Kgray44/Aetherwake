@@ -342,12 +342,20 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const active = ['queued', 'running', 'cancelling', 'paused'].includes(mission.outcome);
   const profile = mission.profile;
   const planningUsage = reportedUsage(plan?.usage);
-  const usage = attempts.flatMap(attempt => attempt.usage ? [{ tokens: attempt.usage.totalTokens, source: attempt.providerEvidence }] : []);
+  // Attempt receipts can outlive their lifecycle events in the bounded journal.
+  const usage = Array.from(byAttempt.values()).flatMap(({ attempt }) => {
+    const receipt = reportedUsage(attempt.telemetry?.usage);
+    return receipt ? [{ tokens: receipt.totalTokens, source: attempt.telemetry?.providerEvidence ?? null }] : [];
+  });
   if (planningUsage) usage.push({ tokens: planningUsage.totalTokens, source: plan?.providerEvidence ?? null });
-  const tokenTotal = (source: 'reported' | 'simulated' | null) => {
-    const readings = usage.filter(reading => reading.source === source);
-    return readings.length ? readings.reduce((sum, reading) => sum + reading.tokens, 0) : null;
-  };
+  const usageReceipts = { reported: 0, simulated: 0, unattributed: 0,
+    missing: profile.providerCalls !== null && profile.providerCalls >= usage.length ? profile.providerCalls - usage.length : null };
+  const tokenTotals: Record<'reported' | 'simulated' | 'unattributed', number | null> = { reported: null, simulated: null, unattributed: null };
+  for (const { source, tokens } of usage) {
+    const bucket = source ?? 'unattributed';
+    usageReceipts[bucket]++;
+    tokenTotals[bucket] = (tokenTotals[bucket] ?? 0) + tokens;
+  }
   const timeToVerified = initial ? interval(mission.id, initial, firstVerified) : null;
   const timeToSettlement = complete && !active && initial ? interval(mission.id, initial, lastSettlement) : null;
   const path = complete && !active ? criticalPath(attempts) : null;
@@ -397,8 +405,8 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
         eventSeqs: [longestOnPath.start.eventSeq, longestOnPath.end!.eventSeq] } : null,
     },
     economics: {
-      providerCalls: profile.providerCalls, reportedTotalTokens: tokenTotal('reported'),
-      simulatedTotalTokens: tokenTotal('simulated'), unattributedTotalTokens: tokenTotal(null),
+      providerCalls: profile.providerCalls, reportedTotalTokens: tokenTotals.reported,
+      simulatedTotalTokens: tokenTotals.simulated, unattributedTotalTokens: tokenTotals.unattributed, usageReceipts,
       usageCoverage: usage.length === 0 ? profile.providerCalls === 0 ? 'not-applicable' as const : 'missing' as const :
         usage.length === profile.providerCalls ? 'complete' as const : 'partial' as const,
       cost: null,

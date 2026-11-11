@@ -279,6 +279,23 @@ test('simulated provider usage stays out of the reported token total', async () 
     assert.equal(profile.planning?.providerEvidence, 'simulated');
     assert.equal(profile.economics.reportedTotalTokens, null);
     assert.equal(profile.economics.simulatedTotalTokens, 10);
+    assert.deepEqual(profile.economics.usageReceipts, { reported: 0, simulated: 1, unattributed: 0, missing: 0 });
+    await flush();
+    f.active.get('inspect')!.release();
+    await flush();
+    const retained = service.read(mission.id, scope);
+    retained.profile.providerCalls = 3;
+    retained.tasks[0].attempts[0].telemetry = { durationMs: 15, providerCalls: 1, providerEvidence: 'reported',
+      usage: { source: 'provider-reported', inputTokens: 12, outputTokens: 8, totalTokens: 20 } };
+    const economics = projectMissionExecution({ ...retained, events: [] }).economics;
+    assert.equal(economics.reportedTotalTokens, 20);
+    assert.equal(economics.simulatedTotalTokens, 10);
+    assert.equal(economics.usageCoverage, 'partial');
+    assert.deepEqual(economics.usageReceipts, { reported: 1, simulated: 1, unattributed: 0, missing: 1 });
+    delete retained.tasks[0].attempts[0].telemetry.providerEvidence;
+    retained.profile.providerCalls = null;
+    assert.deepEqual(projectMissionExecution(retained).economics.usageReceipts,
+      { reported: 0, simulated: 1, unattributed: 1, missing: null });
   } finally {
     await service.close();
     f.db.close();
