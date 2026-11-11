@@ -798,6 +798,66 @@ test('verification failure, paused admission, evidence-bound amendment, and repl
   } finally { await service.close(); f.db.close(); }
 });
 
+test('a parallel retry preserves attempt timing and separates mixed usage receipts', async () => {
+  const f = fixture();
+  const executor = f.host.executors.fixture;
+  const service = new MissionService({ ...f.host, executors: { fixture: {
+    ...executor,
+    async run(context) {
+      const result = await executor.run(context);
+      if (context.task.id === 'join') return { ...result, telemetry: { durationMs: 0, providerCalls: 0 } };
+      const simulated = context.task.id === 'right';
+      const usage = result.value === false ? undefined : { source: 'provider-reported' as const,
+        inputTokens: 12, outputTokens: 8, totalTokens: 20, cachedInputTokens: simulated ? 0 : 4 };
+      return { ...result, telemetry: { durationMs: 2, providerCalls: 1, usage,
+        providerEvidence: simulated ? 'simulated' : 'reported', providerExecutionId: context.attemptId } };
+    },
+  } } });
+  try {
+    const { id } = service.create('parallel-retry-economics', plan(task('left'), task('right'), task('join', ['left', 'right'])));
+    const read = () => service.read(id, scope);
+    await flush();
+    assert.ok(f.active.has('left') && f.active.has('right'));
+    f.active.get('left')!.release(false);
+    await flush();
+    service.control(id, scope, read().revision, { type: 'retry', taskId: 'left' });
+    await flush();
+    assert.ok(f.active.has('left') && f.active.has('right'));
+    f.active.get('right')!.release();
+    await flush();
+    assert.equal(f.active.has('join'), false);
+    f.active.get('left')!.release();
+    await flush();
+    f.active.get('join')!.release();
+    await flush();
+
+    const profile = projectMissionExecution(read());
+    assert.equal(profile.outcome, 'verified');
+    const [failed, parallel, retry, join] = profile.attempts;
+    assert.equal(failed.state, 'failed');
+    assert.deepEqual(retry.predecessors, [failed.id]);
+    assert.deepEqual(join.predecessors, [retry.id, parallel.id]);
+    assert.equal(profile.work.retries[0]?.previousAttemptId, failed.id);
+    assert.equal(profile.work.retries[0]?.attemptId, retry.id);
+    const duration = (attempt: typeof failed) => attempt.interval!.end - attempt.interval!.start;
+    const expectedPathMs = Math.max(duration(failed) + duration(retry), duration(parallel)) + duration(join);
+    assert.ok(Math.abs(profile.work.criticalPath!.durationMs - expectedPathMs) < 1e-6);
+    assert.ok(Math.abs(profile.work.workerMs! - profile.attempts.reduce((sum, attempt) => sum + duration(attempt), 0)) < 1e-6);
+    assert.equal(profile.work.peakWorkers, 2);
+    assert.ok(profile.work.overlapMs! > 0);
+    assert.ok(profile.admissionToLastSettlementMs! >= expectedPathMs);
+    const { economics } = profile;
+    assert.equal(economics.providerCalls, 3);
+    assert.deepEqual(economics.usageReceipts, { reported: 1, simulated: 1, missing: 1, unattributed: 0 });
+    assert.equal(economics.reportedTotalTokens, 20);
+    assert.equal(economics.simulatedTotalTokens, 20);
+    assert.deepEqual(economics.usageBySource.reported.cachedInputTokens, { observedTokens: 4, receipts: 1 });
+    assert.deepEqual(economics.usageBySource.simulated.cachedInputTokens, { observedTokens: 0, receipts: 1 });
+    assert.equal(economics.cost, null);
+    assert.equal(economics.costCoverage, 'billing-receipt-unavailable');
+  } finally { await service.close(); f.db.close(); }
+});
+
 test('restart reconciles a committed in-flight nonreplayable attempt as uncertain and never dispatches twice', async () => {
   const f = fixture(false), service = f.create();
   let recovered: MissionService | undefined;
