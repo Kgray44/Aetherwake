@@ -414,6 +414,22 @@ test('simulated provider usage stays out of the reported token total', async () 
     assert.deepEqual(economics.usageBySource.reported.inputTokens, { observedTokens: 12, receipts: 1 });
     assert.deepEqual(economics.usageBySource.reported.cachedInputTokens, { observedTokens: null, receipts: 0 });
     assert.deepEqual(economics.usageBySource.simulated.outputTokens, { observedTokens: 4, receipts: 1 });
+    const invalid = structuredClone(retained);
+    const invalidTelemetry = invalid.tasks[0].attempts[0].telemetry!;
+    invalidTelemetry.usage = { ...invalidTelemetry.usage!, cachedInputTokens: 13,
+      cacheWriteInputTokens: 13, reasoningOutputTokens: 9 };
+    const constrained = projectMissionExecution(invalid).economics;
+    assert.equal(constrained.reportedTotalTokens, 20);
+    const unavailable = { observedTokens: null, receipts: 0 };
+    assert.deepEqual(constrained.usageBySource.reported.cachedInputTokens, unavailable);
+    assert.deepEqual(constrained.usageBySource.reported.cacheWriteInputTokens, unavailable);
+    assert.deepEqual(constrained.usageBySource.reported.reasoningOutputTokens, unavailable);
+    invalidTelemetry.usage = { ...invalidTelemetry.usage, cachedInputTokens: 12,
+      cacheWriteInputTokens: 0, reasoningOutputTokens: 8 };
+    const bounded = projectMissionExecution(invalid).economics.usageBySource.reported;
+    assert.deepEqual(bounded.cachedInputTokens, { observedTokens: 12, receipts: 1 });
+    assert.deepEqual(bounded.cacheWriteInputTokens, { observedTokens: 0, receipts: 1 });
+    assert.deepEqual(bounded.reasoningOutputTokens, { observedTokens: 8, receipts: 1 });
     const inconsistentCount = projectMissionExecution({ ...retained, profile: { ...retained.profile, providerCalls: 1 } }).economics;
     assert.deepEqual(inconsistentCount.usageGaps, ['usage-exceeds-provider-call-count']);
     assert.equal(inconsistentCount.usageReceipts.missing, null);

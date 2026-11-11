@@ -98,9 +98,9 @@ function reportedUsage(usage?: ReportedUsage): ReportedUsage | null {
   const { inputTokens, outputTokens, totalTokens, cachedInputTokens, cacheWriteInputTokens, reasoningOutputTokens } = usage;
   if (!count(inputTokens) || !count(outputTokens) || !count(totalTokens)) return null;
   return { source: usage.source, inputTokens, outputTokens, totalTokens,
-    ...(count(cachedInputTokens) ? { cachedInputTokens } : {}),
-    ...(count(cacheWriteInputTokens) ? { cacheWriteInputTokens } : {}),
-    ...(count(reasoningOutputTokens) ? { reasoningOutputTokens } : {}) };
+    ...(count(cachedInputTokens) && cachedInputTokens <= inputTokens ? { cachedInputTokens } : {}),
+    ...(count(cacheWriteInputTokens) && cacheWriteInputTokens <= inputTokens ? { cacheWriteInputTokens } : {}),
+    ...(count(reasoningOutputTokens) && reasoningOutputTokens <= outputTokens ? { reasoningOutputTokens } : {}) };
 }
 
 const tokenFields = ['totalTokens', 'inputTokens', 'outputTokens', 'cachedInputTokens',
