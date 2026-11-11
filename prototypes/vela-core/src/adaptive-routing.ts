@@ -5,6 +5,7 @@ import type { VelaCalibrationComparison } from './routing-calibration.ts';
 
 export type VelaRoutingIntent = 'quick' | 'deep' | 'app-planning' | 'local-read' | 'local-write' | 'project-check';
 export type VelaMode = 'auto' | 'fast' | 'deep' | 'codex' | 'custom';
+export interface VelaMissionCheckpointRef { id: string; revision: number; triggerSeq: number }
 export interface VelaTurnRouting {
   mode?: VelaMode;
   providerId?: string;
@@ -13,8 +14,9 @@ export interface VelaTurnRouting {
   allowEscalation?: true;
   /** Omitted uses the runtime default; false starts this send without the recent canonical tail. */
   includeRecentHistory?: boolean;
-  /** This send explicitly reviews selected notes for semantic analysis. */
+  /** This send explicitly reviews selected evidence for semantic analysis. */
   semanticContext?: true;
+  missionCheckpoint?: VelaMissionCheckpointRef;
   handoffSourceRequestId?: string;
   routingAgentId?: string;
   overrideDefaults?: true;

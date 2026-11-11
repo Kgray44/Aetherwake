@@ -8,6 +8,7 @@ const maxNeeds = 4;
 const maxCandidates = 8;
 const maxRounds = 2;
 const maxExcerptBytes = 2048;
+export const maxMissionCheckpointBytes = 4096;
 const string = { type: 'string' } as const;
 const list = <T extends object>(items: T) => ({ type: 'array', items });
 const object = <T extends Record<string, object>>(properties: T) =>
@@ -47,7 +48,7 @@ type Proposal = { objective: string; clarification: string; needs: Need[] } &
 export type SemanticHistoryScan = 'bounded' | 'partial' | 'unavailable';
 export interface SemanticHistorySource {
   sourceId: string;
-  sourceKind?: 'conversation-exchange' | 'note';
+  sourceKind?: 'conversation-exchange' | 'note' | 'mission-checkpoint';
   revision: string;
   text: string;
   title?: string;
@@ -201,7 +202,8 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       if (sources.length > 2 * maxCandidates) partial();
       for (const source of sources.slice(0, 2 * maxCandidates)) {
         if (observed.has(source.sourceId)) continue;
-        if (evidence.size === maxCandidates || !bounded(source.text, maxExcerptBytes) || !owner.isCurrent(source)) {
+        const textLimit = source.sourceKind === 'mission-checkpoint' ? maxMissionCheckpointBytes : maxExcerptBytes;
+        if (evidence.size === maxCandidates || !bounded(source.text, textLimit) || !owner.isCurrent(source)) {
           partial();
           if (evidence.size === maxCandidates) break;
           continue;
@@ -239,7 +241,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         ...(pendingClarification ? { proposedClarification: pendingClarification } : {}),
         excerpts: [...evidence].map(([handle, source]) => ({
           handle, text: source.text, ...(source.sourceKind ? { sourceKind: source.sourceKind } : {}),
-          ...(source.sourceKind === 'note' && bounded(source.title, 512) ? { title: source.title } : {}),
+          ...(source.sourceKind !== 'conversation-exchange' && bounded(source.title, 512) ? { title: source.title } : {}),
         })) }, sources);
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale');
       if (reviewed == null) return empty('unavailable');

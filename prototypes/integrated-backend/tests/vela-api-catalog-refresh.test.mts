@@ -4,7 +4,7 @@ import {createHash,createCipheriv,createDecipheriv,randomBytes} from 'node:crypt
 import {DatabaseSync} from 'node:sqlite';
 import {VelaApiConnection} from '../src/vela-api-connection.mts';
 import {VelaApiRuntime} from '../src/vela-api-runtime.mts';
-import { investigateReviewedVelaNotes } from '../src/vela-semantic-history.mts';
+import { investigateReviewedVelaEvidence } from '../src/vela-semantic-history.mts';
 import {createCapabilityCatalog} from '../../vela-core/src/capability-catalog.mts';
 import {CAPABILITIES} from '../../vela-core/src/capabilities.ts';
 
@@ -66,7 +66,7 @@ test('reviewed notes refresh catalog membership without repeating current semant
     const note = { sourceId: 'note-1', sourceKind: 'note' as const, title: 'Inspection', revision: '1',
       text: 'The pump inspection is on Tuesday.', proofDigest: 'synthetic' };
     const respond = (value: unknown) => () => f.reply(false, JSON.stringify(value));
-    const investigate = () => investigateReviewedVelaNotes(f.runtime, 'Which weekday is the pump inspection?', [note],
+    const investigate = () => investigateReviewedVelaEvidence(f.runtime, 'Which weekday is the pump inspection?', [note],
       1, 'gpt-6-luna', () => {}, f.controller.signal);
     f.replies.push(respond(perception), respond(assessment), respond(perception), respond(assessment));
     assert.equal((await investigate()).state, 'assessed');
