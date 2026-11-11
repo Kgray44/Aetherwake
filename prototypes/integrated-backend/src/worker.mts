@@ -20,7 +20,7 @@ const computerClient=hosted&&workerData.nativeComputerHostProtocol===1?createWin
 port.on('close',()=>{maintenanceClient?.close();computerClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();nativeClient?.close();});
 try {
   const options=(hosted?workerData.options:workerData) as Options;
-  const core = new BackendCore(options, event => port.postMessage({ event }),nativeClient?{...nativeClient.services,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{}),...(maintenanceClient?{maintenance:maintenanceClient.services}:{}),...(computerClient?{computer:computerClient.services}:{})}:undefined);
+  const core = new BackendCore(options, event => port.postMessage({ event }),nativeClient?{...nativeClient.services,resourcePolicy:workerData.resourcePolicy,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{}),...(maintenanceClient?{maintenance:maintenanceClient.services}:{}),...(computerClient?{computer:computerClient.services}:{})}:undefined);
   port.on('message', async request => {
     if(isWindowsMaintenanceEnvelope(request)){maintenanceClient?.handle(request);return;}
     if(isWindowsComputerEnvelope(request)){computerClient?.handle(request);return;}

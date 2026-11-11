@@ -16,6 +16,7 @@ import { canonicalMissionContextSource } from '../../vela-core/src/mission-conte
 import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningOffer, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import { MISSION_LIMITS } from './mission-contracts.mts';
 import { createMissionAdmission } from './mission-admission.mts';
+import { createResourcePolicyStore } from './resource-policy-store.mts';
 import { MissionPublication } from './mission-publication.mts';
 import { MissionConversationReceipts } from './mission-conversation.mts';
 import { WorkspaceRecoveryService } from './workspace-recovery.mts';
@@ -491,6 +492,7 @@ export class BackendCore {
       };
       this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
         resourcePolicy: nativeHostServices?.resourcePolicy,
+        resourcePolicyPersistence: this.privateMode && nativeHostServices ? createResourcePolicyStore(this.db) : undefined,
         onChange: () => this.missions?.capacityChanged() });
       const resourceKind = (lane: string, executorId: string) => executorId === 'inspect.backend-source' ? 'cpu' as const :
         lane === 'codex-local-check' ? 'build' as const :
@@ -5826,6 +5828,41 @@ export class BackendCore {
     if (name === 'missionPlanReviewed') return await this.startMissionPlanning(a) as CommandMap[K]['output'];
     if (name === 'missionRevisionReviewed')
       return await this.missionCommand({ name: 'revision-apply', input: a }, true) as CommandMap[K]['output'];
+    if (name === 'resourcePolicyNative') {
+      ensure(!this.closed && this.privateMode && this.nativeHostServices, 'native_resource_policy_required');
+      ensure(a && typeof a === 'object' && !Array.isArray(a), 'invalid_resource_policy_request');
+      const fields = Object.keys(a);
+      const governor = this.missionAdmission;
+      const current = governor.inspectPolicy();
+      if (a.name === 'inspect' && fields.length === 1) return current as CommandMap[K]['output'];
+      ensure(fields.includes('name') && fields.includes('expectedVersion') && Number.isSafeInteger(a.expectedVersion),
+        'invalid_resource_policy_request');
+      ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
+      ensure(a.expectedVersion === current.configVersion, 'stale_resource_policy');
+      const config = { mode: current.mode, limits: current.limits, monitorWindows: current.windowsMonitoring };
+      try {
+        if (a.name === 'set-mode' && fields.length === 3 && ['balanced', 'gaming_focus', 'max_throughput'].includes(a.mode)) {
+          governor.configurePolicy(a.expectedVersion, { ...config, mode: a.mode });
+        } else if (a.name === 'set-cpu-limit' && fields.length === 3 &&
+            Number.isSafeInteger(a.limit) && a.limit >= 0 && a.limit <= current.maxCpuWorkers) {
+          governor.configurePolicy(a.expectedVersion, { ...config, limits: { ...current.limits, cpu: a.limit } });
+        } else if (a.name === 'set-windows-monitoring' && fields.length === 3 && typeof a.enabled === 'boolean') {
+          governor.configurePolicy(a.expectedVersion, { ...config, monitorWindows: a.enabled });
+        } else if (a.name === 'restore-defaults' && fields.length === 2) {
+          governor.restorePolicyDefaults(a.expectedVersion);
+        } else if (a.name === 'rollback' && fields.length === 2) {
+          governor.rollbackPolicy(a.expectedVersion);
+        } else throw new ServiceError('invalid_resource_policy_request');
+      } catch (error) {
+        if (error instanceof ServiceError) throw error;
+        const code = error instanceof Error ? error.message : '';
+        throw new ServiceError(['stale_resource_policy', 'resource_policy_rollback_unavailable'].includes(code) ?
+          code : 'resource_policy_save_failed');
+      }
+      governor.read(false);
+      this.missions.capacityChanged();
+      return governor.inspectPolicy() as CommandMap[K]['output'];
+    }
     if (name === 'missionHostSignal') {
       ensure(this.privateMode && this.nativeHostServices && a && Object.keys(a).length === 1, 'invalid_mission_host_signal');
       if (typeof a.storageAdmitted === 'boolean') {

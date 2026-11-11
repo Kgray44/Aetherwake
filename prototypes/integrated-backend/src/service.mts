@@ -27,7 +27,7 @@ export class Backend {
   private maintenanceServer:ReturnType<typeof createWindowsMaintenanceServer>;
   private computerServer:ReturnType<typeof createWindowsComputerServer>;
   constructor(options: Options, nativeHost?:NativeHostServices) {
-    this.worker = new Worker(new URL('./worker.mts', import.meta.url), { workerData: nativeHost?{nativeHostProtocol:1,nativeLiveHostProtocol:nativeHost.liveMedia?1:0,nativeSystemFactsProtocol:nativeHost.systemFacts?1:0,nativeWakeCaptureProtocol:nativeHost.wakeCapture?1:0,nativeDocumentTextProtocol:nativeHost.documents?1:0,nativeMaintenanceHostProtocol:nativeHost.maintenance?1:0,nativeComputerHostProtocol:nativeHost.computer?1:0,options}:options });
+    this.worker = new Worker(new URL('./worker.mts', import.meta.url), { workerData: nativeHost?{nativeHostProtocol:1,nativeLiveHostProtocol:nativeHost.liveMedia?1:0,nativeSystemFactsProtocol:nativeHost.systemFacts?1:0,nativeWakeCaptureProtocol:nativeHost.wakeCapture?1:0,nativeDocumentTextProtocol:nativeHost.documents?1:0,nativeMaintenanceHostProtocol:nativeHost.maintenance?1:0,nativeComputerHostProtocol:nativeHost.computer?1:0,resourcePolicy:nativeHost.resourcePolicy,options}:options });
     this.maintenanceServer=createWindowsMaintenanceServer(nativeHost?.maintenance,message=>this.worker.postMessage(message));
     this.computerServer=createWindowsComputerServer(nativeHost?.computer,message=>this.worker.postMessage(message));
     this.wakeServer=createNativeWakeCaptureServer(nativeHost?.wakeCapture,message=>this.worker.postMessage(message));
