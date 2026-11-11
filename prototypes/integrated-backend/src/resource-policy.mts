@@ -144,6 +144,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     const critical = suspended || free === undefined || free < memoryFloor || reasons.includes('storage-reserve');
     freeForReservations = critical ? 0 : free - memoryFloor;
     const rendererPressure = reasons.includes('renderer-latency');
+    const gpuPressure = reasons.includes('gpu-load');
     const protecting = config.mode === 'gaming_focus' || reasons.includes('active-input') || rendererPressure;
     const powerLimited = reasons.includes('battery-power') || reasons.includes('cpu-speed-limit');
     const contention = protecting || powerLimited || reasons.includes('cpu-load') || reasons.includes('disk-io');
@@ -151,10 +152,10 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     const recovering = now() - lastProtection < 3_000;
     const cpuLimited = protecting || powerLimited || reasons.includes('cpu-load') || !readings.cpuPercent || recovering;
     const idleHeadroom = config.mode === 'max_throughput' && !cpuLimited && idleSeconds !== null && idleSeconds >= 15 &&
-      !reasons.includes('gpu-load') && !reasons.includes('disk-io');
+      !gpuPressure && !reasons.includes('disk-io');
     const balancedCeiling = Math.max(1, maxWorkers - 1);
     const cpu = critical ? 0 : Math.min(config.limits.cpu, cpuLimited ? 1 : idleHeadroom ? maxWorkers : balancedCeiling);
-    gpuPreparationAllowed = !critical && !contention && !recovering && !reasons.includes('gpu-load') && config.limits.gpu > 0;
+    gpuPreparationAllowed = !critical && !contention && !recovering && !gpuPressure && config.limits.gpu > 0;
     const next = {
       cpu,
       build: protecting || reasons.includes('disk-io') ? 0 : Math.min(cpu, config.limits.build),
@@ -166,7 +167,8 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     const nextReason = suspended ? 'system_suspended' : critical ? (free === undefined ? 'memory_unavailable' : 'safety_floor') :
       rendererPressure ? 'renderer_latency' : protecting ? 'foreground_protection' :
         powerLimited ? 'power_protection' : recovering && !contention ? 'recovery_dwell' : cpuLimited ? 'cpu_conservative' :
-        reasons.includes('disk-io') ? 'disk_contention' : idleHeadroom ? 'throughput_profile' : 'balanced';
+      reasons.includes('disk-io') ? 'disk_contention' : gpuPressure ? 'gpu_contention' :
+        idleHeadroom ? 'throughput_profile' : 'balanced';
     if (nextReason !== reason || kinds.some(kind => next[kind] !== effective[kind])) {
       previous = effective;
       effective = next;
