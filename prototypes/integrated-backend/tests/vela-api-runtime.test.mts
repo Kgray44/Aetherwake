@@ -168,8 +168,21 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.resultObservedMs&&
       timing.resultObservedMs<=timing.settlementStagedMs);
     assert.equal(timing.outputStagedMs,null);
+    const outputTiming=execution.outputTiming;
+    assert.ok(outputTiming);
+    assert.equal(outputTiming.messageId,output.id);
+    assert.equal(outputTiming.parentRequestId,first.id);
+    assert.equal(outputTiming.source,'simulated');
+    assert.ok(timing.settlementStagedMs<=outputTiming.compositionStartedMs&&
+      outputTiming.compositionStartedMs<=outputTiming.readyMs&&outputTiming.readyMs<=outputTiming.stagedMs);
+    assert.doesNotMatch(JSON.stringify(outputTiming),/Mass measures inertia/u);
+    const readOutputTiming=async()=> (await f.core.command('conversationActivity',{resourceIds:[execution.resourceId]}))
+      .executions.find(item=>item.id===execution.id)?.outputTiming;
+    assert.deepEqual(await readOutputTiming(),outputTiming);
+    assert.deepEqual((await f.core.command('conversationActivity',{resourceIds:['unavailable-conversation']})).executions,[]);
     assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,1); assert.ok(!JSON.stringify({snapshot,events:f.events}).includes(marker));
     await f.reopen(); assert.equal((await f.core.command('velaApiUsageStatus',{})).enabled,true);
+    assert.deepEqual(await readOutputTiming(),outputTiming);
     f.replies.push(()=>response('Weight changes with gravity; mass stays the same.','resp-next'));
     const next=await f.send('And on the Moon?'); assert.equal(next.state,'responded'); assert.ok(next.history?.messages.some(message=>message.messageId===output.id));
     assert.ok(f.requests[1].input[0].content.includes('Mass measures inertia'));
@@ -192,7 +205,13 @@ test('actual Core semantic application action uses standing source policy and co
     const result=await f.send('Create a workspace called Research');
     const state=await f.core.command('vela',{name:'state',input:{}}) as any,plan=state.plans.find((item:any)=>item.requestId===result.id);assert.equal(result.state,'responded',JSON.stringify({state:result.state,workflow:result.toolWorkflow,planState:plan?.state,requests:f.requests.length}));assert.equal(plan?.state,'applied');assert.equal(plan.steps[0].action.title,'Research'); const desktop=await f.core.command('desktop',{type:'snapshot'});assert.equal(desktop.workspaces.filter(item=>item.title==='Research').length,1);
     assert.equal(f.requests.length,3); assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,3);assert.equal(state.requests.length,1);assert.equal(state.conversation.messages.filter((item:any)=>item.role==='user').length,1);
-    assert.equal((await f.core.command('snapshot',{})).conversations.length,1);
+    const snapshot=await f.core.command('snapshot',{});
+    assert.equal(snapshot.conversations.length,1);
+    const staged=Object.values(snapshot.executions).filter(execution=>execution.outputTiming);
+    assert.equal(staged.length,1);
+    assert.equal(staged[0].responseId,'resp-confirmation');
+    assert.equal(staged[0].outputTiming?.parentRequestId,result.id);
+    assert.equal(staged[0].outputTiming?.messageId,staged[0].outputMessageId);
   } finally { await f.close(); }
 });
 
@@ -203,6 +222,7 @@ test('API model pins and usage revocation fail closed and incomplete output neve
     await assert.rejects(f.send('Hello',{providerId:'openai-api-vela',model:'unavailable-model'}),/unsupported_model/); assert.equal(f.requests.length,0);
     f.replies.push(()=>response('Partial answer','resp-incomplete',[message('Partial answer')],'incomplete'));
     const result=await f.send('Explain rainfall'); assert.equal(result.toolWorkflow?.phase,'blocked');assert.equal(result.state,'responded');assert.equal(result.response?.kind,'inability'); assert.equal(f.requests.length,1);
+    assert.ok(Object.values((await f.core.command('snapshot',{})).executions).every(execution=>!execution.outputTiming));
     const state=await f.core.command('vela',{name:'state',input:{}}) as VelaState,visible=state.conversation!.messages.find(message=>message.id===result.response!.messageId)!;
     assert.equal(visible.source,'vela-native');assert.equal(visible.classification,'observed');assert.equal(visible.providerContribution,undefined);assert(!visible.content.includes('Partial answer'));
     const snapshot=await f.core.command('snapshot',{}); assert.equal(Object.values(snapshot.executions)[0].state,'failed');

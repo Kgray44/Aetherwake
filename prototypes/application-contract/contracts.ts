@@ -87,6 +87,15 @@ export type ConversationExecutionState =
   | "failed"
   | "interrupted"
   | "unknown";
+/** Offsets within the reviewed API execution, through canonical message staging. */
+export type ConversationOutputTiming = {
+  source: "observed" | "simulated";
+  parentRequestId: string;
+  messageId: string;
+  compositionStartedMs: number;
+  readyMs: number;
+  stagedMs: number;
+};
 export type PublicConversationExecution = {
   id: string;
   resourceId: string;
@@ -99,6 +108,7 @@ export type PublicConversationExecution = {
   recoveryAvailable?: true;
   errorCode?: string;
   httpDiagnostic?: Readonly<import("../openai-provider/contracts.mts").TurnHttpDiagnostic>;
+  outputTiming?: ConversationOutputTiming;
 };
 /** Read-only, scoped to at most 64 requested conversations per call. Live text
  * is the existing ephemeral provider buffer, never a second transcript store. */
