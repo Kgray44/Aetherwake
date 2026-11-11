@@ -19,6 +19,7 @@ import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, M
 import { MISSION_LIMITS } from './mission-contracts.mts';
 import { createMissionAdmission } from './mission-admission.mts';
 import { createResourcePolicyStore } from './resource-policy-store.mts';
+import { isResourceSignal } from './resource-signals.mts';
 import { MissionPublication } from './mission-publication.mts';
 import { MissionConversationReceipts } from './mission-conversation.mts';
 import { WorkspaceRecoveryService } from './workspace-recovery.mts';
@@ -521,7 +522,9 @@ export class BackendCore {
         admission: demand => {
           if (!demand || !this.missionStorageAdmitted) this.missionAdmission.stopDemand();
           const snapshot = this.missionAdmission.read(demand && this.missionStorageAdmitted);
-          return this.missionStorageAdmitted ? snapshot : { ...snapshot, workerLimit: 0,
+          const effectiveLimits = this.missionAdmission.inspectPolicy().effective;
+          return this.missionStorageAdmitted ? { ...snapshot, effectiveLimits } : { ...snapshot, workerLimit: 0,
+            effectiveLimits: { cpu: 0, build: 0, gpu: 0, host_io: 0, remote: 0 },
             reasons: ['storage-reserve', ...snapshot.reasons] };
         },
         replan: replanNativeMission,
@@ -5980,6 +5983,8 @@ export class BackendCore {
           clearTimeout(this.missionPublicationTimer);
           this.missionPublicationTimer = undefined;
         }
+      } else if (isResourceSignal(a)) {
+        this.missionAdmission.noteResourceSignal(a);
       } else {
         ensure(a.foregroundInput === true, 'invalid_mission_host_signal');
         this.missionAdmission.noteActivity();

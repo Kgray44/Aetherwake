@@ -81,16 +81,19 @@ export interface MissionVerification {
   detail: string;
   evidenceIds: string[];
 }
-export type MissionAdmissionReason = 'physical-memory' | 'storage-reserve' | 'cpu-load' | 'gpu-load' | 'disk-io' | 'active-input';
+export type MissionAdmissionReason = 'physical-memory' | 'storage-reserve' | 'cpu-load' | 'gpu-load' | 'disk-io' | 'active-input' |
+  'renderer-latency' | 'battery-power' | 'suspended' | 'cpu-speed-limit';
 export interface MissionAdmissionReading { value: number; observedAt: string }
 export interface MissionAdmission {
   workerLimit: number;
+  effectiveLimits?: { cpu: number; build: number; gpu: number; host_io: number; remote: number };
   reasons: MissionAdmissionReason[];
   readings: {
     cpuPercent?: MissionAdmissionReading;
     availableMemoryBytes?: MissionAdmissionReading;
     gpuEnginePercent?: MissionAdmissionReading;
     diskQueueLength?: MissionAdmissionReading;
+    rendererFrameP95Ms?: MissionAdmissionReading;
   };
 }
 type MissionPhaseInterval = [startedMs: number, endedMs: number];

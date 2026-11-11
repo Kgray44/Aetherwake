@@ -7,6 +7,7 @@ import {
   materialMotionKey,
 } from "./resource-material-motion.ts";
 import { installApplication, type Application } from "./application";
+import { createResourceTiming } from "./resource-timing";
 import { velaVisualLabels, type VelaVisualState } from './vela-visual-state.ts';
 import type { ResourceOpeningInput } from "../../../application-contract/resource-opening.ts";
 import { targetDirectCard, directCardLayer } from "./direct-card-motion.ts";
@@ -22,6 +23,7 @@ import {
   motionPolicy,
   nextDrawDeadline,
   DRAW_EARLY_TOLERANCE_MS,
+  BALANCED_ACTIVE_CADENCE_MS,
 } from "./policy";
 import { deriveSceneState } from "./scene-state";
 import { registerScene, retargetScene, sceneWeights } from "./scene-transition";
@@ -114,6 +116,15 @@ app.innerHTML = `
 `;
 
 const desktopMode = !!window.aerynthHost?.command;
+const resourceTiming = window.aerynthHost?.observeResourceTiming ?
+  createResourceTiming(sample => window.aerynthHost?.observeResourceTiming?.(sample)) : undefined;
+let previousUnpacedCadence = 0;
+let displayFrameBudget = 0;
+window.aerynthHost?.onResourceFrameBudget?.(budget => {
+  displayFrameBudget = budget ?? 0;
+  previousUnpacedCadence = 0;
+  resourceTiming?.reset();
+});
 // Native caption buttons keep Windows snapping, system menus and accessibility.
 // Only their glass backdrop is drawn here; browser fixtures have no caption pill.
 const captionOverlay = (navigator as Navigator & {
@@ -1261,6 +1272,8 @@ function lifecycle(active: boolean) {
     );
   }
   if (!active) {
+    previousUnpacedCadence = 0;
+    resourceTiming?.reset();
     cancelAnimationFrame(raf);
     clearTimeout(schedulerTimer);
     schedulerTimer = 0;
@@ -1290,6 +1303,8 @@ declare global {
       onActive: (listener: (active: boolean) => void) => void;
       command?: (name: string, input: unknown) => Promise<unknown>;
       onEvent?: (listener: (event: unknown) => void) => () => void;
+      observeResourceTiming?: (sample: { frameP95Ms: number; budgetRatioP95: number; samples: number; windowMs: number }) => void;
+      onResourceFrameBudget?: (listener: (budget: number | null) => void) => void;
     };
     __aerynth: ReturnType<typeof controller>;
   }
@@ -1497,13 +1512,19 @@ function renderDOM() {
 }
 function tick(now: number) {
   raf = 0;
-  if (!running || !nativeActive || document.hidden) return;
+  if (!running || !nativeActive || document.hidden) {
+    previousUnpacedCadence = 0;
+    resourceTiming?.reset();
+    return;
+  }
   // Synchronous host/layer invalidation requests the next existing frame;
   // it cannot start a second RAF chain while the current frame is executing.
   frameRunning = true;
   wakeRequested = false;
   try {
     const interval = Math.max(0, now - lastFrame);
+    resourceTiming?.observe(now, interval, previousUnpacedCadence);
+    previousUnpacedCadence = 0;
     const dt = Math.min(interval / 1000, 0.12);
     lastFrame = now;
     visualClock += dt * 1000;
@@ -1751,7 +1772,11 @@ function tick(now: number) {
           },
           Math.max(1, nextDraw - performance.now() - 1),
         );
-      else raf = requestAnimationFrame(tick);
+      else {
+        previousUnpacedCadence = !idle && !motion.reduced ?
+          Math.max(cadence || BALANCED_ACTIVE_CADENCE_MS, displayFrameBudget) : 0;
+        raf = requestAnimationFrame(tick);
+      }
     }
   } finally {
     frameRunning = false;

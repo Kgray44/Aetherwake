@@ -53,6 +53,10 @@ const admissionReasonLabel: Record<MissionAdmissionReason, string> = {
   "gpu-load": "High GPU load",
   "disk-io": "High disk I/O load",
   "active-input": "Recent Aerynth activity",
+  "renderer-latency": "Slow renderer frames",
+  "battery-power": "Battery power",
+  suspended: "System suspended",
+  "cpu-speed-limit": "OS CPU speed limit",
 };
 const admissionNumber = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 export const missionAdmissionRefreshMs = 2000;
@@ -69,19 +73,26 @@ export function missionAdmissionDetails(
     disclosure.dataset.missionDisclosure = focusKey;
     summary.dataset.missionFocus = focusKey;
   }
+  const effective = admission.effectiveLimits;
+  const headline = effective
+    ? [phase === "current" ? "Resource admission" : "Resource admission at start", `CPU ${effective.cpu}`, `Remote ${effective.remote}`]
+    : [phase === "current" ? "Scheduler limit" : "Scheduler limit at admission",
+      `${admission.workerLimit} ${admission.workerLimit === 1 ? "worker" : "workers"}`];
   summary.textContent = [
-    phase === "current" ? "Scheduler limit" : "Scheduler limit at admission",
-    `${admission.workerLimit} ${admission.workerLimit === 1 ? "worker" : "workers"}`,
+    ...headline,
     ...admission.reasons.map(reason => admissionReasonLabel[reason]),
   ].join(" · ");
   const description = doc.createElement("small");
-  description.textContent = "The limit applies to new starts across missions.";
+  description.textContent = effective
+    ? `Build limit ${effective.build} · Host I/O limit ${effective.host_io} · GPU limit ${effective.gpu}`
+    : "The limit applies to new starts across missions.";
   disclosure.append(summary, description);
   const readings = [
     ["cpuPercent", "CPU usage", "%"],
     ["availableMemoryBytes", "Available physical memory", " MiB"],
     ["gpuEnginePercent", "Busiest GPU engine", "%"],
     ["diskQueueLength", "Disk queue length", ""],
+    ["rendererFrameP95Ms", "Renderer frame interval p95", " ms"],
   ] as const;
   for (const [key, label, unit] of readings) {
     const row = doc.createElement("small"), reading = admission.readings[key];

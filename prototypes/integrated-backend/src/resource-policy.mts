@@ -116,22 +116,27 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     for (const { lease } of active.values()) bytes += lease.receipt.reservedRamBytes;
     return bytes;
   }
-  function update(admission: MissionAdmission | undefined, memoryFreshUntil = localFreshUntil) {
+  let idleSeconds: number | null = null;
+  function update(admission: MissionAdmission | undefined, memoryFreshUntil = localFreshUntil, nativeIdleSeconds = idleSeconds) {
     if (disposed) return;
     latest = admission;
+    idleSeconds = nativeIdleSeconds;
     const { config } = preference;
     localFreshUntil = memoryFreshUntil;
     const readings = admission?.readings ?? {};
     const reasons: readonly MissionAdmission['reasons'][number][] = admission?.reasons ?? [];
     const free = readings.availableMemoryBytes?.value;
-    const critical = free === undefined || free < memoryFloor || reasons.includes('storage-reserve');
+    const suspended = reasons.includes('suspended');
+    const critical = suspended || free === undefined || free < memoryFloor || reasons.includes('storage-reserve');
     freeForReservations = critical ? 0 : free - memoryFloor;
-    const protecting = config.mode === 'gaming_focus' || reasons.includes('active-input');
-    const contention = protecting || reasons.includes('cpu-load') || reasons.includes('disk-io');
+    const rendererPressure = reasons.includes('renderer-latency');
+    const protecting = config.mode === 'gaming_focus' || reasons.includes('active-input') || rendererPressure;
+    const powerLimited = reasons.includes('battery-power') || reasons.includes('cpu-speed-limit');
+    const contention = protecting || powerLimited || reasons.includes('cpu-load') || reasons.includes('disk-io');
     if (critical || contention) lastProtection = now();
     const recovering = now() - lastProtection < 3_000;
-    const cpuLimited = protecting || reasons.includes('cpu-load') || !readings.cpuPercent || recovering;
-    const idleHeadroom = config.mode === 'max_throughput' && !cpuLimited &&
+    const cpuLimited = protecting || powerLimited || reasons.includes('cpu-load') || !readings.cpuPercent || recovering;
+    const idleHeadroom = config.mode === 'max_throughput' && !cpuLimited && idleSeconds !== null && idleSeconds >= 15 &&
       !reasons.includes('gpu-load') && !reasons.includes('disk-io');
     const balancedCeiling = Math.max(1, maxWorkers - 1);
     const cpu = critical ? 0 : Math.min(config.limits.cpu, cpuLimited ? 1 : idleHeadroom ? maxWorkers : balancedCeiling);
@@ -143,8 +148,9 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       host_io: critical ? 0 : config.limits.host_io,
       remote: config.limits.remote,
     };
-    const nextReason = critical ? (free === undefined ? 'memory_unavailable' : 'safety_floor') :
-      protecting ? 'foreground_protection' : recovering && !contention ? 'recovery_dwell' : cpuLimited ? 'cpu_conservative' :
+    const nextReason = suspended ? 'system_suspended' : critical ? (free === undefined ? 'memory_unavailable' : 'safety_floor') :
+      rendererPressure ? 'renderer_latency' : protecting ? 'foreground_protection' :
+        powerLimited ? 'power_protection' : recovering && !contention ? 'recovery_dwell' : cpuLimited ? 'cpu_conservative' :
         reasons.includes('disk-io') ? 'disk_contention' : idleHeadroom ? 'throughput_profile' : 'balanced';
     if (nextReason !== reason || kinds.some(kind => next[kind] !== effective[kind])) {
       previous = effective;
