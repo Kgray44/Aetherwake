@@ -17,19 +17,29 @@ Object.defineProperty(native,'mutate',{get(){mutations++;throw Error('effects_un
 // Exercise production private-host authorization with an isolated synthetic DB,
 // synthetic encrypted credential and the zero-network preload; no real profile.
 const create=()=>new Backend({path:database,privateRoot:directory,provider:'fixture',contentPolicy:'local-private'},native);
+const progress = (phase: string) => process.stderr.write('native worker fixture: ' + phase + '\n');
 let backend=create();
 try{
+ progress('configuring');
  await backend.call('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:'SYNTHETIC_ONLY_WORKER_HOP'},expectedVersion:null});await backend.call('velaApiUsageAuthorize',{expectedVersion:1,enabled:true});
+ progress('reviewing');
  const intent='Synthetic read-only native worker bridge test',preview=await backend.call('velaRequestPreview',{intent,resourceIds:[],adaptive:true}),review=await backend.call('velaNativeReview',{previewId:preview.id,signature:preview.signature}),grant=await backend.call('authorizeVelaRequest',{previewId:preview.id,signature:preview.signature,reviewDigest:review.reviewDigest,...(preview.sendDisposition==='routine'?{directSend:true}:{})});
  const run=backend.call('vela',{name:'request',input:{intent,resourceIds:[],authorizeProvider:true,previewId:preview.id,grantId:grant.grantId}}) as Promise<any>;
  if(scenario.startsWith('shutdown')){
-  const settled=run.catch(error=>({error:error.code??error.message}));await nativeEntered;await backend.close();assert.equal(nativeSignal?.aborted,true);await settled;assert.equal(memoryReads,scenario==='shutdown'?1:0);assert.equal(computerReads,scenario==='shutdown-computer'?1:0);
+  const settled=run.catch(error=>({error:error.code??error.message}));
+  progress('waiting for native port');
+  const entered = await Promise.race([nativeEntered.then(() => true), settled.then(() => false)]);
+  assert.ok(entered, 'worker request settled before entering the expected native port');
+  progress('closing first worker');
+  await backend.close();assert.equal(nativeSignal?.aborted,true);await settled;assert.equal(memoryReads,scenario==='shutdown'?1:0);assert.equal(computerReads,scenario==='shutdown-computer'?1:0);
+  progress('reopening worker');
   backend=create();await backend.call('snapshot',{});assert.equal(memoryReads,scenario==='shutdown'?1:0);assert.equal(computerReads,scenario==='shutdown-computer'?1:0);
  }else{
   const request=await run,state=await backend.call('vela',{name:'state',input:{}}) as VelaBackendState;
   if(scenario==='effect-denied'){assert.equal(request.state,'awaiting-review');assert.equal(memoryReads+computerReads,0);assert.equal(state.hostOperations!.length,1);await assert.rejects(backend.call('vela',{name:'hostOperation',input:{operationId:state.hostOperations![0].id}}),/native_review_required/);}
   else{assert.equal(request.state,'responded');assert.equal(memoryReads,scenario==='absent'?0:1);assert.equal(computerReads,scenario==='absent'?0:1);}
  }
+ progress('closing and checking persisted state');
  await backend.close();const db=new DatabaseSync(database,{readOnly:true});try{
   const workflow=JSON.parse(String(db.prepare('SELECT json FROM vela_tool_workflows').get()!.json));
   for(const id of ['windows.memory.diagnose','windows.computer.discover'])assert.equal(workflow.catalog.descriptors.find((item:any)=>item.id===id).availability,scenario==='absent'?'unavailable':'available');
