@@ -1,5 +1,6 @@
 export type GraphicsTier = "cinematic" | "balanced" | "efficient";
 export const DRAW_EARLY_TOLERANCE_MS = 0.25;
+export const BALANCED_ACTIVE_CADENCE_MS = 1000 / 60;
 
 /** A responsive transition may draw before its tier deadline. Start its next
  * interval from that actual draw instead of accumulating future time debt. */
@@ -31,7 +32,7 @@ export function motionPolicy(input: {
     input.tier === "cinematic"
       ? 0
       : input.tier === "balanced"
-        ? 1000 / 60
+        ? BALANCED_ACTIVE_CADENCE_MS
         : 1000 / 15;
   if (input.reduced) return { continuous: false, cadenceMs: Infinity };
   if (input.transitioning)

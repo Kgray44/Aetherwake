@@ -12,6 +12,7 @@ const {
   powerMonitor,
   Menu,
   MenuItem,
+  screen,
 } = require("electron");
 const { createMediaPlayback, scheme: mediaScheme } = require("./media-playback.cjs");
 protocol.registerSchemesAsPrivileged([
@@ -479,6 +480,47 @@ app.whenReady().then(async () => {
     },
   });
   const owner = win.webContents;
+  let displayFrameBudget = null;
+  const publishDisplayBudget = (force = false) => {
+    if (win.isDestroyed() || owner.isDestroyed() || owner.getURL() !== localURL) return;
+    let hz;
+    try { hz = screen.getDisplayMatching(win.getBounds()).displayFrequency; } catch { hz = null; }
+    const next = Number.isFinite(hz) && hz >= 1 && hz <= 1000 ? 1000 / hz : null;
+    if (!force && next === displayFrameBudget) return;
+    displayFrameBudget = next;
+    owner.send("application-resource-frame-budget", next);
+  };
+  const refreshDisplayBudget = () => publishDisplayBudget();
+  owner.on("did-finish-load", () => publishDisplayBudget(true));
+  win.on("move", refreshDisplayBudget);
+  const displayEvents = ["display-metrics-changed", "display-added", "display-removed"];
+  for (const event of displayEvents) screen.on(event, refreshDisplayBudget);
+  const stopResourcePower = require("./resource-power.cjs").observeResourcePower(powerMonitor, sendMissionHostSignal);
+  const publishResourceFocus = () => sendMissionHostSignal({ aerynthFocused:
+    win.isVisible() && !win.isMinimized() && win.isFocused() && owner.getURL() === localURL });
+  owner.on("did-finish-load", publishResourceFocus);
+  for (const event of ["focus", "blur", "show", "hide", "minimize", "restore"]) win.on(event, publishResourceFocus);
+  let lastResourceTiming = -Infinity;
+  const observeResourceTiming = (event, sample) => {
+    if (closing || win.isDestroyed() || !win.isVisible() || win.isMinimized() || !win.isFocused() ||
+        event.sender !== owner || event.senderFrame !== owner.mainFrame || event.senderFrame?.url !== localURL ||
+        !sample || Object.keys(sample).length !== 4) return;
+    const { frameP95Ms, budgetRatioP95, samples, windowMs } = sample;
+    if (!Number.isFinite(frameP95Ms) || frameP95Ms < 1 || frameP95Ms > 1000 ||
+        !Number.isFinite(budgetRatioP95) || budgetRatioP95 < 0.01 || budgetRatioP95 > 60 ||
+        !Number.isSafeInteger(samples) || samples < 12 || samples > 256 ||
+        !Number.isFinite(windowMs) || windowMs < 1000 || windowMs > 5000) return;
+    const at = performance.now();
+    if (at - lastResourceTiming < 1500) return;
+    lastResourceTiming = at;
+    sendMissionHostSignal({ rendererTiming: { frameP95Ms, budgetRatioP95, samples, windowMs } });
+  };
+  ipcMain.on("application-resource-timing", observeResourceTiming);
+  win.once("closed", () => {
+    stopResourcePower();
+    for (const event of displayEvents) screen.off(event, refreshDisplayBudget);
+    ipcMain.off("application-resource-timing", observeResourceTiming);
+  });
   let lastMissionActivity = -Infinity;
   const observeMissionActivity = () => {
     const at = performance.now();

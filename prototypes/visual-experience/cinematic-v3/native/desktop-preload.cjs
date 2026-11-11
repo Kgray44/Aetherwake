@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer } = require("electron");
+let lastResourceTimingAt = -Infinity;
 contextBridge.exposeInMainWorld(
   "aerynthHost",
   Object.freeze({
@@ -6,6 +7,20 @@ contextBridge.exposeInMainWorld(
     geometryObservation: process.argv.includes(
       "--aerynth-geometry-observation",
     ),
+    observeResourceTiming(sample) {
+      const { frameP95Ms, budgetRatioP95, samples, windowMs } = sample ?? {};
+      const at = performance.now();
+      if (at - lastResourceTimingAt >= 1500 && [frameP95Ms, budgetRatioP95, samples, windowMs].every(Number.isFinite)) {
+        lastResourceTimingAt = at;
+        ipcRenderer.send("application-resource-timing", { frameP95Ms, budgetRatioP95, samples, windowMs });
+      }
+    },
+    onResourceFrameBudget(listener) {
+      if (typeof listener === "function")
+        ipcRenderer.on("application-resource-frame-budget", (_event, value) => {
+          if (value === null || Number.isFinite(value) && value >= 1 && value <= 1000) listener(value);
+        });
+    },
     onActive(listener) {
       if (typeof listener === "function")
         ipcRenderer.on("host-active", (_e, active) => {

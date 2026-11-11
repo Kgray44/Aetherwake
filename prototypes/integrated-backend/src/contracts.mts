@@ -252,7 +252,8 @@ export interface CommandMap {
   missionCheckReview: { input: { paths: string[] }; output: { cwd: string; argv: string[]; head: string; digest: string } };
   missionPlanReviewed: { input: Extract<MissionRequest, { name: 'plan' }>['input']; output: MissionResponse };
   missionRevisionReviewed: { input: Extract<MissionRequest, { name: 'revision-apply' }>['input']; output: MissionResponse };
-  missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true }; output: null };
+  missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true } |
+    import('./resource-signals.mts').ResourceSignal; output: null };
   /** Owned desktop command, excluded from renderer and model routes. */
   resourcePolicyNative: { input: import('./resource-policy.mts').ResourcePolicyNativeRequest;
     output: import('./resource-policy.mts').ResourcePolicyNativeView };

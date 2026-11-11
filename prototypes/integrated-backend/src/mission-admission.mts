@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { aggregateGpuEngines, readCpuCounters } from '../../vela-core/src/system-utilization.mts';
 import type { MissionAdmission, MissionAdmissionReading } from './mission-contracts.mts';
 import { createResourcePolicy, type ResourcePolicyConfig, type ResourcePolicyPersistence } from './resource-policy.mts';
+import type { HostPower, ResourceSignal } from './resource-signals.mts';
 
 const memoryFloorBytes = 512 * 1024 * 1024;
 const cpuIntervalMs = 500;
@@ -13,6 +14,8 @@ const windowsWarmupMs = 2_000;
 const windowsIntervalMs = 20_000;
 const windowsFreshMs = 30_000;
 const inputFreshMs = 3_000;
+const rendererFreshMs = 6_000;
+const powerFreshMs = 15_000;
 
 type CpuCounters = Omit<ReturnType<typeof readCpuCounters>, 'logicalProcessors'> &
   Partial<Pick<ReturnType<typeof readCpuCounters>, 'logicalProcessors'>>;
@@ -141,6 +144,10 @@ export function createMissionAdmission(options: AdmissionOptions) {
   let lastProbe = -Infinity;
   let probe: AbortController | undefined;
   let disposed = false;
+  let focused: boolean | null = null;
+  let power: { value: HostPower; time: number } | undefined;
+  let frame: { timing: TimedReading; ratio: number } | undefined;
+  let framePressure: Pressure = { highSamples: 0, pressured: false };
   const samples = new Map<string, MetricSample>();
   const errors = new Set<string>();
   let processBaseline: { usage: NodeJS.CpuUsage; time: number } | undefined;
@@ -235,11 +242,19 @@ export function createMissionAdmission(options: AdmissionOptions) {
     }
   }
 
-  return {
+  function clearRendererTiming() {
+    frame = undefined;
+    framePressure = { highSamples: 0, pressured: false };
+    samples.delete('frameTime');
+    samples.delete('frameBudgetRatio');
+    samples.delete('rendererTimingSamples');
+  }
+
+  const governor = {
     read(demand: boolean): MissionAdmission {
       if (disposed) return { workerLimit: options.maxWorkers, reasons: [], readings: {} };
       const time = now();
-      if (demand) {
+      if (demand && !power?.value.suspended) {
         if (time - lastDemand > demandGapMs) {
           demandSince = time;
           cpuBaseline = undefined;
@@ -259,21 +274,29 @@ export function createMissionAdmission(options: AdmissionOptions) {
       const availableMemoryBytes = fresh(memory, time, demandGapMs)?.reading;
       const gpuEnginePercent = fresh(gpu.sample, time, windowsFreshMs)?.reading;
       const diskQueueLength = fresh(disk.sample, time, windowsFreshMs)?.reading;
+      const rendererFrameP95Ms = fresh(frame?.timing, time, rendererFreshMs)?.reading;
+      const nativePower = power && time - power.time <= powerFreshMs ? power.value : undefined;
       const reasons: MissionAdmission['reasons'] = [];
       if (availableMemoryBytes && availableMemoryBytes.value < memoryFloorBytes) reasons.push('physical-memory');
       if (cpuPercent && cpu.pressured) reasons.push('cpu-load');
       if (gpuEnginePercent && gpu.pressured) reasons.push('gpu-load');
       if (diskQueueLength && disk.pressured) reasons.push('disk-io');
+      if (rendererFrameP95Ms && focused && framePressure.pressured) reasons.push('renderer-latency');
+      if (nativePower?.battery === true) reasons.push('battery-power');
+      if (nativePower && nativePower.speedLimitPercent !== null && nativePower.speedLimitPercent < 100) reasons.push('cpu-speed-limit');
+      if (power?.value.suspended) reasons.push('suspended');
       if (time - lastInput <= inputFreshMs && ((cpuPercent?.value ?? -1) >= 80 || (gpuEnginePercent?.value ?? -1) >= 85))
         reasons.push('active-input');
-      const workerLimit = reasons.includes('physical-memory') ? 0 : reasons.length ? Math.min(1, options.maxWorkers) : options.maxWorkers;
+      const workerLimit = reasons.includes('physical-memory') || reasons.includes('suspended') ?
+        0 : reasons.length ? Math.min(1, options.maxWorkers) : options.maxWorkers;
       const snapshot = { workerLimit, reasons, readings: {
         ...(cpuPercent ? { cpuPercent: { ...cpuPercent } } : {}),
         ...(availableMemoryBytes ? { availableMemoryBytes: { ...availableMemoryBytes } } : {}),
         ...(gpuEnginePercent ? { gpuEnginePercent: { ...gpuEnginePercent } } : {}),
         ...(diskQueueLength ? { diskQueueLength: { ...diskQueueLength } } : {}),
+        ...(rendererFrameP95Ms ? { rendererFrameP95Ms: { ...rendererFrameP95Ms } } : {}),
       } };
-      policy.update(snapshot, memory ? memory.time + demandGapMs : -Infinity);
+      policy.update(snapshot, memory ? memory.time + demandGapMs : -Infinity, nativePower?.idleSeconds ?? null);
       return snapshot;
     },
     inspectPolicy() { return { ...policy.inspect(), windowsCountersSupported: !!readWindows }; },
@@ -316,14 +339,64 @@ export function createMissionAdmission(options: AdmissionOptions) {
         availableMemoryBytes: metric('availableMemoryBytes', 'bytes', 'node:os.freemem', demandGapMs),
         totalMemoryBytes: metric('totalMemoryBytes', 'bytes', 'node:os.totalmem', demandGapMs),
         vramAvailableBytes: metric('vramAvailableBytes', 'bytes', 'No qualified adapter budget sensor', 0, false, false),
-        powerState: metric('powerState', 'state', 'No qualified power sensor', 0, false, false),
+        batteryPower: metric('batteryPower', '0=not on battery, 1=battery', 'Electron powerMonitor.isOnBatteryPower', powerFreshMs),
+        idleSeconds: metric('idleSeconds', 's', 'Electron powerMonitor.getSystemIdleTime', powerFreshMs),
+        suspended: metric('suspended', '0=awake, 1=suspended', 'Electron powerMonitor suspend/resume', Infinity),
+        cpuSpeedLimitPercent: metric('cpuSpeedLimitPercent', 'percent of rated CPU speed', 'Electron powerMonitor speed-limit-change', powerFreshMs),
         thermalTemperature: metric('thermalTemperature', 'degrees Celsius', 'No qualified thermal sensor', 0, false, false),
         foregroundApp: metric('foregroundApp', 'state', 'No authorized foreground OS source', 0, false, false),
-        frameTime: metric('frameTime', 'ms', 'No renderer sample attached', 0, false, false),
+        aerynthFocused: metric('aerynthFocused', '0=unfocused, 1=focused', 'Electron BrowserWindow focus/blur', Infinity),
+        frameTime: metric('frameTime', 'ms, callback interval p95', 'Aerynth renderer animation-frame timestamps', rendererFreshMs, true),
+        frameBudgetRatio: metric('frameBudgetRatio', 'ratio to target cadence, p95', 'Aerynth renderer animation-frame timestamps', rendererFreshMs, true),
+        rendererTimingSamples: metric('rendererTimingSamples', 'callback intervals', 'Aerynth renderer animation-frame timestamps', rendererFreshMs),
       } };
+    },
+    noteResourceSignal(signal: ResourceSignal) {
+      if (disposed) return;
+      const time = now();
+      if ('aerynthFocused' in signal) {
+        focused = signal.aerynthFocused;
+        if (!focused) clearRendererTiming();
+        capture('aerynthFocused', Number(focused), time);
+      } else if ('hostPower' in signal) {
+        const next = signal.hostPower;
+        if (next.suspended !== (power?.value.suspended ?? false)) {
+          probe?.abort();
+          memory = undefined;
+          cpuBaseline = processBaseline = undefined;
+          cpu = gpu = disk = { highSamples: 0, pressured: false };
+          samples.clear();
+          errors.clear();
+          clearRendererTiming();
+          lastDemand = lastProbe = lastInput = -Infinity;
+          if (focused !== null) capture('aerynthFocused', Number(focused), time);
+        }
+        power = { value: { ...next }, time };
+        if (next.battery === null) samples.delete('batteryPower');
+        else capture('batteryPower', Number(next.battery), time);
+        if (next.idleSeconds === null) samples.delete('idleSeconds');
+        else capture('idleSeconds', next.idleSeconds, time);
+        if (next.speedLimitPercent === null) samples.delete('cpuSpeedLimitPercent');
+        else capture('cpuSpeedLimitPercent', next.speedLimitPercent, time);
+        capture('suspended', Number(next.suspended), time);
+      } else {
+        if (!focused || power?.value.suspended || frame && time - frame.timing.time < 1_500) return;
+        const { frameP95Ms, budgetRatioP95, samples: count, windowMs } = signal.rendererTiming;
+        const previous = fresh(frame?.timing, time, rendererFreshMs) ? frame : undefined;
+        const ratio = previous ? previous.ratio * 0.7 + budgetRatioP95 * 0.3 : budgetRatioP95;
+        frame = { timing: reading(frameP95Ms, time), ratio };
+        framePressure = observePressure(previous ? framePressure : { highSamples: 0, pressured: false }, reading(ratio, time), 1.5, 1.2);
+        capture('frameTime', frameP95Ms, time, windowMs);
+        capture('frameBudgetRatio', budgetRatioP95, time, windowMs);
+        capture('rendererTimingSamples', count, time, windowMs);
+      }
+      const before = policy.inspect().revision;
+      governor.read(false);
+      if (policy.inspect().revision !== before) options.onChange?.();
     },
     noteActivity() { if (!disposed) lastInput = now(); },
     stopDemand() { lastDemand = -Infinity; probe?.abort(); },
     dispose() { disposed = true; probe?.abort(); policy.dispose(); samples.clear(); errors.clear(); },
   };
+  return governor;
 }
