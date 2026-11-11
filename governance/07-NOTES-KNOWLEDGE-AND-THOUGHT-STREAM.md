@@ -671,3 +671,29 @@ Vela should be able to recognize relevant ideas and connect them to current work
 **AW-NKT-137 — Thought truth.** The user's Thought Stream and agent-visible summaries MUST never be confused with private model chain-of-thought or artificially simulated reasoning.
 
 **Acceptance:** Turn a source note into a verified plan while keeping the source untouched, trace facts to source, then revoke source and prove stale retrieval is not trusted.
+
+---
+
+## Owner-directed supporting amendment FI-2026-11-10: experience-backed learning knowledge
+
+> **Design obligations; not proof of active learning.** Human-authored notes and Thought Stream records retain their own owners. Learning evidence and CIE projections remain derivatives, not a new note database or an unbounded model memory.
+
+**AW-NKT-138 — Separate experience from interpretation.** A learned strategy, inferred preference, model explanation, performance measurement, user-authored note and externally verified outcome MUST be represented as distinct record types linked by provenance. An AI inference MUST NOT silently overwrite an original note or user correction.
+
+**AW-NKT-139 — Traceable learning objects.** Experiential knowledge SHOULD carry source IDs, mission or experiment references, task class, hardware/capability context, observation window, uncertainty, validation state, policy version and applicable scope. Missing evidence MUST remain explicit rather than filled by model-generated certainty.
+
+**AW-NKT-140 — Human-facing learning journal.** The Adaptive Intelligence Workspace MAY expose a readable learning journal that explains what Vela observed, hypothesized, tested, accepted, rejected, paused or rolled back. The journal MUST be a view over source-backed learning records and respect individual source retention policies.
+
+**AW-NKT-141 — Corrections outrank stale conclusions.** A user correction, source revision, invalidated experiment or permission withdrawal MUST trigger appropriate re-evaluation of derived knowledge and prevent superseded assumptions from being reintroduced by cached summaries or other agents.
+
+**AW-NKT-142 — Contextual strategy retrieval.** CIE MAY retrieve prior strategy outcomes as decision support for AIR, AEP and ARIE, but retrieval MUST filter by source authorization, task similarity, hardware and model capabilities, age, confidence and contradictory evidence. Historical success MUST NOT become a universal default.
+
+**AW-NKT-143 — No clandestine self-modification.** Learning records MAY recommend model/tool selection, parallelism, retrieval, verification and resource policies within an authorized control plane. They MUST NOT grant permission to alter source code, retrain provider models, exfiltrate private records or rewrite user-authored knowledge.
+
+**AW-NKT-144 — Notes to experiments with consent.** User notes and ideas MAY seed a proposed evaluation or implementation plan only within the user's authorized scope; derived experiments MUST retain source links, outcomes and explicit decisions rather than quietly converting ideas into completed work.
+
+**AW-NKT-145 — Explanation provenance.** A generated explanation of a learning decision MUST cite the recorded policy, measured comparison and relevant limits when available. A post-hoc model rationale MUST be labeled as interpretation, not authenticated historical internal reasoning.
+
+**AW-NKT-146 — Private and reversible learning.** Export, source deletion, revocation, data correction and retention boundaries MUST propagate through derived learning views and caches as defined by the unified memory and trust owners; incomplete deletion or lingering provider retention MUST be disclosed where applicable.
+
+**Acceptance:** Record a proposed optimization and its sources, reject it on quality evidence, inspect its history in the learning journal, correct a faulty assumption, revoke a source and verify both future retrieval and exported knowledge respect the correction. Coordinate with [08 CIE](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md), [10 AEP](10-AI-EXECUTION-PROFILER.md), [14 Trust](14-TRUST-PRIVACY-AND-AUTONOMY.md).
