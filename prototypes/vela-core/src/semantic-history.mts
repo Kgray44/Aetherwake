@@ -24,9 +24,11 @@ export const semanticHistoryFormats = {
       needs: list(object({ key: string, question: string, query: string })) }),
   },
   assess: {
-    type: 'json_schema', name: 'vela_history_assessment_v2', strict: true,
-    schema: object({ version, clarification: string, assessment: list(object({ key: string, status: { type: 'string', enum: [...statuses] },
-      sources: list(string), query: string })) }),
+    type: 'json_schema', name: 'vela_history_assessment_v3', strict: true,
+    schema: object({ version: { type: 'integer', enum: [3] }, clarification: string, assessment: list(object({
+      key: string, status: { type: 'string', enum: [...statuses] },
+      passages: list(object({ source: string, quote: string })), query: string,
+    })) }),
   },
 } as const;
 
@@ -49,11 +51,12 @@ export interface SemanticHistorySource {
   revision: string;
   text: string;
 }
-interface Assessment { key: string; status: Status; sources: string[]; query: string }
+interface Passage { source: string; quote: string }
+interface Assessment { key: string; status: Status; sources: string[]; query: string; passages?: Passage[] }
 interface EvidenceReview { rows: Assessment[]; clarification: string }
 export type SemanticHistoryCall =
   | { stage: 'interpret'; request: string }
-  | { stage: 'assess'; needs: readonly Need[]; excerpts: readonly { handle: string; text: string; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number };
+  | { stage: 'assess'; request: string; needs: readonly Need[]; excerpts: readonly { handle: string; text: string; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number };
 
 interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan }
 interface SemanticHistoryOwner<T extends SemanticHistorySource> {
@@ -72,7 +75,7 @@ interface Result<T> {
   clarification?: string;
   rounds: number;
   searchCoverage: SemanticHistoryScan | null;
-  coverage: { key: string; status: Status; sources: T[] }[];
+  coverage: { key: string; status: Status; sources: T[]; passages?: { sourceId: string; quote: string }[] }[];
 }
 
 function exact(value: unknown, keys: string[]): value is Record<string, unknown> {
@@ -109,21 +112,41 @@ function parseProposal(value: unknown): Proposal | undefined {
   }
   return structuredClone(value) as unknown as Proposal;
 }
-function parseAssessment<T>(value: unknown, needs: readonly Need[], evidence: Map<string, T>): EvidenceReview | undefined {
-  const legacy = exact(value, ['version', 'assessment']) && value.version === 1;
-  const current = exact(value, ['version', 'assessment', 'clarification']) && value.version === 2 && bounded(value.clarification, 512, true);
-  if (!(legacy || current) || !Array.isArray(value.assessment) ||
-    value.assessment.length !== needs.length) return;
-  const remaining = new Set(needs.map(need => need.key));
-  for (const row of value.assessment) {
-    if (!exact(row, ['key', 'status', 'sources', 'query']) || typeof row.key !== 'string' || !remaining.delete(row.key) ||
-      !statuses.includes(row.status as Status) || !Array.isArray(row.sources) || row.sources.length > maxCandidates ||
-      new Set(row.sources).size !== row.sources.length || !row.sources.every(id => typeof id === 'string' && evidence.has(id)) ||
-      !bounded(row.query, 512, true) || (row.query && !canonicalRetrievalQuery(row.query))) return;
-    if ((['supported', 'partial'].includes(row.status as string) && row.sources.length < 1) ||
-      (row.status === 'contradicted' && row.sources.length < 2)) return;
+function parsePassages<T extends SemanticHistorySource>(value: unknown, evidence: Map<string, T>): Passage[] | undefined {
+  if (!Array.isArray(value) || value.length > maxCandidates) return;
+  const passages: Passage[] = [];
+  for (const item of value) {
+    if (!exact(item, ['source', 'quote']) || typeof item.source !== 'string' || !bounded(item.quote, 512) ||
+      !evidence.get(item.source)?.text.includes(item.quote)) return;
+    if (passages.some(passage => passage.source === item.source && passage.quote === item.quote)) return;
+    passages.push({ source: item.source, quote: item.quote });
   }
-  return { rows: structuredClone(value.assessment) as Assessment[], clarification: current ? String(value.clarification) : '' };
+  return passages;
+}
+
+function parseAssessment<T extends SemanticHistorySource>(value: unknown, needs: readonly Need[], evidence: Map<string, T>): EvidenceReview | undefined {
+  const legacy = exact(value, ['version', 'assessment']) && value.version === 1;
+  const versioned = exact(value, ['version', 'assessment', 'clarification']) &&
+    (value.version === 2 || value.version === 3) && bounded(value.clarification, 512, true);
+  if (!(legacy || versioned) || !Array.isArray(value.assessment) || value.assessment.length !== needs.length) return;
+  const remaining = new Set(needs.map(need => need.key));
+  const rows: Assessment[] = [];
+  const quoted = value.version === 3;
+  for (const row of value.assessment) {
+    if (!exact(row, ['key', 'status', quoted ? 'passages' : 'sources', 'query']) ||
+      typeof row.key !== 'string' || !remaining.delete(row.key) || !statuses.includes(row.status as Status) ||
+      !bounded(row.query, 512, true) || (row.query && !canonicalRetrievalQuery(row.query))) return;
+    const passages = quoted ? parsePassages(row.passages, evidence) : undefined;
+    if (quoted && !passages) return;
+    const sources = passages ? [...new Set(passages.map(passage => passage.source))] : row.sources;
+    if (!Array.isArray(sources) || sources.length > maxCandidates || new Set(sources).size !== sources.length ||
+      !sources.every(id => typeof id === 'string' && evidence.has(id))) return;
+    if ((['supported', 'partial'].includes(row.status as string) && sources.length < 1) ||
+      (row.status === 'contradicted' && sources.length < 2)) return;
+    rows.push({ key: row.key, status: row.status as Status, sources: [...sources], query: row.query,
+      ...(passages ? { passages } : {}) });
+  }
+  return { rows, clarification: versioned ? String(value.clarification) : '' };
 }
 
 /** Model proposals guide search. The caller retains authoritative context selection and egress. */
@@ -158,7 +181,9 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       state: 'assessed', proposal, rounds, searchCoverage,
       ...(review.clarification && review.rows.some(row => row.status !== 'supported') ? { clarification: review.clarification } : {}),
       coverage: review.rows.map(row =>
-        ({ key: row.key, status: row.status, sources: row.sources.map(handle => evidence.get(handle)!) })),
+        ({ key: row.key, status: row.status, sources: row.sources.map(handle => evidence.get(handle)!),
+          ...(row.passages ? { passages: row.passages.map(passage =>
+            ({ sourceId: evidence.get(passage.source)!.sourceId, quote: passage.quote })) } : {}) })),
     });
     const partial = () => { if (searchCoverage === 'bounded') searchCoverage = 'partial'; };
     const addCandidates = ({ sources, scan }: SemanticHistoryCandidates<T>) => {
@@ -199,7 +224,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
 
       const sources = [...evidence.values()];
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale');
-      const reviewed = await disclose({ stage: 'assess', needs: structuredClone(proposal.needs), round: rounds,
+      const reviewed = await disclose({ stage: 'assess', request, needs: structuredClone(proposal.needs), round: rounds,
         excerpts: [...evidence].map(([handle, source]) => ({
           handle, text: source.text, ...(source.sourceKind ? { sourceKind: source.sourceKind } : {}),
         })) }, sources);

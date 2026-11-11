@@ -136,13 +136,15 @@ test('native semantic shadow dispatch uses strict output and denies revoked admi
     });
     f.replies.push(body => {
       assert.match(JSON.stringify(body.input), /excerpts/);
+      assert.match(JSON.stringify(body.input), /Which safeguard stopped the batch/);
+      assert.deepEqual(body.text.format.schema.properties.version.enum, [3]);
       assert.match(JSON.stringify(body.input), /duplicate batch/);
-      return response(JSON.stringify({ version: 2, clarification: '', assessment: [{ key: 'safeguard', status: 'missing', sources: [], query: '' }] }), body.model);
+      return response(JSON.stringify({ version: 3, clarification: '', assessment: [{ key: 'safeguard', status: 'missing', passages: [], query: '' }] }), body.model);
     });
     const found = await f.core.investigateVelaHistory(intent, admission);
     assert.equal(found.state, 'assessed');
     assert.equal(found.proposal?.version, 2);
-    assert.deepEqual(found.coverage, [{ key: 'safeguard', status: 'missing', sources: [] }]);
+    assert.deepEqual(found.coverage, [{ key: 'safeguard', status: 'missing', sources: [], passages: [] }]);
     assert.equal(f.requests.length, 2);
     const validDelta = JSON.stringify({ version: 2, objective: 'No source required', clarification: '', needs: [], perception });
     for (const terminal of [null, validDelta.replace('No source required', 'Different terminal result')]) {

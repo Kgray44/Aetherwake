@@ -131,3 +131,41 @@ test('selected notes preserve recent evidence after a conversation query miss', 
   assert.equal(result.coverage[0].status, 'contradicted');
   assert.deepEqual(result.coverage[0].sources, [note, correction]);
 });
+
+test('binds assessed passages to the original request and rejects invented quotations', async () => {
+  for (const quote of [candidate.text, 'An invented approval']) {
+    let assessed = false;
+    const result = await investigateSemanticHistory(request, {
+      search: () => ({ sources: [candidate], scan: 'bounded' }),
+      isCurrent: () => true,
+      disclose: async call => {
+        if (call.stage === 'interpret') return proposal;
+        assert.equal(call.request, request);
+        assessed = true;
+        return { version: 3, clarification: '', assessment: [
+          { key: 's1', status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
+        ] };
+      },
+    });
+    assert.equal(assessed, true);
+    if (quote === candidate.text) {
+      assert.equal(result.state, 'assessed');
+      assert.deepEqual(result.coverage[0].passages, [{ sourceId: candidate.sourceId, quote }]);
+    } else {
+      assert.equal(result.state, 'invalid');
+      assert.deepEqual(result.coverage, []);
+    }
+  }
+});
+
+test('overlapping passages from one source cannot establish a cross-source contradiction', async () => {
+  const result = await investigateSemanticHistory(request, {
+    search: () => ({ sources: [candidate], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : {
+      version: 3, clarification: '', assessment: [{ key: 's1', status: 'contradicted', query: '',
+        passages: [{ source: 'e1', quote: 'idempotency key' }, { source: 'e1', quote: candidate.text }] }],
+    },
+  });
+  assert.equal(result.state, 'invalid');
+});
