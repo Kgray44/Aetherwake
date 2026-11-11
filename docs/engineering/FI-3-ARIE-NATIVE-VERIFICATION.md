@@ -151,6 +151,10 @@ The installed Windows App Server rejected `command/exec/terminate` with RPC erro
 
 Moving the same storage reserve probe off the backend event loop reduced the maximum event-loop delay in the read-only fixture from 1,228 ms in the synchronous run to 274 and 306 ms in two asynchronous repeats. Total executor times were 4,312 ms before and 3,980 and 4,063 ms after. Sandbox command times were 2,770 ms before and 2,765 and 2,784 ms after. The async path uses the existing C and D reserve calculation and rechecks the reviewed target after awaiting the probe. This is a bounded synthetic Node test executed by the actual sandbox. Foreground frame and input latency with a representative build remain unqualified.
 
+The mission executor now runs the existing Git and input checks in short-lived Node workers before dispatch and after sandbox exit. The workers run sequentially under the same build lease and each has a 32 MiB V8 old-generation limit. The executor waits for each worker to exit before releasing the lease. The native review step still uses the existing planner directly.
+
+Two repeats with the worker path each recorded 20 ms maximum backend event-loop delay. Executor times were 4,369 and 4,583 ms, including sandbox command times of 2,769 and 2,805 ms. In a separate attempt within each repeat, the fixture edited a tracked input after dispatch. Both attempts settled with `reviewed_check_changed`, failed verification, and released the build lease. The delay measurements cover the bounded sandbox fixture. Representative build timing and packaged foreground responsiveness remain unqualified.
+
 The wider local regression reported five file-edit and inspection fixture failures. Those fixtures explicitly create repositories under the worktree `.runtime` directory, which is beneath `.codex` on this machine. Changing `TEMP` does not move them. The combined draft has separate fixture-root changes for these five cases. [Combined integration draft](https://github.com/Kgray44/Aetherwake/pull/53)
 
 ## Acceptance status

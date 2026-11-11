@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
@@ -31,7 +31,8 @@ function latch() {
   const promise = new Promise<void>(resolve => { release = resolve; });
   return { promise, resolve: release };
 }
-const readyEntered = latch(), readyGate = latch(), commandEntered = latch();
+const readyEntered = latch(), readyGate = latch();
+let commandEntered = latch();
 const eventLoop = monitorEventLoopDelay({ resolution: 5 });
 let nativeCommandMs = 0;
 let holdReadiness = true, nativeRuns = 0, occupied = false;
@@ -120,10 +121,24 @@ try {
   assert.equal(governor.inspectPolicy().active.build, 0);
   assert.equal(nativeRuns, 1);
   eventLoop.disable();
+  const verifiedCommandMs = nativeCommandMs;
+
+  mode('balanced');
+  commandEntered = latch();
+  const stale = service.create('input-changes-after-dispatch', plan);
+  await Promise.race([commandEntered.promise, wait(7000, undefined, { ref: false }).then(() => { throw Error('sandbox dispatch not reached'); })]);
+  await wait(350);
+  appendFileSync(input, '\n// Synthetic input changed after dispatch.\n');
+  const invalidated = await settle(stale.id);
+  assert.equal(invalidated.outcome, 'blocked');
+  assert.equal((invalidated.tasks[0].attempts[0].evidence?.value as { status: string }).status, 'reviewed_check_changed');
+  assert.equal(invalidated.tasks[0].attempts[0].verification?.passed, false);
+  assert.equal(governor.inspectPolicy().active.build, 0);
+  assert.equal(nativeRuns, 2);
   console.log(JSON.stringify({ sandboxReady: true, preDispatchOutcome: blocked.outcome, nativeRuns,
     activeLeaseRetainedUntilVerified: true, remoteAvailableUnderPressure: true,
-    executionMs: terminal.tasks[0].attempts[0].timing?.executionMs, nativeCommandMs,
-    backendEventLoopMaxMs: Math.round(eventLoop.max / 1e6) }));
+    executionMs: terminal.tasks[0].attempts[0].timing?.executionMs, nativeCommandMs: verifiedCommandMs,
+    backendEventLoopMaxMs: Math.round(eventLoop.max / 1e6), changedInputOutcome: invalidated.outcome }));
 } finally {
   eventLoop.disable();
   readyGate.resolve();

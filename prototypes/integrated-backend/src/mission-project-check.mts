@@ -1,7 +1,8 @@
 import type { ProviderPort } from './contracts.mts';
 import type { MissionExecutor } from './mission-contracts.mts';
 import { admitVelaFileEditAsync } from './vela-file-edit.mts';
-import { interpretVelaProjectCheck, planVelaProjectCheck } from './vela-project-check.mts';
+import { planMissionProjectCheck } from './mission-project-check-planner.mts';
+import { interpretVelaProjectCheck } from './vela-project-check.mts';
 
 interface ProjectCheckHost {
   runner: ProviderPort['projectChecks'];
@@ -35,7 +36,7 @@ export function createMissionProjectCheck(host: ProjectCheckHost): MissionExecut
         stop.throwIfAborted();
         await admitVelaFileEditAsync(selected, host.privateRoot, stop);
         stop.throwIfAborted();
-        const plan = planVelaProjectCheck(undefined, 'node-test', target.paths, host.privateRoot);
+        const plan = await planMissionProjectCheck(target.paths, host.privateRoot);
         if (host.digest(plan) !== target.digest) return blocked('reviewed_check_changed');
         validatePlanningContext?.();
         stop.throwIfAborted();
@@ -43,7 +44,8 @@ export function createMissionProjectCheck(host: ProjectCheckHost): MissionExecut
         // App Server's Windows sandbox has no per-command terminate operation. Keep the lease
         // until the original bounded call settles and preserve any verified terminal evidence.
         const result = interpretVelaProjectCheck('node-test', await runner.execute(plan.argv, plan.cwd));
-        const observed = planVelaProjectCheck(undefined, 'node-test', target.paths, host.privateRoot);
+        signal.throwIfAborted();
+        const observed = await planMissionProjectCheck(target.paths, host.privateRoot);
         if (host.digest(observed) !== target.digest) return blocked('reviewed_check_changed');
         return { source, value: { state: result.state, exitCode: result.exitCode ?? null,
           testCount: result.testCount ?? null, head: plan.head, inputDigest: target.digest }, telemetry: telemetry(),
