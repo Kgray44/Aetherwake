@@ -515,6 +515,16 @@ export class VelaApiRuntime {
     return this.currentStructuredQualifications(version, allowed, schema, instruction).find(record => listed.has(record.model));
   }
 
+  isStructuredQualificationCurrent(receipt: VelaStructuredQualification): boolean {
+    const { configurationVersion, model, contractDigest, expiresAt } = receipt;
+    const key = JSON.stringify([configurationVersion, model, contractDigest]);
+    // Catalog freshness gates dispatch. A newer catalog can exclude a model, but age
+    // alone does not revoke an admitted stream or its still-current qualification.
+    return this.authorized(configurationVersion) && expiresAt > Date.now() &&
+      this.structuredQualifications.get(key) === receipt && this.knownCatalog?.version === configurationVersion &&
+      this.knownCatalog.models.includes(model);
+  }
+
   async resolveQualifiedStructuredRoute(version: number, allowed: readonly string[], schema: ApiJsonSchema, instruction: string,
     signal: AbortSignal) {
     if (!this.currentStructuredQualifications(version, allowed, schema, instruction).length) return;

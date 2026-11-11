@@ -110,15 +110,16 @@ export function investigateVelaHistoryWithApi(vela: Pick<VelaService, 'investiga
       ? await api.resolveQualifiedStructuredRoute(configurationVersion, allowed, schema, instruction, abort) : undefined;
     const model = admission.model ?? qualification?.model;
     const needsAssessmentRoute = !!qualification && call.stage === 'interpret';
-    if (!model || (needsAssessmentRoute && !availableAssessment())) return null;
+    const assessment = needsAssessmentRoute ? availableAssessment() : undefined;
+    if (!model || (needsAssessmentRoute && !assessment)) return null;
     const prompt = JSON.stringify(call);
     const proofs = sources.map(summarize);
     const contextDigest = historyDigest({ configurationVersion, model, prompt, proofs, qualification });
     const review = { purpose: 'investigation' as const, configurationVersion, model, call, sources: proofs, contextDigest, ...(qualification ? { qualification } : {}) };
     const validate = () => {
       if (!revalidate() || !authorize(structuredClone(review)) || !revalidate() ||
-        (qualification && api.qualifiedStructuredRoute(configurationVersion, [model], schema, instruction) !== qualification) ||
-        (needsAssessmentRoute && !availableAssessment())) throw new Error('semantic_history_disclosure_denied');
+        (qualification && !api.isStructuredQualificationCurrent(qualification)) ||
+        (assessment && !api.isStructuredQualificationCurrent(assessment))) throw new Error('semantic_history_disclosure_denied');
     };
     const proposal = await api.structuredProposal({ requestId: randomUUID(), model, payload: call, instruction,
       binding: { configurationVersion, contextDigest }, schema, validate, onResult: observations?.observeResult,

@@ -26,12 +26,13 @@ function response(content:string,model:string,terminal:string|null=content) {
 }
 function fixture(velaHistoryContext = false, nativeMedia = false, documents?: NativeDocumentTextServices, liveCredential?: string) {
   const base=resolve(tmpdir()),directory=mkdtempSync(join(base,'aerynth-mission-api-')),path=join(directory,'canonical.sqlite'),key=randomBytes(32),requests:any[]=[],replies:((body:any)=>Response|Promise<Response>)[]=[];
+  let catalogModels = ['gpt-6-luna', 'gpt-6.1-sol'];
   let beforeCredentialOpen: (() => Promise<void>) | undefined;
   const native:NativeHostServices={documents,secrets:{available:async()=>true,
     seal:async value=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);return Buffer.concat([iv,cipher.update(value),cipher.final(),cipher.getAuthTag()]);},
     open:async value=>{const before=beforeCredentialOpen;beforeCredentialOpen=undefined;await before?.();
       const data=Buffer.from(value),cipher=createDecipheriv('aes-256-gcm',key,data.subarray(0,12));cipher.setAuthTag(data.subarray(-16));return Buffer.concat([cipher.update(data.subarray(12,-16)),cipher.final()]).toString();}}};
-  const api={fetch:(async(url,init)=>{if(String(url)==='https://api.openai.com/v1/models')return Response.json({data:[{id:'gpt-6-luna'},{id:'gpt-6.1-sol'}]});
+  const api={fetch:(async(url,init)=>{if(String(url)==='https://api.openai.com/v1/models')return Response.json({data:catalogModels.map(id=>({id}))});
     assert.equal(String(url),'https://api.openai.com/v1/responses');assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
     const body=JSON.parse(String(init?.body));requests.push(body);const next=replies.shift();assert.ok(next,'unexpected API inference');return next(body);}) as typeof fetch};
   const create=()=>new BackendCore({path,provider:'fixture',contentPolicy:liveCredential ? 'local-private' : 'synthetic-only',
@@ -39,6 +40,7 @@ function fixture(velaHistoryContext = false, nativeMedia = false, documents?: Na
   const preview=async(text=objective)=>await core.command('missions',{name:'preview',input:{objective:text}}) as MissionPlanningOffer;
   const plan=async(offer:MissionPlanningOffer,requestId=randomUUID())=>await core.command('missionPlanReviewed',{objective:offer.objective,fingerprint:offer.fingerprint,requestId}) as MissionPreview;
   return {get core(){return core;},directory,requests,replies,preview,plan,
+    setCatalogModels(models: string[]) { catalogModels = models; },
     onNextCredentialRead(action: () => Promise<void>) { beforeCredentialOpen = action; },
     async ready(){await core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:liveCredential ?? marker},expectedVersion:null});await core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true});await core.command('desktop',{type:'createWorkspace',title:'Synthetic Minecraft investigation',projectId:null});},
     async pin(defaults:any){if(defaults.providerId==='openai-api-vela')await core.command('vela',{name:'routingOptions',input:{providerId:'openai-api-vela'}});await core.command('vela',{name:'saveRoutingSettings',input:{scope:'global',id:null,expectedVersion:0,defaults}});},
@@ -734,7 +736,7 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
   } finally { await f.close(); }
 });
 
-test('native adaptive CIE requires qualified stages and reviews the resolved model', async () => {
+test('native adaptive CIE requires qualified stages and reviews the resolved model', async t => {
   const f = fixture(true);
   try {
     await f.ready();
@@ -771,22 +773,42 @@ test('native adaptive CIE requires qualified stages and reviews the resolved mod
     const qualified = await qualify();
     assert.deepEqual(qualified.map(item => item.stage), ['interpret', 'assess']);
     assert.equal(f.requests.length, 4);
-    f.replies.push(reply(interpreted), reply({ version: 3, clarification: '', assessment: [
-      { key: 'day', status: 'missing', passages: [], query: '' },
-    ] }));
+    const now = Date.now.bind(Date);
+    let elapsed = 0;
+    t.mock.method(Date, 'now', () => now() + elapsed);
+    const runtime = (f.core as unknown as { velaApiRuntime: VelaApiRuntime }).velaApiRuntime;
+    f.replies.push(body => {
+      elapsed += 61_000;
+      assert.deepEqual(runtime.knownModels(), [], 'the model catalog expires after perception dispatch');
+      return reply(interpreted)(body);
+    }, body => {
+      assert.ok(runtime.knownModels().includes(body.model), 'assessment dispatch refreshes the expired catalog');
+      return reply({ version: 3, clarification: '', assessment: [
+        { key: 'day', status: 'missing', passages: [], query: '' },
+      ] })(body);
+    });
     const result = await f.core.investigateVelaHistory(intent, { ...admission, ...callerMetadata });
     assert.equal(result.state, 'assessed');
     assert.equal(f.requests.length, 6);
-    const runtime = (f.core as unknown as { velaApiRuntime: VelaApiRuntime }).velaApiRuntime;
     assert.equal(runtime.missionCognitiveReceipts(callerMetadata.planningRequestId, 'unrelated-mission'), undefined);
+    f.replies.push(body => {
+      elapsed += 61_000;
+      f.setCatalogModels(['gpt-6.1-sol']);
+      return reply(interpreted)(body);
+    });
+    assert.equal((await f.core.investigateVelaHistory(intent, admission)).state, 'unavailable');
+    assert.equal(f.requests.length, 7, 'a catalog that removes the model blocks assessment before disclosure');
+    elapsed += 61_000;
+    f.setCatalogModels(['gpt-6-luna', 'gpt-6.1-sol']);
+    await runtime.models(1);
     await f.pin({providerId:'openai-api-vela',model:'gpt-6.1-sol'});
     assert.equal((await f.core.investigateVelaHistory(intent, admission)).state, 'unavailable');
-    assert.equal(f.requests.length, 6);
+    assert.equal(f.requests.length, 7);
     await f.core.command('vela',{name:'saveRoutingSettings',input:{scope:'global',id:null,expectedVersion:1,defaults:{}}});
     await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:false});
     await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true});
     assert.equal((await f.core.investigateVelaHistory(intent, admission)).state, 'unavailable');
-    assert.equal(f.requests.length, 6);
+    assert.equal(f.requests.length, 7);
   } finally { await f.close(); }
 });
 
