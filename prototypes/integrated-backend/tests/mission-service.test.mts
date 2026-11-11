@@ -138,6 +138,18 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.equal(readiness.observedReadyBetweenAttemptsMs, 0.75);
     assert.equal(readiness.unattributedBetweenAttemptsMs, 0.25);
     assert.deepEqual(readiness.readyQueueCoverage, { observedEdges: 1, totalEdges: 1 });
+    assert.deepEqual(readiness.largestMeasuredSegment, { kind: 'execution', attemptId: right.id, taskId: 'right',
+      startedMs: 3, endedMs: 9, durationMs: 6 });
+    const queued = structuredClone(replay);
+    for (const event of queued.events) {
+      if (event.seq === join.start.eventSeq) event.timing!.monotonicMs = 20;
+      if (event.seq === join.end!.eventSeq) event.timing!.monotonicMs = 23;
+    }
+    const queuedPhases = queued.tasks.find(task => task.id === 'join')!.attempts[0].timing!.phases!;
+    queuedPhases.contextAssembly = [19, 20];
+    queuedPhases.execution = [20, 22];
+    assert.deepEqual(projectMissionExecution(queued).work.dependencyReadinessPath?.largestMeasuredSegment,
+      { kind: 'observed-ready-wait', attemptId: join.id, taskId: 'join', startedMs: 10.25, endedMs: 19, durationMs: 8.75 });
     assert.equal(readiness.unattributedWithinAttemptsMs, 3);
     assert.deepEqual(readiness.phaseMs, { contextAssembly: 2, execution: 8 });
     const invalid = structuredClone(replay);
