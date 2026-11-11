@@ -132,6 +132,10 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     const replay = service.read(mission.id, scope);
     replay.events = [...replay.events, replay.events[0], replay.events.at(-1)!].reverse();
     assert.deepEqual(projectMissionExecution(replay), profile);
+    const withoutLifecycle = projectMissionExecution({ ...replay, events: [] });
+    assert.deepEqual(withoutLifecycle.quality.criteria, profile.quality.criteria);
+    assert.equal(withoutLifecycle.quality.objectiveVerified, true);
+    assert.ok(withoutLifecycle.experiment.blockers.includes('incomplete-causal-timing'));
     const crossClock = structuredClone(replay);
     for (const event of crossClock.events) {
       if (event.kind === 'created') event.timing!.intakeMonotonicMs = event.timing!.monotonicMs;
@@ -342,6 +346,9 @@ test('a source edit fences in-flight results, invalidates downstream proof and p
     assert.equal(stale.tasks[1].detail, 'mission_context_changed_during_execution');
     assert(stale.tasks.every(task => !task.attempts[0].evidence && !task.attempts[0].verification && !task.attempts[0].context));
     assert.deepEqual(projectMissionExecution(stale).verifiedTaskMilestones, { first: null, last: null });
+    const staleProfile = projectMissionExecution(stale);
+    assert.ok(staleProfile.quality.criteria.every(criterion => criterion.state === 'unverified' && !criterion.proofs.length));
+    assert.ok(staleProfile.experiment.blockers.includes('missing-current-criterion-evidence'));
     service.control(id, scope, stale.revision, { type: 'retry', taskId: 'inspect' });
     await flush();
     assert.equal(f.active.get('inspect')?.context.context.manifest.sources[0]?.version, 2);
@@ -356,6 +363,10 @@ test('a source edit fences in-flight results, invalidates downstream proof and p
     const milestones = projectMissionExecution(read()).verifiedTaskMilestones;
     assert.equal(milestones.first?.attemptId, read().tasks[0].attempts[1].id);
     assert.equal(milestones.last?.attemptId, read().tasks[1].attempts[1].id);
+    const restoredProfile = projectMissionExecution(read());
+    assert.equal(restoredProfile.quality.objectiveVerified, true);
+    assert.deepEqual(restoredProfile.quality.criteria.map(criterion => criterion.proofs[0].attemptId),
+      read().tasks.map(task => task.attempts[1].id));
   } finally { await service.close(); f.db.close(); }
 });
 

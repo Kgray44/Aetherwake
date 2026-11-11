@@ -303,16 +303,32 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const verifiedAttempts = attempts.filter(attempt => attempt.verifiedEvidenceIds.length && attempt.end)
     .sort((a, b) => a.end!.eventSeq - b.end!.eventSeq);
   const firstVerified = verifiedAttempts[0]?.end ?? null;
-  const currentVerifiedIds = new Set(mission.tasks.flatMap(task =>
-    task.state === 'verified' && task.attempts.length ? [task.attempts.at(-1)!.id] : []));
+  const currentProofs = new Map(mission.tasks.flatMap(task => {
+    const attempt = task.attempts.at(-1);
+    const verification = attempt?.verification;
+    if (task.state !== 'verified' || attempt?.outcome !== 'verified' || !attempt.evidence ||
+      !verification?.passed || verification.criterion !== task.criterion ||
+      !verification.evidenceIds.includes(attempt.evidence.id)) return [];
+    return [[task.id, { taskId: task.id, attemptId: attempt.id, evidenceIds: [...verification.evidenceIds] }] as const];
+  }));
   const verifiedMilestones = verifiedAttempts.flatMap(({ id, taskId, planRevision, end, interrupted, verifiedEvidenceIds }) => {
     const source = byAttempt.get(id)?.attempt;
-    if (!currentVerifiedIds.has(id) || interrupted || !end || !source?.verification || !source.evidence ||
-      !verifiedEvidenceIds.includes(source.evidence.id)) return [];
+    if (currentProofs.get(taskId)?.attemptId !== id || interrupted || !end || !source?.verification) return [];
     const elapsed = intake && initial ? interval(id, { ...initial, monotonicMs: intake.monotonicMs }, end) : null;
     return [{ taskId, attemptId: id, planRevision, criterion: source.verification.criterion,
       evidenceIds: verifiedEvidenceIds, settlement: end, intakeToSettlementMs: elapsed ? elapsed.end - elapsed.start : null }];
   });
+  const criterionCoverage = mission.criteria.map(criterion => {
+    const taskIds = mission.tasks.filter(task => task.criterion === criterion).map(task => task.id);
+    const proofs = taskIds.flatMap(id => {
+      const proof = currentProofs.get(id);
+      return proof ? [proof] : [];
+    });
+    const state = !proofs.length ? 'unverified' as const : proofs.length === taskIds.length ? 'verified' as const : 'partial' as const;
+    return { criterion, state, taskIds, proofs };
+  });
+  const allCriteriaVerified = criterionCoverage.length > 0 && criterionCoverage.every(criterion => criterion.state === 'verified');
+  const objectiveVerified = mission.outcome === 'verified' && allCriteriaVerified;
   const lastSettlement = attempts.flatMap(attempt => attempt.interval && attempt.end ? [attempt.end] : [])
     .sort((a, b) => b.eventSeq - a.eventSeq)[0] ?? null;
   const plan = mission.planning;
@@ -389,11 +405,14 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     },
     quality: {
       taskOutcomes: mission.tasks.map(task => ({ taskId: task.id, state: task.state })),
+      criteria: criterionCoverage, objectiveVerified,
       partialObjectiveCoverage: mission.coverage?.status === 'partial',
       independentComparison: null,
     },
     experiment: { state: 'baseline-observation' as const, blockers: [
       ...(path ? [] : ['incomplete-causal-timing']),
+      ...(objectiveVerified ? [] : ['objective-not-verified']),
+      ...(allCriteriaVerified ? [] : ['missing-current-criterion-evidence']),
       'no-matched-comparison', 'no-independent-quality-evaluation',
     ] },
   };

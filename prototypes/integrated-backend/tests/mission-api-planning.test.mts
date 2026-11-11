@@ -61,6 +61,9 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
     const readProfile=()=>f.core.command('missions',{name:'execution-profile',input:{id:running.id}});
     const profile=await readProfile();
     assert.ok(profile&&'kind' in profile&&profile.kind==='execution-profile');
+    assert.equal(profile.quality.objectiveVerified, false);
+    assert.ok(profile.quality.criteria.every(criterion => criterion.state === 'verified' && criterion.proofs.length > 0));
+    assert.ok(profile.experiment.blockers.includes('objective-not-verified'));
     const timing=profile.planning?.timing;
     assert.ok(timing&&timing.firstTextDeltaMs!==null&&timing.responseCreatedMs!==null);
     const clock = timing.lifecycleClock;
