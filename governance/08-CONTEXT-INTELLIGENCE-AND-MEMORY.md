@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-008 |
-| Version | **1.2.0 — owner-directed clarification 2026-11-05** |
+| Version | **1.3.0 — owner-directed Fluid Intelligence amendment 2026-11-10 (previous owner approvals preserved)** |
 | Status | **Owner-accepted and ratified governing charter; implementation verification remains separate** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem charter subordinate to [The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
@@ -773,3 +773,90 @@ This is an **owner-ratified governing charter (2026-11-05)**. These are accepted
 **AW-CIE-164 — Recovery versus realization.** Current Architecture Recovery MUST preserve existing retrieval and improve ownership/benchmark readiness without pretending to complete the full CIE. Full semantic retrieval, candidate memory learning and broad adaptive context integration require their own verified Full Realization milestones.
 
 **Status:** These are owner-directed design requirements, not claims of implemented semantics, native provider eligibility or production benchmark success.
+
+---
+
+## Owner-directed amendment FI-2026-11-10: cognitive context investigation and experiential intelligence
+
+> **Authority.** Owner-directed binding design requirements for Full Aerynth Realization dated 2026-11-10. Prior AW-CIE-001–164, ratified Unified Memory, SI-2026-11-05 semantic interpretation clarification, permission and source-owner boundaries remain binding. This amendment does **not** claim production semantic retrieval, connected account access or measured effectiveness. See [05 mission execution](05-AGENTS-TASKS-AND-WORKFLOWS.md), [06 Vela cognition](06-VELA-INTELLIGENCE-AND-ADAPTATION.md), [10 AEP](10-AI-EXECUTION-PROFILER.md), [14 Trust](14-TRUST-PRIVACY-AND-AUTONOMY.md), and [15 Acceptance](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md).
+
+### FI-08.1 CIE is an AI-assisted evidence investigator, not a second planner
+
+At the earliest authorized stages of a request, CIE SHOULD be able to investigate the user's references, relevant history, current projects, previous outcomes, source revisions, governance requirements and task checkpoints. Its model-driven semantic intelligence expresses **what evidence is needed**, assesses retrieval quality, and decides whether further scoped retrieval is warranted. The AI Mission Planner and Executive (06/05) own mission strategy; CIE MUST NOT silently transform evidence retrieval into privileged action planning or task execution.
+
+**AW-CIE-165 — Model-assisted evidence strategy.** For ambiguous, historical, relational, multimodal or underspecified requests, CIE MUST support qualified AI interpretation of distinct evidence needs, temporal anchors, candidate entities, probable project lineage, authoritative source classes, conflicts and unresolved references. Keyword overlap alone MUST NOT qualify as the semantic CIE.
+
+**AW-CIE-166 — Retrieval begins early and can overlap.** Authorized cheap native lookup, exact selected-resource inspection, task-state readback and model-assisted evidence-need formulation MAY operate concurrently with Vela perception and capability lookup when dependencies permit. Speculative retrieval MUST be bounded, read-only, cancel-safe and within already permitted scope.
+
+**AW-CIE-167 — Iterative search and sufficiency reasoning.** CIE MUST support a multi-pass retrieve → examine → identify gaps → refine query → retrieve loop when the initial candidate set fails to satisfy material information needs. The loop MUST have explicit stopping criteria, uncertainty, privacy and budget protections; neither an arbitrary fixed number of top hits nor unbounded exploration constitutes sufficiency.
+
+**AW-CIE-168 — Evidence-needs contract.** Model-proposed needs MUST be typed, versioned, scoped and validated, describing intent hypothesis, entities, time ranges, source candidates, query variants, required facts, freshness, confidence, contradictions, access restrictions and provenance. The host MUST resolve actual IDs, enforce permission and determine query eligibility before any source access or provider disclosure.
+
+**AW-CIE-169 — Semantics stay outside source authority.** An interpreter MUST NOT claim that a source says what it does not say, overwrite source-owner records, decide user permissions, execute an agent plan, create a binding task, or infer consent to share data. Retrieved text, prompts and tool responses remain untrusted task data under Trust governance.
+
+**AW-CIE-170 — Evidence sufficiency is not similarity.** The sufficiency evaluator MUST distinguish supported, partially supported, contradicted, stale, inaccessible and absent facts, and report when authoritative evidence is unavailable. A close semantic match, high embedding score or model confidence MUST NOT be treated as fact or complete coverage.
+
+**AW-CIE-171 — Structured grounded context package.** Every consequential context bundle SHOULD carry source IDs/revisions, query/need provenance, timestamps, access scope, task lineage, exact citations/locations, known contradictions, exclusions, unresolved gaps, compaction notes and an explicit as-of time. Model-inferred statements MUST be tagged separately from source-supported facts.
+
+**AW-CIE-172 — Privacy preflight per operation.** Permission checks MUST occur before each retrieval and each external model disclosure, including semantic interpretation, embeddings, reranking, summarization and specialist-agent transfer. Permissions are not inherited merely from an earlier retrieval or a provider session ID; revoked access MUST fence downstream reuse.
+
+**AW-CIE-173 — Bounded context preparation.** CIE SHOULD apply deduplication, section-level governance retrieval, source-revision caches, context profiles and incremental compaction to reduce latency without removing decisive constraints, negative evidence, instructions, temporal qualifiers or provenance. Quality must be evaluated at the eventual task outcome, not merely token count.
+
+**AW-CIE-174 — Native exactness fast path.** Exact identifiers, authoritative OS telemetry, known file paths, already-selected resources and deterministic task state MUST remain eligible for native direct lookup without unnecessary AI inference. This is a capability-preserving fast path, not permission for keyword-based semantic routing.
+
+**AW-CIE-175 — Adaptive model choice.** CIE MAY select light or deep qualified models for interpretation, gap evaluation, contradiction resolution and summarization based on uncertainty, privacy, task quality, latency and measured evidence usefulness. A task does not become better merely by adding interpretation calls; skipped calls MUST be justified by observed sufficiency or deterministic exactness.
+
+### FI-08.2 Experiential memory and cross-engine learning
+
+Unified Memory SHALL retain the **source-supported history of adaptation**, enabling Vela to retrieve which strategy was chosen, why it was chosen, how it performed, whether it generalized, and what conditions invalidate it. This is a governed projection over canonical sources, not an independently writable global optimization memory.
+
+**AW-CIE-176 — Experience record provenance.** Experiential recall MUST relate mission/attempt IDs, model/tool/capability versions, AEP trace/experiment IDs, ARIE conditions, user feedback/correction refs, observed outcome quality and source revisions. Measurements and hypotheses MUST remain typed, not merged into a free-text truth claim.
+
+**AW-CIE-177 — Learning-status taxonomy.** CIE MUST preserve distinctions among \`observation\`, \`hypothesis\`, \`experiment\`, \`validated_finding\`, \`approved_policy\`, \`superseded\`, \`rejected\` and \`rolled_back\`. Only policies promoted through their authoritative owner MAY influence active AIR/ARIE decisions as policies.
+
+**AW-CIE-178 — Contextual applicability.** When retrieving learned strategies, CIE MUST preserve applicable task family, model/tool compatibility, hardware class, user preferences, project context, evaluation population, confidence, sample sufficiency, temporal freshness and known counterexamples. A strategy validated for one workload MUST NOT silently become a global heuristic.
+
+**AW-CIE-179 — Durable learning without model-weight claims.** The platform MAY improve via stored evidence, retrieved experiences and versioned routing/resource policies, but MUST NOT describe that as retraining or fine-tuning the underlying OpenAI provider model unless a separately authorized, independently verified training workflow actually occurs.
+
+**AW-CIE-180 — Corrections and invalidation propagate.** User corrections, forgotten facts, document changes, source deletions, permission revocation, model deprecation, invalidated experiments and policy rollback MUST invalidate or re-scope derived search artifacts, learning summaries, policy references and cached context packages as applicable.
+
+**AW-CIE-181 — Contradictory experience remains visible.** CIE SHOULD retain contrary run outcomes, unsuccessful optimizations, uncertainty and negative examples so AIR can avoid overfitting to only successful experiences. Negative findings MUST be source-linked and sensitive to sample size, not reinterpreted as universal prohibitions.
+
+**AW-CIE-182 — Explicit preferences outrank guesses.** Inferred working habits MAY be proposed as editable preferences; they MUST retain provenance and confidence, respect privacy scope, and be subordinate to explicit user direction, model/tool availability and task-specific instruction. A user preference for speed is not permission to skip acceptance criteria.
+
+**AW-CIE-183 — Source ownership is not transferred.** MissionService owns task/attempt state; AEP owns measurements/experiments; ARIE owns hardware policy and sampling; conversations/notes own their original content; Trust owns scope. CIE indexes and retrieves versioned projections with citations but MUST NOT mutate those authoritative sources.
+
+**AW-CIE-184 — Learning memory isn't perpetual surveillance.** Experience collection MUST follow user-authorized monitoring, retention, deletion and export controls; local-only signals MUST remain local except for a separately qualified disclosure. The AI cannot infer consent to observe unrelated applications from a desire for better performance.
+
+**AW-CIE-185 — Adaptive policy retrieval.** For relevant future tasks, CIE SHOULD supply compact, properly qualified strategy evidence to AIR and the AI Executive, including successful alternatives and reasons a previously promising strategy was rejected. The recipient MUST verify current policy version and applicability before acting.
+
+### FI-08.3 Performance, resilience, and explainable continuity
+
+**AW-CIE-186 — Retrieval fan-out with containment.** CIE MAY parallelize searches across permitted source families and shard/index operations, but MUST preserve per-source freshness and authorization, bounded concurrency, deadline propagation, backpressure and result deduplication. Concurrent lookups MUST NOT leak one workspace's private records into another.
+
+**AW-CIE-187 — Model/transport failure behavior.** If semantic interpretation or provider access is unavailable, CIE MUST preserve functioning native/lexical retrieval, clearly mark degraded semantic coverage, and avoid misrepresenting an incomplete evidence package as complete. It MAY queue retry or request clarification when authorized.
+
+**AW-CIE-188 — Checkpoint-safe context revision.** Context bundles handed to ongoing tasks MUST be versioned and correlated to mission plan revisions, permission epochs and source revisions. A newly retrieved fact MAY trigger a model-informed replan through [05/06] but CIE MUST NOT directly rewrite active task commitments.
+
+**AW-CIE-189 — Provider and project transfer boundary.** Context across model/provider transitions, Connected Branches and specialist agents MUST use explicit scoped transfers, source links, semantic need, redaction and consent controls. Model caches or third-party session memory do not become canonical CIE records.
+
+**AW-CIE-190 — Explainable context decisions.** The Context Inspector SHOULD show material evidence needs, selected source families, provenance, contradictions, freshness, gaps and why an additional search was or was not performed. It MUST NOT purport to reveal private model chain of thought or display fabricated retrieval activity.
+
+**AW-CIE-191 — End-to-end retrieval economics.** AEP SHOULD correlate CIE interpretation, retrieval, reranking, provider disclosure and compaction time/cost with eventual answer quality and mission rework. CIE SHOULD optimize critical-path time and evidence sufficiency rather than solely cheaper tokens or fewer hits.
+
+### FI-08.4 Mandatory acceptance and conflict tests
+
+**AW-CIE-192 — Held-out semantic comprehension.** Evaluate unseen paraphrases, references to prior conversations, implicit project relationships, time-bound questions and corrections against human-labeled evidence needs and verified downstream task outcomes. A lexical query hardcoded for the test MUST NOT qualify.
+
+**AW-CIE-193 — Multi-pass gap proof.** Show a first retrieval insufficient for a multi-fact task, a model-identified gap, a correctly scoped follow-up query, a grounded final package and truthful disclosure when a material requirement remains unresolved.
+
+**AW-CIE-194 — Source/permission isolation proof.** Test forbidden branch and provider disclosure, prompt injection inside retrieved material, scope revocation during multi-pass retrieval, stale cached evidence, and deletion of an originating personal note. All derived artifacts MUST honor the boundary.
+
+**AW-CIE-195 — Experience provenance proof.** Verify that a past AEP experiment can be found with its cohort, measured outcome, counterexamples, effective policy version and applicable hardware/task context without promoting a mere hypothesis.
+
+**AW-CIE-196 — Anti-overfitting proof.** Demonstrate that a strategy learned for one project/hardware class is not automatically generalized to a different workload. Show decay, contradictory evidence handling, rollback propagation and explicit user preference overrides.
+
+**AW-CIE-197 — Quality and latency proof.** Compare exact, lexical, semantic and hybrid retrieval on independent unseen workloads; report source coverage, contradictory evidence, privacy failures, p50/p95 elapsed time, token/provider costs, compaction fidelity and final mission correctness.
+
+**Integration obligation:** Update the existing [Unified Memory Runtime](../docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md) and [Semantic Interpretation specification](../docs/specifications/CIE-SEMANTIC-INTERPRETATION-AND-EVIDENCE-RETRIEVAL.md) in their own supporting-revision scope. This amendment does not authorize a second global memory database or new privileged planner inside CIE, and a merged charter alone does not constitute successful retrieval implementation.
+

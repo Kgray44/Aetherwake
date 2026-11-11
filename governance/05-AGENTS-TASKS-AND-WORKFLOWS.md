@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-005 |
-| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Version | 1.2.0 — 2026-11-10 owner-directed Fluid Intelligence amendment (2026-11-05 ratification preserved) |
 | Status | **Owner-accepted and ratified governing charter (binding requirements; implementation separate)** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem charter, subordinate to [00 — The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
@@ -715,4 +715,91 @@ Aerynth succeeds when an ordinary question remains effortless, a complicated obj
 **AW-ATW-163 — Initiative remains task-bound.** Scheduled/proactive work MUST retain a user-authorized purpose, trigger, budget, stop/revoke mechanism, notification policy, evidence and accountable owner. Ambient speculation does not authorize persistent monitoring.
 
 **Required additional acceptance:** two independent read agents with measured overlap; two conflicting write agents with safe contention; real delegated tool action and verified readback; crashed session reconciliation; approval revoked mid-run; hosted subagent denied a forbidden tool; canceled non-idempotent action remaining unknown until proof. See [execution fabric](../docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md).
+
+---
+
+## Owner-directed amendment FI-2026-11-10: AI-native mission intelligence and adaptive concurrent orchestration
+
+> **Authority and status.** Owner-directed binding **design requirements** for Full Aerynth Realization, added 2026-11-10. Existing AW-ATW-001–163, constitutional authority, prior ratifications, and Architecture Recovery boundaries remain in force. This amendment does **not** certify current code, API entitlement, provider availability, benchmarks, or release readiness. It is coordinated with [06 — Vela](06-VELA-INTELLIGENCE-AND-ADAPTATION.md), [08 — CIE](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md), [10 — AEP](10-AI-EXECUTION-PROFILER.md), [13 — Platform](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md), [14 — Trust](14-TRUST-PRIVACY-AND-AUTONOMY.md), and [15 — Acceptance](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md).
+
+### FI-05.1 Scope, ownership, and intelligence boundary
+
+Aerynth SHALL maintain **one canonical MissionService and task/attempt lineage**, one authority-bearing execution kernel and one task/event persistence model. The model-driven **AI Mission Executive** is a *cognitive participant*, not a second scheduler, database, source of authorization, or permission system. AIR/Vela (06) own semantic intent and strategy decisions; CIE (08) owns evidence-grounded context packages; the canonical task system (05) owns execution facts and durable commitments; AEP (10) owns measured execution evidence and optimization findings; the platform governor/ARIE (13) owns resource enforcement; Trust (14) owns privilege boundaries.
+
+**AW-ATW-164 — AI-assisted orchestration as first-class behavior.** Materially ambiguous, novel, or consequential multi-step missions MUST be eligible for model-informed task decomposition and ongoing mission-level judgment rather than a single keyword dispatch. A deterministic local exact operation MUST remain eligible for a zero-model path when doing so preserves intended capability.
+
+**AW-ATW-165 — Separate executive from kernel.** An AI Mission Executive MAY interpret progress, propose delegation, revise priorities, request evidence, or propose replanning. Only the canonical execution kernel MAY commit state transitions, schedule effectful operations, enforce resource and permission claims, and record verified results. Every AI proposal MUST pass typed schema and host policy validation.
+
+**AW-ATW-166 — Real agent allocation.** Planning MUST right-size agent count, specialties, reasoning depth, model/provider and tool capabilities to the actual objective, independence and measured overhead. Fixed agent counts, always-on critic swarms, or superficial agent multiplication MUST NOT substitute for demonstrated benefit.
+
+**AW-ATW-167 — Versioned executable mission plan.** Every complex mission plan MUST carry stable mission ID, version, objective, authoritative inputs, planned deliverables, acceptance criteria, dependencies, scoped tasks, candidate capability requirements, decision provenance, permission requirements, resource hints, retry/unknown policy, and expected artifact types. AI-produced JSON is a *proposal* until compiled and validated by host authority.
+
+**AW-ATW-168 — Validated plan compilation.** The compiler MUST reject invalid schemas, cycles, missing task IDs, unavailable or ineligible models/tools, impossible dependencies, unknown resource targets, over-budget work, unsupported modalities and privilege expansion. It MUST resolve abstract capability requests against live qualified capabilities and return machine-readable errors for repair or explicit limitation reporting.
+
+**AW-ATW-169 — Plan lineage and replan diffs.** Replanning MUST create a versioned delta recording why it occurred, evidence motivating change, changed dependencies, cancelled or superseded tasks, and effects on critical path. Completed, verified, unaffected work MUST remain reusable; a replan MUST NOT silently replay side effects.
+
+**AW-ATW-170 — Event-driven executive checkpoints.** AI mission supervision SHOULD run at meaningful state changes (new evidence, dependency resolution, failure, ambiguity, risk, user instruction, milestone), not on every timer tick or log line. The scheduler continues deterministic work while the executive reasons. Executive decisions MUST be attributable to their input evidence and canonical mission revision.
+
+### FI-05.2 Parallel execution, isolation, and resource-aware behavior
+
+**AW-ATW-171 — Critical-path-first scheduling.** The runtime MUST distinguish genuinely independent operations from causal dependencies, calculate/estimate critical-path and queue effects, and overlap useful API requests, retrieval, tool calls, agent work and verification where authorization and isolation permit. Total model-call count or total parallel workers alone is not an optimization success metric.
+
+**AW-ATW-172 — Distinguish concurrency resources.** Async remote API I/O, local CPU-intensive workloads, GPU/VRAM, RAM, disk bandwidth, tool rate limits and UI/rendering contention MUST use separate bounded budgets. Remote API concurrency MUST NOT be equated to a requirement for one local CPU thread per request. CPU-heavy work SHOULD use bounded worker pools or isolated processes; the UI event loop MUST remain nonblocking.
+
+**AW-ATW-173 — ARIE enforcement integration.** Mission scheduling MUST consume authorized, versioned resource envelopes from the platform Performance Governor/Adaptive Resource Intelligence Engine (13). Worker counts, local build intensity, indexing, disk I/O and GPU workloads MUST decrease under measured foreground contention, then cautiously recover with hysteresis. Remote inference MAY continue when eligible and safe; gaming protection MUST NOT silently reduce the cognitive quality of a task.
+
+**AW-ATW-174 — Fair, preemptible queues.** User-facing urgent tasks, voice interaction and UI responsiveness MUST not be starved by background missions. Priorities, pausing, cancellation points, per-mission fairness, bounded queues and resume semantics MUST be explicit. A noninterruptible external action MUST retain an honest in-flight/unknown state rather than be declared stopped.
+
+**AW-ATW-175 — Isolation before overlap.** Conflicting writes, generated artifacts, repo worktrees, mutable CIE projections, shared indexes and external entities MUST use appropriate isolation, scoped locks, transactional coordination or serialization. Two agents writing the same canonical entity MUST NOT race merely to report greater concurrency.
+
+**AW-ATW-176 — Bounded speculative preparation.** CIE lookup, read-only inspection, capability probing and other cancel-safe preparatory operations MAY run before full planning when policy-qualified and relevant. Speculation MUST NOT execute consequential effects, widen data disclosure or produce false progress claims; unused work MUST be cancellable and attributed.
+
+**AW-ATW-177 — Concurrent error integrity.** Partial tool replies, tool-call retries, provider reconnects, late async results and task cancellation MUST be correlated by stable call/attempt identifiers. The orchestrator MUST deduplicate repeated receipts, reconcile unknown effects before retry, and reject late results from superseded permission or plan epochs.
+
+**AW-ATW-178 — Adaptive API strategy.** Qualified execution paths MAY use provider-supported streaming, persistent connections, asynchronous tools, hosted tool/programmatic orchestration, tool discovery, prompt caching, and background work. The capability registry MUST verify feature compatibility and account/privacy policy per model and tool; API marketing or an illustrative plan field MUST NOT be treated as proof that a feature works for this account.
+
+**AW-ATW-179 — No intelligence-removing optimization.** Performance improvements MUST preserve the task's required semantic interpretation, context sufficiency, deliberation, evidence review and independent verification. Eliminating a model call is acceptable only when a validated alternative provides equal-or-better quality for its applicable task class; cheap calls with no discernible value MAY be consolidated.
+
+### FI-05.3 Execution contracts and outcome lifecycle
+
+The following is a **conceptual host-normalized envelope**, not a fixed OpenAI request schema. Types are normative; exact serialization, storage and provider adapters belong to implementation architecture.
+
+| Contract | Required typed fields | Source of authority |
+|---|---|---|
+| \`MissionPlan\` | mission_id; version; objective; input references; outcomes; acceptance; task DAG; strategy rationale; applicable constraints | MissionService persists validated revision |
+| \`TaskNode\` | task_id; parent; dependencies; role/capability requirements; input evidence refs; tool scopes; cost/resource envelope; artifact contract; verification | MissionService and authoritative resource owners |
+| \`ExecutiveProposal\` | mission_id; based_on_version; trigger event IDs; proposed operation; reasoning *summary*; evidence refs; uncertainty; policy impacts | AI proposal, accepted/rejected by kernel |
+| \`ResourceLease\` | task/attempt IDs; CPU/GPU/memory/disk limits; priority; epoch; expiry; revocation behavior | ARIE/Platform Governor, deterministic enforcement |
+| \`ResultReceipt\` | attempt ID; reported outcome; objective readback; artifact references; postconditions; unknowns; verified_by; timestamp | Source-owning tool + independent verifier |
+| \`PlanChange\` | old/new revision; changed nodes/edges; rationale; user correction refs; reused evidence; cancelled or fenced attempts | MissionService revision transaction |
+
+**AW-ATW-180 — Outcome-state separation.** \`requested\`, \`planned\`, \`authorized\`, \`queued\`, \`running\`, \`provider_done\`, \`effect_observed\`, \`verified\`, \`delivered\`, \`blocked\`, \`unknown\`, and \`cancelled\` MUST remain distinguishable where applicable. User-visible completion requires appropriate evidence of actual requested deliverables.
+
+**AW-ATW-181 — Verified multimodal deliverables.** A mission MAY produce text, a created file, repository commit, generated image/audio, document and explanation, interactive block, external action, or any combination. Each artifact MUST have a typed identity, storage/provenance reference, existence/readability check, authorization and rendering contract; model prose alone MUST NOT stand in for a requested deliverable.
+
+**AW-ATW-182 — Incremental verification.** Independent completed branches SHOULD be eligible for verification before unrelated nodes finish, using objective checks and qualified semantic review. The verifier MUST not declare acceptance solely because a model reports confidence or a command exits zero.
+
+**AW-ATW-183 — Context handoff continuity.** Agents and replans MUST consume CIE-supplied, scoped evidence packages and durable task checkpoints without duplicating the context authority or treating provider conversation IDs as task identity. Summarization MUST preserve constraints, source lineage, open failures and approvals.
+
+**AW-ATW-184 — Safe strategy adaptation.** AEP-supplied performance findings MAY influence plan construction and scheduling only through reviewed, scoped, versioned, reversible policies and current ARIE resource ceilings. No autonomous experiment or learned strategy may broaden Trust-granted authority.
+
+**AW-ATW-185 — Transparent decision observability.** Every substantive executive intervention, model/agent allocation, stop, replan or optimization application MUST emit causal, privacy-safe decision receipts to the authoritative event/observability stream. Explanations are evidence-grounded summaries, not claims to expose model-private chain of thought.
+
+**AW-ATW-186 — Cross-mission learning boundary.** Worker outputs and execution records MAY inform later missions through CIE and AEP, but observations MUST be distinguished from hypotheses and promoted policies. No unverified failed run, temporary provider outage, synthetic fixture, or one-off success may silently become a universal execution rule.
+
+### FI-05.4 Mandatory implementation and acceptance evidence
+
+**AW-ATW-187 — Novel objective proof.** Test unseen multi-deliverable requests requiring intelligent decomposition, model/tool assignment, typed plan validation and independently verified text plus artifact output. A canned recipe or keyword classifier MUST NOT pass as generalized planning.
+
+**AW-ATW-188 — Concurrency proof.** Demonstrate actual overlapping independent operations, measured p50/p95 mission and first-useful-result latency, critical-path attribution, and no duplicate writes across mixed model, local-tool and verification work. Compare against a quality-equivalent sequential baseline.
+
+**AW-ATW-189 — Foreground protection proof.** With sustained representative gaming/foreground load, confirm ARIE-enforced CPU/GPU/disk protection and responsive rendering while preserving authorized remote reasoning and mission outcome quality; then show safe worker recovery after idle.
+
+**AW-ATW-190 — Replan and interruption proof.** Inject bad evidence, capability loss, resource pressure, a failed build, a permission revocation and a restart during an effectful operation. Verify versioned replanning, fenced late results, preserved verified subresults and reconciled unknown effects.
+
+**AW-ATW-191 — Model/tool qualification proof.** Demonstrate unsupported feature rejection, eligible alternative selection, real cost/latency evidence, and honest blocked outcomes for unavailable transport/tool/model capability. Test with real provider compatibility as well as negative fixtures.
+
+**AW-ATW-192 — Governed learning proof.** Show a versioned AEP optimization proposal applied to a comparable mission only after held-out quality checks and authorized policy promotion; confirm reversal of a performance-only change that reduces answer or artifact quality.
+
+**Implementation sequencing:** preserve scoped Architecture Recovery; first stabilize canonical contracts and instrumentation, then implement model-led cognitive stages and AI executive, safe concurrency/ARIE interfaces, quality-gated adaptive policy use, and visual mission/decision projections. **No documentation change is evidence of implementation.**
 
