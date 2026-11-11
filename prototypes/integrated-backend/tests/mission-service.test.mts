@@ -653,10 +653,20 @@ test('verification failure, paused admission, evidence-bound amendment, and repl
     assert.equal(read(m.id).tasks[0].attempts.length, 2);
     const final = read(m.id), profile = projectMissionExecution(final);
     const [first, retry, dependent] = profile.attempts;
+    const requestEvent = final.events.find(event => event.kind === 'control' && event.detail === 'retry')!;
+    const retryRequest = { eventSeq: requestEvent.seq, utc: requestEvent.time, clock: requestEvent.timing!.domain,
+      monotonicMs: requestEvent.timing!.monotonicMs };
     assert.deepEqual(profile.work.retries, [{ taskId: 'inspect', previousAttemptId: first.id, attemptId: retry.id,
-      previousOutcome: 'failed', previousSettlement: first.end, retryDispatch: retry.start,
+      previousOutcome: 'failed', previousSettlement: first.end, retryRequest, retryDispatch: retry.start,
       previousOccupiedMs: first.interval!.end - first.interval!.start,
+      settlementToRetryRequestMs: retryRequest.monotonicMs - first.end!.monotonicMs!,
+      retryRequestToDispatchMs: retry.start.monotonicMs! - retryRequest.monotonicMs,
       settlementToDispatchMs: retry.start.monotonicMs! - first.end!.monotonicMs! }]);
+    const withoutRequest = projectMissionExecution({ ...final, events: final.events.filter(event => event.seq !== requestEvent.seq) });
+    assert.equal(withoutRequest.work.retries[0]?.retryRequest, null);
+    assert.equal(withoutRequest.work.retries[0]?.settlementToRetryRequestMs, null);
+    assert.equal(withoutRequest.work.retries[0]?.retryRequestToDispatchMs, null);
+    assert.equal(withoutRequest.work.retries[0]?.settlementToDispatchMs, profile.work.retries[0]?.settlementToDispatchMs);
     const withoutPriorEvents = projectMissionExecution({ ...final, events: final.events.filter(event => event.attemptId !== first.id) });
     assert.equal(withoutPriorEvents.work.retries[0]?.previousAttemptId, first.id);
     assert.equal(withoutPriorEvents.work.retries[0]?.previousOccupiedMs, null);
@@ -666,6 +676,8 @@ test('verification failure, paused admission, evidence-bound amendment, and repl
     const separated = projectMissionExecution(crossClock).work.retries[0];
     assert.equal(separated?.previousOccupiedMs, profile.work.retries[0].previousOccupiedMs);
     assert.equal(separated?.settlementToDispatchMs, null);
+    assert.equal(separated?.settlementToRetryRequestMs, profile.work.retries[0]?.settlementToRetryRequestMs);
+    assert.equal(separated?.retryRequestToDispatchMs, null);
     assert.ok(retry.phases!.readyQueue!.firstObservedMs >= first.end!.monotonicMs!);
     assert.ok(dependent.phases!.readyQueue!.firstObservedMs >= retry.end!.monotonicMs!);
   } finally { await service.close(); f.db.close(); }
