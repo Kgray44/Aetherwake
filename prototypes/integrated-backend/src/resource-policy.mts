@@ -51,6 +51,7 @@ export type ResourceLeaseRequest = {
 /** Private host observation from the process that owns the GPU device. */
 export type GpuProcessBudget = { contextId: string; budgetBytes: number; usedBytes: number };
 const gpuBudgetFreshMs = 5000;
+const recoveryDwellMs = 3_000;
 export type ResourceLease = {
   readonly active: boolean;
   readonly receipt: Readonly<{
@@ -121,6 +122,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
   let previous: typeof effective | null = null;
   let revision = 1, reason = 'awaiting_native_sample', freeForReservations = 0;
   let localFreshUntil = -Infinity, lastProtection = -Infinity;
+  let gpuRecoverAfter = -Infinity;
   let disposed = false;
   let gpuPreparationAllowed = false;
   let gpuBudget: (GpuProcessBudget & { at: number }) | undefined;
@@ -157,20 +159,25 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     freeForReservations = critical ? 0 : Math.min(free, commit ?? Infinity) - memoryFloor;
     const rendererPressure = reasons.includes('renderer-latency');
     const gpuPressure = reasons.includes('gpu-load');
+    const time = now();
+    if (gpuPressure) gpuRecoverAfter = Infinity;
+    else if (gpuRecoverAfter === Infinity) gpuRecoverAfter = time + recoveryDwellMs;
+    const gpuRecovering = !gpuPressure && time < gpuRecoverAfter;
     const gpuThermalPressure = reasons.includes('gpu-thermal-throttling');
     const externalActivity = config.protectExternalActivity && reasons.includes('external-desktop-activity');
     const protecting = config.mode === 'gaming_focus' || reasons.includes('active-input') || rendererPressure || externalActivity;
     const powerLimited = reasons.includes('battery-power') || reasons.includes('cpu-speed-limit');
     const cpuPressure = reasons.includes('cpu-load');
     const contention = protecting || powerLimited || cpuPressure || reasons.includes('disk-io');
-    if (critical || contention) lastProtection = now();
-    const recovering = now() - lastProtection < 3_000;
+    if (critical || contention) lastProtection = time;
+    const recovering = time - lastProtection < recoveryDwellMs;
     const cpuLimited = protecting || powerLimited || cpuPressure || !readings.cpuPercent || recovering;
     const idleHeadroom = config.mode === 'max_throughput' && !cpuLimited && idleSeconds !== null && idleSeconds >= 15 &&
       !gpuPressure && !reasons.includes('disk-io');
     const balancedCeiling = Math.max(1, maxWorkers - 1);
     const cpu = critical ? 0 : Math.min(config.limits.cpu, cpuLimited ? 1 : idleHeadroom ? maxWorkers : balancedCeiling);
-    gpuPreparationAllowed = !critical && !contention && !recovering && !gpuPressure && !gpuThermalPressure && config.limits.gpu > 0;
+    gpuPreparationAllowed = !critical && !contention && !recovering && !gpuPressure && !gpuRecovering &&
+      !gpuThermalPressure && config.limits.gpu > 0;
     const next = {
       cpu,
       build: protecting || reasons.includes('disk-io') ? 0 : Math.min(cpu, config.limits.build),
@@ -186,7 +193,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
         powerLimited ? 'power_protection' : cpuPressure ? 'cpu_contention' :
           recovering && !contention ? 'recovery_dwell' : cpuLimited ? 'cpu_conservative' :
       reasons.includes('disk-io') ? 'disk_contention' : gpuThermalPressure ? 'gpu_thermal_pressure' : gpuPressure ? 'gpu_contention' :
-        idleHeadroom ? 'throughput_profile' : 'balanced';
+        gpuRecovering ? 'gpu_recovery_dwell' : idleHeadroom ? 'throughput_profile' : 'balanced';
     if (nextReason !== reason || kinds.some(kind => next[kind] !== effective[kind])) {
       previous = effective;
       effective = next;

@@ -31,7 +31,7 @@ test('GPU admission requires a fresh process budget, matching context and bounde
   } finally { policy.dispose(); }
 });
 
-test('GPU contention records why preparation stops even when there is no active GPU lease', () => {
+test('GPU contention and recovery hold preparation without reducing CPU or remote admission', () => {
   const mib = 2 ** 20;
   let now = 4000;
   const policy = createResourcePolicy(3, 512 * mib, () => now, Date.now, { mode: 'balanced',
@@ -52,6 +52,19 @@ test('GPU contention records why preparation stops even when there is no active 
     assert.ok(held.revision > initial.revision);
     assert.deepEqual(held.effective, initial.effective);
     assert.equal(policy.canLease('remote'), true);
+    policy.update(sample, Infinity);
+    assert.equal(policy.mayPrepareGpu(), false);
+    assert.equal(policy.inspect().reason, 'gpu_recovery_dwell');
+    assert.deepEqual(policy.inspect().effective, initial.effective);
+    now += 2_900;
+    policy.update({ ...sample, reasons: ['gpu-load'] }, Infinity);
+    assert.equal(policy.inspect().reason, 'gpu_contention');
+    policy.update(sample, Infinity);
+    now += 2_999;
+    policy.update(sample, Infinity);
+    assert.equal(policy.mayPrepareGpu(), false);
+    assert.equal(policy.canLease('remote'), true);
+    now += 1;
     policy.update(sample, Infinity);
     assert.equal(policy.mayPrepareGpu(), true);
     assert.equal(policy.inspect().reason, 'balanced');
