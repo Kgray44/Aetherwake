@@ -280,6 +280,17 @@ test('cancelling dispatched API workers retains an uncertain outcome and cannot 
     const current = await f.core.command('missions', { name: 'read', input: { id: mission.id } }) as MissionProjection;
     await f.core.command('missions', { name: 'control', input: { id: mission.id, revision: current.revision, control: { type: 'cancel' } } }); f.release();
     const done = await settled(f, mission.id); assert.ok(done.tasks.filter(task => task.specialist).every(task => task.state === 'uncertain'));
+    const readTrace = () => f.core.command('missions', { name: 'execution-profile', input: { id: mission.id } });
+    const trace = await readTrace();
+    assert.ok(trace && 'kind' in trace && trace.kind === 'execution-profile');
+    const [cancellation] = trace.work.cancellations;
+    assert.equal(cancellation.kind, 'cancel');
+    assert.deepEqual(cancellation.attempts?.map(attempt => attempt.attemptId).sort(),
+      current.tasks.filter(task => task.state === 'running').map(task => task.attempts.at(-1)!.id).sort());
+    assert.ok(cancellation.attempts?.every(attempt => attempt.outcome === 'uncertain'));
     await f.reopen(); assert.equal(f.requests.length, 2); assert.notEqual((await settled(f, mission.id)).outcome, 'verified');
+    const restored = await readTrace();
+    assert.ok(restored && 'kind' in restored && restored.kind === 'execution-profile');
+    assert.deepEqual(restored.work.cancellations, [cancellation]);
   } finally { await f.close(); }
 });
