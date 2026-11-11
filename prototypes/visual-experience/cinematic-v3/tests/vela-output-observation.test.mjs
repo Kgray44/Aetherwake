@@ -33,4 +33,8 @@ test("only a new current output that survives a visible frame opportunity is rep
   observe(current);
   flush();
   assert.deepEqual(sent, [current.output]);
+  const report = { ...value("report"), output: { missionId: "mission-1", messageId: "report" } };
+  observe(report);
+  flush();
+  assert.deepEqual(sent, [current.output, report.output]);
 });

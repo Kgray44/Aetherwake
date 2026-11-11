@@ -112,6 +112,7 @@ export interface VelaMessage {
   /** Native captured transcript evidence; never a completed conversational turn. */
   voice?: { sessionId:string;startMs:number;endMs:number;completedTurn:false;transcription:'provider-reported';sealed:boolean;acceptedRequestId?:string };
   missionReport?: { missionId: string; workspaceId: string; projectId: string | null; jobsDone?: number };
+  missionPresentation?: import('../../application-contract/contracts.ts').RendererOutputPresentation;
   /** Parsed conversational content remains attributed to the actual observed provider output. */
   responseKind?: ProviderReplyKind; providerContribution?: ProviderContribution;
 }

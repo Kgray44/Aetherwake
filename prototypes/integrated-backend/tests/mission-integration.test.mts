@@ -305,7 +305,19 @@ test('canonical backend runs a native mission without inference, restores eviden
     }
     assert.deepEqual(await backend.call('providerActivity', {}), providerActivity);
     const readPublication = () => backend.call('missions', { name: 'execution-profile', input: { id: single.id } });
+    const latestReport = vela.conversation!.messages.find(message => message.missionReport?.missionId === single.id)!;
+    const receipt = { missionId: single.id, messageId: latestReport.id };
+    assert.deepEqual(await backend.call('rendererVelaOutput', { ...receipt, missionId: measured.id }), { accepted: false });
+    assert.deepEqual(await backend.call('rendererVelaOutput', receipt), { accepted: true });
     const beforeReopen = await readPublication();
+    assert.ok(beforeReopen && 'kind' in beforeReopen && beforeReopen.kind === 'execution-profile');
+    assert.equal(beforeReopen.userDelivery?.messageId, latestReport.id);
+    assert.equal(beforeReopen.userDelivery?.source, 'renderer-visible-frame');
+    assert.ok(beforeReopen.userDelivery?.stagingToReceiptMs != null && beforeReopen.userDelivery.stagingToReceiptMs >= 0);
+    assert.equal(beforeReopen.intakeToUserDeliveryMs,
+      beforeReopen.intakeToReportStagedMs! + beforeReopen.userDelivery.stagingToReceiptMs);
+    assert.deepEqual(await backend.call('rendererVelaOutput', receipt), { accepted: true });
+    assert.deepEqual(await readPublication(), beforeReopen);
     await backend.close();
     backend = new Backend(options);
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });

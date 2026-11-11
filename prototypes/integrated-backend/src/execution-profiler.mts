@@ -42,6 +42,7 @@ type Path = { durationMs: number; attemptIds: string[] };
 export type ReportPublication = Pick<StreamEvent, 'eventId' | 'cursor' | 'receivedAt'> & {
   timing: MissionReportTiming | null;
 };
+export type ReportDelivery = import('../../application-contract/contracts.ts').RendererOutputPresentation & { messageId: string };
 
 function timeToReportStaging(timing: MissionReportTiming | null | undefined,
   start: Pick<AttemptBoundary, 'clock' | 'monotonicMs'> | null) {
@@ -161,7 +162,8 @@ function dependencyReadinessPath(attempts: {
 }
 
 /** Read model of already-authorized mission receipts. No independent journal or content retention. */
-export function projectMissionExecution(mission: MissionProjection, reportPublication: ReportPublication | null = null) {
+export function projectMissionExecution(mission: MissionProjection, reportPublication: ReportPublication | null = null,
+  userDelivery: ReportDelivery | null = null) {
   const events = [...new Map(mission.events.map(event => [event.seq, event])).values()].sort((a, b) => a.seq - b.seq);
   const byAttempt = new Map([...mission.tasks, ...(mission.retiredTasks ?? [])].flatMap(task =>
     task.attempts.map((attempt, i) => [attempt.id, { task, attempt, previous: task.attempts[i - 1]?.id }] as const)));
@@ -253,13 +255,16 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const pathIds = new Set(path?.attemptIds);
   const longestOnPath = attempts.filter(attempt => pathIds.has(attempt.id) && attempt.interval)
     .sort((a, b) => (b.interval!.end - b.interval!.start) - (a.interval!.end - a.interval!.start))[0];
+  const intakeToReportStagedMs = timeToReportStaging(reportPublication?.timing, intake);
   return {
     contract: 'aerynth.mission-execution-profile@1' as const,
     kind: 'execution-profile' as const, missionId: mission.id, revision: mission.revision, outcome: mission.outcome,
     admission: initial, firstVerifiedTask: firstVerified, lastSettlement, reportPublication,
     settlementToReportStagedMs: complete ? timeToReportStaging(reportPublication?.timing, lastSettlement) : null,
-    intakeToReportStagedMs: timeToReportStaging(reportPublication?.timing, intake),
-    requestIntake: intake, firstMeaningfulOutput: null, userDelivery: null,
+    intakeToReportStagedMs,
+    requestIntake: intake, firstMeaningfulOutput: null, userDelivery,
+    intakeToUserDeliveryMs: intakeToReportStagedMs !== null && userDelivery?.stagingToReceiptMs != null ?
+      intakeToReportStagedMs + userDelivery.stagingToReceiptMs : null,
     intakeToAdmissionMs: intake && initial?.monotonicMs != null ? initial.monotonicMs - intake.monotonicMs : null,
     admissionToFirstVerifiedTaskMs: timeToVerified ? timeToVerified.end - timeToVerified.start : null,
     admissionToLastSettlementMs: timeToSettlement ? timeToSettlement.end - timeToSettlement.start : null,
