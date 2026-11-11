@@ -562,7 +562,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const timeToSettlement = complete && !active && initial ? interval(mission.id, initial, lastSettlement) : null;
   const path = complete && !active ? criticalPath(attempts) : null;
   const readinessPath = complete && !active ? dependencyReadinessPath(attempts, initial) : null;
-  let workerBudgetEvidence = null;
+  let workerBudgetCandidate = null;
   if (objectiveVerified && readinessPath) {
     for (const [index, node] of readinessPath.attempts.entries()) {
       const trace = traceByAttempt.get(node.attemptId);
@@ -570,21 +570,32 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       const budget = ready?.blockers['worker-budget'];
       const admission = trace?.resourceAdmission;
       const observedReadyWaitMs = index === 0 ? readinessPath.entry?.observedReadyWaitMs : node.observedReadyWaitMs;
-      if (!trace?.end || !admission || !ready || !budget || observedReadyWaitMs == null || observedReadyWaitMs <= 0 ||
+      if (!trace?.end || !trace.predecessors || !admission || !ready || !budget || observedReadyWaitMs == null || observedReadyWaitMs <= 0 ||
         currentProofs.get(node.taskId)?.attemptId !== node.attemptId ||
         !Number.isSafeInteger(budget.samples) || budget.samples < 1 || !Number.isFinite(budget.lastObservedMs) ||
         budget.lastObservedMs < ready.firstObservedMs || budget.lastObservedMs > node.assemblyStartedMs ||
-        (workerBudgetEvidence && workerBudgetEvidence.observedReadyWaitMs >= observedReadyWaitMs)) continue;
-      workerBudgetEvidence = { taskId: node.taskId, attemptId: node.attemptId, clock: readinessPath.clock,
-        attemptPlanRevision: trace.planRevision, eventSeqs: [trace.start.eventSeq, trace.end.eventSeq] as const,
-        observedReadyWaitMs, blockers: ready.blockers,
-        admissionAtDispatch: admission, verifiedEvidenceIds: trace.verifiedEvidenceIds };
+        (workerBudgetCandidate && workerBudgetCandidate.evidence.observedReadyWaitMs >= observedReadyWaitMs)) continue;
+      workerBudgetCandidate = {
+        applicability: { taskId: node.taskId, executor: trace.executor, predecessorAttemptIds: trace.predecessors },
+        evidence: { taskId: node.taskId, attemptId: node.attemptId, clock: readinessPath.clock,
+          attemptPlanRevision: trace.planRevision, eventSeqs: [trace.start.eventSeq, trace.end.eventSeq] as const,
+          observedReadyWaitMs, blockers: ready.blockers,
+          admissionAtDispatch: admission, verifiedEvidenceIds: trace.verifiedEvidenceIds },
+      };
     }
   }
-  const hypothesis = workerBudgetEvidence ? {
-    id: `${mission.id}:${mission.planRevision}:${workerBudgetEvidence.attemptId}:worker-budget`,
+  const hypothesis = workerBudgetCandidate && readinessPath ? {
+    id: `${mission.id}:${mission.planRevision}:${workerBudgetCandidate.evidence.attemptId}:worker-budget`,
     status: 'hypothesis' as const, owner: 'arie' as const, kind: 'compare-worker-budget' as const,
-    missionId: mission.id, planRevision: mission.planRevision, evidence: workerBudgetEvidence,
+    missionId: mission.id, planRevision: mission.planRevision, ...workerBudgetCandidate,
+    baseline: { missionRevision: mission.revision, dependencyPathMs: readinessPath.elapsedMs,
+      occupiedCriticalPathMs: path?.durationMs ?? null, workerMs: total?.workerMs ?? null, overlapMs: total?.overlapMs ?? null,
+      admittedWorkerLimit: workerBudgetCandidate.evidence.admissionAtDispatch.workerLimit },
+    comparison: { change: 'one-approved-worker-limit' as const, restoreOriginalWorkerLimit: true,
+      qualityDimensions: ['verified-objective', 'criterion-evidence', 'scope-compliance', 'foreground-responsiveness'] as const },
+    uncertainty: { causalAttribution: 'unverified' as const, matchedComparison: 'unavailable' as const,
+      independentEvaluation: 'unavailable' as const,
+      otherObservedBlockers: Object.keys(workerBudgetCandidate.evidence.blockers).filter(reason => reason !== 'worker-budget') },
     metrics: ['first-verified-result', 'mission-completion', 'foreground-responsiveness'] as const,
     guardrails: ['equivalent-verified-work', 'independent-quality-evaluation', 'foreground-interference', 'resource-reserve'] as const,
   } : null;

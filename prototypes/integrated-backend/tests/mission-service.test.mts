@@ -246,6 +246,13 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.deepEqual(hypothesis.evidence.eventSeqs, [join.start.eventSeq, join.end!.eventSeq]);
     assert.deepEqual(hypothesis.evidence.blockers, blockers);
     assert.deepEqual(hypothesis.evidence.verifiedEvidenceIds, join.verifiedEvidenceIds);
+    assert.deepEqual(hypothesis.applicability, { taskId: 'join', executor: 'fixture', predecessorAttemptIds: [left.id, right.id] });
+    assert.deepEqual(hypothesis.baseline, { missionRevision: constrained.revision, dependencyPathMs: 14,
+      occupiedCriticalPathMs: 11, workerMs: 16, overlapMs: 4, admittedWorkerLimit: 1 });
+    assert.deepEqual(hypothesis.uncertainty.otherObservedBlockers, ['resource-conflict']);
+    assert.equal(hypothesis.uncertainty.causalAttribution, 'unverified');
+    assert.equal(hypothesis.comparison.restoreOriginalWorkerLimit, true);
+    assert.ok(hypothesis.comparison.qualityDimensions.includes('criterion-evidence'));
     assert.ok(experiment.blockers.includes('no-independent-quality-evaluation'));
     assert.deepEqual(resolveMissionHypothesis(constrained, hypothesis.id, constrained.revision), {
       kind: 'experiment-hypothesis', missionRevision: constrained.revision, hypothesis,
