@@ -444,16 +444,30 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const pathIds = new Set(path?.attemptIds);
   const longestOnPath = attempts.filter(attempt => pathIds.has(attempt.id) && attempt.interval)
     .sort((a, b) => (b.interval!.end - b.interval!.start) - (a.interval!.end - a.interval!.start))[0];
-  const intakeToReportStagedMs = timeToReportStaging(reportPublication?.timing, intake);
+  const reportTiming = reportPublication?.timing;
+  const timedReport = reportTiming &&
+    [reportTiming.compositionStartedMs, reportTiming.composedMs, reportTiming.stagedMs].every(Number.isFinite) &&
+    reportTiming.compositionStartedMs <= reportTiming.composedMs && reportTiming.composedMs <= reportTiming.stagedMs
+    ? reportTiming : null;
+  const settlementToReportStagedMs = complete ? timeToReportStaging(timedReport, lastSettlement) : null;
+  const reportLatency = reportPublication && timedReport ? {
+    publicationEventId: reportPublication.eventId,
+    settlementEventSeq: settlementToReportStagedMs !== null ? lastSettlement!.eventSeq : null,
+    settlementToCompositionMs: settlementToReportStagedMs !== null
+      ? timedReport.compositionStartedMs - lastSettlement!.monotonicMs! : null,
+    compositionMs: timedReport.composedMs - timedReport.compositionStartedMs,
+    compositionToStagingMs: timedReport.stagedMs - timedReport.composedMs,
+    stagingToRendererReceiptMs: userDelivery?.stagingToReceiptMs ?? null,
+  } : null;
+  const intakeToReportStagedMs = timeToReportStaging(timedReport, intake);
   const planningClock = plan?.timing?.lifecycleClock;
   let planningLifecycle = null;
   if (planningClock && intake && initial?.monotonicMs != null && planningClock.domain === intake.clock &&
     planningClock.commandStartedMs <= planningClock.validatedMs && planningClock.validatedMs <= intake.monotonicMs &&
     intake.monotonicMs <= initial.monotonicMs) {
     const firstProof = interval(mission.id, initial, verifiedMilestones[0]?.settlement ?? null);
-    const reportTiming = reportPublication?.timing;
-    const planningCommandToReportStagedMs = reportTiming && timeToReportStaging(reportTiming, initial) !== null ?
-      reportTiming.stagedMs - planningClock.commandStartedMs : null;
+    const planningCommandToReportStagedMs = timedReport && timeToReportStaging(timedReport, initial) !== null ?
+      timedReport.stagedMs - planningClock.commandStartedMs : null;
     planningLifecycle = {
       validatedToStartCommandMs: intake.monotonicMs - planningClock.validatedMs,
       planningCommandToAdmissionMs: initial.monotonicMs - planningClock.commandStartedMs,
@@ -479,7 +493,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     verifiedTaskMilestones: { first: verifiedMilestones[0] ?? null, last: verifiedMilestones.at(-1) ?? null },
     resourcePolicy: { currentAdmission: projectResourceAdmission(mission.admission), admittedAttemptsWithSample,
       admittedAttemptsWithoutSample: byAttempt.size - admittedAttemptsWithSample, admittedAttemptsWithReasons, attemptsByReason },
-    settlementToReportStagedMs: complete ? timeToReportStaging(reportPublication?.timing, lastSettlement) : null,
+    settlementToReportStagedMs, reportLatency,
     intakeToReportStagedMs,
     requestIntake: intake, firstMeaningfulOutput: null, userDelivery,
     intakeToUserDeliveryMs: intakeToReportStagedMs !== null && userDelivery?.stagingToReceiptMs != null ?

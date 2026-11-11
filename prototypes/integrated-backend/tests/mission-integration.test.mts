@@ -328,6 +328,14 @@ test('canonical backend runs a native mission without inference, restores eviden
       assert.equal(clock, profile.lastSettlement?.clock);
       assert.equal(profile.settlementToReportStagedMs, stagedMs - profile.lastSettlement!.monotonicMs!);
       assert.equal(profile.intakeToReportStagedMs, stagedMs - profile.requestIntake!.monotonicMs);
+      assert.deepEqual(profile.reportLatency, {
+        publicationEventId: posted.eventId,
+        settlementEventSeq: profile.lastSettlement!.eventSeq,
+        settlementToCompositionMs: compositionStartedMs - profile.lastSettlement!.monotonicMs!,
+        compositionMs: composedMs - compositionStartedMs,
+        compositionToStagingMs: stagedMs - composedMs,
+        stagingToRendererReceiptMs: null,
+      });
       assert.equal(profile.userDelivery, null);
     }
     assert.deepEqual(await backend.call('providerActivity', {}), providerActivity);
@@ -343,6 +351,7 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.ok(beforeReopen.userDelivery?.stagingToReceiptMs != null && beforeReopen.userDelivery.stagingToReceiptMs >= 0);
     assert.equal(beforeReopen.intakeToUserDeliveryMs,
       beforeReopen.intakeToReportStagedMs! + beforeReopen.userDelivery.stagingToReceiptMs);
+    assert.equal(beforeReopen.reportLatency?.stagingToRendererReceiptMs, beforeReopen.userDelivery.stagingToReceiptMs);
     assert.deepEqual(await backend.call('rendererVelaOutput', receipt), { accepted: true });
     assert.deepEqual(await readPublication(), beforeReopen);
     await backend.close();
