@@ -221,8 +221,11 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     rootPhases.contextAssembly = [8, 9];
     rootPhases.execution = [9, 9.5];
     for (const event of withEntry.events) if (event.seq === right.start.eventSeq) event.timing!.monotonicMs = 9;
-    assert.deepEqual(projectMissionExecution(withEntry).work.dependencyReadinessPath?.largestMeasuredSegment,
-      { kind: 'observed-ready-wait', attemptId: right.id, taskId: 'right', startedMs: 0.25, endedMs: 8, durationMs: 7.75 });
+    const delayedEntry = projectMissionExecution(withEntry).work.dependencyReadinessPath!;
+    assert.equal(delayedEntry.entry?.observedReadyWaitMs, 7.75);
+    assert.equal(delayedEntry.elapsedMs, 7);
+    assert.deepEqual(delayedEntry.largestMeasuredSegment,
+      { kind: 'execution', attemptId: join.id, taskId: 'join', startedMs: 12, endedMs: 14, durationMs: 2 });
     rootPhases.readyQueue!.firstObservedMs = -1;
     const staleEntry = projectMissionExecution(withEntry).work.dependencyReadinessPath?.entry;
     assert.equal(staleEntry?.observedReadyWaitMs, null);

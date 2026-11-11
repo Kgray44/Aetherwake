@@ -219,8 +219,7 @@ function dependencyReadinessPath(attempts: {
   };
   for (const node of chain) {
     const ready = node.phases.readyQueue;
-    const readyWait = node === root ? entry?.observedReadyWaitMs ?? null : node.observedReadyWaitMs;
-    if (ready && readyWait !== null)
+    if (ready && node.observedReadyWaitMs !== null)
       largestMeasuredSegment = considerSegment(node, 'observed-ready-wait', ready.firstObservedMs, node.assemblyStartedMs);
     for (const phase of attemptPhases) {
       const bounds = node.phases[phase];
