@@ -272,6 +272,9 @@ export interface CommandMap {
   missionPlanReviewed: { input: Extract<MissionRequest, { name: 'plan' }>['input']; output: MissionResponse };
   missionRevisionReviewed: { input: Extract<MissionRequest, { name: 'revision-apply' }>['input']; output: MissionResponse };
   missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true }; output: null };
+  /** Owned desktop command, excluded from renderer and model routes. */
+  resourcePolicyNative: { input: import('./resource-policy.mts').ResourcePolicyNativeRequest;
+    output: import('./resource-policy.mts').ResourcePolicyNativeView };
   /** Private desktop-host command. Local paths never cross renderer IPC. */
   mediaImportTrusted: {
     input: Omit<MediaImportRequest, 'url'> & { commandId: string; selection: MediaSelection };

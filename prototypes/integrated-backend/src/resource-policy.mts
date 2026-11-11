@@ -6,6 +6,21 @@ export type ResourceMode = 'balanced' | 'gaming_focus' | 'max_throughput';
 export type ResourcePolicyConfig = {
   mode: ResourceMode;
   limits: Readonly<Record<ResourceKind, number>>;
+  monitorWindows?: boolean;
+};
+type PolicyPreference = { config: ResourcePolicyConfig; origin: 'default' | 'host' | 'user' };
+type SavedPreferences = { schemaVersion: 1; current: PolicyPreference; previous: PolicyPreference | null; appliedAtUtc: string };
+export interface ResourcePolicyPersistence {
+  load(): { version: number; value: unknown } | null;
+  save(expectedVersion: number | null, version: number, value: SavedPreferences): void;
+}
+export type ResourcePolicyNativeRequest = { name: 'inspect' } |
+  { name: 'set-mode'; mode: ResourceMode; expectedVersion: number } |
+  { name: 'set-cpu-limit'; limit: number; expectedVersion: number } |
+  { name: 'set-windows-monitoring'; enabled: boolean; expectedVersion: number } |
+  { name: 'restore-defaults' | 'rollback'; expectedVersion: number };
+export type ResourcePolicyNativeView = ReturnType<ReturnType<typeof createResourcePolicy>['inspect']> & {
+  windowsCountersSupported: boolean;
 };
 export type ResourceAdjustment = {
   schemaVersion: 1;
@@ -28,6 +43,7 @@ export type ResourceLease = {
     epoch: string;
     leaseId: string;
     policyRevision: number;
+    configVersion: number;
     kind: ResourceKind;
     reservedRamBytes: number;
     expiresAt: string;
@@ -43,21 +59,47 @@ const finiteCount = (n: number, max: number) => Number.isSafeInteger(n) && n >= 
 
 /** Private admission bookkeeping for the Performance Governor. MissionService owns the queue and attempts. */
 export function createResourcePolicy(maxWorkers: number, memoryFloor: number, now: () => number, wallNow: () => number,
-  initial?: ResourcePolicyConfig) {
+  initial?: ResourcePolicyConfig, persistence?: ResourcePolicyPersistence) {
   if (!finiteCount(maxWorkers, 1024) || maxWorkers === 0) throw Error('invalid_resource_worker_ceiling');
   const epoch = randomUUID();
   const defaults: ResourcePolicyConfig = { mode: 'balanced',
     limits: { cpu: maxWorkers, build: 1, gpu: 0, host_io: maxWorkers, remote: maxWorkers } };
   function validate(config: ResourcePolicyConfig): ResourcePolicyConfig {
-    if (!['balanced', 'gaming_focus', 'max_throughput'].includes(config.mode) ||
+    if (!config || !config.limits || !['balanced', 'gaming_focus', 'max_throughput'].includes(config.mode) ||
+        config.monitorWindows !== undefined && typeof config.monitorWindows !== 'boolean' ||
         !kinds.every(kind => finiteCount(config.limits[kind], maxWorkers))) throw Error('invalid_resource_policy');
-    return { mode: config.mode, limits: { ...config.limits } };
+    return { mode: config.mode, monitorWindows: config.monitorWindows ?? true,
+      limits: Object.fromEntries(kinds.map(kind => [kind, config.limits[kind]])) as ResourcePolicyConfig['limits'] };
   }
-  let config = validate(initial ?? defaults), previousConfig: ResourcePolicyConfig | undefined;
+  function restorePreference(value: PolicyPreference): PolicyPreference {
+    if (!value || !['default', 'host', 'user'].includes(value.origin)) throw Error('invalid_resource_policy');
+    return { config: validate(value.config), origin: value.origin };
+  }
+  let preference: PolicyPreference = { config: validate(initial ?? defaults), origin: initial ? 'host' : 'default' };
+  let previousPreference: PolicyPreference | null = null;
+  const saved = persistence?.load() ?? null;
+  let storedVersion = saved?.version ?? null, configurationHealth: 'valid' | 'fallback' = 'valid';
+  let configVersion = storedVersion ?? 1;
+  let appliedAtUtc: string | null = null;
+  if (saved) {
+    try {
+      const value = saved.value as SavedPreferences;
+      if (value?.schemaVersion !== 1 || typeof value.appliedAtUtc !== 'string' || !Number.isFinite(Date.parse(value.appliedAtUtc)))
+        throw Error('invalid_resource_policy');
+      const current = restorePreference(value.current);
+      previousPreference = value.previous === null ? null : restorePreference(value.previous);
+      preference = current;
+      appliedAtUtc = value.appliedAtUtc;
+    } catch {
+      configurationHealth = 'fallback';
+      preference = { config: { ...defaults, monitorWindows: false }, origin: 'default' };
+      previousPreference = null;
+    }
+  }
   let latest: MissionAdmission | undefined;
-  let effective = { cpu: 0, build: 0, gpu: 0, host_io: 0, remote: config.limits.remote };
+  let effective = { cpu: 0, build: 0, gpu: 0, host_io: 0, remote: preference.config.limits.remote };
   let previous: typeof effective | null = null;
-  let revision = 1, configVersion = 1, reason = 'awaiting_native_sample', freeForReservations = 0;
+  let revision = 1, reason = 'awaiting_native_sample', freeForReservations = 0;
   let localFreshUntil = -Infinity, lastProtection = -Infinity;
   let disposed = false;
   const active = new Map<string, {
@@ -77,6 +119,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
   function update(admission: MissionAdmission | undefined, memoryFreshUntil = localFreshUntil) {
     if (disposed) return;
     latest = admission;
+    const { config } = preference;
     localFreshUntil = memoryFreshUntil;
     const readings = admission?.readings ?? {};
     const reasons: readonly MissionAdmission['reasons'][number][] = admission?.reasons ?? [];
@@ -125,14 +168,34 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       (kind !== 'build' || used('cpu') < effective.cpu) &&
       (kind === 'remote' || now() <= localFreshUntil && bytes <= Math.max(0, freeForReservations - reservedRam()));
   }
+  function commit(expectedVersion: number, current: PolicyPreference, prior: PolicyPreference | null) {
+    if (disposed || expectedVersion !== configVersion) throw Error('stale_resource_policy');
+    const nextVersion = configVersion + 1;
+    if (!Number.isSafeInteger(nextVersion)) throw Error('invalid_resource_policy');
+    const savedAt = new Date(wallNow()).toISOString();
+    persistence?.save(storedVersion, nextVersion, { schemaVersion: 1, current, previous: prior, appliedAtUtc: savedAt });
+    if (persistence) storedVersion = nextVersion;
+    preference = current;
+    previousPreference = prior;
+    configVersion = nextVersion;
+    appliedAtUtc = savedAt;
+    configurationHealth = 'valid';
+    const previousRevision = revision;
+    update(latest);
+    if (revision === previousRevision) revision++;
+  }
   return {
     update,
     canLease,
+    windowsMonitoring: () => preference.config.monitorWindows ?? true,
     inspect() {
+      const { config, origin } = preference;
       return { schemaVersion: 1 as const, epoch, revision, configVersion, mode: config.mode,
         limits: { ...config.limits }, effective: { ...effective }, previous: previous && { ...previous }, reason,
         active: Object.fromEntries(kinds.map(kind => [kind, used(kind)])), reservedRamBytes: reservedRam(),
-        canRollback: !!previousConfig };
+        origin, configurationHealth, maxCpuWorkers: maxWorkers, canRollback: !!previousPreference,
+        windowsMonitoring: config.monitorWindows ?? true, appliedAtUtc,
+        previousMode: previousPreference?.config.mode ?? null };
     },
     /** AEP owns the cited evidence. A preview performs structural and budget checks only. */
     previewAdjustment(proposal: ResourceAdjustment) {
@@ -157,19 +220,14 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
         prediction, evidenceRefs: [...proposal.evidenceRefs] };
     },
     configure(expectedVersion: number, next: ResourcePolicyConfig) {
-      if (disposed || expectedVersion !== configVersion) throw Error('stale_resource_policy');
-      const validated = validate(next);
-      previousConfig = config;
-      config = validated;
-      configVersion++;
-      update(latest);
+      commit(expectedVersion, { config: validate(next), origin: 'user' }, preference);
+    },
+    restoreDefaults(expectedVersion: number) {
+      commit(expectedVersion, { config: defaults, origin: 'default' }, preference);
     },
     rollback(expectedVersion: number) {
-      if (disposed || expectedVersion !== configVersion || !previousConfig) throw Error('resource_policy_rollback_unavailable');
-      config = previousConfig;
-      previousConfig = undefined;
-      configVersion++;
-      update(latest);
+      if (disposed || expectedVersion !== configVersion || !previousPreference) throw Error('resource_policy_rollback_unavailable');
+      commit(expectedVersion, previousPreference, null);
     },
     tryLease(request: ResourceLeaseRequest): ResourceLease | undefined {
       const { kind, attemptId, missionId, taskId, timeoutMs, estimatedRamBytes = 0 } = request;
@@ -181,7 +239,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       const timer = setTimeout(() => checkpoint.abort('lease-expired'), timeoutMs).unref();
       const lease: ResourceLease = {
         receipt: Object.freeze({ schemaVersion: 1, epoch, leaseId: randomUUID(), policyRevision: revision, kind,
-          reservedRamBytes: estimatedRamBytes, expiresAt: new Date(wallNow() + timeoutMs).toISOString() }),
+          configVersion, reservedRamBytes: estimatedRamBytes, expiresAt: new Date(wallNow() + timeoutMs).toISOString() }),
         checkpointRequested: checkpoint.signal,
         release() {
           if (active.get(attemptId)?.lease !== lease) return;

@@ -10,6 +10,8 @@ const {
   safeStorage,
   clipboard,
   powerMonitor,
+  Menu,
+  MenuItem,
 } = require("electron");
 const { createMediaPlayback, scheme: mediaScheme } = require("./media-playback.cjs");
 protocol.registerSchemesAsPrivileged([
@@ -554,6 +556,15 @@ app.whenReady().then(async () => {
   const nativeReviewGate=async work=>{if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
   const reviewProvider=args=>nativeReviewGate(()=>showVelaReview(args));
   const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
+  if (!verify) {
+    const menu = Menu.getApplicationMenu() ?? new Menu();
+    menu.append(new MenuItem(require("./resource-policy-menu.cjs").resourcePolicyMenu({
+      call, show: options => reviewDialogs.showMessageBox(win, options),
+      ready: () => !closing && !backendFailed && !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
+      canWrite: () => storage.allowWrite(),
+    })));
+    Menu.setApplicationMenu(menu);
+  }
   const validateHostOperation=async(binding,{phase='before-dispatch'}={})=>{
       const frame=maintenanceReviewFrames.get(binding.operationId);
       const trusted=()=>!closing&&!backendFailed&&!!frame&&maintenanceReviewFrames.get(binding.operationId)===frame&&(phase==='after-dispatch'?trustedApplicationFrame:trustedActiveFrame)({sender:win.webContents,senderFrame:frame});
@@ -599,7 +610,7 @@ app.whenReady().then(async () => {
   win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
-      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative'].includes(command))throw Error('unauthorized_private_command');
+      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative'].includes(command))throw Error('unauthorized_private_command');
       if (
         event.sender !== win.webContents ||
         event.senderFrame !== win.webContents.mainFrame ||

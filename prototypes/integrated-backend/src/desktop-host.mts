@@ -56,6 +56,12 @@ lines.on("line", async (line) => {
       return;
     }
     id = request.id;
+    if (request.command === 'resourcePolicyNative') {
+      if (!nativeClient || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
+        throw new Error('native_resource_policy_required');
+      write({ id, result: await backend.call('resourcePolicyNative', request.input) });
+      return;
+    }
     if (['velaApiConfigure', 'velaApiUsageAuthorize', 'velaApiUsageStatus','velaVoiceNative','velaWeatherPermissionNative','velaWakeNative','velaWakeFrame','velaWakeCaptureState','velaFileProposalPrepareNative','velaSourcesPickNative','folderOpenNative',
       'hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative',
       'missionFileEditPrepareNative','missionFileEditRunNative','missionFileEditReviewNative','missionFileEditChoiceNative','missionFileEditApplyNative','missionFileEditCheckReviewNative','missionFileEditCheckRunNative','missionFileEditRead'].includes(request.command)) {

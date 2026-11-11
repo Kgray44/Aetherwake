@@ -4,7 +4,7 @@ import { isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import { aggregateGpuEngines, readCpuCounters } from '../../vela-core/src/system-utilization.mts';
 import type { MissionAdmission, MissionAdmissionReading } from './mission-contracts.mts';
-import { createResourcePolicy, type ResourcePolicyConfig } from './resource-policy.mts';
+import { createResourcePolicy, type ResourcePolicyConfig, type ResourcePolicyPersistence } from './resource-policy.mts';
 
 const memoryFloorBytes = 512 * 1024 * 1024;
 const cpuIntervalMs = 500;
@@ -28,7 +28,7 @@ type WindowsPressure = Partial<Record<keyof typeof windowsMetrics, number>>;
 type TimedReading = { reading: MissionAdmissionReading; time: number };
 type MetricValue = number | readonly number[];
 type MetricSample = { value: MetricValue; observedAt: string; time: number; windowMs: number | null };
-type Availability = 'observed' | 'derived' | 'unsupported' | 'stale' | 'error' | 'not_sampled';
+type Availability = 'observed' | 'derived' | 'unsupported' | 'disabled' | 'stale' | 'error' | 'not_sampled';
 type Pressure = { sample?: TimedReading; highSamples: number; pressured: boolean };
 type AdmissionOptions = {
   maxWorkers: number;
@@ -39,6 +39,7 @@ type AdmissionOptions = {
   cpuCounters?(): CpuCounters;
   readWindowsPressure?: ((signal: AbortSignal) => Promise<WindowsPressure>) | null;
   resourcePolicy?: ResourcePolicyConfig;
+  resourcePolicyPersistence?: ResourcePolicyPersistence;
 };
 
 const numeric = (value: unknown, max: number): value is number =>
@@ -123,7 +124,8 @@ function observePressure(previous: Pressure, sample: TimedReading | undefined, h
 export function createMissionAdmission(options: AdmissionOptions) {
   const now = options.now ?? (() => performance.now());
   const wallNow = options.wallNow ?? Date.now;
-  const policy = createResourcePolicy(options.maxWorkers, memoryFloorBytes, now, wallNow, options.resourcePolicy);
+  const policy = createResourcePolicy(options.maxWorkers, memoryFloorBytes, now, wallNow,
+    options.resourcePolicy, options.resourcePolicyPersistence);
   const availableMemory = options.availableMemory ?? freemem;
   const readCpu = options.cpuCounters ?? readCpuCounters;
   const readWindows = options.readWindowsPressure === null ? undefined :
@@ -206,7 +208,8 @@ export function createMissionAdmission(options: AdmissionOptions) {
   }
 
   function refreshWindows(time: number) {
-    if (!readWindows || probe || time - demandSince < windowsWarmupMs || time - lastProbe < windowsIntervalMs) return;
+    if (!policy.windowsMonitoring() || !readWindows || probe ||
+        time - demandSince < windowsWarmupMs || time - lastProbe < windowsIntervalMs) return;
     const controller = new AbortController();
     const startedAtUtc = new Date(wallNow()).toISOString();
     probe = controller;
@@ -219,6 +222,17 @@ export function createMissionAdmission(options: AdmissionOptions) {
     }).catch(() => {
       // Optional telemetry and a failed observer cannot stall scheduler admission.
     }).finally(() => { probe = undefined; });
+  }
+
+  function reconcileWindowsMonitoring() {
+    if (policy.windowsMonitoring()) return;
+    probe?.abort();
+    gpu = { highSamples: 0, pressured: false };
+    disk = { highSamples: 0, pressured: false };
+    for (const name of Object.keys(windowsMetrics)) {
+      samples.delete(name);
+      errors.delete(name);
+    }
   }
 
   return {
@@ -262,18 +276,28 @@ export function createMissionAdmission(options: AdmissionOptions) {
       policy.update(snapshot, memory ? memory.time + demandGapMs : -Infinity);
       return snapshot;
     },
-    inspectPolicy: policy.inspect,
-    configurePolicy: policy.configure,
-    rollbackPolicy: policy.rollback,
+    inspectPolicy() { return { ...policy.inspect(), windowsCountersSupported: !!readWindows }; },
+    configurePolicy(expectedVersion: number, config: ResourcePolicyConfig) {
+      policy.configure(expectedVersion, config);
+      reconcileWindowsMonitoring();
+    },
+    restorePolicyDefaults(expectedVersion: number) {
+      policy.restoreDefaults(expectedVersion);
+      reconcileWindowsMonitoring();
+    },
+    rollbackPolicy(expectedVersion: number) {
+      policy.rollback(expectedVersion);
+      reconcileWindowsMonitoring();
+    },
     previewAdjustment: policy.previewAdjustment,
     canLease: policy.canLease,
     tryLease: policy.tryLease,
     telemetry() {
       const time = now();
-      function metric(name: string, unit: string, source: string, maxAge: number, derived = false, supported = true) {
+      function metric(name: string, unit: string, source: string, maxAge: number, derived = false, supported = true, enabled = true) {
         const sample = samples.get(name);
         const ageMs = sample ? Math.max(0, time - sample.time) : null;
-        const availability: Availability = !supported ? 'unsupported' : errors.has(name) ? 'error' :
+        const availability: Availability = !supported ? 'unsupported' : !enabled ? 'disabled' : errors.has(name) ? 'error' :
           ageMs === null ? 'not_sampled' : ageMs > maxAge ? 'stale' : derived ? 'derived' : 'observed';
         return { availability, unit, source, ageMs, observedAt: sample?.observedAt ?? null,
           windowMs: sample?.windowMs ?? null,
@@ -281,7 +305,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
       }
       const windows = Object.fromEntries((Object.keys(windowsMetrics) as (keyof typeof windowsMetrics)[]).map(name => {
         const [unit, source] = windowsMetrics[name];
-        return [name, metric(name, unit, source, windowsFreshMs, true, !!readWindows)];
+        return [name, metric(name, unit, source, windowsFreshMs, true, !!readWindows, policy.windowsMonitoring())];
       })) as Record<keyof typeof windowsMetrics, ReturnType<typeof metric>>;
       return { schemaVersion: 1 as const, scope: 'local-host' as const, metrics: {
         ...windows,
