@@ -97,7 +97,7 @@ function validPerception(value: unknown): value is PerceptionProposal {
     return Array.isArray(entries) && entries.length <= 5 && entries.every(entry => bounded(entry, 240));
   });
 }
-function parseProposal(value: unknown): Proposal | undefined {
+export function parseSemanticHistoryProposal(value: unknown): Proposal | undefined {
   const fields = ['version', 'objective', 'clarification', 'needs'];
   const legacy = exact(value, fields) && value.version === 1;
   const current = exact(value, [...fields, 'perception']) && value.version === 2 && validPerception(value.perception);
@@ -112,7 +112,7 @@ function parseProposal(value: unknown): Proposal | undefined {
   }
   return structuredClone(value) as unknown as Proposal;
 }
-function parsePassages<T extends SemanticHistorySource>(value: unknown, evidence: Map<string, T>): Passage[] | undefined {
+function parsePassages(value: unknown, evidence: ReadonlyMap<string, { text: string }>): Passage[] | undefined {
   if (!Array.isArray(value) || value.length > maxCandidates) return;
   const passages: Passage[] = [];
   for (const item of value) {
@@ -124,7 +124,8 @@ function parsePassages<T extends SemanticHistorySource>(value: unknown, evidence
   return passages;
 }
 
-function parseAssessment<T extends SemanticHistorySource>(value: unknown, needs: readonly Need[], evidence: Map<string, T>): EvidenceReview | undefined {
+export function parseSemanticHistoryAssessment(value: unknown, needs: readonly Need[],
+  evidence: ReadonlyMap<string, { text: string }>): EvidenceReview | undefined {
   const legacy = exact(value, ['version', 'assessment']) && value.version === 1;
   const versioned = exact(value, ['version', 'assessment', 'clarification']) &&
     (value.version === 2 || value.version === 3) && bounded(value.clarification, 512, true);
@@ -168,7 +169,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     if (!bounded(request, 8192)) return empty('invalid');
     const raw = await disclose({ stage: 'interpret', request }, []);
     if (raw == null) return empty('unavailable');
-    const proposal = parseProposal(raw);
+    const proposal = parseSemanticHistoryProposal(raw);
     if (!proposal) return empty('invalid');
     if (!proposal.needs.length) return { ...empty('assessed'), proposal, ...(proposal.clarification ? { clarification: proposal.clarification } : {}) };
     const evidence = new Map<string, T>(), observed = new Set<string>();
@@ -230,7 +231,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         })) }, sources);
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale');
       if (reviewed == null) return empty('unavailable');
-      const assessment = parseAssessment(reviewed, proposal.needs, evidence);
+      const assessment = parseSemanticHistoryAssessment(reviewed, proposal.needs, evidence);
       if (!assessment) return empty('invalid');
       priorAssessment = assessment;
       const gaps = assessment.rows.filter(row => row.status !== 'supported');

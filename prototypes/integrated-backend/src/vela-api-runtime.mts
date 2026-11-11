@@ -71,8 +71,22 @@ export interface VelaApiToolContinuation {
   items:ApiResponseItem[];receipts:ApiToolOutput[];fetchedIds:string[];continuation:ApiContinuation;final:VelaApiRunResult;
   pending:{call:ApiFunctionCall;invocation:VelaToolInvocation;receipt:VelaToolReceipt}[];
 }
+export interface VelaStructuredQualification {
+  version: 1;
+  provider: typeof VELA_API_PROVIDER;
+  configurationVersion: number;
+  model: string;
+  contractDigest: string;
+  observedAt: number;
+  expiresAt: number;
+  elapsedMs: number;
+  evidence: 'observed' | 'simulated';
+}
+
 /** Metadata and receipts only. Canonical VelaService owns every conversation body. */
 export class VelaApiRuntime {
+  private readonly structuredQualifications = new Map<string, Readonly<VelaStructuredQualification>>();
+  private qualificationEpoch = 0;
   private readonly options: VelaApiRuntimeOptions;
   private readonly lifetime = new AbortController();
   private readonly running = new Map<string, VelaApiRun['lane']>();
@@ -111,6 +125,8 @@ export class VelaApiRuntime {
       this.options.db.prepare('INSERT INTO vela_api_usage VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET configuration_version=excluded.configuration_version,enabled=excluded.enabled,observed_at=excluded.observed_at')
         .run(expectedVersion, Number(enabled), new Date().toISOString());
     });
+    this.qualificationEpoch++;
+    this.structuredQualifications.clear();
     return this.usageStatus();
   }
   authorized(version = this.configurationVersion()): boolean {
@@ -380,6 +396,59 @@ export class VelaApiRuntime {
       if(semantic){const code=String((error as {code?:string})?.code??''),reason=code==='vela_workflow_budget_exhausted'?code:invoking?'vela_tool_owner_unknown':/^vela_tool_[a-z_]{1,64}$/.test(code)?code:'vela_tool_rejected',phase=reason==='vela_workflow_budget_exhausted'?'budget-exhausted':invoking?'unknown':'blocked';checkpoint(phase,reason);if(final)return {...final,workflow:{workflowId:semantic.workflowId,phase,reason}};}throw error;
     } finally { this.running.delete(input.requestId); }
   }
+  private structuredContract(schema: ApiJsonSchema, instruction: string) {
+    return digest(JSON.stringify([VELA_IDENTITY_VERSION, instruction, schema]));
+  }
+
+  async qualifyStructuredRoute(input: Parameters<VelaApiRuntime['structuredProposal']>[0] & { model: string; binding: NonNullable<Parameters<VelaApiRuntime['structuredProposal']>[0]['binding']> },
+    verify: (output: unknown) => boolean, signal: AbortSignal): Promise<Readonly<VelaStructuredQualification>> {
+    const { model, binding, schema, instruction } = input;
+    check(!input.weatherTool && !input.reasoningEffort, 'vela_structured_probe_requires_default_controls');
+    const epoch = this.qualificationEpoch;
+    const contractDigest = this.structuredContract(schema, instruction);
+    const start = performance.now();
+    const validate = () => {
+      input.validate();
+      signal.throwIfAborted();
+      check(this.qualificationEpoch === epoch, 'vela_api_usage_authorization_changed');
+    };
+    const output = await this.structuredProposal({ ...input, validate }, signal);
+    check(verify(output), 'vela_structured_probe_failed');
+    validate();
+    this.validate(binding.configurationVersion);
+    const observedAt = Date.now();
+    const receipt = Object.freeze({ version: 1 as const, provider: VELA_API_PROVIDER, configurationVersion: binding.configurationVersion,
+      model, contractDigest, observedAt, expiresAt: observedAt + 15 * 60_000,
+      elapsedMs: Math.round(performance.now() - start), evidence: this.options.test ? 'simulated' as const : 'observed' as const });
+    const key = JSON.stringify([binding.configurationVersion, model, contractDigest]);
+    this.structuredQualifications.delete(key);
+    if (this.structuredQualifications.size >= 32) this.structuredQualifications.delete(this.structuredQualifications.keys().next().value!);
+    this.structuredQualifications.set(key, receipt);
+    return receipt;
+  }
+
+  private currentStructuredQualifications(version: number, allowed: readonly string[], schema: ApiJsonSchema, instruction: string) {
+    if (!this.authorized(version)) return [];
+    const contract = this.structuredContract(schema, instruction);
+    const now = Date.now();
+    return allowed.flatMap(model => {
+      const record = this.structuredQualifications.get(JSON.stringify([version, model, contract]));
+      return record && record.expiresAt > now ? [record] : [];
+    });
+  }
+
+  qualifiedStructuredRoute(version: number, allowed: readonly string[], schema: ApiJsonSchema, instruction: string) {
+    const listed = new Set(this.knownModels());
+    return this.currentStructuredQualifications(version, allowed, schema, instruction).find(record => listed.has(record.model));
+  }
+
+  async resolveQualifiedStructuredRoute(version: number, allowed: readonly string[], schema: ApiJsonSchema, instruction: string,
+    signal: AbortSignal) {
+    if (!this.currentStructuredQualifications(version, allowed, schema, instruction).length) return;
+    await abortable(this.models(version), signal);
+    return this.qualifiedStructuredRoute(version, allowed, schema, instruction);
+  }
+
   async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;
     /** Native binding for a reviewed cognitive payload and its current source provenance. */
     binding?: { configurationVersion: number; contextDigest: string };
