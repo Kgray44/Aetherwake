@@ -763,3 +763,88 @@ test('reviewed CIE treats extracted document coverage as partial and keeps extra
     await f.close();
   }
 });
+
+test('reviewed CIE reconciles one prior exchange with a current note under the same provider', async () => {
+  const f = fixture(true, true);
+  try {
+    await f.ready();
+    const require = createRequire(import.meta.url);
+    const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    const { reviewPage } = require('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+    const providerId = 'openai-api-vela', model = 'gpt-6-luna';
+    const dispatch = (input: Parameters<typeof f.core.command<'velaRequestPreview'>>[1],
+      reviewProvider = async (_input: { review: VelaNativeReview }) => true) => velaCommand({
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      directMessageSend: true, routeNative: true, dialog: {}, call: f.core.command.bind(f.core), reviewProvider,
+      input: { name: 'request', input: { ...input, authorizeProvider: true } },
+    }) as Promise<VelaRequest>;
+    const seed = (intent: string, answer: string, resourceIds: string[] = []) => {
+      f.replies.push(body => response(answer, body.model));
+      return dispatch({ intent, resourceIds, providerId, model, includeRecentHistory: false });
+    };
+    const workspace = await f.core.command('desktop', { type: 'snapshot' });
+    const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Schedule correction', workspaceId: workspace.activeWorkspaceId });
+    const note = created.resources.find(item => item.title === 'Schedule correction')!;
+    const earlierPath = join(f.directory, 'Earlier schedule.txt');
+    writeFileSync(earlierPath, 'The earlier handoff target was 18:00. ORIGINAL-FILE-BODY-18');
+    const original = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file', selection: { kind: 'file', path: earlierPath } });
+    const prior = await seed('For this test, the earlier handoff target was 18:00. Confirm the earlier schedule.',
+      'The earlier handoff target was 18:00.', [original.resource.id]);
+    assert.equal(prior.state, 'responded');
+    await seed('Summarize an unrelated test note.', 'UNSELECTED-EXCHANGE-39');
+    const correction = 'The handoff moved to 20:00. This supersedes the 18:00 schedule.';
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: correction });
+    const intent = 'What changed between the earlier handoff target and the current schedule correction?';
+    const input = { intent, resourceIds: [note.id], providerId, model, handoffSourceRequestId: prior.id };
+    await assert.rejects(f.core.command('velaRequestPreview', { ...input, adaptive: true }), /vela_handoff_same_provider/);
+    const reviewedInput = { ...input, semanticContext: true as const };
+    const send = (allow: boolean) => dispatch(reviewedInput, async ({ review }) => {
+      assert.equal(review.handoff?.purpose, 'reviewed-evidence');
+      assert.equal(review.history?.messages.length, 2);
+      assert.ok(review.history?.messages.every(item => item.requestId === prior.id));
+      assert.match(reviewPage(review, intent), /Selected prior exchange/);
+      assert.doesNotMatch(JSON.stringify(review), /UNSELECTED-EXCHANGE-39|ORIGINAL-FILE-BODY-18/);
+      return allow;
+    });
+    await assert.rejects(send(false), /authorization_cancelled/);
+    assert.equal(f.requests.length, 2);
+    const interpretation = (keys: string[]) => ({ version: 2, objective: intent, clarification: '',
+      perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: keys.map(key => ({ key, question: key === 'old' ? 'What was the earlier time?' : 'What is the current time?', query: 'handoff schedule' })) });
+    const assessment = (entries: { key: string; source: string; quote: string }[]) => ({ version: 3, clarification: '', assessment: entries.map(
+      ({ key, source, quote }) => ({ key, status: 'supported', passages: [{ source, quote }], query: '' })) });
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    f.replies.push(reply(interpretation(['day'])), reply(assessment([{ key: 'day', source: 'e1', quote: 'The pump inspection is on Tuesday.' }])),
+      body => {
+        assert.doesNotMatch(JSON.stringify(body.input), /18:00|20:00|UNSELECTED-EXCHANGE-39/);
+        return reply(interpretation(['old', 'current']))(body);
+      }, body => {
+        const excerpts = JSON.parse(body.input[0].content).excerpts;
+        assert.deepEqual(excerpts.map((entry: { sourceKind: string }) => entry.sourceKind), ['note', 'conversation-exchange']);
+        assert.match(excerpts[1].text, /User \(observed\)[\s\S]*Assistant \(reported\)[\s\S]*18:00/);
+        assert.doesNotMatch(excerpts[1].text, /UNSELECTED-EXCHANGE-39|ORIGINAL-FILE-BODY-18/);
+        return reply(assessment([{ key: 'old', source: 'e2', quote: 'The earlier handoff target was 18:00.' },
+          { key: 'current', source: 'e1', quote: 'The handoff moved to 20:00.' }]))(body);
+      }, body => {
+        const evidence = JSON.parse(body.input[0].content).evidence;
+        assert.deepEqual(evidence.coverage.flatMap((entry: { passages: { sourceId: string }[] }) =>
+          entry.passages.map(passage => passage.sourceId)), [prior.id, note.id]);
+        assert.equal(body.tools, undefined);
+        return response('The handoff moved from 18:00 to 20:00.', body.model);
+      });
+    const result = await send(true);
+    assert.equal(result.state, 'responded', result.errorCode);
+    assert.equal(result.handoff?.purpose, 'reviewed-evidence');
+    assert.equal(f.requests.length, 7);
+    const stale = await f.core.command('velaRequestPreview', { ...reviewedInput, adaptive: true });
+    const staleReview = await f.core.command('velaNativeReview', { previewId: stale.id, signature: stale.signature });
+    await seed('A separate synthetic discussion begins here.', 'A new conversation revision exists.');
+    await assert.rejects(f.core.command('authorizeVelaRequest', { previewId: stale.id, signature: stale.signature, reviewDigest: staleReview.reviewDigest }),
+      /stale-history-revision/);
+    writeFileSync(earlierPath, 'Replaced original schedule.');
+    await assert.rejects(f.core.command('velaRequestPreview', { ...reviewedInput, adaptive: true }), /vela_handoff_source_unavailable/);
+    assert.equal(f.requests.length, 8);
+  } finally {
+    await f.close();
+  }
+});

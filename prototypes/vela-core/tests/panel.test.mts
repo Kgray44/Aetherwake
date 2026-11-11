@@ -358,6 +358,34 @@ test('workspace evidence is an explicit dedicated API composer choice', async ()
   } finally { panel.dispose(); }
 });
 
+test('selecting a prior exchange uses reviewed evidence even when Vela API answered it', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const source = request({ id: '11111111-1111-4111-8111-111111111111', state: 'responded', providerId: 'openai-api-vela',
+    response: { kind: 'answer', messageId: 'synthetic:earlier' }, provenance: { schemaVersion: 1, dependencies: [], digest: 'a'.repeat(64) } });
+  canonical.requests = [source];
+  canonical.conversation!.messages = [{ id: source.response!.messageId, requestId: source.id, role: 'assistant', content: 'Earlier schedule.',
+    source: 'provider', classification: 'reported', responseKind: 'answer', providerId: source.providerId!,
+    providerContribution: { providerId: source.providerId!, classification: 'reported', executionId: 'synthetic:execution' } }];
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => { turns.push(input); throw Error('authorization_cancelled'); },
+  }));
+  try {
+    await settles(() => named(root, 'Use this exchange as evidence')?.hidden === false);
+    named(root, 'Use this exchange as evidence').fire('click');
+    assert.equal(turns.length, 0);
+    const composer = root.find(node => node.tagName === 'textarea')!;
+    composer.value = 'What did we agree earlier?';
+    composer.fire('input');
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => turns.length === 1);
+    assert.equal(turns[0].semanticContext, true);
+    assert.equal(turns[0].handoffSourceRequestId, source.id);
+    assert.equal(turns[0].providerId, 'openai-api-vela');
+  } finally { panel.dispose(); }
+});
+
 test('a timed-out API reply stays unknown with concise visible text and no fabricated completion', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.requests = [request({state:'unknown',errorCode:'provider_timeout',providerId:'openai-api-vela',

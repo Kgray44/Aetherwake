@@ -19,8 +19,10 @@ function handoffMatches(preview, review) {
   const handoff = review.handoff;
   if (handoff === undefined) return true;
   const history = review.history;
+  const evidence = handoff?.purpose === "reviewed-evidence";
   if (!handoff || typeof handoff.taskId !== 'string' || !/^[a-f0-9-]{36}$/u.test(handoff.taskId) ||
-      handoff.destinationProviderId !== review.providerId || handoff.sourceProviderId === review.providerId ||
+      (evidence ? review.semanticContext !== true : handoff.purpose !== undefined || review.semanticContext === true) ||
+      handoff.destinationProviderId !== review.providerId || (!evidence && handoff.sourceProviderId === review.providerId) ||
       !hash(handoff.contextDigest) || handoff.contextDigest !== preview.history?.digest ||
       history?.schemaVersion !== 1 || history.coverage !== "bounded-authorized-whole-messages" ||
       !Array.isArray(history.messages) || history.messages.length !== 2 || Buffer.byteLength(JSON.stringify(history)) > 4096)
@@ -76,8 +78,8 @@ function validateReview(preview, review) {
     !reviewedStateMatches(preview.missionCheckpoint, review.missionCheckpoint) ||
     !reviewedStateMatches(preview.workspaceState, review.workspaceState) ||
     ((preview.missionCheckpoint || preview.workspaceState) && !review.semanticContext) ||
-    (review.semanticContext && (review.providerId !== "openai-api-vela" || review.history || review.handoff ||
-      !Array.isArray(review.context?.included) || (!review.context.included.length && !review.missionCheckpoint && !review.workspaceState) ||
+    (review.semanticContext && (review.providerId !== "openai-api-vela" || (!!review.history !== (review.handoff?.purpose === "reviewed-evidence")) ||
+      !Array.isArray(review.context?.included) || (!review.context.included.length && !review.missionCheckpoint && !review.workspaceState && !review.handoff) ||
       review.context.included.some(source => !["note", "file"].includes(source?.resourceKind)))) ||
     (preview.workingDirectory !== undefined && review.workingDirectory !== preview.workingDirectory) ||
     JSON.stringify(review.route) !== JSON.stringify(preview.route) ||
@@ -193,7 +195,8 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
   const route = review.route;
   const origins = review.routingSettings?.origins;
   const routeSummary = route ? [
-    review.handoff && "Handoff from " + providerLabel(review.handoff.sourceProviderId) + " to " + provider,
+    review.handoff?.purpose === "reviewed-evidence" ? "Reviewed exchange from " + providerLabel(review.handoff.sourceProviderId) :
+      review.handoff && "Handoff from " + providerLabel(review.handoff.sourceProviderId) + " to " + provider,
     review.routingAgent && "Agent profile " + review.routingAgent.title + " · version " + review.routingAgent.profileVersion,
     route.kind === "file-edit" ? "Read-only Codex proposal. File changes require a separate review." +
       (route.followUpCheck ? " The requested project check also requires a separate review." : "")
@@ -243,7 +246,7 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
   const semanticDetails = review.missionPlanning
     ? "<p>Vela will investigate these selected notes and send checked passages to the mission planner. This uses up to six API calls, including synthetic compatibility checks. You’ll review the proposed tasks before they can start.</p>"
     : review.semanticContext
-      ? "<p>Vela will interpret your question and check the selected evidence using this model. The answer uses checked passages. This read-only request excludes conversation history and tools. It can use up to six API calls, including synthetic compatibility checks.</p>" : "";
+      ? `<p>Vela will interpret your question and check the selected evidence using this model. The answer uses checked passages. ${review.handoff ? "Only the selected exchange is included from the conversation." : "Conversation history is excluded."} Tools are disabled. This can use up to six API calls, including synthetic compatibility checks.</p>` : "";
   const checkpointDetails = review.missionCheckpoint
     ? `<details open><summary>Mission checkpoint</summary><section><pre>${escape(review.missionCheckpoint.text)}</pre></section></details>` : "";
   const workspaceDetails = review.workspaceState

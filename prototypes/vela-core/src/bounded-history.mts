@@ -366,6 +366,7 @@ function selectQueriedHistory(input: { origin: HistoryOrigin; snapshot: HistoryS
 /** An explicit handoff selects one canonical exchange. No fallback or neighbor bodies. */
 export function selectVelaHandoff(input: {
   requestId: string; destinationProviderId: string; origin: HistoryOrigin;
+  purpose?: VelaHandoff['purpose'];
   tail: HistoryTail; reader: HistoryProofReader; fits(history: ProviderHistory): boolean;
 }): { history: ProviderHistory; fence: HistoryFence; handoff: VelaHandoff } {
   const { requestId, destinationProviderId, origin, tail, reader } = input;
@@ -374,7 +375,7 @@ export function selectVelaHandoff(input: {
   const verifier = new Verifier(reader, origin, tail.conversationId);
   const request = verifier.request(requestId);
   requireValue(identifier(request.providerId),'non-conversational');
-  requireValue(request.providerId !== destinationProviderId, 'handoff-same-provider');
+  requireValue(request.providerId !== destinationProviderId || input.purpose === 'reviewed-evidence', 'handoff-same-provider');
   requireValue(request.response?.kind === 'answer', 'non-conversational');
   verifier.dependencies(request.provenance!.dependencies);
   const user = verifier.accepted(tail.conversationId, request.inputMessageId!, request);
@@ -388,7 +389,8 @@ export function selectVelaHandoff(input: {
     baseTailOrdinal: tail.ordinal, origin: structuredClone(origin), messages,
     dependencies: unionHistoryDependencies(request.provenance!.dependencies, messages), historyDigest: contextDigest };
   return { history, fence: { ...body, digest: historyDigest(fenceBody(body)) },
-    handoff: { taskId: request.taskId ?? requestId, sourceRequestId: requestId, sourceMessageId: answer.message.id, sourceProviderId: request.providerId!,
+    handoff: { ...(input.purpose ? { purpose: input.purpose } : {}), taskId: request.taskId ?? requestId,
+      sourceRequestId: requestId, sourceMessageId: answer.message.id, sourceProviderId: request.providerId!,
       destinationProviderId, contextDigest } };
 }
 

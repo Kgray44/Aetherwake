@@ -426,7 +426,7 @@ export class VelaService {
   /** Core-only prospective egress. Opening/selection never appends, creates a conversation or invokes a provider. */
   previewProviderContext(resourceIds: string[], options: { includeHistory: boolean; activeResourceId?: string; historyQuery?: string; historyQueryMode?: 'semantic-query';
     agent?: { ref: ResourceRef; instructions: string };
-    handoff?: { requestId: string; destinationProviderId: string }; fits(context: ContextManifest): boolean
+    handoff?: { requestId: string; destinationProviderId: string; purpose?: VelaHandoff['purpose'] }; fits(context: ContextManifest): boolean
   }): { context: ContextManifest; origin: HistoryOrigin; historyFence?: HistoryFence; historyOmissions: readonly HistoryOmission[]; handoff?: VelaHandoff } {
     return this.read(() => {
       const scope = this.scope(), origin = this.historyOrigin(scope), context = this.context(resourceIds, scope, options.activeResourceId);

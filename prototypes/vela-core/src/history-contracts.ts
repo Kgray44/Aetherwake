@@ -21,6 +21,8 @@ export interface ProviderHistory { schemaVersion: 1; messages: readonly Provider
     resolution: 'matched' | 'ambiguous' | 'no-match'; scannedMessages: number; partial: boolean } }
 /** References to the canonical exchange. The receipt contains no message bodies. */
 export interface VelaHandoff {
+  /** An explicitly selected exchange used as evidence in a read-only investigation. */
+  purpose?: 'reviewed-evidence';
   /** Stable across reviewed stages of the same Vela task. */
   taskId?: string;
   sourceRequestId: string;
