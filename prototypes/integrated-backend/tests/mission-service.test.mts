@@ -630,6 +630,11 @@ test('host admission holds queued work, preserves running workers and records on
     assert.equal(held.waits.first, 'resource-pressure');
     assert.deepEqual(held.admission, memory);
     assert.ok(held.tasks.every(task => !task.attempts.length));
+    const heldPolicy = projectMissionExecution(held).resourcePolicy;
+    assert.equal(heldPolicy.currentAdmission?.workerLimit, 0);
+    assert.deepEqual(heldPolicy.currentAdmission?.reasons, ['physical-memory']);
+    assert.equal(heldPolicy.currentAdmission?.observedAt.availableMemoryBytes, observedAt);
+    assert.equal(heldPolicy.admittedAttemptsWithSample, 0);
     assert.equal(demand.length, samples, 'projection must not trigger admission sampling');
 
     policy = normal;
@@ -663,6 +668,11 @@ test('host admission holds queued work, preserves running workers and records on
     assert.equal(read().outcome, 'verified');
     const profile = projectMissionExecution(read());
     const third = profile.attempts.find(attempt => attempt.taskId === 'third')!;
+    assert.deepEqual(third.resourceAdmission?.reasons, ['cpu-load']);
+    assert.equal(third.resourceAdmission?.observedAt.cpuPercent, observedAt);
+    assert.equal(third.resourceAdmission?.observedAt.gpuEnginePercent, null);
+    assert.deepEqual(profile.resourcePolicy, { currentAdmission: null, admittedAttemptsWithSample: 3,
+      admittedAttemptsWithoutSample: 0, admittedAttemptsWithReasons: 1, attemptsByReason: { 'cpu-load': 1 } });
     assert.equal(third.readyQueueMs, phases.contextAssembly[0] - phases.readyQueue.firstObservedMs);
     assert.equal(read().admission, undefined);
     assert.deepEqual(read().tasks[2].attempts[0].admission, cpu);
