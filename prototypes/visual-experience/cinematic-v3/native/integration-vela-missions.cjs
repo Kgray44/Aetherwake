@@ -680,6 +680,46 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     }
     await click("#vela");
     const composer = SURFACE + ' textarea[aria-label="Message Vela"]';
+    if (argv.includes('--missions-aep-presentation-only')) {
+      // The panel preserves active edits instead of refreshing their controls from events.
+      key("Tab");
+      assert.equal(await js('document.activeElement?.matches("input,textarea,select")'), false);
+      const preview = await rpc("missions", { name: "preview", input: { objective: OBJECTIVE } });
+      assert.equal(preview.externalReview, undefined);
+      const mission = await rpc("missions", { name: "start", input: {
+        objective: OBJECTIVE, fingerprint: preview.fingerprint, requestId: randomUUID(),
+      } });
+      receipt.actions.push({ method: "application-capability-fixture", type: "startLocalMission" });
+      const report = await wait("Canonical mission report is available", async () => {
+        const state = await rpc("vela", { name: "state", input: {} });
+        return state.conversation?.messages.find(message => message.missionReport?.missionId === mission.id);
+      });
+      const missionId = mission.id;
+      const reportLink = SURFACE + ' .vela-manifestation [data-mission-report-link=' + quote(missionId) + ']';
+      await wait("The report link is rendered in the current Vela reply", () =>
+        js(`document.querySelector(${quote(reportLink)})?.getClientRects().length > 0`));
+      const presentation = await wait("Visible mission report has a scoped execution-profile receipt", async () => {
+        const profile = await rpc("missions", { name: "execution-profile", input: { id: missionId } });
+        return profile.userDelivery?.messageId === report.id && profile;
+      });
+      assert.equal(presentation.userDelivery.source, "renderer-visible-frame");
+      assert.equal(presentation.outcome, "verified");
+      assert.ok(Number.isFinite(presentation.userDelivery.stagingToReceiptMs) && presentation.userDelivery.stagingToReceiptMs >= 0);
+      assert.ok(Number.isFinite(presentation.intakeToReportStagedMs) && presentation.intakeToReportStagedMs >= 0);
+      assert.equal(presentation.intakeToUserDeliveryMs,
+        presentation.intakeToReportStagedMs + presentation.userDelivery.stagingToReceiptMs);
+      receipt.executionPresentation = { missionId, messageId: report.id,
+        stagingToReceiptMs: presentation.userDelivery.stagingToReceiptMs,
+        intakeToReceiptMs: presentation.intakeToUserDeliveryMs,
+        reportEventId: presentation.reportPublication.eventId };
+      await capture("01-native-mission-report");
+      receipt.providerActivity = { before: providerBefore, after: await rpc("providerActivity", {}) };
+      assert.equal(receipt.providerActivity.after.providerRequests, 0);
+      assert.equal(receipt.providerActivity.after.codexConnections, 0);
+      assert.deepEqual(receipt.errors, [], "mission_presentation_renderer_errors");
+      receipt.passed = true;
+      return;
+    }
     const unmatchedObjective = "Plan a mission to read physical memory after recording processor load";
     await fill(composer, unmatchedObjective);
     await click(SURFACE + ' button[aria-label="Send to Vela"]');
