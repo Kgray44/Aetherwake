@@ -59,12 +59,14 @@ interface Passage { source: string; quote: string }
 interface Assessment { key: string; status: Status; sources: string[]; query: string; passages?: Passage[] }
 interface EvidenceReview { rows: Assessment[]; clarification: string }
 export type SemanticHistoryCall =
-  | { stage: 'interpret'; request: string; reviewedSourceTitles?: readonly string[] }
+  | { stage: 'interpret'; request: string; reviewedSourceTitles?: readonly string[]; reviewedMissionGap?: string }
   | { stage: 'assess'; request: string; proposedClarification?: string; needs: readonly Need[];
     excerpts: readonly { handle: string; text: string; title?: string; partial?: true; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number };
 
 interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan }
 interface SemanticHistoryOwner<T extends SemanticHistorySource> {
+  /** Longer reviewed investigations can retain the same call and evidence limits. */
+  timeBudgetMs?: number;
   // The owner authorizes the current scope on every search and resolves canonical revisions.
   search(query: string): SemanticHistoryCandidates<T>;
   selected?(): SemanticHistoryCandidates<T>;
@@ -159,7 +161,9 @@ export function parseSemanticHistoryAssessment(value: unknown, needs: readonly N
 /** Model proposals guide search. The caller retains authoritative context selection and egress. */
 export async function investigateSemanticHistory<T extends SemanticHistorySource>(request: string,
   owner: SemanticHistoryOwner<T>, cancel?: AbortSignal): Promise<Result<T>> {
-  const timeout = AbortSignal.timeout(30_000);
+  const budget = owner.timeBudgetMs;
+  const timeout = AbortSignal.timeout(typeof budget === 'number' && Number.isSafeInteger(budget) &&
+    budget >= 30_000 && budget <= 75_000 ? budget : 30_000);
   const signal = cancel ? AbortSignal.any([cancel, timeout]) : timeout;
   let rounds = 0;
   let searchCoverage: SemanticHistoryScan | null = null;

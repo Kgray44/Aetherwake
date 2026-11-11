@@ -322,7 +322,8 @@ export function installApplication(hooks: Hooks) {
     },
     async (intent, missionCheckpoint) => {
       const result = await velaClient.request({ intent, missionCheckpoint, resourceIds: [], authorizeProvider: true,
-        semanticContext: true, providerId: "openai-api-vela" });
+        semanticContext: true, providerId: "openai-api-vela",
+        ...(missionCheckpoint.gapIndex === undefined ? {} : { projectEvidence: true }) });
       if (result?.state !== "responded") throw Error(result?.errorCode ?? "vela_mission_checkpoint_unavailable");
     },
   );

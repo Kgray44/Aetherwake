@@ -5,7 +5,12 @@ import type { VelaCalibrationComparison } from './routing-calibration.ts';
 
 export type VelaRoutingIntent = 'quick' | 'deep' | 'app-planning' | 'local-read' | 'local-write' | 'project-check';
 export type VelaMode = 'auto' | 'fast' | 'deep' | 'codex' | 'custom';
-export interface VelaMissionCheckpointRef { id: string; revision: number; triggerSeq: number }
+export interface VelaMissionCheckpointRef { id: string; revision: number; triggerSeq: number; gapIndex?: number }
+export interface VelaMissionGapEvidence {
+  workspaceId: string;
+  checkpoint: { selection: VelaMissionCheckpointRef; digest: string };
+  project: { projectId: string; sourceIds: string[]; partial: boolean; digest: string };
+}
 export interface VelaTurnRouting {
   mode?: VelaMode;
   providerId?: string;
