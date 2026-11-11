@@ -52,3 +52,25 @@ test('opt-out aborts a pending supplemental probe and drops late samples', async
     assert.equal(admission.telemetry().metrics.availableMemoryBytes.availability, 'observed');
   } finally { admission.dispose(); }
 });
+
+test('dedicated GPU headroom is an expiring estimate and grants no GPU admission', async () => {
+  let time = 0;
+  const gib = 1024 ** 3;
+  const admission = createMissionAdmission({ maxWorkers: 2, now: () => time,
+    availableMemory: () => gib, readWindowsPressure: async () => ({
+      gpuDedicatedCapacityBytes: 8 * gib, gpuDedicatedInUseBytes: 6 * gib, vramAvailableBytes: 2 * gib,
+    }) });
+  try {
+    admission.read(true);
+    time = 2001;
+    admission.read(true);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const { vramAvailableBytes: estimate } = admission.telemetry().metrics;
+    assert.equal(estimate.availability, 'estimated');
+    assert.equal(estimate.value, 2 * gib);
+    assert.equal(admission.canLease('gpu'), false);
+    time += 30_001;
+    assert.equal(admission.telemetry().metrics.vramAvailableBytes.availability, 'stale');
+    assert.equal(admission.telemetry().metrics.vramAvailableBytes.value, null);
+  } finally { admission.dispose(); }
+});

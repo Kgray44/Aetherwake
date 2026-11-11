@@ -23,11 +23,13 @@ function describe(view) {
   const profile = profiles.find(([mode]) => mode === view.mode)?.[1] ?? "Unknown";
   const source = originLabels[view.origin] ?? "Unknown source";
   const effective = view.effective;
+  const estimate = view.dedicatedVramEstimate;
   const detail = [
     `${source} profile: ${profile}`,
     reasons[view.reason] ?? "Waiting for policy evidence",
     `CPU worker limit: ${effective.cpu} effective, ${view.limits.cpu} configured`,
     `Other admission limits: build ${effective.build}, host I/O ${effective.host_io}, GPU ${effective.gpu}, remote requests ${effective.remote}`,
+    `Estimated dedicated VRAM headroom: ${estimate ? `${(estimate.bytes / 2 ** 30).toFixed(2)} GiB (${Math.ceil(estimate.ageMs / 1000)} s old)` : "Unavailable"}`,
     `Supplemental Windows counters: ${!view.windowsCountersSupported ? "Unavailable" : view.windowsMonitoring ? "Enabled" : "Disabled"}`,
   ];
   if (view.configurationHealth === "fallback") detail.push("Saved preferences were invalid. Safe settings are active.");

@@ -6,6 +6,7 @@ import { aggregateGpuEngines, readCpuCounters } from '../../vela-core/src/system
 import type { MissionAdmission, MissionAdmissionReading } from './mission-contracts.mts';
 import { createResourcePolicy, type ResourcePolicyConfig, type ResourcePolicyPersistence } from './resource-policy.mts';
 import type { HostPower, ResourceSignal } from './resource-signals.mts';
+import { createWindowsGpuCapacityCache, estimateDedicatedHeadroom } from './windows-gpu-memory.mts';
 
 const memoryFloorBytes = 512 * 1024 * 1024;
 const cpuIntervalMs = 500;
@@ -21,6 +22,9 @@ type CpuCounters = Omit<ReturnType<typeof readCpuCounters>, 'logicalProcessors'>
   Partial<Pick<ReturnType<typeof readCpuCounters>, 'logicalProcessors'>>;
 const windowsMetrics = {
   gpuEnginePercent: ['percent', 'Windows GPU Engine counters (busiest engine)'],
+  gpuDedicatedCapacityBytes: ['bytes', 'DXGI adapter dedicated capacity (selected adapter)'],
+  gpuDedicatedInUseBytes: ['bytes', 'Windows WDDM GPU Adapter Memory dedicated usage (selected adapter)'],
+  vramAvailableBytes: ['bytes', 'DXGI dedicated capacity minus WDDM dedicated usage (selected adapter estimate)'],
   diskQueueLength: ['requests', 'Windows PhysicalDisk counters (busiest device)'],
   diskBytesPerSecond: ['bytes/s', 'Windows PhysicalDisk counters (_Total)'],
   networkBytesPerSecond: ['bytes/s', 'Windows Network Interface counters (busiest interface)'],
@@ -31,7 +35,7 @@ type WindowsPressure = Partial<Record<keyof typeof windowsMetrics, number>>;
 type TimedReading = { reading: MissionAdmissionReading; time: number };
 type MetricValue = number | readonly number[];
 type MetricSample = { value: MetricValue; observedAt: string; time: number; windowMs: number | null };
-type Availability = 'observed' | 'derived' | 'unsupported' | 'disabled' | 'stale' | 'error' | 'not_sampled';
+type Availability = 'observed' | 'derived' | 'estimated' | 'unsupported' | 'disabled' | 'stale' | 'error' | 'not_sampled';
 type Pressure = { sample?: TimedReading; highSamples: number; pressured: boolean };
 type AdmissionOptions = {
   maxWorkers: number;
@@ -82,12 +86,19 @@ try {
   $pages = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfOS_Memory | Select-Object -First 1 -ExpandProperty PagesPersec
 } catch {}
 ConvertTo-Json -InputObject @{networkBytesPerSecond=$network; physicalCores=$cores; pagesPerSecond=$pages} -Compress
+$gpuMemory = $null
+try {
+  $gpuMemory = @(Get-CimInstance -ClassName Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory |
+    Select-Object -First 65 -Property Name,DedicatedUsage)
+} catch {}
+ConvertTo-Json -InputObject @{gpuMemory=$gpuMemory} -Compress
 `;
 
-async function sampleWindowsPressure(signal: AbortSignal): Promise<WindowsPressure> {
+async function sampleWindowsPressure(signal: AbortSignal, topology: ReturnType<typeof createWindowsGpuCapacityCache>): Promise<WindowsPressure> {
   const windows = process.env.SystemRoot;
   if (!windows || !isAbsolute(windows)) return {};
   const powershell = join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const capacity = topology.get(powershell, signal);
   const { stdout } = await exec(powershell, ['-NoProfile', '-NonInteractive', '-Command', countersScript],
     { windowsHide: true, timeout: 15_000, maxBuffer: 1024 * 1024, encoding: 'utf8', signal })
     .catch((error: { killed?: boolean; stdout?: string }) => {
@@ -95,16 +106,16 @@ async function sampleWindowsPressure(signal: AbortSignal): Promise<WindowsPressu
       throw error;
     });
   // Keep complete primary observations even if optional counters time out.
-  const parts = stdout.split(/\r?\n/u).slice(0, 2).map(line => {
-    try { return JSON.parse(line) as { gpu?: unknown; disk?: unknown } & WindowsPressure; }
+  const parts = stdout.split(/\r?\n/u).slice(0, 3).map(line => {
+    try { return JSON.parse(line) as { gpu?: unknown; disk?: unknown; gpuMemory?: unknown } & WindowsPressure; }
     catch { return {}; }
   });
-  const { gpu, disk, ...counters } = { ...parts[0], ...parts[1] };
+  const { gpu, disk, gpuMemory, ...counters } = { ...parts[0], ...parts[1], ...parts[2] };
   let gpuEnginePercent: number | undefined;
   try { gpuEnginePercent = aggregateGpuEngines(gpu).percent; } catch { /* The disk reading can still be valid. */ }
   const diskQueueLength = Array.isArray(disk) && disk.length > 0 && disk.length <= 128 &&
     disk.every(value => numeric(value, Number.MAX_SAFE_INTEGER)) ? Math.max(...disk) : undefined;
-  return { gpuEnginePercent, diskQueueLength, ...counters };
+  return { gpuEnginePercent, diskQueueLength, ...counters, ...estimateDedicatedHeadroom(await capacity, gpuMemory) };
 }
 
 function cpuPercentBetween(before: { total: number; idle: number }, after: { total: number; idle: number }) {
@@ -131,8 +142,8 @@ export function createMissionAdmission(options: AdmissionOptions) {
     options.resourcePolicy, options.resourcePolicyPersistence);
   const availableMemory = options.availableMemory ?? freemem;
   const readCpu = options.cpuCounters ?? readCpuCounters;
-  const readWindows = options.readWindowsPressure === null ? undefined :
-    options.readWindowsPressure ?? (platform() === 'win32' ? sampleWindowsPressure : undefined);
+  const topology = platform() === 'win32' && options.readWindowsPressure === undefined ? createWindowsGpuCapacityCache() : undefined;
+  const readWindows = options.readWindowsPressure ?? (topology ? (signal: AbortSignal) => sampleWindowsPressure(signal, topology) : undefined);
   let memory: TimedReading | undefined;
   let cpu: Pressure = { highSamples: 0, pressured: false };
   let gpu: Pressure = { highSamples: 0, pressured: false };
@@ -234,6 +245,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
   function reconcileWindowsMonitoring() {
     if (policy.windowsMonitoring()) return;
     probe?.abort();
+    topology?.reset();
     gpu = { highSamples: 0, pressured: false };
     disk = { highSamples: 0, pressured: false };
     for (const name of Object.keys(windowsMetrics)) {
@@ -321,10 +333,12 @@ export function createMissionAdmission(options: AdmissionOptions) {
         const sample = samples.get(name);
         const ageMs = sample ? Math.max(0, time - sample.time) : null;
         const availability: Availability = !supported ? 'unsupported' : !enabled ? 'disabled' : errors.has(name) ? 'error' :
-          ageMs === null ? 'not_sampled' : ageMs > maxAge ? 'stale' : derived ? 'derived' : 'observed';
+          ageMs === null ? 'not_sampled' : ageMs > maxAge ? 'stale' : name === 'vramAvailableBytes' ? 'estimated' :
+            derived ? 'derived' : 'observed';
         return { availability, unit, source, ageMs, observedAt: sample?.observedAt ?? null,
           windowMs: sample?.windowMs ?? null,
-          value: availability === 'observed' || availability === 'derived' ? structuredClone(sample!.value) : null };
+          value: availability === 'observed' || availability === 'derived' || availability === 'estimated' ?
+            structuredClone(sample!.value) : null };
       }
       const windows = Object.fromEntries((Object.keys(windowsMetrics) as (keyof typeof windowsMetrics)[]).map(name => {
         const [unit, source] = windowsMetrics[name];
@@ -338,7 +352,6 @@ export function createMissionAdmission(options: AdmissionOptions) {
         hostProcessCpuPercent: metric('hostProcessCpuPercent', 'percent of one logical processor', 'node:process.cpuUsage', demandGapMs, true),
         availableMemoryBytes: metric('availableMemoryBytes', 'bytes', 'node:os.freemem', demandGapMs),
         totalMemoryBytes: metric('totalMemoryBytes', 'bytes', 'node:os.totalmem', demandGapMs),
-        vramAvailableBytes: metric('vramAvailableBytes', 'bytes', 'No qualified adapter budget sensor', 0, false, false),
         batteryPower: metric('batteryPower', '0=not on battery, 1=battery', 'Electron powerMonitor.isOnBatteryPower', powerFreshMs),
         idleSeconds: metric('idleSeconds', 's', 'Electron powerMonitor.getSystemIdleTime', powerFreshMs),
         suspended: metric('suspended', '0=awake, 1=suspended', 'Electron powerMonitor suspend/resume', Infinity),
@@ -362,6 +375,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
         const next = signal.hostPower;
         if (next.suspended !== (power?.value.suspended ?? false)) {
           probe?.abort();
+          topology?.reset();
           memory = undefined;
           cpuBaseline = processBaseline = undefined;
           cpu = gpu = disk = { highSamples: 0, pressured: false };

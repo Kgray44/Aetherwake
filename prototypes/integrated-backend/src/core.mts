@@ -5836,8 +5836,14 @@ export class BackendCore {
       ensure(a && typeof a === 'object' && !Array.isArray(a), 'invalid_resource_policy_request');
       const fields = Object.keys(a);
       const governor = this.missionAdmission;
+      const policyView = () => {
+        const estimate = governor.telemetry().metrics.vramAvailableBytes;
+        return { ...governor.inspectPolicy(), dedicatedVramEstimate:
+          estimate.availability === 'estimated' && typeof estimate.value === 'number' && estimate.ageMs !== null ?
+            { bytes: estimate.value, ageMs: estimate.ageMs } : null };
+      };
       const current = governor.inspectPolicy();
-      if (a.name === 'inspect' && fields.length === 1) return current as CommandMap[K]['output'];
+      if (a.name === 'inspect' && fields.length === 1) return policyView() as CommandMap[K]['output'];
       ensure(fields.includes('name') && fields.includes('expectedVersion') && Number.isSafeInteger(a.expectedVersion),
         'invalid_resource_policy_request');
       ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
@@ -5864,7 +5870,7 @@ export class BackendCore {
       }
       governor.read(false);
       this.missions.capacityChanged();
-      return governor.inspectPolicy() as CommandMap[K]['output'];
+      return policyView() as CommandMap[K]['output'];
     }
     if (name === 'missionHostSignal') {
       ensure(this.privateMode && this.nativeHostServices && a && Object.keys(a).length === 1, 'invalid_mission_host_signal');
