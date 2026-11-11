@@ -740,9 +740,10 @@ export class MissionService {
     }
     ready.sort((a, b) => (this.lastAdmitted.get(a.mission.id) ?? 0) - (this.lastAdmitted.get(b.mission.id) ?? 0));
     const now = Date.now();
-    for (const { mission: m, tasks } of ready) {
+    for (const [index, { mission: m, tasks }] of ready.entries()) {
       if (this.running.size >= workerLimit) {
-        if (this.readyObservations.size) for (const task of tasks) this.observeReadyBlocker(m.id, task.id, 'worker-budget');
+        if (this.readyObservations.size) for (const deferred of ready.slice(index))
+          for (const task of deferred.tasks) this.observeReadyBlocker(deferred.mission.id, task.id, 'worker-budget');
         return;
       }
       for (const task of orderReadyTasks(m, tasks, now)) {
