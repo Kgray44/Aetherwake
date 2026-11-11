@@ -276,6 +276,40 @@ test('an explicit mission request opens canonical review without sending an ordi
   panel.dispose();
 });
 
+test('explicit mission review carries the selected project evidence and matching API route', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const scope = { workspaceId: 'workspace:synthetic', projectId: 'project:synthetic' };
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  canonical.applicationContext = { currentProjectId: scope.projectId, currentWorkspaceId: scope.workspaceId, references: [] };
+  const offer = { kind: 'planning-offer' as const, scope, objective: 'Run a mission to verify the release',
+    fingerprint: 'preview:project', planner: { provider: 'openai-api-vela' as const, model: 'gpt-6-luna', capabilities: [] } };
+  const seen: unknown[] = [];
+  let reviewed = false, ordinary = 0;
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async () => { ordinary++; return request(); },
+  }), { missions: {
+    element: doc.createElement('section') as unknown as HTMLElement,
+    preview: async (_objective, _agent, evidence) => { seen.push(evidence); return offer; },
+    review: preview => { reviewed = preview === offer; }, setVisible() {},
+  } });
+  try {
+    await settles(() => !!named(root, 'Vela API'));
+    named(root, 'Vela API').fire('click');
+    const choice = root.find(node => node.tagName === 'label' && node.textContent === 'Find evidence in this project')!.querySelector('input')!;
+    assert.equal(choice.disabled, false);
+    choice.checked = true;
+    const composer = root.find(node => node.tagName === 'textarea')!;
+    composer.value = offer.objective;
+    composer.fire('input');
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => reviewed || !!root.find(node => node.className === 'vela-core-error' && !node.hidden));
+    assert.deepEqual(seen, [{ projectEvidence: true }]);
+    assert.equal(reviewed, true, 'the matching API route opens project evidence review');
+    assert.equal(ordinary, 0);
+    assert.equal(composer.value, offer.objective);
+  } finally { panel.dispose(); }
+});
+
 test('saved routing controls show origins, preserve preferences when editing limits and offer one-send Auto', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'chatgpt-plan-responses', available: true }];

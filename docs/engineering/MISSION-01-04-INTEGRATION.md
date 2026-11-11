@@ -9,7 +9,7 @@ This draft assembles Architecture Recovery A3 and A4 and Fluid Intelligence FI-0
 | 01, storage and retrieval | [#36](https://github.com/Kgray44/Aetherwake/pull/36) | `51406e35629b7181abdf43d42834f1d5d7991571` |
 | 01, runtime recovery | [#38](https://github.com/Kgray44/Aetherwake/pull/38) | `d422229aa3753099b43ba3c87adc8c2489bfae41` |
 | 01, common contracts | [#40](https://github.com/Kgray44/Aetherwake/pull/40) | `5a72594b2259d850da70810183234797d2e34ab1` |
-| 02, profiling | [#41](https://github.com/Kgray44/Aetherwake/pull/41) | `5028aaefcbc0e56398eb49c5af7b88c1147c854f` |
+| 02, profiling | [#41](https://github.com/Kgray44/Aetherwake/pull/41) and [combined-base follow-up](https://github.com/Kgray44/Aetherwake/commit/7eb21fca3c40cb0ba02c35524fa1224ac147d3f7) | `5028aaefcbc0e56398eb49c5af7b88c1147c854f` plus the FI-1 delta from `7aac5163` through `7eb21fca3c40cb0ba02c35524fa1224ac147d3f7` |
 | 03, resources | [#37](https://github.com/Kgray44/Aetherwake/pull/37), [#39](https://github.com/Kgray44/Aetherwake/pull/39), [#42](https://github.com/Kgray44/Aetherwake/pull/42) | `8dd54d1347349ba199b4af5dae28e3caaf4804d9` |
 | 04, cognition | [#43–52 stack tip](https://github.com/Kgray44/Aetherwake/pull/52) | `8363758f87d1ded17a64acdf96425f973df6cbda` |
 
@@ -48,6 +48,10 @@ Vela projects reviewed Executive findings into the existing mission report with 
 The Vela reply's Speak response control now supplies the speaker mask used by the existing icon component. During that reply's playback, the control selects the existing stop mask and stops only the matching speech attempt.
 
 The exact `b8b0acdd` Windows portable package included the icon fix. In an isolated Electron 45.2.1 renderer using manifest-verified production CSS, the previous package painted 100% of each icon box. The fixed package resolved both masks and painted 20.3% for the speaker and 9.2% for stop. The fixture used synthetic markup and zero provider calls.
+
+The FI-1 follow-up correlates the authorized cognition ledger, retained ARIE lease receipts and AEP milestones in the scoped execution profile. Its explicit composer command opens the existing mission review, keeps the draft until Start succeeds, and carries selected note, file or project evidence. A one-turn provider selection can continue when it matches the reviewed provider. The reviewed mission path retains its existing approval boundary.
+
+Hosted Windows at `80fad289` verified Core shutdown with the external runner and API transport held. The separate private-command stdio test hit its subprocess deadline. The test now measures cold startup with a public zero-activity read before checking each private command under its existing deadline. It verifies zero provider and Codex activity before and after the denial sequence.
 
 ## Performance investigations
 
