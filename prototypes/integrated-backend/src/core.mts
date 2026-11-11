@@ -5,7 +5,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
-import { observeProviderStream, projectMissionExecution } from './execution-profiler.mts';
+import { observeProviderStream, projectMissionExecution, type ReportPublication } from './execution-profiler.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
@@ -711,15 +711,21 @@ export class BackendCore {
         acknowledge();
         return { kind: 'mission-report', missionId: id, messageId: String(existing.message_id) };
       }
+      const clock = this.missions.fullProfilingClock();
+      const compositionStartedMs = clock ? performance.now() : null;
       const { content, jobsDone } = missionCompletion(mission);
+      const composedMs = clock ? performance.now() : null;
       const message = this.appendVelaMessage(origin, {
         role: 'assistant', source: 'vela-native', classification: 'observed', content, responseKind: 'answer',
         missionReport: { missionId: id, workspaceId: scope.workspaceId, projectId: scope.projectId, jobsDone },
       }, !this.missionSpeechBacklog.has(id));
       this.db.prepare('INSERT INTO vela_mission_report_links VALUES(?,?)').run(id, message.id);
+      const reportTiming = clock && compositionStartedMs !== null && composedMs !== null ?
+        { clock, compositionStartedMs, composedMs, stagedMs: performance.now() } : undefined;
       this.record('vela.mission/report-posted', 'observed', undefined, 'mission:report:' + id, {
         providerId: 'aerynth-native', detached: true, correlationId: id,
-        mission: { id, scope, kind: 'report-posted' }, status: 'posted', payload: { redacted: true },
+        mission: { id, scope, kind: 'report-posted', ...(reportTiming ? { reportTiming } : {}) },
+        status: 'posted', payload: { redacted: true },
       });
       acknowledge();
       return { kind: 'mission-report', missionId: id, messageId: message.id };
@@ -1056,12 +1062,12 @@ export class BackendCore {
       case 'execution-profile': {
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
         const mission = this.missions.read(request.input.id, scope);
-        let publication: Pick<StreamEvent, 'eventId' | 'cursor' | 'receivedAt'> | null = null;
+        let publication: ReportPublication | null = null;
         if (this.streamScopeMatches(scope, mission.scope)) {
           const row = this.db.prepare('SELECT json FROM intelligence_events WHERE dedupe=?').get('mission:report:' + mission.id);
           if (row) {
-            const { eventId, cursor, receivedAt } = JSON.parse(String(row.json)) as StreamEvent;
-            publication = { eventId, cursor, receivedAt };
+            const { eventId, cursor, receivedAt, mission: source } = JSON.parse(String(row.json)) as StreamEvent;
+            publication = { eventId, cursor, receivedAt, timing: source?.reportTiming ?? null };
           }
         }
         return projectMissionExecution(mission, publication);

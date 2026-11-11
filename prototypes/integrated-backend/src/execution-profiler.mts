@@ -1,5 +1,5 @@
 import type { MissionEvent, MissionProjection } from './mission-contracts.mts';
-import type { StreamEvent } from './contracts.mts';
+import type { MissionReportTiming, StreamEvent } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
 import type { TurnEvent } from '../../openai-provider/contracts.mts';
 
@@ -23,7 +23,16 @@ function boundary(event: MissionEvent) {
 type AttemptBoundary = ReturnType<typeof boundary>;
 type Interval = { id: string; clock: string; start: number; end: number };
 type Path = { durationMs: number; attemptIds: string[] };
-type ReportPublication = Pick<StreamEvent, 'eventId' | 'cursor' | 'receivedAt'>;
+export type ReportPublication = Pick<StreamEvent, 'eventId' | 'cursor' | 'receivedAt'> & {
+  timing: MissionReportTiming | null;
+};
+
+function timeToReportStaging(timing: MissionReportTiming | null | undefined,
+  start: Pick<AttemptBoundary, 'clock' | 'monotonicMs'> | null) {
+  if (!timing || start?.clock !== timing.clock || start.monotonicMs === null ||
+    timing.compositionStartedMs < start.monotonicMs) return null;
+  return timing.stagedMs - start.monotonicMs;
+}
 
 function reportedUsage(usage?: ReportedUsage): ReportedUsage | null {
   const count = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -172,6 +181,8 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     contract: 'aerynth.mission-execution-profile@1' as const,
     kind: 'execution-profile' as const, missionId: mission.id, revision: mission.revision, outcome: mission.outcome,
     admission: initial, firstVerifiedTask: firstVerified, lastSettlement, reportPublication,
+    settlementToReportStagedMs: complete ? timeToReportStaging(reportPublication?.timing, lastSettlement) : null,
+    intakeToReportStagedMs: timeToReportStaging(reportPublication?.timing, intake),
     requestIntake: intake, firstMeaningfulOutput: null, userDelivery: null,
     intakeToAdmissionMs: intake && initial?.monotonicMs != null ? initial.monotonicMs - intake.monotonicMs : null,
     admissionToFirstVerifiedTaskMs: timeToVerified ? timeToVerified.end - timeToVerified.start : null,

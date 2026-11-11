@@ -204,6 +204,10 @@ export class MissionService {
     m.events.push(recorded);
     return recorded;
   }
+  fullProfilingClock() {
+    return (this.host.profilerMode ?? 'full') === 'full' ? this.profilerClock : null;
+  }
+
   private encode(m: Mission) {
     let json = JSON.stringify(m);
     if (Buffer.byteLength(json) > recordLimitBytes && m.events.some(event => event.timing)) {

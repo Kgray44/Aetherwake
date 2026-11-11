@@ -151,6 +151,13 @@ export interface VelaRouteTiming {
   contextMs: number;
   previewMs: number;
 }
+export interface MissionReportTiming {
+  clock: string;
+  compositionStartedMs: number;
+  composedMs: number;
+  /** The conversation append and report link were staged inside the publication transaction. */
+  stagedMs: number;
+}
 /** Scoped lifecycle metadata only. Mission objectives, prompts and evidence stay with their owning resources. */
 export interface MissionStreamEvent {
   id: string;
@@ -162,6 +169,7 @@ export interface MissionStreamEvent {
   taskId?: string;
   attemptId?: string;
   executor?: string;
+  reportTiming?: MissionReportTiming;
 }
 export interface StreamEvent {
   schemaVersion: 1; eventId: string; cursor: number;

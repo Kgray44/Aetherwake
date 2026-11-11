@@ -283,10 +283,26 @@ test('canonical backend runs a native mission without inference, restores eviden
       const posted = (await backend.call('replay', { limit: 1000 })).events
         .find(event => event.mission?.id === result.id && event.type === 'vela.mission/report-posted');
       assert.ok(posted);
-      assert.deepEqual(profile.reportPublication, { eventId: posted.eventId, cursor: posted.cursor, receivedAt: posted.receivedAt });
+      const publication = profile.reportPublication;
+      assert.ok(publication?.timing);
+      assert.deepEqual(publication.timing, posted.mission?.reportTiming);
+      assert.equal(publication.eventId, posted.eventId);
+      assert.equal(publication.cursor, posted.cursor);
+      assert.equal(publication.receivedAt, posted.receivedAt);
+      const { compositionStartedMs, composedMs, stagedMs, clock } = publication.timing;
+      assert.ok(compositionStartedMs <= composedMs && composedMs <= stagedMs);
+      assert.equal(clock, profile.lastSettlement?.clock);
+      assert.equal(profile.settlementToReportStagedMs, stagedMs - profile.lastSettlement!.monotonicMs!);
+      assert.equal(profile.intakeToReportStagedMs, stagedMs - profile.requestIntake!.monotonicMs);
       assert.equal(profile.userDelivery, null);
     }
     assert.deepEqual(await backend.call('providerActivity', {}), providerActivity);
+    const readPublication = () => backend.call('missions', { name: 'execution-profile', input: { id: single.id } });
+    const beforeReopen = await readPublication();
+    await backend.close();
+    backend = new Backend(options);
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
+    assert.deepEqual(await readPublication(), beforeReopen);
   } finally {
     await backend.close();
     const target = resolve(directory);

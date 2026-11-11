@@ -94,6 +94,12 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.equal(work.workerMs, 16);
     assert.equal(work.overlapMs, 4);
     assert.deepEqual(work.criticalPath, { durationMs: 11, attemptIds: [right.id, join.id] });
+    const recoveredPublication = projectMissionExecution(replay, {
+      eventId: 'report-after-restart', cursor: 99, receivedAt: '2026-11-10T22:00:00.000Z',
+      timing: { clock: 'reopened-process', compositionStartedMs: 20, composedMs: 21, stagedMs: 22 },
+    });
+    assert.equal(recoveredPublication.reportPublication?.eventId, 'report-after-restart');
+    assert.equal(recoveredPublication.settlementToReportStagedMs, null);
     f.revoke();
     assert.throws(readProfile, /mission_not_found/);
   } finally {
