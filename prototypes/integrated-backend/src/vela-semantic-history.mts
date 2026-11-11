@@ -122,9 +122,12 @@ export async function investigateReviewedVelaNotes(api: VelaApiRuntime, intent: 
   notes: readonly (VelaSemanticHistorySource & { title: string })[], configurationVersion: number, model: string,
   validate: () => void, signal: AbortSignal, observations?: MissionCognitionObservations) {
   const authorize = () => { validate(); return !signal.aborted; };
-  const ready = (['interpret', 'assess'] as const).every(stage =>
-    api.qualifiedStructuredRoute(configurationVersion, [model], semanticHistoryFormats[stage].schema, instructions[stage]));
-  if (!ready) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize }, signal, observations);
+  validate();
+  const perceptionSchema = semanticHistoryFormats.interpret.schema;
+  const perception = api.qualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret) ??
+    await api.resolveQualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret, signal);
+  const assessment = api.qualifiedStructuredRoute(configurationVersion, [model], semanticHistoryFormats.assess.schema, instructions.assess);
+  if (!perception || !assessment) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize }, signal, observations);
   const scoped: Pick<VelaService, 'investigateHistory'> = {
     investigateHistory(request, disclose, cancel) {
       const current = (source: VelaSemanticHistorySource) => notes.includes(source as typeof notes[number]) && authorize();
