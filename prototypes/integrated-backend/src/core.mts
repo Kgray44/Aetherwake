@@ -553,10 +553,14 @@ export class BackendCore {
           const specialist = reassignMissionSpecialist(task, this.missionSpecialistSelection(mission.scope, profileId));
           return this.missionSpecialistAvailable(mission.scope, { specialist }) ? specialist : undefined;
         },
-        contextSource: (mission, task) => task.executor === 'inspect.workspace-notes' ?
-          canonicalMissionContextSource(this.missionContextHost(mission.scope), (binding, id) =>
-            this.missionScopeAllowed(binding.scope) && !!this.db.prepare('SELECT 1 FROM blocks WHERE workspace_id=? AND resource_id=?')
-              .get(binding.scope.workspaceId, id)) : undefined,
+        contextSource: (mission, task) => {
+          if (task.executor !== 'inspect.workspace-notes') return;
+          const reviewed = mission.planning?.context?.notes;
+          const source = canonicalMissionContextSource(this.missionContextHost(mission.scope), (binding, id) =>
+            (!reviewed || reviewed.some(note => note.id === id)) && this.missionScopeAllowed(binding.scope) &&
+            !!this.db.prepare('SELECT 1 FROM blocks WHERE workspace_id=? AND resource_id=?').get(binding.scope.workspaceId, id));
+          return reviewed ? { ...source, retrieve: () => [] } : source;
+        },
         stagePublication: (mission, from) => this.missionPublication.stage(mission, from),
         observe: () => {this.flushMissionPublication();this.queueToolOwnerJobResults();},
       });
@@ -968,7 +972,8 @@ export class BackendCore {
     const apiPlanner=this.velaApiRuntime?.authorized()&&values.mode!=='codex'&&(!values.providerId||values.providerId===VELA_API_PROVIDER)&&
       velaApiReasoningEfforts(apiModel).includes(apiEffort)?{provider:VELA_API_PROVIDER,model:apiModel,effort:apiEffort,
         version:this.velaApiRuntime.configurationVersion()!,settingsStamp:this.velaRoutingSettingsStamp(profiles)}:undefined;
-    const tasks = [...Object.values(missionPlanningCatalog()), ...missionPlanningSpecialists(selection)];
+    const tasks = [...Object.values(missionPlanningCatalog()), ...missionPlanningSpecialists(selection)].map(task =>
+      notes && task.executor === 'inspect.workspace-notes' ? { ...task, objective: 'Confirm exact versions of the reviewed mission notes' } : task);
     const catalog = Object.fromEntries(tasks.filter(task => this.missionExecutors[task.executor].available(scope, task))
       .map(task => [task.id, task]));
     const capabilities = Object.values(catalog).map(task => ({ id: task.id, description: task.objective +

@@ -809,8 +809,12 @@ export class MissionService {
     const dependencies = task.dependencies.map(dep => taskOf(m, dep)!.attempts.at(-1)!.evidence!);
     const { attempts: _attempts, queuedAt: _queued, state: _state, priority: _priority, detail: _detail, ...plan } = task;
     const source = this.host.contextSource?.(m, plan);
+    const reviewedNotes = task.executor === 'inspect.workspace-notes' ? m.planning?.context?.notes : undefined;
     const request = { missionId: m.id, revision: m.planRevision, taskId: task.id, scope: m.scope,
       missionObjective: m.objective, taskObjective: task.objective, criteria: m.criteria, dependencyTaskIds: task.dependencies,
+      ...(reviewedNotes ? { requiredSources: reviewedNotes.map(note => ({
+        kind: 'resource' as const, id: note.id, expectedVersion: note.version,
+      })) } : {}),
       dependencies: dependencies.map((e, i) => ({ taskId: task.dependencies[i], evidenceId: e.id,
         source: e.source, attemptId: e.attemptId, observedAt: e.observedAt, value: e.value })), maxTokens: 48 * 1024 };
     let context: MissionExecutionContext;

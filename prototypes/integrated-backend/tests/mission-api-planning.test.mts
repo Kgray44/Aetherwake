@@ -291,7 +291,8 @@ test('reviewed mission planning binds checked note evidence to the executable pl
         assert.equal(payload.evidence.coverage[0].question, 'What measurements are required?');
         assert.equal(payload.evidence.coverage[0].passages[0].sourceId, note.id);
         assert.doesNotMatch(JSON.stringify(payload), /BOX-447/);
-        return reply(graph)(body);
+        return reply({ ...graph, tasks: [{ capability: 'notes', after: [] },
+          ...graph.tasks.map(task => task.capability === 'cpu' ? { ...task, after: ['notes'] } : task)] })(body);
       });
     const requestId = randomUUID();
     const plan = await f.core.command('missionPlanReviewed', { objective, noteIds, fingerprint: offer.fingerprint, requestId }) as MissionPreview;
@@ -306,6 +307,7 @@ test('reviewed mission planning binds checked note evidence to the executable pl
       settled = await f.core.command('missions', { name: 'read', input: { id: mission.id } }) as MissionProjection;
     }
     assert.ok(settled.tasks.every(task => task.state === 'verified'));
+    assert.deepEqual(settled.tasks.find(task => task.executor === 'inspect.workspace-notes')?.attempts[0].context?.sources.map(source => source.ref.id), noteIds);
     assert.ok(settled.planning?.context?.evidenceDigest);
     assert.equal(settled.profile.providerCalls, 5);
     assert.equal(settled.profile.usageReports, 5);
