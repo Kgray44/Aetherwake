@@ -86,3 +86,71 @@ test('opt-in Windows product diagnostic verifies through the real worker and can
         budgetBytes: attempt.resourceLease.gpuBudgetBytes }));
     } finally { await f.close(); }
   });
+
+test('the owner can checkpoint an admitted Windows GPU attempt and review a new run after rollback', {
+  skip: process.platform !== 'win32' || process.env.AERYNTH_VERIFY_GPU_PRODUCT !== '1', timeout: 55_000,
+}, async t => {
+  const f = fixture();
+  const { backend } = f;
+  let unsubscribe = () => {};
+  try {
+    await f.workspace('Synthetic GPU checkpoint workspace');
+    const initial = await backend.call('resourcePolicyNative', { name: 'inspect' });
+    const enabled = await backend.call('resourcePolicyNative', { name: 'set-gpu-limit', limit: 1,
+      expectedVersion: initial.configVersion });
+    const launch = async () => {
+      const review = await backend.call('gpuReadbackNative', { name: 'preview' });
+      assert.equal(review.kind, 'preview');
+      const started = await backend.call('gpuReadbackNative', { name: 'start', reviewId: review.reviewId });
+      assert.equal(started.kind, 'started');
+      return started.missionId;
+    };
+    const read = async (id: string) => await backend.call('missions', { name: 'read', input: { id } }) as MissionProjection;
+    const settled = async (id: string) => {
+      let mission = await read(id);
+      while (mission.outcome === 'queued' || mission.outcome === 'running') {
+        await wait(25, undefined, { signal: t.signal });
+        mission = await read(id);
+      }
+      return mission;
+    };
+    const checkpoint = new Promise<{ missionId: string; attemptId: string; policy: typeof enabled }>((resolve, reject) => {
+      unsubscribe = backend.subscribe(event => {
+        const started = event.mission;
+        if (event.type !== 'vela.mission/started' || !started?.attemptId) return;
+        unsubscribe();
+        const { id: missionId, attemptId } = started;
+        void backend.call('resourcePolicyNative', { name: 'set-mode', mode: 'gaming_focus', expectedVersion: enabled.configVersion })
+          .then(policy => resolve({ missionId, attemptId, policy }), reject);
+      });
+    });
+    const [id, change] = await Promise.all([launch(), Promise.race([checkpoint, wait(15_000, undefined,
+      { ref: false, signal: t.signal }).then(() => { throw Error('gpu_checkpoint_start_not_observed'); })])]);
+    assert.equal(change.missionId, id);
+    assert.equal(change.policy.reason, 'foreground_protection');
+    assert.equal(change.policy.active.gpu, 1);
+    assert.equal(change.policy.effective.gpu, 0);
+    assert.equal(change.policy.effective.remote, enabled.effective.remote);
+    const original = await settled(id);
+    assert.equal(original.outcome, 'blocked');
+    const [attempt] = original.tasks[0].attempts;
+    assert.equal(attempt.id, change.attemptId);
+    assert.equal(attempt.resourceLease?.kind, 'gpu');
+    assert.deepEqual(attempt.evidence?.value, { status: 'resource_checkpoint' });
+    assert.equal(attempt.verification?.passed, false);
+    const rolledBack = await backend.call('resourcePolicyNative', { name: 'rollback', expectedVersion: change.policy.configVersion });
+    assert.equal(rolledBack.mode, 'balanced');
+    const replacementId = await launch();
+    const replacement = await settled(replacementId);
+    assert.equal(replacement.outcome, 'verified');
+    assert.equal((replacement.tasks[0].attempts[0].evidence?.value as { verifiedBuffers?: number }).verifiedBuffers, 8);
+    assert.equal((await read(id)).tasks[0].attempts.length, 1);
+    assert.equal((await backend.call('resourcePolicyNative', { name: 'inspect' })).active.gpu, 0);
+    console.log(JSON.stringify({ productGpuCheckpoint: true, reservationActiveAtSwitch: true, originalAttempts: 1,
+      checkpointExecutionMs: attempt.timing?.executionMs, replacementQueueMs: replacement.tasks[0].attempts[0].timing?.queueMs,
+      replacementExecutionMs: replacement.tasks[0].attempts[0].timing?.executionMs }));
+  } finally {
+    unsubscribe();
+    await f.close();
+  }
+});
