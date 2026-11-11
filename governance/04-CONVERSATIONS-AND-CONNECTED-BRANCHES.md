@@ -614,3 +614,29 @@ This charter specifies **owner-ratified (2026-11-05)** conversation and Connecte
 **AW-CHAT-129 — Observable tool results.** Conversations MUST distinguish planned, requested, awaiting approval, externally completed, independently verified, unknown and rejected outcomes with trace links.
 
 **Acceptance:** Fork a conversation, switch model, start an agent, speak an update, restart and verify identities, branch boundaries, task evidence and memory privacy.
+
+---
+
+## Owner-directed supporting amendment FI-2026-11-10: conversational continuity through adaptive missions
+
+> **Design obligations.** The conversation/ancestry owner remains authoritative. CIE retrieves evidence, AIR reasons, MissionService executes and AEP observes; none may silently rewrite the original conversation record.
+
+**AW-CHAT-130 — AI-assisted referent resolution.** Conversation intake MUST support semantic understanding of implicit references, previous corrections, temporal descriptions and user goals through authorized CIE evidence retrieval. If records remain ambiguous, Vela MUST express uncertainty instead of inventing conversation history.
+
+**AW-CHAT-131 — Identity across adaptive strategies.** Selection of new models, agent teams, reasoning efforts, API transports or replanned work MUST NOT fragment the canonical conversation, branch, turn or mission ancestry. Provider-specific IDs remain bindings only.
+
+**AW-CHAT-132 — Plan and execution visibility.** Conversation presentation SHOULD link to active plan versions, delegated subagents, verified artifacts, partial status, blocked work and final results, with recorded source evidence rather than AI-invented progress narration.
+
+**AW-CHAT-133 — Streaming and speculative work fidelity.** Parallel interpretation, retrieval or read-only speculative operations MUST not duplicate user-visible turns, speech, tool side effects or finalized answers. Provisional content must remain distinguishable from verified decisions.
+
+**AW-CHAT-134 — Continuing Mission Executive.** A conversation MAY contain multiple AI supervision decisions and revised mission plans; each revision MUST record lineage, affected tasks and retained completions, without rewriting the original user intent or permission scope.
+
+**AW-CHAT-135 — Experiential learning provenance.** A model-generated hypothesis about user preferences, task performance or prior success MUST NOT become a human-authored statement. Learning from user feedback requires source attribution, correction paths and scope-limited persistence.
+
+**AW-CHAT-136 — Private branch boundaries.** Adaptive retrieval, agent handoff and strategy reuse MUST respect branch ancestry, connected-branch grants, provider context-transfer rules and revocation. Learning shared from one branch MUST not imply access to underlying confidential material in another.
+
+**AW-CHAT-137 — Reversible presentation policy.** Users SHOULD be able to inspect the response strategy used, request a different authorized reasoning strategy, view why Vela took an action, and correct retained assumptions without erasing the historically accurate execution receipt.
+
+**AW-CHAT-138 — Resumable result composition.** Long-running missions MUST reconnect to the same authoritative state after navigation, interruption or restart; the assistant may stream later verified outputs without presenting incomplete execution as a completed task.
+
+**Acceptance:** Resolve a novel reference to an earlier task using cited context, spawn parallel delegated work and switch providers, correct an inferred preference, revoke a connected branch, restart mid-mission, and prove no duplicate side effects, invented ancestry or unauthorized context transfer. See [08 CIE](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md), [09 Observability](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md) and [14 Trust](14-TRUST-PRIVACY-AND-AUTONOMY.md).
