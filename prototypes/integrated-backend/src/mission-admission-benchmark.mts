@@ -43,8 +43,8 @@ async function run(arm: Arm) {
       },
     }),
     ...(arm === 'arie-leases' ? { resources: {
-      canAcquire: () => admission.canLease('cpu'),
-      acquire: (_lane, identity) => admission.tryLease({ ...identity, kind: 'cpu' }),
+      canAcquire: () => admission.canLease('host_io'),
+      acquire: (_lane, identity) => admission.tryLease({ ...identity, kind: 'host_io' }),
     } } : {}),
     observe(_mission, event) {
       if (!event.attemptId) return;

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { MissionAdmission } from './mission-contracts.mts';
 
-export type ResourceKind = 'cpu' | 'build' | 'gpu' | 'remote';
+export type ResourceKind = 'cpu' | 'build' | 'gpu' | 'host_io' | 'remote';
 export type ResourceMode = 'balanced' | 'gaming_focus' | 'max_throughput';
 export type ResourcePolicyConfig = {
   mode: ResourceMode;
@@ -29,7 +29,7 @@ export type ResourceLease = {
   release(): void;
 };
 
-const kinds = ['cpu', 'build', 'gpu', 'remote'] as const;
+const kinds = ['cpu', 'build', 'gpu', 'host_io', 'remote'] as const;
 const identifier = (value: string) => typeof value === 'string' && /^[\w.:-]{1,120}$/u.test(value);
 const finiteCount = (n: number, max: number) => Number.isSafeInteger(n) && n >= 0 && n <= max;
 
@@ -39,7 +39,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
   if (!finiteCount(maxWorkers, 1024) || maxWorkers === 0) throw Error('invalid_resource_worker_ceiling');
   const epoch = randomUUID();
   const defaults: ResourcePolicyConfig = { mode: 'balanced',
-    limits: { cpu: maxWorkers, build: 1, gpu: 0, remote: maxWorkers } };
+    limits: { cpu: maxWorkers, build: 1, gpu: 0, host_io: maxWorkers, remote: maxWorkers } };
   function validate(config: ResourcePolicyConfig): ResourcePolicyConfig {
     if (!['balanced', 'gaming_focus', 'max_throughput'].includes(config.mode) ||
         !kinds.every(kind => finiteCount(config.limits[kind], maxWorkers))) throw Error('invalid_resource_policy');
@@ -47,7 +47,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
   }
   let config = validate(initial ?? defaults), previousConfig: ResourcePolicyConfig | undefined;
   let latest: MissionAdmission | undefined;
-  let effective = { cpu: 0, build: 0, gpu: 0, remote: config.limits.remote };
+  let effective = { cpu: 0, build: 0, gpu: 0, host_io: 0, remote: config.limits.remote };
   let previous: typeof effective | null = null;
   let revision = 1, configVersion = 1, reason = 'awaiting_native_sample', freeForReservations = 0;
   let localFreshUntil = -Infinity, lastProtection = -Infinity;
@@ -89,6 +89,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       build: protecting || reasons.includes('disk-io') ? 0 : Math.min(cpu, config.limits.build),
       // This slice has no qualified VRAM headroom measurement.
       gpu: 0,
+      host_io: critical ? 0 : config.limits.host_io,
       remote: config.limits.remote,
     };
     const nextReason = critical ? (free === undefined ? 'memory_unavailable' : 'safety_floor') :
@@ -101,7 +102,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       revision++;
     }
     // Keep reservations until execution actually exits. A signal requests a safe point.
-    for (const kind of ['build', 'cpu', 'gpu'] as const) {
+    for (const kind of ['build', 'cpu', 'gpu', 'host_io'] as const) {
       let excess = used(kind) - effective[kind];
       for (const { request, checkpoint } of [...active.values()].reverse()) {
         if (excess <= 0) break;

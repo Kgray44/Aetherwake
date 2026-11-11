@@ -489,7 +489,8 @@ export class BackendCore {
         resourcePolicy: nativeHostServices?.resourcePolicy,
         onChange: () => this.missions?.capacityChanged() });
       const resourceKind = (lane: string) => lane === 'codex-local-check' ? 'build' as const :
-        lane === CHATGPT_PLAN_PROVIDER || lane === VELA_API_PROVIDER ? 'remote' as const : 'cpu' as const;
+        lane === CHATGPT_PLAN_PROVIDER || lane === VELA_API_PROVIDER ? 'remote' as const :
+        lane === 'native' ? 'host_io' as const : 'cpu' as const;
       this.missionPublication = new MissionPublication(this.db);
       // Persisted publication is recovery, even when its first message is appended later.
       for(const row of this.db.prepare('SELECT mission_id FROM vela_mission_report_outbox').all())this.missionSpeechBacklog.add(String(row.mission_id));

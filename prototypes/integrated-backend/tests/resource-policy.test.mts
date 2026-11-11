@@ -43,3 +43,21 @@ test('policy changes request a safe point, retain reservations, and roll back wi
     assert.equal(governor.canLease('cpu'), false, 'stale RAM samples cannot admit local work');
   } finally { governor.dispose(); }
 });
+
+test('bounded host observations preserve overlap during CPU warmup and obey the local memory floor', () => {
+  let free = 1024 ** 3;
+  const governor = createMissionAdmission({ maxWorkers: 3, availableMemory: () => free, readWindowsPressure: null });
+  const request = { missionId: 'mission', taskId: 'observe', kind: 'host_io' as const, timeoutMs: 1000 };
+  try {
+    governor.read(true);
+    assert.equal(governor.inspectPolicy().effective.cpu, 1);
+    const first = governor.tryLease({ ...request, attemptId: 'first' });
+    const second = governor.tryLease({ ...request, attemptId: 'second' });
+    assert.ok(first && second);
+    free = 0;
+    governor.read(true);
+    assert.equal(governor.canLease('host_io'), false);
+    assert.equal(first.checkpointRequested.reason, 'resource-pressure');
+    assert.equal(second.checkpointRequested.reason, 'resource-pressure');
+  } finally { governor.dispose(); }
+});
