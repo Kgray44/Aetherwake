@@ -151,6 +151,7 @@ export interface VelaRouteTiming {
   capabilityMs: number;
   contextMs: number;
   previewMs: number;
+  previewClock?: { domain: string; startedMs: number; readyMs: number };
 }
 /** Local monotonic offsets within one provider execution. */
 export interface ConversationProviderTiming {
@@ -161,6 +162,8 @@ export interface ConversationProviderTiming {
   firstTextDeltaMs: number | null;
   /** Backend receipt of nonblank provider output. Historical observations may omit this field. */
   firstNonblankOutput?: { kind: 'text' | 'refusal'; elapsedMs: number } | null;
+  /** Elapsed time from the original backend preview, including any intervening review or wait. */
+  fromPreview?: { id: string; toAdapterMs: number; toFirstNonblankOutputMs: number | null };
   resultObservedMs: number | null;
   outputStagedMs: number | null;
   settlementStagedMs: number;
@@ -194,7 +197,7 @@ export interface StreamEvent {
   correlationId: string | null; causationId: string | null;
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
-  status: string | null; payload: { redacted: true; taskId?: string; timing?: VelaRouteTiming; providerTiming?: ConversationProviderTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'>;
+  status: string | null; payload: { redacted: true; taskId?: string; previewId?: string; timing?: VelaRouteTiming; providerTiming?: ConversationProviderTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'>;
     workspaceRecovery?: {workspaceId:string;action:'undo-creation'|'restore';creationEventId:string;workspaceVersion:number};
     clockTimer?: Pick<TimerDomainEvent, 'resourceVersion' | 'commandId' | 'timerIds' | 'expiryIds' | 'operations'>;
     api?: { maxOutputTokens?: number; callId?: string; elapsedMs?: number; enabled?: boolean; executionId?: string; bodyDigest?: string; contextDigest?: string };

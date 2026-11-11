@@ -2330,7 +2330,9 @@ export class BackendCore {
       ...(planning?{catalog:preview.catalog}:{}),
       stage: (executionId, review) => {
         validate(); ensure(!this.active || this.active.state !== 'running' && this.active.state !== 'dispatching', 'execution_busy');
-        const timing = observeConversationProvider('reviewed-api-dispatch-staging', !!this.velaApiTest, input.requestId);
+        const timing = observeConversationProvider('reviewed-api-dispatch-staging', !!this.velaApiTest, input.requestId,
+          performance.now(), { domain: this.missions.fullProfilingClock(),
+            preview: { id: preview.id, clock: preview.timing?.previewClock } });
         const execution: Execution = { id: executionId, resourceId: input.conversationId, providerId: VELA_API_PROVIDER,
           commandId: 'vela-api:' + input.requestId, state: 'dispatching', binding: null, turnId: null, startedAt: now(), endedAt: null,
           taskVerified: false, connectionVersion: preview.connectionVersion, requestedModel: preview.route!.model,
@@ -2469,7 +2471,8 @@ export class BackendCore {
       const measure = preview.calibrationProjectId !== undefined && preview.route?.kind === 'conversational' && !!preview.route.effort && !prepared.responses?.webSearch;
       const started = performance.now();
       const liveVelaAnswer = preview.route?.kind === 'conversational' ? { requestId: input.requestId, scopeStamp: preview.scopeStamp } : undefined;
-      const task = this.runOrdinary(send, prepared, {signal, validate: () => this.validateFrozenVelaPreview(preview), countVelaAttempt: !!preview.route, measure, liveVelaAnswer, requestId: input.requestId});
+      const task = this.runOrdinary(send, prepared, {signal, validate: () => this.validateFrozenVelaPreview(preview), countVelaAttempt: !!preview.route, measure, liveVelaAnswer, requestId: input.requestId,
+        preview: { id: preview.id, clock: preview.timing?.previewClock }});
       this.ordinaryTask = task;
       try {
         const result = await task;
@@ -3869,11 +3872,11 @@ export class BackendCore {
       reasoningEffort: input.reasoningEffort, overrideDefaults: input.overrideDefaults };
     const initialScope = profiles && this.velaScopeStamp();
     const effective = routingSettings?.effective;
-    const routeStarted = performance.now(), timing = { capabilityMs: 0, routingMs: 0, contextMs: 0, previewMs: 0 };
+    const routeStarted = performance.now(), timing = { capabilityMs: 0 };
     const decision = effective ? await this.selectVelaRoute({ ...input, mode: effective.mode,
       providerId: effective.providerId ?? undefined, model: effective.model ?? undefined,
       reasoningEffort: effective.reasoningEffort ?? undefined }, timing) : undefined;
-    timing.routingMs = Math.max(0, performance.now() - routeStarted - timing.capabilityMs);
+    const routingMs = Math.max(0, performance.now() - routeStarted - timing.capabilityMs);
     if (decision) ensure(!this.velaQuotaExhausted(decision.providerId, now().slice(0, 10)), 'vela_daily_attempt_limit_reached');
     const providerId = decision?.providerId ?? input.providerId ?? this.velaPlanner.providerId;
     const route = decision?.route;
@@ -3994,9 +3997,9 @@ export class BackendCore {
     preview.sendDisposition=publicPreview.sendDisposition=this.velaSendDisposition(preview);
     preview.signature=this.velaEgress(input.intent,preview.frozenContext,discovery,preview);
     if (route) {
-      timing.contextMs = performance.now() - contextStarted;
-      timing.previewMs = performance.now() - previewStarted;
-      preview.timing = timing;
+      const readyMs = performance.now(), domain = this.missions.fullProfilingClock();
+      preview.timing = { ...timing, routingMs, contextMs: readyMs - contextStarted, previewMs: readyMs - previewStarted,
+        ...(domain ? { previewClock: { domain, startedMs: previewStarted, readyMs } } : {}) };
     }
     publicPreview.signature=preview.signature;this.velaPreviews.set(preview.id,preview);return structuredClone(publicPreview);
   }
@@ -5517,7 +5520,7 @@ export class BackendCore {
     }
     this.conversations.nativeAuthorizeContextSources(input.resourceId,sources);
   }
-  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer'];requestId?:string}):Promise<Execution> {
+  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer'];requestId?:string;preview?:{id:string;clock?:VelaRouteTiming['previewClock']}}):Promise<Execution> {
     const started = performance.now();
     const measuredStart = authority?.measure ? started : undefined;
     const p=preview.responses;ensure(p&&preview.providerId===CHATGPT_PLAN_PROVIDER&&!this.active&&!this.velaApiTask&&this.missionSpecialistsInFlight<2,'ordinary_execution_unavailable');
@@ -5525,7 +5528,8 @@ export class BackendCore {
     ensure(this.state.revisions[input.resourceId]===input.expectedRevision,'stale_resource_version');
     const fingerprint=hash({type:'ordinary-responses',...input}),prior=this.state.receipts[input.commandId];
     if(prior){ensure(prior.fingerprint===fingerprint,'idempotency_conflict');return structuredClone(this.state.executions[prior.result]);}
-    const timing = observeConversationProvider('ordinary-adapter-entry', !!this.ordinaryTest, authority?.requestId ?? null, started);
+    const timing = observeConversationProvider('ordinary-adapter-entry', !!this.ordinaryTest, authority?.requestId ?? null, started,
+      authority?.preview && { domain: this.missions.fullProfilingClock(), preview: authority.preview });
     const e:Execution={id:p.executionId,resourceId:input.resourceId,providerId:CHATGPT_PLAN_PROVIDER,commandId:input.commandId,state:'dispatching',binding:null,turnId:null,startedAt:now(),endedAt:null,taskVerified:false,connectionVersion:p.connectionVersion,requestedModel:p.model,requestBodyDigest:p.bodyDigest,contextDigest:p.contextDigest,instructionVersion:p.instructionVersion};
     if (p.reasoningEffort !== undefined) e.requestedReasoningEffort = p.reasoningEffort;
     const handoff=preview.handoff&&!preview.handoff.continued?this.package(preview.handoff.id):null,controller=new AbortController();
