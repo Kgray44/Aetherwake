@@ -30,7 +30,7 @@ export type ResourceLease = {
 };
 
 const kinds = ['cpu', 'build', 'gpu', 'remote'] as const;
-const identifier = (value: string) => /^[\w.:-]{1,120}$/u.test(value);
+const identifier = (value: string) => typeof value === 'string' && /^[\w.:-]{1,120}$/u.test(value);
 const finiteCount = (n: number, max: number) => Number.isSafeInteger(n) && n >= 0 && n <= max;
 
 /** Private admission bookkeeping for the Performance Governor. MissionService owns the queue and attempts. */
@@ -70,7 +70,8 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     if (disposed) return;
     latest = admission;
     localFreshUntil = memoryFreshUntil;
-    const { readings, reasons } = admission ?? { readings: {}, reasons: [] };
+    const readings = admission?.readings ?? {};
+    const reasons: readonly MissionAdmission['reasons'][number][] = admission?.reasons ?? [];
     const free = readings.availableMemoryBytes?.value;
     const critical = free === undefined || free < memoryFloor || reasons.includes('storage-reserve');
     freeForReservations = critical ? 0 : free - memoryFloor;
