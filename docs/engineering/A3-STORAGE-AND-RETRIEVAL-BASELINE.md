@@ -21,6 +21,8 @@ Run `node prototypes/integrated-backend/src/journal-retention-benchmark.mjs` for
 
 Run `node --test prototypes/integrated-backend/tests/transaction-coordination.test.mts` for the integrated journal checks. The retention regression verifies the range query plan, sparse cursor retention, authorized renderer bounds and restart with the normal `stream/reopened` event. The suite includes interruption before and after SQLite release.
 
+Three hosted Windows runs reached different subprocess deadlines in the unchanged native review and worker fixtures. The worker probe now reports the phase it reached, detects a request that settles before it reaches the native port, and allows up to 30 seconds on Windows for the probe that can start and reopen source workers. The desktop review fixture allows 10 seconds for the first reply, including host startup, and keeps five seconds for each subsequent reply. The shutdown, authorization, persistence, and zero-provider assertions remain in effect.
+
 ## Disk-backed continuity and retrieval
 
 Run `node prototypes/integrated-backend/src/transaction-benchmark.mjs` for the existing disk-backed mutation, restart and writer-fence workload. The Windows run completed all seven synthetic profiles with four warmups and 24 measured samples per operation. Examples from that run follow. Peak RSS is cumulative across the process. Other host activity overlapped this run, so the latency numbers describe this run and should not be used as quiet-host thresholds.

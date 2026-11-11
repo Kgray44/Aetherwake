@@ -41,10 +41,12 @@ test(
     const request = (command: string, input: unknown) =>
       new Promise<any>((accept, reject) => {
         const id = ++serial,
+          // The initial reply also includes cold host startup.
+          replyTimeoutMs = id === 1 ? 10000 : 5000,
           timer = setTimeout(() => {
             pending.delete(id);
-            reject(Error("desktop_host_timeout: " + errorText));
-          }, 5000);
+            reject(Error("desktop_host_timeout (" + command + "): " + errorText));
+          }, replyTimeoutMs);
         pending.set(id, (value) => {
           clearTimeout(timer);
           pending.delete(id);
