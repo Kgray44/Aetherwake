@@ -36,7 +36,7 @@ export type SemanticHistoryProbeAdmission = Pick<SemanticHistoryAuthority, 'conf
 
 export async function qualifyVelaHistoryModelWithApi(api: VelaApiRuntime, admission: SemanticHistoryProbeAdmission, signal: AbortSignal) {
   const { configurationVersion, model, authorize } = admission;
-  const request = 'In a fictional maintenance exercise, which weekday was chosen for the pump inspection?';
+  const request = 'Which weekday did the previously recorded handoff note name for the pump inspection in the fictional maintenance exercise?';
   const calls: SemanticHistoryCall[] = [
     { stage: 'interpret', request },
     { stage: 'assess', request, round: 1, needs: [{ key: 'day', question: 'Which weekday is the inspection?', query: 'inspection weekday' }],
