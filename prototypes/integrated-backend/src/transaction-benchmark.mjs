@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { Session } from 'node:inspector/promises';
 import { arch, availableParallelism, cpus, platform, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { BackendCore } from './core.mts';
 import { nativeMissionPlan } from './mission-native.mts';
 
 const warmups = 4;
 const samples = 24;
+const allocationIntervalBytes = 32 * 1024;
+const allocationSamples = 8;
 const profiles = [
   ['almost-empty', 0, 0, 0, 0],
   ['small', 24, 256, 8, 24],
@@ -27,6 +30,25 @@ function summarize(rows) {
       max: values.at(-1),
     }];
   }));
+}
+
+async function sampleHeapAllocations(session, work) {
+  await session.post('HeapProfiler.startSampling', {
+    samplingInterval: allocationIntervalBytes,
+    includeObjectsCollectedByMajorGC: true,
+    includeObjectsCollectedByMinorGC: true,
+  });
+  let allocations;
+  try {
+    await work();
+  } finally {
+    const { profile } = await session.post('HeapProfiler.stopSampling');
+    allocations = profile.samples;
+  }
+  return {
+    sampledBytes: allocations.reduce((sum, sample) => sum + sample.size, 0),
+    sampleCount: allocations.length,
+  };
 }
 
 function probes(core) {
@@ -90,7 +112,7 @@ function probes(core) {
   };
 }
 
-async function run([name, messages, bytes, resources, events]) {
+async function run([name, messages, bytes, resources, events], measureAllocations) {
   const folder = mkdtempSync(join(tmpdir(), 'aerynth-a21-bench-'));
   const path = join(folder, 'canonical.sqlite');
   const options = { path, provider: 'fixture', contentPolicy: 'synthetic-only' };
@@ -201,15 +223,37 @@ async function run([name, messages, bytes, resources, events]) {
       core = undefined;
       const start = performance.now();
       core = open();
+      const hydrated = performance.now();
       const restored = await call('snapshot', {});
       const operationMs = performance.now() - start;
       assert.deepEqual(restored.graph, expectedGraph);
       assert.equal(restored.graph.messages.at(-1).id, messageId);
       assert.equal((await call('openWorkspace', { workspaceId: workspace.id })).workspace.id, workspace.id);
       assert.equal(core.missions.read(missionId, scope).disposition, 'cancelled');
-      if (i >= warmups) reopens.push({ operationMs });
+      if (i >= warmups) reopens.push({ operationMs, hydrationMs: hydrated - start, firstSnapshotMs: operationMs - (hydrated - start) });
     }
     operations.reopenAndSnapshot = summarize(reopens);
+    let heapAllocations;
+    if (measureAllocations) {
+      const session = new Session();
+      session.connect();
+      try {
+        const startup = [], firstSnapshot = [], replay = [];
+        for (let i = 0; i < allocationSamples; i++) {
+          await call('close', {});
+          core = undefined;
+          startup.push(await sampleHeapAllocations(session, () => { core = open(); }));
+          let restored;
+          firstSnapshot.push(await sampleHeapAllocations(session, async () => { restored = await call('snapshot', {}); }));
+          assert.deepEqual(restored.graph, expectedGraph);
+          let page;
+          replay.push(await sampleHeapAllocations(session, async () => { page = await call('rendererEventPage', { recent: true, limit: 250 }); }));
+          assert.equal(page.scannedThrough, page.latest);
+        }
+        heapAllocations = { samplingIntervalBytes: allocationIntervalBytes, samplesPerPhase: allocationSamples,
+          startup: summarize(startup), firstSnapshot: summarize(firstSnapshot), replay: summarize(replay) };
+      } finally { session.disconnect(); }
+    }
     second = new BackendCore(options);
     await append('Synthetic winning concurrent-writer mutation');
     const conflicts = [];
@@ -219,14 +263,19 @@ async function run([name, messages, bytes, resources, events]) {
       if (i >= warmups) conflicts.push({ operationMs: performance.now() - start });
     }
     operations.staleWriterReject = summarize(conflicts);
-    return { name, messages, bytes, resources, events, before, after, operations,
+    return { name, messages, bytes, resources, events, before, after, operations, heapAllocations,
       processMaxRssKiB: process.resourceUsage().maxRSS };
   } finally {
     probe?.restore();
     try { if (second) await second.command('close', {}); }
     finally {
       try { if (core) await core.command('close', {}); }
-      finally { rmSync(folder, { recursive: true, force: true }); }
+      finally {
+        const target = realpathSync(folder);
+        assert.equal(dirname(target), realpathSync(tmpdir()));
+        assert(basename(target).startsWith('aerynth-a21-bench-'));
+        rmSync(target, { recursive: true, force: true });
+      }
     }
   }
 }
@@ -234,7 +283,10 @@ async function run([name, messages, bytes, resources, events]) {
 console.log(JSON.stringify({ node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0]?.model,
   logicalCpuCount: availableParallelism(), warmups, samples,
   note: 'Disk-backed synthetic BackendCore. RSS is cumulative process peak. Logical SQL changes include rolled-back work. Stage timings are inclusive and can overlap.' }));
-const [profileName, ...extraArguments] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const measureAllocations = args.includes('--sample-allocations');
+const [profileName, ...extraArguments] = args.filter(argument => argument !== '--sample-allocations');
 const selected = profileName ? profiles.filter(([name]) => name === profileName) : profiles;
-assert(selected.length && !extraArguments.length, 'Pass one listed profile name or omit it to run all profiles.');
-for (const profile of selected) console.log(JSON.stringify(await run(profile)));
+assert(selected.length && !extraArguments.length && args.length - (profileName ? 1 : 0) <= 1,
+  'Pass one listed profile name or omit it to run all profiles. Optionally pass --sample-allocations.');
+for (const profile of selected) console.log(JSON.stringify(await run(profile, measureAllocations)));
