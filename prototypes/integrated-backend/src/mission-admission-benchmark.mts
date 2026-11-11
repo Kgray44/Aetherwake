@@ -10,7 +10,10 @@ import { MissionService } from './mission-service.mts';
 const scope = { workspaceId: 'benchmark-workspace', projectId: null };
 const template = nativeMissionPlan('Measure CPU and RAM', scope)!;
 const [cpu, ram, report] = template.tasks;
-const quick = process.argv.includes('--quick');
+const flags = new Set(process.argv.slice(2));
+const supportedFlags = ['--quick', '--cold-only', '--without-supplemental-windows'];
+if ([...flags].some(flag => !supportedFlags.includes(flag))) throw Error('unsupported_mission_admission_benchmark_option');
+const quick = flags.has('--quick');
 const samples = Array.from({ length: quick ? 3 : 8 }, (_, index) => {
   const id = `cpu-${index + 1}`;
   return { ...cpu, id, criterion: id };
@@ -22,8 +25,8 @@ const batchSize = quick ? 1 : 4;
 const laneWorkers = 2;
 type Arm = 'memory-only' | 'measured-admission' | 'arie-leases';
 type Hook = 'memoryGuard' | 'sampleAdmission' | 'canLease' | 'acquireLease';
-const withoutSupplemental = process.argv.includes('--without-supplemental-windows');
-const coldOnly = process.argv.includes('--cold-only');
+const withoutSupplemental = flags.has('--without-supplemental-windows');
+const coldOnly = flags.has('--cold-only');
 const round = (value: number) => Math.round(value * 100) / 100;
 const p95 = (values: number[]) => values.length ? round(values.sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1]) : null;
 

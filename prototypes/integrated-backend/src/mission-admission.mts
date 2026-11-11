@@ -37,7 +37,9 @@ const windowsMetrics = {
 type WindowsPressure = Partial<Record<keyof typeof windowsMetrics, number>>;
 const earlyMemoryMetrics = ['windowsLowMemory', 'windowsCommitHeadroomBytes'] as const;
 type EarlyMemoryMetric = typeof earlyMemoryMetrics[number];
-type WindowsMemoryPressure = Pick<WindowsPressure, EarlyMemoryMetric>;
+type WindowsProbeStage = 'memory' | 'utilization';
+type ObserveWindowsPressure = (value: WindowsPressure, stage: WindowsProbeStage) => void;
+type WindowsProbeLine = WindowsPressure & { gpu?: unknown; disk?: unknown; gpuMemory?: unknown };
 type TimedReading = { reading: MissionAdmissionReading; time: number };
 type MetricValue = number | readonly number[];
 type MetricSample = { value: MetricValue; observedAt: string; time: number; windowMs: number | null };
@@ -50,7 +52,7 @@ type AdmissionOptions = {
   wallNow?(): number;
   availableMemory?(): number;
   cpuCounters?(): CpuCounters;
-  readWindowsPressure?: ((signal: AbortSignal, observeMemory: (value: WindowsMemoryPressure) => void) => Promise<WindowsPressure>) | null;
+  readWindowsPressure?: ((signal: AbortSignal, observe: ObserveWindowsPressure) => Promise<WindowsPressure>) | null;
   resourcePolicy?: ResourcePolicyConfig;
   resourcePolicyPersistence?: ResourcePolicyPersistence;
 };
@@ -146,25 +148,42 @@ try {
 ConvertTo-Json -InputObject @{gpuMemory=$gpuMemory} -Compress
 `;
 
+function windowsUtilization({ gpu, disk, diskBytesPerSecond }: WindowsProbeLine): WindowsPressure {
+  let gpuEnginePercent: number | undefined;
+  try { gpuEnginePercent = aggregateGpuEngines(gpu).percent; } catch { /* Disk counters may still be valid. */ }
+  const diskQueueLength = Array.isArray(disk) && disk.length > 0 && disk.length <= 128 &&
+    disk.every(value => numeric(value, Number.MAX_SAFE_INTEGER)) ? Math.max(...disk) : undefined;
+  return { gpuEnginePercent, diskQueueLength, diskBytesPerSecond };
+}
+
 async function sampleWindowsPressure(signal: AbortSignal, topology: ReturnType<typeof createWindowsGpuCapacityCache>,
-  observeMemory: (value: WindowsMemoryPressure) => void): Promise<WindowsPressure> {
+  observe: ObserveWindowsPressure): Promise<WindowsPressure> {
   const windows = process.env.SystemRoot;
   if (!windows || !isAbsolute(windows)) return {};
   const powershell = join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const capacity = topology.get(powershell, signal);
   const execution = exec(powershell, ['-NoProfile', '-NonInteractive', '-Command', countersScript],
     { windowsHide: true, timeout: 15_000, maxBuffer: 1024 * 1024, encoding: 'utf8', signal });
-  const parse = (line: string) => {
-    try { return JSON.parse(line) as { gpu?: unknown; disk?: unknown; gpuMemory?: unknown } & WindowsPressure; }
+  const parse = (line: string): WindowsProbeLine => {
+    try {
+      const value = JSON.parse(line);
+      return value && typeof value === 'object' && !Array.isArray(value) ? value as WindowsProbeLine : {};
+    }
     catch { return {}; }
   };
-  let firstLine = '';
+  let buffered = '', lines = 0;
+  let earlyUtilization: WindowsPressure | undefined;
   const receive = (chunk: string) => {
-    const end = chunk.indexOf('\n');
-    firstLine += end === -1 ? chunk.slice(0, 1024) : chunk.slice(0, Math.min(end, 1024));
-    if (end === -1 && firstLine.length < 1024) return;
-    execution.child.stdout?.off('data', receive);
-    if (firstLine.length < 1024) observeMemory(parse(firstLine));
+    buffered += chunk;
+    while (lines < 2) {
+      const end = buffered.indexOf('\n');
+      if (end === -1) break;
+      const line = parse(buffered.slice(0, end));
+      buffered = buffered.slice(end + 1);
+      if (++lines === 1) observe(line, 'memory');
+      else observe(earlyUtilization = windowsUtilization(line), 'utilization');
+    }
+    if (lines === 2 || buffered.length >= 1024 * 1024) execution.child.stdout?.off('data', receive);
   };
   execution.child.stdout?.on('data', receive);
   const { stdout } = await execution.catch((error: { killed?: boolean; stdout?: string }) => {
@@ -173,12 +192,9 @@ async function sampleWindowsPressure(signal: AbortSignal, topology: ReturnType<t
     });
   // Keep complete primary observations even if optional counters time out.
   const parts = stdout.split(/\r?\n/u).slice(0, 4).map(parse);
-  const { gpu, disk, gpuMemory, ...counters } = Object.assign({}, ...parts) as ReturnType<typeof parse>;
-  let gpuEnginePercent: number | undefined;
-  try { gpuEnginePercent = aggregateGpuEngines(gpu).percent; } catch { /* The disk reading can still be valid. */ }
-  const diskQueueLength = Array.isArray(disk) && disk.length > 0 && disk.length <= 128 &&
-    disk.every(value => numeric(value, Number.MAX_SAFE_INTEGER)) ? Math.max(...disk) : undefined;
-  return { gpuEnginePercent, diskQueueLength, ...counters, ...estimateDedicatedHeadroom(await capacity, gpuMemory) };
+  const { gpu, disk, gpuMemory, ...counters } = Object.assign({}, ...parts) as WindowsProbeLine;
+  const utilization = earlyUtilization ?? windowsUtilization({ gpu, disk, diskBytesPerSecond: counters.diskBytesPerSecond });
+  return { ...counters, ...utilization, ...estimateDedicatedHeadroom(await capacity, gpuMemory) };
 }
 
 function cpuPercentBetween(before: { total: number; idle: number }, after: { total: number; idle: number }) {
@@ -207,7 +223,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
   const readCpu = options.cpuCounters ?? readCpuCounters;
   const topology = platform() === 'win32' && options.readWindowsPressure === undefined ? createWindowsGpuCapacityCache() : undefined;
   const readWindows = options.readWindowsPressure ?? (topology ?
-    (signal: AbortSignal, observeMemory: (value: WindowsMemoryPressure) => void) => sampleWindowsPressure(signal, topology, observeMemory) : undefined);
+    (signal: AbortSignal, observe: ObserveWindowsPressure) => sampleWindowsPressure(signal, topology, observe) : undefined);
   let memory: TimedReading | undefined;
   let cpu: Pressure = { highSamples: 0, pressured: false };
   let gpu: Pressure = { highSamples: 0, pressured: false };
@@ -271,23 +287,25 @@ export function createMissionAdmission(options: AdmissionOptions) {
     }
   }
 
-  function applyWindowsPressure(result: WindowsPressure, startedAt: number, startedAtUtc: string) {
-    if (disposed) return;
+  function applyWindowsUtilization(result: WindowsPressure, startedAt: number, startedAtUtc: string) {
     const time = now(), recentDemand = time - lastDemand <= demandGapMs;
     const previousGpu = fresh(gpu.sample, time, windowsFreshMs);
     const previousDisk = fresh(disk.sample, time, windowsFreshMs);
     const windowsReading = (value: number) => ({ reading: { value, observedAt: startedAtUtc }, time: startedAt });
     const gpuReading = numeric(result.gpuEnginePercent, 100) ? windowsReading(result.gpuEnginePercent) : undefined;
     const diskReading = numeric(result.diskQueueLength, Number.MAX_SAFE_INTEGER) ? windowsReading(result.diskQueueLength) : undefined;
-    for (const name of Object.keys(windowsMetrics) as (keyof typeof windowsMetrics)[]) {
-      if (name === 'windowsLowMemory' || name === 'windowsCommitHeadroomBytes') continue;
+    for (const name of ['gpuEnginePercent', 'diskQueueLength', 'diskBytesPerSecond'] as const) {
       const value = result[name];
       capture(name, numeric(value, name === 'gpuEnginePercent' ? 100 : Number.MAX_SAFE_INTEGER) ? value : undefined,
         startedAt, null, startedAtUtc);
     }
     gpu = observePressure(previousGpu ? gpu : { highSamples: 0, pressured: false }, gpuReading, 95, 85);
     disk = observePressure(previousDisk ? disk : { highSamples: 0, pressured: false }, diskReading, 8, 4);
-    if (recentDemand && (gpuReading || diskReading || previousGpu || previousDisk)) options.onChange?.();
+    if (recentDemand && (gpuReading || diskReading || previousGpu || previousDisk)) notifyWindowsObservation();
+  }
+
+  function notifyWindowsObservation() {
+    try { options.onChange?.(); } catch { /* Optional telemetry cannot break the host. */ }
   }
 
   function refreshWindows(time: number) {
@@ -297,10 +315,14 @@ export function createMissionAdmission(options: AdmissionOptions) {
     const startedAtUtc = new Date(wallNow()).toISOString();
     probe = controller;
     lastProbe = time;
-    let memoryReported = false;
-    const observeMemory = (observation: WindowsMemoryPressure) => {
-      if (memoryReported || controller.signal.aborted || disposed) return;
-      memoryReported = true;
+    const reported = new Set<WindowsProbeStage>();
+    const observe: ObserveWindowsPressure = (observation, stage) => {
+      if (reported.has(stage) || controller.signal.aborted || disposed) return;
+      reported.add(stage);
+      if (stage === 'utilization') {
+        applyWindowsUtilization(observation, time, startedAtUtc);
+        return;
+      }
       const observedAt = now();
       let changed = false;
       for (const name of earlyMemoryMetrics) {
@@ -313,16 +335,21 @@ export function createMissionAdmission(options: AdmissionOptions) {
         if (valid && value !== before) changed = true;
       }
       if (changed && observedAt - lastDemand <= demandGapMs) {
-        try { options.onChange?.(); } catch { /* Optional telemetry cannot break the host. */ }
+        notifyWindowsObservation();
       }
     };
     void Promise.resolve().then(() => {
       controller.signal.throwIfAborted();
-      return readWindows(controller.signal, observeMemory);
+      return readWindows(controller.signal, observe);
     }).catch((): WindowsPressure => ({})).then(result => {
-      if (!controller.signal.aborted) {
-        observeMemory(result);
-        applyWindowsPressure(result, time, startedAtUtc);
+      if (!controller.signal.aborted && !disposed) {
+        observe(result, 'memory');
+        observe(result, 'utilization');
+        for (const name of ['gpuDedicatedCapacityBytes', 'gpuDedicatedInUseBytes', 'vramAvailableBytes',
+          'networkBytesPerSecond', 'physicalCores', 'pagesPerSecond'] as const) {
+          const value = result[name];
+          capture(name, numeric(value, Number.MAX_SAFE_INTEGER) ? value : undefined, time, null, startedAtUtc);
+        }
       }
     }).catch(() => {
       // Optional telemetry and a failed observer cannot stall scheduler admission.
