@@ -159,10 +159,12 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     freeForReservations = critical ? 0 : Math.min(free, commit ?? Infinity) - memoryFloor;
     const rendererPressure = reasons.includes('renderer-latency');
     const gpuPressure = reasons.includes('gpu-load');
+    const gpuLoadUnavailable = reasons.includes('gpu-load-unavailable');
+    const gpuHeld = gpuPressure || gpuLoadUnavailable;
     const time = now();
-    if (gpuPressure) gpuRecoverAfter = Infinity;
+    if (gpuHeld) gpuRecoverAfter = Infinity;
     else if (gpuRecoverAfter === Infinity) gpuRecoverAfter = time + recoveryDwellMs;
-    const gpuRecovering = !gpuPressure && time < gpuRecoverAfter;
+    const gpuRecovering = !gpuHeld && time < gpuRecoverAfter;
     const gpuThermalPressure = reasons.includes('gpu-thermal-throttling');
     const externalActivity = config.protectExternalActivity && reasons.includes('external-desktop-activity');
     const protecting = config.mode === 'gaming_focus' || reasons.includes('active-input') || rendererPressure || externalActivity;
@@ -176,7 +178,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       !gpuPressure && !reasons.includes('disk-io');
     const balancedCeiling = Math.max(1, maxWorkers - 1);
     const cpu = critical ? 0 : Math.min(config.limits.cpu, cpuLimited ? 1 : idleHeadroom ? maxWorkers : balancedCeiling);
-    gpuPreparationAllowed = !critical && !contention && !recovering && !gpuPressure && !gpuRecovering &&
+    gpuPreparationAllowed = !critical && !contention && !recovering && !gpuHeld && !gpuRecovering &&
       !gpuThermalPressure && config.limits.gpu > 0;
     const next = {
       cpu,
@@ -193,7 +195,8 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
         powerLimited ? 'power_protection' : cpuPressure ? 'cpu_contention' :
           recovering && !contention ? 'recovery_dwell' : cpuLimited ? 'cpu_conservative' :
       reasons.includes('disk-io') ? 'disk_contention' : gpuThermalPressure ? 'gpu_thermal_pressure' : gpuPressure ? 'gpu_contention' :
-        gpuRecovering ? 'gpu_recovery_dwell' : idleHeadroom ? 'throughput_profile' : 'balanced';
+        gpuLoadUnavailable ? 'gpu_load_unavailable' : gpuRecovering ? 'gpu_recovery_dwell' :
+          idleHeadroom ? 'throughput_profile' : 'balanced';
     if (nextReason !== reason || kinds.some(kind => next[kind] !== effective[kind])) {
       previous = effective;
       effective = next;

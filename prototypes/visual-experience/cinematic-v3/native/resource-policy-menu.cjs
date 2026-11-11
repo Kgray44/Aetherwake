@@ -19,6 +19,7 @@ const reasons = {
   cpu_contention: "Sustained CPU load",
   disk_contention: "Disk contention",
   gpu_contention: "GPU contention",
+  gpu_load_unavailable: "Waiting for a GPU load reading after contention",
   gpu_recovery_dwell: "Waiting for GPU headroom to stabilize",
   gpu_thermal_pressure: "GPU driver reports thermal slowdown",
   throughput_profile: "Throughput profile has headroom",
