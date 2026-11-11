@@ -77,7 +77,7 @@ export interface MissionVerification {
   detail: string;
   evidenceIds: string[];
 }
-export type MissionAdmissionReason = 'physical-memory' | 'storage-reserve' | 'cpu-load' | 'gpu-load' | 'disk-io' | 'active-input' |
+export type MissionAdmissionReason = 'physical-memory' | 'storage-reserve' | 'cpu-load' | 'gpu-load' | 'disk-io' | 'active-input' | 'external-desktop-activity' |
   'renderer-latency' | 'battery-power' | 'suspended' | 'cpu-speed-limit';
 export interface MissionAdmissionReading { value: number; observedAt: string }
 export interface MissionAdmission {

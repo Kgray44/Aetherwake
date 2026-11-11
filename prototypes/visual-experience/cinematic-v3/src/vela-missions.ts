@@ -53,6 +53,7 @@ const admissionReasonLabel: Record<MissionAdmissionReason, string> = {
   "gpu-load": "High GPU load",
   "disk-io": "High disk I/O load",
   "active-input": "Recent Aerynth activity",
+  "external-desktop-activity": "Recent desktop activity during contention",
   "renderer-latency": "Slow renderer frames",
   "battery-power": "Battery power",
   suspended: "System suspended",

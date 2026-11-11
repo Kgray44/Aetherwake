@@ -7,6 +7,7 @@ export type ResourcePolicyConfig = {
   mode: ResourceMode;
   limits: Readonly<Record<ResourceKind, number>>;
   monitorWindows?: boolean;
+  protectExternalActivity?: boolean;
 };
 type PolicyPreference = { config: ResourcePolicyConfig; origin: 'default' | 'host' | 'user' };
 type SavedPreferences = { schemaVersion: 1; current: PolicyPreference; previous: PolicyPreference | null; appliedAtUtc: string };
@@ -19,10 +20,12 @@ export type ResourcePolicyNativeRequest = { name: 'inspect' } |
   { name: 'set-cpu-limit'; limit: number; expectedVersion: number } |
   { name: 'set-gpu-limit'; limit: 0 | 1; expectedVersion: number } |
   { name: 'set-windows-monitoring'; enabled: boolean; expectedVersion: number } |
+  { name: 'set-external-activity-protection'; enabled: boolean; expectedVersion: number } |
   { name: 'restore-defaults' | 'rollback'; expectedVersion: number };
 export type ResourcePolicyNativeView = ReturnType<ReturnType<typeof createResourcePolicy>['inspect']> & {
   windowsCountersSupported: boolean;
   dedicatedVramEstimate: { bytes: number; ageMs: number } | null;
+  externalDesktopActivity: { active: boolean; ageMs: number } | null;
 };
 export type ResourceAdjustment = {
   schemaVersion: 1;
@@ -79,8 +82,10 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
   function validate(config: ResourcePolicyConfig): ResourcePolicyConfig {
     if (!config || !config.limits || !['balanced', 'gaming_focus', 'max_throughput'].includes(config.mode) ||
         config.monitorWindows !== undefined && typeof config.monitorWindows !== 'boolean' ||
+        config.protectExternalActivity !== undefined && typeof config.protectExternalActivity !== 'boolean' ||
         !kinds.every(kind => finiteCount(config.limits[kind], maxWorkers))) throw Error('invalid_resource_policy');
     return { mode: config.mode, monitorWindows: config.monitorWindows ?? true,
+      protectExternalActivity: config.protectExternalActivity ?? false,
       limits: Object.fromEntries(kinds.map(kind => [kind, config.limits[kind]])) as ResourcePolicyConfig['limits'] };
   }
   function restorePreference(value: PolicyPreference): PolicyPreference {
@@ -146,7 +151,8 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     freeForReservations = critical ? 0 : free - memoryFloor;
     const rendererPressure = reasons.includes('renderer-latency');
     const gpuPressure = reasons.includes('gpu-load');
-    const protecting = config.mode === 'gaming_focus' || reasons.includes('active-input') || rendererPressure;
+    const externalActivity = config.protectExternalActivity && reasons.includes('external-desktop-activity');
+    const protecting = config.mode === 'gaming_focus' || reasons.includes('active-input') || rendererPressure || externalActivity;
     const powerLimited = reasons.includes('battery-power') || reasons.includes('cpu-speed-limit');
     const contention = protecting || powerLimited || reasons.includes('cpu-load') || reasons.includes('disk-io');
     if (critical || contention) lastProtection = now();
@@ -166,7 +172,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       remote: config.limits.remote,
     };
     const nextReason = suspended ? 'system_suspended' : critical ? (free === undefined ? 'memory_unavailable' : 'safety_floor') :
-      rendererPressure ? 'renderer_latency' : protecting ? 'foreground_protection' :
+      rendererPressure ? 'renderer_latency' : externalActivity ? 'external_desktop_activity' : protecting ? 'foreground_protection' :
         powerLimited ? 'power_protection' : recovering && !contention ? 'recovery_dwell' : cpuLimited ? 'cpu_conservative' :
       reasons.includes('disk-io') ? 'disk_contention' : gpuPressure ? 'gpu_contention' :
         idleHeadroom ? 'throughput_profile' : 'balanced';
@@ -222,13 +228,14 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       return true;
     },
     windowsMonitoring: () => preference.config.monitorWindows ?? true,
+    externalActivityProtection: () => preference.config.protectExternalActivity ?? false,
     inspect() {
       const { config, origin } = preference;
       return { schemaVersion: 1 as const, epoch, revision, configVersion, mode: config.mode,
         limits: { ...config.limits }, effective: { ...effective }, previous: previous && { ...previous }, reason,
         active: Object.fromEntries(kinds.map(kind => [kind, used(kind)])), reservedRamBytes: reservedRam(),
         origin, configurationHealth, maxCpuWorkers: maxWorkers, canRollback: !!previousPreference,
-        windowsMonitoring: config.monitorWindows ?? true, appliedAtUtc,
+        windowsMonitoring: config.monitorWindows ?? true, externalActivityProtection: config.protectExternalActivity ?? false, appliedAtUtc,
         previousMode: previousPreference?.config.mode ?? null };
     },
     /** AEP owns the cited evidence. A preview performs structural and budget checks only. */

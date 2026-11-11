@@ -17,6 +17,7 @@ const windowsFreshMs = 30_000;
 const inputFreshMs = 3_000;
 const rendererFreshMs = 6_000;
 const powerFreshMs = 15_000;
+const desktopActivityFreshMs = 6_500;
 
 type CpuCounters = Omit<ReturnType<typeof readCpuCounters>, 'logicalProcessors'> &
   Partial<Pick<ReturnType<typeof readCpuCounters>, 'logicalProcessors'>>;
@@ -262,6 +263,12 @@ export function createMissionAdmission(options: AdmissionOptions) {
     samples.delete('rendererTimingSamples');
   }
 
+  function externalDesktopActivity(time: number) {
+    if (!policy.externalActivityProtection() || focused === null || !power || power.value.suspended ||
+        power.value.idleSeconds === null || time - power.time > desktopActivityFreshMs) return undefined;
+    return !focused && power.value.idleSeconds * 1000 < inputFreshMs;
+  }
+
   const governor = {
     read(demand: boolean): MissionAdmission {
       if (disposed) return { workerLimit: options.maxWorkers, reasons: [], readings: {} };
@@ -297,8 +304,10 @@ export function createMissionAdmission(options: AdmissionOptions) {
       if (nativePower?.battery === true) reasons.push('battery-power');
       if (nativePower && nativePower.speedLimitPercent !== null && nativePower.speedLimitPercent < 100) reasons.push('cpu-speed-limit');
       if (power?.value.suspended) reasons.push('suspended');
-      if (time - lastInput <= inputFreshMs && ((cpuPercent?.value ?? -1) >= 80 || (gpuEnginePercent?.value ?? -1) >= 85))
-        reasons.push('active-input');
+      if ((cpuPercent?.value ?? -1) >= 80 || (gpuEnginePercent?.value ?? -1) >= 85) {
+        if (time - lastInput <= inputFreshMs) reasons.push('active-input');
+        if (externalDesktopActivity(time)) reasons.push('external-desktop-activity');
+      }
       const workerLimit = reasons.includes('physical-memory') || reasons.includes('suspended') ?
         0 : reasons.length ? Math.min(1, options.maxWorkers) : options.maxWorkers;
       const snapshot = { workerLimit, reasons, readings: {
@@ -346,6 +355,9 @@ export function createMissionAdmission(options: AdmissionOptions) {
         const [unit, source] = windowsMetrics[name];
         return [name, metric(name, unit, source, windowsFreshMs, true, !!readWindows, policy.windowsMonitoring())];
       })) as Record<keyof typeof windowsMetrics, ReturnType<typeof metric>>;
+      const activity = externalDesktopActivity(time);
+      const activitySource = metric('idleSeconds', '0=inactive, 1=recent input outside Aerynth',
+        'Electron system idle time and Aerynth window focus', desktopActivityFreshMs, true, true, policy.externalActivityProtection());
       return { schemaVersion: 1 as const, scope: 'local-host' as const, metrics: {
         ...windows,
         logicalProcessors: metric('logicalProcessors', 'logical processors', 'node:os.cpus', demandGapMs),
@@ -360,6 +372,9 @@ export function createMissionAdmission(options: AdmissionOptions) {
         cpuSpeedLimitPercent: metric('cpuSpeedLimitPercent', 'percent of rated CPU speed', 'Electron powerMonitor speed-limit-change', powerFreshMs),
         thermalTemperature: metric('thermalTemperature', 'degrees Celsius', 'No qualified thermal sensor', 0, false, false),
         foregroundApp: metric('foregroundApp', 'state', 'No authorized foreground OS source', 0, false, false),
+        externalDesktopActivity: { ...activitySource,
+          availability: activity === undefined && activitySource.availability === 'derived' ? 'not_sampled' : activitySource.availability,
+          value: activity === undefined ? null : Number(activity) },
         aerynthFocused: metric('aerynthFocused', '0=unfocused, 1=focused', 'Electron BrowserWindow focus/blur', Infinity),
         frameTime: metric('frameTime', 'ms, callback interval p95', 'Aerynth renderer animation-frame timestamps', rendererFreshMs, true),
         frameBudgetRatio: metric('frameBudgetRatio', 'ratio to target cadence, p95', 'Aerynth renderer animation-frame timestamps', rendererFreshMs, true),
