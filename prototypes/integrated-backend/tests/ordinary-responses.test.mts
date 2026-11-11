@@ -1786,6 +1786,9 @@ test('ordinary Responses uses canonical identity, exact grant and stateless loca
   assert.equal(timing.parentRequestId,null);
   assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.resultObservedMs&&
     timing.resultObservedMs<=timing.outputStagedMs&&timing.outputStagedMs<=timing.settlementStagedMs);
+  assert.ok(timing.firstNonblankOutput?.kind === 'text' &&
+    timing.firstTextDeltaMs <= timing.firstNonblankOutput.elapsedMs &&
+    timing.firstNonblankOutput.elapsedMs <= timing.resultObservedMs);
   assert.doesNotMatch(JSON.stringify(timing),/Synthetic first (?:question|answer)/u);
   f.responses.push(()=>complete('resp-synthetic-second','Synthetic follow-up answer'));const second=await prepare(f,c.resourceId,'Synthetic follow-up');assert.deepEqual(second.preview.responses!.messages.filter(m=>m.role!=='developer').map(m=>[m.role,m.content]),[['user','Synthetic first question'],['assistant','Synthetic first answer'],['user','Synthetic follow-up']]);await f.core.command('conversationSend',await grant(f,second.preview));
   const before=await f.core.command('snapshot',{}),beforeIds=before.graph.messages.map(m=>m.id);assert.equal(before.bindings[c.resourceId],undefined);assert.equal(before.graph.messages.length,4);await f.reopen();

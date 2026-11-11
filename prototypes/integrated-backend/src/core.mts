@@ -2434,7 +2434,7 @@ export class BackendCore {
       },
       event: event => {
         const execution = this.state.executions[event.executionId]; ensure(execution && this.active === execution, 'invalid_provider_response');
-        if (trace?.executionId === event.executionId) trace.timing.observe(event.type);
+        if (trace?.executionId === event.executionId) trace.timing.observe(event);
         if (event.type === 'provider/response-created') this.atomic(() => { execution.responseId = event.responseId; execution.state = 'running'; });
         else if (event.type === 'provider/usage') {
           this.atomic(() => { execution.usage = event.usage; });
@@ -5626,7 +5626,7 @@ export class BackendCore {
       ensure(event.executionId===e.id&&event.providerId===CHATGPT_PLAN_PROVIDER,'invalid_provider_response');
       if (!ownsTurn() || controller.signal.aborted) return;
       if(!this.conversationAccess.resource(e.resourceId)){controller.abort();throw new ServiceError('source_unavailable');}
-      timing.observe(event.type);
+      timing.observe(event);
       if (event.type === 'provider/response-created') {
         await supply(event.responseId);
         // A cancelled transport can stop waiting for this callback.
