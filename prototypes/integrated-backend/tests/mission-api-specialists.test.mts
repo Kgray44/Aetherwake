@@ -79,6 +79,12 @@ test('actual Core admits two API specialists before either HTTP request is relea
     await until(() => f.requests.length, count => count === 2);
     const during = await f.core.command('missions', { name: 'read', input: { id: mission.id } }) as MissionProjection;
     assert.equal(during.tasks.filter(task => task.state === 'running').length, 2, 'both transports must overlap before release');
+    const live = await f.core.command('missions', { name: 'execution-profile', input: { id: mission.id } });
+    assert.ok(live && 'kind' in live && live.kind === 'execution-profile');
+    assert.equal(live.work.live?.attempts.length, 2);
+    assert.ok(live.work.live?.attempts.every(attempt => attempt.state === 'running' &&
+      attempt.elapsedSinceDispatchMs !== null && attempt.elapsedSinceDispatchMs >= 0));
+    assert.equal(live.work.criticalPath, null);
     const payloads = f.requests.map(body => {
       assert.equal(body.model, 'gpt-6.1-sol'); assert.deepEqual(body.reasoning, { effort: 'high' });
       assert.equal(body.store, false); assert.equal(body.tools, undefined); assert.equal(body.max_output_tokens, 2048);
@@ -107,6 +113,7 @@ test('actual Core admits two API specialists before either HTTP request is relea
     const readProfile = () => f.core.command('missions', { name: 'execution-profile', input: { id: mission.id } });
     const profile = await readProfile();
     assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+    assert.equal(profile.work.live, null);
     const specialistTimings = profile.attempts.filter(attempt => attempt.providerExecutionId !== null);
     assert.equal(specialistTimings.length, 2);
     for (const attempt of specialistTimings) {

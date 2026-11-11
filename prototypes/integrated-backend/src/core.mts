@@ -1083,7 +1083,10 @@ export class BackendCore {
             mission.originConversationId && this.conversationReadAccess(mission.originConversationId, messageId))
             delivery = { ...meta.missionPresentation, messageId };
         }
-        return projectMissionExecution(mission, publication, delivery);
+        const clock = this.missions.fullProfilingClock();
+        const observation = clock && (mission.outcome === 'running' || mission.outcome === 'cancelling') ?
+          { clock, monotonicMs: performance.now() } : null;
+        return projectMissionExecution(mission, publication, delivery, observation);
       }
       case 'read': {
         ensure(Object.keys(request.input).length === 1, 'invalid_mission_command');
