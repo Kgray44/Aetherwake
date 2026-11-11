@@ -1,8 +1,9 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { promisify } from 'node:util';
 import { VelaError, check, isRecord, text } from '../../vela-core/src/capabilities.ts';
 import type { VelaFileEditItemView, VelaFileEditVerification, VelaFileEditView, VelaProjectCheckKind, VelaProjectCheckReceipt } from '../../vela-core/src/contracts.ts';
 export type { VelaFileEditView } from '../../vela-core/src/contracts.ts';
@@ -248,21 +249,38 @@ export function parseVelaFileEdit(output: string, targets: VelaFileEditTarget[],
   return targets.flatMap(target => edits.filter(edit => edit.target === target));
 }
 
-function powershell(args: string[], env?: NodeJS.ProcessEnv) {
+function powershellExecutable() {
   const root = process.env.SystemRoot;
   check(root && isAbsolute(root), 'vela_codex_write_unavailable');
-  return execFileSync(join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-    ['-NoProfile', '-NonInteractive', ...args], { ...processOptions, timeout: 15000, ...(env ? { env } : {}) });
+  return join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
+function powershell(args: string[], env?: NodeJS.ProcessEnv) {
+  return execFileSync(powershellExecutable(), ['-NoProfile', '-NonInteractive', ...args],
+    { ...processOptions, timeout: 15000, ...(env ? { env } : {}) });
+}
+
+function reserveGuardArguments(path: string, privateRoot?: string) {
+  return ['-File', join(homedir(), 'AppData', 'Local', 'AeroStorageWatch', 'ReserveGuard.ps1'),
+    '-EstimatedCBytes', '67108864', '-EstimatedDBytes',
+    [path, privateRoot].some(value => value && /^D:/iu.test(value)) ? '67108864' : '0'];
 }
 
 /** Trusted constructor injection only. This is storage admission, never write authority. */
 export type FileEditAdmission = (targetPath: string, privateRoot?: string) => void;
 export function admitVelaFileEdit(path: string, privateRoot?: string) {
   try {
-    const raw = powershell(['-File', join(homedir(), 'AppData', 'Local', 'AeroStorageWatch', 'ReserveGuard.ps1'),
-      '-EstimatedCBytes', '67108864', '-EstimatedDBytes',
-      [path, privateRoot].some(value => value && /^D:/iu.test(value)) ? '67108864' : '0']);
+    const raw = powershell(reserveGuardArguments(path, privateRoot));
     check(JSON.parse(raw).allowed === true, 'storage_reserve_admission_denied');
+  } catch { throw new VelaError('storage_reserve_admission_denied'); }
+}
+
+const execute = promisify(execFile);
+export async function admitVelaFileEditAsync(path: string, privateRoot?: string, signal?: AbortSignal) {
+  try {
+    const { stdout } = await execute(powershellExecutable(), ['-NoProfile', '-NonInteractive', ...reserveGuardArguments(path, privateRoot)],
+      { ...processOptions, timeout: 15000, signal });
+    check(JSON.parse(stdout).allowed === true, 'storage_reserve_admission_denied');
   } catch { throw new VelaError('storage_reserve_admission_denied'); }
 }
 
