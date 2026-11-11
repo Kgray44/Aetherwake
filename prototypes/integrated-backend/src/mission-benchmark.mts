@@ -9,9 +9,11 @@ import type { MissionProjection } from './mission-contracts.mts';
 
 const db = new DatabaseSync(':memory:');
 const scope = { workspaceId: 'benchmark-workspace', projectId: null };
-const plan = nativeMissionPlan('Investigate Aerynth backend performance', scope)!;
 const concurrent = process.argv.includes('--concurrent');
 const paired = process.argv.includes('--paired');
+const holdout = process.argv.includes('--holdout');
+if (holdout && (!paired || concurrent)) throw Error('benchmark_holdout_requires_paired_mode');
+const plan = nativeMissionPlan(holdout ? 'Measure CPU and RAM' : 'Investigate Aerynth backend performance', scope)!;
 const concurrentLaneLimit = 3;
 let underPressure = false;
 let workload: { running: Map<string, string>; peakWorkers: number; peakMissions: number; firstStartMs?: number } | undefined;
@@ -71,9 +73,12 @@ async function runBaseline() {
 const batchSize = 4;
 const round = (n: number) => Math.round(n * 100) / 100;
 const sourceByTask = new Map([
-  ['backend', 'aerynth.backend.node'], ['cpu', 'node:os.cpus'], ['ram', 'node:os.totalmem+freemem'],
-  ['code', 'aerynth.shipped-backend-source'], ['report', 'aerynth.mission.journal'],
+  ['cpu', 'node:os.cpus'], ['ram', 'node:os.totalmem+freemem'], ['report', 'aerynth.mission.journal'],
 ]);
+if (!holdout) {
+  sourceByTask.set('backend', 'aerynth.backend.node');
+  sourceByTask.set('code', 'aerynth.shipped-backend-source');
+}
 const joinInputIds = [...sourceByTask.keys()].filter(id => id !== 'report');
 const screening = { protocol: 'native-worker-pair-screen@1', pairs: 6, minimumConcordantPairs: 5,
   minimumMedianRelativeEffect: 0.05 };
@@ -109,10 +114,10 @@ async function runPaired() {
   const startedAt = new Date().toISOString();
   let iteration = 0;
   const warmups = [];
-  for (const workers of [1, 2, 3]) warmups.push(await samplePaired(iteration++, workers));
+  for (const workers of holdout ? [1, 2] : [1, 2, 3]) warmups.push(await samplePaired(iteration++, workers));
   const comparisons = [];
   const hypotheses = [];
-  for (const [baselineWorkers, candidateWorkers] of [[1, 2], [2, 3]]) {
+  for (const [baselineWorkers, candidateWorkers] of holdout ? [[1, 2]] : [[1, 2], [2, 3]]) {
     const pairs = [];
     for (let pair = 0; pair < screening.pairs; pair++) {
       const baselineFirst = pair % 2 === 0;
@@ -133,7 +138,7 @@ async function runPaired() {
     comparisons.push({ baselineWorkers, candidateWorkers, pairs, validPairs: deltas.length,
       medianDeltaMs: deltas.length === pairs.length ? (deltas[2] + deltas[3]) / 2 : null,
       medianRelativeDelta, slowerPairs, fasterPairs });
-    if (warmups.every(row => row.qualityPassed) && medianRelativeDelta !== null &&
+    if (!holdout && warmups.every(row => row.qualityPassed) && medianRelativeDelta !== null &&
       Math.abs(medianRelativeDelta) >= screening.minimumMedianRelativeEffect &&
       Math.max(slowerPairs, fasterPairs) >= screening.minimumConcordantPairs) {
       const lowerWorkerArmWasFaster = medianRelativeDelta > 0;
@@ -164,8 +169,10 @@ async function runPaired() {
   }
   console.log(JSON.stringify({ contract: 'aerynth.mission-worker-comparison@1', startedAt, node: process.version,
     platform: process.platform, arch: process.arch, osRelease: release(), logicalParallelism: availableParallelism(),
-    warmups, comparisons, screening, hypotheses, providerCalls: 0,
-    boundary: 'Counterbalanced local read-only native workload with in-memory SQLite. Six pairs per comparison; no tail-latency or confidence estimate. Host interference is uncontrolled. The screen emits hypotheses for independent review.' }));
+    cohort: holdout ? 'cpu-ram-holdout' : 'backend-observation-screen',
+    expectedTaskSources: Object.fromEntries(sourceByTask), warmups, comparisons, screening, hypotheses, providerCalls: 0,
+    boundary: 'Counterbalanced local read-only native workload with in-memory SQLite. Six pairs per comparison; no tail-latency or confidence estimate. Host interference is uncontrolled.' +
+      (holdout ? ' This distinct native graph assesses transfer of the one-versus-two comparison.' : ' The screen emits hypotheses for independent review.') }));
   if (warmups.some(row => !row.qualityPassed) || comparisons.some(item => item.validPairs !== item.pairs.length)) process.exitCode = 1;
 }
 async function runBatch(holdMs: number) {
