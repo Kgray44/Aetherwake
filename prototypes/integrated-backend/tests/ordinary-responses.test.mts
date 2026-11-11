@@ -657,8 +657,12 @@ test('Read this log, tell me what happened, then fix the code and benchmark it',
 test('Read the log, explain the slowdown, fix the count, and run the tests after I approve once', {
   skip: process.platform !== 'win32',
 }, async () => {
-  const runtime = fileURLToPath(new URL('../.runtime/', import.meta.url));
-  mkdirSync(runtime, { recursive: true });
+  const scratchRoot = process.env.AERYNTH_FIXTURE_FILE_EDIT_ROOT;
+  const fallback = fileURLToPath(new URL('../.runtime/', import.meta.url));
+  if (scratchRoot === undefined) mkdirSync(fallback, { recursive: true });
+  else assert.ok(isAbsolute(scratchRoot), 'File-edit fixture scratch root must be absolute');
+  // Local Codex worktrees may be under .codex, where production file edits must remain denied.
+  const runtime = realpathSync.native(scratchRoot ?? fallback);
   const dir = mkdtempSync(join(runtime, 'vela-file-edit-'));
   const file = join(dir, 'sample.json');
   const testFile = join(dir, 'sample.test.mjs');
