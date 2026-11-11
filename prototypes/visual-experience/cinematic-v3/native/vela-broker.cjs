@@ -222,8 +222,11 @@ exports.velaCommand = async ({
       (value.workspaceState !== undefined && (value.workspaceState !== true || value.semanticContext !== true)) ||
       (value.projectEvidence !== undefined && (value.projectEvidence !== true || value.semanticContext !== true)) ||
       (value.missionCheckpoint !== undefined && (value.semanticContext !== true || !value.missionCheckpoint ||
-        Object.keys(value.missionCheckpoint).length !== 3 || !/^[a-f0-9-]{36}$/.test(value.missionCheckpoint.id) ||
-        !Number.isSafeInteger(value.missionCheckpoint.revision) || !Number.isSafeInteger(value.missionCheckpoint.triggerSeq))) ||
+        Object.keys(value.missionCheckpoint).length !== (value.missionCheckpoint.gapIndex === undefined ? 3 : 4) ||
+        !/^[a-f0-9-]{36}$/.test(value.missionCheckpoint.id) ||
+        !Number.isSafeInteger(value.missionCheckpoint.revision) || !Number.isSafeInteger(value.missionCheckpoint.triggerSeq) ||
+        (value.missionCheckpoint.gapIndex !== undefined && (value.projectEvidence !== true ||
+          !Number.isSafeInteger(value.missionCheckpoint.gapIndex) || value.missionCheckpoint.gapIndex < 0 || value.missionCheckpoint.gapIndex >= 8)))) ||
       (value.handoffSourceRequestId !== undefined && (!directMessageSend ||
         typeof value.handoffSourceRequestId !== "string" || !/^[a-f0-9-]{36}$/.test(value.handoffSourceRequestId))) ||
       (value.routingAgentId !== undefined && (!directMessageSend ||
@@ -346,7 +349,8 @@ exports.velaCommand = async ({
     if (!!preview.projectEvidence !== !!value.projectEvidence) throw Error("invalid_native_vela_review");
     const checkpoint = preview.missionCheckpoint?.selection, requestedCheckpoint = value.missionCheckpoint;
     if (checkpoint?.id !== requestedCheckpoint?.id || checkpoint?.revision !== requestedCheckpoint?.revision ||
-      checkpoint?.triggerSeq !== requestedCheckpoint?.triggerSeq) throw Error("invalid_native_vela_review");
+      checkpoint?.triggerSeq !== requestedCheckpoint?.triggerSeq ||
+      checkpoint?.gapIndex !== requestedCheckpoint?.gapIndex) throw Error("invalid_native_vela_review");
     if (directMessageSend && preview.workflowScope) {
       const paths = await pickEditPaths(win, dialog, preview.workflowScope.selection);
       const checkPaths = await pickCheckPaths(win, dialog, preview.workflowScope.check);

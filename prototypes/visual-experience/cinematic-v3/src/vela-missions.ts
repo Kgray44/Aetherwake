@@ -1215,7 +1215,24 @@ export function createVelaMissionView(
     const revision = renderRevisionReview(current);
     if (revision) section.append(revision);
     const checkpoint = current.events.findLast(event => event.kind === "settled" || event.kind === "recovered");
-    if (askCheckpoint && checkpoint && sameScope(current.scope, scope) && current.disposition !== "cancelled") {
+    const canAskCheckpoint = !!askCheckpoint && !!checkpoint && sameScope(current.scope, scope) && current.disposition !== "cancelled";
+    const askAboutCheckpoint = async (intent: string, gapIndex?: number) => {
+      if (!canAskCheckpoint || checkpointAnswerPending || mission?.id !== current.id || mission.revision !== current.revision) return;
+      const expectedEpoch = epoch;
+      checkpointAnswerPending = true;
+      try {
+        await askCheckpoint!(intent, { id: current.id, revision: current.revision, triggerSeq: checkpoint!.seq,
+          ...(gapIndex === undefined ? {} : { gapIndex }) });
+        if (epoch === expectedEpoch && mission?.id === current.id && mission.revision === current.revision)
+          checkpointAnswered = current.id;
+      } catch (cause) {
+        if (epoch === expectedEpoch && selectedId === current.id) showError(cause);
+      } finally {
+        checkpointAnswerPending = false;
+        if (visible) render();
+      }
+    };
+    if (canAskCheckpoint) {
       const form = el("form"), label = el("label", undefined, "Question about this checkpoint"), question = el("input");
       form.dataset.missionCheckpointQuestion = "";
       question.required = true;
@@ -1229,19 +1246,8 @@ export function createVelaMissionView(
         event.preventDefault();
         const intent = question.value.trim();
         if (!intent || checkpointAnswerPending) return;
-        const expectedEpoch = epoch;
-        checkpointAnswerPending = submit.disabled = true;
-        void askCheckpoint(intent, { id: current.id, revision: current.revision, triggerSeq: checkpoint.seq })
-          .then(() => {
-            if (epoch === expectedEpoch && mission?.id === current.id && mission.revision === current.revision)
-              checkpointAnswered = current.id;
-            question.value = "";
-          }, cause => {
-            if (epoch === expectedEpoch && selectedId === current.id) showError(cause);
-          }).finally(() => {
-            checkpointAnswerPending = submit.disabled = false;
-            if (visible) render();
-          });
+        submit.disabled = true;
+        void askAboutCheckpoint(intent);
       });
       section.append(form);
     }
@@ -1257,10 +1263,17 @@ export function createVelaMissionView(
     if (current.objectiveAssessment) {
       section.append(el("h4", undefined, "Objective assessment"),
         el("p", "vela-core-meta", `Reviewed by ${current.objectiveAssessment.model}`));
-      for (const finding of current.objectiveAssessment.findings) {
+      for (const [index, finding] of current.objectiveAssessment.findings.entries()) {
         section.append(el("p", undefined, `${finding.status === "supported" ? "Supported by checked evidence" : "Still unverified"} — ${finding.statement}`));
         if (finding.evidence.length) section.append(el("p", "vela-core-meta", finding.evidence.map(ref =>
           current.tasks.find(task => task.id === ref.taskId)?.objective ?? ref.taskId).join(" · ")));
+        if (finding.status === "unverified" && canAskCheckpoint && current.scope.projectId) {
+          const investigate = button("Find project evidence for this gap", `mission-gap-${index}`, () => {
+            void askAboutCheckpoint("What evidence in this project can address the selected mission gap?", index);
+          });
+          investigate.disabled = commandPending || checkpointAnswerPending;
+          section.append(investigate);
+        }
       }
     } else if (checkpoint && canAssessObjective(current, scope)) {
       const assess = button("Review objective against results", "assess-objective", () => { void requestExecutiveReview(current, checkpoint.seq); });

@@ -1118,14 +1118,63 @@ test('project evidence supplies a mission plan across workspaces and remains bou
       .conversation!.messages.find(message => message.missionReport?.missionId === running.id)!;
     const displayed = await chatReport();
     assert.deepEqual(displayed.missionReport?.assessment?.gaps, ['The host counters do not certify readiness.']);
+    const recorded = await read();
+    const added = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Duty review record',
+      workspaceId: workspace.activeWorkspaceId! });
+    const signoff = added.resources.find(resource => resource.title === 'Duty review record')!;
+    const signoffText = 'The release duty engineer signed the handoff at 16:20.';
+    await f.core.command('desktop', { type: 'content', resourceId: signoff.id, expectedVersion: signoff.version, content: signoffText });
+    const question = 'What evidence in this project can address the selected mission gap?';
+    const gapInput = { intent: question, resourceIds: [], authorizeProvider: true, providerId: 'openai-api-vela',
+      model: 'gpt-6-luna', semanticContext: true as const, projectEvidence: true as const,
+      missionCheckpoint: { id: running.id, revision: recorded.revision, triggerSeq: assessmentRequest.triggerSeq, gapIndex: 0 } };
+    await assert.rejects(f.core.command('velaRequestPreview', { ...gapInput, adaptive: true,
+      missionCheckpoint: { ...gapInput.missionCheckpoint, gapIndex: 7 } }), /vela_mission_checkpoint_changed/);
+    const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    const send = (allow: boolean) => velaCommand({
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      directMessageSend: true, routeNative: true, dialog: {}, call: f.core.command.bind(f.core),
+      async reviewProvider({ review }: { review: VelaNativeReview }) {
+        assert.match(review.missionCheckpoint!.text, /unverifiedMissionGap.*host counters/);
+        assert.ok(review.projectEvidence?.sources.some(source => source.id === signoff.id));
+        assert.doesNotMatch(JSON.stringify(review), /FOREIGN-PLAN-831/);
+        return allow;
+      },
+      input: { name: 'request', input: gapInput },
+    }) as Promise<VelaRequest>;
+    await assert.rejects(send(false), /authorization_cancelled/);
+    assert.equal(f.requests.length, 6);
+    f.replies.push(body => {
+      const packet = JSON.parse(body.input[0].content);
+      assert.equal(packet.reviewedMissionGap, 'The host counters do not certify readiness.');
+      return reply(perceive('signoff', 'release duty engineer signed handoff'))(body);
+    }, body => {
+      const packet = JSON.parse(body.input[0].content);
+      const source = packet.excerpts.find((item: { title: string }) => item.title === 'Duty review record');
+      assert.ok(source);
+      return reply({ version: 3, clarification: '', assessment: [
+        { key: 'signoff', status: 'supported', passages: [{ source: source.handle, quote: signoffText }], query: '' },
+      ] })(body);
+    }, body => {
+      const packet = JSON.parse(body.input[0].content);
+      assert.deepEqual(packet.evidence.coverage[0].passages, [{ sourceId: signoff.id, title: 'Duty review record', quote: signoffText }]);
+      assert.equal(body.tools, undefined);
+      return response('The duty review record reports sign-off at 16:20.', body.model);
+    });
+    const followup = await send(true);
+    assert.equal(followup.state, 'responded');
+    assert.equal(followup.missionGapEvidence?.checkpoint.selection.gapIndex, 0);
+    assert.ok(followup.missionGapEvidence?.project.sourceIds.includes(signoff.id));
+    assert.equal((await read()).revision, recorded.revision, 'investigation does not revise the mission');
     const nextId = randomUUID();
     enqueue();
-    const next = await f.core.command('missionPlanReviewed', { ...selection, fingerprint: offer.fingerprint, requestId: nextId }) as MissionPreview;
+    const nextOffer = await f.core.command('missions', { name: 'preview', input: selection }) as MissionPlanningOffer;
+    const next = await f.core.command('missionPlanReviewed', { ...selection, fingerprint: nextOffer.fingerprint, requestId: nextId }) as MissionPreview;
     writeFileSync(path, 'A new correction withdraws every previous check.');
     await assert.rejects(f.core.command('missions', { name: 'start', input: {
       objective, requestId: nextId, proposalId: nextId, fingerprint: next.fingerprint,
     } }), /mission_planning_context_changed/);
-    assert.equal(f.requests.length, 9);
+    assert.equal(f.requests.length, 12);
     await f.reopen();
     const restored = await read();
     assert.deepEqual(restored.planning?.context?.projectEvidence, offer.projectEvidence);
@@ -1135,6 +1184,9 @@ test('project evidence supplies a mission plan across workspaces and remains bou
     assert.equal(stale.missionReport?.stale, true);
     assert.equal(stale.missionReport?.assessment, undefined);
     assert.doesNotMatch(stale.content, /RAM \d|timer delay|certify readiness/);
+    const after = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
+    assert.ok(!after.requests.some(request => request.id === followup.id));
+    assert.ok(!after.conversation?.messages.some(message => message.requestId === followup.id));
     assert.ok(restored.tasks.every(task => task.state === 'blocked' && task.detail === 'mission_source_changed_since_verification'));
     assert.deepEqual(restored.tasks.map(task => task.attempts.map(attempt => attempt.id)),
       settled.tasks.map(task => task.attempts.map(attempt => attempt.id)));

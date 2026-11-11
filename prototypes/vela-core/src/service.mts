@@ -56,6 +56,7 @@ export interface VelaServiceOptions {
   providerContextAdvance?(requestId:string):{context:ContextManifest;historyFence?:HistoryFence;navigation:{currentProjectId:string|null;currentWorkspaceId:string|null};validate():void}|undefined;
   /** Source-owned negative observation inside the same plan-rejection transaction; never starts a provider. */
   onPlanRejected?(plan:VelaPlan):void;
+  validateMissionGapEvidence?(evidence: NonNullable<VelaRequest['missionGapEvidence']>): boolean;
   /** Explicit bounded canonical projections. Absent means no implicit conversational history. */
   history?: {
     snapshot(conversationId: string, limit: number, query?: string, mode?: 'semantic-query'): HistorySnapshot | null;
@@ -253,9 +254,11 @@ export class VelaService {
   }
   private append(content: string, requestId: string, source: 'user' | 'vela-native' | 'provider', plan?: VelaPlan, response?: { kind: ProviderReplyKind; contribution?: ProviderContribution }) {
     const contribution = source === 'provider' ? response?.contribution ?? plan?.contribution : undefined;
+    const gapFollowup = this.data.requests.findLast(request => request.id === requestId)?.missionGapEvidence;
     return this.opts.host.appendMessage(this.conversationId(), {
       role: source === 'user' ? 'user' : 'assistant', content, source,
       classification: source === 'provider' ? 'reported' : 'observed', requestId,
+      ...(gapFollowup ? { missionGapFollowup: true as const } : {}),
       ...(plan ? { planId: plan.id } : {}), ...(contribution ? { providerId: contribution.providerId } : {}),
       ...(source === 'provider' && contribution ? { providerContribution: structuredClone(contribution) } : {}), ...(response ? { responseKind: response.kind } : {}),
     });
@@ -270,7 +273,8 @@ export class VelaService {
     const available = this.opts.planner?.availability() ?? { available: false, busy: false, reason: 'No planning provider connected' };
     const visible = (item: AttentionItem) => item.subject === null || (this.permitted(item.subject.id, item.subject.kind, scope) && !!this.opts.host.resolve(item.subject, scope));
     // Revoke content visibility as well as future collection. Persisted private history remains host-owned.
-    const requests = structuredClone(this.data.requests).map(r => {
+    const requests = structuredClone(this.data.requests.filter(request =>
+      !request.missionGapEvidence || this.opts.validateMissionGapEvidence?.(request.missionGapEvidence) === true)).map(r => {
       const { activeSurface, activeResourceId, activeWorkspaceLayout, ...context } = r.context;
       const projectId = activeSurface?.projectId ?? null, workspaceId = activeSurface?.workspaceId ?? null;
       const visibleWorkspaceId = workspaceId && scope.workspaceIds.includes(workspaceId) ? workspaceId : null;
@@ -397,6 +401,7 @@ export class VelaService {
       const r = this.data.requests.find(value => value.id === id); if (!r) return null;
       const scope = this.scope(), ref = this.opts.host.resolve({ id: r.conversationId, kind: 'resource' }, scope);
       if (!ref || this.opts.host.canReadContent?.(ref, scope) !== true) return null;
+      if (r.missionGapEvidence && this.opts.validateMissionGapEvidence?.(r.missionGapEvidence) !== true) return null;
       if(r.nativeSourceObservation&&this.opts.host.validateNativeSourceObservation?.(r.nativeSourceObservation,scope)!==true)return null;
       let sourceDependencies; try { sourceDependencies = historyDependenciesFromContext(r.context, r.conversationId); } catch { return null; }
       return structuredClone({ id: r.id, conversationId: r.conversationId, state: r.state, providerId: r.providerId,
@@ -756,13 +761,15 @@ export class VelaService {
       request.updatedAt = recovery.observedAt;
     });
   }
-  async request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean }, frozen?: PrivateFrozenProviderContext, planner = this.opts.planner, routed?: Pick<VelaRequest, 'route' | 'routingSettings' | 'handoff' | 'routingAgent'>): Promise<VelaRequest> {
+  async request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean }, frozen?: PrivateFrozenProviderContext, planner = this.opts.planner, routed?: Pick<VelaRequest, 'route' | 'routingSettings' | 'handoff' | 'routingAgent' | 'missionGapEvidence'>): Promise<VelaRequest> {
     check(text(input.intent, 16000) && typeof input.authorizeProvider === 'boolean', 'invalid_request');
     const scope = this.scope(), navigation = this.contextIdentity();
     if (frozen) check(typeof frozen.validate === 'function' && typeof frozen.onAcceptedAppend === 'function', 'private_provider_context_required');
     const reviewed = frozen ? freeze(structuredClone({ context: frozen.context, ...(frozen.historyFence ? { historyFence: frozen.historyFence } : {}) })) : undefined;
     if (routed?.handoff) check(identifier(routed.handoff.taskId) && reviewed?.historyFence?.historyDigest === routed.handoff.contextDigest &&
       routed.handoff.destinationProviderId === planner?.providerId, 'invalid_vela_handoff');
+    if (routed?.missionGapEvidence) check(!!frozen && input.authorizeProvider &&
+      this.opts.validateMissionGapEvidence?.(routed.missionGapEvidence) === true, 'vela_mission_checkpoint_changed');
     let acceptedAppend: AcceptedHistoryAppend | undefined;
     let completionContext:ReturnType<NonNullable<VelaServiceOptions['providerContextAdvance']>>;
     const validate = (phase: 'before-append' | 'before-provider' | 'before-response') => {
