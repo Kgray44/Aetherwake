@@ -681,20 +681,49 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     await click("#vela");
     const composer = SURFACE + ' textarea[aria-label="Message Vela"]';
     if (argv.includes('--missions-aep-presentation-only')) {
+      const retryNotes = argv.includes("--missions-aep-retry");
+      assert(!retryNotes || !argv.includes("--bootstrap-vela-api"), "native_retry_requires_offline_profile");
       // The panel preserves active edits instead of refreshing their controls from events.
       key("Tab");
       assert.equal(await js('document.activeElement?.matches("input,textarea,select")'), false);
-      const preview = await rpc("missions", { name: "preview", input: { objective: OBJECTIVE } });
+      const objective = retryNotes ? OBJECTIVE + " using workspace notes" : OBJECTIVE;
+      const preview = await rpc("missions", { name: "preview", input: { objective } });
       assert.equal(preview.externalReview, undefined);
       const mission = await rpc("missions", { name: "start", input: {
-        objective: OBJECTIVE, fingerprint: preview.fingerprint, requestId: randomUUID(),
+        objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
       } });
       receipt.actions.push({ method: "application-capability-fixture", type: "startLocalMission" });
+      const missionId = mission.id;
+      let failedAttemptId = null;
+      if (retryNotes) {
+        const failed = await wait("Native note verification fails without an authorized note", async () => {
+          const profile = await rpc("missions", { name: "execution-profile", input: { id: missionId } });
+          return profile.attempts.find(attempt => attempt.taskId === "notes" && attempt.state === "failed" && attempt.end);
+        });
+        failedAttemptId = failed.id;
+        const title = "Backend performance notes";
+        const created = await rpc("desktop", { type: "createResource", kind: "note", title, workspaceId: scope.workspaceId });
+        const note = created.resources.find(resource => resource.kind === "note" && resource.title === title);
+        assert.ok(note, "native_retry_source_missing");
+        await rpc("desktop", { type: "content", resourceId: note.id, expectedVersion: note.version,
+          content: "Synthetic backend performance timing baseline and code sampling notes." });
+        await wait("Canonical retry is accepted after the note is supplied", async () => {
+          const current = await rpc("missions", { name: "read", input: { id: missionId } });
+          try {
+            return await rpc("missions", { name: "control", input: {
+              id: missionId, revision: current.revision, control: { type: "retry", taskId: "notes" },
+            } });
+          } catch (error) {
+            if (!String(error.message).includes("mission_revision_changed")) throw error;
+            return false;
+          }
+        });
+        receipt.actions.push({ method: "application-capability-fixture", type: "retryAfterCanonicalNote" });
+      }
       const report = await wait("Canonical mission report is available", async () => {
         const state = await rpc("vela", { name: "state", input: {} });
         return state.conversation?.messages.find(message => message.missionReport?.missionId === mission.id);
       });
-      const missionId = mission.id;
       const reportLink = SURFACE + ' .vela-manifestation [data-mission-report-link=' + quote(missionId) + ']';
       await wait("The report link is rendered in the current Vela reply", () =>
         js(`document.querySelector(${quote(reportLink)})?.getClientRects().length > 0`));
@@ -725,6 +754,21 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         compositionToStagingMs: stagedMs - composedMs,
         stagingToRendererReceiptMs: presentation.userDelivery.stagingToReceiptMs,
       });
+      if (failedAttemptId) {
+        const retry = presentation.work.retries.find(item => item.taskId === "notes");
+        const join = presentation.attempts.find(attempt => attempt.taskId === "report");
+        assert.equal(retry?.previousAttemptId, failedAttemptId);
+        assert.equal(retry.previousOutcome, "failed");
+        assert.ok(retry.previousSettlement.eventSeq < retry.retryRequest.eventSeq &&
+          retry.retryRequest.eventSeq < retry.retryDispatch.eventSeq);
+        assert.ok(retry.settlementToRetryRequestMs >= 0 && retry.retryRequestToDispatchMs >= 0);
+        assert.ok(join?.predecessors.includes(retry.attemptId));
+        assert.ok(!join.predecessors.includes(failedAttemptId));
+        assert.ok(presentation.work.overlapMs > 0);
+        const failed = presentation.work.occupancyByOutcome.find(item => item.outcome === "failed");
+        assert.ok(failed?.clockSegments.some(segment => segment.attemptIds.includes(failedAttemptId)));
+        receipt.nativeRetry = { retry, failed, joinAttemptId: join.id, overlapMs: presentation.work.overlapMs };
+      }
       receipt.executionPresentation = { missionId, messageId: report.id,
         stagingToReceiptMs: presentation.userDelivery.stagingToReceiptMs,
         intakeToReceiptMs: presentation.intakeToUserDeliveryMs,
