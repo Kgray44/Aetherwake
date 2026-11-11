@@ -159,16 +159,18 @@ export interface VelaRequestAdmissionTiming {
   requestToProviderContextCheckMs: number;
   previewToInputStagingMs: number | null;
 }
+export interface ProviderStreamTiming {
+  responseCreatedMs: number | null;
+  firstTextDeltaMs: number | null;
+  transport?: TurnTransportTiming;
+}
 /** Local monotonic offsets within one provider execution. */
-export interface ConversationProviderTiming {
+export interface ConversationProviderTiming extends ProviderStreamTiming {
   source: 'observed' | 'simulated';
   origin: 'ordinary-adapter-entry' | 'reviewed-api-dispatch-staging';
   parentRequestId: string | null;
-  responseCreatedMs: number | null;
-  firstTextDeltaMs: number | null;
   /** Backend receipt of nonblank provider output. Historical observations may omit this field. */
   firstNonblankOutput?: { kind: 'text' | 'refusal'; elapsedMs: number } | null;
-  transport?: TurnTransportTiming;
   /** Elapsed time from the original backend preview, including any intervening review or wait. */
   fromPreview?: { id: string; toAdapterMs: number; toFirstNonblankOutputMs: number | null };
   resultObservedMs: number | null;

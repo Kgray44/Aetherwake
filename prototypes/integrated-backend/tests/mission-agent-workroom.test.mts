@@ -311,6 +311,11 @@ test('real Responses protocol applies long Unicode assignment labels through can
     const { responseCreatedMs, firstTextDeltaMs } = specialist.providerStream;
     assert.ok(responseCreatedMs !== null && firstTextDeltaMs !== null && firstTextDeltaMs >= responseCreatedMs);
     assert.ok(firstTextDeltaMs <= specialist.providerAdapterMs!);
+    assert.equal(specialist.providerExecutionId, finished.attempts[0].id);
+    const transport = specialist.providerStream.transport;
+    assert.ok(transport && transport.postAttemptMs !== null && transport.headersMs !== null && transport.firstSseBytesMs !== null);
+    assert.ok(transport.postAttemptMs <= transport.headersMs && transport.headersMs <= transport.firstSseBytesMs &&
+      transport.firstSseBytesMs <= transport.finishedMs && transport.finishedMs <= specialist.providerAdapterMs!);
     assert.equal(trace.firstMeaningfulOutput, null);
     assert.ok(!JSON.stringify(specialist).includes('Record observed variance.'));
     const view = await core.command('desktop', { type: 'snapshot' });

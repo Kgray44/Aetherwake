@@ -1,19 +1,22 @@
 import type { MissionAttemptPhaseTiming, MissionEvent, MissionProjection } from './mission-contracts.mts';
-import type { ConversationProviderTiming, MissionReportTiming, StreamEvent, VelaRouteTiming } from './contracts.mts';
+import type { ConversationProviderTiming, MissionReportTiming, ProviderStreamTiming, StreamEvent, VelaRouteTiming } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
 import type { TurnEvent, TurnTransportTiming } from '../../openai-provider/contracts.mts';
 
 /** Bodyless milestones measured relative to the caller's monotonic start. */
 export function observeProviderStream(started: number) {
   let responseCreatedMs: number | null = null, firstTextDeltaMs: number | null = null;
+  let transport: TurnTransportTiming | undefined;
   return {
     observe(type: TurnEvent['type']) {
       if (type === 'provider/response-created') responseCreatedMs ??= performance.now() - started;
       if (type === 'provider/text-delta') firstTextDeltaMs ??= performance.now() - started;
     },
-    read: () => ({ responseCreatedMs, firstTextDeltaMs }),
+    observeTransport(timing: TurnTransportTiming) { transport ??= timing; },
+    read: (): ProviderStreamTiming => ({ responseCreatedMs, firstTextDeltaMs, ...(transport ? { transport } : {}) }),
   };
 }
+export type ProviderStreamObserver = Pick<ReturnType<typeof observeProviderStream>, 'observe' | 'observeTransport'>;
 
 export function observeConversationProvider(origin: ConversationProviderTiming['origin'], simulated: boolean,
   parentRequestId: string | null, started = performance.now(),
@@ -26,7 +29,6 @@ export function observeConversationProvider(origin: ConversationProviderTiming['
     ? { id: correlation.preview.id, toAdapterMs: started - clock.startedMs }
     : undefined;
   let resultObservedMs: number | null = null;
-  let transport: TurnTransportTiming | undefined;
   let firstNonblankOutput: NonNullable<ConversationProviderTiming['firstNonblankOutput']> | null = null;
   return {
     observe(event: TurnEvent) {
@@ -38,11 +40,11 @@ export function observeConversationProvider(origin: ConversationProviderTiming['
     },
     elapsed,
     previewOrigin,
-    observeTransport(timing: TurnTransportTiming) { transport ??= timing; },
+    observeTransport: stream.observeTransport,
     observeResult() { resultObservedMs ??= elapsed(); },
     settlement(outputStagedMs: number | null = null): ConversationProviderTiming {
       return { ...stream.read(), source: simulated ? 'simulated' : 'observed', origin, parentRequestId,
-        firstNonblankOutput, resultObservedMs, outputStagedMs, settlementStagedMs: elapsed(), ...(transport ? { transport } : {}),
+        firstNonblankOutput, resultObservedMs, outputStagedMs, settlementStagedMs: elapsed(),
         ...(previewOrigin ? { fromPreview: { ...previewOrigin,
           toFirstNonblankOutputMs: firstNonblankOutput === null ? null :
             previewOrigin.toAdapterMs + firstNonblankOutput.elapsedMs } } : {}) };
@@ -238,8 +240,9 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       } : null,
       providerCalls: attempt.telemetry?.providerCalls ?? null,
       providerEvidence: attempt.telemetry?.providerEvidence ?? null,
+      providerExecutionId: attempt.telemetry?.providerExecutionId ?? null,
       providerAdapterMs: attempt.telemetry?.providerCalls ? attempt.telemetry.durationMs : null,
-      providerStream: attempt.telemetry?.providerStream ? { ...attempt.telemetry.providerStream } : null,
+      providerStream: attempt.telemetry?.providerStream ? structuredClone(attempt.telemetry.providerStream) : null,
       reportedModel: attempt.telemetry?.reportedModel ?? null,
       usage: reportedUsage(attempt.telemetry?.usage),
       verifiedEvidenceIds: attempt.verification?.passed && attempt.outcome === 'verified' ?
@@ -299,7 +302,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     admissionToLastSettlementMs: timeToSettlement ? timeToSettlement.end - timeToSettlement.start : null,
     // Planning starts before mission admission. Its independent receipt has no monotonic linkage.
     planning: plan ? { durationMs: plan.durationMs, provider: plan.provider, model: plan.model,
-      executionId: plan.executionId ?? null, timing: plan.timing ? { ...plan.timing } : null,
+      executionId: plan.executionId ?? null, timing: plan.timing ? structuredClone(plan.timing) : null,
       providerEvidence: plan.providerEvidence ?? null, usage: planningUsage } : null,
     attempts, waits: mission.waits,
     work: {

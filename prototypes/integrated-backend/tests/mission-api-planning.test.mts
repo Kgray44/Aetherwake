@@ -62,6 +62,10 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
     assert.ok(profile&&'kind' in profile&&profile.kind==='execution-profile');
     const timing=profile.planning?.timing;
     assert.ok(timing&&timing.firstTextDeltaMs!==null&&timing.responseCreatedMs!==null);
+    const transport = timing.transport;
+    assert.ok(transport && transport.postAttemptMs !== null && transport.headersMs !== null && transport.firstSseBytesMs !== null);
+    assert.ok(transport.postAttemptMs <= transport.headersMs && transport.headersMs <= transport.firstSseBytesMs &&
+      transport.firstSseBytesMs <= transport.finishedMs && transport.finishedMs <= timing.providerResultMs);
     assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.providerResultMs);
     assert.ok(timing.validationMs>=0&&timing.providerResultMs+timing.validationMs<=profile.planning!.durationMs);
     assert.equal(profile.planning?.providerEvidence,'simulated');

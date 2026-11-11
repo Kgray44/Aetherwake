@@ -461,6 +461,7 @@ export class VelaApiRuntime {
     /** Native binding for a reviewed cognitive payload and its current source provenance. */
     binding?: { configurationVersion: number; contextDigest: string };
     observeEventType?: VelaApiRun['observeEventType'];
+    observeTransport?: VelaApiRun['observeTransport'];
     validate(): void }, signal: AbortSignal): Promise<unknown> {
     const version = this.configurationVersion(); check(version !== null, 'api_configuration_disconnected');
     const binding = input.binding;
@@ -475,7 +476,7 @@ export class VelaApiRuntime {
       instruction: input.instruction, ...(reasoningEffort ? { reasoningEffort } : {}),
       contextDigest: binding?.contextDigest ?? digest(prompt), ...(binding ? { oneUse: true as const } : {}),
       outputSchema: input.schema,...(input.weatherTool?{weatherTool:input.weatherTool}:{}),validate: input.validate,
-      observeEventType: input.observeEventType }, signal);
+      observeEventType: input.observeEventType, observeTransport: input.observeTransport }, signal);
     input.onResult?.(result);
     check(result.outcome === 'completed', result.errorCode ?? 'vela_api_proposal_failed');
     if (binding) {
