@@ -26,6 +26,7 @@ import type {
 } from './contracts.ts';
 
 export interface VelaSemanticHistorySource extends SemanticHistorySource {
+  sourceKind: 'conversation-exchange' | 'note';
   proofDigest: string;
 }
 
@@ -473,20 +474,22 @@ export class VelaService {
   /** Native shadow investigation. The disclosure gateway must authorize each exact outbound payload.
    * No exchange or model assessment is appended or used as a turn result. */
   investigateHistory(intent: string, disclose: (call: SemanticHistoryCall, sources: readonly VelaSemanticHistorySource[],
-    signal: AbortSignal, revalidate: () => boolean) => Promise<unknown>, signal?: AbortSignal) {
-    const origin = this.read(() => this.historyOrigin());
-    const previews = new WeakMap<VelaSemanticHistorySource, { context: ContextManifest; historyFence?: HistoryFence }>();
+    signal: AbortSignal, revalidate: () => boolean) => Promise<unknown>, signal?: AbortSignal,
+    selectedNoteIds: readonly string[] = []) {
+    const noteIds = [...selectedNoteIds];
+    check(noteIds.length <= 4 && noteIds.every(identifier) && new Set(noteIds).size === noteIds.length, 'invalid_semantic_note_selection');
+    const originDigest = historyDigest(this.read(() => this.historyOrigin()));
+    const originCurrent = () => historyDigest(this.read(() => this.historyOrigin())) === originDigest;
+    const proofs = new WeakMap<VelaSemanticHistorySource, () => boolean>();
     const isCurrent = (source: VelaSemanticHistorySource) => {
-      const preview = previews.get(source);
-      if (!preview) return false;
-      try { this.validateProviderHistory(preview); return true; }
+      try { return proofs.get(source)?.() === true; }
       catch (error) {
         if (error instanceof HistorySelectionError || error instanceof VelaError) return false;
         throw error;
       }
     };
     const findHistory = (query?: string) => {
-      if (historyDigest(this.read(() => this.historyOrigin())) !== historyDigest(origin)) return { sources: [], scan: 'unavailable' as const };
+      if (!originCurrent()) return { sources: [], scan: 'unavailable' as const };
       const preview = this.previewProviderContext([], { includeHistory: true,
         ...(query ? { historyQuery: query, historyQueryMode: 'semantic-query' as const } : {}), fits: () => true });
       const { history } = preview.context;
@@ -498,21 +501,45 @@ export class VelaService {
       const requestIds = history.retrieval?.selectedRequestIds ?? [...new Set(history.messages.map(message => message.requestId))];
       const sources = requestIds.map(sourceId => {
         const source = Object.freeze({
-          sourceId, revision: String(fence.baseRevision), proofDigest: fence.digest,
+          sourceId, sourceKind: 'conversation-exchange' as const, revision: String(fence.baseRevision), proofDigest: fence.digest,
           text: JSON.stringify(history.messages.filter(message => message.requestId === sourceId)
             .map(({ role, content }) => ({ role, content }))),
         });
-        previews.set(source, preview);
+        proofs.set(source, () => { this.validateProviderHistory(preview); return true; });
         return source;
       });
       return { sources, scan };
     };
+    const readNote = (id: string) => this.read(() => {
+      const scope = this.scope();
+      const ref = this.opts.host.resolve({ id, kind: 'resource' }, scope);
+      if (ref?.resourceKind !== 'note' || this.opts.host.canReadContent?.(ref, scope) !== true) return null;
+      const entry = this.context([id], scope).included[0];
+      if (!entry) return null;
+      return Object.freeze({
+        sourceId: id, sourceKind: 'note' as const, revision: String(entry.version), text: entry.content,
+        proofDigest: historyDigest({ originDigest, id, version: entry.version, source: entry.source, digest: entry.contentDigest }),
+      });
+    });
+    const findSources = (query?: string) => {
+      const history = findHistory(query);
+      if (!noteIds.length || !originCurrent()) return history;
+      const notes = noteIds.flatMap(id => {
+        const note = readNote(id);
+        if (!note) return [];
+        proofs.set(note, () => readNote(id)?.proofDigest === note.proofDigest);
+        return [note];
+      });
+      const scan: SemanticHistoryScan = notes.length === noteIds.length ? history.scan
+        : notes.length || history.sources.length ? 'partial' : 'unavailable';
+      return { sources: [...notes, ...history.sources], scan };
+    };
     return investigateSemanticHistory<VelaSemanticHistorySource>(intent, {
-      search: findHistory,
-      recent: () => findHistory(),
+      search: findSources,
+      recent: () => findSources(),
       isCurrent,
       disclose: (call, sources, abort) => {
-        const revalidate = () => historyDigest(this.read(() => this.historyOrigin())) === historyDigest(origin) && sources.every(isCurrent);
+        const revalidate = () => originCurrent() && sources.every(isCurrent);
         return revalidate() ? disclose(call, sources, abort, revalidate) : Promise.resolve(null);
       },
     }, signal);

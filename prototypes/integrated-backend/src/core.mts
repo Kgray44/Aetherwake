@@ -2273,9 +2273,9 @@ export class BackendCore {
   /** Native-only FI-2 shadow entry point. No renderer command exposes this disclosure port. */
   investigateVelaHistory(intent: string, admission: SemanticHistoryAdmission, signal?: AbortSignal) {
     const scope = this.velaScopeStamp();
-    const { model, configurationVersion, authorize } = admission;
+    const { model, configurationVersion, selectedNoteIds, authorize } = admission;
     return investigateVelaHistoryWithApi(this.vela, this.velaApiRuntime, intent, {
-      model, configurationVersion,
+      model, configurationVersion, selectedNoteIds,
       authorize: review => !this.closed && this.missionStorageAdmitted && this.historyContextEnabled && scope === this.velaScopeStamp() &&
         this.velaApiRuntime.authorized(configurationVersion) && authorize(review),
     }, signal);
