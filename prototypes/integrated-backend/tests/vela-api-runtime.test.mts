@@ -4,6 +4,7 @@ import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:
 import {DatabaseSync} from 'node:sqlite';
 import {VelaApiRuntime} from '../src/vela-api-runtime.mts';
 import {apiRunDiagnostics} from '../src/api-run-diagnostics.mts';
+import {observeConversationProvider} from '../src/execution-profiler.mts';
 import {WEATHER_TOOL_NAME,WEATHER_TOOL,type WeatherQuery} from '../src/weather-tool.mts';
 import {readWeatherData} from '../src/weather-data.mts';
 import {VELA_TOOL_SCHEMAS,VELA_TOOL_INVOKE} from '../src/vela-semantic-tools.mts';
@@ -18,13 +19,30 @@ import type { VelaRequest, VelaState } from '../../vela-core/src/contracts.ts';
 import type { StreamEvent } from '../src/contracts.mts';
 const marker = 'SYNTHETIC_ONLY_VELA_API_RUNTIME_CREDENTIAL';
 const message = (content: string) => ({ type: 'message', id: 'msg-fixture', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: content, annotations: [] }] });
-function response(content: string, id = 'resp-fixture', output = [message(content)], outcome = 'completed') {
+function response(content: string, id = 'resp-fixture', output = [message(content)], outcome = 'completed',
+  deltas = content ? [content] : []) {
   const events = [{ type: 'response.created', response: { id, status: 'in_progress' } },
-    ...(content ? [{ type: 'response.output_text.delta', delta: content }] : []),
+    ...deltas.map(delta => ({ type: 'response.output_text.delta', delta })),
     { type: outcome === 'completed' ? 'response.completed' : 'response.incomplete', response: { id, status: outcome, model: 'gpt-6-luna', output,
       ...(outcome === 'incomplete' ? { incomplete_details: { reason: 'max_output_tokens' } } : {}), usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 } } }];
   return new Response(events.map(event => 'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
 }
+
+test('conversation timing retains only the first nonblank provider output milestone and its kind', () => {
+  const timing = observeConversationProvider('ordinary-adapter-entry', true, 'request-fixture');
+  const identity = { providerId: 'chatgpt-plan-responses' as const, executionId: 'execution-fixture' };
+  timing.observe({ ...identity, type: 'provider/text-delta', delta: ' \n\t' });
+  const blank = timing.settlement();
+  assert.notEqual(blank.firstTextDeltaMs, null);
+  assert.equal(blank.firstNonblankOutput, null);
+  timing.observe({ ...identity, type: 'provider/refusal-delta', delta: 'SYNTHETIC_REFUSAL' });
+  const first = timing.settlement().firstNonblankOutput;
+  assert.ok(first && first.elapsedMs >= blank.settlementStagedMs);
+  assert.equal(first.kind, 'refusal');
+  timing.observe({ ...identity, type: 'provider/text-delta', delta: 'SYNTHETIC_TEXT' });
+  assert.deepEqual(timing.settlement().firstNonblankOutput, first);
+  assert.doesNotMatch(JSON.stringify(timing.settlement()), /SYNTHETIC_/u);
+});
 function fixture() {
   const base = resolve(tmpdir()), dir = mkdtempSync(join(base,'aerynth-api-runtime-')), path = join(dir,'canonical.sqlite'), requests: any[] = [], events: StreamEvent[] = [], replies: ((body:any)=>Response|Promise<Response>)[] = [];
   const encryptionKey = randomBytes(32);
@@ -154,12 +172,13 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     await f.configure(); assert.equal((await f.core.command('velaApiUsageStatus',{})).enabled,false);
     await assert.rejects(f.send('Explain the difference between mass and weight',{providerId:'openai-api-vela'}),/vela_api_usage_authorization_required/);
     assert.equal(f.requests.length,0); await f.authorize();
-    f.replies.push(()=>response('Mass measures inertia; weight is gravitational force.'));
+    const answer = ' Mass measures inertia; weight is gravitational force.';
+    f.replies.push(()=>response(answer, undefined, undefined, undefined, [' ', answer.slice(1)]));
     const first=await f.send('Explain the difference between mass and weight'); assert.equal(first.state,'responded'); assert.equal(first.providerId,'openai-api-vela');
     const wire=f.requests[0]; assert.equal(wire.model,'gpt-6-luna'); assert.deepEqual(wire.reasoning,{effort:'none'}); assert.equal(wire.max_output_tokens,2048); assert.equal(wire.store,false); assert(wire.tools.some((tool:any)=>tool.name===VELA_TOOL_INVOKE)); assert.ok(wire.instructions.includes('Vela is Aerynth'));
     const snapshot=await f.core.command('snapshot',{}); assert.equal(snapshot.conversations.length,1); assert.equal(snapshot.graph.messages.length,2);
     const output=snapshot.graph.messages.find(message=>message.role==='assistant')!;
-    assert.equal(output.content,'Mass measures inertia; weight is gravitational force.'); assert.equal(snapshot.messageEvidence[output.id].providerId,'openai-api-vela');
+    assert.equal(output.content,answer); assert.equal(snapshot.messageEvidence[output.id].providerId,'openai-api-vela');
     const execution=Object.values(snapshot.executions)[0]; assert.equal(execution.resourceId,first.conversationId); assert.equal(execution.outputMessageId,output.id); assert.equal(execution.usage?.totalTokens,28); assert.equal(execution.taskVerified,false);
     const timing=f.events.find(event=>event.executionId===execution.id&&event.type==='execution/provider_completed')?.payload.providerTiming;
     assert.ok(timing&&timing.firstTextDeltaMs!==null&&timing.responseCreatedMs!==null&&timing.resultObservedMs!==null);
@@ -167,6 +186,9 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     assert.equal(timing.parentRequestId,first.id);
     assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.resultObservedMs&&
       timing.resultObservedMs<=timing.settlementStagedMs);
+    assert.ok(timing.firstNonblankOutput?.kind === 'text' &&
+      timing.firstTextDeltaMs < timing.firstNonblankOutput.elapsedMs &&
+      timing.firstNonblankOutput.elapsedMs <= timing.resultObservedMs);
     assert.equal(timing.outputStagedMs,null);
     const outputTiming=execution.outputTiming;
     assert.ok(outputTiming);

@@ -20,13 +20,20 @@ export function observeConversationProvider(origin: ConversationProviderTiming['
   const stream = observeProviderStream(started);
   const elapsed = () => performance.now() - started;
   let resultObservedMs: number | null = null;
+  let firstNonblankOutput: NonNullable<ConversationProviderTiming['firstNonblankOutput']> | null = null;
   return {
-    observe: stream.observe,
+    observe(event: TurnEvent) {
+      stream.observe(event.type);
+      if (firstNonblankOutput === null &&
+        (event.type === 'provider/text-delta' || event.type === 'provider/refusal-delta') && /\S/u.test(event.delta)) {
+        firstNonblankOutput = { kind: event.type === 'provider/text-delta' ? 'text' : 'refusal', elapsedMs: elapsed() };
+      }
+    },
     elapsed,
     observeResult() { resultObservedMs ??= elapsed(); },
     settlement(outputStagedMs: number | null = null): ConversationProviderTiming {
       return { ...stream.read(), source: simulated ? 'simulated' : 'observed', origin, parentRequestId,
-        resultObservedMs, outputStagedMs, settlementStagedMs: elapsed() };
+        firstNonblankOutput, resultObservedMs, outputStagedMs, settlementStagedMs: elapsed() };
     },
   };
 }

@@ -159,6 +159,8 @@ export interface ConversationProviderTiming {
   parentRequestId: string | null;
   responseCreatedMs: number | null;
   firstTextDeltaMs: number | null;
+  /** Backend receipt of nonblank provider output. Historical observations may omit this field. */
+  firstNonblankOutput?: { kind: 'text' | 'refusal'; elapsedMs: number } | null;
   resultObservedMs: number | null;
   outputStagedMs: number | null;
   settlementStagedMs: number;
