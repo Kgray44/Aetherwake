@@ -516,6 +516,17 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       reading.receipts++;
     }
   }
+  const usageGaps = [
+    ...(providerCalls === null ? ['provider-call-count-unavailable' as const] : []),
+    ...(providerCalls !== null && usage.length > providerCalls ? ['usage-exceeds-provider-call-count' as const] : []),
+    ...(usageReceipts.missing ? ['missing-usage-receipts' as const] : []),
+    ...(conflictingUsageExecutionIds.length ? ['conflicting-usage-receipts' as const] : []),
+    ...(usageReceipts.unattributed ? ['unattributed-usage' as const] : []),
+  ];
+  const costCoverage = providerCalls === null ? 'provider-call-count-unavailable' as const :
+    providerCalls === 0 && usage.length === 0 ? 'not-applicable' as const :
+    providerCalls > 0 && usageReceipts.simulated === providerCalls && usage.length === providerCalls ? 'simulated-only' as const :
+    'billing-receipt-unavailable' as const;
   const timeToVerified = initial ? interval(mission.id, initial, firstVerified) : null;
   const timeToSettlement = complete && !active && initial ? interval(mission.id, initial, lastSettlement) : null;
   const path = complete && !active ? criticalPath(attempts) : null;
@@ -625,7 +636,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       unattributedTotalTokens: usageBySource.unattributed.totalTokens.observedTokens, usageReceipts, usageBySource,
       usageCoverage: usage.length === 0 ? providerCalls === 0 ? 'not-applicable' as const : 'missing' as const :
         usage.length === providerCalls ? 'complete' as const : 'partial' as const,
-      cost: null,
+      usageGaps, cost: null, costCoverage,
     },
     quality: {
       taskOutcomes: mission.tasks.map(task => ({ taskId: task.id, state: task.state })),

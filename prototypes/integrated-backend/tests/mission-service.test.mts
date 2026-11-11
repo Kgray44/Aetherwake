@@ -155,6 +155,7 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.equal(profile.work.criticalPath!.attemptIds.at(-1), join.id);
     assert.ok(profile.work.workerMs! > profile.work.criticalPath!.durationMs);
     assert.equal(profile.economics.cost, null);
+    assert.equal(profile.economics.costCoverage, 'provider-call-count-unavailable');
     assert.equal(profile.economics.usageCoverage, 'missing');
     assert.equal(profile.attempts[0].start.eventSeq > 0, true);
     assert.ok(!JSON.stringify(profile).includes('Independent synthetic evidence check'));
@@ -367,6 +368,8 @@ test('simulated provider usage stays out of the reported token total', async () 
     assert.equal(profile.economics.reportedTotalTokens, null);
     assert.equal(profile.economics.simulatedTotalTokens, 10);
     assert.deepEqual(profile.economics.usageReceipts, { reported: 0, simulated: 1, unattributed: 0, missing: 0 });
+    assert.equal(profile.economics.costCoverage, 'simulated-only');
+    assert.deepEqual(profile.economics.usageGaps, []);
     await flush();
     f.active.get('inspect')!.release();
     await flush();
@@ -379,13 +382,21 @@ test('simulated provider usage stays out of the reported token total', async () 
     assert.equal(economics.simulatedTotalTokens, 10);
     assert.equal(economics.usageCoverage, 'partial');
     assert.deepEqual(economics.usageReceipts, { reported: 1, simulated: 1, unattributed: 0, missing: 1 });
+    assert.equal(economics.costCoverage, 'billing-receipt-unavailable');
+    assert.deepEqual(economics.usageGaps, ['missing-usage-receipts']);
     assert.deepEqual(economics.usageBySource.reported.inputTokens, { observedTokens: 12, receipts: 1 });
     assert.deepEqual(economics.usageBySource.reported.cachedInputTokens, { observedTokens: null, receipts: 0 });
     assert.deepEqual(economics.usageBySource.simulated.outputTokens, { observedTokens: 4, receipts: 1 });
+    const inconsistentCount = projectMissionExecution({ ...retained, profile: { ...retained.profile, providerCalls: 1 } }).economics;
+    assert.deepEqual(inconsistentCount.usageGaps, ['usage-exceeds-provider-call-count']);
+    assert.equal(inconsistentCount.usageReceipts.missing, null);
     delete retained.tasks[0].attempts[0].telemetry.providerEvidence;
     retained.profile.providerCalls = null;
-    assert.deepEqual(projectMissionExecution(retained).economics.usageReceipts,
+    const unattributed = projectMissionExecution(retained).economics;
+    assert.deepEqual(unattributed.usageReceipts,
       { reported: 0, simulated: 1, unattributed: 1, missing: null });
+    assert.equal(unattributed.costCoverage, 'provider-call-count-unavailable');
+    assert.deepEqual(unattributed.usageGaps, ['provider-call-count-unavailable', 'unattributed-usage']);
     retained.planning!.executionId = 'same-execution';
     retained.tasks[0].attempts[0].telemetry = { ...retained.tasks[0].attempts[0].telemetry!,
       providerExecutionId: 'same-execution', providerEvidence: 'simulated', usage: retained.planning!.usage };
@@ -403,6 +414,7 @@ test('simulated provider usage stays out of the reported token total', async () 
     assert.equal(conflicted.reportedTotalTokens, null);
     assert.equal(conflicted.simulatedTotalTokens, null);
     assert.deepEqual(conflicted.conflictingUsageExecutionIds, ['same-execution']);
+    assert.deepEqual(conflicted.usageGaps, ['missing-usage-receipts', 'conflicting-usage-receipts']);
   } finally {
     await service.close();
     f.db.close();
