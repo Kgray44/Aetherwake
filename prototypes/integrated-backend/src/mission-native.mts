@@ -6,6 +6,7 @@ import { readCpuUtilization, readGpuUtilization } from '../../vela-core/src/syst
 import { readSystemMemory } from '../../vela-core/src/system-memory.mts';
 import { validateSystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
 import { verifiedGpuReadback } from './windows-gpu-readback.mts';
+import { EXPLICIT_MISSION_PREFIX } from './mission-contracts.mts';
 import type { Mission, MissionExecutor, MissionPlan, MissionProjection, MissionScope, MissionTask, MissionTaskPlan } from './mission-contracts.mts';
 
 const numberIn = (n: unknown, min: number, max: number) =>
@@ -200,9 +201,8 @@ export function missionPlanningCatalog() {
 export function nativeMissionPlan(intent: string, scope: MissionScope): MissionPlan | null {
   if (typeof intent !== 'string' || Buffer.byteLength(intent) > 4096) return null;
   const normalized = intent.normalize('NFKC').toLowerCase().trim().replace(/^vela[,:]?\s+/u, '');
-  const prefix = /^(?:please\s+)?(?:run|start|plan|create) (?:a )?mission (?:to|for)\s+/u;
-  const explicit = prefix.test(normalized);
-  const text = normalized.replace(prefix, '').replace(/[.!?]+$/u, '');
+  const explicit = EXPLICIT_MISSION_PREFIX.test(normalized);
+  const text = normalized.replace(EXPLICIT_MISSION_PREFIX, '').replace(/[.!?]+$/u, '');
   let ids: string[];
   const check = /^run (?:the )?selected node(?:\.js)? tests and (?:measure|sample|check) cpu and ram(?: in parallel)?$/u.test(text);
   if (/^(?:investigate|profile|measure) (?:the )?aerynth backend(?:'s)? performance(?: using workspace notes)?$/u.test(text))

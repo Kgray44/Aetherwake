@@ -6,6 +6,7 @@ import { confirmedVelaPlan, projectVelaManifestation, type VelaManifestationStat
 import { summarizeSystemMemory } from './system-information.ts';
 import { createVelaProposalView, type VelaProposalChoice } from './proposal-view.ts';
 import { githubRepository } from '../../application-contract/github-timeline.ts';
+import { EXPLICIT_MISSION_PREFIX } from '../../integrated-backend/src/mission-contracts.mts';
 import type { MissionPlanningOffer, MissionPreview } from '../../integrated-backend/src/mission-contracts.mts';
 
 function conciseObservedAnswer(content:string|undefined,facts:VelaLocalFacts|undefined){
@@ -482,6 +483,39 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
   form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return;
+    const missions = options.missions;
+    if (missions && EXPLICIT_MISSION_PREFIX.test(intent.value.normalize('NFKC').trim())) {
+      const objective = intent.value, revision = draftRevision, sources = [...selected.values()];
+      void run(async () => {
+        if (handoffSelection || routingAgentSelection || workspaceState.checked) throw Error('mission_composer_context_unsupported');
+        const noteIds = sources.filter(ref => ref.resourceKind === 'note').map(ref => ref.id);
+        const fileIds = sources.filter(ref => ref.resourceKind === 'file').map(ref => ref.id);
+        if (noteIds.length + fileIds.length !== sources.length) throw Error('mission_composer_evidence_unsupported');
+        busy = true; send.disabled = true; errorBox.hidden = true;
+        form.setAttribute('aria-busy', 'true');
+        try {
+          const preview = await missions.preview(objective, undefined, noteIds.length ? noteIds : undefined, fileIds.length ? fileIds : undefined);
+          if (disposed || draftRevision !== revision) return;
+          if (!preview) throw Error('mission_scope_denied');
+          const usesProvider = 'plan' in preview ? !!preview.externalReview : true;
+          if (usesProvider && (chosenProviderId || useAutomaticOnce || (routeMode.value && routeMode.value !== 'auto') ||
+            routeModel.value || routeEffort.value || routeEscalation.checked || routeHistory.checked))
+            throw Error('mission_composer_routing_options');
+          reveal('missions');
+          missions.review(preview, missionId => {
+            if (disposed) return;
+            if (draftRevision === revision && intent.value === objective) {
+              intent.value = ''; draftRevision++; send.disabled = true; updateSemanticContext();
+            }
+            missions.openReport?.(missionId);
+          });
+        } finally {
+          busy = false; send.disabled = !intent.value.trim();
+          form.setAttribute('aria-busy', 'false'); updateSemanticContext(); present();
+        }
+      });
+      return;
+    }
     if (options.voice && /^\s*(?:vela[,!]?\s+)?(?:let['’]?s talk(?: instead)?|switch to voice|start (?:a )?voice(?: conversation)?)[.!?]*\s*$/iu.test(intent.value)) {
       const text = intent.value, revision = draftRevision;
       reveal('voice');
@@ -886,6 +920,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       const messages: Record<string, string> = {
         vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',
         mission_scope_denied: 'The mission workspace changed. Review the current workspace and try again.',
+        mission_composer_routing_options: 'Clear the one-turn routing options before opening mission review. Your draft is still here.',
+        mission_composer_context_unsupported: 'Clear the selected handoff, agent or workspace state before opening mission review. Your draft is still here.',
+        mission_composer_evidence_unsupported: 'Choose workspace notes or text files for mission evidence. Your draft is still here.',
         mission_planning_note_unavailable: 'Select up to four short notes attached to the active workspace.',
         mission_planning_file_unavailable: 'Select a current, short UTF-8 text file attached to the active workspace.',
         vela_planner_sign_in_required: 'Connect Codex or choose ChatGPT plan. Your draft is still here.',

@@ -206,6 +206,40 @@ test('ordinary investigations reach the canonical intelligence request without a
   await settles(()=>turns.length===3);assert.deepEqual(previews,[]);assert.equal(turns[2],unfamiliar);panel.dispose();
 });
 
+test('an explicit mission request opens canonical review without sending an ordinary turn', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const previews: string[] = [], reports: string[] = [];
+  const scope = { workspaceId: 'workspace:synthetic', projectId: null };
+  const offer = { kind: 'planning-offer' as const, scope, objective: 'Synthetic mission', fingerprint: 'preview:synthetic' };
+  let started: ((id: string) => void) | undefined;
+  let available = true, ordinary = 0;
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async () => { ordinary++; return request(); },
+  }), { missions: {
+    element: doc.createElement('section') as unknown as HTMLElement,
+    preview: async intent => { previews.push(intent); return available ? offer : null; },
+    review: (preview, onStarted) => { assert.equal(preview, offer); started = onStarted; },
+    openReport: id => { reports.push(id); }, setVisible() {},
+  } });
+  await settles(() => !!named(root, 'Send to Vela'));
+  const composer = root.find(node => node.tagName === 'textarea')!;
+  const objective = 'Run a mission to measure CPU and RAM';
+  composer.value = objective; composer.fire('input'); composer.fire('keydown', { key: 'Enter' });
+  await settles(() => !!started);
+  assert.deepEqual(previews, [objective]);
+  assert.equal(ordinary, 0);
+  assert.equal(composer.value, objective);
+  started!('mission:verified');
+  assert.deepEqual(reports, ['mission:verified']);
+  assert.equal(composer.value, '');
+  available = false;
+  composer.value = objective; composer.fire('input'); composer.fire('keydown', { key: 'Enter' });
+  await settles(() => root.find(node => node.className === 'vela-core-error')!.textContent.includes('mission workspace'));
+  assert.equal(ordinary, 0);
+  assert.equal(composer.value, objective);
+  panel.dispose();
+});
+
 test('saved routing controls show origins, preserve preferences when editing limits and offer one-send Auto', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'chatgpt-plan-responses', available: true }];
