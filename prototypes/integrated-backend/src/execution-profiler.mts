@@ -82,7 +82,7 @@ type Path = { durationMs: number; attemptIds: string[] };
 export type ReportPublication = Pick<StreamEvent, 'eventId' | 'cursor' | 'receivedAt'> & {
   timing: MissionReportTiming | null;
 };
-export type ReportDelivery = import('../../application-contract/contracts.ts').RendererOutputPresentation & { messageId: string };
+export type ReportDelivery = NonNullable<import('../../vela-core/src/contracts.ts').VelaMessage['missionPresentation']> & { messageId: string };
 
 function timeToReportStaging(timing: MissionReportTiming | null | undefined,
   start: Pick<AttemptBoundary, 'clock' | 'monotonicMs'> | null) {
@@ -557,9 +557,10 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const intakeToUserDeliveryMs = intakeToReportStagedMs !== null && userDelivery?.stagingToReceiptMs != null ?
     intakeToReportStagedMs + userDelivery.stagingToReceiptMs : null;
   // A report receipt marks the first measured substantive output for the mission Start command.
-  const firstMeaningfulOutput = reportPublication && userDelivery ? {
+  const firstMeaningfulOutput = userDelivery ? {
     kind: 'mission-report' as const, source: userDelivery.source, messageId: userDelivery.messageId,
-    publicationEventId: reportPublication.eventId, receivedAt: userDelivery.receivedAt,
+    publicationEventId: userDelivery.publicationEventId ?? reportPublication?.eventId ?? null,
+    receivedAt: userDelivery.receivedAt,
     intakeToReceiptMs: intakeToUserDeliveryMs,
   } : null;
   const planningClock = plan?.timing?.lifecycleClock;

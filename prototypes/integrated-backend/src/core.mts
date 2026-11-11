@@ -2171,8 +2171,14 @@ export class BackendCore {
         throw error;
       }
       if (!meta.missionPresentation) {
-        const timing = this.missionReportPublication(input.missionId)?.timing;
-        this.atomic(() => { meta.missionPresentation = this.rendererOutputPresentation(received, timing?.clock, timing?.stagedMs); });
+        const publication = this.missionReportPublication(input.missionId);
+        const timing = publication?.timing;
+        this.atomic(() => {
+          meta.missionPresentation = {
+            ...this.rendererOutputPresentation(received, timing?.clock, timing?.stagedMs),
+            ...(publication ? { publicationEventId: publication.eventId } : {}),
+          };
+        });
       }
       return { accepted: true };
     }
