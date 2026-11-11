@@ -18,6 +18,8 @@ import { planVelaProjectCheck } from './vela-project-check.mts';
 if (process.platform !== 'win32' || process.env.AERYNTH_VERIFY_WINDOWS_BUILD !== '1')
   throw Error('Windows and AERYNTH_VERIFY_WINDOWS_BUILD=1 are required');
 const parallelTypecheck = process.argv.includes('--parallel-typecheck');
+const requireCpuPressure = process.argv.includes('--require-native-cpu-pressure');
+assert.ok(!requireCpuPressure || parallelTypecheck, 'Native CPU pressure verification requires the parallel typecheck fixture');
 const path = Object.entries(process.env).find(([name]) => name.toUpperCase() === 'PATH')?.[1] ?? '';
 const launch = windowsCodexLaunch(path, process.execPath, ['app-server', '--listen', 'stdio://']);
 assert.ok(launch, 'installed Codex CLI is unavailable');
@@ -170,7 +172,17 @@ try {
   mode('balanced');
   if (parallelTypecheck) {
     await wait(550);
-    governor.read(true);
+    let sample = governor.read(true);
+    if (requireCpuPressure) {
+      const deadline = performance.now() + 6000;
+      while (!sample.reasons.includes('cpu-load') && performance.now() < deadline) {
+        await wait(550);
+        sample = governor.read(true);
+      }
+      assert.ok(sample.reasons.includes('cpu-load'), 'Expected sustained native CPU pressure before sandbox admission');
+      assert.equal(governor.inspectPolicy().effective.cpu, 1);
+      assert.equal(governor.canLease('remote'), true);
+    }
   }
   eventLoop.enable();
   await wait(20);
@@ -185,6 +197,7 @@ try {
   assert.equal(terminal.outcome, 'verified', terminal.tasks[0].detail);
   const attempt = terminal.tasks[0].attempts[0];
   assert.equal(attempt.resourceLease?.kind, 'build');
+  if (requireCpuPressure) assert.ok(attempt.admission?.reasons.includes('cpu-load'));
   assert.equal(governor.inspectPolicy().active.build, 0);
   assert.equal(nativeRuns, 1);
   const verifiedOverlapMs = compilerOverlapMs;
@@ -206,7 +219,7 @@ try {
   assert.equal(nativeRuns, 2);
   console.log(JSON.stringify({ sandboxReady: true, preDispatchOutcome: blocked.outcome, nativeRuns,
     activeLeaseRetainedUntilVerified: true, remoteAvailableUnderPressure: true,
-    executionMs: attempt.timing?.executionMs, nativeCommandMs: verifiedCommandMs,
+    queueMs: attempt.timing?.queueMs, executionMs: attempt.timing?.executionMs, nativeCommandMs: verifiedCommandMs,
     backendEventLoopMaxMs: Math.round(eventLoop.max / 1e6), changedInputOutcome: invalidated.outcome,
     ...(parallelTypecheck ? { compilerWorkers: 2, compilerOverlapMs: verifiedOverlapMs,
       cpuAtAdmissionPercent: attempt.admission?.readings.cpuPercent?.value ?? null,
