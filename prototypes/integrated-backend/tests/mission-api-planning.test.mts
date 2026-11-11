@@ -283,6 +283,12 @@ test('Executive reviews a real native mission checkpoint through the synthetic R
     assert.deepEqual(after.cognitiveReceipts?.runs.map(run => run.attribution.stage), ['executive']);
     assert.deepEqual(after.cognitiveReceipts?.runs[0].attribution.owner,
       { kind: 'checkpoint', missionId: started.id, revision: settled.revision, planRevision: settled.planRevision, triggerSeq: trigger.seq });
+    const profile = await f.core.command('missions', { name: 'execution-profile', input: { id: started.id } });
+    assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+    const executive = profile.cognition?.runs[0];
+    assert.equal(executive?.executionId, after.cognitiveReceipts?.runs[0].executionId);
+    assert.equal(executive?.checkpointEventSeq, trigger.seq);
+    assert.equal(profile.economics.providerCalls, 1);
   } finally { await f.close(); }
 });
 
@@ -364,6 +370,11 @@ test('reviewed mission planning binds checked note evidence to the executable pl
     const profile = await f.core.command('missions', { name: 'execution-profile', input: { id: mission.id } });
     assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
     assert.equal(profile.planning?.executionId, cognition.runs.at(-1)?.executionId);
+    assert.deepEqual(profile.cognition?.runs.map(run => run.executionId), cognition.runs.map(run => run.executionId));
+    assert.equal(profile.economics.providerCalls, 5);
+    assert.equal(profile.economics.simulatedTotalTokens, 700);
+    assert.equal(profile.economics.reportedTotalTokens, null);
+    assert.doesNotMatch(JSON.stringify(profile.cognition), /BOX-447|Verify both CPU and RAM pressure/);
     const timing = profile.planning?.timing;
     assert.ok(timing?.transport && timing.transport.finishedMs <= timing.providerResultMs);
     assert.ok(settled.tasks.every(task => task.attempts[0].resourceLease?.schemaVersion === 1));
@@ -400,6 +411,13 @@ test('reviewed mission planning binds checked note evidence to the executable pl
     assert.equal(stale.outcome, 'blocked');
     assert.equal(stale.planning?.context?.evidenceDigest, settled.planning?.context?.evidenceDigest);
     assert.deepEqual(stale.cognitiveReceipts, cognition);
+    const reopenedProfile = await f.core.command('missions', { name: 'execution-profile', input: { id: mission.id } });
+    assert.ok(reopenedProfile && 'kind' in reopenedProfile && reopenedProfile.kind === 'execution-profile');
+    assert.deepEqual(reopenedProfile.cognition, profile.cognition);
+    const unrelated = await f.core.command('desktop', { type: 'createWorkspace', title: 'Unrelated scope', projectId: null });
+    const unrelatedId = unrelated.workspaces.find(workspace => workspace.title === 'Unrelated scope')!.id;
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: unrelatedId } });
+    await assert.rejects(f.core.command('missions', { name: 'execution-profile', input: { id: mission.id } }), /mission_not_found/);
     assert.ok(stale.tasks.every(task => task.state === 'blocked' && !task.attempts.some(attempt => attempt.verification)));
     assert.equal(f.requests.length, 8);
   } finally { await f.close(); }
