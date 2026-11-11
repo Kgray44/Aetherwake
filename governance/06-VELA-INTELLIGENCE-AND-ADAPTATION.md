@@ -747,3 +747,92 @@ References: [Vela Presence art direction](../docs/design/VELA-PRESENCE-INTELLIGE
 **AW-VELA-165 — Backend-to-experience continuity.** Native and provider events that materially change Vela's task understanding or user-visible state SHOULD move through typed, observable canonical projections with stable causation IDs. Provider switches and application restart MUST NOT fabricate a new Vela identity or break task/source lineage. Performance and graceful fallback must be tested in the real application.
 
 **Status:** Accepted design clarification, not proof of integrated adaptation or full visual acceptance.
+
+---
+
+## Owner-directed amendment FI-2026-11-10: AI-native Vela and Fluid Intelligence
+
+> **Authority and posture.** Owner-directed binding design expansion dated 2026-11-10, preserving existing AW-VELA-001–165 and AW-VELA-200–217, prior owner acceptance, constitutional limits and the Architecture Recovery / Full Realization split. This amendment defines required **behavior**, not completed API integration, trained model weights, live learning, or released performance. Neighbor ownership: [05 mission execution](05-AGENTS-TASKS-AND-WORKFLOWS.md), [08 evidence and memory](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md), [10 AEP](10-AI-EXECUTION-PROFILER.md), [13 platform/ARIE](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md), [14 trust](14-TRUST-PRIVACY-AND-AUTONOMY.md).
+
+### FI-06.1 One continuous, API-native intelligence
+
+**Fluid Intelligence doctrine:** Vela is not a conventional application with a single AI planner bolted onto a keyword-based pipeline. Qualifying semantic decisions at input, context formation, planning, execution oversight, verification, adaptation and result composition MUST be eligible for actual model reasoning. Use the smallest *capable* cognitive operation, not the fewest model calls at any cost. Lightweight model calls and larger reasoning models are complementary, not competing identities. A deterministic tool retains authority over exact measurements, access checks and physical effects.
+
+**AW-VELA-218 — AI-native pipeline coverage.** Material semantic understanding SHOULD be model-assisted across perception, context investigation, plan design, mission supervision, evaluation and final response when doing so improves reliability. Pure string matching, rules-based keyword picking or lexical recall MUST NOT be represented as the finished semantic intelligence of Vela.
+
+**AW-VELA-219 — Context-aware initial perception.** At intake, Vela MUST be able to interpret conversational references, elliptical/implicit goals, temporal anchors, active project context, multimodal observations, requested deliverables, uncertainty and user corrections through qualified AI. Input understanding MAY proceed concurrently with safe initial evidence retrieval and capability discovery.
+
+**AW-VELA-220 — Typed interpretation, not invented certainty.** A model-derived intent record MUST distinguish explicitly requested goals from inferred hypotheses, unresolved references, constraints, potential effects, provenance and calibrated uncertainty. Vela MUST investigate missing context or seek clarification when material ambiguity remains; it MUST NOT silently convert guesses into authorization or remembered fact.
+
+**AW-VELA-221 — Cognitive stages are logical, not mandatory calls.** Perception, CIE collaboration, strategy selection, executive oversight, critique and composition SHALL be independently identifiable responsibilities but MAY share a model invocation when quality is preserved. A small deterministic request SHOULD NOT invoke a ceremonial multi-agent pipeline; a novel high-stakes mission MUST NOT be constrained to one shallow model call.
+
+**AW-VELA-222 — Model diversity and continuity.** Vela MAY employ qualified fast models, stronger reasoning models, Codex and specialist multimodal tools within one user task, with per-stage effort and provider eligibility. Provider changes MUST preserve Vela identity, applicable context, task lineage, privacy constraints and unresolved state. Codex is an engineering execution capability, not a synonym for deep intelligence.
+
+**AW-VELA-223 — AI-led strategic planning.** Complex user goals MUST support structured, iterative AI planning that selects task graph, agent count, model/tool classes, dependencies, expected artifacts and acceptance criteria. Alternate plans and independent critiques MAY be used when complexity warrants them. Plan proposals remain subject to canonical [05] validation and [14] authorization.
+
+**AW-VELA-224 — Continuing mission-level intelligence.** The AI Mission Executive MUST be able to interpret fresh evidence, unresolved failures, user corrections, contradictory sources, and changing resource conditions and propose appropriate replan, escalation, delegation, pause or completion review. It MUST NOT own direct privilege escalation, scheduling locks or canonical mission status.
+
+**AW-VELA-225 — Outcome-first cognitive effort.** AIR MUST consider task difficulty, ambiguity, required quality, evidence sufficiency, actual model capability, tool needs, latency, resource availability, privacy, user pins and previous validated outcomes. The number of calls or agents SHALL NOT be used as a proxy for intelligence or quality.
+
+**AW-VELA-226 — Rich multimodal outcome composition.** Vela MUST support a single mission producing coherent combinations of explanation, documents, editable files, source changes, images, audio, interactive UI blocks, evidence and completed actions. Presentation MUST preserve artifact existence, verification state and provenance; an attractive generated response MUST NOT invent missing deliverables.
+
+**AW-VELA-227 — Deliberate non-optimization.** Vela MUST be permitted to choose additional reasoning, deeper retrieval, more independent review or slower authorized execution when that improves result quality or preserves trust. AEP or ARIE MAY optimize the critical path, scheduling, caching and redundant work but MUST NOT optimize necessary intelligence, context, verification, accessibility or user control away.
+
+### FI-06.2 The experiential adaptation loop
+
+Adaptation SHALL be a **closed, inspectable, quality-gated loop**: (1) observe genuine runs and corrections; (2) diagnose with evidence-grounded AI; (3) form scoped strategy hypotheses; (4) compare against fair baselines; (5) validate correctness, risk and outcome quality; (6) apply authorized versioned policy; (7) monitor drift, regressions and rollback; (8) retain provenance-linked learning. This is persistent evidence and policy adaptation, **not** automatic modification of third-party model weights.
+
+**AW-VELA-228 — Cross-engine learning contract.** AIR owns cognitive routing choices; CIE owns source-grounded knowledge retrieval; AEP owns performance and experiment evidence; ARIE/Platform Governor owns resource policy and enforcement; MissionService owns actual task states. Vela MUST integrate their approved outputs without creating an independent authoritative learning database.
+
+**AW-VELA-229 — Learning is contextual, not universal.** Every learned strategy MUST identify applicable task family, capabilities, hardware/environment, source evidence, confidence, evaluation conditions, expiry/drift conditions and counterexamples. One successful run or an untested anecdote MUST NOT become a global policy.
+
+**AW-VELA-230 — Evidence before policy promotion.** Proposed strategy changes MUST retain measured baseline, comparable evaluation cohort, held-out checks, quality and safety results, estimated downside, authorizing policy/version and rollback conditions. A faster response with poorer verified completion is a rejected optimization.
+
+**AW-VELA-231 — Learn from corrections and failures.** User corrections, execution failures, wasted context, missed outcomes, failed experiments and undone optimizations SHOULD inform subsequent decisions after attribution and validation. User disagreement MUST NOT be misclassified as proof that a model or user preference is always wrong.
+
+**AW-VELA-232 — Preference authority precedence.** Explicit user instruction and controls MUST outrank inferred habits; correction/deletion and privacy scope MUST propagate to derived preference candidates and adaptive policies. Learned preferences MUST NOT modify external action permissions or expand disclosure boundaries.
+
+**AW-VELA-233 — Active strategy evaluation.** Vela SHOULD occasionally inspect applicable AEP insights to decide whether a task warrants more evidence, better tools, more or fewer agents, a stronger model or different scheduling. High-frequency OS resource enforcement remains deterministic, not a perpetual stream of LLM polling.
+
+**AW-VELA-234 — Adaptation confidence and decay.** Strategy policies MUST record evidence quality, effective period and compatibility assumptions; stale model capabilities, hardware changes, changed projects, contradictory evaluations and task-domain shift MUST trigger requalification or demotion.
+
+**AW-VELA-235 — Rollback is a cognitive capability.** Vela MUST be able to explain a regression, identify the policy revision linked to it, request rollback and preserve the evaluation history. Rolled-back, superseded and rejected strategies MUST remain distinguishable from currently active policies.
+
+**AW-VELA-236 — Explain decisions from evidence.** When asked why Vela chose a model, agent plan, context source, resource cap or optimization, she SHOULD cite persisted decision records, relevant model-facing capability metadata, and measurable outcomes. Explanations MUST separate observed state, interpretation, proposal and verified impact; never fabricate inaccessible private chain of thought.
+
+### FI-06.3 Low-latency intelligence without quality compromise
+
+**AW-VELA-237 — Latency as initial architectural constraint.** Cognition MUST be designed for overlapped intake, context retrieval, capability lookup, specialist work and incremental verification. Measure time to first meaningful response, first useful verified artifact, mission p50/p95, critical path, retries and quality-adjusted end-to-end time from the first implementation, not after full feature rollout.
+
+**AW-VELA-238 — Competent fast paths.** Exact native time/device values, already-resolved command results and low-ambiguity requests MAY bypass deliberative model stages where no loss of intended intelligence occurs. Fast paths MUST expose whether facts came from OS, trusted cache or model and must never silently truncate authorized work.
+
+**AW-VELA-239 — Adaptive reasoning depth.** Routing SHOULD choose reasoning depth and independent review based on uncertainty, consequence, expected benefit and prior evidence. A strong model MAY be faster overall if it prevents repeated corrections; a light model MAY suffice for short contextual interpretation. Both claims require measured outcomes.
+
+**AW-VELA-240 — Concurrent perception and context.** Interpretation, retrieval, qualified tool discovery and platform sampling SHOULD overlap where data dependency permits. Speculative work MUST be scoped, read-only or otherwise cancel-safe and MUST NOT claim effects before authorization.
+
+**AW-VELA-241 — API feature qualification.** Vela SHOULD leverage current, compatible Responses API tools, structured outputs, streaming, cache reuse, async or persistent transports, advanced multimodal, voice and agent capabilities when beneficial. Model/version/region/tool/retention/credit compatibility MUST be probed; no illustrative model identifier or API marketing claim substitutes for actual entitlement.
+
+**AW-VELA-242 — Headroom-sensitive execution without reduced intelligence.** Gaming and foreground contention SHOULD reduce intrusive local indexing, builds, disk/GPU workers and background rendering, not automatically switch to an incapable reasoning model. ARIE MUST provide enforceable resource envelopes; Vela MAY continue eligible remote AI work and gracefully pause constrained local effects.
+
+**AW-VELA-243 — Bounded executive overhead.** An executive model call SHOULD add semantic value at a meaningful decision boundary, not on every progress tick or repeated known fact. AEP SHOULD measure the benefit of supervisory calls and detect unnecessary coordination while preserving sufficient judgment.
+
+**AW-VELA-244 — User-perceived continuity.** Early useful explanation, live trustworthy stage status, interruptible speech, progressive previews and fast foreground interaction SHOULD remain available during a long mission. Interim output MUST differentiate draft from verified result and MUST NOT hide outstanding dependencies.
+
+### FI-06.4 Explicit experience and acceptance ownership
+
+**AW-VELA-245 — Adaptive Intelligence experience.** Vela MUST offer an inspectable experience, integrated with the existing spatial world, where users can understand model/tool decisions, mission revisions, ARIE resource adaptation, AEP hypotheses/experiments, learning confidence, policy promotions and reversions. The interface MUST derive from canonical evidence, not a second dashboard database.
+
+**AW-VELA-246 — Personal control of learning.** Vela MUST provide understandable settings for monitoring scope, retention, experimental optimization, personalization, resource priority, pausing adaptive behaviors and undoing applicable policies, constrained by [14] Trust and user agency.
+
+**AW-VELA-247 — Privacy-aware learning.** Local user telemetry, conversation snippets, account/provider data and personal preference evidence MUST remain within authorized scopes; anonymized or aggregated public demonstrations MUST never expose identifying machine paths, logs or private content.
+
+**AW-VELA-248 — Novel semantics acceptance.** Validate unseen ambiguous references and multimodal intents, cross-branch disambiguation, unavailable context, contradictory evidence, and privacy-denied recall. Evaluate grounded outcome quality, not merely route-label accuracy or schema syntax.
+
+**AW-VELA-249 — Adaptive mission acceptance.** Demonstrate AI-created plans with correct qualified model/tool roles, graceful capability failures, dynamic subtask changes, meaningful resource-aware replanning, and independently verified text plus nontext results.
+
+**AW-VELA-250 — Quality-preserving learning acceptance.** Compare selected learned policies against task-matched holdouts and hard objective verification; reject faster-but-worse strategies, detect domain drift, prove preference override, demonstrate policy rollback and correct memory deletion.
+
+**AW-VELA-251 — Observable continuity acceptance.** In the real application, show truthful API/agent decisions and ARIE/AEP findings, explain evidence for an adopted policy, survive restart/model handoff with consistent identity, and refrain from showing private model reasoning. Synthetic visual demonstrations MUST remain labeled.
+
+**Canonical phase boundary:** this expansion does not authorize expanding a scoped Architecture Recovery PR into a wholesale runtime rebuild. The Full Realization program SHALL sequence cognitive contracts, evidence/telemetry, concurrent execution, validated learning policies and the integrated spatial experience, measuring intelligence preservation throughout.
+
