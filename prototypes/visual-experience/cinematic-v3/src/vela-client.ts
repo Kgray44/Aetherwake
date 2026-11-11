@@ -1,6 +1,7 @@
 import type {
   VelaActiveCard,
   VelaClient,
+  VelaRequest,
   VelaState,
 } from "../../../vela-core/src/contracts.ts";
 import type { WorkspacePresentationContext } from "../../../application-contract/contracts.ts";
@@ -15,6 +16,30 @@ export function createVelaClient(options: {
   presentation?(): WorkspacePresentationContext | null;
   activeCard?(): VelaActiveCard | undefined;
 }): VelaClient {
+  const submit = async (input: unknown): Promise<VelaRequest> => {
+    const submissionId = crypto.randomUUID();
+    const response = options.command("vela", { name: "request", input, submissionId }) as Promise<VelaRequest>;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const recovered = new Promise<VelaRequest>((resolve) => {
+      async function check() {
+        const recorded = await options.command("vela", {
+          name: "submissionStatus",
+          input: { submissionId },
+        }).catch(() => null) as VelaRequest | null;
+        if (settled) return;
+        if (recorded?.id) resolve(recorded);
+        else timer = setTimeout(check, 750);
+      }
+      timer = setTimeout(check, 750);
+    });
+    try {
+      return await Promise.race([response, recovered]);
+    } finally {
+      settled = true;
+      clearTimeout(timer);
+    }
+  };
   const invoke = async <T>(name: string, input: unknown): Promise<T> => {
     const mayPresent =
       name === "request" || name === "apply"
@@ -23,7 +48,7 @@ export function createVelaClient(options: {
     const observing = name === "state" || name === "open";
     const current = observing ? options.observationFence?.() : undefined;
     const presentation = name === "apply" ? options.presentation?.() : null;
-    const result = await options.command("vela", {
+    const result = name === "request" ? await submit(input) : await options.command("vela", {
       name,
       input,
       ...(presentation ? { presentation: structuredClone(presentation) } : {}),

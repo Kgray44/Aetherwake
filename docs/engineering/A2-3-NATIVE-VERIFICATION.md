@@ -44,6 +44,14 @@ The owned-process check found no Electron or backend process remaining under the
 
 Private receipts remain under the task evidence root and the checkout’s private application evidence folder. The app was tested with ordinary Electron pointer commands and canonical SQLite fixtures. The runner exercised the normal layout, conversation, permission and navigation paths. A full forced dropped-event and reconnect matrix in Electron, live Codex interruption, physical input, mixed displays, artistic acceptance and production performance remain separate.
 
+## Connected interruption probe
+
+The Windows probe used the built Electron app and a dedicated synthetic SQLite profile. Test instrumentation withheld one live `application/createResource` notice and one successful Vela IPC response. The renderer recovered the note event from the retained page after cursor 2 and rendered the same event at cursor 3. In the first run, the Vela composer stayed busy while Core already recorded the provider-free request as `responded`.
+
+After the correction, the composer displayed `responded` and cleared `aria-busy` with the original IPC response still withheld. The renderer read the canonical request correlated by the native host, without sending again. The probe then terminated its owned backend, observed the disconnect in Electron, and started a new process on the same profile. The exact request ID and one copy of the note remained. The replacement app exited normally.
+
+Private receipts are `Aetherwake-A2-3-interruption/1794355841845/receipt.json` and `Aetherwake-A2-3-interruption/1794356116658/receipt.json`. The interruption occurred after the request was terminal. An in-flight signed-in Codex turn, pending native authorization during interruption, and the full forced replay and reconnect matrix remain open.
+
 ## Bounded performance observations
 
 A paired descriptive read of the default Living Instruments receipts used 240 renderer callback intervals per run. Baseline and first A2.3 freeze both reported p50 6.1 ms, p95 6.2 ms and p99 6.3 ms, with zero intervals over 16.67 ms. End-to-end runner elapsed time was 36.7 seconds on the baseline and 34.3 seconds on the first freeze. The second freeze measured p50 6.1 ms, p95 6.2 ms, p99 6.2 ms, and 34.0 seconds elapsed. These single observations include fixture and renderer work. They do not establish a speedup, monitor presentation timing, input latency or a memory-leak result. Initial hydration, replay IPC and backlog performance need independently repeated measurement.

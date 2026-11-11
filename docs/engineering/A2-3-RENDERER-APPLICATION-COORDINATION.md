@@ -52,6 +52,7 @@ Core samples replay bounds and rows in one read transaction. The connected rende
 | Scoped provider partial is authorized | The preview carries the observed request and provider identity. Canonical denial clears the preview even if the execution ID remains active. |
 | Provider terminal | Conversation activity can retire busy from the observed terminal record after a missed notification. Verified effects and missions still use their separate receipts. |
 | Cancellation requested | The UI can show the request while awaiting confirmation. It reports interruption only from a canonical terminal state. |
+| Submission reply withheld after native completion | The composer checks a read-only status route with its transient submission ID. Native main binds that ID to the exact canonical request for the trusted frame. Core supplies the current visible result, and the original submission is sent once. |
 | Failure, unknown or disconnect | Failed and unknown states remain distinct. A disconnected view clears live text and reports the last observed state as unconfirmed. Restart may reconcile persisted receipts without repeating an effect. |
 
 The form still waits for its specific submission promise to settle. Canonical completion while that response remains indefinitely hung is a separate unqualified case. A completely inactive, hidden renderer checks arbitrary missed metadata on return or on its next read trigger.
