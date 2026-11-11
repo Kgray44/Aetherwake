@@ -338,6 +338,19 @@ test('simulated provider usage stays out of the reported token total', async () 
     retained.profile.providerCalls = null;
     assert.deepEqual(projectMissionExecution(retained).economics.usageReceipts,
       { reported: 0, simulated: 1, unattributed: 1, missing: null });
+    retained.planning!.executionId = 'same-execution';
+    retained.tasks[0].attempts[0].telemetry = { ...retained.tasks[0].attempts[0].telemetry!,
+      providerExecutionId: 'same-execution', providerEvidence: 'simulated', usage: retained.planning!.usage };
+    retained.profile.providerCalls = 2;
+    const deduplicated = projectMissionExecution(retained).economics;
+    assert.equal(deduplicated.providerCalls, 1);
+    assert.equal(deduplicated.simulatedTotalTokens, 10);
+    assert.equal(deduplicated.usageCoverage, 'complete');
+    retained.tasks[0].attempts[0].telemetry.providerEvidence = 'reported';
+    const conflicted = projectMissionExecution(retained).economics;
+    assert.equal(conflicted.reportedTotalTokens, null);
+    assert.equal(conflicted.simulatedTotalTokens, null);
+    assert.deepEqual(conflicted.conflictingUsageExecutionIds, ['same-execution']);
   } finally {
     await service.close();
     f.db.close();
