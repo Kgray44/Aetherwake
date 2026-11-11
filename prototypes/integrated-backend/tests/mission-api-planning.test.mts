@@ -346,6 +346,12 @@ test('reviewed mission planning binds checked note evidence to the executable pl
     assert.ok(cognition?.runs.every(run => run.providerEvidence === 'simulated' && run.dispatched === true &&
       run.reportedModel === 'gpt-6-luna' && run.settledMs !== null && run.settledMs >= run.startedMs && run.usage?.totalTokens === 140));
     assert.doesNotMatch(JSON.stringify(cognition), /BOX-447|Verify both CPU and RAM pressure/);
+    const profile = await f.core.command('missions', { name: 'execution-profile', input: { id: mission.id } });
+    assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+    assert.equal(profile.planning?.executionId, cognition.runs.at(-1)?.executionId);
+    const timing = profile.planning?.timing;
+    assert.ok(timing?.transport && timing.transport.finishedMs <= timing.providerResultMs);
+    assert.ok(settled.tasks.every(task => task.attempts[0].resourceLease?.schemaVersion === 1));
     const nextId = randomUUID();
     f.replies.push(reply(proposal('What measurements are required?')), reply(assess('Verify both CPU and RAM pressure.')),
       reply({ tasks: [
