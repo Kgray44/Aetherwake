@@ -1,11 +1,12 @@
 import type { ProviderPort } from './contracts.mts';
 import type { MissionExecutor } from './mission-contracts.mts';
-import { admitVelaFileEdit } from './vela-file-edit.mts';
+import { admitVelaFileEdit, type FileEditAdmission } from './vela-file-edit.mts';
 import { interpretVelaProjectCheck, planVelaProjectCheck } from './vela-project-check.mts';
 
 interface ProjectCheckHost {
   runner: ProviderPort['projectChecks'];
   privateRoot?: string;
+  fileEditAdmission?: FileEditAdmission;
   digest(value: unknown): string;
   lease(): (() => void) | null;
 }
@@ -31,7 +32,7 @@ export function createMissionProjectCheck(host: ProjectCheckHost): MissionExecut
         signal.throwIfAborted();
         const plan = planVelaProjectCheck(undefined, 'node-test', target.paths, host.privateRoot);
         if (host.digest(plan) !== target.digest) return blocked('reviewed_check_changed');
-        admitVelaFileEdit(plan.cwd, host.privateRoot);
+        (host.fileEditAdmission ?? admitVelaFileEdit)(plan.cwd, host.privateRoot);
         validatePlanningContext?.();
         dispatched = true;
         const result = interpretVelaProjectCheck('node-test', await runner.execute(plan.argv, plan.cwd));

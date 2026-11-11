@@ -387,8 +387,9 @@ test('preselected tracked tests bind provider review and Start without disclosin
       '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', message);
     commit('Track two test fixtures');
     await f.ready();
-    let effects = 0;
+    let effects = 0, storageAdmissions = 0;
     const runner = { ready: async () => true, execute: async (argv: string[], cwd: string) => {
+      assert.equal(storageAdmissions, 1, 'storage admission must precede the simulated command');
       effects++;
       assert.equal(cwd.toLowerCase(), repo.toLowerCase());
       assert.equal(argv.at(-1), './harness.test.mjs');
@@ -396,7 +397,13 @@ test('preselected tracked tests bind provider review and Start without disclosin
     } };
     const host = f.core as unknown as { port: ProviderPort; missionExecutors: Record<string, MissionExecutor> };
     host.port.projectChecks = runner;
-    host.missionExecutors['codex.project-check'] = createMissionProjectCheck({ runner, digest: planningDigest, lease: () => () => {} });
+    host.missionExecutors['codex.project-check'] = createMissionProjectCheck({
+      runner, digest: planningDigest, lease: () => () => {},
+      fileEditAdmission: cwd => {
+        assert.equal(cwd.toLowerCase(), repo.toLowerCase());
+        storageAdmissions++;
+      },
+    });
     const objective = 'Plan a mission to run my chosen check and measure physical RAM.';
     const workspace = await f.core.command('desktop', { type: 'snapshot' });
     const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Check instructions',
@@ -464,13 +471,16 @@ test('preselected tracked tests bind provider review and Start without disclosin
       await new Promise(done => setTimeout(done, 10));
       settled = await read();
     }
-    assert.ok(settled.tasks.every(task => task.state === 'verified'));
+    assert.deepEqual(settled.tasks.map(({ executor, state }) => [executor, state]), [
+      ['codex.project-check', 'verified'], ['sample.ram', 'verified'], ['join.samples', 'verified'],
+    ]);
     assert.equal(settled.outcome, 'verified');
     assert.ok(!JSON.stringify(settled).includes(freshCheck.digest) && !JSON.stringify(settled).includes(repo) &&
       !JSON.stringify(settled).includes(freshCheck.head));
     commit('Advance checkout after review');
     await assert.rejects(f.core.command('missionStartReviewed', approvedStart), /mission_project_check_scope_changed/);
     assert.equal(effects, 1);
+    assert.equal(storageAdmissions, 1, 'the synthetic checkout must pass storage admission before dispatch');
     assert.equal(f.requests.length, 5);
   } finally {
     await f.close();
