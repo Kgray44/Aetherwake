@@ -245,7 +245,9 @@ test('canonical backend runs a native mission without inference, restores eviden
       let result = await backend.call('missions', { name: 'start', input: {
         objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
       } }) as MissionProjection;
-      const until = performance.now() + 4000;
+      // Give the real counters and dependent join their declared attempt budgets, even if admitted serially.
+      const attemptBudgetMs = preview.plan.tasks.reduce((total, task) => total + task.timeoutMs * task.maxAttempts, 0);
+      const until = performance.now() + attemptBudgetMs + 3000;
       while (['queued', 'running'].includes(result.outcome) && performance.now() < until) {
         await delay(25);
         result = await backend.call('missions', { name: 'read', input: { id: result.id } }) as MissionProjection;

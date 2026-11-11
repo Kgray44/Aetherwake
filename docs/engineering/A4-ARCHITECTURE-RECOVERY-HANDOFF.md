@@ -36,6 +36,8 @@ The [Windows integration run](https://github.com/Kgray44/Aetherwake/actions/runs
 
 The sample helper runs before scope setup. A three-way comparison with Mission 03's lease-gate fixture change preserved both the sample helper and the governor memory input. A Windows snapshot combining A4 `9912be8c` with [ARIE #42](https://github.com/Kgray44/Aetherwake/pull/42) at `9103e446` passed all 30 focused tests. The deterministic samples reached the existing mission pipeline after the real lease gate admitted the tasks. The [FI-0 handoff](https://github.com/Kgray44/Aetherwake/pull/40) records the pinned inputs and scope.
 
+The [FI-0 Windows run](https://github.com/Kgray44/Aetherwake/actions/runs/42964212247/job/130337544864) found a separate observation deadline in the real CPU/RAM publication test. The CPU task was still running at the assertion, and RAM admission had already taken 5.66 seconds. The test allowed four seconds of polling while each native task allows six seconds per attempt. The fixture now derives its finite observation budget from the reviewed plan and allows time for scheduler wakeups. The real counter, dependency, publication, and restart assertions remain in place.
+
 ### Native voice transport probe
 
 The [loopback probe](../../prototypes/visual-experience/cinematic-v3/native/voice-loopback-verify.cjs) ran on Windows with Electron 45.2.1. It uses the production media broker, sandboxed preload and native host client. A separate owned Electron renderer supplies a synthetic local WebRTC answer and acknowledges the data-channel commands. Both renderers are muted, and the peer uses a silent generated track. The probe uses no physical microphone, provider credential or provider network request.
