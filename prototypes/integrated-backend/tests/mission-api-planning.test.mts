@@ -22,7 +22,7 @@ function response(content:string,model:string,terminal:string|null=content) {
   return new Response([{type:'response.created',response:{id,status:'in_progress'}},{type:'response.output_text.delta',delta:content},{type:'response.completed',response:{id,status:'completed',model,output,
     usage:{input_tokens:100,output_tokens:40,total_tokens:140}}}].map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
 }
-function fixture(velaHistoryContext = false) {
+function fixture(velaHistoryContext = false, liveCredential?: string) {
   const base=resolve(tmpdir()),directory=mkdtempSync(join(base,'aerynth-mission-api-')),path=join(directory,'canonical.sqlite'),key=randomBytes(32),requests:any[]=[],replies:((body:any)=>Response|Promise<Response>)[]=[];
   let beforeCredentialOpen: (() => Promise<void>) | undefined;
   const native:NativeHostServices={secrets:{available:async()=>true,
@@ -32,29 +32,39 @@ function fixture(velaHistoryContext = false) {
   const api={fetch:(async(url,init)=>{if(String(url)==='https://api.openai.com/v1/models')return Response.json({data:[{id:'gpt-6-luna'},{id:'gpt-6.1-sol'}]});
     assert.equal(String(url),'https://api.openai.com/v1/responses');assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
     const body=JSON.parse(String(init?.body));requests.push(body);const next=replies.shift();assert.ok(next,'unexpected API inference');return next(body);}) as typeof fetch};
-  const create=()=>new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only',velaHistoryContext},()=>{},native,undefined,api);let core=create();
+  const create=()=>new BackendCore({path,provider:'fixture',contentPolicy:liveCredential ? 'local-private' : 'synthetic-only',
+    velaHistoryContext},()=>{},native,undefined,liveCredential ? undefined : api);let core=create();
   const preview=async(text=objective)=>await core.command('missions',{name:'preview',input:{objective:text}}) as MissionPlanningOffer;
   const plan=async(offer:MissionPlanningOffer,requestId=randomUUID())=>await core.command('missionPlanReviewed',{objective:offer.objective,fingerprint:offer.fingerprint,requestId}) as MissionPreview;
   return {get core(){return core;},requests,replies,preview,plan,
     onNextCredentialRead(action: () => Promise<void>) { beforeCredentialOpen = action; },
-    async ready(){await core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:marker},expectedVersion:null});await core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true});await core.command('desktop',{type:'createWorkspace',title:'Synthetic Minecraft investigation',projectId:null});},
+    async ready(){await core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:liveCredential ?? marker},expectedVersion:null});await core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true});await core.command('desktop',{type:'createWorkspace',title:'Synthetic Minecraft investigation',projectId:null});},
     async pin(defaults:any){if(defaults.providerId==='openai-api-vela')await core.command('vela',{name:'routingOptions',input:{providerId:'openai-api-vela'}});await core.command('vela',{name:'saveRoutingSettings',input:{scope:'global',id:null,expectedVersion:0,defaults}});},
     async reopen(){await core.command('close',{});core=create();},
     async close(){await core.command('close',{}).catch(()=>{});const part=relative(base,resolve(directory));assert.ok(part.startsWith('aerynth-mission-api-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(directory,{recursive:true,force:true});},
   };
 }
 
-test('API-planned native verification failure and retry retain one provider execution through report presentation', async () => {
-  const f = fixture();
+async function verifyReviewedPlanningRetry(live?: { credential: string; model: string }) {
+  const f = fixture(false, live?.credential);
   try {
     await f.ready();
+    if (live) await f.pin({ providerId: 'openai-api-vela', model: live.model });
     const offer = await f.preview();
-    f.replies.push(body => response(JSON.stringify({ contract: 'aerynth.vela-mission-proposal@1',
+    assert.equal(offer.planner?.provider, 'openai-api-vela');
+    assert.equal(offer.notes, undefined);
+    if (live) assert.equal(offer.planner?.model, live.model);
+    else f.replies.push(body => response(JSON.stringify({ contract: 'aerynth.vela-mission-proposal@1',
       tasks: ['cpu', 'ram', 'notes'].map(capability => ({ capability, after: [] })),
       unsupported: graph.unsupported,
     }), body.model));
+    const usageBefore = await f.core.command('velaApiUsageStatus', {});
     const requestId = randomUUID();
     const planned = await f.plan(offer, requestId);
+    assert.deepEqual(planned.plan.tasks.map(task => task.executor).sort(),
+      ['inspect.workspace-notes', 'join.samples', 'sample.cpu', 'sample.ram']);
+    assert.ok(planned.plan.tasks.filter(task => task.id === 'cpu' || task.id === 'ram')
+      .every(task => task.dependencies.length === 0));
     const { id } = await f.core.command('missions', { name: 'start',
       input: { objective, proposalId: requestId, requestId, fingerprint: planned.fingerprint } }) as MissionProjection;
     const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
@@ -85,21 +95,30 @@ test('API-planned native verification failure and retry retain one provider exec
     await f.core.command('missions', { name: 'control', input: { id, revision: failed.revision,
       control: { type: 'retry', taskId: 'notes' } } });
     const settled = await waitForMission(mission => mission.tasks.every(task => task.state === 'verified'));
+    assert.equal(settled.tasks.find(task => task.id === 'cpu')?.attempts[0]?.evidence?.source, 'node:os.cpus');
+    assert.equal(settled.tasks.find(task => task.id === 'ram')?.attempts[0]?.evidence?.source, 'node:os.totalmem+freemem');
     const retried = settled.tasks.find(task => task.id === 'notes')!.attempts[1];
     assert.deepEqual(retried.context?.sources.map(source => source.ref.id), [note.id]);
     const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
     const report = state.conversation?.messages.find(message => message.missionReport?.missionId === id);
     assert.ok(report);
-    assert.deepEqual(await f.core.command('rendererVelaOutput', { missionId: id, messageId: report.id }), { accepted: true });
+    if (!live) assert.deepEqual(await f.core.command('rendererVelaOutput', { missionId: id, messageId: report.id }), { accepted: true });
     const profile = await readProfile();
     assert.equal(profile.cognition?.runs.length, 1);
     assert.equal(profile.cognition?.runs[0].executionId, profile.planning?.executionId);
-    assert.equal(profile.cognition?.runs[0].providerEvidence, 'simulated');
+    assert.equal(profile.cognition?.runs[0].providerEvidence, live ? 'reported' : 'simulated');
     assert.equal(profile.economics.providerCalls, 1);
-    assert.equal(profile.economics.simulatedTotalTokens, 140);
-    assert.equal(profile.economics.reportedTotalTokens, null);
-    assert.equal(profile.economics.costCoverage, 'simulated-only');
-    assert.deepEqual(profile.economics.usageGaps, []);
+    if (live) {
+      assert.equal(profile.economics.simulatedTotalTokens, null);
+      assert.ok(profile.economics.reportedTotalTokens === null || profile.economics.reportedTotalTokens > 0);
+      assert.equal(profile.economics.costCoverage, 'billing-receipt-unavailable');
+      assert.deepEqual(profile.economics.usageGaps, profile.economics.reportedTotalTokens === null ? ['missing-usage-receipts'] : []);
+    } else {
+      assert.equal(profile.economics.simulatedTotalTokens, 140);
+      assert.equal(profile.economics.reportedTotalTokens, null);
+      assert.equal(profile.economics.costCoverage, 'simulated-only');
+      assert.deepEqual(profile.economics.usageGaps, []);
+    }
     const retry = profile.work.retries.find(attempt => attempt.taskId === 'notes');
     assert.equal(retry?.previousAttemptId, failedAttempt.id);
     assert.equal(retry?.attemptId, retried.id);
@@ -108,13 +127,40 @@ test('API-planned native verification failure and retry retain one provider exec
       .some(segment => segment.attemptIds.includes(failedAttempt.id)));
     assert.ok(profile.attempts.find(attempt => attempt.executor === 'join.samples')?.predecessors?.includes(retried.id));
     assert.ok(profile.attempts.every(attempt => attempt.resourceLease?.leaseId));
-    assert.equal(profile.firstMeaningfulOutput?.messageId, report.id);
-    assert.ok(profile.planning?.lifecycle?.planningCommandToRendererReceiptMs != null);
+    if (live) {
+      assert.equal(profile.userDelivery, null);
+      assert.ok(profile.reportPublication?.eventId);
+      assert.ok(profile.work.overlapMs !== null && profile.work.overlapMs > 0);
+    } else {
+      assert.equal(profile.firstMeaningfulOutput?.messageId, report.id);
+      assert.ok(profile.planning?.lifecycle?.planningCommandToRendererReceiptMs != null);
+    }
     assert.equal(profile.quality.objectiveVerified, false);
     await f.reopen();
     assert.deepEqual(await readProfile(), profile);
+    const usageAfter = await f.core.command('velaApiUsageStatus', {});
+    assert.equal(usageAfter.usedToday, usageBefore.usedToday + 1);
+    if (live) return { missionId: id, planningExecutionId: profile.planning?.executionId,
+      publicationEventId: profile.reportPublication?.eventId, providerCalls: profile.economics.providerCalls,
+      reportedTotalTokens: profile.economics.reportedTotalTokens, costCoverage: profile.economics.costCoverage,
+      retry, overlapMs: profile.work.overlapMs };
     assert.equal(f.requests.length, 1);
   } finally { await f.close(); }
+}
+
+test('API-planned native verification failure and retry retain one provider execution through report presentation', async () => {
+  await verifyReviewedPlanningRetry();
+});
+
+test('authorized live AEP retry retains reported provider planning through a native retry and restart', {
+  skip: process.env.AERYNTH_VERIFY_LIVE_AEP_RETRY !== '1', timeout: 120_000,
+}, async t => {
+  const credential = process.env.OPENAI_API_KEY;
+  const model = process.env.AERYNTH_AEP_LIVE_MODEL;
+  assert.ok(process.platform === 'win32' && credential && model,
+    'This opt-in test requires Windows, an authorized OPENAI_API_KEY and AERYNTH_AEP_LIVE_MODEL');
+  delete process.env.OPENAI_API_KEY;
+  t.diagnostic(JSON.stringify(await verifyReviewedPlanningRetry({ credential, model })));
 });
 
 test('actual Core natural Minecraft investigation makes one authorized API graph request, verifies host data and reports incomplete whole-objective coverage',async()=>{
