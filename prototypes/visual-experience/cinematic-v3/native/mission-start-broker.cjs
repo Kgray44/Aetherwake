@@ -9,13 +9,24 @@ async function startReviewedMission({win,event,localURL,storage,call,dialog,inpu
   const checkedDialog={};
   for(const name of ['showMessageBox','showOpenDialog'])checkedDialog[name]=async(...args)=>{guard();const result=await dialog[name](...args);guard();return result;};
   guard();let result;
+          if (Object.hasOwn(input.input ?? {}, "approvedObjectiveDigest") || Object.hasOwn(input.input ?? {}, "approvedProjectCheck"))
+            throw Error("mission_native_review_required");
           const preview = await call("missions", { name: "preview", input: {
             objective: input.input?.objective, ...(input.input?.agentProfileId ? { agentProfileId: input.input.agentProfileId } : {}),
             ...(input.input?.proposalId ? { proposalId: input.input.proposalId } : {}),
             ...(input.input?.teamId ? { teamId: input.input.teamId } : {}),
           } });
           if (!preview?.plan || preview.fingerprint !== input.input?.fingerprint) throw Error("mission_preview_changed");
-          let approvedProjectCheck;
+          let approvedProjectCheck, approvedObjectiveDigest;
+          const objective = preview.objectiveReview;
+          const objectiveDetail = objective
+            ? `Original objective:\n${preview.plan.objective}\n\nResults that would complete it:\n${objective.obligations.map(item => item.objective).join('\n')}\n\nConfirm these results cover the full objective, or keep the mission's coverage partial.`
+            : '';
+          const startButtons = objective ? ["Cancel", "Run and verify objective", "Run with partial coverage"] : ["Cancel", "Run reviewed mission"];
+          const acceptStart = choice => {
+            if (choice.response !== 1 && !(objective && choice.response === 2)) throw Error("mission_review_declined");
+            if (objective && choice.response === 1) approvedObjectiveDigest = objective.digest;
+          };
           if (preview.externalReview) {
             if (preview.executors.some(executor => !executor.available)) throw Error("mission_specialist_unavailable");
             const { provider, calls } = preview.externalReview;
@@ -41,12 +52,18 @@ async function startReviewedMission({win,event,localURL,storage,call,dialog,inpu
             if (paths.length > preview.localReview.maxFiles) throw Error("mission_project_check_selection_limit");
             const review = await call("missionCheckReview", { paths });
             const choice = await checkedDialog.showMessageBox(win, {
-              type: "question", buttons: ["Cancel", "Run reviewed mission"], defaultId: 0, cancelId: 0,
+              type: "question", buttons: startButtons, defaultId: 0, cancelId: 0,
               title: "Review read-only project tests", message: "Run the selected Node tests alongside native measurements?",
-              detail: `Checkout: ${review.cwd}\nCommit: ${review.head}\nArguments: ${JSON.stringify(review.argv)}\n\nCodex runs the selected command in a read-only sandbox with zero model requests. The sandbox requests restricted networking. Effective isolation depends on the installed Windows sandbox mode.`,
+              detail: `Checkout: ${review.cwd}\nCommit: ${review.head}\nArguments: ${JSON.stringify(review.argv)}\n\nCodex runs the selected command in a read-only sandbox with zero model requests. The sandbox requests restricted networking. Effective isolation depends on the installed Windows sandbox mode.${objective ? '\n\n' + objectiveDetail : ''}`,
             });
-            if (choice.response !== 1) throw Error("mission_review_declined");
+            acceptStart(choice);
             approvedProjectCheck = { paths, digest: review.digest };
+          } else if (objective) {
+            if (preview.executors.some(executor => !executor.available)) throw Error("mission_scope_or_plan_unavailable");
+            acceptStart(await checkedDialog.showMessageBox(win, {
+              type: "question", buttons: startButtons, defaultId: 0, cancelId: 0,
+              title: "Review mission objective", message: "Review the results this mission will verify", detail: objectiveDetail,
+            }));
           }
           guard();
           if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
@@ -55,12 +72,14 @@ async function startReviewedMission({win,event,localURL,storage,call,dialog,inpu
           guard();
           if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
           guard();
-          if (preview.externalReview || approvedProjectCheck) {
+          if (preview.externalReview || approvedProjectCheck || approvedObjectiveDigest) {
             if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
               throw Error("unauthorized_sender");
             if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
             guard();
-            result = await call("missionStartReviewed", { ...input.input, ...(approvedProjectCheck ? { approvedProjectCheck } : {}) });
+            result = await call("missionStartReviewed", { ...input.input,
+              ...(approvedProjectCheck ? { approvedProjectCheck } : {}),
+              ...(approvedObjectiveDigest ? { approvedObjectiveDigest } : {}) });
           } else result = await call("missions", input);
 
   return result;

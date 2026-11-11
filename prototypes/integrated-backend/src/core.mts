@@ -11,6 +11,7 @@ import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionCompletion, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
 import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS, MISSION_PROPOSAL_SCHEMA, naturalMissionInvestigation } from './mission-proposal.mts';
+import { provisionalObjectiveCoverage, reviewableMissionObjective } from './mission-objective-review.mts';
 import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, reassignMissionSpecialist, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
 import { MissionTeams } from './mission-teams.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
@@ -297,7 +298,7 @@ export class BackendCore {
   private missionSpecialistsInFlight = 0;
   private missionTeams: MissionTeams;
   private missionPlanningRun?: { abort: AbortController; settled: Promise<MissionResponse> };
-  private missionProposals = new Map<string, { plan: MissionPlan; expires: number }>();
+  private missionProposals = new Map<string, { plan: MissionPlan; expires: number; objectiveReviewEligible?: true }>();
   private missionProjectCheckRunning = false;
   private missionFileEdits!: MissionFileEdits;
   private toolWorkflows!:VelaToolWorkflows;
@@ -1031,6 +1032,7 @@ export class BackendCore {
     const settled = Promise.resolve().then(async () => {
       let result:TurnResult,proposal:string;
       let context: NonNullable<MissionPlan['planning']>['context'];
+      let evidence: Awaited<ReturnType<typeof investigateReviewedVelaEvidence>> | undefined;
       let plannerStarted = started;
       let plannerStartedAt = now();
       if(apiPlanner){
@@ -1040,7 +1042,6 @@ export class BackendCore {
           if (notes || files || project) ensure(this.missionPlanningSourcesCurrent(scope, offer.notes ?? [], offer.files, offer.projectEvidence),
             'mission_planning_context_changed');};
         fence();this.kernel.withTransaction(()=>this.db.prepare('INSERT INTO vela_mission_provider_admissions VALUES(?,?,?,?)').run(executionId,VELA_API_PROVIDER,scope.projectId,now().slice(0,10)));
-        let evidence: Awaited<ReturnType<typeof investigateReviewedVelaEvidence>> | undefined;
         if (notes || files || project) {
           const evidenceStarted = performance.now();
           let providerCalls = 0;
@@ -1079,7 +1080,7 @@ export class BackendCore {
       const partial=naturalMissionInvestigation(objective)?{partialLimitations:[
         /\bminecraft\b/iu.test(objective)?'Minecraft server logs, tick timings/TPS, process profiling and network evidence are not connected or authorized. Local host counters cannot establish the server lag cause.':
         'Available evidence is limited to reviewed sources and listed native capabilities. Target application logs, traces and external runtime access need separate authorized capabilities.']}:
-        apiPlanner?{partialLimitations:['Whole-objective completion requires independent evidence beyond the listed task checks. Local observations alone cannot establish an external diagnosis or completion.']}:undefined;
+        apiPlanner?{partialLimitations:[provisionalObjectiveCoverage]}:undefined;
       const plan = compileMissionProposal(proposal, objective, scope, catalog,
         partial && (notes || files || project) ? { ...partial, retainProviderLimitations: false } : partial);
       ensure(!plan.tasks.some(step => step.specialist?.provider === CHATGPT_PLAN_PROVIDER && step.dependencies.length), 'mission_proposal_unsupported_objective');
@@ -1087,7 +1088,10 @@ export class BackendCore {
       plan.planning = { provider: apiPlanner?VELA_API_PROVIDER:CHATGPT_PLAN_PROVIDER, model: planner.model, effort: planner.effort,
         responseId: result.responseId, startedAt: plannerStartedAt, durationMs: performance.now() - plannerStarted,
         ...(result.usage ? { usage: result.usage } : {}), ...(context ? { context } : {}) };
-      this.missionProposals.set(requestId, { plan, expires: Date.now() + 5 * 60_000 });
+      const objectiveReviewEligible = evidence?.searchCoverage === 'bounded' && !evidence.clarification &&
+        evidence.coverage.every(need => need.status === 'supported' && need.passages.length > 0);
+      this.missionProposals.set(requestId, { plan, expires: Date.now() + 5 * 60_000,
+        ...(objectiveReviewEligible ? { objectiveReviewEligible: true } : {}) });
       return this.missionCommand({ name: 'preview', input: { objective, proposalId: requestId } });
     }).finally(() => {
       this.missionPlanningRun = undefined;
@@ -1105,7 +1109,8 @@ export class BackendCore {
     return { cwd: plan.cwd, argv: plan.argv, head: plan.head, digest: planningDigest(plan) };
   }
   private missionCommand(request: MissionRequest, reviewed = false,
-    approvedProjectCheck?: CommandMap['missionStartReviewed']['input']['approvedProjectCheck']): MissionResponse | Promise<MissionResponse> {
+    approvedProjectCheck?: CommandMap['missionStartReviewed']['input']['approvedProjectCheck'],
+    approvedObjectiveDigest?: string): MissionResponse | Promise<MissionResponse> {
     ensure(request && Object.keys(request).length === 2 && request.input &&
       typeof request.input === 'object' && !Array.isArray(request.input), 'invalid_mission_command');
     const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
@@ -1152,6 +1157,7 @@ export class BackendCore {
         }
         ensure(plan && this.missionScopeAllowed(scope), 'mission_scope_or_plan_unavailable');
         const fingerprint = planningDigest(plan);
+        const objectiveReview = stored?.objectiveReviewEligible ? reviewableMissionObjective(plan, fingerprint) : undefined;
         const remote = plan.tasks.filter(task => task.executor === 'chatgpt.specialist' || task.executor === 'api.specialist');
         const projectCheck = plan.tasks.find(task => task.executor === 'codex.project-check');
         const selected = remote[0]?.specialist;
@@ -1159,9 +1165,12 @@ export class BackendCore {
           ...(proposalId ? { proposalId } : {}),
           executors: plan.tasks.map(task => ({ id: task.id, available: this.missionExecutors[task.executor].available(scope, task) })),
           ...(projectCheck ? { localReview: { kind: 'node-test', maxFiles: 4 } as const } : {}),
+          ...(objectiveReview ? { objectiveReview } : {}),
           ...(remote.length ? { externalReview: { provider: [...new Set(remote.map(task => task.specialist?.provider === VELA_API_PROVIDER ? 'Vela dedicated API' : 'ChatGPT plan'))].join(' + '), model: selected?.model ?? 'Unavailable',
             effort: selected?.effort, calls: remote.length } } : {}) };
         ensure(request.input.fingerprint === fingerprint, 'mission_preview_changed');
+        if (approvedObjectiveDigest !== undefined)
+          ensure(reviewed && objectiveReview && approvedObjectiveDigest === objectiveReview.digest, 'mission_objective_review_changed');
         ensure(!remote.length || reviewed && remote.every(task => this.missionSpecialistAvailable(scope, task)), 'mission_native_review_or_connection_required');
         if (projectCheck) {
           ensure(reviewed && approvedProjectCheck && this.port.projectChecks, 'mission_project_check_review_required');
@@ -1171,7 +1180,8 @@ export class BackendCore {
         }
         const requestId = request.input.requestId;
         const toolOwner=this.toolWorkflows.ownerOperations('specialist-mission').find(op=>op.binding.ownerRef.id===requestId);if(toolOwner)this.toolWorkflows.assertOwnerDispatch(toolOwner.binding.requestId,{id:requestId,digest:toolOwner.binding.ownerRef.digest});
-        const created=this.missions.create(requestId, { ...plan, originConversationId: this.vela.ensureMissionConversation() });if(toolOwner)this.toolWorkflows.witnessOwnerResult(toolOwner.binding,{fence:this.toolFence(toolOwner.binding.requestId,true),sourceDigest:this.toolPlanDigest(toolOwner.binding.ownerRef),receiptRefs:[created.id]});return created;
+        const created=this.missions.create(requestId, { ...plan, originConversationId: this.vela.ensureMissionConversation() },
+          approvedObjectiveDigest === undefined ? undefined : objectiveReview);if(toolOwner)this.toolWorkflows.witnessOwnerResult(toolOwner.binding,{fence:this.toolFence(toolOwner.binding.requestId,true),sourceDigest:this.toolPlanDigest(toolOwner.binding.ownerRef),receiptRefs:[created.id]});return created;
       }
       case 'team-library':
         ensure(!Object.keys(request.input).length, 'invalid_mission_command');
@@ -6327,8 +6337,8 @@ export class BackendCore {
     }
     if (name === 'missions') return await this.missionCommand(a) as CommandMap[K]['output'];
     if (name === 'missionStartReviewed') {
-      const { approvedProjectCheck, ...request } = a as CommandMap['missionStartReviewed']['input'];
-      return await this.missionCommand({ name: 'start', input: request }, true, approvedProjectCheck) as CommandMap[K]['output'];
+      const { approvedProjectCheck, approvedObjectiveDigest, ...request } = a as CommandMap['missionStartReviewed']['input'];
+      return await this.missionCommand({ name: 'start', input: request }, true, approvedProjectCheck, approvedObjectiveDigest) as CommandMap[K]['output'];
     }
     if (name === 'missionCheckReview') return await this.missionCheckReview(a?.paths) as CommandMap[K]['output'];
     if (name === 'missionPlanReviewed') return await this.startMissionPlanning(a) as CommandMap[K]['output'];

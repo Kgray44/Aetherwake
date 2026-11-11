@@ -774,7 +774,7 @@ export function createVelaMissionView(
     if (!review) return null;
     const { preview, requestId, agentProfileId } = review;
     if ("kind" in preview) return renderPlanningOffer(preview);
-    const { plan, executors, externalReview, localReview } = preview;
+    const { plan, executors, externalReview, localReview, objectiveReview } = preview;
     const section = el("section", "vela-core-plan vela-mission-preview");
     const heading = el("h3", undefined, "Review mission");
     if (plan.team) {
@@ -782,7 +782,9 @@ export function createVelaMissionView(
       heading.dataset.missionFocus = "team-review-heading";
     }
     section.append(heading, el("p", undefined, plan.objective));
-    if(plan.coverage)section.append(el("p","vela-core-meta","Partial investigation: "+plan.coverage.limitations.join(' ')+' The original objective will remain blocked until the missing evidence is available.'));
+    if (objectiveReview) section.append(el("p", "vela-core-meta",
+      "On Start, confirm whether these results cover your full objective. Each result must pass verification."));
+    else if(plan.coverage)section.append(el("p","vela-core-meta","Partial investigation: "+plan.coverage.limitations.join(' ')+' The original objective will remain blocked until the missing evidence is available.'));
     if (plan.team) section.append(teamLabel(plan.team));
     if (localReview) section.append(el("p", "vela-core-meta",
       "Start opens a native picker for up to four tracked Node tests. You will review the exact checkout and command before it runs."));

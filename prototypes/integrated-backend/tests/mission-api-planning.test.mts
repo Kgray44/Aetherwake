@@ -366,6 +366,90 @@ test('reviewed API mission planning rejects a terminal response that disagrees w
   } finally { await f.close(); }
 });
 
+test('native Start review binds the complete objective to current host proofs across restart', async () => {
+  const f = fixture(true);
+  try {
+    await f.ready();
+    const workspace = await f.core.command('desktop', { type: 'snapshot' });
+    const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Meter card', workspaceId: workspace.activeWorkspaceId });
+    const note = created.resources.find(item => item.title === 'Meter card')!;
+    const quote = 'The meter card requires a CPU reading and a physical RAM reading.';
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: quote });
+    const objective = 'Could you tell me what the meters on the card actually read?';
+    const selection = { objective, noteIds: [note.id] };
+    const offer = await f.core.command('missions', { name: 'preview', input: selection }) as MissionPlanningOffer;
+    const perceive = (key: string) => ({ version: 2, objective, clarification: '',
+      perception: { kind: 'plan', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: [{ key, question: 'What reading is required?', query: 'meter reading' }] });
+    const assess = (key: string, text: string) => ({ version: 3, clarification: '', assessment: [
+      { key, status: 'supported', passages: [{ source: 'e1', quote: text }], query: '' },
+    ] });
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    const tasks = [{ capability: 'cpu', after: [] }, { capability: 'ram', after: [] }];
+    f.replies.push(reply(perceive('day')), reply(assess('day', 'The pump inspection is on Tuesday.')));
+    const plan = async (unsupported: string[]) => {
+      f.replies.push(reply(perceive('meters')), reply(assess('meters', quote)), reply({ tasks, unsupported }));
+      const requestId = randomUUID();
+      const preview = await f.core.command('missionPlanReviewed', { ...selection, requestId, fingerprint: offer.fingerprint }) as MissionPreview;
+      return { preview, input: { objective, requestId, proposalId: requestId, fingerprint: preview.fingerprint } };
+    };
+    const unsupported = await plan(['The blue-card record itself cannot be written using the selected capabilities.']);
+    assert.equal(unsupported.preview.objectiveReview, undefined);
+    await assert.rejects(f.core.command('missionStartReviewed', { ...unsupported.input, approvedObjectiveDigest: 'a'.repeat(64) }), /mission_objective_review_changed/);
+    const { preview, input } = await plan([]);
+    assert.deepEqual(preview.objectiveReview?.obligations.map(row => row.taskId), ['cpu', 'ram']);
+    const approvedObjectiveDigest = preview.objectiveReview!.digest;
+    await assert.rejects(f.core.command('missionStartReviewed', { ...input, approvedObjectiveDigest: 'a'.repeat(64) }), /mission_objective_review_changed/);
+    await assert.rejects(f.core.command('missionStartReviewed', { ...input, fingerprint: 'b'.repeat(64), approvedObjectiveDigest }), /mission_preview_changed/);
+    await f.core.command('desktop', { type: 'createWorkspace', title: 'Unrelated meter board', projectId: null });
+    await assert.rejects(f.core.command('missionStartReviewed', { ...input, approvedObjectiveDigest }), /mission_preview_changed/);
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.activeWorkspaceId! } });
+    const require = createRequire(import.meta.url);
+    const { startReviewedMission } = require('../../visual-experience/cinematic-v3/native/mission-start-broker.cjs');
+    const localURL = 'file:///fixture.html', frame = { url: localURL };
+    const webContents = { mainFrame: frame, isDestroyed: () => false, getURL: () => localURL };
+    const win = { webContents, isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => true };
+    const start = (choice: number, startInput = input) => startReviewedMission({ win, event: { sender: webContents, senderFrame: frame }, localURL,
+      storage: { allowWrite: async () => true }, call: f.core.command.bind(f.core),
+      dialog: { showMessageBox: async (_window: unknown, review: { detail: string }) => {
+        assert.match(review.detail, /physical|RAM/);
+        assert.ok(review.detail.includes(objective));
+        return { response: choice };
+      } }, input: { name: 'start', input: startInput } }) as Promise<MissionProjection>;
+    const forged = { ...input, approvedObjectiveDigest };
+    await assert.rejects(start(2, forged), /mission_native_review_required/);
+    await assert.rejects(start(0), /mission_review_declined/);
+    const started = await start(1);
+    const read = () => f.core.command('missions', { name: 'read', input: { id: started.id } }) as Promise<MissionProjection>;
+    let settled = await read();
+    for (let index = 0; index < 150 && ['queued', 'running'].includes(settled.outcome); index++) {
+      await new Promise(done => setTimeout(done, 10));
+      settled = await read();
+    }
+    assert.equal(settled.outcome, 'verified');
+    assert.equal(settled.coverage, undefined);
+    assert.equal(settled.objectiveReview?.digest, approvedObjectiveDigest);
+    await f.core.command('missions', { name: 'post-report', input: { id: started.id } });
+    const report = async () => (await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState)
+      .conversation?.messages.find(message => message.missionReport?.missionId === started.id);
+    const complete = await report();
+    assert.match(complete?.content ?? '', /CPU .*\nRAM /);
+    assert.doesNotMatch(complete!.content, /incomplete|Still needed/);
+    assert.equal((await start(1)).id, started.id);
+    await f.reopen();
+    assert.deepEqual((await read()).tasks, settled.tasks);
+    assert.equal((await read()).outcome, 'verified');
+    assert.deepEqual(await report(), complete);
+    const snapshot = await f.core.command('desktop', { type: 'snapshot' });
+    const saved = snapshot.resources.find(item => item.id === note.id)!;
+    await f.core.command('desktop', { type: 'content', resourceId: saved.id, expectedVersion: saved.version, content: 'The meter card was withdrawn.' });
+    assert.equal((await read()).outcome, 'blocked');
+    assert.equal((await read()).coverage?.status, 'partial');
+    assert.equal((await report())?.missionReport?.stale, true);
+    assert.equal(f.requests.length, 8);
+  } finally { await f.close(); }
+});
+
 test('reviewed mission planning binds checked note evidence to the executable plan', async () => {
   const f = fixture(true);
   try {

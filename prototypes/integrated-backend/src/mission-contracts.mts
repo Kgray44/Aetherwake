@@ -49,6 +49,12 @@ export interface MissionPlan {
   coverage?: MissionCoverage;
 }
 export interface MissionCoverage { status: 'partial'; limitations: string[] }
+export interface MissionObjectiveReview {
+  digest: string;
+  planFingerprint: string;
+  planRevision: 1;
+  obligations: { taskId: string; objective: string; executor: string; criterion: string; evidenceSource: string }[];
+}
 export interface MissionObjectiveAssessment {
   model: string;
   requestId: string;
@@ -147,6 +153,7 @@ export interface Mission {
   team?: MissionTeamBinding;
   originConversationId?: string;
   coverage?: MissionCoverage;
+  objectiveReview?: MissionObjectiveReview;
   objectiveAssessment?: MissionObjectiveAssessment;
   workroom?: MissionWorkroom;
   tasks: MissionTask[];
@@ -237,6 +244,7 @@ export interface MissionPreview {
   executors: { id: string; available: boolean }[];
   externalReview?: { provider: string; model: string; effort?: ReasoningEffort; calls: number };
   localReview?: { kind: 'node-test'; maxFiles: number };
+  objectiveReview?: MissionObjectiveReview;
   proposalId?: string;
 }
 export interface MissionPlanningOffer {
