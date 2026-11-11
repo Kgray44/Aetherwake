@@ -23,8 +23,6 @@ export interface SemanticHistoryReview {
 
 interface SemanticHistoryAuthority {
   configurationVersion: number;
-  observeResult?(result: TurnResult): void;
-  planningRequestId?: string;
   /** Explicit selection supplied by the trusted native caller. */
   selectedNoteIds?: readonly string[];
   /** Native authorization for the exact payload, purpose, destination and current source proofs.
@@ -33,10 +31,14 @@ interface SemanticHistoryAuthority {
 }
 export type SemanticHistoryAdmission = SemanticHistoryAuthority &
   ({ model: string; models?: never } | { model?: never; models: readonly string[] });
-export type SemanticHistoryProbeAdmission = Pick<SemanticHistoryAuthority,
-  'configurationVersion' | 'authorize' | 'observeResult' | 'planningRequestId'> & { model: string };
+export type SemanticHistoryProbeAdmission = Pick<SemanticHistoryAuthority, 'configurationVersion' | 'authorize'> & { model: string };
+interface MissionCognitionObservations {
+  planningRequestId: string;
+  observeResult(result: TurnResult): void;
+}
 
-export async function qualifyVelaHistoryModelWithApi(api: VelaApiRuntime, admission: SemanticHistoryProbeAdmission, signal: AbortSignal) {
+export async function qualifyVelaHistoryModelWithApi(api: VelaApiRuntime, admission: SemanticHistoryProbeAdmission, signal: AbortSignal,
+  observations?: MissionCognitionObservations) {
   const { configurationVersion, model, authorize } = admission;
   const request = 'Which weekday did the previously recorded handoff note name for the pump inspection in the fictional maintenance exercise?';
   const calls: SemanticHistoryCall[] = [
@@ -54,15 +56,15 @@ export async function qualifyVelaHistoryModelWithApi(api: VelaApiRuntime, admiss
     };
     const receipt = await api.qualifyStructuredRoute({ requestId: randomUUID(), model, payload: call,
       instruction: instructions[call.stage], schema, binding: { configurationVersion, contextDigest }, validate,
-      onResult: admission.observeResult,
-      ...(admission.planningRequestId ? { missionCognition: {
-        owner: { kind: 'planning', requestId: admission.planningRequestId },
+      onResult: observations?.observeResult,
+      ...(observations ? { missionCognition: {
+        owner: { kind: 'planning', requestId: observations.planningRequestId },
         stage: call.stage === 'interpret' ? 'qualify-perception' : 'qualify-assessment',
       } } : {}),
     }, output => {
       if (call.stage === 'interpret') {
         const proposal = parseSemanticHistoryProposal(output);
-        return proposal?.version === 2 && proposal.needs.some(need => /weekday|day/i.test(need.question));
+        return proposal?.version === 2 && proposal.needs.length > 0;
       }
       if ((output as { version?: unknown } | null)?.version !== 3) return false;
       const evidence = new Map(call.excerpts.map(excerpt => [excerpt.handle, excerpt]));
@@ -77,7 +79,7 @@ export async function qualifyVelaHistoryModelWithApi(api: VelaApiRuntime, admiss
 /** Opt-in native shadow port. Runs through the existing API admission, credentials,
  * execution ledger and Responses transport. No tools or external effects are proposed. */
 export function investigateVelaHistoryWithApi(vela: Pick<VelaService, 'investigateHistory'>, api: VelaApiRuntime, intent: string,
-  admission: SemanticHistoryAdmission, signal?: AbortSignal) {
+  admission: SemanticHistoryAdmission, signal?: AbortSignal, observations?: MissionCognitionObservations) {
   const { configurationVersion, authorize } = admission;
   const allowed = admission.models ? [...admission.models] : [];
   const summarize = (source: VelaSemanticHistorySource) => ({
@@ -103,9 +105,9 @@ export function investigateVelaHistoryWithApi(vela: Pick<VelaService, 'investiga
         (needsAssessmentRoute && !availableAssessment())) throw new Error('semantic_history_disclosure_denied');
     };
     const proposal = await api.structuredProposal({ requestId: randomUUID(), model, payload: call, instruction,
-      binding: { configurationVersion, contextDigest }, schema, validate, onResult: admission.observeResult,
-      ...(admission.planningRequestId ? { missionCognition: {
-        owner: { kind: 'planning', requestId: admission.planningRequestId },
+      binding: { configurationVersion, contextDigest }, schema, validate, onResult: observations?.observeResult,
+      ...(observations ? { missionCognition: {
+        owner: { kind: 'planning', requestId: observations.planningRequestId },
         stage: call.stage === 'interpret' ? 'perception' : 'evidence-assessment',
         ...(call.stage === 'assess' ? { round: call.round } : {}),
       } } : {}),
@@ -118,14 +120,11 @@ export function investigateVelaHistoryWithApi(vela: Pick<VelaService, 'investiga
 /** A reviewed foreground turn cannot discover anything outside its frozen source envelope. */
 export async function investigateReviewedVelaNotes(api: VelaApiRuntime, intent: string,
   notes: readonly (VelaSemanticHistorySource & { title: string })[], configurationVersion: number, model: string,
-  validate: () => void, signal: AbortSignal, observations?: {
-    planningRequestId: string;
-    observeResult(result: TurnResult): void;
-  }) {
+  validate: () => void, signal: AbortSignal, observations?: MissionCognitionObservations) {
   const authorize = () => { validate(); return !signal.aborted; };
   const ready = (['interpret', 'assess'] as const).every(stage =>
     api.qualifiedStructuredRoute(configurationVersion, [model], semanticHistoryFormats[stage].schema, instructions[stage]));
-  if (!ready) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize, ...observations }, signal);
+  if (!ready) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize }, signal, observations);
   const scoped: Pick<VelaService, 'investigateHistory'> = {
     investigateHistory(request, disclose, cancel) {
       const current = (source: VelaSemanticHistorySource) => notes.includes(source as typeof notes[number]) && authorize();
@@ -137,7 +136,7 @@ export async function investigateReviewedVelaNotes(api: VelaApiRuntime, intent: 
       }, cancel);
     },
   };
-  const result = await investigateVelaHistoryWithApi(scoped, api, intent, { configurationVersion, models: [model], authorize, ...observations }, signal);
+  const result = await investigateVelaHistoryWithApi(scoped, api, intent, { configurationVersion, models: [model], authorize }, signal, observations);
   validate();
   const titles = new Map(notes.map(note => [note.sourceId, note.title]));
   const questions = new Map(result.proposal?.needs.map(need => [need.key, need.question]));

@@ -12,6 +12,7 @@ import type { MissionPlanningOffer,MissionPreview,MissionProjection } from '../s
 import type { NativeHostServices } from '../src/native-host.mts';
 import type { VelaBackendState } from '../src/contracts.mts';
 import type { VelaRequest } from '../../vela-core/src/contracts.ts';
+import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
 const marker='SYNTHETIC_ONLY_MISSION_API_KEY';
 const graph={tasks:[{capability:'cpu',after:[]},{capability:'ram',after:[]},{capability:'backend',after:['cpu','ram']}],unsupported:['Server tick timings and logs are unavailable.']};
@@ -488,10 +489,11 @@ test('native adaptive CIE requires qualified stages and reviews the resolved mod
     const perception = { kind: 'recall', explicitGoals: ['Find the inspection weekday'], inferredGoals: [],
       constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] };
     const interpreted = { version: 2, objective: 'Recall the inspection weekday', clarification: '', perception,
-      needs: [{ key: 'day', question: 'Which weekday is the inspection?', query: 'inspection weekday' }] };
+      needs: [{ key: 'day', question: 'Which prior handoff note records the inspection schedule?', query: 'inspection weekday' }] };
     const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
     const assessment = { key: 'day', status: 'supported', passages: [{ source: 'e1', quote: 'The pump inspection is on Tuesday.' }], query: '' };
-    const qualify = () => f.core.qualifyVelaHistoryModel({ configurationVersion: 1, model: 'gpt-6-luna', authorize: review => {
+    const callerMetadata = { planningRequestId: 'unrelated-planning-owner' };
+    const qualify = () => f.core.qualifyVelaHistoryModel({ ...callerMetadata, configurationVersion: 1, model: 'gpt-6-luna', authorize: review => {
       assert.equal(review.model, 'gpt-6-luna');
       assert.doesNotMatch(JSON.stringify(review.call), /When should I/);
       assert.equal(review.purpose, 'qualification');
@@ -509,9 +511,11 @@ test('native adaptive CIE requires qualified stages and reviews the resolved mod
     f.replies.push(reply(interpreted), reply({ version: 3, clarification: '', assessment: [
       { key: 'day', status: 'missing', passages: [], query: '' },
     ] }));
-    const result = await f.core.investigateVelaHistory(intent, admission);
+    const result = await f.core.investigateVelaHistory(intent, { ...admission, ...callerMetadata });
     assert.equal(result.state, 'assessed');
     assert.equal(f.requests.length, 6);
+    const runtime = (f.core as unknown as { velaApiRuntime: VelaApiRuntime }).velaApiRuntime;
+    assert.equal(runtime.missionCognitiveReceipts(callerMetadata.planningRequestId, 'unrelated-mission'), undefined);
     await f.pin({providerId:'openai-api-vela',model:'gpt-6.1-sol'});
     assert.equal((await f.core.investigateVelaHistory(intent, admission)).state, 'unavailable');
     assert.equal(f.requests.length, 6);
