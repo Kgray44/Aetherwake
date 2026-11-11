@@ -5,7 +5,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
-import { projectMissionExecution } from './execution-profiler.mts';
+import { observeProviderStream, projectMissionExecution } from './execution-profiler.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
@@ -919,6 +919,7 @@ export class BackendCore {
     }:undefined;
     const abort = new AbortController();
     const started = performance.now(), startedAt = now();
+    const stream = observeProviderStream(started);
     const settled = Promise.resolve().then(async () => {
       let result:TurnResult,proposal:string;
       if(apiPlanner){
@@ -928,9 +929,11 @@ export class BackendCore {
         fence();this.kernel.withTransaction(()=>this.db.prepare('INSERT INTO vela_mission_provider_admissions VALUES(?,?,?,?)').run(executionId,VELA_API_PROVIDER,scope.projectId,now().slice(0,10)));
         let observed:TurnResult|undefined;
         await this.velaApiRuntime.structuredProposal({instruction:MISSION_PROPOSAL_INSTRUCTIONS,payload:{objective,capabilities},schema:MISSION_PROPOSAL_SCHEMA,
-          requestId,model:apiPlanner.model,reasoningEffort:apiPlanner.effort,validate:fence,onResult:value=>{observed=value;}},abort.signal);
+          requestId,model:apiPlanner.model,reasoningEffort:apiPlanner.effort,validate:fence,
+          observeEventType:stream.observe,onResult:value=>{observed=value;}},abort.signal);
         fence();ensure(observed,'mission_planning_response_unavailable');result=observed;proposal=result.partialText;
-      }else{ensure(task&&turn,'mission_planner_unavailable');result=await this.runMissionProvider(scope,task,turn,abort.signal,requestId,true);proposal=result.partialText;}
+      }else{ensure(task&&turn,'mission_planner_unavailable');result=await this.runMissionProvider(scope,task,turn,abort.signal,requestId,true,stream.observe);proposal=result.partialText;}
+      const validatingAt = performance.now();
       const planner=apiPlanner??selection!;
       ensure(result.outcome === 'completed' && result.dispatched && result.responseId && result.reportedModel === planner.model,
         'mission_planning_response_unavailable');
@@ -943,7 +946,9 @@ export class BackendCore {
       validateMissionPlan(plan, this.missionExecutors);
       plan.planning = { provider: apiPlanner?VELA_API_PROVIDER:CHATGPT_PLAN_PROVIDER, model: planner.model, effort: planner.effort,
         providerEvidence: (apiPlanner ? this.velaApiTest : this.ordinaryTest) ? 'simulated' : 'reported',
-        responseId: result.responseId, startedAt, durationMs: performance.now() - started, ...(result.usage ? { usage: result.usage } : {}) };
+        responseId: result.responseId, executionId: result.executionId, startedAt,
+        timing: { ...stream.read(), providerResultMs: validatingAt - started, validationMs: performance.now() - validatingAt },
+        durationMs: performance.now() - started, ...(result.usage ? { usage: result.usage } : {}) };
       this.missionProposals.set(requestId, { plan, expires: Date.now() + 5 * 60_000 });
       return this.missionCommand({ name: 'preview', input: { objective, proposalId: requestId } });
     }).finally(() => {

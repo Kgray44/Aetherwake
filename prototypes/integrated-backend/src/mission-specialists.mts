@@ -4,6 +4,7 @@ import type { MissionExecutionContext, MissionExecutor, MissionPlan, MissionScop
 import { nativeMissionPlan } from './mission-native.mts';
 import type { MissionTeam } from './mission-teams.mts';
 import {apiRunDiagnostics} from './api-run-diagnostics.mts';
+import { observeProviderStream } from './execution-profiler.mts';
 
 type Selection = Omit<NonNullable<MissionTaskPlan['specialist']>, 'role' | 'instructions'>;
 export const specialistExecutorId = (provider: NonNullable<MissionTaskPlan['specialist']>['provider']) => provider === 'openai-api-vela' ? 'api.specialist' : 'chatgpt.specialist';
@@ -192,14 +193,12 @@ export function createSpecialistExecutor(port: SpecialistPort, provider: NonNull
     available: (scope, task) => task.specialist?.provider === provider && task.executor === specialistExecutorId(provider) && port.available(scope, task),
     async run(context) {
       const start = performance.now();
-      let responseCreatedMs: number | null = null, firstTextDeltaMs: number | null = null;
-      const result = await port.turn(context, type => {
-        if (type === 'provider/response-created') responseCreatedMs ??= performance.now() - start;
-        if (type === 'provider/text-delta') firstTextDeltaMs ??= performance.now() - start;
-      });
+      const stream = observeProviderStream(start);
+      const result = await port.turn(context, stream.observe);
+      const providerStream = stream.read();
       const telemetry = { durationMs: performance.now() - start, providerCalls: Number(result.dispatched),
         ...(port.providerEvidence ? { providerEvidence: port.providerEvidence } : {}),
-        ...(responseCreatedMs !== null || firstTextDeltaMs !== null ? { providerStream: { responseCreatedMs, firstTextDeltaMs } } : {}),
+        ...(providerStream.responseCreatedMs !== null || providerStream.firstTextDeltaMs !== null ? { providerStream } : {}),
         ...(result.usage ? { usage: result.usage } : {}), ...(result.responseId ? { responseId: result.responseId } : {}),
         ...(result.reportedModel ? { reportedModel: result.reportedModel } : {}) };
       const source = provider + ':reported';

@@ -60,6 +60,7 @@ export interface VelaApiRun {
   validate(): void;
   stage?(executionId: string, review: DispatchReview): void | (() => void);
   event?(event: TurnEvent): void;
+  observeEventType?(type: TurnEvent['type']): void;
   completed?(executionId: string, result: TurnResult): void;
 }
 export interface VelaApiToolContinuationRef {id:string;digest:string}
@@ -249,7 +250,12 @@ export class VelaApiRuntime {
           }
         };
         const transport = new ResponsesTransport({ ...(this.options.test ? { fetch: this.options.test.fetch } : {}), limits: { outputBytes: 65536, timeoutMs: 45000 },
-          onEvent: event => { fence(); if (input.event) input.event(event); else this.options.observe?.event(event,input.requestId); }, native: {
+          onEvent: event => {
+            fence();
+            input.observeEventType?.(event.type);
+            if (input.event) input.event(event);
+            else this.options.observe?.event(event,input.requestId);
+          }, native: {
             authorize: async review => {
               exactReview(review); check(!admitted, 'api_execution_already_dispatched');
               const before = semantic?.budget.providerRequests;
@@ -380,12 +386,13 @@ export class VelaApiRuntime {
       if(semantic){const code=String((error as {code?:string})?.code??''),reason=code==='vela_workflow_budget_exhausted'?code:invoking?'vela_tool_owner_unknown':/^vela_tool_[a-z_]{1,64}$/.test(code)?code:'vela_tool_rejected',phase=reason==='vela_workflow_budget_exhausted'?'budget-exhausted':invoking?'unknown':'blocked';checkpoint(phase,reason);if(final)return {...final,workflow:{workflowId:semantic.workflowId,phase,reason}};}throw error;
     } finally { this.running.delete(input.requestId); }
   }
-  async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;validate(): void }, signal: AbortSignal): Promise<unknown> {
+  async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;observeEventType?:VelaApiRun['observeEventType'];validate(): void }, signal: AbortSignal): Promise<unknown> {
     const version = this.configurationVersion(); check(version !== null, 'api_configuration_disconnected');
     const model=input.model??'gpt-6-luna',models = await this.models(version); check(models.includes(model), 'vela_api_default_model_unavailable');
     const prompt = JSON.stringify(input.payload); check(Buffer.byteLength(prompt) <= 32768, 'context_budget_exceeded');
     const { result } = await this.run({ requestId: input.requestId, version, model, prompt,
-      instruction: input.instruction, reasoningEffort:input.reasoningEffort??'low', contextDigest: digest(prompt), outputSchema: input.schema,...(input.weatherTool?{weatherTool:input.weatherTool}:{}),validate: input.validate }, signal);
+      instruction: input.instruction, reasoningEffort:input.reasoningEffort??'low', contextDigest: digest(prompt), outputSchema: input.schema,...(input.weatherTool?{weatherTool:input.weatherTool}:{}),validate: input.validate,
+      observeEventType: input.observeEventType }, signal);
     input.onResult?.(result);
     check(result.outcome === 'completed', result.errorCode ?? 'vela_api_proposal_failed');
     try{return JSON.parse(result.partialText);}catch{throw new VelaError('vela_api_proposal_invalid');}

@@ -83,6 +83,10 @@ test('a reviewed planning request compiles one graph and runs native dependencie
     ]));
     const proposed = await f.core.command('missionPlanReviewed', input) as MissionPreview;
     assert.equal(proposed.proposalId, input.requestId);
+    const planningTiming = proposed.plan.planning?.timing;
+    assert.ok(planningTiming && planningTiming.responseCreatedMs !== null && planningTiming.firstTextDeltaMs !== null);
+    assert.ok(planningTiming.responseCreatedMs <= planningTiming.firstTextDeltaMs &&
+      planningTiming.firstTextDeltaMs <= planningTiming.providerResultMs);
     assert.deepEqual(proposed.plan.tasks.map(task => [task.id, task.dependencies]), [
       ['cpu', []], ['ram', ['cpu']], ['temporary-specialist-1', []], ['report', ['cpu', 'ram', 'temporary-specialist-1']],
     ]);

@@ -60,8 +60,11 @@ export interface MissionPlanningReceipt {
   model: string;
   effort?: ReasoningEffort;
   responseId: string;
+  executionId?: string;
   startedAt: string;
   durationMs: number;
+  /** Stream and result offsets use the planning start. Validation is an elapsed duration. */
+  timing?: { responseCreatedMs: number | null; firstTextDeltaMs: number | null; providerResultMs: number; validationMs: number };
   providerEvidence?: 'reported' | 'simulated';
   usage?: ReportedUsage;
 }

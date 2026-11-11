@@ -54,11 +54,22 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
     assert.ok(cpu.attempts[0].verification?.passed&&ram.attempts[0].verification?.passed&&backend.attempts[0].verification?.passed);
     assert.ok(Date.parse(backend.attempts[0].admittedAt)>=Math.max(Date.parse(cpu.attempts[0].finishedAt!),Date.parse(ram.attempts[0].finishedAt!)),'dependent backend task started before its verified prerequisites');
     assert.equal(settled.profile.verifiedObjectivesPerReportedToken,null,'partial evidence must not count as a verified user objective');
+    const readProfile=()=>f.core.command('missions',{name:'execution-profile',input:{id:running.id}});
+    const profile=await readProfile();
+    assert.ok(profile&&'kind' in profile&&profile.kind==='execution-profile');
+    const timing=profile.planning?.timing;
+    assert.ok(timing&&timing.firstTextDeltaMs!==null&&timing.responseCreatedMs!==null);
+    assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.providerResultMs);
+    assert.ok(timing.validationMs>=0&&timing.providerResultMs+timing.validationMs<=profile.planning!.durationMs);
+    assert.equal(profile.planning?.providerEvidence,'simulated');
     const state=await f.core.command('vela',{name:'state',input:{}}) as VelaBackendState;
     const report=state.conversation!.messages.find(message=>message.missionReport?.missionId===running.id)!;assert.ok(report);assert.equal(report.source,'vela-native');
     assert.match(report.content,/investigation remains incomplete/);assert.match(report.content,/CPU.*RAM/su);assert.match(report.content,/cannot establish the server lag cause/);assert.doesNotMatch(report.content,/server lag (?:is caused|was fixed)/iu);
     await f.reopen();const restored=await f.core.command('missions',{name:'read',input:{id:running.id}}) as MissionProjection;
     assert.equal(restored.outcome,'blocked');assert.deepEqual(restored.coverage,settled.coverage);assert.equal(f.requests.length,1);
+    const restoredProfile=await readProfile();
+    assert.ok(restoredProfile&&'kind' in restoredProfile&&restoredProfile.kind==='execution-profile');
+    assert.deepEqual(restoredProfile.planning,profile.planning);
     assert.equal((await f.core.command('providerActivity',{})).codexConnections,0);
   }finally{await f.close();}
 });

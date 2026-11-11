@@ -1,6 +1,19 @@
 import type { MissionEvent, MissionProjection } from './mission-contracts.mts';
 import type { StreamEvent } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
+import type { TurnEvent } from '../../openai-provider/contracts.mts';
+
+/** Bodyless milestones measured relative to the caller's monotonic start. */
+export function observeProviderStream(started: number) {
+  let responseCreatedMs: number | null = null, firstTextDeltaMs: number | null = null;
+  return {
+    observe(type: TurnEvent['type']) {
+      if (type === 'provider/response-created') responseCreatedMs ??= performance.now() - started;
+      if (type === 'provider/text-delta') firstTextDeltaMs ??= performance.now() - started;
+    },
+    read: () => ({ responseCreatedMs, firstTextDeltaMs }),
+  };
+}
 
 function boundary(event: MissionEvent) {
   return { eventSeq: event.seq, utc: event.time, clock: event.timing?.domain ?? null,
@@ -165,6 +178,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     admissionToLastSettlementMs: timeToSettlement ? timeToSettlement.end - timeToSettlement.start : null,
     // Planning starts before mission admission. Its independent receipt has no monotonic linkage.
     planning: plan ? { durationMs: plan.durationMs, provider: plan.provider, model: plan.model,
+      executionId: plan.executionId ?? null, timing: plan.timing ? { ...plan.timing } : null,
       providerEvidence: plan.providerEvidence ?? null, usage: planningUsage } : null,
     attempts, waits: mission.waits,
     work: {
