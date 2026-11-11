@@ -229,6 +229,9 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
       outputTiming.compositionStartedMs<=outputTiming.readyMs&&outputTiming.readyMs<=outputTiming.stagedMs);
     assert.deepEqual(outputTiming.fromPreview, { id: timing.fromPreview.id,
       toStagingMs: timing.fromPreview.toAdapterMs + outputTiming.stagedMs });
+    assert.ok(outputTiming.requestToStagingMs !== undefined &&
+      outputTiming.requestToStagingMs >= admission.requestToInputStagingMs &&
+      outputTiming.requestToStagingMs <= outputTiming.fromPreview.toStagingMs);
     assert.doesNotMatch(JSON.stringify(outputTiming),/Mass measures inertia/u);
     const readOutputTiming=async()=> (await f.core.command('conversationActivity',{resourceIds:[execution.resourceId]}))
       .executions.find(item=>item.id===execution.id)?.outputTiming;
@@ -241,6 +244,7 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     assert.ok(observed && observed.stagingToReceiptMs!==null && observed.stagingToReceiptMs>=0);
     assert.equal(observed.previewToReceiptMs,
       outputTiming.fromPreview!.toStagingMs + observed.stagingToReceiptMs);
+    assert.equal(observed.requestToReceiptMs, outputTiming.requestToStagingMs + observed.stagingToReceiptMs);
     assert.equal((await f.core.command('rendererVelaOutput',presented)).accepted,true);
     assert.deepEqual((await readOutputTiming())?.presentation,observed);
     assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,1); assert.ok(!JSON.stringify({snapshot,events:f.events}).includes(marker));
@@ -267,6 +271,7 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     assert.ok(restored.outputTiming?.fromPreview);
     assert.equal(restored.outputTiming?.presentation?.stagingToReceiptMs,null);
     assert.equal(restored.outputTiming?.presentation?.previewToReceiptMs,null);
+    assert.equal(restored.outputTiming?.presentation?.requestToReceiptMs,null);
   } finally { await f.close(); }
 });
 
