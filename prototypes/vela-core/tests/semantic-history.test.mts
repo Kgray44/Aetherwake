@@ -61,3 +61,20 @@ test('reports partial owner coverage and retains usable hits after an oversized 
   assert.equal(result.searchCoverage, 'partial');
   assert.deepEqual(result.coverage[0].sources, [candidate]);
 });
+
+test('separates inferred intent, constraints and verification from the search proposal', async () => {
+  const result = await investigateSemanticHistory('Put the handoff on paper and make sure the safety check is covered.', {
+    search: () => assert.fail('the model reported no historical evidence need'),
+    isCurrent: () => false,
+    disclose: async () => ({ version: 2, objective: 'Draft a checked handoff', clarification: '', needs: [],
+      perception: { kind: 'plan', explicitGoals: ['Document the handoff'], inferredGoals: ['Review coverage before delivery'],
+        constraints: ['Include the safety check'], capabilityHints: ['document authoring'], deliverables: ['document'],
+        verification: ['The safety check is present in the final document'] } }),
+  });
+  assert.equal(result.state, 'assessed');
+  assert.equal(result.proposal?.version, 2);
+  if (result.proposal?.version !== 2) assert.fail('expected v2 perception');
+  assert.equal(result.proposal.perception.kind, 'plan');
+  assert.deepEqual(result.proposal.perception.deliverables, ['document']);
+  assert.equal(result.rounds, 0);
+});

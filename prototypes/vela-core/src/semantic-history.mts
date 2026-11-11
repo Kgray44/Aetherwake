@@ -2,6 +2,8 @@ import { canonicalRetrievalQuery } from './history-retrieval.mts';
 
 const statuses = ['supported', 'contradicted', 'missing', 'stale', 'inaccessible', 'uncertain'] as const;
 type Status = typeof statuses[number];
+const intentKinds = ['answer', 'recall', 'plan', 'revise', 'clarify', 'unknown'] as const;
+const deliverableKinds = ['text', 'document', 'file', 'code', 'image', 'action', 'interactive'] as const;
 const maxNeeds = 4;
 const maxCandidates = 8;
 const maxRounds = 2;
@@ -14,8 +16,11 @@ const version = { type: 'integer', enum: [1] };
 
 export const semanticHistoryFormats = {
   interpret: {
-    type: 'json_schema', name: 'vela_history_needs_v1', strict: true,
-    schema: object({ version, objective: string, clarification: string,
+    type: 'json_schema', name: 'vela_request_perception_v2', strict: true,
+    schema: object({ version: { type: 'integer', enum: [2] }, objective: string, clarification: string,
+      perception: object({ kind: { type: 'string', enum: [...intentKinds] },
+        explicitGoals: list(string), inferredGoals: list(string), constraints: list(string), capabilityHints: list(string),
+        deliverables: list({ type: 'string', enum: [...deliverableKinds] }), verification: list(string) }),
       needs: list(object({ key: string, question: string, query: string })) }),
   },
   assess: {
@@ -26,7 +31,17 @@ export const semanticHistoryFormats = {
 } as const;
 
 interface Need { key: string; question: string; query: string }
-interface Proposal { version: 1; objective: string; clarification: string; needs: Need[] }
+interface PerceptionProposal {
+  kind: typeof intentKinds[number];
+  explicitGoals: string[];
+  inferredGoals: string[];
+  constraints: string[];
+  capabilityHints: string[];
+  deliverables: typeof deliverableKinds[number][];
+  verification: string[];
+}
+type Proposal = { objective: string; clarification: string; needs: Need[] } &
+  ({ version: 1 } | { version: 2; perception: PerceptionProposal });
 export type SemanticHistoryScan = 'bounded' | 'partial' | 'unavailable';
 export interface SemanticHistorySource { sourceId: string; revision: string; text: string }
 interface Assessment { key: string; status: Status; sources: string[]; query: string }
@@ -57,9 +72,23 @@ function exact(value: unknown, keys: string[]): value is Record<string, unknown>
 function bounded(value: unknown, max: number, empty = false): value is string {
   return typeof value === 'string' && Buffer.byteLength(value) <= max && (empty || !!value.trim());
 }
+function validPerception(value: unknown): value is PerceptionProposal {
+  const textLists = ['explicitGoals', 'inferredGoals', 'constraints', 'capabilityHints', 'verification'];
+  if (!exact(value, ['kind', 'deliverables', ...textLists]) ||
+    !intentKinds.includes(value.kind as PerceptionProposal['kind']) ||
+    !Array.isArray(value.deliverables) || value.deliverables.length > 5 ||
+    new Set(value.deliverables).size !== value.deliverables.length ||
+    !value.deliverables.every(kind => deliverableKinds.includes(kind))) return false;
+  return textLists.every(key => {
+    const entries = value[key];
+    return Array.isArray(entries) && entries.length <= 5 && entries.every(entry => bounded(entry, 240));
+  });
+}
 function parseProposal(value: unknown): Proposal | undefined {
-  if (!exact(value, ['version', 'objective', 'clarification', 'needs']) || value.version !== 1 ||
-    !bounded(value.objective, 512) || !bounded(value.clarification, 512, true) || !Array.isArray(value.needs) ||
+  const fields = ['version', 'objective', 'clarification', 'needs'];
+  const legacy = exact(value, fields) && value.version === 1;
+  const current = exact(value, [...fields, 'perception']) && value.version === 2 && validPerception(value.perception);
+  if (!(legacy || current) || !bounded(value.objective, 512) || !bounded(value.clarification, 512, true) || !Array.isArray(value.needs) ||
     value.needs.length > maxNeeds) return;
   const keys = new Set<string>();
   for (const need of value.needs) {

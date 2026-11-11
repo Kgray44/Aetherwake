@@ -123,13 +123,15 @@ test('native semantic shadow dispatch uses strict output and denies revoked admi
     assert.equal(f.requests.length, 0);
 
     allow = true;
+    const perception = { kind: 'recall', explicitGoals: ['Identify the safeguard'], inferredGoals: [],
+      constraints: [], capabilityHints: [], deliverables: ['text'], verification: ['Cite the relevant exchange'] };
     f.replies.push(body => {
       assert.equal(body.model, admission.model);
       assert.equal(body.store, false);
       assert.equal(body.text.format.strict, true);
       assert.equal(body.tools, undefined);
       assert.match(JSON.stringify(body.input), /Which safeguard/);
-      return response(JSON.stringify({ version: 1, objective: 'Locate the duplication safeguard', clarification: '',
+      return response(JSON.stringify({ version: 2, objective: 'Locate the duplication safeguard', clarification: '', perception,
         needs: [{ key: 'safeguard', question: 'Which safeguard was selected?', query: 'duplicate batch' }] }), body.model);
     });
     f.replies.push(body => {
@@ -139,9 +141,10 @@ test('native semantic shadow dispatch uses strict output and denies revoked admi
     });
     const found = await f.core.investigateVelaHistory(intent, admission);
     assert.equal(found.state, 'assessed');
+    assert.equal(found.proposal?.version, 2);
     assert.deepEqual(found.coverage, [{ key: 'safeguard', status: 'missing', sources: [] }]);
     assert.equal(f.requests.length, 2);
-    const validDelta = JSON.stringify({ version: 1, objective: 'No source required', clarification: '', needs: [] });
+    const validDelta = JSON.stringify({ version: 2, objective: 'No source required', clarification: '', needs: [], perception });
     for (const terminal of [null, validDelta.replace('No source required', 'Different terminal result')]) {
       f.replies.push(body => response(validDelta, body.model, terminal));
       assert.equal((await f.core.investigateVelaHistory(intent, admission)).state, 'unavailable');
