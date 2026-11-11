@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createCipheriv,createDecipheriv,createHash,randomBytes,randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync,rmSync,writeFileSync } from 'node:fs';
+import { existsSync,mkdirSync,mkdtempSync,realpathSync,renameSync,rmSync,symlinkSync,writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { crc32, deflateSync } from 'node:zlib';
@@ -21,6 +21,7 @@ import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
 import type { NativeDocumentTextServices } from '../src/document-text-host.mts';
 import { docxFixture } from '../../block-library/tests/media-fixtures.mts';
 import { missionImageModel } from '../../openai-provider/images.mts';
+import { writeMissionArtifacts } from '../src/mission-artifacts.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
 const marker='SYNTHETIC_ONLY_MISSION_API_KEY';
 const graph={tasks:[{capability:'cpu',after:[]},{capability:'ram',after:[]},{capability:'backend',after:['cpu','ram']}],unsupported:['Server tick timings and logs are unavailable.']};
@@ -30,8 +31,8 @@ function response(content:string,model:string,terminal:string|null=content, frag
     usage:{input_tokens:100,output_tokens:40,total_tokens:140}}}].map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
 }
 function fixture(velaHistoryContext = false, nativeMedia = false, documents?: NativeDocumentTextServices, liveCredential?: string,
-  artifactFixture = false) {
-  const base=resolve(tmpdir()),directory=mkdtempSync(join(base,'aerynth-mission-api-')),path=join(directory,'canonical.sqlite'),key=randomBytes(32),requests:any[]=[],replies:((body:any)=>Response|Promise<Response>)[]=[];
+  artifactFixture = false, alternateRootCase = false) {
+  const base=resolve(tmpdir()),directory=mkdtempSync(join(base,'aerynth-mission-api-')),path=join(alternateRootCase ? directory.toUpperCase() : directory,'canonical.sqlite'),key=randomBytes(32),requests:any[]=[],replies:((body:any)=>Response|Promise<Response>)[]=[];
   let catalogModels = ['gpt-6-luna', 'gpt-6.1-sol'];
   let beforeCredentialOpen: (() => Promise<void>) | undefined;
   const native:NativeHostServices={documents,...(artifactFixture && !liveCredential ? { fileEditAdmission: () => {} } : {}),secrets:{available:async()=>true,
@@ -44,7 +45,7 @@ function fixture(velaHistoryContext = false, nativeMedia = false, documents?: Na
     assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
     const body=JSON.parse(String(init?.body));requests.push(body);const next=replies.shift();assert.ok(next,'unexpected API inference');return next(body);}) as typeof fetch};
   const create=()=>new BackendCore({path,provider:'fixture',contentPolicy:liveCredential ? 'local-private' : 'synthetic-only',
-    ...(liveCredential || artifactFixture ? { privateRoot: directory } : {}), velaHistoryContext,nativeMedia},()=>{},native,undefined,liveCredential ? undefined : api);let core=create();
+    ...(liveCredential || artifactFixture ? { privateRoot: alternateRootCase ? directory.toUpperCase() : directory } : {}), velaHistoryContext,nativeMedia},()=>{},native,undefined,liveCredential ? undefined : api);let core=create();
   const preview=async(text=objective)=>await core.command('missions',{name:'preview',input:{objective:text}}) as MissionPlanningOffer;
   const plan=async(offer:MissionPlanningOffer,requestId=randomUUID())=>await core.command('missionPlanReviewed',{objective:offer.objective,fingerprint:offer.fingerprint,requestId}) as MissionPreview;
   return {get core(){return core;},directory,requests,replies,preview,plan,
@@ -75,9 +76,10 @@ function illustrationFixture() {
     chunk('IDAT', deflateSync(Buffer.alloc(1024 * (1024 * 3 + 1)))), chunk('IEND', Buffer.alloc(0))]);
 }
 
-async function verifyIllustrationMission(liveCredential?: string) {
-  const f = fixture(false, true, undefined, liveCredential, true);
+async function verifyIllustrationMission(liveCredential?: string, alternateRootCase = false) {
+  const f = fixture(false, true, undefined, liveCredential, true, alternateRootCase);
   try {
+    if (alternateRootCase) assert.notEqual(realpathSync(f.directory.toUpperCase()), realpathSync.native(f.directory));
     f.setCatalogModels([missionImageModel]);
     await f.ready();
     const prompt = liveCredential ? 'A simple abstract geometric illustration. Any colors.' : 'A synthetic black square';
@@ -140,6 +142,43 @@ async function verifyIllustrationMission(liveCredential?: string) {
 
 test('a native-reviewed illustration mission publishes two readable workspace artifacts and one report', async () => {
   await verifyIllustrationMission();
+});
+
+test('an illustration root with alternate Windows spelling retains native readback and restart proof', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  // Force a spelling mismatch even when TEMP does not contain an 8.3 alias.
+  // This must exercise production root normalization, not normalize the fixture first.
+  await verifyIllustrationMission(undefined, true);
+});
+
+test('artifact readback accepts a canonical root but rejects a linked root', t => {
+  const directory = realpathSync.native(mkdtempSync(join(tmpdir(), 'aerynth-artifact-root-')));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const root = join(directory, 'root'), alias = join(directory, 'alias');
+  mkdirSync(root);
+  const png = illustrationFixture();
+  assert.deepEqual(writeMissionArtifacts(root, randomUUID(), png, 'Synthetic notes', () => {}).map(file => file.name),
+    ['illustration.png', 'illustration-notes.txt']);
+  symlinkSync(root, alias, 'junction');
+  assert.throws(() => writeMissionArtifacts(alias, randomUUID(), png, 'Synthetic notes', () => {}),
+    /mission_artifact_directory_changed/);
+});
+
+test('artifact writing rejects a replaced directory before publishing its first file', t => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'aerynth-artifact-root-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const id = randomUUID(), target = join(root, 'mission-artifacts', id);
+  let validations = 0;
+  assert.throws(() => writeMissionArtifacts(root, id, illustrationFixture(), 'Synthetic notes', () => {
+    if (++validations === 2) {
+      renameSync(target, target + '-replaced');
+      mkdirSync(target);
+    }
+  }), /mission_artifact_directory_changed/);
+  assert.equal(validations, 2);
+  assert.equal(existsSync(join(target, 'illustration.png')), false);
+  assert.equal(existsSync(join(target, 'illustration-notes.txt')), false);
 });
 
 test('an illustration with an unconfirmed provider result never publishes or retries', async () => {

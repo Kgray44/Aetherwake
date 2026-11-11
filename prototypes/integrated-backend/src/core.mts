@@ -363,8 +363,10 @@ export class BackendCore {
       ensure(rel.startsWith('..') || isAbsolute(rel), 'private_storage_inside_source');
       ensure(realpathSync(dirname(options.path)) === privateRoot, 'private_storage_scope_mismatch');
     }
-    this.missionArtifactRoot = this.privateRoot ?? (velaApiTest && options.privateRoot && isAbsolute(options.path) &&
+    const artifactRoot = this.privateRoot ?? (velaApiTest && options.privateRoot && isAbsolute(options.path) &&
       realpathSync(dirname(options.path)) === realpathSync(options.privateRoot) ? realpathSync(options.privateRoot) : undefined);
+    // Match artifact readback's native canonical spelling, including Windows 8.3 aliases.
+    this.missionArtifactRoot = artifactRoot ? realpathSync.native(artifactRoot) : undefined;
     this.maxEvents = options.retention?.maxEvents ?? 10000;
     ensure(Number.isInteger(this.maxEvents) && this.maxEvents >= 4 && this.maxEvents <= 100000, 'invalid_retention');
     this.emit = emit;
