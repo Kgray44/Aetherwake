@@ -150,6 +150,7 @@ export interface MissionProjection extends Mission {
   streamPending?: true;
   reportPending?: true;
   conversationPending?: true;
+  cognitiveReceipts?: import('./vela-api-runtime.mts').VelaMissionCognitiveReceipts;
   waits: Record<string, 'dependencies' | 'capacity' | 'resource-conflict' | 'resource-pressure'>;
   profile: {
     elapsedMs: number;
