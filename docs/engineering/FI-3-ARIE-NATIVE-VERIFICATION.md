@@ -97,6 +97,22 @@ A Windows Electron 45.2.1 smoke run used a hidden window and the shipped power c
 
 A Windows Electron 45.2.1 offscreen software-rendering fixture used the shipped collector with a 240 Hz display and the 60 Hz balanced reference. Two baseline windows reported 16.7 ms frame interval p95, and two windows under a scripted 36 ms per-callback load reported 50 ms. Electron reported that the system was awake, was off battery, and had advertised a 34% CPU speed limit during this observation. Replaying the four measured windows through the governor with controlled receipt timing held build admission at one during baseline and reduced it to zero after the second slow window. Remote admission stayed at three. Earlier harness attempts hit a startup deadline or lost the renderer frame before collection. The successful fixture used scripted focus, a software-rendered canvas, and policy replay. Gameplay, GPU presentation, physical suspend/resume, and responsiveness gains remain unqualified.
 
+## Sustained Windows CPU observation
+
+On Windows build 26300 with Node 24.18.0, an AMD Ryzen AI 7 350 with 16 logical processors, and the host's active gaming power plan, an isolated below-normal priority process ran 16 SHA-256 worker threads for about 16 seconds per worker. The governor sampled real OS CPU and memory counters at roughly 530 ms intervals before, during and after the load. It admitted two CPU leases before each load and held them until the load process exited to observe reservation accounting after the checkpoint.
+
+All three runs entered the one-slot policy after two high samples and requested a checkpoint while both leases still counted as active. Remote admission stayed available with three slots throughout. Two slots returned after low samples and recovery dwell.
+
+| Run | CPU at policy entry | Entry after first load sample | Recovery after load process exit | Hashes | Aggregate load CPU time | Governor event-loop p95 before / during |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 100% | 1.06 s | 2.12 s | 1,257,497 | 207.44 s | 16.26 / 16.13 ms |
+| 2 | 100% | 1.61 s | 3.19 s | 1,311,772 | 220.73 s | 16.11 / 16.14 ms |
+| 3 | 99.83% | 1.08 s | 3.20 s | 1,028,218 | 163.03 s | 16.19 / 16.48 ms |
+
+The third run used the new `cpu_contention` reason. These observations were on a shared desktop, and the load ran at below-normal priority. The leases exercised the admission API while the hashing workload ran separately.
+
+The Performance menu now reports **Sustained CPU load** when the governor backs off in response to measured load. It continues to report **Conservative CPU admission** while waiting for a usable CPU sample. The bounded hashing load demonstrates the OS-driven policy change and recovery. A paired run with a representative verified multi-process build, real foreground input and frame timing remains open.
+
 ## Windows comparison
 
 Run `node prototypes/integrated-backend/src/mission-admission-benchmark.mts --quick` from the worktree root. Each measured arm ran three times after one warm-up, with one mission per run, three real CPU samples, one RAM sample, and one report. All nine measured runs verified all five attempts. The host was under ambient contention and the three arms were rotated. Metrics below are medians across each arm's three runs. Queue time includes time waiting on mission dependencies, and Node event-loop delay measures backend responsiveness.
@@ -161,5 +177,5 @@ The wider local regression reported five file-edit and inspection fixture failur
 
 - The focused Windows run passed 29 tests across admission, telemetry, resource policy, MissionService, and canonical backend integration. It covers telemetry freshness, timed and cancelled sampling, local versus remote admission, retained reservations, versioned rollback, fairness and claims, native overlap, dispatch and settlement, and restart uncertainty. A wider run on the pre-change worktree recorded timeouts and Windows fixture cleanup failures.
 - CPU pool follow-up passed 24 focused Windows tests. The mission-conversation and workspace-recovery suites passed 12 tests with synthetic RAM availability feeding the real governor. This corrects earlier Ubuntu failures in fixtures that bypassed the old admission callback. The earlier [integration run](https://github.com/Kgray44/Aetherwake/actions/runs/42960582678) also logged graphics and profile-restore failures already present in the [telemetry-only run](https://github.com/Kgray44/Aetherwake/actions/runs/42957724317). The [CPU-pool Ubuntu run](https://github.com/Kgray44/Aetherwake/actions/runs/42962271625/job/130331343155) reported an OpenAI native-storage CAS assertion failure. Hosted qualification remains open.
-- Existing real Windows OS observations, reduced comparisons, and the bounded live CPU/GPU/API overlap are recorded above. Full-sized baseline, idle and interactive workloads, controlled CPU/GPU/memory contention, foreground transitions, packaged restart with GPU mission readback, and sustained mixed live load remain unqualified.
+- Existing real Windows OS observations, the native CPU pressure transition, reduced comparisons, and bounded live CPU/GPU/API overlap are recorded above. A representative saturated build, idle and interactive workloads, induced GPU and memory policy transitions, foreground transitions, packaged restart with GPU mission readback, and sustained mixed live load remain unqualified.
 - The Windows build/test lane reuses the existing restricted runner. The CPU worker pool currently runs shipped-source inspection. Broader CPU and GPU workloads, packaged renderer responsiveness, adaptive GPU effects, and AEP recommendation promotion remain open. Draft PRs require review before integration.

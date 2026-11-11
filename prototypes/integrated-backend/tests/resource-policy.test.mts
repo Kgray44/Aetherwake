@@ -51,6 +51,7 @@ test('bounded host observations preserve overlap during CPU warmup and obey the 
   try {
     governor.read(true);
     assert.equal(governor.inspectPolicy().effective.cpu, 1);
+    assert.equal(governor.inspectPolicy().reason, 'cpu_conservative');
     const first = governor.tryLease({ ...request, attemptId: 'first' });
     const second = governor.tryLease({ ...request, attemptId: 'second' });
     assert.ok(first && second);
@@ -59,6 +60,38 @@ test('bounded host observations preserve overlap during CPU warmup and obey the 
     assert.equal(governor.canLease('host_io'), false);
     assert.equal(first.checkpointRequested.reason, 'resource-pressure');
     assert.equal(second.checkpointRequested.reason, 'resource-pressure');
+  } finally { governor.dispose(); }
+});
+
+test('sustained CPU load has its own reason and retains a checkpointed lease until release', () => {
+  let time = 0, idle = 0;
+  const governor = createMissionAdmission({ maxWorkers: 3, now: () => time, availableMemory: () => 1024 ** 3,
+    cpuCounters: () => ({ logicalCpus: 4, total: time * 4, idle }), readWindowsPressure: null });
+  const sample = (idleTicks: number) => { time += 500; idle += idleTicks; governor.read(true); };
+  try {
+    governor.read(true);
+    sample(1_600);
+    assert.equal(governor.inspectPolicy().reason, 'balanced');
+    const leases = ['first', 'second'].map(attemptId => governor.tryLease({ kind: 'cpu', missionId: 'mission',
+      taskId: attemptId, attemptId, timeoutMs: 1000 })!);
+    assert.ok(leases.every(lease => lease?.active));
+    sample(0);
+    assert.equal(governor.inspectPolicy().reason, 'balanced');
+    sample(0);
+    const restricted = governor.inspectPolicy();
+    assert.equal(restricted.reason, 'cpu_contention');
+    assert.equal(restricted.effective.cpu, 1);
+    assert.equal(restricted.previous?.cpu, 2);
+    assert.equal(restricted.active.cpu, 2);
+    assert.equal(leases[0].checkpointRequested.aborted, false);
+    assert.equal(leases[1].checkpointRequested.reason, 'resource-pressure');
+    assert.equal(governor.canLease('remote'), true);
+    leases.forEach(lease => lease.release());
+    sample(1_600);
+    assert.equal(governor.inspectPolicy().reason, 'recovery_dwell');
+    time += 3000;
+    sample(11_200);
+    assert.equal(governor.inspectPolicy().reason, 'balanced');
   } finally { governor.dispose(); }
 });
 
