@@ -201,7 +201,8 @@ export function createVelaMissionView(
     onStarted: (missionId: string) => void;
   } | null = null;
   let workroomReview: MissionWorkroomPreview | null = null;
-  let revisionReview: { preview: MissionRevisionPreview; change: MissionRevisionChange } | null = null;
+  let revisionReview: { preview: MissionRevisionPreview; change: MissionRevisionChange; reason?: string } | null = null;
+  let executiveAdvisory: string | null = null;
   const revisionDrafts = new Map<string, MissionRevisionChange>();
   let revisionProfilesRequested = false;
   let commandPending = false;
@@ -245,6 +246,12 @@ export function createVelaMissionView(
         "The specialist connection or reviewed scope changed. Submit the objective again.",
       mission_review_declined:
         "The review was cancelled. Your draft is still here.",
+      mission_executive_review_changed:
+        "The mission checkpoint changed. Review the latest task results.",
+      mission_executive_already_attempted:
+        "Vela already sent a request for this checkpoint.",
+      mission_executive_unavailable:
+        "Vela could not review this checkpoint. Check the dedicated API connection and the mission’s current state.",
       mission_project_check_unavailable:
         "The installed Codex read-only sandbox is unavailable.",
       mission_planner_unavailable:
@@ -586,6 +593,7 @@ export function createVelaMissionView(
   function clearRevision() {
     revisionDrafts.clear();
     revisionReview = null;
+    executiveAdvisory = null;
     revisionProfilesRequested = false;
   }
   function requestRevisionProfiles() {
@@ -988,6 +996,21 @@ export function createVelaMissionView(
       body.querySelector<HTMLElement>('[data-mission-focus="revision-review-heading"]')?.focus();
     refresh();
   }
+  async function requestExecutiveReview(current: MissionProjection, triggerSeq: number) {
+    if (!currentRevision(current) || commandPending) return;
+    await scopedCommand({ name: "executive-review", input: { id: current.id, revision: current.revision, triggerSeq } }, value => {
+      if (!currentRevision(current)) return;
+      if (!value || !("kind" in value) || value.kind !== "executive-result") throw Error("mission_executive_unavailable");
+      const { result } = value;
+      if (result.state === "advisory") {
+        executiveAdvisory = result.reason;
+      } else if (result.state === "reviewable" && result.preview.missionId === current.id && result.preview.revision === current.revision) {
+        revisionReview = { preview: result.preview, change: result.change, reason: result.reason };
+      } else if (result.state === "rejected") {
+        executiveAdvisory = "Vela’s suggestion could not be applied to this checkpoint.";
+      } else throw Error(result.state === "stale" ? "mission_executive_review_changed" : "mission_executive_unavailable");
+    });
+  }
   async function applyRevision(current: MissionProjection, reviewed: NonNullable<typeof revisionReview>) {
     if (!currentRevision(current) || revisionReview !== reviewed || commandPending) return;
     const readGeneration = readEpoch;
@@ -1011,6 +1034,7 @@ export function createVelaMissionView(
     heading.tabIndex = -1;
     heading.dataset.missionFocus = "revision-review-heading";
     section.append(heading, el("p", undefined, reviewed.preview.summary));
+    if (reviewed.reason) section.append(el("p", "vela-core-meta", reviewed.reason));
     const external = reviewed.preview.externalReview;
     if (external) section.append(el("p", "vela-core-meta",
       `${external.provider} · ${external.model}${external.effort ? ` · ${external.effort}` : ""} · Native review required before reassignment`));
@@ -1166,6 +1190,15 @@ export function createVelaMissionView(
     if (current.conversationPending) section.append(el("p", "vela-core-meta", "The verified handoff is waiting to reach the mission conversation."));
     const revision = renderRevisionReview(current);
     if (revision) section.append(revision);
+    const checkpoint = current.events.findLast(event => event.kind === "settled" || event.kind === "recovered");
+    if (checkpoint && canRevise(current, scope) && current.tasks.some(task => ["failed", "blocked", "uncertain"].includes(task.state))) {
+      if (executiveAdvisory) section.append(el("p", "vela-core-meta", executiveAdvisory));
+      if (!revision && !executiveAdvisory) {
+        const ask = button("Ask Vela to review this checkpoint", "executive-review", () => { void requestExecutiveReview(current, checkpoint.seq); });
+        ask.disabled = commandPending;
+        section.append(ask);
+      }
+    }
     if(current.coverage)section.append(el("p","vela-core-meta","Investigation incomplete: "+current.coverage.limitations.join(' ')));
     if (sameScope(current.scope, scope) && (current.outcome === "verified" || current.outcome==='blocked'&&current.coverage&&current.tasks.every(task=>task.state==='verified'))) {
       const post = button("Post evidence link to Vela chat", "post-report", () => { postReport(current.id); });

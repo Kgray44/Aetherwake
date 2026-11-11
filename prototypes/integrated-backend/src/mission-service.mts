@@ -492,6 +492,7 @@ export class MissionService {
   private prepareRevision(mission: Mission, scope: MissionScope, revision: number, change: MissionRevisionChange) {
     this.requireAccess(mission, scope);
     check(mission.revision === revision, 'mission_revision_changed');
+    check(this.host.planningContextCurrent?.(mission) !== false, 'mission_planning_context_changed');
     check(sameScope(mission.scope, scope) && mission.disposition === 'paused' && !busy(mission) &&
       mission.events.filter(event => event.kind === 'revised').length < L.revisions, 'mission_revision_denied');
     const candidate = buildMissionRevision(mission, change, {

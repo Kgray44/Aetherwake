@@ -212,7 +212,8 @@ export interface StreamEvent {
     api?: { maxOutputTokens?: number; callId?: string; elapsedMs?: number; enabled?: boolean; executionId?: string; bodyDigest?: string; contextDigest?: string };
     voice?: {sessionId?:string;attemptId?:string;state?:string;usageSeconds?:number;messageId?:string;delegationId?:string;catalogCount?:number;errorCode?:string};
     tools?:{workflowId:string;receiptId?:string};
-    wake?: {phase:string;enabled:boolean;microphone:string;voice:string;detector:string;owner:string|null;sessionId:string|null;settingsVersion:number;errorCode:string|null};files?:{count:number;state:string} };
+    wake?: {phase:string;enabled:boolean;microphone:string;voice:string;detector:string;owner:string|null;sessionId:string|null;settingsVersion:number;errorCode:string|null};files?:{count:number;state:string};
+    executive?: { contextDigest: string; proposalDigest: string; state: 'reviewable' | 'advisory'; triggerSequence: number; planRevision: number } };
   mission?: MissionStreamEvent;
 }
 export interface HandoffReview {
@@ -285,6 +286,8 @@ export interface CommandMap {
     approvedProjectCheck?: { paths: string[]; digest: string } }; output: MissionResponse };
   missionCheckReview: { input: { paths: string[] }; output: { cwd: string; argv: string[]; head: string; digest: string } };
   missionPlanReviewed: { input: Extract<MissionRequest, { name: 'plan' }>['input']; output: MissionResponse };
+  missionExecutiveReview: { input: import('./mission-contracts.mts').MissionExecutiveRequest; output: import('./mission-contracts.mts').MissionExecutiveReview };
+  missionExecutiveReviewed: { input: import('./mission-contracts.mts').MissionExecutiveRequest & { fingerprint: string }; output: Extract<MissionResponse, { kind: 'executive-result' }> };
   missionPlanningReview: {
     input: { objective: string; fingerprint: string; noteIds: string[] };
     output: { offer: import('./mission-contracts.mts').MissionPlanningOffer;

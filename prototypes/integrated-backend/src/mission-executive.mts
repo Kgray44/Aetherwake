@@ -25,7 +25,8 @@ export interface ExecutivePacket {
   outcome: MissionProjection['outcome'];
   trigger: { sequence: number; kind: 'settled' | 'recovered'; task: string | null };
   tasks: { handle: string; objective: string; state: MissionProjection['tasks'][number]['state'];
-    dependencies: string[]; verified: boolean; unknown: boolean }[];
+    dependencies: string[]; verified: boolean; unknown: boolean; executor: string; remainingAttempts: number;
+    verificationDetail?: string }[];
 }
 interface ExecutiveOwner {
   read(): MissionProjection;
@@ -39,7 +40,7 @@ interface ExecutiveCheckpoint {
   triggerSequence: number;
   digest: string;
 }
-type ExecutiveResult =
+export type ExecutiveResult =
   | { state: 'unavailable' | 'stale' }
   | { state: 'rejected'; reasonCode: 'invalid-proposal' | 'invalid-arguments' | 'uneditable-checkpoint' | 'canonical-revision-rejected';
     action?: Action; canonicalCode?: string }
@@ -58,7 +59,7 @@ function parse(value: unknown): { action: Action; target: string; related: strin
   return { action: row.action as Action, target: row.target, related: [...row.related], reason: row.reason };
 }
 
-function projectCheckpoint(mission: MissionProjection, triggerSeq: number) {
+export function projectExecutiveCheckpoint(mission: MissionProjection, triggerSeq: number) {
   const event = mission.events.findLast(entry => entry.kind === 'settled' || entry.kind === 'recovered');
   if (!event || event.seq !== triggerSeq || (event.kind !== 'settled' && event.kind !== 'recovered') ||
     mission.disposition === 'cancelled' || mission.tasks.length > MISSION_LIMITS.tasks) return;
@@ -68,6 +69,9 @@ function projectCheckpoint(mission: MissionProjection, triggerSeq: number) {
     dependencies: task.dependencies.map(id => handles.get(id)!),
     verified: task.state === 'verified' && task.attempts.at(-1)?.verification?.passed === true,
     unknown: task.state === 'uncertain' || task.attempts.some(attempt => attempt.outcome === 'uncertain'),
+    executor: task.executor,
+    remainingAttempts: Math.max(0, task.maxAttempts - task.attempts.length),
+    verificationDetail: task.attempts.at(-1)?.verification?.detail,
   }));
   const packet: ExecutivePacket = {
     version: 1, basedOnRevision: mission.revision, basedOnPlanRevision: mission.planRevision,
@@ -86,7 +90,7 @@ export async function proposeMissionExecutiveRevision(triggerSeq: number, owner:
   try {
     signal.throwIfAborted();
     const mission = structuredClone(owner.read());
-    const projected = projectCheckpoint(mission, triggerSeq);
+    const projected = projectExecutiveCheckpoint(mission, triggerSeq);
     if (!projected) return { state: 'unavailable' };
     const { packet, handles } = projected;
     const encoded = JSON.stringify(packet);
@@ -97,7 +101,7 @@ export async function proposeMissionExecutiveRevision(triggerSeq: number, owner:
     if (Buffer.byteLength(encoded) > 12000) return { state: 'unavailable' };
     const isCurrent = () => {
       const current = owner.read();
-      return current.id === mission.id && JSON.stringify(projectCheckpoint(current, triggerSeq)?.packet) === encoded;
+      return current.id === mission.id && JSON.stringify(projectExecutiveCheckpoint(current, triggerSeq)?.packet) === encoded;
     };
     const raw = await owner.disclose(packet, signal, isCurrent);
     signal.throwIfAborted();
