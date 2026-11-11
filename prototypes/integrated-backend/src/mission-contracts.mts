@@ -83,7 +83,7 @@ export interface MissionVerification {
   evidenceIds: string[];
 }
 export type MissionAdmissionReason = 'physical-memory' | 'storage-reserve' | 'cpu-load' | 'gpu-load' | 'disk-io' | 'active-input' | 'external-desktop-activity' |
-  'renderer-latency' | 'battery-power' | 'suspended' | 'cpu-speed-limit';
+  'renderer-latency' | 'battery-power' | 'suspended' | 'cpu-speed-limit' | 'os-memory-pressure';
 export interface MissionAdmissionReading { value: number; observedAt: string }
 export interface MissionAdmission {
   workerLimit: number;
@@ -92,6 +92,7 @@ export interface MissionAdmission {
   readings: {
     cpuPercent?: MissionAdmissionReading;
     availableMemoryBytes?: MissionAdmissionReading;
+    windowsLowMemory?: MissionAdmissionReading;
     gpuEnginePercent?: MissionAdmissionReading;
     diskQueueLength?: MissionAdmissionReading;
     rendererFrameP95Ms?: MissionAdmissionReading;

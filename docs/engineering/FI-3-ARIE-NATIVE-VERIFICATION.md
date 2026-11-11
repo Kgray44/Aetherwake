@@ -26,6 +26,12 @@ On Windows with Node v24.18.0, the sampler observed 16 logical processors, 16 pe
 
 The sampler preserves explicit stale, failed, unsupported, and unsampled states. GPU admission requires an eligible execution process and its own live GPU budget. External foreground app identity and temperature remain unavailable. Native input activity supplies a separate short-lived signal. The optional desktop-activity setting below uses a coarse OS-backed observation without identifying the foreground application.
 
+### Windows low-memory notification
+
+The demand-gated Windows probe publishes the OS low-physical-memory notification before collecting slower counters. A fresh active notification holds local admission and requests checkpoints from active local leases. The existing available-RAM floor remains in force, and remote admission keeps its own budget. The native Performance menu shows the last fresh observation and its age. Supplemental Windows counters can be disabled through the existing owner control. [Microsoft Win32 memory notification API](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-querymemoryresourcenotification)
+
+In a Windows smoke run the real notification reported clear approximately 0.64 seconds after probe launch, before a GPU observation was available. The GPU reading arrived approximately 3.6 seconds after probe launch, when the governor observed 6,982,324,224 available physical RAM bytes. A controlled notification test exercised the active, expired and clear paths. With 1 GiB of available RAM in that test, the early notification closed local admission and requested a checkpoint while the active lease stayed reserved until release. Remote admission remained available. A naturally signaled low-memory transition under a representative workload remains unverified.
+
 ## Dedicated GPU memory
 
 The supplemental Windows probe matches DXGI dedicated capacity to WDDM dedicated usage by adapter LUID. It publishes the capacity, usage, and estimated headroom of a single matched adapter. Selection excludes linked, ambiguous, unmatched, and inconsistent readings. The user-visible result contains only memory quantities and age. The Performance menu shows the estimate and its age when fresh. Static capacity discovery is cached for five minutes and invalidated on suspend or monitoring opt-out.

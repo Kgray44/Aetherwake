@@ -6125,12 +6125,14 @@ export class BackendCore {
       const fields = Object.keys(a);
       const governor = this.missionAdmission;
       const policyView = () => {
-        const { vramAvailableBytes: estimate, externalDesktopActivity: activity } = governor.telemetry().metrics;
+        const { vramAvailableBytes: estimate, externalDesktopActivity: activity, windowsLowMemory: memory } = governor.telemetry().metrics;
         return { ...governor.inspectPolicy(), dedicatedVramEstimate:
           estimate.availability === 'estimated' && typeof estimate.value === 'number' && estimate.ageMs !== null ?
             { bytes: estimate.value, ageMs: estimate.ageMs } : null,
         externalDesktopActivity: activity.availability === 'derived' && activity.ageMs !== null ?
-          { active: activity.value === 1, ageMs: activity.ageMs } : null };
+          { active: activity.value === 1, ageMs: activity.ageMs } : null,
+        windowsLowMemory: memory.availability === 'observed' && memory.ageMs !== null ?
+          { active: memory.value === 1, ageMs: memory.ageMs } : null };
       };
       const current = governor.inspectPolicy();
       if (a.name === 'inspect' && fields.length === 1) return policyView() as CommandMap[K]['output'];

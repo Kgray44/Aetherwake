@@ -7,6 +7,7 @@ const reasons = {
   awaiting_native_sample: "Waiting for a resource sample",
   memory_unavailable: "Available RAM is unknown",
   safety_floor: "Local resources are below the safety floor",
+  os_memory_pressure: "Windows reports low physical memory",
   foreground_protection: "Protecting foreground activity",
   external_desktop_activity: "Protecting recent desktop activity during contention",
   renderer_latency: "Protecting renderer responsiveness",
@@ -27,6 +28,7 @@ function describe(view) {
   const effective = view.effective;
   const estimate = view.dedicatedVramEstimate;
   const activity = view.externalDesktopActivity;
+  const lowMemory = view.windowsLowMemory;
   const detail = [
     `${source} profile: ${profile}`,
     reasons[view.reason] ?? "Waiting for policy evidence",
@@ -34,6 +36,7 @@ function describe(view) {
     `Other admission limits: build ${effective.build}, host I/O ${effective.host_io}, GPU ${effective.gpu}, remote requests ${effective.remote}`,
     `Estimated dedicated VRAM headroom: ${estimate ? `${(estimate.bytes / 2 ** 30).toFixed(2)} GiB (${Math.ceil(estimate.ageMs / 1000)} s old)` : "Unavailable"}`,
     `Supplemental Windows counters: ${!view.windowsCountersSupported ? "Unavailable" : view.windowsMonitoring ? "Enabled" : "Disabled"}`,
+    `Windows low-memory notification: ${lowMemory ? `${lowMemory.active ? "Active" : "Clear"} (${Math.ceil(lowMemory.ageMs / 1000)} s old)` : "Unavailable"}`,
     `Other desktop activity protection (system idle time and Aerynth focus): ${view.externalActivityProtection ? "On" : "Off"}`,
   ];
   if (view.externalActivityProtection) detail.push(activity ?

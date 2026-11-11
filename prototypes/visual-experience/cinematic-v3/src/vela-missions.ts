@@ -48,6 +48,7 @@ export { eventLabel as missionEventLabel, stateLabel as missionStateLabel };
 
 const admissionReasonLabel: Record<MissionAdmissionReason, string> = {
   "physical-memory": "Low available memory",
+  "os-memory-pressure": "Windows reports low memory",
   "storage-reserve": "Storage reserve",
   "cpu-load": "High CPU load",
   "gpu-load": "High GPU load",

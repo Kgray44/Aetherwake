@@ -26,6 +26,7 @@ export type ResourcePolicyNativeView = ReturnType<ReturnType<typeof createResour
   windowsCountersSupported: boolean;
   dedicatedVramEstimate: { bytes: number; ageMs: number } | null;
   externalDesktopActivity: { active: boolean; ageMs: number } | null;
+  windowsLowMemory: { active: boolean; ageMs: number } | null;
 };
 export type ResourceAdjustment = {
   schemaVersion: 1;
@@ -147,7 +148,8 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     const reasons: readonly MissionAdmission['reasons'][number][] = admission?.reasons ?? [];
     const free = readings.availableMemoryBytes?.value;
     const suspended = reasons.includes('suspended');
-    const critical = suspended || free === undefined || free < memoryFloor || reasons.includes('storage-reserve');
+    const osMemoryPressure = reasons.includes('os-memory-pressure');
+    const critical = suspended || osMemoryPressure || free === undefined || free < memoryFloor || reasons.includes('storage-reserve');
     freeForReservations = critical ? 0 : free - memoryFloor;
     const rendererPressure = reasons.includes('renderer-latency');
     const gpuPressure = reasons.includes('gpu-load');
@@ -171,7 +173,8 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       host_io: critical ? 0 : config.limits.host_io,
       remote: config.limits.remote,
     };
-    const nextReason = suspended ? 'system_suspended' : critical ? (free === undefined ? 'memory_unavailable' : 'safety_floor') :
+    const nextReason = suspended ? 'system_suspended' : osMemoryPressure ? 'os_memory_pressure' :
+      critical ? (free === undefined ? 'memory_unavailable' : 'safety_floor') :
       rendererPressure ? 'renderer_latency' : externalActivity ? 'external_desktop_activity' : protecting ? 'foreground_protection' :
         powerLimited ? 'power_protection' : recovering && !contention ? 'recovery_dwell' : cpuLimited ? 'cpu_conservative' :
       reasons.includes('disk-io') ? 'disk_contention' : gpuPressure ? 'gpu_contention' :
