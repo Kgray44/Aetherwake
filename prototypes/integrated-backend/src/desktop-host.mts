@@ -62,6 +62,12 @@ lines.on("line", async (line) => {
       write({ id, result: await backend.call('resourcePolicyNative', request.input) });
       return;
     }
+    if (request.command === 'gpuReadbackNative') {
+      if (!nativeClient || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
+        throw new Error('native_gpu_readback_required');
+      write({ id, result: await backend.call('gpuReadbackNative', request.input) });
+      return;
+    }
     if (['velaApiConfigure', 'velaApiUsageAuthorize', 'velaApiUsageStatus','velaVoiceNative','velaWeatherPermissionNative','velaWakeNative','velaWakeFrame','velaWakeCaptureState','velaFileProposalPrepareNative','velaSourcesPickNative','folderOpenNative',
       'hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative',
       'missionFileEditPrepareNative','missionFileEditRunNative','missionFileEditReviewNative','missionFileEditChoiceNative','missionFileEditApplyNative','missionFileEditCheckReviewNative','missionFileEditCheckRunNative','missionFileEditRead'].includes(request.command)) {

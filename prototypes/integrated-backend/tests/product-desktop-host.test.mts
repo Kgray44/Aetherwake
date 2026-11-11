@@ -17,6 +17,7 @@ test('actual desktop stdio host and worker route Agent/Checklist reads and write
   const call=(command:string,input:unknown)=>new Promise<any>((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject,timer:setTimeout(()=>{pending.delete(id);reject(Error('synthetic host deadline '+diagnostics));},8000)});child.stdin.write(JSON.stringify({id,command,input})+'\n');});
   try{
     await assert.rejects(call('resourcePolicyNative',{name:'inspect'}),/native_resource_policy_required/);
+    await assert.rejects(call('gpuReadbackNative',{name:'preview'}),/native_gpu_readback_required/);
     for(const [command,input] of [['velaFileProposalPrepareNative',{intent:'Add project docs to this workspace',selectedDirectory:dir}],['velaSourcesPickNative',{commandId:'forged-picker',selection:{kind:'folder',path:dir},destination:'context'}],['folderOpenNative',{resourceId:'forged-folder'}]] as const)
       await assert.rejects(call(command,input),/native_api_configuration_required/,'Public stdio without the native host cannot mint selection authority or resolve private paths');
     await assert.rejects(call('folders',{type:'list',resourceId:'forged-folder'}),/folder_source_unavailable/,'The public metadata command routes through the worker but cannot invent a folder grant');

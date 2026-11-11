@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { readCpuUtilization, readGpuUtilization } from '../../vela-core/src/system-utilization.mts';
 import { readSystemMemory } from '../../vela-core/src/system-memory.mts';
 import { validateSystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
+import { verifiedGpuReadback } from './windows-gpu-readback.mts';
 import type { Mission, MissionExecutor, MissionPlan, MissionProjection, MissionScope, MissionTask, MissionTaskPlan } from './mission-contracts.mts';
 
 const numberIn = (n: unknown, min: number, max: number) =>
@@ -61,6 +62,8 @@ export function missionCompletion(mission: Mission) {
       lines.push(`Backend ${mib(value.rssBytes)} MiB RSS, ${mib(value.heapUsedBytes)} MiB heap, ${value.timerOvershootMs.toFixed(1)} ms timer delay.`);
     } else if (evidence?.source === 'aerynth.shipped-backend-source') {
       lines.push(`Found ${value.sqlitePrepareSites} SQLite prepare sites and ${value.transactionSites} transaction sites in the shipped source.`);
+    } else if (evidence?.source === 'windows:d3d11-verified-readback' && verifiedGpuReadback(value)) {
+      lines.push(`Verified all ${value.verifiedBuffers} GPU buffer digests across ${value.allocatedBytes / 2 ** 20} MiB of test data.`);
     } else if (evidence?.source === 'aerynth.authorized-workspace-notes' && Array.isArray(value.references)) {
       lines.push(`Found ${value.references.length} relevant ${value.references.length === 1 ? 'note' : 'notes'}.`);
     } else if (evidence?.source === 'codex-app-server:read-only-command') {

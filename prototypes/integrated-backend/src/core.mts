@@ -9,6 +9,8 @@ import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission, createPooledBackendSourceExecutor } from './mission-native.mts';
 import { createMissionCpuPool } from './mission-cpu-pool.mts';
+import { createGpuReadbackAdapter, gpuReadbackExecutor, gpuReadbackPlan } from './mission-gpu-readback.mts';
+import { gpuReadbackRamReservationBytes, gpuReadbackReservationBytes } from './windows-gpu-readback.mts';
 import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS, MISSION_PROPOSAL_SCHEMA, naturalMissionInvestigation } from './mission-proposal.mts';
 import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, reassignMissionSpecialist, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
 import { MissionTeams } from './mission-teams.mts';
@@ -275,6 +277,8 @@ export class BackendCore {
   private missions: MissionService;
   private missionAdmission: ReturnType<typeof createMissionAdmission>;
   private readonly missionCpuPool = createMissionCpuPool(MISSION_LIMITS.workers);
+  private gpuReadback: ReturnType<typeof createGpuReadbackAdapter>;
+  private gpuReadbackReview?: { id: string; scopeStamp: string; configVersion: number; expiresAt: number };
   private missionStorageAdmitted = true;
   private missionPublication: MissionPublication;
   private missionPublicationTimer?: NodeJS.Timeout;
@@ -474,7 +478,14 @@ export class BackendCore {
         authorized: scope => this.missionScopeAllowed(scope),
         profileAvailable: (scope, id) => this.missionAgentProfile(scope, id) !== undefined,
       });
+      this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
+        resourcePolicy: nativeHostServices?.resourcePolicy,
+        resourcePolicyPersistence: this.privateMode && nativeHostServices ? createResourcePolicyStore(this.db) : undefined,
+        onChange: () => this.missions?.capacityChanged() });
+      this.gpuReadback = createGpuReadbackAdapter(this.missionAdmission, () => this.missions?.capacityChanged(),
+        () => process.platform === 'win32' && this.privateMode && !!this.nativeHostServices && !this.closed);
       this.missionExecutors = { ...nativeMissionExecutors,
+        [gpuReadbackExecutor]: this.gpuReadback.executor,
         'inspect.backend-source': createPooledBackendSourceExecutor(this.missionCpuPool),
         'join.team': missionTeamJoin, 'codex.project-check': createMissionProjectCheck({
         runner: this.port.projectChecks, privateRoot: this.privateRoot, digest: planningDigest,
@@ -491,10 +502,6 @@ export class BackendCore {
         turn: input => this.runMissionSpecialist(input),
       }, VELA_API_PROVIDER),
       };
-      this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
-        resourcePolicy: nativeHostServices?.resourcePolicy,
-        resourcePolicyPersistence: this.privateMode && nativeHostServices ? createResourcePolicyStore(this.db) : undefined,
-        onChange: () => this.missions?.capacityChanged() });
       const resourceKind = (lane: string, executorId: string) => executorId === 'inspect.backend-source' ? 'cpu' as const :
         lane === 'codex-local-check' ? 'build' as const :
         lane === CHATGPT_PLAN_PROVIDER || lane === VELA_API_PROVIDER ? 'remote' as const :
@@ -510,13 +517,19 @@ export class BackendCore {
           lane === VELA_API_PROVIDER ? VELA_API_RUNTIME_LIMITS.concurrent - this.velaApiRuntime.nonMissionInFlight() : 2,
         underPressure: () => !this.missionStorageAdmitted,
         resources: {
-          canAcquire: (lane, executorId) => this.missionStorageAdmitted && this.missionAdmission.canLease(resourceKind(lane, executorId)),
-          acquire: (lane, identity, executorId) => this.missionStorageAdmitted ?
-            this.missionAdmission.tryLease({ ...identity, kind: resourceKind(lane, executorId) }) : undefined,
+          canAcquire: (lane, executorId) => this.missionStorageAdmitted && (executorId === gpuReadbackExecutor ?
+            this.gpuReadback.canAcquire() : this.missionAdmission.canLease(resourceKind(lane, executorId))),
+          prepare: (_lane, executorId) => { if (executorId === gpuReadbackExecutor) this.gpuReadback.prepare(); },
+          acquire: (lane, identity, executorId) => {
+            if (!this.missionStorageAdmitted) return;
+            return executorId === gpuReadbackExecutor ? this.gpuReadback.acquire(identity) :
+              this.missionAdmission.tryLease({ ...identity, kind: resourceKind(lane, executorId) });
+          },
         },
         admission: demand => {
           if (!demand || !this.missionStorageAdmitted) this.missionAdmission.stopDemand();
           const snapshot = this.missionAdmission.read(demand && this.missionStorageAdmitted);
+          if (!demand || !this.missionStorageAdmitted || !this.missionAdmission.mayPrepareGpu()) this.gpuReadback.stopIdle();
           const effectiveLimits = this.missionAdmission.inspectPolicy().effective;
           return this.missionStorageAdmitted ? { ...snapshot, effectiveLimits } : { ...snapshot, workerLimit: 0,
             effectiveLimits: { cpu: 0, build: 0, gpu: 0, host_io: 0, remote: 0 },
@@ -5831,6 +5844,33 @@ export class BackendCore {
     if (name === 'missionPlanReviewed') return await this.startMissionPlanning(a) as CommandMap[K]['output'];
     if (name === 'missionRevisionReviewed')
       return await this.missionCommand({ name: 'revision-apply', input: a }, true) as CommandMap[K]['output'];
+    if (name === 'gpuReadbackNative') {
+      ensure(!this.closed && this.privateMode && this.nativeHostServices, 'native_gpu_readback_required');
+      ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
+      ensure(this.gpuReadback.enabled(), 'gpu_readback_disabled');
+      ensure(a && typeof a === 'object' && !Array.isArray(a), 'invalid_gpu_readback_request');
+      const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
+      ensure(workspaceId && this.missionScopeAllowed({ workspaceId, projectId }), 'mission_workspace_required');
+      const workspace = this.workspaceRecoverySnapshot(workspaceId);
+      ensure(workspace, 'mission_workspace_required');
+      const scopeStamp = planningDigest([workspaceId, projectId, workspace.version, workspace.projectVersion]);
+      const configVersion = this.missionAdmission.inspectPolicy().configVersion;
+      if (a.name === 'preview' && Object.keys(a).length === 1) {
+        const reviewId = randomUUID();
+        this.gpuReadbackReview = { id: reviewId, scopeStamp, configVersion, expiresAt: performance.now() + 60_000 };
+        return { kind: 'preview', reviewId, workspaceTitle: workspace.title, ramBytes: gpuReadbackRamReservationBytes,
+          vramBytes: gpuReadbackReservationBytes } as CommandMap[K]['output'];
+      }
+      ensure(a.name === 'start' && Object.keys(a).length === 2 && identifier(a.reviewId), 'invalid_gpu_readback_request');
+      const review = this.gpuReadbackReview;
+      ensure(review && review.id === a.reviewId && review.scopeStamp === scopeStamp && review.configVersion === configVersion &&
+        performance.now() < review.expiresAt, 'gpu_readback_review_changed');
+      const plan = gpuReadbackPlan({ workspaceId, projectId });
+      this.gpuReadback.reopen();
+      const mission = this.missions.create(review.id, { ...plan, originConversationId: this.vela.ensureMissionConversation() });
+      this.gpuReadbackReview = undefined;
+      return { kind: 'started', missionId: mission.id } as CommandMap[K]['output'];
+    }
     if (name === 'resourcePolicyNative') {
       ensure(!this.closed && this.privateMode && this.nativeHostServices, 'native_resource_policy_required');
       ensure(a && typeof a === 'object' && !Array.isArray(a), 'invalid_resource_policy_request');
@@ -5855,6 +5895,9 @@ export class BackendCore {
         } else if (a.name === 'set-cpu-limit' && fields.length === 3 &&
             Number.isSafeInteger(a.limit) && a.limit >= 0 && a.limit <= current.maxCpuWorkers) {
           governor.configurePolicy(a.expectedVersion, { ...config, limits: { ...current.limits, cpu: a.limit } });
+        } else if (a.name === 'set-gpu-limit' && fields.length === 3 && process.platform === 'win32' &&
+            (a.limit === 0 || a.limit === 1)) {
+          governor.configurePolicy(a.expectedVersion, { ...config, limits: { ...current.limits, gpu: a.limit } });
         } else if (a.name === 'set-windows-monitoring' && fields.length === 3 && typeof a.enabled === 'boolean') {
           governor.configurePolicy(a.expectedVersion, { ...config, monitorWindows: a.enabled });
         } else if (a.name === 'restore-defaults' && fields.length === 2) {
@@ -5869,6 +5912,7 @@ export class BackendCore {
           code : 'resource_policy_save_failed');
       }
       governor.read(false);
+      if (!governor.mayPrepareGpu()) this.gpuReadback.stopIdle();
       this.missions.capacityChanged();
       return policyView() as CommandMap[K]['output'];
     }
@@ -5879,6 +5923,8 @@ export class BackendCore {
         this.missions.capacityChanged();
         if (a.storageAdmitted) { this.flushMissionPublication(); if (this.timerDomain) void this.readyTimers().then(domain => domain.reconcile()).catch(() => {}); }
         else {
+          this.gpuReadback.stopIdle();
+          this.missionAdmission.noteGpuBudget(null);
           clearTimeout(this.missionPublicationTimer);
           this.missionPublicationTimer = undefined;
         }
@@ -6150,10 +6196,12 @@ export class BackendCore {
         await cleanup(() => this.ordinaryController?.abort());
         const planning = this.missionPlanningRun;
         await cleanup(() => planning?.abort.abort());
-        await cleanup(() => this.missionAdmission.dispose());
+        await cleanup(() => this.missionAdmission.stopDemand());
         await cleanup(() => this.weatherRequest?.abort());
         await cleanup(() => this.weatherPermissions?.close());
         await cleanup(() => this.missions.close());
+        await cleanup(() => this.gpuReadback.close());
+        await cleanup(() => this.missionAdmission.dispose());
         await cleanup(() => this.missionCpuPool.close());
         await cleanup(() => this.flushMissionPublication());
         await planning?.settled.catch(() => {});

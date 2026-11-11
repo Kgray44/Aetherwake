@@ -31,3 +31,26 @@ test("native resource controls submit only a confirmed versioned selection", asy
   assert.deepEqual(calls.at(-1), ["resourcePolicyNative", { name: "inspect" }]);
   assert.match(dialogs.at(-1).detail, /storage reserve/u);
 });
+
+test("GPU diagnostic uses a native workspace review and submits only after confirmation", async () => {
+  const calls = [], dialogs = [];
+  let response = 1;
+  const menu = resourcePolicyMenu({
+    call: async (command, input) => {
+      calls.push([command, input]);
+      return input.name === "preview" ? { kind: "preview", reviewId: "review",
+        workspaceTitle: "Synthetic workspace", ramBytes: 64 * 2 ** 20, vramBytes: 256 * 2 ** 20 } :
+        { kind: "started", missionId: "mission" };
+    },
+    show: async options => { dialogs.push(options); return { response }; },
+    ready: () => true,
+    canWrite: async () => true,
+  });
+  const action = menu.submenu.find(item => item.label === "Run GPU Buffer Diagnostic…");
+  await action.click();
+  assert.deepEqual(calls, [["gpuReadbackNative", { name: "preview" }]]);
+  assert.match(dialogs[0].detail, /Synthetic workspace.*256 MiB VRAM and 64 MiB RAM/su);
+  response = 0;
+  await action.click();
+  assert.deepEqual(calls.at(-1), ["gpuReadbackNative", { name: "start", reviewId: "review" }]);
+});

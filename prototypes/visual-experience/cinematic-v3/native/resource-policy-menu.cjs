@@ -62,6 +62,29 @@ exports.resourcePolicyMenu = function resourcePolicyMenu({ call, show, ready, ca
       if (ready()) await show({ type: "warning", title: "Resource policy", message: "Resource policy unavailable", detail }).catch(() => {});
     } finally { busy = false; }
   };
+  const runGpuDiagnostic = async () => {
+    if (busy || !ready()) return;
+    busy = true;
+    try {
+      const preview = await call("gpuReadbackNative", { name: "preview" });
+      if (preview.kind !== "preview" || !ready()) return;
+      const detail = `Workspace: ${preview.workspaceTitle}\nARIE reserves ${preview.vramBytes / 2 ** 20} MiB VRAM and ${preview.ramBytes / 2 ** 20} MiB RAM. The mission waits for available resources before copying and verifying the test buffers.`;
+      const choice = await show({ type: "question", title: "GPU buffer diagnostic", message: "Run this diagnostic?",
+        detail, buttons: ["Run Diagnostic", "Cancel"], defaultId: 1, cancelId: 1 });
+      if (choice.response !== 0 || !ready()) return;
+      if (!(await canWrite()) || !ready()) throw Error("storage_reserve_admission_denied");
+      await call("gpuReadbackNative", { name: "start", reviewId: preview.reviewId });
+      if (ready()) await show({ type: "info", title: "GPU buffer diagnostic", message: "Diagnostic queued",
+        detail: "Follow the result in your workspace’s missions." });
+    } catch (error) {
+      const detail = error?.message === "gpu_readback_disabled" ? "Enable one GPU diagnostic worker in the Performance menu on Windows." :
+        error?.message === "mission_workspace_required" ? "Open a workspace and try again." :
+        error?.message === "gpu_readback_review_changed" ? "The workspace or resource policy changed. Review the diagnostic again." :
+        error?.message === "storage_reserve_admission_denied" ? "The storage reserve prevented this diagnostic." :
+        "The GPU diagnostic could not be queued.";
+      if (ready()) await show({ type: "warning", title: "GPU buffer diagnostic", message: "Diagnostic unavailable", detail }).catch(() => {});
+    } finally { busy = false; }
+  };
   return {
     label: "Performance",
     submenu: [
@@ -73,6 +96,12 @@ exports.resourcePolicyMenu = function resourcePolicyMenu({ call, show, ready, ca
       { label: "Supplemental Windows Counters…", click: choose("Control supplemental Windows counters", view =>
         view.windowsCountersSupported ? [{ label: view.windowsMonitoring ? "Disable" : "Enable",
           request: { name: "set-windows-monitoring", enabled: !view.windowsMonitoring } }] : []) },
+      { label: "GPU Diagnostic Limit…", click: choose("Set the local GPU diagnostic limit", view =>
+        view.windowsCountersSupported ? [
+          { label: "Off", request: { name: "set-gpu-limit", limit: 0 } },
+          { label: "One Worker", request: { name: "set-gpu-limit", limit: 1 } },
+        ] : []) },
+      { label: "Run GPU Buffer Diagnostic…", click: runGpuDiagnostic },
       { type: "separator" },
       { label: "Undo Last Policy Change…", click: choose("Undo the last resource policy change", view =>
         view.canRollback ? [{ label: "Undo", request: { name: "rollback" } }] : []) },

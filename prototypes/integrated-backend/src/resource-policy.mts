@@ -17,6 +17,7 @@ export interface ResourcePolicyPersistence {
 export type ResourcePolicyNativeRequest = { name: 'inspect' } |
   { name: 'set-mode'; mode: ResourceMode; expectedVersion: number } |
   { name: 'set-cpu-limit'; limit: number; expectedVersion: number } |
+  { name: 'set-gpu-limit'; limit: 0 | 1; expectedVersion: number } |
   { name: 'set-windows-monitoring'; enabled: boolean; expectedVersion: number } |
   { name: 'restore-defaults' | 'rollback'; expectedVersion: number };
 export type ResourcePolicyNativeView = ReturnType<ReturnType<typeof createResourcePolicy>['inspect']> & {
@@ -112,6 +113,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
   let revision = 1, reason = 'awaiting_native_sample', freeForReservations = 0;
   let localFreshUntil = -Infinity, lastProtection = -Infinity;
   let disposed = false;
+  let gpuPreparationAllowed = false;
   let gpuBudget: (GpuProcessBudget & { at: number }) | undefined;
   const active = new Map<string, {
     request: ResourceLeaseRequest; lease: ResourceLease; checkpoint: AbortController;
@@ -152,10 +154,11 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       !reasons.includes('gpu-load') && !reasons.includes('disk-io');
     const balancedCeiling = Math.max(1, maxWorkers - 1);
     const cpu = critical ? 0 : Math.min(config.limits.cpu, cpuLimited ? 1 : idleHeadroom ? maxWorkers : balancedCeiling);
+    gpuPreparationAllowed = !critical && !contention && !recovering && !reasons.includes('gpu-load') && config.limits.gpu > 0;
     const next = {
       cpu,
       build: protecting || reasons.includes('disk-io') ? 0 : Math.min(cpu, config.limits.build),
-      gpu: !critical && !contention && !recovering && !reasons.includes('gpu-load') && freshGpuBudget() ?
+      gpu: gpuPreparationAllowed && freshGpuBudget() ?
         Math.min(1, config.limits.gpu) : 0,
       host_io: critical ? 0 : config.limits.host_io,
       remote: config.limits.remote,
@@ -206,6 +209,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
   return {
     update,
     canLease,
+    mayPrepareGpu: () => !disposed && gpuPreparationAllowed && now() <= localFreshUntil && used('gpu') === 0,
     noteGpuBudget(budget: GpuProcessBudget | null) {
       if (disposed || budget && (!identifier(budget.contextId) || !finiteCount(budget.budgetBytes, Number.MAX_SAFE_INTEGER) ||
           !finiteCount(budget.usedBytes, budget.budgetBytes) || budget.budgetBytes === budget.usedBytes ||

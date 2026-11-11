@@ -234,6 +234,7 @@ export function openWindowsGpuReadback() {
   });
   return {
     budget: ready,
+    closed: ended.then(() => {}),
     async run(lease: ResourceLease, signal: AbortSignal): Promise<WindowsGpuReadback> {
       const receipt = lease.receipt;
       if (!lease.active || claimed || child.killed || child.exitCode !== null || !budget || receipt.kind !== 'gpu' ||

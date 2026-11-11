@@ -257,6 +257,9 @@ export interface CommandMap {
   /** Owned desktop command, excluded from renderer and model routes. */
   resourcePolicyNative: { input: import('./resource-policy.mts').ResourcePolicyNativeRequest;
     output: import('./resource-policy.mts').ResourcePolicyNativeView };
+  /** Fixed GPU diagnostic, accessible only through the native desktop review. */
+  gpuReadbackNative: { input: import('./mission-gpu-readback.mts').GpuReadbackNativeRequest;
+    output: import('./mission-gpu-readback.mts').GpuReadbackNativeResponse };
   /** Private desktop-host command. Local paths never cross renderer IPC. */
   mediaImportTrusted: {
     input: Omit<MediaImportRequest, 'url'> & { commandId: string; selection: MediaSelection };
