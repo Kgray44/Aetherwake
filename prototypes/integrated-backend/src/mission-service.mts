@@ -8,7 +8,8 @@ import { missionMeasurementAnswer } from './mission-native.mts';
 import { buildMissionRevision } from './mission-revision.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
   type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
-  type MissionAdmission, type MissionAttempt, type MissionAttemptPhaseTiming, type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
+  type MissionAdmission, type MissionAttempt, type MissionAttemptPhaseTiming, type MissionReadyBlocker, type MissionReadyQueueEvidence,
+  type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
   type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomCard, type MissionWorkroomDashboard,
   type MissionWorkroomResource, type MissionAgentAttempt, type MissionAgentDashboard } from './mission-contracts.mts';
 
@@ -64,6 +65,7 @@ const active = (m: Mission) => busy(m) || m.disposition !== 'cancelled' && m.tas
 const recordLimitBytes = 160 * 1024;
 const admissionLimitBytes = 1024;
 const priorityAgingMs = 30_000;
+type ReadyObservation = { planRevision: number; queuedAt: string; attemptCount: number; evidence: MissionReadyQueueEvidence };
 
 function readyTasks(mission: Mission): MissionTask[] {
   const tasks = new Map(mission.tasks.map(task => [task.id, task]));
@@ -155,6 +157,7 @@ export class MissionService {
   private turn = 0;
   private readonly host: MissionServiceHost;
   private readonly profilerClock = randomUUID();
+  private readyObservations = new Map<string, ReadyObservation>();
 
   constructor(host: MissionServiceHost) {
     this.host = host;
@@ -706,6 +709,7 @@ export class MissionService {
     const rows = this.host.db.prepare('SELECT json FROM vela_missions WHERE pending=1 ORDER BY rowid LIMIT ?').all(L.active);
     const ready = rows.map(row => this.decode(row.json)).map(mission => ({ mission, tasks: readyTasks(mission) }))
       .filter(entry => entry.tasks.length);
+    this.observeReadyQueue(ready);
     if (!ready.length) { this.clearAdmissionDemand(); return; }
     const demand = ready.some(({ mission }) => this.host.authorized(mission.scope));
     const admission = this.sampleAdmission(demand);
@@ -713,11 +717,18 @@ export class MissionService {
     const workerLimit = this.host.underPressure?.() ? 0 : admission?.workerLimit ?? L.workers;
     if (workerLimit === 0 || demand && this.host.admission)
       this.wakeTimer ??= setTimeout(() => { this.wakeTimer = undefined; this.wake(); }, 1500).unref();
-    if (workerLimit === 0) return;
+    if (workerLimit === 0) {
+      if (this.readyObservations.size) for (const { mission, tasks } of ready)
+        for (const task of tasks) this.observeReadyBlocker(mission.id, task.id, 'worker-budget');
+      return;
+    }
     ready.sort((a, b) => (this.lastAdmitted.get(a.mission.id) ?? 0) - (this.lastAdmitted.get(b.mission.id) ?? 0));
     const now = Date.now();
     for (const { mission: m, tasks } of ready) {
-      if (this.running.size >= workerLimit) return;
+      if (this.running.size >= workerLimit) {
+        if (this.readyObservations.size) for (const task of tasks) this.observeReadyBlocker(m.id, task.id, 'worker-budget');
+        return;
+      }
       for (const task of orderReadyTasks(m, tasks, now)) {
         const executor = own(this.host.executors, task.executor) ? this.host.executors[task.executor] : undefined;
         if (!this.host.authorized(m.scope) || !executor?.available(m.scope, task)) {
@@ -728,7 +739,14 @@ export class MissionService {
           });
           continue;
         }
-        if (!this.capacityFor(m, executor.lane) || this.conflict(task)) continue;
+        if (!this.capacityFor(m, executor.lane)) {
+          this.observeReadyBlocker(m.id, task.id, 'capacity');
+          continue;
+        }
+        if (this.conflict(task)) {
+          this.observeReadyBlocker(m.id, task.id, 'resource-conflict');
+          continue;
+        }
         this.start(m, task, executor, admission);
         this.lastAdmitted.set(m.id, ++this.turn);
         this.wake();
@@ -737,9 +755,35 @@ export class MissionService {
     }
   }
 
+  private observeReadyQueue(ready: { mission: Mission; tasks: MissionTask[] }[]) {
+    if (!this.fullProfilingClock()) return;
+    if (!ready.length) { this.readyObservations.clear(); return; }
+    const now = performance.now();
+    const next = new Map<string, ReadyObservation>();
+    for (const { mission, tasks } of ready) for (const task of tasks) {
+      const key = mission.id + '/' + task.id;
+      const prior = this.readyObservations.get(key);
+      next.set(key, prior?.planRevision === mission.planRevision && prior.queuedAt === task.queuedAt &&
+        prior.attemptCount === task.attempts.length ? prior : {
+          planRevision: mission.planRevision, queuedAt: task.queuedAt, attemptCount: task.attempts.length,
+          evidence: { firstObservedMs: now, blockers: {} },
+        });
+    }
+    this.readyObservations = next;
+  }
+  private observeReadyBlocker(missionId: string, taskId: string, blocker: MissionReadyBlocker) {
+    if (!this.readyObservations.size) return;
+    const evidence = this.readyObservations.get(missionId + '/' + taskId)?.evidence;
+    if (!evidence) return;
+    evidence.blockers[blocker] = { samples: (evidence.blockers[blocker]?.samples ?? 0) + 1, lastObservedMs: performance.now() };
+  }
+
   private start(m: Mission, task: MissionTask, executor: MissionExecutor, admission?: MissionAdmission) {
     const id = randomUUID();
     const compilingAt = performance.now();
+    const queueKey = this.readyObservations.size ? m.id + '/' + task.id : undefined;
+    const readyQueue = queueKey ? this.readyObservations.get(queueKey)?.evidence : undefined;
+    if (queueKey) this.readyObservations.delete(queueKey);
     const abort = new AbortController();
     const dependencies = task.dependencies.map(dep => taskOf(m, dep)!.attempts.at(-1)!.evidence!);
     const { attempts: _attempts, queuedAt: _queued, state: _state, priority: _priority, detail: _detail, ...plan } = task;
@@ -771,7 +815,7 @@ export class MissionService {
     }
     const assembledAt = performance.now(), clock = this.fullProfilingClock();
     const phases: MissionAttemptPhaseTiming | undefined =
-      clock ? { clock, contextAssembly: [compilingAt, assembledAt] } : undefined;
+      clock ? { clock, contextAssembly: [compilingAt, assembledAt], ...(readyQueue ? { readyQueue } : {}) } : undefined;
     const timing: NonNullable<MissionAttempt['timing']> = {
       queueMs: Math.max(0, Date.now() - Date.parse(task.queuedAt)),
       contextPreparationMs: assembledAt - compilingAt,

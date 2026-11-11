@@ -186,6 +186,8 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     ])] : null;
     const measured = matched?.kind === 'settled' ? interval(id, start, end) : null;
     const readings = attempt.admission?.readings;
+    const phases = attempt.timing?.phases;
+    const readyQueueMs = phases?.readyQueue ? phases.contextAssembly[0] - phases.readyQueue.firstObservedMs : NaN;
     return {
       id, taskId: task.id, planRevision: event.timing?.planRevision ?? attempt.context?.binding.revision ?? null, start, end, predecessors,
       executor: attempt.executor, state: attempt.outcome ?? 'running', interrupted: matched?.kind === 'recovered',
@@ -194,7 +196,8 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
         provider: task.specialist.provider, model: task.specialist.model, effort: task.specialist.effort ?? null,
       } : null,
       interval: measured, contextPreparationMs: attempt.timing?.contextPreparationMs ?? null,
-      phases: attempt.timing?.phases ? structuredClone(attempt.timing.phases) : null,
+      phases: phases ? structuredClone(phases) : null,
+      readyQueueMs: Number.isFinite(readyQueueMs) && readyQueueMs >= 0 ? readyQueueMs : null,
       executionMs: attempt.timing?.executionMs ?? null, verificationMs: attempt.timing?.verificationMs ?? null,
       queueWallClockMs: attempt.timing?.queueMs ?? null,
       resourceAdmission: attempt.admission && readings ? {
