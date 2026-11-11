@@ -163,6 +163,9 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.ok(readiness);
     assert.equal(readiness.attempts.at(-1)?.settledMs, profile.lastSettlement?.monotonicMs);
     assert.ok(readiness.elapsedMs <= profile.admissionToLastSettlementMs!);
+    assert.ok(readiness.entry && readiness.entry.attemptId === readiness.attempts[0].attemptId);
+    assert.equal(readiness.entry.admissionEventSeq, profile.admission?.eventSeq);
+    assert.ok(Math.abs(readiness.entry.elapsedMs + readiness.elapsedMs - profile.admissionToLastSettlementMs!) < 0.001);
     const segment = readiness.largestMeasuredSegment;
     assert.ok(segment && readiness.attempts.some(attempt => attempt.attemptId === segment.attemptId));
     assert.equal(segment.durationMs, segment.endedMs - segment.startedMs);
