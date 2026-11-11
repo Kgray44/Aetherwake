@@ -49,6 +49,7 @@ export { eventLabel as missionEventLabel, stateLabel as missionStateLabel };
 const admissionReasonLabel: Record<MissionAdmissionReason, string> = {
   "physical-memory": "Low available memory",
   "os-memory-pressure": "Windows reports low memory",
+  "windows-commit-pressure": "Low Windows commit headroom",
   "storage-reserve": "Storage reserve",
   "cpu-load": "High CPU load",
   "gpu-load": "High GPU load",
@@ -92,6 +93,7 @@ export function missionAdmissionDetails(
   const readings = [
     ["cpuPercent", "CPU usage", "%"],
     ["availableMemoryBytes", "Available physical memory", " MiB"],
+    ["windowsCommitHeadroomBytes", "Windows commit headroom", " MiB"],
     ["gpuEnginePercent", "Busiest GPU engine", "%"],
     ["diskQueueLength", "Disk queue length", ""],
     ["rendererFrameP95Ms", "Renderer frame interval p95", " ms"],
@@ -100,7 +102,7 @@ export function missionAdmissionDetails(
     const row = doc.createElement("small"), reading = admission.readings[key];
     row.dataset.admissionMetric = key;
     if (reading) {
-      const value = key === "availableMemoryBytes" ? reading.value / (1024 * 1024) : reading.value;
+      const value = unit === " MiB" ? reading.value / (1024 * 1024) : reading.value;
       const time = doc.createElement("time");
       time.dateTime = reading.observedAt;
       time.textContent = reading.observedAt;

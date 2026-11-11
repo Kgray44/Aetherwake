@@ -126,7 +126,7 @@ test('separate short missions do not combine their Windows sampler warmup', asyn
 
 test('an early Windows low-memory notification checkpoints local work before the other counters finish', async () => {
   let time = 0, changes = 0, probes = 0;
-  let observe!: (value: unknown) => void, finish!: (result: { windowsLowMemory: number }) => void;
+  let observe!: (value: { windowsLowMemory: number }) => void, finish!: (result: { windowsLowMemory: number }) => void;
   const pending = new Promise<{ windowsLowMemory: number }>(resolve => { finish = resolve; });
   const admission = createMissionAdmission({ maxWorkers: 3, now: () => time, wallNow: () => epoch + time,
     availableMemory: () => 1024 * mib, readWindowsPressure: async (_signal, onMemory) => {
@@ -141,7 +141,7 @@ test('an early Windows low-memory notification checkpoints local work before the
     await yieldToProbe();
     const active = admission.tryLease({ missionId: 'memory', taskId: 'observe', attemptId: 'first', kind: 'host_io', timeoutMs: 4000 });
     assert.ok(active);
-    observe(1);
+    observe({ windowsLowMemory: 1 });
     assert.equal(changes, 1);
     const held = admission.read(true);
     assert.equal(held.workerLimit, 0);
@@ -168,4 +168,39 @@ test('an early Windows low-memory notification checkpoints local work before the
     assert.equal(admission.read(true).readings.windowsLowMemory?.value, 0);
     assert.equal(admission.telemetry().metrics.windowsLowMemory.availability, 'observed');
   } finally { finish({ windowsLowMemory: 1 }); admission.dispose(); }
+});
+
+test('Windows commit headroom caps RAM reservations and can hold local admission independently of physical RAM', async () => {
+  let time = 0, commitMiB = 768;
+  const admission = createMissionAdmission({ maxWorkers: 3, now: () => time,
+    availableMemory: () => 4096 * mib, readWindowsPressure: async () => ({ windowsLowMemory: 0,
+      windowsCommitHeadroomBytes: commitMiB * mib }) });
+  const request = { missionId: 'commit', taskId: 'work', attemptId: 'first', kind: 'cpu' as const, timeoutMs: 4000 };
+  try {
+    admission.read(true);
+    time = 2000;
+    admission.read(true);
+    await yieldToProbe();
+    assert.equal(admission.read(true).readings.windowsCommitHeadroomBytes?.value, 768 * mib);
+    assert.equal(admission.telemetry().metrics.windowsCommitHeadroomBytes.availability, 'derived');
+    assert.equal(admission.tryLease({ ...request, estimatedRamBytes: 257 * mib }), undefined);
+    const lease = admission.tryLease({ ...request, estimatedRamBytes: 256 * mib });
+    assert.ok(lease);
+    lease.release();
+
+    commitMiB = 480;
+    for (time = 6000; time <= 22_000; time += 4000) admission.read(true);
+    await yieldToProbe();
+    const held = admission.read(true);
+    assert.equal(held.readings.availableMemoryBytes?.value, 4096 * mib);
+    assert.equal(held.readings.windowsLowMemory?.value, 0);
+    assert.deepEqual(held.reasons, ['windows-commit-pressure']);
+    assert.equal(held.workerLimit, 0);
+    assert.equal(admission.inspectPolicy().reason, 'windows_commit_pressure');
+    assert.equal(admission.canLease('remote'), true);
+    assert.equal(admission.canLease('cpu'), false);
+    time = 52_001;
+    assert.equal(admission.read(true).readings.windowsCommitHeadroomBytes, undefined);
+    assert.equal(admission.canLease('host_io'), true);
+  } finally { admission.dispose(); }
 });
