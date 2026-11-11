@@ -288,7 +288,7 @@ export interface CommandMap {
   missions: { input: MissionRequest; output: MissionResponse };
   workspaceRecovery: { input: WorkspaceRecoveryRequest; output: WorkspaceRecoveryResponse };
   missionStartReviewed: { input: Extract<MissionRequest, { name: 'start' }>['input'] & {
-    approvedProjectCheck?: { paths: string[]; digest: string } }; output: MissionResponse };
+    approvedProjectCheck?: { paths: string[]; digest: string }; approvedArtifactDigest?: string }; output: MissionResponse };
   missionCheckReview: { input: { paths: string[] }; output: { cwd: string; argv: string[]; head: string; digest: string } };
   missionPlanReviewed: { input: Extract<MissionRequest, { name: 'plan' }>['input']; output: MissionResponse };
   missionExecutiveReview: { input: import('./mission-contracts.mts').MissionExecutiveRequest; output: import('./mission-contracts.mts').MissionExecutiveReview };

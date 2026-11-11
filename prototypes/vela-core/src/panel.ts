@@ -513,8 +513,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
           const preview = await missions.preview(objective, undefined, Object.keys(evidence).length ? evidence : undefined);
           if (disposed || draftRevision !== revision) return;
           if (!preview) throw Error('mission_scope_denied');
-          const usesProvider = 'plan' in preview ? !!preview.externalReview : true;
-          const reviewedProvider = 'plan' in preview ? preview.externalReview?.provider : preview.planner?.provider;
+          const usesProvider = 'plan' in preview ? !!(preview.externalReview || preview.artifactReview) : true;
+          const reviewedProvider = 'plan' in preview ? (preview.artifactReview ? 'openai-api-vela' : preview.externalReview?.provider) : preview.planner?.provider;
           if (usesProvider && ((chosenProviderId && chosenProviderId !== reviewedProvider) || useAutomaticOnce || (routeMode.value && routeMode.value !== 'auto') ||
             routeModel.value || routeEffort.value || routeEscalation.checked || routeHistory.checked))
             throw Error('mission_composer_routing_options');

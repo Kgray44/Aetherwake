@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { mkdtempSync,rmSync,writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
+import { crc32, deflateSync } from 'node:zlib';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
 import { projectMissionExecution, type MissionExecutionProfile } from '../src/execution-profiler.mts';
@@ -16,6 +17,7 @@ import type { VelaRequest } from '../../vela-core/src/contracts.ts';
 import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
 import type { NativeDocumentTextServices } from '../src/document-text-host.mts';
 import { docxFixture } from '../../block-library/tests/media-fixtures.mts';
+import { missionImageModel } from '../../openai-provider/images.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
 const marker='SYNTHETIC_ONLY_MISSION_API_KEY';
 const graph={tasks:[{capability:'cpu',after:[]},{capability:'ram',after:[]},{capability:'backend',after:['cpu','ram']}],unsupported:['Server tick timings and logs are unavailable.']};
@@ -24,19 +26,22 @@ function response(content:string,model:string,terminal:string|null=content, frag
   return new Response([{type:'response.created',response:{id,status:'in_progress'}},...fragments.map(delta=>({type:'response.output_text.delta',delta})),{type:'response.completed',response:{id,status:'completed',model,output,
     usage:{input_tokens:100,output_tokens:40,total_tokens:140}}}].map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
 }
-function fixture(velaHistoryContext = false, nativeMedia = false, documents?: NativeDocumentTextServices, liveCredential?: string) {
+function fixture(velaHistoryContext = false, nativeMedia = false, documents?: NativeDocumentTextServices, liveCredential?: string,
+  artifactFixture = false) {
   const base=resolve(tmpdir()),directory=mkdtempSync(join(base,'aerynth-mission-api-')),path=join(directory,'canonical.sqlite'),key=randomBytes(32),requests:any[]=[],replies:((body:any)=>Response|Promise<Response>)[]=[];
   let catalogModels = ['gpt-6-luna', 'gpt-6.1-sol'];
   let beforeCredentialOpen: (() => Promise<void>) | undefined;
-  const native:NativeHostServices={documents,secrets:{available:async()=>true,
+  const native:NativeHostServices={documents,...(artifactFixture && !liveCredential ? { fileEditAdmission: () => {} } : {}),secrets:{available:async()=>true,
     seal:async value=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);return Buffer.concat([iv,cipher.update(value),cipher.final(),cipher.getAuthTag()]);},
     open:async value=>{const before=beforeCredentialOpen;beforeCredentialOpen=undefined;await before?.();
       const data=Buffer.from(value),cipher=createDecipheriv('aes-256-gcm',key,data.subarray(0,12));cipher.setAuthTag(data.subarray(-16));return Buffer.concat([cipher.update(data.subarray(12,-16)),cipher.final()]).toString();}}};
   const api={fetch:(async(url,init)=>{if(String(url)==='https://api.openai.com/v1/models')return Response.json({data:catalogModels.map(id=>({id}))});
-    assert.equal(String(url),'https://api.openai.com/v1/responses');assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
+    assert.ok(String(url) === 'https://api.openai.com/v1/responses' ||
+      artifactFixture && String(url) === 'https://api.openai.com/v1/images/generations');
+    assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
     const body=JSON.parse(String(init?.body));requests.push(body);const next=replies.shift();assert.ok(next,'unexpected API inference');return next(body);}) as typeof fetch};
   const create=()=>new BackendCore({path,provider:'fixture',contentPolicy:liveCredential ? 'local-private' : 'synthetic-only',
-    ...(liveCredential ? { privateRoot: directory } : {}), velaHistoryContext,nativeMedia},()=>{},native,undefined,liveCredential ? undefined : api);let core=create();
+    ...(liveCredential || artifactFixture ? { privateRoot: directory } : {}), velaHistoryContext,nativeMedia},()=>{},native,undefined,liveCredential ? undefined : api);let core=create();
   const preview=async(text=objective)=>await core.command('missions',{name:'preview',input:{objective:text}}) as MissionPlanningOffer;
   const plan=async(offer:MissionPlanningOffer,requestId=randomUUID())=>await core.command('missionPlanReviewed',{objective:offer.objective,fingerprint:offer.fingerprint,requestId}) as MissionPreview;
   return {get core(){return core;},directory,requests,replies,preview,plan,
@@ -48,6 +53,100 @@ function fixture(velaHistoryContext = false, nativeMedia = false, documents?: Na
     async close(){await core.command('close',{}).catch(()=>{});const part=relative(base,resolve(directory));assert.ok(part.startsWith('aerynth-mission-api-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(directory,{recursive:true,force:true});},
   };
 }
+
+function illustrationFixture() {
+  const chunk = (type: string, value: Buffer) => {
+    const data = Buffer.concat([Buffer.from(type), value]);
+    const frame = Buffer.alloc(data.length + 8);
+    frame.writeUInt32BE(value.length);
+    data.copy(frame, 4);
+    frame.writeUInt32BE(crc32(data), frame.length - 4);
+    return frame;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1024, 0);
+  header.writeUInt32BE(1024, 4);
+  header[8] = 8;
+  header[9] = 2;
+  return Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', header),
+    chunk('IDAT', deflateSync(Buffer.alloc(1024 * (1024 * 3 + 1)))), chunk('IEND', Buffer.alloc(0))]);
+}
+
+async function verifyIllustrationMission(liveCredential?: string) {
+  const f = fixture(false, true, undefined, liveCredential, true);
+  try {
+    f.setCatalogModels([missionImageModel]);
+    await f.ready();
+    const prompt = liveCredential ? 'A simple abstract geometric illustration. Any colors.' : 'A synthetic black square';
+    const objective = `Run a mission to generate an illustration: ${prompt}`;
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    assert.equal(preview.artifactReview?.prompt, prompt);
+    assert.equal(preview.executors[0].available, true);
+    const input = { objective, fingerprint: preview.fingerprint, requestId: randomUUID() };
+    await assert.rejects(f.core.command('missions', { name: 'start', input }), /mission_artifact_review_required/);
+    await assert.rejects(f.core.command('missionStartReviewed', { ...input, approvedArtifactDigest: '0'.repeat(64) }), /mission_artifact_review_required/);
+    assert.equal(f.requests.length, 0);
+    if (!liveCredential) f.replies.push(body => {
+      assert.equal(body.prompt, preview.artifactReview?.prompt);
+      return Response.json({ data: [{ b64_json: illustrationFixture().toString('base64') }] });
+    });
+    const approved = { ...input, approvedArtifactDigest: preview.artifactReview!.digest };
+    const { startReviewedMission } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/mission-start-broker.cjs');
+    const localURL = 'file:///synthetic-aerynth/index.html';
+    const mainFrame = { url: localURL };
+    const webContents = { mainFrame, getURL: () => localURL, isDestroyed: () => false };
+    const win = { webContents, isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => true };
+    const usageBefore = await f.core.command('velaApiUsageStatus', {});
+    const { id } = await startReviewedMission({ win, localURL, event: { sender: webContents, senderFrame: mainFrame },
+      storage: { allowWrite: async () => true }, input: { name: 'start', input },
+      dialog: { showMessageBox: async (_window: unknown, options: { detail: string; defaultId: number }) => {
+        assert.equal(options.defaultId, 0);
+        assert.ok(options.detail.includes(prompt));
+        assert.match(options.detail, /illustration-notes\.txt/);
+        return { response: 1 };
+      } }, call: f.core.command.bind(f.core) }) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
+    let mission = await read();
+    const deadline = performance.now() + (liveCredential ? 125_000 : 5_000);
+    while (performance.now() < deadline && ['queued', 'running'].includes(mission.outcome)) {
+      await delay(liveCredential ? 250 : 25);
+      mission = await read();
+    }
+    assert.equal(mission.outcome, 'verified', JSON.stringify(mission.tasks[0].attempts));
+    const artifacts = (mission.tasks[0].attempts[0].evidence?.value as { artifacts: { name: string; resourceId: string }[] }).artifacts;
+    assert.deepEqual(artifacts.map(file => file.name), ['illustration.png', 'illustration-notes.txt']);
+    const state = await f.core.command('desktop', { type: 'snapshot' });
+    assert.ok(artifacts.every(file => state.resources.some(resource => resource.id === file.resourceId)));
+    await f.core.command('missions', { name: 'post-report', input: { id } });
+    const report = (await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState).conversation?.messages
+      .find(message => message.missionReport?.missionId === id);
+    assert.match(report?.content ?? '', /Generated and verified illustration\.png/);
+    await f.reopen();
+    assert.equal((await read()).outcome, 'verified');
+    assert.equal((await f.core.command('missionStartReviewed', approved) as MissionProjection).id, id);
+    assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday - usageBefore.usedToday, 1);
+    assert.equal(f.requests.length, liveCredential ? 0 : 1);
+    writeFileSync(join(f.directory, 'mission-artifacts', id, 'illustration-notes.txt'), 'Changed after verification.');
+    assert.equal((await read()).outcome, 'blocked');
+    const stale = (await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState).conversation?.messages
+      .find(message => message.missionReport?.missionId === id);
+    assert.equal(stale?.id, report?.id);
+    assert.equal(stale?.missionReport?.stale, true);
+  } finally { await f.close(); }
+}
+
+test('a native-reviewed illustration mission publishes two readable workspace artifacts and one report', async () => {
+  await verifyIllustrationMission();
+});
+
+test('one qualified live illustration mission delivers a verified file, image and narrative', {
+  skip: process.env.AERYNTH_VERIFY_LIVE_MISSION_ARTIFACTS !== '1', timeout: 145_000,
+}, async () => {
+  const credential = process.env.OPENAI_API_KEY;
+  assert.ok(credential, 'Existing ephemeral API credential is required');
+  delete process.env.OPENAI_API_KEY;
+  await verifyIllustrationMission(credential);
+});
 
 async function verifyReviewedPlanningRetry(live?: { credential: string; model: string }) {
   const f = fixture(false, false, undefined, live?.credential);

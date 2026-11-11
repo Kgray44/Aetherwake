@@ -6,6 +6,7 @@ import type { MissionTeam, MissionTeamSave } from './mission-teams.mts';
 
 /** Only an explicit command enters mission review before ordinary composer routing. */
 export const EXPLICIT_MISSION_PREFIX = /^(?:vela[,:]?\s+)?(?:please\s+)?(?:run|start|plan|create)\s+(?:a\s+)?mission\s+(?:to|for)\s+(?=\S)/iu;
+export const ARTIFACT_MISSION_PREFIX = /^run a mission to generate an illustration:\s*(?=\S)/iu;
 
 export const MISSION_CONTRACT = 'aerynth.vela-mission@1' as const;
 export const MISSION_LIMITS = { missions: 128, active: 8, tasks: 16, attempts: 3, workers: 3, revisions: 4, events: 256 } as const;
@@ -28,6 +29,7 @@ export interface MissionTaskPlan {
   timeoutMs: number;
   maxAttempts: number;
   projectCheck?: { paths: string[]; digest: string };
+  artifactImage?: { prompt: string; digest: string; configurationVersion: number };
   teamMember?: { profileId: string; title: string; responsibility: string };
   specialist?: {
     role: string;
@@ -283,6 +285,7 @@ export interface MissionPreview {
   executors: { id: string; available: boolean }[];
   externalReview?: { provider: string; model: string; effort?: ReasoningEffort; calls: number };
   localReview?: { kind: 'node-test'; maxFiles: number };
+  artifactReview?: { prompt: string; digest: string; model: string; width: number; height: number; files: readonly string[] };
   proposalId?: string;
 }
 export interface MissionPlanningOffer {

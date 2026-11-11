@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { prepareResponsesTurn, ResponsesTransport } from '../../openai-provider/responses.mts';
+import { missionImageModel, prepareImageGeneration, sendReviewedImageGeneration } from '../../openai-provider/images.mts';
 import type { ApiContinuation, ApiContextTransition, ApiFunctionCall, ApiJsonSchema, ApiResponseItem, ApiToolOutput, DispatchReview, ReviewedApiFunction, TurnEvent, TurnResult, TurnTransportTiming } from '../../openai-provider/contracts.mts';
 import { VELA_API_PROVIDER } from '../../openai-provider/api-connection-contracts.mts';
 import { VELA_IDENTITY_VERSION, renderVelaIdentityPrompt } from '../../vela-core/src/vela-identity.mts';
@@ -192,6 +193,48 @@ export class VelaApiRuntime {
     const catalog = await this.options.connection.resolveCatalog(version); this.knownCatalog = { version, expiresAt: catalog.expiresAt, models: [...catalog.models] }; return [...catalog.models];
   }
   knownModels() { return this.knownCatalog && this.authorized(this.knownCatalog.version) && this.knownCatalog.expiresAt > Date.now() ? [...this.knownCatalog.models] : []; }
+
+  async generateMissionImage(input: { attemptId: string; version: number; prompt: string; approvedDigest: string;
+    validate(): void }, signal: AbortSignal) {
+    const combined = AbortSignal.any([signal, this.lifetime.signal]);
+    const review = prepareImageGeneration(input.prompt);
+    const fence = () => {
+      check(!combined.aborted, 'vela_execution_cancelled');
+      this.validate(input.version);
+      input.validate();
+    };
+    fence();
+    check(review.digest === input.approvedDigest, 'image_review_changed');
+    check(!this.running.has(input.attemptId) && this.running.size < VELA_API_RUNTIME_LIMITS.concurrent, 'vela_api_busy');
+    this.running.set(input.attemptId, 'mission-specialist');
+    try {
+      check((await abortable(this.models(input.version), combined)).includes(missionImageModel), 'mission_image_model_unavailable');
+      const credential = await abortable(this.options.connection.resolveNativeCredential(input.version), combined);
+      fence();
+      const started = performance.now();
+      this.options.transaction(() => {
+        fence();
+        check(this.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay, 'vela_api_daily_limit_reached');
+        this.options.db.prepare(`INSERT INTO vela_api_runs
+          (execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state)
+          VALUES(?,?,?,?,?,?,'dispatching')`).run(input.attemptId, input.attemptId, input.version,
+          new Date().toISOString().slice(0,10), review.digest, review.digest);
+      });
+      try {
+        const result = await sendReviewedImageGeneration(review, input.approvedDigest, credential.bearer, combined, this.options.test?.fetch);
+        fence();
+        this.options.db.prepare("UPDATE vela_api_runs SET state='completed',elapsed_ms=? WHERE execution_id=?")
+          .run(Math.round(performance.now() - started), input.attemptId);
+        return result;
+      } catch {
+        this.options.db.prepare("UPDATE vela_api_runs SET state='unknown',error_code='image_result_unknown',elapsed_ms=? WHERE execution_id=?")
+          .run(Math.round(performance.now() - started), input.attemptId);
+        throw new VelaError('image_result_unknown', 'unknown');
+      }
+    } finally {
+      this.running.delete(input.attemptId);
+    }
+  }
   matchesResult(executionId: string, content: string): boolean {
     const row = this.options.db.prepare('SELECT state,result_digest FROM vela_api_runs WHERE execution_id=?').get(executionId);
     return row?.state === 'completed' && row.result_digest === digest(content);

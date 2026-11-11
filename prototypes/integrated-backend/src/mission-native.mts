@@ -7,6 +7,7 @@ import { readSystemMemory } from '../../vela-core/src/system-memory.mts';
 import { validateSystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
 import { verifiedGpuReadback } from './windows-gpu-readback.mts';
 import { EXPLICIT_MISSION_PREFIX } from './mission-contracts.mts';
+import { missionArtifactFiles, missionArtifactSource } from './mission-artifacts.mts';
 import type { Mission, MissionExecutor, MissionPlan, MissionProjection, MissionScope, MissionTask, MissionTaskPlan } from './mission-contracts.mts';
 
 const numberIn = (n: unknown, min: number, max: number) =>
@@ -67,6 +68,10 @@ export function missionCompletion(mission: Mission) {
       lines.push(`Verified all ${value.verifiedBuffers} GPU buffer digests across ${value.allocatedBytes / 2 ** 20} MiB of test data.`);
     } else if (evidence?.source === 'aerynth.authorized-workspace-notes' && Array.isArray(value.references)) {
       lines.push(`Found ${value.references.length} relevant ${value.references.length === 1 ? 'note' : 'notes'}.`);
+    } else if (evidence?.source === missionArtifactSource && Array.isArray(value.artifacts) &&
+      evidence.attemptId === task.attempts.at(-1)?.id && task.attempts.at(-1)?.verification?.evidenceIds.includes(evidence.id) &&
+      value.artifacts.length === missionArtifactFiles.length && value.artifacts.every((file, index) => file?.name === missionArtifactFiles[index])) {
+      lines.push(`Generated and verified ${missionArtifactFiles[0]} (1024 × 1024 PNG) and ${missionArtifactFiles[1]}. Both files are available in this workspace.`);
     } else if (evidence?.source === 'codex-app-server:read-only-command') {
       lines.push(`${value.testCount} ${value.testCount === 1 ? 'test passed' : 'tests passed'}.`);
     } else if ((evidence?.source === 'chatgpt-plan-responses:reported' || evidence?.source === 'openai-api-vela:reported') && Array.isArray(value.observations) &&

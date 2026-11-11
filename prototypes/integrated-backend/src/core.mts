@@ -19,7 +19,9 @@ import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, 
 import { MissionTeams } from './mission-teams.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
 import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningEvidenceSelection, MissionPlanningOffer, MissionPlanningSourceRef, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
-import { EXPLICIT_MISSION_PREFIX, MISSION_LIMITS } from './mission-contracts.mts';
+import { ARTIFACT_MISSION_PREFIX, EXPLICIT_MISSION_PREFIX, MISSION_LIMITS } from './mission-contracts.mts';
+import { missionImageModel, missionImageSize, prepareImageGeneration } from '../../openai-provider/images.mts';
+import { missionArtifactFiles, missionArtifactPath, missionArtifactSource, readMissionArtifact, writeMissionArtifacts } from './mission-artifacts.mts';
 import { createMissionAdmission } from './mission-admission.mts';
 import { createResourcePolicyStore } from './resource-policy-store.mts';
 import { isResourceSignal } from './resource-signals.mts';
@@ -333,6 +335,7 @@ export class BackendCore {
   private library!:TemplateService;
   private velaTemplateReviews = new Map<string, PendingVelaTemplate>();
   private readonly nativeMedia: boolean;
+  private readonly missionArtifactRoot?: string;
   private notes!:NoteExperienceService;
   private timerDomain?: TimerDomain;
   private syntheticTimerClock?: TimerClockReading;
@@ -358,6 +361,8 @@ export class BackendCore {
       ensure(rel.startsWith('..') || isAbsolute(rel), 'private_storage_inside_source');
       ensure(realpathSync(dirname(options.path)) === privateRoot, 'private_storage_scope_mismatch');
     }
+    this.missionArtifactRoot = this.privateRoot ?? (velaApiTest && options.privateRoot && isAbsolute(options.path) &&
+      realpathSync(dirname(options.path)) === realpathSync(options.privateRoot) ? realpathSync(options.privateRoot) : undefined);
     this.maxEvents = options.retention?.maxEvents ?? 10000;
     ensure(Number.isInteger(this.maxEvents) && this.maxEvents >= 4 && this.maxEvents <= 100000, 'invalid_retention');
     this.emit = emit;
@@ -508,6 +513,7 @@ export class BackendCore {
       this.gpuReadback = createGpuReadbackAdapter(this.missionAdmission, () => this.missions?.capacityChanged(),
         () => process.platform === 'win32' && this.privateMode && !!this.nativeHostServices && !this.closed);
       this.missionExecutors = { ...nativeMissionExecutors,
+        'artifact.illustration': this.missionArtifactExecutor(),
         [gpuReadbackExecutor]: this.gpuReadback.executor,
         'inspect.backend-source': createPooledBackendSourceExecutor(this.missionCpuPool),
         'join.team': missionTeamJoin, 'codex.project-check': createMissionProjectCheck({
@@ -1001,7 +1007,15 @@ export class BackendCore {
           .every((file, index) => file.proofDigest === files[index].proofDigest));
     } catch { return false; }
   }
-  private missionPlanningContextCurrent(plan: Pick<MissionPlan, 'scope' | 'planning'>) {
+  private missionPlanningContextCurrent(plan: Pick<MissionPlan, 'scope' | 'planning'> | Mission) {
+    if ('id' in plan) {
+      for (const task of plan.tasks) {
+        if (task.executor === 'artifact.illustration' && task.state === 'verified') {
+          const evidence = task.attempts.at(-1)?.evidence;
+          if (!evidence || !this.missionArtifactProofCurrent(plan.id, plan.scope, evidence, false)) return false;
+        }
+      }
+    }
     const context = plan.planning?.context;
     return !context || this.missionPlanningSourcesCurrent(plan.scope, context.notes, context.files, context.projectEvidence);
   }
@@ -1170,8 +1184,89 @@ export class BackendCore {
     ensure(await runner.ready(), 'mission_project_check_unavailable');
     return { cwd: plan.cwd, argv: plan.argv, head: plan.head, digest: planningDigest(plan) };
   }
+  private missionArtifactAvailable(scope: MissionScope, version: number) {
+    const current = this.velaContext();
+    return !this.closed && !!this.missionArtifactRoot && this.nativeMedia && !!this.nativeHostServices &&
+      this.missionStorageAdmitted && this.missionScopeAllowed(scope) && scope.workspaceId === current.currentWorkspaceId &&
+      scope.projectId === current.currentProjectId && this.velaApiRuntime.authorized(version);
+  }
+
+  private missionArtifactPlan(objective: string, scope: MissionScope, prompt: string): MissionPlan {
+    const review = prepareImageGeneration(prompt);
+    return { objective, scope, criteria: ['verified-illustration-files'], tasks: [{
+      id: 'illustration', objective: 'Generate a PNG and verify it alongside its text notes in this workspace.',
+      executor: 'artifact.illustration', dependencies: [], claims: [], criterion: 'verified-illustration-files',
+      timeoutMs: 120_000, maxAttempts: 1, artifactImage: { prompt, digest: review.digest,
+        configurationVersion: this.velaApiRuntime.configurationVersion() ?? 0 },
+    }] };
+  }
+
+  private missionArtifactExecutor(): MissionExecutor {
+    return { lane: VELA_API_PROVIDER, replaySafe: false,
+      available: (scope, task) => !!task?.artifactImage && this.missionArtifactAvailable(scope, task.artifactImage.configurationVersion),
+      run: async context => {
+        const { scope, task, signal, attemptId, missionId } = context;
+        const image = task.artifactImage, root = this.missionArtifactRoot;
+        ensure(image && root, 'mission_artifact_unavailable');
+        const validate = () => {
+          ensure(!signal.aborted && this.missionArtifactAvailable(scope, image.configurationVersion), 'mission_artifact_scope_changed');
+          context.validatePlanningContext?.();
+        };
+        const admit = () => (this.nativeHostServices?.fileEditAdmission ?? admitVelaFileEdit)(root, root);
+        validate();
+        admit();
+        const started = performance.now();
+        const result = await this.velaApiRuntime.generateMissionImage({ attemptId, version: image.configurationVersion,
+          prompt: image.prompt, approvedDigest: image.digest, validate }, signal);
+        const durationMs = performance.now() - started;
+        validate();
+        admit();
+        const notes = `Generated illustration\n\nRequested prompt: ${image.prompt}\n\n` +
+          `Image: ${missionArtifactFiles[0]} (${missionImageSize} × ${missionImageSize} PNG).\n`;
+        const files = writeMissionArtifacts(root, missionId, result.bytes, notes, validate);
+        const artifacts = [];
+        for (const file of files) {
+          validate();
+          const layout = this.desktop.nativeBlockServices().engine.project(scope.workspaceId);
+          const imported = await this.importSelectedMedia({ kind: 'file', selection: { kind: 'file', path: file.path },
+            commandId: `${attemptId}:${file.name}`, workspaceId: scope.workspaceId, expectedLayoutVersion: layout.revision });
+          artifacts.push({ name: file.name, sha256: file.sha256, bytes: file.bytes, resourceId: imported.resource.id });
+        }
+        return { source: missionArtifactSource, value: { artifacts, requestId: result.requestId },
+          telemetry: { providerCalls: 1, durationMs, providerExecutionId: attemptId,
+            providerEvidence: this.velaApiTest ? 'simulated' : 'reported' } };
+      },
+      verify: (evidence, { missionId, scope }) => {
+        const passed = this.missionArtifactProofCurrent(missionId, scope, evidence, true);
+        return { passed, detail: passed ? 'Verified the PNG and text file through their workspace resources.' : 'Artifact readback failed.' };
+      },
+    };
+  }
+
+  private missionArtifactProofCurrent(missionId: string, scope: MissionScope,
+    evidence: import('./mission-contracts.mts').MissionEvidence, readback: boolean) {
+    try {
+      const root = this.missionArtifactRoot;
+      const value = evidence.value as { artifacts: { name: typeof missionArtifactFiles[number]; resourceId: string; sha256: string; bytes: number }[] };
+      return !!root && evidence.source === missionArtifactSource && value.artifacts.length === missionArtifactFiles.length &&
+        value.artifacts.every((artifact, index) => {
+          if (artifact.name !== missionArtifactFiles[index] || !this.productResourceAccess(artifact.resourceId) ||
+            !this.db.prepare('SELECT 1 FROM blocks WHERE workspace_id=? AND resource_id=?').get(scope.workspaceId, artifact.resourceId)) return false;
+          const path = missionArtifactPath(root, missionId, artifact.name);
+          const source = readMediaSource(this.db, artifact.resourceId);
+          if (source?.path !== path || source.metadata.byteLength !== artifact.bytes || realpathSync.native(path) !== path) return false;
+          const stat = lstatSync(path, { bigint: true });
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n || mediaSourceRevision(stat) !== source.metadata.sourceRevision) return false;
+          if (!readback) return true;
+          const actual = readMissionArtifact(path, artifact.name);
+          return actual.sha256 === artifact.sha256 && actual.bytes === artifact.bytes;
+        });
+    } catch { return false; }
+  }
+
   private missionCommand(request: MissionRequest, reviewed = false,
-    approvedProjectCheck?: CommandMap['missionStartReviewed']['input']['approvedProjectCheck']): MissionResponse | Promise<MissionResponse> {
+    approvedProjectCheck?: CommandMap['missionStartReviewed']['input']['approvedProjectCheck'],
+    approvedArtifactDigest?: string): MissionResponse | Promise<MissionResponse> {
     const intakeMonotonicMs = request?.name === 'start' ? performance.now() : undefined;
     ensure(request && Object.keys(request).length === 2 && request.input &&
       typeof request.input === 'object' && !Array.isArray(request.input), 'invalid_mission_command');
@@ -1190,6 +1285,9 @@ export class BackendCore {
         ensure(Object.keys(request.input).every(key => keys.includes(key)) &&
           (agentProfileId === undefined || identifier(agentProfileId)) &&
           (teamId === undefined || identifier(teamId) && agentProfileId === undefined && proposalId === undefined), 'invalid_mission_command');
+        const artifactRequest = typeof objective === 'string' && ARTIFACT_MISSION_PREFIX.test(objective.trim());
+        if (artifactRequest) ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
+          noteIds === undefined && fileIds === undefined && projectEvidence === undefined, 'mission_artifact_context_unsupported');
         if (noteIds !== undefined || fileIds !== undefined || projectEvidence !== undefined) {
           ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
             typeof objective === 'string' && objective.trim() && Buffer.byteLength(objective) <= 1536, 'invalid_mission_command');
@@ -1201,10 +1299,12 @@ export class BackendCore {
           stored.expires > Date.now() && objective === stored.plan.objective &&
           scope.workspaceId === stored.plan.scope.workspaceId && scope.projectId === stored.plan.scope.projectId, 'mission_preview_changed');
         if (stored) ensure(this.missionPlanningContextCurrent(stored.plan), 'mission_planning_context_changed');
+        const artifactPrompt = artifactRequest ? objective.trim().replace(ARTIFACT_MISSION_PREFIX, '') : undefined;
+        const artifactPlan = artifactPrompt === undefined ? undefined : this.missionArtifactPlan(objective, scope, artifactPrompt);
         const plan = teamId !== undefined ? teamMissionPlan(objective, scope, this.missionTeams.read(teamId, scope), id => {
           const profile = this.missionAgentProfile(scope, id);
           return profile ? { title: profile.resource.title, selection: this.missionSpecialistSelection(scope, id) } : undefined;
-        }) : (stored ? structuredClone(stored.plan) : undefined) ??
+        }) : (stored ? structuredClone(stored.plan) : undefined) ?? artifactPlan ??
           (agentProfileId === undefined ? nativeMissionPlan(objective, scope) : null) ??
           specialistMissionPlan(objective, scope, this.missionSpecialistSelection(scope),
             agentProfileId === undefined ? undefined : { selection: this.missionSpecialistSelection(scope, agentProfileId) });
@@ -1221,14 +1321,21 @@ export class BackendCore {
         const fingerprint = planningDigest(plan);
         const remote = plan.tasks.filter(task => task.executor === 'chatgpt.specialist' || task.executor === 'api.specialist');
         const projectCheck = plan.tasks.find(task => task.executor === 'codex.project-check');
+        const artifactImage = plan.tasks.find(task => task.executor === 'artifact.illustration')?.artifactImage;
         const selected = remote[0]?.specialist;
         if (request.name === 'preview') return { fingerprint, plan,
           ...(proposalId ? { proposalId } : {}),
           executors: plan.tasks.map(task => ({ id: task.id, available: this.missionExecutors[task.executor].available(scope, task) })),
           ...(projectCheck ? { localReview: { kind: 'node-test', maxFiles: 4 } as const } : {}),
+          ...(artifactImage ? { artifactReview: { prompt: artifactImage.prompt, digest: artifactImage.digest,
+            model: missionImageModel, width: missionImageSize, height: missionImageSize, files: missionArtifactFiles } } : {}),
           ...(remote.length ? { externalReview: { provider: [...new Set(remote.map(task => task.specialist?.provider === VELA_API_PROVIDER ? 'Vela dedicated API' : 'ChatGPT plan'))].join(' + '), model: selected?.model ?? 'Unavailable',
             effort: selected?.effort, calls: remote.length } } : {}) };
         ensure(request.input.fingerprint === fingerprint, 'mission_preview_changed');
+        if (artifactImage || approvedArtifactDigest !== undefined) {
+          ensure(reviewed && artifactImage && approvedArtifactDigest === artifactImage.digest &&
+            this.missionArtifactAvailable(scope, artifactImage.configurationVersion), 'mission_artifact_review_required');
+        }
         ensure(!remote.length || reviewed && remote.every(task => this.missionSpecialistAvailable(scope, task)), 'mission_native_review_or_connection_required');
         if (projectCheck) {
           ensure(reviewed && approvedProjectCheck && this.port.projectChecks, 'mission_project_check_review_required');
@@ -6581,8 +6688,8 @@ export class BackendCore {
     }
     if (name === 'missions') return await this.missionCommand(a) as CommandMap[K]['output'];
     if (name === 'missionStartReviewed') {
-      const { approvedProjectCheck, ...request } = a as CommandMap['missionStartReviewed']['input'];
-      return await this.missionCommand({ name: 'start', input: request }, true, approvedProjectCheck) as CommandMap[K]['output'];
+      const { approvedProjectCheck, approvedArtifactDigest, ...request } = a as CommandMap['missionStartReviewed']['input'];
+      return await this.missionCommand({ name: 'start', input: request }, true, approvedProjectCheck, approvedArtifactDigest) as CommandMap[K]['output'];
     }
     if (name === 'missionCheckReview') return await this.missionCheckReview(a?.paths) as CommandMap[K]['output'];
     if (name === 'missionPlanReviewed') return await this.startMissionPlanning(a) as CommandMap[K]['output'];

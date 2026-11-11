@@ -9,13 +9,25 @@ async function startReviewedMission({win,event,localURL,storage,call,dialog,inpu
   const checkedDialog={};
   for(const name of ['showMessageBox','showOpenDialog'])checkedDialog[name]=async(...args)=>{guard();const result=await dialog[name](...args);guard();return result;};
   guard();let result;
-          const preview = await call("missions", { name: "preview", input: {
+            if (Object.hasOwn(input.input ?? {}, "approvedArtifactDigest")) throw Error("mission_native_review_required");
+            const preview = await call("missions", { name: "preview", input: {
             objective: input.input?.objective, ...(input.input?.agentProfileId ? { agentProfileId: input.input.agentProfileId } : {}),
             ...(input.input?.proposalId ? { proposalId: input.input.proposalId } : {}),
             ...(input.input?.teamId ? { teamId: input.input.teamId } : {}),
           } });
           if (!preview?.plan || preview.fingerprint !== input.input?.fingerprint) throw Error("mission_preview_changed");
-          let approvedProjectCheck;
+            let approvedProjectCheck, approvedArtifactDigest;
+            if (preview.artifactReview) {
+              if (preview.executors.some(executor => !executor.available)) throw Error("mission_artifact_unavailable");
+              const { prompt, digest, model, width, height, files } = preview.artifactReview;
+              const choice = await checkedDialog.showMessageBox(win, {
+                type: "question", buttons: ["Cancel", "Generate and save"], defaultId: 0, cancelId: 0,
+                title: "Review illustration mission", message: `Send this prompt to ${model} through the dedicated Vela API?`,
+                detail: `Prompt sent to OpenAI:\n${prompt}\n\nSave a ${width} × ${height} PNG and text notes to this workspace's managed files:\n${files.join("\n")}\n\nThis uses one image generation request on your configured API account.`,
+              });
+              if (choice.response !== 1) throw Error("mission_review_declined");
+              approvedArtifactDigest = digest;
+            }
           if (preview.externalReview) {
             if (preview.executors.some(executor => !executor.available)) throw Error("mission_specialist_unavailable");
             const { provider, calls } = preview.externalReview;
@@ -55,12 +67,13 @@ async function startReviewedMission({win,event,localURL,storage,call,dialog,inpu
           guard();
           if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
           guard();
-          if (preview.externalReview || approvedProjectCheck) {
+            if (preview.externalReview || approvedProjectCheck || approvedArtifactDigest) {
             if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
               throw Error("unauthorized_sender");
             if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
             guard();
-            result = await call("missionStartReviewed", { ...input.input, ...(approvedProjectCheck ? { approvedProjectCheck } : {}) });
+              result = await call("missionStartReviewed", { ...input.input, ...(approvedProjectCheck ? { approvedProjectCheck } : {}),
+                ...(approvedArtifactDigest ? { approvedArtifactDigest } : {}) });
           } else result = await call("missions", input);
 
   return result;
