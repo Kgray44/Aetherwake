@@ -46,14 +46,12 @@ export function estimateDedicatedHeadroom(capacities: unknown, counters: unknown
 
 // DXGI 1.1 uses native SIZE_T capacity and an adapter LUID. Exclude software adapters
 // and return no adapter names or per-process information.
-const capacityScript = String.raw`
-$ErrorActionPreference = 'Stop'
-Add-Type -TypeDefinition @'
+export const dxgiCapacityInterop = String.raw`
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
-public static class AerynthDxgiMemory {
+public static partial class AerynthDxgiMemory {
     [StructLayout(LayoutKind.Sequential)]
     private struct Luid {
         public uint Low;
@@ -119,6 +117,12 @@ public static class AerynthDxgiMemory {
         } finally { Marshal.Release(factory); }
     }
 }
+`;
+
+const capacityScript = `
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+${dxgiCapacityInterop}
 '@
 ConvertTo-Json -InputObject @([AerynthDxgiMemory]::Read()) -Compress
 `;

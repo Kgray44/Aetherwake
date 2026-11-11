@@ -37,8 +37,14 @@ export type ResourceLeaseRequest = {
   kind: ResourceKind;
   timeoutMs: number;
   estimatedRamBytes?: number;
+  gpuContextId?: string;
+  estimatedVramBytes?: number;
 };
+/** Private host observation from the process that owns the GPU device. */
+export type GpuProcessBudget = { contextId: string; budgetBytes: number; usedBytes: number };
+const gpuBudgetFreshMs = 5000;
 export type ResourceLease = {
+  readonly active: boolean;
   readonly receipt: Readonly<{
     schemaVersion: 1;
     epoch: string;
@@ -47,6 +53,9 @@ export type ResourceLease = {
     configVersion: number;
     kind: ResourceKind;
     reservedRamBytes: number;
+    gpuContextId?: string;
+    reservedVramBytes?: number;
+    gpuBudgetBytes?: number;
     expiresAt: string;
   }>;
   readonly checkpointRequested: AbortSignal;
@@ -103,6 +112,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
   let revision = 1, reason = 'awaiting_native_sample', freeForReservations = 0;
   let localFreshUntil = -Infinity, lastProtection = -Infinity;
   let disposed = false;
+  let gpuBudget: (GpuProcessBudget & { at: number }) | undefined;
   const active = new Map<string, {
     request: ResourceLeaseRequest; lease: ResourceLease; checkpoint: AbortController;
   }>();
@@ -117,6 +127,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     for (const { lease } of active.values()) bytes += lease.receipt.reservedRamBytes;
     return bytes;
   }
+  const freshGpuBudget = () => gpuBudget && now() - gpuBudget.at <= gpuBudgetFreshMs ? gpuBudget : undefined;
   let idleSeconds: number | null = null;
   function update(admission: MissionAdmission | undefined, memoryFreshUntil = localFreshUntil, nativeIdleSeconds = idleSeconds) {
     if (disposed) return;
@@ -144,8 +155,8 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     const next = {
       cpu,
       build: protecting || reasons.includes('disk-io') ? 0 : Math.min(cpu, config.limits.build),
-      // This slice has no qualified VRAM headroom measurement.
-      gpu: 0,
+      gpu: !critical && !contention && !recovering && !reasons.includes('gpu-load') && freshGpuBudget() ?
+        Math.min(1, config.limits.gpu) : 0,
       host_io: critical ? 0 : config.limits.host_io,
       remote: config.limits.remote,
     };
@@ -172,6 +183,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
   }
   function canLease(kind: ResourceKind, bytes = 0) {
     return !disposed && used(kind) < effective[kind] &&
+      (kind !== 'gpu' || !!freshGpuBudget()) &&
       (kind !== 'build' || used('cpu') < effective.cpu) &&
       (kind === 'remote' || now() <= localFreshUntil && bytes <= Math.max(0, freeForReservations - reservedRam()));
   }
@@ -194,6 +206,14 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
   return {
     update,
     canLease,
+    noteGpuBudget(budget: GpuProcessBudget | null) {
+      if (disposed || budget && (!identifier(budget.contextId) || !finiteCount(budget.budgetBytes, Number.MAX_SAFE_INTEGER) ||
+          !finiteCount(budget.usedBytes, budget.budgetBytes) || budget.budgetBytes === budget.usedBytes ||
+          used('gpu') > 0 && gpuBudget?.contextId !== budget.contextId)) return false;
+      gpuBudget = budget ? { ...budget, at: now() } : undefined;
+      update(latest);
+      return true;
+    },
     windowsMonitoring: () => preference.config.monitorWindows ?? true,
     inspect() {
       const { config, origin } = preference;
@@ -237,16 +257,22 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       commit(expectedVersion, previousPreference, null);
     },
     tryLease(request: ResourceLeaseRequest): ResourceLease | undefined {
-      const { kind, attemptId, missionId, taskId, timeoutMs, estimatedRamBytes = 0 } = request;
+      const { kind, attemptId, missionId, taskId, timeoutMs, estimatedRamBytes = 0, gpuContextId, estimatedVramBytes } = request;
       if (!identifier(attemptId) || !identifier(missionId) || !identifier(taskId) || !kinds.includes(kind) ||
           !finiteCount(estimatedRamBytes, Number.MAX_SAFE_INTEGER) || kind === 'remote' && estimatedRamBytes !== 0 ||
           !finiteCount(timeoutMs, 0x7fffffff) || timeoutMs === 0 || active.has(attemptId) ||
           !canLease(kind, estimatedRamBytes)) return;
+      const budget = kind === 'gpu' ? freshGpuBudget() : undefined;
+      if (kind === 'gpu' ? !budget || gpuContextId !== budget.contextId || typeof estimatedVramBytes !== 'number' ||
+          estimatedVramBytes === 0 || !finiteCount(estimatedVramBytes, budget.budgetBytes - budget.usedBytes) :
+          gpuContextId !== undefined || estimatedVramBytes !== undefined) return;
       const checkpoint = new AbortController();
       const timer = setTimeout(() => checkpoint.abort('lease-expired'), timeoutMs).unref();
       const lease: ResourceLease = {
+        get active() { return active.get(attemptId)?.lease === lease; },
         receipt: Object.freeze({ schemaVersion: 1, epoch, leaseId: randomUUID(), policyRevision: revision, kind,
-          configVersion, reservedRamBytes: estimatedRamBytes, expiresAt: new Date(wallNow() + timeoutMs).toISOString() }),
+          configVersion, reservedRamBytes: estimatedRamBytes, expiresAt: new Date(wallNow() + timeoutMs).toISOString(),
+          ...(budget ? { gpuContextId: budget.contextId, reservedVramBytes: estimatedVramBytes, gpuBudgetBytes: budget.budgetBytes } : {}) }),
         checkpointRequested: checkpoint.signal,
         release() {
           if (active.get(attemptId)?.lease !== lease) return;
