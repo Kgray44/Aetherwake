@@ -78,6 +78,10 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
     assert.deepEqual(profile.planning?.lifecycle, {
       validatedToStartCommandMs: profile.requestIntake.monotonicMs - clock.validatedMs,
       planningCommandToAdmissionMs: profile.admission.monotonicMs - clock.commandStartedMs,
+      planningCommandToFirstVerifiedTaskMs: profile.verifiedTaskMilestones.first!.settlement.monotonicMs! - clock.commandStartedMs,
+      planningCommandToLastSettlementMs: profile.lastSettlement!.monotonicMs! - clock.commandStartedMs,
+      planningCommandToReportStagedMs: profile.reportPublication!.timing!.stagedMs - clock.commandStartedMs,
+      planningCommandToRendererReceiptMs: null,
     });
     assert.ok(profile.planning!.lifecycle!.validatedToStartCommandMs >= 0);
     const transport = timing.transport;
@@ -97,12 +101,23 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
     const state=await f.core.command('vela',{name:'state',input:{}}) as VelaBackendState;
     const report=state.conversation!.messages.find(message=>message.missionReport?.missionId===running.id)!;assert.ok(report);assert.equal(report.source,'vela-native');
     assert.match(report.content,/investigation remains incomplete/);assert.match(report.content,/CPU.*RAM/su);assert.match(report.content,/cannot establish the server lag cause/);assert.doesNotMatch(report.content,/server lag (?:is caused|was fixed)/iu);
+    assert.deepEqual(await f.core.command('rendererVelaOutput', { missionId: running.id, messageId: report.id }), { accepted: true });
+    const delivered = await readProfile();
+    assert.ok(delivered && 'kind' in delivered && delivered.kind === 'execution-profile' && delivered.userDelivery?.stagingToReceiptMs != null);
+    assert.equal(delivered.planning?.lifecycle?.planningCommandToRendererReceiptMs,
+      profile.planning!.lifecycle!.planningCommandToReportStagedMs! + delivered.userDelivery.stagingToReceiptMs);
     await f.reopen();const restored=await f.core.command('missions',{name:'read',input:{id:running.id}}) as MissionProjection;
     assert.equal(restored.outcome,'blocked');assert.deepEqual(restored.coverage,settled.coverage);assert.equal(f.requests.length,1);
     const restoredProfile=await readProfile();
     assert.ok(restoredProfile&&'kind' in restoredProfile&&restoredProfile.kind==='execution-profile');
-    assert.deepEqual(restoredProfile.planning,profile.planning);
     assert.deepEqual(restored.tasks.map(task => task.attempts[0].resourceLease), leaseReceipts);
+    assert.deepEqual(restoredProfile.planning,delivered.planning);
+    const publication = delivered.reportPublication!;
+    const unrelatedPublication = { ...publication, timing: { ...publication.timing!, clock: 'unrelated-report-clock' } };
+    const unrelatedDelivery = projectMissionExecution(restored, unrelatedPublication, delivered.userDelivery).planning?.lifecycle;
+    assert.equal(unrelatedDelivery?.planningCommandToAdmissionMs, profile.planning!.lifecycle!.planningCommandToAdmissionMs);
+    assert.equal(unrelatedDelivery?.planningCommandToReportStagedMs, null);
+    assert.equal(unrelatedDelivery?.planningCommandToRendererReceiptMs, null);
     const unlinked = structuredClone(restored);
     const unlinkedClock = unlinked.planning!.timing!.lifecycleClock!;
     unlinkedClock.domain = 'unrelated-clock-fixture';

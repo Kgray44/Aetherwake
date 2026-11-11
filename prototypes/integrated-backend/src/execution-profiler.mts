@@ -375,13 +375,6 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const lastSettlement = attempts.flatMap(attempt => attempt.interval && attempt.end ? [attempt.end] : [])
     .sort((a, b) => b.eventSeq - a.eventSeq)[0] ?? null;
   const plan = mission.planning;
-  const planningClock = plan?.timing?.lifecycleClock;
-  const planningLifecycle = planningClock && intake && initial?.monotonicMs != null && planningClock.domain === intake.clock &&
-    planningClock.commandStartedMs <= planningClock.validatedMs && planningClock.validatedMs <= intake.monotonicMs &&
-    intake.monotonicMs <= initial.monotonicMs ? {
-      validatedToStartCommandMs: intake.monotonicMs - planningClock.validatedMs,
-      planningCommandToAdmissionMs: initial.monotonicMs - planningClock.commandStartedMs,
-    } : null;
   const active = ['queued', 'running', 'cancelling', 'paused'].includes(mission.outcome);
   const profile = mission.profile;
   const planningUsage = reportedUsage(plan?.usage);
@@ -442,6 +435,25 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const longestOnPath = attempts.filter(attempt => pathIds.has(attempt.id) && attempt.interval)
     .sort((a, b) => (b.interval!.end - b.interval!.start) - (a.interval!.end - a.interval!.start))[0];
   const intakeToReportStagedMs = timeToReportStaging(reportPublication?.timing, intake);
+  const planningClock = plan?.timing?.lifecycleClock;
+  let planningLifecycle = null;
+  if (planningClock && intake && initial?.monotonicMs != null && planningClock.domain === intake.clock &&
+    planningClock.commandStartedMs <= planningClock.validatedMs && planningClock.validatedMs <= intake.monotonicMs &&
+    intake.monotonicMs <= initial.monotonicMs) {
+    const firstProof = interval(mission.id, initial, verifiedMilestones[0]?.settlement ?? null);
+    const reportTiming = reportPublication?.timing;
+    const planningCommandToReportStagedMs = reportTiming && timeToReportStaging(reportTiming, initial) !== null ?
+      reportTiming.stagedMs - planningClock.commandStartedMs : null;
+    planningLifecycle = {
+      validatedToStartCommandMs: intake.monotonicMs - planningClock.validatedMs,
+      planningCommandToAdmissionMs: initial.monotonicMs - planningClock.commandStartedMs,
+      planningCommandToFirstVerifiedTaskMs: firstProof ? firstProof.end - planningClock.commandStartedMs : null,
+      planningCommandToLastSettlementMs: timeToSettlement ? timeToSettlement.end - planningClock.commandStartedMs : null,
+      planningCommandToReportStagedMs,
+      planningCommandToRendererReceiptMs: planningCommandToReportStagedMs !== null && userDelivery?.stagingToReceiptMs != null ?
+        planningCommandToReportStagedMs + userDelivery.stagingToReceiptMs : null,
+    };
+  }
   const attemptsByReason: Partial<Record<MissionAdmissionReason, number>> = {};
   let admittedAttemptsWithSample = 0, admittedAttemptsWithReasons = 0;
   for (const { attempt } of byAttempt.values()) {
