@@ -708,10 +708,22 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       assert.ok(Number.isFinite(presentation.intakeToReportStagedMs) && presentation.intakeToReportStagedMs >= 0);
       assert.equal(presentation.intakeToUserDeliveryMs,
         presentation.intakeToReportStagedMs + presentation.userDelivery.stagingToReceiptMs);
+      const { reportLatency, reportPublication, lastSettlement } = presentation;
+      const { compositionStartedMs, composedMs, stagedMs, clock } = reportPublication.timing;
+      assert.equal(lastSettlement.clock, clock);
+      assert.ok(lastSettlement.monotonicMs <= compositionStartedMs && compositionStartedMs <= composedMs && composedMs <= stagedMs);
+      assert.deepEqual(reportLatency, {
+        publicationEventId: reportPublication.eventId,
+        settlementEventSeq: lastSettlement.eventSeq,
+        settlementToCompositionMs: compositionStartedMs - lastSettlement.monotonicMs,
+        compositionMs: composedMs - compositionStartedMs,
+        compositionToStagingMs: stagedMs - composedMs,
+        stagingToRendererReceiptMs: presentation.userDelivery.stagingToReceiptMs,
+      });
       receipt.executionPresentation = { missionId, messageId: report.id,
         stagingToReceiptMs: presentation.userDelivery.stagingToReceiptMs,
         intakeToReceiptMs: presentation.intakeToUserDeliveryMs,
-        reportEventId: presentation.reportPublication.eventId };
+        reportEventId: reportPublication.eventId, reportLatency };
       await capture("01-native-mission-report");
       receipt.providerActivity = { before: providerBefore, after: await rpc("providerActivity", {}) };
       assert.equal(receipt.providerActivity.after.providerRequests, 0);
