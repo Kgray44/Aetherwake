@@ -700,3 +700,34 @@ Changes to normative IDs, privacy guarantees, model/provider access assumptions,
 
 **Mandatory negative tests:** injected MCP instruction tries to widen privileges; subagent attempts forbidden tool; tool allowed at discovery is revoked before call; ambiguous external write is re-requested; private screenshot tries to upload without scope consent; subscription credits exhausted and auto-recharge off; voice wake without consent. See [contract](../docs/specifications/VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md).
 
+---
+
+## Owner-directed supporting amendment FI-2026-11-10: privacy-safe adaptive autonomy
+
+> **Design obligations.** Intelligent planning, AEP optimization, ARIE learning and greater parallelism do not alter existing permission hierarchy, confidentiality rules, effect gates, account entitlements or the user's right to revoke authority.
+
+**AW-TRUST-154 — AI reasoning is not authority.** Input interpreters, context investigators, planners, reviewers, mission executives and adaptive policy models MAY propose decisions only within original principal/scope/approval boundaries. Model confidence, successful experiments or inferred user preference MUST NOT expand access.
+
+**AW-TRUST-155 — Scoped experiential learning.** Records of user corrections, preference inference, task outcomes, hardware behavior and optimization experiments MUST carry purpose, source classification, consent, retention, applicable project/account and deletion policy. User-visible control MUST distinguish local telemetry from external API transmission.
+
+**AW-TRUST-156 — Data minimization in profiling.** AEP and ARIE SHOULD store only the measurements needed for authorized performance analysis. Raw screenshots, conversations, command arguments, filenames, secrets and personally identifying foreground-app details MUST NOT be copied into public reports or model prompts merely to facilitate profiling.
+
+**AW-TRUST-157 — Learning policy authority gates.** AI-generated improvements MAY be proposed, tested in scoped conditions and evaluated, but persistent policy promotion MUST pass deterministic safety and permission checks plus documented rollout policy. Elevated filesystem changes, purchases, new data sharing and autonomy expansion always require the appropriate independent user authorization.
+
+**AW-TRUST-158 — User control and reversibility.** Authorized users MUST be able to inspect, correct, disable or roll back adaptive policies and optional telemetry within their scope. Historical effect receipts and legally or operationally necessary audit records MUST remain distinguishable from deletable preference projections; remaining retention limits must be disclosed.
+
+**AW-TRUST-159 — Consent boundaries across engines.** CIE retrieval, AIR strategy selection, AEP experiments, ARIE resource observations and connected-branch sharing MUST not cause unauthorized transfer of sensitive context among projects, providers, devices or subagents. Cached data and learned strategy metadata MUST honor revocation.
+
+**AW-TRUST-160 — Experiment containment.** Adaptive experiments MUST declare action class, cost and compute budgets, eligible environments, rollback plan, observation criteria and forbidden side effects. Risky write operations SHOULD use inert/test environments or explicit approval, never speculative uncontrolled production effects.
+
+**AW-TRUST-161 — Foreground protection as user control.** Resource monitoring and automatic scheduling MUST be transparent and adjustable; Aerynth MUST not override operating-system protections, bypass power/thermal constraints, disable user foreground work or silently increase financial/API spending for speed.
+
+**AW-TRUST-162 — Truthful explanations.** The Adaptive Intelligence Workspace MUST distinguish observed event, model interpretation, policy proposal, successful authorization, and verified effect. Private chain-of-thought or unavailable internal model state MUST NOT be reconstructed or represented as authentic evidence.
+
+**AW-TRUST-163 — Prompt injection in learned records.** Prior messages, external documents, performance traces, model-generated experiment suggestions and persisted memories MUST be treated as potentially untrusted data. Their reuse MUST NOT override system instruction, governance, permission or scope boundaries.
+
+**AW-TRUST-164 — Mid-mission revocation and cancellation.** Revoking a tool, source, policy, provider or task MUST invalidate future dependent model/tool actions and speculation, halt controllable in-flight work, preserve honest uncertain external effects and prevent side-effect repetition upon resumption.
+
+**AW-TRUST-165 — Independent negative testing.** Release evidence MUST include unauthorized data export attempts, malicious learning records, revoked experimental authority, prompt-injected tool selection, unauthorized stronger-spend tiers, duplicate external writes, and gaming/foreground protections under pressure.
+
+**Ownership:** Trust decisions remain centralized in this charter's policy enforcement architecture; [08 CIE](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md) owns retrieval, [10 AEP](10-AI-EXECUTION-PROFILER.md) owns profiling evidence, [13 Platform](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md) owns resource policy, and [15 Quality](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md) owns independent acceptance.
