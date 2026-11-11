@@ -65,22 +65,25 @@ test('Windows probes wait for sustained demand, enforce a cooldown and expire in
     const first = readAt(2_000, false);
     assert.equal(first.workerLimit, 3);
     assert.equal(first.readings.gpuEnginePercent?.value, 97);
-    for (const at of [6_000, 10_000, 14_000, 18_000, 21_999]) readAt(at);
+    for (const at of [6_000, 7_999]) readAt(at);
     await yieldToProbe();
     assert.equal(probes, 1);
-    readAt(22_000);
+    readAt(8_000);
     await yieldToProbe();
     assert.equal(probes, 2);
-    const second = readAt(22_000, false);
+    const second = readAt(8_000, false);
     assert.equal(second.workerLimit, 1);
     assert.deepEqual(second.reasons, ['gpu-load', 'disk-io']);
-    for (const at of [26_000, 30_000, 34_000, 38_000, 42_000]) readAt(at);
+    for (const at of [12_000, 16_000, 20_000, 24_000, 27_999]) readAt(at);
     await yieldToProbe();
-    const third = readAt(42_000, false);
+    assert.equal(probes, 2, 'Confirmed contention uses the ordinary interval');
+    readAt(28_000);
+    await yieldToProbe();
+    const third = readAt(28_000, false);
     assert.equal(third.workerLimit, 3);
     assert.equal(third.readings.gpuEnginePercent?.value, 0);
     assert.equal(third.readings.diskQueueLength, undefined);
-    assert.deepEqual(readAt(72_001, false).readings, {});
+    assert.deepEqual(readAt(58_001, false).readings, {});
   } finally { admission.dispose(); }
 });
 

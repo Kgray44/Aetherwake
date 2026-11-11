@@ -14,6 +14,7 @@ const cpuIntervalMs = 500;
 const demandGapMs = 5_000;
 const windowsWarmupMs = 2_000;
 const windowsIntervalMs = 20_000;
+const windowsGpuConfirmationIntervalMs = 6_000;
 const windowsFreshMs = 30_000;
 const inputFreshMs = 3_000;
 const rendererFreshMs = 6_000;
@@ -326,8 +327,11 @@ export function createMissionAdmission(options: AdmissionOptions) {
   }
 
   function refreshWindows(time: number) {
+    // Confirm a candidate spike promptly without increasing the ordinary sampling cadence.
+    const confirmingGpuPressure = gpu.highSamples === 1 && !gpu.pressured && fresh(gpu.sample, time, windowsFreshMs);
+    const interval = confirmingGpuPressure ? windowsGpuConfirmationIntervalMs : windowsIntervalMs;
     if (!policy.windowsMonitoring() || (!readWindows && !readThermals) || probe ||
-        time - demandSince < windowsWarmupMs || time - lastProbe < windowsIntervalMs) return;
+        time - demandSince < windowsWarmupMs || time - lastProbe < interval) return;
     const controller = new AbortController();
     const startedAtUtc = new Date(wallNow()).toISOString();
     probe = controller;
