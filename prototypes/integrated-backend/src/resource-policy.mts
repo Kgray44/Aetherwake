@@ -26,6 +26,7 @@ export type ResourcePolicyNativeView = ReturnType<ReturnType<typeof createResour
 };
 export type ResourceAdjustment = {
   schemaVersion: 1;
+  policyEpoch: string;
   baseRevision: number;
   evidenceRefs: readonly string[];
   expiresAtMs: number;
@@ -64,7 +65,7 @@ export type ResourceLease = {
 };
 
 const kinds = ['cpu', 'build', 'gpu', 'host_io', 'remote'] as const;
-const adjustmentFields = ['schemaVersion', 'baseRevision', 'evidenceRefs', 'expiresAtMs', 'changes'];
+const adjustmentFields = ['schemaVersion', 'policyEpoch', 'baseRevision', 'evidenceRefs', 'expiresAtMs', 'changes'];
 const identifier = (value: string) => typeof value === 'string' && /^[\w.:-]{1,120}$/u.test(value);
 const finiteCount = (n: number, max: number) => Number.isSafeInteger(n) && n >= 0 && n <= max;
 
@@ -234,22 +235,25 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     previewAdjustment(proposal: ResourceAdjustment) {
       if (!proposal || typeof proposal !== 'object' || Object.keys(proposal).some(key => !adjustmentFields.includes(key)))
         return { status: 'invalid_proposal' as const };
-      if (disposed || proposal.baseRevision !== revision) return { status: 'stale_policy' as const };
       if (proposal.schemaVersion !== 1 || !Number.isSafeInteger(proposal.expiresAtMs) || proposal.expiresAtMs <= wallNow() ||
+          !identifier(proposal.policyEpoch) || !finiteCount(proposal.baseRevision, Number.MAX_SAFE_INTEGER) ||
           !Array.isArray(proposal.evidenceRefs) || proposal.evidenceRefs.length === 0 || proposal.evidenceRefs.length > 16 ||
           !Array.from(proposal.evidenceRefs).every(identifier) ||
           !proposal.changes || typeof proposal.changes !== 'object' || Array.isArray(proposal.changes))
         return { status: 'invalid_proposal' as const };
+      if (disposed || proposal.policyEpoch !== epoch || proposal.baseRevision !== revision)
+        return { status: 'stale_policy' as const };
       const changes = Object.entries(proposal.changes);
       if (!changes.length || !changes.every(([kind, delta]) => kinds.includes(kind as ResourceKind) &&
           Number.isSafeInteger(delta) && Math.abs(delta) <= maxWorkers)) return { status: 'invalid_proposal' as const };
+      if (changes.some(([, delta]) => delta > 0)) return { status: 'increase_requires_review' as const };
       const prediction = { ...effective };
       for (const [name, delta] of changes) {
         const kind = name as ResourceKind;
-        prediction[kind] = Math.max(0, Math.min(effective[kind], effective[kind] + delta));
+        prediction[kind] = Math.max(0, effective[kind] + delta);
       }
       prediction.build = Math.min(prediction.cpu, prediction.build);
-      return { status: 'preview' as const, baseRevision: revision, current: { ...effective },
+      return { status: 'preview' as const, policyEpoch: epoch, baseRevision: revision, current: { ...effective },
         prediction, evidenceRefs: [...proposal.evidenceRefs] };
     },
     configure(expectedVersion: number, next: ResourcePolicyConfig) {
