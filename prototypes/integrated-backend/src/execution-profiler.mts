@@ -93,6 +93,15 @@ function reportedUsage(usage?: ReportedUsage): ReportedUsage | null {
     ...(count(reasoningOutputTokens) ? { reasoningOutputTokens } : {}) };
 }
 
+const tokenFields = ['totalTokens', 'inputTokens', 'outputTokens', 'cachedInputTokens',
+  'cacheWriteInputTokens', 'reasoningOutputTokens'] as const;
+type TokenField = typeof tokenFields[number];
+type TokenObservation = { observedTokens: number | null; receipts: number };
+
+function emptyTokenObservations() {
+  return Object.fromEntries(tokenFields.map(field => [field, { observedTokens: null, receipts: 0 }])) as Record<TokenField, TokenObservation>;
+}
+
 function interval(id: string, start: AttemptBoundary, end: AttemptBoundary | null): Interval | null {
   if (!start.clock || start.clock !== end?.clock || start.monotonicMs === null ||
     end.monotonicMs === null || end.monotonicMs < start.monotonicMs) return null;
@@ -383,32 +392,48 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       receipt: reportedUsage(telemetry.usage), source: telemetry.providerEvidence ?? null }] : [];
   });
   if (plan) claims.push({ executionId: plan.executionId, receipt: planningUsage, source: plan.providerEvidence ?? null });
-  const usage: { tokens: number; source: 'reported' | 'simulated' | null }[] = [];
+  const usage: { receipt: ReportedUsage; source: 'reported' | 'simulated' | null }[] = [];
   const executionClaims = new Map<string, typeof claims>();
   for (const claim of claims) {
     if (claim.executionId) {
       const group = executionClaims.get(claim.executionId) ?? [];
       group.push(claim);
       executionClaims.set(claim.executionId, group);
-    } else if (claim.receipt) usage.push({ tokens: claim.receipt.totalTokens, source: claim.source });
+    } else if (claim.receipt) usage.push({ receipt: claim.receipt, source: claim.source });
   }
   const conflictingUsageExecutionIds: string[] = [];
   let duplicateCalls = 0;
   for (const [id, group] of executionClaims) {
     duplicateCalls += group.length - 1;
     const sources = new Set(group.flatMap(claim => claim.source ? [claim.source] : []));
-    const receipts = new Map(group.flatMap(claim => claim.receipt ? [[JSON.stringify(claim.receipt), claim.receipt]] : []));
-    if (sources.size > 1 || receipts.size > 1) conflictingUsageExecutionIds.push(id);
-    else for (const receipt of receipts.values()) usage.push({ tokens: receipt.totalTokens, source: sources.values().next().value ?? null });
+    let receipt: ReportedUsage | null = null;
+    let conflict = sources.size > 1;
+    for (const claim of group) {
+      if (!claim.receipt) continue;
+      const observed = claim.receipt;
+      if (tokenFields.some(field => receipt?.[field] !== undefined && observed[field] !== undefined && receipt[field] !== observed[field])) {
+        conflict = true;
+        break;
+      }
+      receipt = Object.assign({}, receipt, observed);
+    }
+    if (conflict) conflictingUsageExecutionIds.push(id);
+    else if (receipt) usage.push({ receipt, source: sources.values().next().value ?? null });
   }
   const providerCalls = profile.providerCalls !== null && profile.providerCalls >= duplicateCalls ? profile.providerCalls - duplicateCalls : null;
   const usageReceipts = { reported: 0, simulated: 0, unattributed: 0,
     missing: providerCalls !== null && providerCalls >= usage.length ? providerCalls - usage.length : null };
-  const tokenTotals: Record<'reported' | 'simulated' | 'unattributed', number | null> = { reported: null, simulated: null, unattributed: null };
-  for (const { source, tokens } of usage) {
+  const usageBySource = { reported: emptyTokenObservations(), simulated: emptyTokenObservations(), unattributed: emptyTokenObservations() };
+  for (const { source, receipt } of usage) {
     const bucket = source ?? 'unattributed';
     usageReceipts[bucket]++;
-    tokenTotals[bucket] = (tokenTotals[bucket] ?? 0) + tokens;
+    for (const field of tokenFields) {
+      const tokens = receipt[field];
+      if (tokens === undefined) continue;
+      const reading = usageBySource[bucket][field];
+      reading.observedTokens = (reading.observedTokens ?? 0) + tokens;
+      reading.receipts++;
+    }
   }
   const timeToVerified = initial ? interval(mission.id, initial, firstVerified) : null;
   const timeToSettlement = complete && !active && initial ? interval(mission.id, initial, lastSettlement) : null;
@@ -462,8 +487,9 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
         eventSeqs: [longestOnPath.start.eventSeq, longestOnPath.end!.eventSeq] } : null,
     },
     economics: {
-      providerCalls, reportedTotalTokens: tokenTotals.reported, conflictingUsageExecutionIds,
-      simulatedTotalTokens: tokenTotals.simulated, unattributedTotalTokens: tokenTotals.unattributed, usageReceipts,
+      providerCalls, reportedTotalTokens: usageBySource.reported.totalTokens.observedTokens, conflictingUsageExecutionIds,
+      simulatedTotalTokens: usageBySource.simulated.totalTokens.observedTokens,
+      unattributedTotalTokens: usageBySource.unattributed.totalTokens.observedTokens, usageReceipts, usageBySource,
       usageCoverage: usage.length === 0 ? providerCalls === 0 ? 'not-applicable' as const : 'missing' as const :
         usage.length === providerCalls ? 'complete' as const : 'partial' as const,
       cost: null,
