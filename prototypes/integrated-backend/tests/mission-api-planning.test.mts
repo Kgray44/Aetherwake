@@ -451,11 +451,15 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
     const qualification = { ...interpreted, needs: [{ key: 'day', question: 'Which weekday?', query: 'inspection weekday' }] };
     const assess = (key: string, quote: string) => ({ version: 3, clarification: '', assessment: [
       { key, status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
-      ...(key === 'condition' ? [{ key: 'signoff', status: 'missing', passages: [], query: '' }] : []),
+      ...(key === 'condition' ? [{ key: 'signoff', status: 'missing', passages: [{ source: 'e1', quote }], query: '' }] : []),
     ] });
     const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
     f.replies.push(reply(qualification), reply(assess('day', 'The pump inspection is on Tuesday.')),
-      reply(interpreted), reply(assess('condition', 'The west lift returns to service after an inspection.')),
+      reply(interpreted), body => {
+        const packet = JSON.parse(body.input[0].content);
+        assert.deepEqual(packet.excerpts, [{ handle: 'e1', sourceKind: 'note', title: 'Lift handoff', text: noteText }]);
+        return reply(assess('condition', 'The west lift returns to service after an inspection.'))(body);
+      },
       body => {
         assert.equal(body.tools, undefined);
         assert.match(JSON.stringify(body.input), /returns to service after an inspection/);

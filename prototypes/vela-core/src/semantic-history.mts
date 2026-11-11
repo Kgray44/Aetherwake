@@ -50,6 +50,7 @@ export interface SemanticHistorySource {
   sourceKind?: 'conversation-exchange' | 'note';
   revision: string;
   text: string;
+  title?: string;
 }
 interface Passage { source: string; quote: string }
 interface Assessment { key: string; status: Status; sources: string[]; query: string; passages?: Passage[] }
@@ -57,7 +58,7 @@ interface EvidenceReview { rows: Assessment[]; clarification: string }
 export type SemanticHistoryCall =
   | { stage: 'interpret'; request: string }
   | { stage: 'assess'; request: string; proposedClarification?: string; needs: readonly Need[];
-    excerpts: readonly { handle: string; text: string; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number };
+    excerpts: readonly { handle: string; text: string; title?: string; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number };
 
 interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan }
 interface SemanticHistoryOwner<T extends SemanticHistorySource> {
@@ -138,8 +139,9 @@ export function parseSemanticHistoryAssessment(value: unknown, needs: readonly N
     if (!exact(row, ['key', 'status', quoted ? 'passages' : 'sources', 'query']) ||
       typeof row.key !== 'string' || !remaining.delete(row.key) || !statuses.includes(row.status as Status) ||
       !bounded(row.query, 512, true) || (row.query && !canonicalRetrievalQuery(row.query))) return;
-    const passages = quoted ? parsePassages(row.passages, evidence) : undefined;
-    if (quoted && !passages) return;
+    const checkedPassages = quoted ? parsePassages(row.passages, evidence) : undefined;
+    if (quoted && !checkedPassages) return;
+    const passages = checkedPassages && (row.status === 'missing' || row.status === 'inaccessible' ? [] : checkedPassages);
     const sources = passages ? [...new Set(passages.map(passage => passage.source))] : row.sources;
     if (!Array.isArray(sources) || sources.length > maxCandidates || new Set(sources).size !== sources.length ||
       !sources.every(id => typeof id === 'string' && evidence.has(id))) return;
@@ -237,6 +239,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         ...(pendingClarification ? { proposedClarification: pendingClarification } : {}),
         excerpts: [...evidence].map(([handle, source]) => ({
           handle, text: source.text, ...(source.sourceKind ? { sourceKind: source.sourceKind } : {}),
+          ...(source.sourceKind === 'note' && bounded(source.title, 512) ? { title: source.title } : {}),
         })) }, sources);
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale');
       if (reviewed == null) return empty('unavailable');
