@@ -16,6 +16,7 @@ const reasons = {
   system_suspended: "System suspended",
   recovery_dwell: "Waiting for resource headroom to stabilize",
   cpu_conservative: "Conservative CPU admission",
+  cpu_contention: "Sustained CPU load",
   disk_contention: "Disk contention",
   gpu_contention: "GPU contention",
   gpu_thermal_pressure: "GPU driver reports thermal slowdown",

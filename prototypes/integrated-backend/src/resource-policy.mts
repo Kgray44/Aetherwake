@@ -161,10 +161,11 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     const externalActivity = config.protectExternalActivity && reasons.includes('external-desktop-activity');
     const protecting = config.mode === 'gaming_focus' || reasons.includes('active-input') || rendererPressure || externalActivity;
     const powerLimited = reasons.includes('battery-power') || reasons.includes('cpu-speed-limit');
-    const contention = protecting || powerLimited || reasons.includes('cpu-load') || reasons.includes('disk-io');
+    const cpuPressure = reasons.includes('cpu-load');
+    const contention = protecting || powerLimited || cpuPressure || reasons.includes('disk-io');
     if (critical || contention) lastProtection = now();
     const recovering = now() - lastProtection < 3_000;
-    const cpuLimited = protecting || powerLimited || reasons.includes('cpu-load') || !readings.cpuPercent || recovering;
+    const cpuLimited = protecting || powerLimited || cpuPressure || !readings.cpuPercent || recovering;
     const idleHeadroom = config.mode === 'max_throughput' && !cpuLimited && idleSeconds !== null && idleSeconds >= 15 &&
       !gpuPressure && !reasons.includes('disk-io');
     const balancedCeiling = Math.max(1, maxWorkers - 1);
@@ -182,7 +183,8 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       commitPressure ? 'windows_commit_pressure' :
       critical ? (free === undefined ? 'memory_unavailable' : 'safety_floor') :
       rendererPressure ? 'renderer_latency' : externalActivity ? 'external_desktop_activity' : protecting ? 'foreground_protection' :
-        powerLimited ? 'power_protection' : recovering && !contention ? 'recovery_dwell' : cpuLimited ? 'cpu_conservative' :
+        powerLimited ? 'power_protection' : cpuPressure ? 'cpu_contention' :
+          recovering && !contention ? 'recovery_dwell' : cpuLimited ? 'cpu_conservative' :
       reasons.includes('disk-io') ? 'disk_contention' : gpuThermalPressure ? 'gpu_thermal_pressure' : gpuPressure ? 'gpu_contention' :
         idleHeadroom ? 'throughput_profile' : 'balanced';
     if (nextReason !== reason || kinds.some(kind => next[kind] !== effective[kind])) {
