@@ -608,6 +608,41 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
         planningCommandToReportStagedMs + userDelivery.stagingToReceiptMs : null,
     };
   }
+  let wallTime = null;
+  const pathEntry = readinessPath?.entry;
+  const pathEnd = readinessPath?.attempts.at(-1);
+  if (intake && intakeToAdmissionMs !== null && timeToSettlement && lastSettlement && readinessPath && pathEntry &&
+    readinessPath.clock === timeToSettlement.clock && pathEntry.admittedMs === timeToSettlement.start &&
+    pathEnd?.settledMs === timeToSettlement.end) {
+    const planningStart = planningLifecycle ? planningClock?.commandStartedMs : undefined;
+    const start = planningStart ?? intake.monotonicMs;
+    const publication = reportLatency?.settlementEventSeq === lastSettlement.eventSeq ? reportLatency : null;
+    const stagingToReceipt = userDelivery?.stagingToReceiptMs;
+    const receipt = publication && userDelivery?.publicationEventId === publication.publicationEventId &&
+      stagingToReceipt != null && Number.isFinite(stagingToReceipt) && stagingToReceipt >= 0 ? userDelivery : null;
+    const end = publication && timedReport ? timedReport.stagedMs : timeToSettlement.end;
+    wallTime = {
+      clock: timeToSettlement.clock,
+      from: planningStart === undefined ? 'mission-start-command' as const : 'planning-command' as const,
+      through: receipt ? 'renderer-receipt' as const : publication ? 'report-staged' as const : 'last-settlement' as const,
+      elapsedMs: end - start + (receipt?.stagingToReceiptMs ?? 0),
+      planningExecutionId: planningStart === undefined ? null : plan?.executionId ?? null,
+      admissionEventSeq: pathEntry.admissionEventSeq, settlementEventSeq: lastSettlement.eventSeq,
+      attemptIds: readinessPath.attempts.map(attempt => attempt.attemptId),
+      publicationEventId: publication?.publicationEventId ?? null, messageId: receipt?.messageId ?? null,
+      segments: {
+        planningAndValidationMs: planningStart === undefined ? null : planningClock!.validatedMs - planningStart,
+        validatedToStartCommandMs: planningLifecycle?.validatedToStartCommandMs ?? null,
+        startCommandToAdmissionMs: intakeToAdmissionMs,
+        admissionToFirstContextMs: pathEntry.elapsedMs,
+        dependencyChainMs: readinessPath.elapsedMs,
+        settlementToCompositionMs: publication?.settlementToCompositionMs ?? null,
+        compositionMs: publication?.compositionMs ?? null,
+        compositionToStagingMs: publication?.compositionToStagingMs ?? null,
+        stagingToRendererReceiptMs: receipt?.stagingToReceiptMs ?? null,
+      },
+    };
+  }
   const attemptsByReason: Partial<Record<MissionAdmissionReason, number>> = {};
   const attemptsByKind: Partial<Record<NonNullable<MissionAttempt['resourceLease']>['kind'], number>> = {};
   let withReceipt = 0;
@@ -631,7 +666,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     resourcePolicy: { currentAdmission: projectResourceAdmission(mission.admission), admittedAttemptsWithSample,
       admittedAttemptsWithoutSample: byAttempt.size - admittedAttemptsWithSample, admittedAttemptsWithReasons, attemptsByReason,
       leaseCoverage: { withReceipt, withoutReceipt: byAttempt.size - withReceipt, attemptsByKind } },
-    settlementToReportStagedMs, reportLatency,
+    settlementToReportStagedMs, reportLatency, wallTime,
     intakeToReportStagedMs,
     requestIntake: intake, requestAcknowledgement, firstMeaningfulOutput, userDelivery, intakeToUserDeliveryMs,
     intakeToAdmissionMs,
