@@ -56,7 +56,8 @@ interface Assessment { key: string; status: Status; sources: string[]; query: st
 interface EvidenceReview { rows: Assessment[]; clarification: string }
 export type SemanticHistoryCall =
   | { stage: 'interpret'; request: string }
-  | { stage: 'assess'; request: string; needs: readonly Need[]; excerpts: readonly { handle: string; text: string; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number };
+  | { stage: 'assess'; request: string; proposedClarification?: string; needs: readonly Need[];
+    excerpts: readonly { handle: string; text: string; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number };
 
 interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan }
 interface SemanticHistoryOwner<T extends SemanticHistorySource> {
@@ -171,21 +172,27 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     if (raw == null) return empty('unavailable');
     const proposal = parseSemanticHistoryProposal(raw);
     if (!proposal) return empty('invalid');
-    if (!proposal.needs.length) return { ...empty('assessed'), proposal, ...(proposal.clarification ? { clarification: proposal.clarification } : {}) };
+    const pendingClarification = !proposal.needs.length ? proposal.clarification.trim() : '';
+    if (!proposal.needs.length && !pendingClarification) return { ...empty('assessed'), proposal };
+    const needs = pendingClarification
+      ? [{ key: 'clarification', question: pendingClarification, query: canonicalRetrievalQuery(request)?.terms.join(' ') ?? '' }]
+      : proposal.needs;
     const evidence = new Map<string, T>(), observed = new Set<string>();
     const queries = new Set<string>();
-    let next = proposal.needs.map(need => need.query);
+    let next = needs.map(need => need.query).filter(Boolean);
     let anchorsRead = false;
     let priorAssessment: EvidenceReview | undefined;
     let investigateAnchors = false;
-    const assessed = (review: EvidenceReview): Result<T> => ({
-      state: 'assessed', proposal, rounds, searchCoverage,
-      ...(review.clarification && review.rows.some(row => row.status !== 'supported') ? { clarification: review.clarification } : {}),
-      coverage: review.rows.map(row =>
-        ({ key: row.key, status: row.status, sources: row.sources.map(handle => evidence.get(handle)!),
-          ...(row.passages ? { passages: row.passages.map(passage =>
-            ({ sourceId: evidence.get(passage.source)!.sourceId, quote: passage.quote })) } : {}) })),
-    });
+    const assessed = (review: EvidenceReview): Result<T> => {
+      const clarification = review.rows.some(row => row.status !== 'supported') && (review.clarification || pendingClarification);
+      return {
+        state: 'assessed', proposal, rounds, searchCoverage, ...(clarification ? { clarification } : {}),
+        coverage: review.rows.map(row =>
+          ({ key: row.key, status: row.status, sources: row.sources.map(handle => evidence.get(handle)!),
+            ...(row.passages ? { passages: row.passages.map(passage =>
+              ({ sourceId: evidence.get(passage.source)!.sourceId, quote: passage.quote })) } : {}) })),
+      };
+    };
     const partial = () => { if (searchCoverage === 'bounded') searchCoverage = 'partial'; };
     const addCandidates = ({ sources, scan }: SemanticHistoryCandidates<T>) => {
       if (searchCoverage === null || searchCoverage === 'bounded' || scan === 'unavailable') searchCoverage = scan;
@@ -204,7 +211,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
 
     if (owner.selected) addCandidates(owner.selected());
 
-    while ((next.length || investigateAnchors) && rounds < maxRounds) {
+    while (rounds < maxRounds) {
       rounds++;
       const priorCount = evidence.size;
       for (const query of next) {
@@ -223,15 +230,17 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         return assessed(priorAssessment);
       }
 
+      if (pendingClarification && !evidence.size) return { ...empty('assessed'), proposal, clarification: pendingClarification };
       const sources = [...evidence.values()];
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale');
-      const reviewed = await disclose({ stage: 'assess', request, needs: structuredClone(proposal.needs), round: rounds,
+      const reviewed = await disclose({ stage: 'assess', request, needs: structuredClone(needs), round: rounds,
+        ...(pendingClarification ? { proposedClarification: pendingClarification } : {}),
         excerpts: [...evidence].map(([handle, source]) => ({
           handle, text: source.text, ...(source.sourceKind ? { sourceKind: source.sourceKind } : {}),
         })) }, sources);
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale');
       if (reviewed == null) return empty('unavailable');
-      const assessment = parseSemanticHistoryAssessment(reviewed, proposal.needs, evidence);
+      const assessment = parseSemanticHistoryAssessment(reviewed, needs, evidence);
       if (!assessment) return empty('invalid');
       priorAssessment = assessment;
       const gaps = assessment.rows.filter(row => row.status !== 'supported');

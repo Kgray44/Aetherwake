@@ -112,6 +112,39 @@ test('keeps a clarification proposed after current evidence leaves the referent 
   assert.deepEqual(result.coverage[0].sources, [candidate, alternative]);
 });
 
+test('checks scoped evidence before returning an intake clarification without evidence needs', async () => {
+  const intent = 'Can I reopen it after the trial run?';
+  const clarification = 'Which enclosure do you mean?';
+  const source = { sourceId: 'handoff', revision: '4', text: 'The trial run used only the north enclosure. Reopen it after the temperature check.' };
+  for (const mode of ['resolved', 'unresolved', 'absent', 'revoked'] as const) {
+    const stages: string[] = [];
+    let current = true;
+    const result = await investigateSemanticHistory(intent, {
+      search: () => ({ sources: [], scan: 'bounded' }),
+      recent: () => ({ sources: mode === 'absent' ? [] : [source], scan: 'bounded' }),
+      isCurrent: item => item === source && current,
+      disclose: async (call, sources) => {
+        stages.push(call.stage);
+        if (call.stage === 'interpret') return { ...proposal, clarification, needs: [] };
+        assert.deepEqual(sources, [source]);
+        assert.equal(call.request, intent);
+        assert.equal(call.proposedClarification, clarification);
+        assert.equal(call.needs[0].question, clarification);
+        if (mode === 'revoked') current = false;
+        const supported = mode !== 'unresolved';
+        return { version: 3, clarification: '', assessment: [{
+          key: call.needs[0].key, status: supported ? 'supported' : 'uncertain',
+          passages: supported ? [{ source: 'e1', quote: source.text }] : [], query: '',
+        }] };
+      },
+    });
+    assert.deepEqual(stages, mode === 'absent' ? ['interpret'] : ['interpret', 'assess']);
+    assert.equal(result.state, mode === 'revoked' ? 'stale' : 'assessed');
+    assert.equal(result.clarification, mode === 'unresolved' || mode === 'absent' ? clarification : undefined);
+    assert.deepEqual(result.coverage.flatMap(need => need.sources), mode === 'resolved' ? [source] : []);
+  }
+});
+
 test('selected notes preserve recent evidence after a conversation query miss', async () => {
   const note = { sourceId: 'selected', revision: '1', text: 'Inspect the equipment on Thursday.' };
   const correction = { sourceId: 'recent', revision: '2', text: 'Move the maintenance visit to Monday.' };
