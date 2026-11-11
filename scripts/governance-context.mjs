@@ -201,7 +201,10 @@ export function buildContext(options) {
     dependencies.push({id:req.id,path:req.path,authority:req.authority,line:req.line,reason:"referenced by selected normative requirement",text:req.text,documentSha256:byDoc.get(req.charter).sha256});
   }
   const chars=selected.reduce((s,x)=>s+x.text.length,0)+normative.reduce((s,x)=>s+x.text.length,0)+dependencies.reduce((s,x)=>s+x.text.length,0);
-  const baselineChars=unique(selected.map(x=>x.path)).reduce((s,path)=>s+(index.documents.find(d=>d.path===path)?.sourceChars||0),0);
+  // A full routed context also contains one-hop normative references outside
+  // the selected charters. Include those same bytes in the comparison baseline:
+  // otherwise --full falsely reports a negative size reduction as charters grow.
+  const baselineChars=unique(selected.map(x=>x.path)).reduce((s,path)=>s+(index.documents.find(d=>d.path===path)?.sourceChars||0),0)+dependencies.reduce((s,x)=>s+x.text.length,0);
   const budgetExceeded=budgetTokens!==null&&estimate(chars)>budgetTokens;
   if(budgetExceeded)warnings.push("Estimated context exceeds soft budget; no authoritative requirement silently discarded.");
   return {
