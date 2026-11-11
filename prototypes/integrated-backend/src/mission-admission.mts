@@ -328,6 +328,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
     canLease: policy.canLease,
     tryLease: policy.tryLease,
     noteGpuBudget: policy.noteGpuBudget,
+    mayPrepareGpu: policy.mayPrepareGpu,
     telemetry() {
       const time = now();
       function metric(name: string, unit: string, source: string, maxAge: number, derived = false, supported = true, enabled = true) {

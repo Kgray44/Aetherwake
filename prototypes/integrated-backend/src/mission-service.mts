@@ -24,6 +24,7 @@ export interface MissionServiceHost {
   admission?(demand: boolean): MissionAdmission;
   resources?: {
     canAcquire(lane: string, executorId: string): boolean;
+    prepare?(lane: string, executorId: string): void;
     acquire(lane: string, identity: Omit<ResourceLeaseRequest, 'kind' | 'estimatedRamBytes'>, executorId: string): ResourceLease | undefined;
   };
   contextSource?(mission: Mission, task: MissionTaskPlan): MissionContextSource | undefined;
@@ -756,7 +757,11 @@ export class MissionService {
           this.observeReadyBlocker(m.id, task.id, 'resource-conflict');
           continue;
         }
-        if (this.host.resources && !this.host.resources.canAcquire(executor.lane, task.executor)) continue;
+        const resources = this.host.resources;
+        if (resources && !resources.canAcquire(executor.lane, task.executor)) {
+          resources.prepare?.(executor.lane, task.executor);
+          continue;
+        }
         if (!this.start(m, task, executor, admission)) continue;
         this.lastAdmitted.set(m.id, ++this.turn);
         this.wake();
