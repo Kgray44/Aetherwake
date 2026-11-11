@@ -589,8 +589,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const baseline = manifestationBaseline; manifestationBaseline = false;
     const message = current?.conversation?.messages.find(item => item.id === projection.currentMessageId);
     const executionId = message?.providerId === 'openai-api-vela' ? message.providerContribution?.executionId : undefined;
-    const output = executionId && message && projection.currentRequestId && projection.kind !== 'action' ?
-      { executionId, messageId: message.id, requestId: projection.currentRequestId } : undefined;
+    const output = message?.missionReport && projection.kind === 'insight' ?
+      { missionId: message.missionReport.missionId, messageId: message.id } :
+      executionId && message && projection.currentRequestId && projection.kind !== 'action' ?
+        { executionId, messageId: message.id, requestId: projection.currentRequestId } : undefined;
     const value: VelaPanelManifestation = { projection: Object.freeze({ ...projection, requiredPlanIds: Object.freeze([...projection.requiredPlanIds]) }), view: view(), baseline, output, elements: { shell, reading: flow, manifestation, composer: form } };
     try { options.onManifestation?.(value); } catch { /* Geometry cannot block useful content or grant an action. */ }
   }

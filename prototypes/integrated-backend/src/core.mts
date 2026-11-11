@@ -5,7 +5,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
-import { observeConversationProvider, observeProviderStream, projectMissionExecution, type ReportPublication } from './execution-profiler.mts';
+import { observeConversationProvider, observeProviderStream, projectMissionExecution, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
@@ -442,7 +442,7 @@ export class BackendCore {
           context:input=>this.voiceContext(input.conversationId),validateContext:async(ref,digest)=>this.validateVoiceContext(ref,digest),
           conversationId:()=>this.vela.ensureMissionConversation(),fragment:(fragment,id)=>this.appendVoiceFragment(fragment,id),
           message:id=>{const conversation=this.state.vela!.conversationId;if(!conversation)return null;return this.readVelaConversation(conversation).messages.find(message=>message.id===id)??null;},
-          readReply:async(messageId,contentDigest)=>this.readVoicePrimaryReply(messageId,contentDigest),
+          readReply:async(messageId,contentDigest)=>this.readCurrentVelaReply(messageId,contentDigest),
           seal:(messageId,sessionId)=>{const meta=this.state.vela!.messages[messageId];ensure(meta?.voice?.sessionId===sessionId,'live_canonical_intent_unavailable');meta.voice.sealed=true;},
           acceptIntent:(intent,attemptId)=>this.atomic(()=>this.once('voice-intent:'+attemptId,{intent},()=>{const id=this.ensureVelaConversation();return this.appendVelaMessage(id,{role:'user',content:intent,source:'user',classification:'observed'}).id;})),
           delegate:(binding,intent,messageId)=>this.delegateVoice(binding,intent,messageId),observe:(type,details)=>{
@@ -1063,15 +1063,17 @@ export class BackendCore {
       case 'execution-profile': {
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
         const mission = this.missions.read(request.input.id, scope);
-        let publication: ReportPublication | null = null;
+        let publication: ReportPublication | null = null, delivery: ReportDelivery | null = null;
         if (this.streamScopeMatches(scope, mission.scope)) {
-          const row = this.db.prepare('SELECT json FROM intelligence_events WHERE dedupe=?').get('mission:report:' + mission.id);
-          if (row) {
-            const { eventId, cursor, receivedAt, mission: source } = JSON.parse(String(row.json)) as StreamEvent;
-            publication = { eventId, cursor, receivedAt, timing: source?.reportTiming ?? null };
-          }
+          publication = this.missionReportPublication(mission.id);
+          const link = this.db.prepare('SELECT message_id FROM vela_mission_report_links WHERE mission_id=?').get(mission.id);
+          const messageId = link?.message_id;
+          const meta = typeof messageId === 'string' ? this.state.vela?.messages[messageId] : undefined;
+          if (typeof messageId === 'string' && meta?.missionReport?.missionId === mission.id && meta.missionPresentation &&
+            mission.originConversationId && this.conversationReadAccess(mission.originConversationId, messageId))
+            delivery = { ...meta.missionPresentation, messageId };
         }
-        return projectMissionExecution(mission, publication);
+        return projectMissionExecution(mission, publication, delivery);
       }
       case 'read': {
         ensure(Object.keys(request.input).length === 1, 'invalid_mission_command');
@@ -1983,11 +1985,37 @@ export class BackendCore {
     if(observe)setImmediate(()=>{if(!this.closed)void observe(entry.id).catch(()=>{});});
     return {...message,id:entry.id};
   }
+  private missionReportPublication(id: string): ReportPublication | null {
+    const row = this.db.prepare('SELECT json FROM intelligence_events WHERE dedupe=?').get('mission:report:' + id);
+    if (!row) return null;
+    const { eventId, cursor, receivedAt, mission } = JSON.parse(String(row.json)) as StreamEvent;
+    return { eventId, cursor, receivedAt, timing: mission?.reportTiming ?? null };
+  }
+  private rendererOutputPresentation(received: number, domain?: string, staged?: number) {
+    return { source: 'renderer-visible-frame' as const, receivedAt: now(),
+      stagingToReceiptMs: domain && domain === this.missions.fullProfilingClock() && staged !== undefined && received >= staged ?
+        received - staged : null };
+  }
   private observeVelaOutput(input: CommandMap['rendererVelaOutput']['input']) {
     const received = performance.now();
     const declined = { accepted: false };
-    if (!input || Object.keys(input).length !== 3 ||
-      !identifier(input.executionId) || !identifier(input.requestId) || !identifier(input.messageId)) return declined;
+    if (!input || typeof input !== 'object' || !identifier(input.messageId)) return declined;
+    if ('missionId' in input) {
+      if (Object.keys(input).length !== 2 || !identifier(input.missionId)) return declined;
+      const meta = this.state.vela?.messages[input.messageId];
+      if (!meta?.missionReport || meta.missionReport.missionId !== input.missionId) return declined;
+      try { this.readCurrentVelaReply(input.messageId); }
+      catch (error) {
+        if (error instanceof ServiceError && ['voice_reply_unavailable', 'mission_not_found'].includes(error.code)) return declined;
+        throw error;
+      }
+      if (!meta.missionPresentation) {
+        const timing = this.missionReportPublication(input.missionId)?.timing;
+        this.atomic(() => { meta.missionPresentation = this.rendererOutputPresentation(received, timing?.clock, timing?.stagedMs); });
+      }
+      return { accepted: true };
+    }
+    if (Object.keys(input).length !== 3 || !identifier(input.executionId) || !identifier(input.requestId)) return declined;
     const execution = this.state.executions[input.executionId], timing = execution?.outputTiming;
     if (!execution || !timing || timing.messageId !== input.messageId || timing.parentRequestId !== input.requestId ||
       execution.outputMessageId !== input.messageId || !this.conversationReadAccess(execution.resourceId, input.messageId))
@@ -2003,14 +2031,12 @@ export class BackendCore {
     if (!timing.presentation) {
       const clock = execution.outputStagingClock;
       this.atomic(() => {
-        timing.presentation = { source: 'renderer-visible-frame', receivedAt: now(),
-          stagingToReceiptMs: clock && clock.domain === this.missions.fullProfilingClock() && received >= clock.monotonicMs ?
-            received - clock.monotonicMs : null };
+        timing.presentation = this.rendererOutputPresentation(received, clock?.domain, clock?.monotonicMs);
       });
     }
     return { accepted: true };
   }
-  private readVoicePrimaryReply(messageId:string,contentDigest?:string){
+  private readCurrentVelaReply(messageId:string,contentDigest?:string){
     ensure(!this.closed&&identifier(messageId),'voice_reply_unavailable');const scope=this.velaHost.scope(),state=this.vela.state(),conversationId=state.conversation?.resourceId;ensure(conversationId&&state.presentation?.view==='current'&&this.velaHost.resolve({id:conversationId,kind:'resource'},scope),'voice_reply_unavailable');
     const projection=projectVelaManifestation(state,state.presentation),message=state.conversation!.messages.find(message=>message.id===messageId);ensure(projection.kind!=='none'&&projection.kind!=='action'&&projection.currentMessageId===messageId&&message?.role==='assistant','voice_reply_unavailable');
     if(message.missionReport){
