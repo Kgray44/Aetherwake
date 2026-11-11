@@ -56,12 +56,14 @@ $pages = $null
 try {
   $gpu = @(Get-CimInstance -ClassName Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine | Select-Object -First 8193 -Property Name,UtilizationPercentage)
 } catch {}
-ConvertTo-Json -InputObject @{gpu=$gpu; disk=$disk; diskBytesPerSecond=$diskRate} -Compress
 try {
   $disks = @(Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_PhysicalDisk | Select-Object -First 130 -Property Name,AvgDiskQueueLength,DiskBytesPersec)
-  $disk = @($disks | Where-Object Name -ne '_Total' | Select-Object -ExpandProperty AvgDiskQueueLength)
-  if ($disks.Count -lt 130) { $diskRate = $disks | Where-Object Name -eq '_Total' | Select-Object -First 1 -ExpandProperty DiskBytesPersec }
+  if ($disks.Count -lt 130) {
+    $disk = @($disks | Where-Object Name -ne '_Total' | Select-Object -ExpandProperty AvgDiskQueueLength)
+    $diskRate = $disks | Where-Object Name -eq '_Total' | Select-Object -First 1 -ExpandProperty DiskBytesPersec
+  }
 } catch {}
+ConvertTo-Json -InputObject @{gpu=$gpu; disk=$disk; diskBytesPerSecond=$diskRate} -Compress
 try {
   $interfaces = @(Get-CimInstance -ClassName Win32_PerfFormattedData_Tcpip_NetworkInterface | Select-Object -First 129 -ExpandProperty BytesTotalPersec)
   if ($interfaces.Count -gt 0 -and $interfaces.Count -le 128) { $network = ($interfaces | Measure-Object -Maximum).Maximum }
