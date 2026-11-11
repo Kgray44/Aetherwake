@@ -159,6 +159,11 @@ test('canonical backend runs a native mission without inference, restores eviden
       readiness.unattributedBetweenAttemptsMs) < 0.001);
     assert.ok(profile.requestIntake && profile.admission && profile.requestIntake.clock === profile.admission.clock);
     assert.ok(profile.intakeToAdmissionMs! >= 0);
+    const { first, last } = profile.verifiedTaskMilestones;
+    assert.ok(first && last && first.settlement.eventSeq < last.settlement.eventSeq);
+    assert.equal(first.intakeToSettlementMs, first.settlement.monotonicMs! - profile.requestIntake.monotonicMs);
+    assert.equal(last.intakeToSettlementMs, last.settlement.monotonicMs! - profile.requestIntake.monotonicMs);
+    assert.ok(last.intakeToSettlementMs! >= first.intakeToSettlementMs!);
     assert.equal(profile.userDelivery, null);
     const other = await backend.call('desktop', { type: 'createWorkspace', title: 'Other synthetic workspace', projectId: null });
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: other.workspaces.find(w => w.id !== workspaceId)!.id } });

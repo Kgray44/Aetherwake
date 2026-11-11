@@ -70,6 +70,11 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     await flush();
     const profile = readProfile();
     const [left, right, join] = profile.attempts;
+    assert.deepEqual(profile.verifiedTaskMilestones.first?.settlement, profile.firstVerifiedTask);
+    assert.equal(profile.verifiedTaskMilestones.last?.attemptId, join.id);
+    assert.deepEqual(profile.verifiedTaskMilestones.last?.evidenceIds, join.verifiedEvidenceIds);
+    assert.equal(profile.verifiedTaskMilestones.last?.criterion, 'join');
+    assert.equal(profile.verifiedTaskMilestones.last?.intakeToSettlementMs, null);
     const phases = join.phases;
     assert.ok(phases);
     assert.equal(phases.clock, join.start.clock);
@@ -95,6 +100,15 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     const replay = service.read(mission.id, scope);
     replay.events = [...replay.events, replay.events[0], replay.events.at(-1)!].reverse();
     assert.deepEqual(projectMissionExecution(replay), profile);
+    const crossClock = structuredClone(replay);
+    for (const event of crossClock.events) {
+      if (event.kind === 'created') event.timing!.intakeMonotonicMs = event.timing!.monotonicMs;
+      if (event.seq === join.end!.eventSeq) event.timing!.domain = 'reopened-fixture';
+    }
+    const crossClockMilestones = projectMissionExecution(crossClock).verifiedTaskMilestones;
+    assert.ok(crossClockMilestones.first?.intakeToSettlementMs != null);
+    assert.deepEqual(crossClockMilestones.last?.evidenceIds, join.verifiedEvidenceIds);
+    assert.equal(crossClockMilestones.last?.intakeToSettlementMs, null);
     // Independent expected intervals: [1, 6], [2, 10], [12, 15].
     const times = new Map([[left.start.eventSeq, 1], [left.end!.eventSeq, 6],
       [right.start.eventSeq, 2], [right.end!.eventSeq, 10], [join.start.eventSeq, 12], [join.end!.eventSeq, 15]]);
@@ -262,6 +276,7 @@ test('a source edit fences in-flight results, invalidates downstream proof and p
     assert.equal(stale.tasks[0].detail, 'mission_source_changed_since_verification');
     assert.equal(stale.tasks[1].detail, 'mission_context_changed_during_execution');
     assert(stale.tasks.every(task => !task.attempts[0].evidence && !task.attempts[0].verification && !task.attempts[0].context));
+    assert.deepEqual(projectMissionExecution(stale).verifiedTaskMilestones, { first: null, last: null });
     service.control(id, scope, stale.revision, { type: 'retry', taskId: 'inspect' });
     await flush();
     assert.equal(f.active.get('inspect')?.context.context.manifest.sources[0]?.version, 2);
@@ -273,6 +288,9 @@ test('a source edit fences in-flight results, invalidates downstream proof and p
     await flush();
     assert.equal(read().outcome, 'verified');
     assert(read().tasks.every(task => task.attempts[1].verification?.passed));
+    const milestones = projectMissionExecution(read()).verifiedTaskMilestones;
+    assert.equal(milestones.first?.attemptId, read().tasks[0].attempts[1].id);
+    assert.equal(milestones.last?.attemptId, read().tasks[1].attempts[1].id);
   } finally { await service.close(); f.db.close(); }
 });
 
