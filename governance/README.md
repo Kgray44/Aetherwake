@@ -25,12 +25,12 @@ The repository owner retains final decision authority. Amendments must be explic
 | 02 | [Liquid Intelligence and Motion](02-LIQUID-INTELLIGENCE-AND-MOTION.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
 | 03 | [Projects, Workspaces, and Resources](03-PROJECTS-WORKSPACES-AND-RESOURCES.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
 | 04 | [Conversations and Connected Branches](04-CONVERSATIONS-AND-CONNECTED-BRANCHES.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 05 | [Agents, Tasks, and Workflows](05-AGENTS-TASKS-AND-WORKFLOWS.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 06 | [Vela Intelligence and Adaptation](06-VELA-INTELLIGENCE-AND-ADAPTATION.md) | **Owner-ratified — v1.2.0 clarification, 2026-11-05** |
+| 05 | [Agents, Tasks, and Workflows](05-AGENTS-TASKS-AND-WORKFLOWS.md) | **Owner-ratified baseline + owner-directed FI amendment — v1.2.0, 2026-11-10** |
+| 06 | [Vela Intelligence and Adaptation](06-VELA-INTELLIGENCE-AND-ADAPTATION.md) | **Owner-ratified baseline + owner-directed FI amendment — v1.3.0, 2026-11-10** |
 | 07 | [Notes, Knowledge, and Thought Stream](07-NOTES-KNOWLEDGE-AND-THOUGHT-STREAM.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 08 | [Context Intelligence and Memory](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md) | **Owner-ratified — v1.2.0 clarification, 2026-11-05** |
+| 08 | [Context Intelligence and Memory](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md) | **Owner-ratified baseline + owner-directed FI amendment — v1.3.0, 2026-11-10** |
 | 09 | [Intelligence Streams and Observability](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 10 | [AI Execution Profiler](10-AI-EXECUTION-PROFILER.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
+| 10 | [AI Execution Profiler](10-AI-EXECUTION-PROFILER.md) | **Owner-ratified baseline + owner-directed FI amendment — v1.2.0, 2026-11-10** |
 | 11 | [Timelines and Replay](11-TIMELINES-AND-REPLAY.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
 | 12 | [Codex Execution and Integrations](12-CODEX-EXECUTION-AND-INTEGRATIONS.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
 | 13 | [Platform, Performance, and Displays](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
@@ -69,6 +69,19 @@ The repository owner explicitly accepted **all 17 governing documents, 00–16**
 ## Architecture Recovery and CIE clarification (2026-11-05)
 
 Charters 06, 08 and 16 carry owner-directed v1.2.0 clarifications for one source-backed Aerynth experience, semantic evidence-aware context retrieval, and separate **Architecture Recovery** versus **Full Aerynth Realization** programs. The companion specification, architecture and ADR linked above are accepted design direction **only**: they do not certify Luna/API access, completed semantic memory retrieval, automatic learning or full native UI integration. The existing domain authority and Charter 08 memory lifecycle remain in force. Implementing agents must not turn present-day cleanup into unrequested full-feature development.
+
+## Fluid Intelligence amendments (owner directive 2026-11-10)
+
+The owner directed a coordinated major overhaul of **Charters 05, 06, 08 and 10**. The appended **FI-2026-11-10** sections are binding *design requirements*, not evidence that the runtime, provider features, ARIE, adaptive experiments or spatial workspace have been implemented or release-qualified. Prior ratifications and constitutional authority remain intact.
+
+- **05 — AW-ATW-164–192:** AI Mission Executive versus deterministic task kernel, validated structured execution plans, concurrency and resource-aware scheduling, artifact verification, supervised replanning and quality-preserving optimization.
+- **06 — AW-VELA-218–251:** AI-native cognition from input through response, Fluid Intelligence experiential learning, capability-first model/tool decisions, resource-sensitive intelligence and explainable adaptation. Existing AW-VELA-200–217 remain authoritative.
+- **08 — AW-CIE-165–197:** iterative AI-supported evidence retrieval, provenance and permission boundaries, experiential memory, scoped strategy applicability, correction/rollback propagation and held-out semantic evaluation.
+- **10 — AW-AEP-138–178:** evidence-led optimization, critical-path and quality-adjusted performance measurement, controlled experiments/policy promotion, ARIE integration and the Adaptive Intelligence Workspace.
+
+**Canonical ownership remains unchanged:** MissionService owns task state; AIR/Vela owns cognition; CIE owns context projections and retrieval; AEP owns measurements and experimental evidence; the existing Platform Governor/ARIE owns local resource-policy enforcement; Trust owns permission; observability owns event projections. The expanded work belongs to **Full Aerynth Realization**, not an unapproved enlargement of Architecture Recovery. Companion architecture, supporting-charter revisions, system tests and integration remain separate follow-on deliverables.
+
+The deterministic section-level Governance Context Router indexes normative requirement lines from the charter source files. Future agents must explicitly retrieve applicable FI requirements by task/path or stable requirement ID and validate substantive section sufficiency; a documentation merge is not an implementation test.
 
 ## Rules for contributors and agents
 
