@@ -100,6 +100,8 @@ test('API-planned native verification failure and retry retain one provider exec
     assert.equal(profile.economics.providerCalls, 1);
     assert.equal(profile.economics.simulatedTotalTokens, 140);
     assert.equal(profile.economics.reportedTotalTokens, null);
+    assert.equal(profile.economics.costCoverage, 'simulated-only');
+    assert.deepEqual(profile.economics.usageGaps, []);
     const retry = profile.work.retries.find(attempt => attempt.taskId === 'notes');
     assert.equal(retry?.previousAttemptId, failedAttempt.id);
     assert.equal(retry?.attemptId, retried.id);
