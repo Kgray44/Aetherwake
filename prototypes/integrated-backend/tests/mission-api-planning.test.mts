@@ -4,6 +4,7 @@ import { createCipheriv,createDecipheriv,createHash,randomBytes,randomUUID } fro
 import { createRequire } from 'node:module';
 import { mkdtempSync,rmSync,writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
 import { projectMissionExecution, type MissionExecutionProfile } from '../src/execution-profiler.mts';
@@ -44,6 +45,77 @@ function fixture(velaHistoryContext = false, nativeMedia = false, documents?: Na
     async close(){await core.command('close',{}).catch(()=>{});const part=relative(base,resolve(directory));assert.ok(part.startsWith('aerynth-mission-api-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(directory,{recursive:true,force:true});},
   };
 }
+
+test('API-planned native verification failure and retry retain one provider execution through report presentation', async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    const offer = await f.preview();
+    f.replies.push(body => response(JSON.stringify({ contract: 'aerynth.vela-mission-proposal@1',
+      tasks: ['cpu', 'ram', 'notes'].map(capability => ({ capability, after: [] })),
+      unsupported: graph.unsupported,
+    }), body.model));
+    const requestId = randomUUID();
+    const planned = await f.plan(offer, requestId);
+    const { id } = await f.core.command('missions', { name: 'start',
+      input: { objective, proposalId: requestId, requestId, fingerprint: planned.fingerprint } }) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
+    const readProfile = async () => {
+      const profile = await f.core.command('missions', { name: 'execution-profile', input: { id } });
+      assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+      return profile;
+    };
+    const waitForMission = async (predicate: (mission: MissionProjection) => boolean) => {
+      const deadline = performance.now() + 7000;
+      while (performance.now() < deadline) {
+        const mission = await read();
+        if (predicate(mission)) return mission;
+        await delay(20);
+      }
+      assert.fail('mission did not reach the expected state');
+    };
+    const failed = await waitForMission(mission => mission.tasks.some(task => task.id === 'notes' && task.state === 'failed') &&
+      !mission.tasks.some(task => task.state === 'running'));
+    const failedAttempt = failed.tasks.find(task => task.id === 'notes')!.attempts[0];
+    assert.equal(failedAttempt.verification?.passed, false);
+    const title = 'Minecraft server performance notes';
+    const desktop = await f.core.command('desktop', { type: 'createResource', kind: 'note', title,
+      workspaceId: failed.scope.workspaceId });
+    const note = desktop.resources.find(resource => resource.title === title)!;
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version,
+      content: 'Synthetic Minecraft server lag and performance observation notes.' });
+    await f.core.command('missions', { name: 'control', input: { id, revision: failed.revision,
+      control: { type: 'retry', taskId: 'notes' } } });
+    const settled = await waitForMission(mission => mission.tasks.every(task => task.state === 'verified'));
+    const retried = settled.tasks.find(task => task.id === 'notes')!.attempts[1];
+    assert.deepEqual(retried.context?.sources.map(source => source.ref.id), [note.id]);
+    const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
+    const report = state.conversation?.messages.find(message => message.missionReport?.missionId === id);
+    assert.ok(report);
+    assert.deepEqual(await f.core.command('rendererVelaOutput', { missionId: id, messageId: report.id }), { accepted: true });
+    const profile = await readProfile();
+    assert.equal(profile.cognition?.runs.length, 1);
+    assert.equal(profile.cognition?.runs[0].executionId, profile.planning?.executionId);
+    assert.equal(profile.cognition?.runs[0].providerEvidence, 'simulated');
+    assert.equal(profile.economics.providerCalls, 1);
+    assert.equal(profile.economics.simulatedTotalTokens, 140);
+    assert.equal(profile.economics.reportedTotalTokens, null);
+    const retry = profile.work.retries.find(attempt => attempt.taskId === 'notes');
+    assert.equal(retry?.previousAttemptId, failedAttempt.id);
+    assert.equal(retry?.attemptId, retried.id);
+    assert.ok(retry?.retryRequest && retry.retryRequestToDispatchMs !== null);
+    assert.ok(profile.work.occupancyByOutcome.find(row => row.outcome === 'failed')?.clockSegments
+      .some(segment => segment.attemptIds.includes(failedAttempt.id)));
+    assert.ok(profile.attempts.find(attempt => attempt.executor === 'join.samples')?.predecessors?.includes(retried.id));
+    assert.ok(profile.attempts.every(attempt => attempt.resourceLease?.leaseId));
+    assert.equal(profile.firstMeaningfulOutput?.messageId, report.id);
+    assert.ok(profile.planning?.lifecycle?.planningCommandToRendererReceiptMs != null);
+    assert.equal(profile.quality.objectiveVerified, false);
+    await f.reopen();
+    assert.deepEqual(await readProfile(), profile);
+    assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});
 
 test('actual Core natural Minecraft investigation makes one authorized API graph request, verifies host data and reports incomplete whole-objective coverage',async()=>{
   const f=fixture();try{
