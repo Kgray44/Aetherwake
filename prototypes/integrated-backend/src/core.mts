@@ -5,7 +5,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
-import { observeConversationProvider, observeProviderStream, projectMissionExecution, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
+import { observeConversationProvider, observeProviderStream, projectMissionExecution, type ProviderStreamObserver, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
@@ -781,7 +781,7 @@ export class BackendCore {
       (!checkAdmission || !this.velaQuotaExhausted(assigned.provider, now().slice(0, 10), this.velaRoutingProfiles(scope)) &&
       (assigned.provider !== VELA_API_PROVIDER || this.velaApiRuntime.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay)));
   }
-  private async runMissionSpecialist(context: MissionExecutionContext, observe: (type: TurnEvent['type']) => void): Promise<TurnResult> {
+  private async runMissionSpecialist(context: MissionExecutionContext, observe: ProviderStreamObserver): Promise<TurnResult> {
     const assigned = context.task.specialist;
     ensure(assigned, 'mission_specialist_unavailable');
     if (assigned.provider === VELA_API_PROVIDER) {
@@ -797,6 +797,7 @@ export class BackendCore {
         model: assigned.model, reasoningEffort: assigned.effort, instruction: assigned.instructions,
         prompt: JSON.stringify(context.context.payload), contextDigest: context.context.manifest.payloadDigest,
         lane: 'mission-specialist', oneUse: true, validate: fence,
+        ...(this.missions.fullProfilingClock() ? { observeTransport: (_executionId, timing) => observe.observeTransport(timing) } : {}),
         stage: (executionId, review) => {
           fence();
           ensure(!this.velaQuotaExhausted(VELA_API_PROVIDER, now().slice(0,10), this.velaRoutingProfiles(context.scope)), 'vela_daily_attempt_limit_reached');
@@ -811,7 +812,7 @@ export class BackendCore {
             detached: true, correlationId: context.missionId, payload: { redacted: true, taskId: context.task.id,
               api: { executionId, bodyDigest: review.bodyDigest, contextDigest: review.contextDigest } } });
         },
-        event: event => { fence(); observe(event.type); if (event.type === 'provider/usage') this.record(event.type, this.velaApiTest ? 'simulated' : 'reported',
+        event: event => { fence(); observe.observe(event.type); if (event.type === 'provider/usage') this.record(event.type, this.velaApiTest ? 'simulated' : 'reported',
           undefined, context.attemptId + ':usage', { providerId: VELA_API_PROVIDER, detached: true, correlationId: context.missionId,
             payload: { redacted: true, taskId: context.task.id, usage: event.usage } }); },
         // MissionService owns task results; do not publish worker output as a Vela conversation turn.
@@ -830,7 +831,7 @@ export class BackendCore {
   }
   private async runMissionProvider(scope: MissionScope, task: Pick<MissionTaskPlan, 'id' | 'specialist'>, turn: TurnInput,
     signal: AbortSignal, correlationId: string, requireActiveWorkspace = false,
-    observe?: (type: TurnEvent['type']) => void): Promise<TurnResult> {
+    observe: ProviderStreamObserver | undefined = undefined): Promise<TurnResult> {
     const assigned = task.specialist;
     ensure(assigned && this.missionSpecialistAvailable(scope, task), 'mission_specialist_unavailable');
     ensure(this.missionSpecialistsInFlight + Number(this.active?.providerId === CHATGPT_PLAN_PROVIDER) < 2, 'mission_planner_busy');
@@ -850,9 +851,10 @@ export class BackendCore {
     try {
       const transport = new ResponsesTransport({ ...(this.ordinaryTest ? { fetch: this.ordinaryTest.fetch } : {}),
         limits: { requestBytes: 8192, outputBytes: 2048, timeoutMs: 40_000, streamBytes: 262144 },
+        ...(this.missions.fullProfilingClock() && observe ? { observeTiming: observe.observeTransport } : {}),
         onEvent: event => {
           fence();
-          observe?.(event.type);
+          observe?.observe(event.type);
           if (event.type === 'provider/usage') this.record(event.type, this.ordinaryTest ? 'simulated' : 'reported',
             undefined, turn.executionId + ':usage', { providerId: CHATGPT_PLAN_PROVIDER, detached: true,
               correlationId, payload: { redacted: true, taskId: task.id, usage: event.usage } });
@@ -941,9 +943,10 @@ export class BackendCore {
         let observed:TurnResult|undefined;
         await this.velaApiRuntime.structuredProposal({instruction:MISSION_PROPOSAL_INSTRUCTIONS,payload:{objective,capabilities},schema:MISSION_PROPOSAL_SCHEMA,
           requestId,model:apiPlanner.model,reasoningEffort:apiPlanner.effort,validate:fence,
-          observeEventType:stream.observe,onResult:value=>{observed=value;}},abort.signal);
+          observeEventType:stream.observe,onResult:value=>{observed=value;},
+          ...(this.missions.fullProfilingClock() ? { observeTransport: (_executionId, timing) => stream.observeTransport(timing) } : {})},abort.signal);
         fence();ensure(observed,'mission_planning_response_unavailable');result=observed;proposal=result.partialText;
-      }else{ensure(task&&turn,'mission_planner_unavailable');result=await this.runMissionProvider(scope,task,turn,abort.signal,requestId,true,stream.observe);proposal=result.partialText;}
+      }else{ensure(task&&turn,'mission_planner_unavailable');result=await this.runMissionProvider(scope,task,turn,abort.signal,requestId,true,stream);proposal=result.partialText;}
       const validatingAt = performance.now();
       const planner=apiPlanner??selection!;
       ensure(result.outcome === 'completed' && result.dispatched && result.responseId && result.reportedModel === planner.model,

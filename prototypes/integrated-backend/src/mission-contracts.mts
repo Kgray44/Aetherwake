@@ -1,7 +1,7 @@
 import type { MissionContextPackage } from '../../vela-core/src/mission-context.mts';
 import type { ReasoningEffort } from '../../openai-provider/model-controls.ts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
-import type { StreamEvent } from './contracts.mts';
+import type { ProviderStreamTiming, StreamEvent } from './contracts.mts';
 import type { MissionTeam, MissionTeamSave } from './mission-teams.mts';
 
 export const MISSION_CONTRACT = 'aerynth.vela-mission@1' as const;
@@ -64,7 +64,7 @@ export interface MissionPlanningReceipt {
   startedAt: string;
   durationMs: number;
   /** Stream and result offsets use the planning start. Validation is an elapsed duration. */
-  timing?: { responseCreatedMs: number | null; firstTextDeltaMs: number | null; providerResultMs: number; validationMs: number };
+  timing?: ProviderStreamTiming & { providerResultMs: number; validationMs: number };
   providerEvidence?: 'reported' | 'simulated';
   usage?: ReportedUsage;
 }
@@ -123,7 +123,7 @@ export interface MissionAttempt {
   timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number; phases?: MissionAttemptPhaseTiming };
   telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string;
     providerEvidence?: MissionPlanningReceipt['providerEvidence'];
-    providerStream?: { responseCreatedMs: number | null; firstTextDeltaMs: number | null } };
+    providerExecutionId?: string; providerStream?: ProviderStreamTiming };
 }
 export type MissionTaskState = 'queued' | 'running' | 'cancelling' | 'verified' | 'failed' | 'blocked' | 'cancelled' | 'uncertain';
 export interface MissionTask extends MissionTaskPlan {
