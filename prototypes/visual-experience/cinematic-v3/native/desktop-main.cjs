@@ -116,6 +116,8 @@ const source = {
 };
 const verifyAirPlan = process.argv.includes("--integration-vela-air-plan");
 const verifyMissions = process.argv.includes("--integration-vela-missions");
+const missionProfilerFlags = process.argv.filter(arg => arg.startsWith("--missions-aep-benchmark="));
+const missionProfilerMode = missionProfilerFlags[0]?.slice("--missions-aep-benchmark=".length);
 const verify = verifyAirPlan ||
   verifyMissions ||
   process.argv.includes("--integration-chat-motion") ||
@@ -166,6 +168,14 @@ if (verifyMissions) {
   if(process.argv.includes('--missions-persistence-reopen-only'))require('./mission-persistence.cjs').assertMissionPersistenceReopen({profile:privateRoot,argv:process.argv,source});
   else if(!/^review-vela-missions-\d+$/u.test(path.basename(privateRoot))||existsSync(privateRoot))throw Error('fresh_offline_mission_profile_required');
 }
+if (missionProfilerFlags.length && (missionProfilerFlags.length !== 1 || !verifyMissions ||
+  !["off", "minimal", "full"].includes(missionProfilerMode) ||
+  !process.argv.includes("--missions-aep-presentation-only") || !process.argv.includes("--missions-aep-composer") ||
+  process.argv.some(arg => arg === "--bootstrap-vela-api" ||
+    arg.startsWith("--integration-") && arg !== "--integration-vela-missions" ||
+    arg.startsWith("--missions-") &&
+    ![missionProfilerFlags[0], "--missions-aep-presentation-only", "--missions-aep-composer"].includes(arg))))
+  throw Error("owned_mission_profiler_benchmark_required");
 if(process.argv.includes('--weather-deny-fixture')&&(!verifyMissions||!process.argv.includes('--missions-weather-product-only')||!process.env.LOCALAPPDATA||path.resolve(path.dirname(privateRoot)).toLowerCase()!==path.resolve(process.env.LOCALAPPDATA,'Aerynth').toLowerCase()||process.argv.filter(value=>value.startsWith('--profile=')).length!==1))throw Error('owned_weather_fixture_journey_required');
 if (verifyAirPlan && (!/^review-vela-air-plan-\d+$/u.test(path.basename(privateRoot)) || !existsSync(privateRoot)))
   throw Error("signed_in_air_test_profile_required");
@@ -373,6 +383,7 @@ app.whenReady().then(async () => {
       "--native-maintenance",
       "--native-computer",
       "--native-documents",
+      ...(missionProfilerMode ? ["--mission-profiler-benchmark=" + missionProfilerMode] : []),
     ],
     { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
   );
@@ -738,7 +749,7 @@ app.whenReady().then(async () => {
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && (isVelaRead(input) || input?.name === "submissionStatus")) &&
-        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experiment-hypothesis", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
+        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experiment-hypothesis", "compare-native-samples", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
         !(command === "workspaceRecovery" && ["state", "preview"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
@@ -1150,6 +1161,7 @@ app.whenReady().then(async () => {
     if (verifyMissions) {
       await require("./integration-vela-missions.cjs").verify({
         win, app, privateRoot, call, source, startupErrors, moduleStartedMonotonicMs,systemFactsAudit:()=>windowsSystemBroker.audit(),
+        benchmarkMode: missionProfilerMode,
       });
       return;
     }

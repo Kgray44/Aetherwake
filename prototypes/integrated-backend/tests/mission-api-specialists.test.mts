@@ -190,7 +190,11 @@ test('API planned temporary specialists consume only named verified handoffs and
     const tasks = new Map(done.tasks.map(task => [task.id, task]));
     for (const task of done.tasks) for (const dependency of task.dependencies) assert.ok(Date.parse(task.attempts[0].admittedAt) >= Date.parse(tasks.get(dependency)!.attempts[0].finishedAt!));
     assert.equal(f.requests.length, 4); assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 4);
-    assert.equal(done.profile.providerCalls, 4); assert.equal(done.profile.reportedTotalTokens, 200);
+    assert.equal(done.profile.providerCalls, 4);
+    assert.equal(done.profile.reportedTotalTokens, null);
+    const profile = await f.core.command('missions', { name: 'execution-profile', input: { id: done.id } });
+    assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+    assert.equal(profile.economics.simulatedTotalTokens, 200);
     assert.equal(done.tasks.find(task => task.id === 'temporary-specialist-1')!.specialist?.role, 'Processor experiment reviewer');
   } finally { await f.close(); }
 });

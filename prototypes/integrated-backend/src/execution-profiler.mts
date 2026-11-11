@@ -1,4 +1,5 @@
-import type { MissionAdmission, MissionAdmissionReason, MissionAttempt, MissionAttemptPhaseTiming, MissionEvent, MissionProjection } from './mission-contracts.mts';
+import { isDeepStrictEqual } from 'node:util';
+import type { Mission, MissionAdmission, MissionAdmissionReason, MissionAttempt, MissionAttemptPhaseTiming, MissionEvent, MissionProjection } from './mission-contracts.mts';
 import type { ConversationProviderTiming, MissionReportTiming, ProviderStreamTiming, StreamEvent, VelaRouteTiming } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
 import type { TurnEvent, TurnTransportTiming } from '../../openai-provider/contracts.mts';
@@ -97,9 +98,9 @@ function reportedUsage(usage?: ReportedUsage): ReportedUsage | null {
   const { inputTokens, outputTokens, totalTokens, cachedInputTokens, cacheWriteInputTokens, reasoningOutputTokens } = usage;
   if (!count(inputTokens) || !count(outputTokens) || !count(totalTokens)) return null;
   return { source: usage.source, inputTokens, outputTokens, totalTokens,
-    ...(count(cachedInputTokens) ? { cachedInputTokens } : {}),
-    ...(count(cacheWriteInputTokens) ? { cacheWriteInputTokens } : {}),
-    ...(count(reasoningOutputTokens) ? { reasoningOutputTokens } : {}) };
+    ...(count(cachedInputTokens) && cachedInputTokens <= inputTokens ? { cachedInputTokens } : {}),
+    ...(count(cacheWriteInputTokens) && cacheWriteInputTokens <= inputTokens ? { cacheWriteInputTokens } : {}),
+    ...(count(reasoningOutputTokens) && reasoningOutputTokens <= outputTokens ? { reasoningOutputTokens } : {}) };
 }
 
 const tokenFields = ['totalTokens', 'inputTokens', 'outputTokens', 'cachedInputTokens',
@@ -109,6 +110,64 @@ type TokenObservation = { observedTokens: number | null; receipts: number };
 
 function emptyTokenObservations() {
   return Object.fromEntries(tokenFields.map(field => [field, { observedTokens: null, receipts: 0 }])) as Record<TokenField, TokenObservation>;
+}
+
+type UsageClaim = { executionId?: string; receipt: ReportedUsage | null; source: 'reported' | 'simulated' | null };
+
+function reconcileMissionUsage(attempts: Iterable<MissionAttempt>, plan: Mission['planning'], additional: UsageClaim[] = []) {
+  const claims: UsageClaim[] = [];
+  for (const { telemetry } of attempts) {
+    if (!telemetry) continue;
+    const executionId = telemetry.providerCalls === 1 ? telemetry.providerExecutionId : undefined;
+    const receipt = reportedUsage(telemetry.usage);
+    if (executionId || receipt) claims.push({ executionId, receipt, source: telemetry.providerEvidence ?? null });
+  }
+  if (plan) claims.push({ executionId: plan.executionId, receipt: reportedUsage(plan.usage), source: plan.providerEvidence ?? null });
+  for (const receipt of plan?.context?.usage ?? [])
+    claims.push({ receipt: reportedUsage(receipt), source: plan?.providerEvidence ?? null });
+  claims.push(...additional);
+  const usage: { receipt: ReportedUsage; source: UsageClaim['source'] }[] = [];
+  const executionClaims = new Map<string, UsageClaim[]>();
+  for (const claim of claims) {
+    if (claim.executionId) {
+      const group = executionClaims.get(claim.executionId) ?? [];
+      group.push(claim);
+      executionClaims.set(claim.executionId, group);
+    } else if (claim.receipt) usage.push({ receipt: claim.receipt, source: claim.source });
+  }
+  const conflictingUsageExecutionIds: string[] = [];
+  let duplicateCalls = 0;
+  for (const [id, group] of executionClaims) {
+    duplicateCalls += group.length - 1;
+    const sources = new Set(group.flatMap(claim => claim.source ? [claim.source] : []));
+    let receipt: ReportedUsage | null = null;
+    let conflict = sources.size > 1;
+    for (const claim of group) {
+      if (!claim.receipt) continue;
+      const observed = claim.receipt;
+      if (tokenFields.some(field => receipt?.[field] !== undefined && observed[field] !== undefined && receipt[field] !== observed[field])) {
+        conflict = true;
+        break;
+      }
+      receipt = Object.assign({}, receipt, observed);
+    }
+    if (conflict) conflictingUsageExecutionIds.push(id);
+    else if (receipt) usage.push({ receipt, source: sources.values().next().value ?? null });
+  }
+  return { usage, conflictingUsageExecutionIds, duplicateCalls };
+}
+
+/** Compact planning and attempt summary. The execution profile also includes linked cognitive receipts. */
+export function summarizeMissionUsage(attempts: readonly MissionAttempt[], plan: Mission['planning'], providerCalls: number | null) {
+  const { usage, conflictingUsageExecutionIds, duplicateCalls } = reconcileMissionUsage(attempts, plan);
+  const reported = usage.filter(claim => claim.source === 'reported');
+  const total = reported.reduce((sum, claim) => sum + claim.receipt.totalTokens, 0);
+  return {
+    usageReports: usage.length,
+    reportedTotalTokens: reported.length && Number.isSafeInteger(total) ? total : null,
+    completeReportedUsage: providerCalls !== null && conflictingUsageExecutionIds.length === 0 &&
+      reported.length === usage.length && reported.length === providerCalls - duplicateCalls,
+  };
 }
 
 function interval(id: string, start: AttemptBoundary, end: AttemptBoundary | null): Interval | null {
@@ -465,46 +524,13 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   } : null;
   const executiveRuns = cognition?.runs.filter(run => run.attribution.owner.kind === 'checkpoint') ?? [];
   // Attempt receipts can outlive their lifecycle events in the bounded journal.
-  const claims = Array.from(byAttempt.values()).flatMap(({ attempt }) => {
-    const telemetry = attempt.telemetry;
-    return telemetry ? [{ executionId: telemetry.providerCalls === 1 ? telemetry.providerExecutionId : undefined,
-      receipt: reportedUsage(telemetry.usage), source: telemetry.providerEvidence ?? null }] : [];
-  });
-  if (plan) claims.push({ executionId: plan.executionId, receipt: planningUsage, source: plan.providerEvidence ?? null });
-  for (const receipt of plan?.context?.usage ?? [])
-    claims.push({ executionId: undefined, receipt: reportedUsage(receipt), source: plan?.providerEvidence ?? null });
-  for (const run of executiveRuns) if (run.dispatched === true)
-    claims.push({ executionId: run.executionId, receipt: run.usage, source: run.providerEvidence });
-  const usage: { receipt: ReportedUsage; source: 'reported' | 'simulated' | null }[] = [];
-  const executionClaims = new Map<string, typeof claims>();
-  for (const claim of claims) {
-    if (claim.executionId) {
-      const group = executionClaims.get(claim.executionId) ?? [];
-      group.push(claim);
-      executionClaims.set(claim.executionId, group);
-    } else if (claim.receipt) usage.push({ receipt: claim.receipt, source: claim.source });
-  }
-  const conflictingUsageExecutionIds: string[] = [];
-  let duplicateCalls = 0;
-  for (const [id, group] of executionClaims) {
-    duplicateCalls += group.length - 1;
-    const sources = new Set(group.flatMap(claim => claim.source ? [claim.source] : []));
-    let receipt: ReportedUsage | null = null;
-    let conflict = sources.size > 1;
-    for (const claim of group) {
-      if (!claim.receipt) continue;
-      const observed = claim.receipt;
-      if (tokenFields.some(field => receipt?.[field] !== undefined && observed[field] !== undefined && receipt[field] !== observed[field])) {
-        conflict = true;
-        break;
-      }
-      receipt = Object.assign({}, receipt, observed);
-    }
-    if (conflict) conflictingUsageExecutionIds.push(id);
-    else if (receipt) usage.push({ receipt, source: sources.values().next().value ?? null });
-  }
+  const dispatchedExecutiveRuns = executiveRuns.filter(run => run.dispatched === true);
+  const { usage, duplicateCalls, conflictingUsageExecutionIds } = reconcileMissionUsage(
+    Array.from(byAttempt.values(), ({ attempt }) => attempt), plan, dispatchedExecutiveRuns.map(run => ({
+      executionId: run.executionId, receipt: run.usage, source: run.providerEvidence,
+    })));
   const knownProviderCalls = profile.providerCalls === null ? null :
-    profile.providerCalls + executiveRuns.filter(run => run.dispatched === true).length;
+    profile.providerCalls + dispatchedExecutiveRuns.length;
   const providerCalls = knownProviderCalls !== null && knownProviderCalls >= duplicateCalls &&
     !cognition?.truncated && !executiveRuns.some(run => run.dispatched === null) ? knownProviderCalls - duplicateCalls : null;
   const usageReceipts = { reported: 0, simulated: 0, unattributed: 0,
@@ -536,7 +562,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const timeToSettlement = complete && !active && initial ? interval(mission.id, initial, lastSettlement) : null;
   const path = complete && !active ? criticalPath(attempts) : null;
   const readinessPath = complete && !active ? dependencyReadinessPath(attempts, initial) : null;
-  let workerBudgetEvidence = null;
+  let workerBudgetCandidate = null;
   if (objectiveVerified && readinessPath) {
     for (const [index, node] of readinessPath.attempts.entries()) {
       const trace = traceByAttempt.get(node.attemptId);
@@ -544,21 +570,32 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       const budget = ready?.blockers['worker-budget'];
       const admission = trace?.resourceAdmission;
       const observedReadyWaitMs = index === 0 ? readinessPath.entry?.observedReadyWaitMs : node.observedReadyWaitMs;
-      if (!trace?.end || !admission || !ready || !budget || observedReadyWaitMs == null || observedReadyWaitMs <= 0 ||
+      if (!trace?.end || !trace.predecessors || !admission || !ready || !budget || observedReadyWaitMs == null || observedReadyWaitMs <= 0 ||
         currentProofs.get(node.taskId)?.attemptId !== node.attemptId ||
         !Number.isSafeInteger(budget.samples) || budget.samples < 1 || !Number.isFinite(budget.lastObservedMs) ||
         budget.lastObservedMs < ready.firstObservedMs || budget.lastObservedMs > node.assemblyStartedMs ||
-        (workerBudgetEvidence && workerBudgetEvidence.observedReadyWaitMs >= observedReadyWaitMs)) continue;
-      workerBudgetEvidence = { taskId: node.taskId, attemptId: node.attemptId, clock: readinessPath.clock,
-        attemptPlanRevision: trace.planRevision, eventSeqs: [trace.start.eventSeq, trace.end.eventSeq] as const,
-        observedReadyWaitMs, blockers: ready.blockers,
-        admissionAtDispatch: admission, verifiedEvidenceIds: trace.verifiedEvidenceIds };
+        (workerBudgetCandidate && workerBudgetCandidate.evidence.observedReadyWaitMs >= observedReadyWaitMs)) continue;
+      workerBudgetCandidate = {
+        applicability: { taskId: node.taskId, executor: trace.executor, predecessorAttemptIds: trace.predecessors },
+        evidence: { taskId: node.taskId, attemptId: node.attemptId, clock: readinessPath.clock,
+          attemptPlanRevision: trace.planRevision, eventSeqs: [trace.start.eventSeq, trace.end.eventSeq] as const,
+          observedReadyWaitMs, blockers: ready.blockers,
+          admissionAtDispatch: admission, verifiedEvidenceIds: trace.verifiedEvidenceIds },
+      };
     }
   }
-  const hypothesis = workerBudgetEvidence ? {
-    id: `${mission.id}:${mission.planRevision}:${workerBudgetEvidence.attemptId}:worker-budget`,
+  const hypothesis = workerBudgetCandidate && readinessPath ? {
+    id: `${mission.id}:${mission.planRevision}:${workerBudgetCandidate.evidence.attemptId}:worker-budget`,
     status: 'hypothesis' as const, owner: 'arie' as const, kind: 'compare-worker-budget' as const,
-    missionId: mission.id, planRevision: mission.planRevision, evidence: workerBudgetEvidence,
+    missionId: mission.id, planRevision: mission.planRevision, ...workerBudgetCandidate,
+    baseline: { missionRevision: mission.revision, dependencyPathMs: readinessPath.elapsedMs,
+      occupiedCriticalPathMs: path?.durationMs ?? null, workerMs: total?.workerMs ?? null, overlapMs: total?.overlapMs ?? null,
+      admittedWorkerLimit: workerBudgetCandidate.evidence.admissionAtDispatch.workerLimit },
+    comparison: { change: 'one-approved-worker-limit' as const, restoreOriginalWorkerLimit: true,
+      qualityDimensions: ['verified-objective', 'criterion-evidence', 'scope-compliance', 'foreground-responsiveness'] as const },
+    uncertainty: { causalAttribution: 'unverified' as const, matchedComparison: 'unavailable' as const,
+      independentEvaluation: 'unavailable' as const,
+      otherObservedBlockers: Object.keys(workerBudgetCandidate.evidence.blockers).filter(reason => reason !== 'worker-budget') },
     metrics: ['first-verified-result', 'mission-completion', 'foreground-responsiveness'] as const,
     guardrails: ['equivalent-verified-work', 'independent-quality-evaluation', 'foreground-interference', 'resource-reserve'] as const,
   } : null;
@@ -730,4 +767,46 @@ export function resolveMissionHypothesis(mission: MissionProjection, hypothesisI
   return hypothesis?.id === hypothesisId ? {
     kind: 'experiment-hypothesis' as const, missionRevision: mission.revision, hypothesis,
   } : null;
+}
+
+const nativeSampleExecutors = new Set(['sample.cpu', 'sample.ram', 'join.samples']);
+
+/** Compare two already-authorized observations without attributing their difference to a policy. */
+export function compareNativeSamples(baseline: MissionProjection, candidate: MissionProjection) {
+  const describe = (mission: MissionProjection) => {
+    const profile = projectMissionExecution(mission);
+    const workload = {
+      objective: mission.objective, criteria: mission.criteria,
+      tasks: mission.tasks.map(({ id, objective, executor, criterion, dependencies, claims, timeoutMs, maxAttempts }) =>
+        ({ id, objective, executor, criterion, dependencies, claims, timeoutMs, maxAttempts })),
+    };
+    const attempts = mission.tasks.flatMap(task => task.attempts);
+    const native = !mission.planning && !mission.team && profile.economics.providerCalls === 0 &&
+      mission.tasks.length > 0 && mission.tasks.every(task => nativeSampleExecutors.has(task.executor) &&
+        !task.specialist && !task.teamMember && !task.projectCheck && task.claims.every(claim => claim.mode === 'read'));
+    return { native, workload, observation: {
+      missionId: mission.id, missionRevision: mission.revision, planRevision: mission.planRevision,
+      outcome: mission.outcome, objectiveVerified: profile.quality.objectiveVerified,
+      attemptIds: attempts.map(attempt => attempt.id),
+      verifiedEvidenceIds: profile.quality.criteria.flatMap(criterion => criterion.proofs.flatMap(proof => proof.evidenceIds)),
+      admissionEventSeq: profile.admission?.eventSeq ?? null, settlementEventSeq: profile.lastSettlement?.eventSeq ?? null,
+      elapsedMs: profile.admissionToLastSettlementMs, workerMs: profile.work.workerMs, overlapMs: profile.work.overlapMs,
+      observedWorkerLimits: [...new Set(attempts.flatMap(attempt => attempt.admission ? [attempt.admission.workerLimit] : []))],
+    } };
+  };
+  const a = describe(baseline), b = describe(candidate);
+  const from = a.observation, to = b.observation;
+  const status = !a.native || !b.native ? 'unsupported-workload' :
+    !isDeepStrictEqual(a.workload, b.workload) ? 'different-workload' :
+    !from.objectiveVerified || !to.objectiveVerified ? 'verification-incomplete' :
+    from.elapsedMs === null || to.elapsedMs === null ? 'timing-unavailable' : 'observed-pair';
+  const delta = (before: number | null, after: number | null) => before === null || after === null ? null : after - before;
+  return {
+    kind: 'native-sample-comparison' as const, status,
+    baseline: from, candidate: to, independentEvaluation: null,
+    deltas: status === 'observed-pair' ? {
+      elapsedMs: delta(from.elapsedMs, to.elapsedMs), workerMs: delta(from.workerMs, to.workerMs),
+      overlapMs: delta(from.overlapMs, to.overlapMs),
+    } : null,
+  };
 }
