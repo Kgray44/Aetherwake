@@ -47,10 +47,11 @@ function fixture(velaHistoryContext = false, liveCredential?: string) {
 
 async function verifyReviewedPlanningRetry(live?: { credential: string; model: string }) {
   const f = fixture(false, live?.credential);
+  const reviewObjective = live ? `${objective} Limit this investigation to three independent native tasks: measure local CPU, measure local RAM, and inspect workspace notes. Use no specialist agents, external services, or repository inspection. Report missing server evidence.` : objective;
   try {
     await f.ready();
     if (live) await f.pin({ providerId: 'openai-api-vela', model: live.model });
-    const offer = await f.preview();
+    const offer = await f.preview(reviewObjective);
     assert.equal(offer.planner?.provider, 'openai-api-vela');
     assert.equal(offer.notes, undefined);
     if (live) assert.equal(offer.planner?.model, live.model);
@@ -66,7 +67,7 @@ async function verifyReviewedPlanningRetry(live?: { credential: string; model: s
     assert.ok(planned.plan.tasks.filter(task => task.id === 'cpu' || task.id === 'ram')
       .every(task => task.dependencies.length === 0));
     const { id } = await f.core.command('missions', { name: 'start',
-      input: { objective, proposalId: requestId, requestId, fingerprint: planned.fingerprint } }) as MissionProjection;
+      input: { objective: reviewObjective, proposalId: requestId, requestId, fingerprint: planned.fingerprint } }) as MissionProjection;
     const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
     const readProfile = async () => {
       const profile = await f.core.command('missions', { name: 'execution-profile', input: { id } });
