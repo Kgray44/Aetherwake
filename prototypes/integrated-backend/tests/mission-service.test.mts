@@ -126,6 +126,16 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.deepEqual(withoutLifecycle.quality.criteria, profile.quality.criteria);
     assert.equal(withoutLifecycle.quality.objectiveVerified, true);
     assert.ok(withoutLifecycle.experiment.blockers.includes('incomplete-causal-timing'));
+    const differentReportClock = {
+      eventId: 'test-report', cursor: 1, receivedAt: profile.lastSettlement!.utc,
+      timing: { clock: 'reopened-report-clock', compositionStartedMs: 1, composedMs: 3, stagedMs: 4 },
+    };
+    const laterReport = projectMissionExecution(replay, differentReportClock);
+    assert.equal(laterReport.settlementToReportStagedMs, null);
+    assert.deepEqual(laterReport.reportLatency, {
+      publicationEventId: 'test-report', settlementEventSeq: null, settlementToCompositionMs: null,
+      compositionMs: 2, compositionToStagingMs: 1, stagingToRendererReceiptMs: null,
+    });
     const crossClock = structuredClone(replay);
     for (const event of crossClock.events) {
       if (event.kind === 'created') event.timing!.intakeMonotonicMs = event.timing!.monotonicMs;
