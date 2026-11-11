@@ -13,8 +13,16 @@ const backend = new Backend({ path: join(scratch, 'state.sqlite'), contentPolicy
 const objective = 'Measure CPU and RAM';
 const pollIntervalMs = 25;
 const settledPolls = 6;
+const missionEvents: { missionId: string; eventId: string; seq?: number; receivedMs: number }[] = [];
+const unsubscribe = backend.subscribe(event => {
+  if (!event.mission || (event.type !== 'vela.mission/settled' && event.type !== 'vela.mission/report-posted')) return;
+  missionEvents.push({ missionId: event.mission.id, eventId: event.eventId,
+    seq: event.mission.seq, receivedMs: performance.now() });
+});
 
 async function sample(index: number) {
+  missionEvents.length = 0;
+  const sampleStartedMs = performance.now();
   const preview = await backend.call('missions', { name: 'preview', input: { objective } }) as MissionPreview;
   const mission = await backend.call('missions', { name: 'start', input: {
     objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
@@ -22,11 +30,11 @@ async function sample(index: number) {
   assert.ok(mission && 'id' in mission);
   const id = mission.id;
   const read = async (name: 'read' | 'execution-profile') => {
-    const startedAt = performance.now();
+    const startedMs = performance.now() - sampleStartedMs;
     const result = await backend.call('missions', { name, input: { id } });
-    const elapsedMs = performance.now() - startedAt;
+    const endedMs = performance.now() - sampleStartedMs;
     assert.ok(result && 'outcome' in result);
-    return { result, elapsedMs };
+    return { result, startedMs, endedMs, elapsedMs: endedMs - startedMs };
   };
   const pairs = [];
   const deadline = performance.now() + 7000;
@@ -47,6 +55,8 @@ async function sample(index: number) {
     pairs.push({ readFirst, missionState: raw.outcome, profileState: profile.outcome, sameState,
       afterFirstVerifiedPair: verifiedPolls > 0, reportPublished: profile.reportPublication !== null,
       missionReadMs: missionRead.elapsedMs, profileReadMs: profileRead.elapsedMs,
+      missionReadBoundsMs: [missionRead.startedMs, missionRead.endedMs],
+      profileReadBoundsMs: [profileRead.startedMs, profileRead.endedMs],
       deltaMs: sameState ? profileRead.elapsedMs - missionRead.elapsedMs : null });
     if (raw.outcome === 'verified' && profile.outcome === 'verified') {
       assert.ok(sawLiveAttempt, 'worker benchmark missed the live native attempt');
@@ -57,8 +67,18 @@ async function sample(index: number) {
       ]);
       assert.deepEqual(profile.verifiedTaskMilestones.last?.evidenceIds, raw.tasks.at(-1)?.attempts.at(-1)?.verification?.evidenceIds);
       if (++verifiedPolls > settledPolls) {
-        assert.ok(profile.reportPublication?.eventId, 'worker benchmark missed report publication');
-        return { pairs };
+        const publicationEventId = profile.reportPublication?.eventId;
+        const settlementSeq = profile.lastSettlement?.eventSeq;
+        assert.ok(publicationEventId && settlementSeq, 'worker benchmark missed report or settlement provenance');
+        const settlement = missionEvents.find(event => event.missionId === id && event.seq === settlementSeq);
+        const publication = missionEvents.find(event => event.missionId === id && event.eventId === publicationEventId);
+        assert.ok(settlement && publication && settlement.receivedMs <= publication.receivedMs,
+          'worker benchmark missed ordered settlement and report events');
+        return { pairs, eventDelivery: {
+          settlementEventId: settlement.eventId, settlementSeq, publicationEventId,
+          settlementReceivedMs: settlement.receivedMs - sampleStartedMs,
+          publicationReceivedMs: publication.receivedMs - sampleStartedMs,
+        }, reportLatency: profile.reportLatency };
       }
     }
     await delay(pollIntervalMs);
@@ -79,8 +99,9 @@ try {
   assert.equal(activity.codexConnections, 0);
   console.log(JSON.stringify({ contract: 'aerynth.profiler-worker-benchmark@1', node: process.version, platform: process.platform,
     pollIntervalMs, settledPolls, warmups: 1, samples, activity,
-    boundary: 'Default full profiler and file-backed SQLite on a Node worker thread. Both reads include backend work, messaging and payload cloning. Pair deltas exclude revisions or outcomes changed between calls. Native execution uses actual CPU and RAM reads. Electron IPC, physical disk latency, renderer and provider overhead are unmeasured.' }));
+    boundary: 'Default full profiler and file-backed SQLite on a Node worker thread. Both reads include backend work, messaging and payload cloning. Pair deltas exclude revisions or outcomes changed between calls. Read bounds and event delivery use the caller clock from sample entry; reportLatency uses separately measured backend boundaries. Native execution uses actual CPU and RAM reads. Electron IPC, physical disk latency, renderer and provider overhead are unmeasured.' }));
 } finally {
+  unsubscribe();
   await backend.close();
   const owned = realpathSync(scratch);
   assert.equal(dirname(owned), root);
