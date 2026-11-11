@@ -1041,6 +1041,7 @@ export class BackendCore {
     ensure(inputs.offer.fingerprint === fingerprint, 'mission_preview_changed');
     const { catalog, capabilities, selection, apiPlanner, notes, files, project, instructions } = inputs;
     ensure(offer.planner && (apiPlanner||selection), 'mission_planner_unavailable');
+    const reviewedMissionCapabilities = offer.planner.capabilities;
     ensure(!this.missionPlanningRun, 'mission_planner_busy');
     for (const [id, value] of this.missionProposals) if (value.expires <= Date.now()) this.missionProposals.delete(id);
     ensure(this.missionProposals.size < 8, 'mission_planning_capacity');
@@ -1080,7 +1081,7 @@ export class BackendCore {
             sourceId: source.id, sourceKind: source.sourceKind, title: source.title, revision: String(source.version),
             proofDigest: source.proofDigest, text: source.text,
           })), apiPlanner.version, apiPlanner.model, fence, AbortSignal.any([abort.signal, AbortSignal.timeout(40_000)]),
-          { planningRequestId: requestId, observeResult: result => {
+          { planningRequestId: requestId, reviewedMissionCapabilities, observeResult: result => {
             if (result.dispatched) providerCalls++;
             if (result.usage) usage.push(result.usage);
           }, ...(projectCheck && approvedProjectCheck ? { reviewedProjectTests: projectCheck.files,

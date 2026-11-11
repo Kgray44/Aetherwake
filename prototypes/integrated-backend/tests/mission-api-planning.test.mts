@@ -437,7 +437,9 @@ test('preselected tracked tests bind provider review and Start without disclosin
     const reply = (value: unknown, disclosed: boolean) => (body: any) => {
       const payload = JSON.parse(body.input[0].content);
       assert.deepEqual(payload.reviewedProjectTests, disclosed ? ['harness.test.mjs'] : undefined);
-      for (const secret of [repo, freshCheck.digest, freshCheck.head, process.execPath]) assert.ok(!JSON.stringify(payload).includes(secret));
+      if (payload.stage) assert.deepEqual(payload.reviewedMissionCapabilities, disclosed ? offer.planner?.capabilities : undefined);
+      for (const secret of [repo, freshCheck.digest, freshCheck.head, process.execPath])
+        assert.ok(!JSON.stringify(payload).includes(JSON.stringify(secret).slice(1, -1)));
       return response(JSON.stringify(value), body.model);
     };
     f.replies.push(reply(perceive('day'), false), reply(assess('day', 'The pump inspection is on Tuesday.'), false),

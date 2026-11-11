@@ -62,7 +62,7 @@ export type SemanticHistoryCall = (
   | { stage: 'interpret'; request: string; reviewedSourceTitles?: readonly string[]; reviewedMissionGap?: string }
   | { stage: 'assess'; request: string; proposedClarification?: string; needs: readonly Need[];
     excerpts: readonly { handle: string; text: string; title?: string; partial?: true; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number }
-) & { missionPlanning?: true; reviewedProjectTests?: readonly string[] };
+) & { missionPlanning?: true; reviewedProjectTests?: readonly string[]; reviewedMissionCapabilities?: readonly string[] };
 
 interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan }
 interface SemanticHistoryOwner<T extends SemanticHistorySource> {
