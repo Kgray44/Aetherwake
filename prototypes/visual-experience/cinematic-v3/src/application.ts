@@ -320,6 +320,11 @@ export function installApplication(hooks: Hooks) {
       await run({ type: "navigate", target: { kind: "workspace", workspaceId } });
       if (state?.activeWorkspaceId === workspaceId) surfaces.close("vela");
     },
+    async (intent, missionCheckpoint) => {
+      const result = await velaClient.request({ intent, missionCheckpoint, resourceIds: [], authorizeProvider: true,
+        semanticContext: true, providerId: "openai-api-vela" });
+      if (result?.state !== "responded") throw Error(result?.errorCode ?? "vela_mission_checkpoint_unavailable");
+    },
   );
   document.addEventListener("visibilitychange", velaMissions.observe);
   let velaOpen = false;

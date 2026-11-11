@@ -17,6 +17,7 @@ import type {
   MissionWorkroomPreview,
 } from "../../../integrated-backend/src/mission-contracts.mts";
 import type { MissionTeam, MissionTeamSave } from "../../../integrated-backend/src/mission-teams.mts";
+import type { VelaMissionCheckpointRef } from "../../../vela-core/src/adaptive-routing.ts";
 
 const stateLabel: Record<MissionProjection["outcome"], string> = {
   queued: "Queued",
@@ -149,6 +150,7 @@ export function createVelaMissionView(
   doc: Document,
   command: (request: MissionRequest) => Promise<MissionResponse>,
   openWorkspace?: (id: string) => Promise<void>,
+  askCheckpoint?: (question: string, selection: VelaMissionCheckpointRef) => Promise<void>,
 ) {
   function el<K extends keyof HTMLElementTagNameMap>(
     tag: K,
@@ -188,6 +190,8 @@ export function createVelaMissionView(
   let workroomReview: MissionWorkroomPreview | null = null;
   let revisionReview: { preview: MissionRevisionPreview; change: MissionRevisionChange; reason?: string } | null = null;
   let executiveAdvisory: string | null = null;
+  let checkpointAnswerPending = false;
+  let checkpointAnswered: string | null = null;
   const revisionDrafts = new Map<string, MissionRevisionChange>();
   let revisionProfilesRequested = false;
   let commandPending = false;
@@ -237,6 +241,10 @@ export function createVelaMissionView(
         "Vela already attempted a review for this checkpoint.",
       mission_executive_unavailable:
         "Vela could not review this checkpoint. Check the dedicated API connection and the mission’s current state.",
+      vela_mission_checkpoint_changed: "The checkpoint changed. Ask about the current checkpoint.",
+      vela_mission_checkpoint_too_large: "This checkpoint is too large for a reviewed question.",
+      vela_mission_checkpoint_unavailable: "Vela could not answer from this checkpoint. Check the dedicated API connection.",
+      authorization_cancelled: "The review was cancelled.",
       mission_project_check_unavailable:
         "The installed Codex read-only sandbox is unavailable.",
       mission_planner_unavailable:
@@ -587,6 +595,7 @@ export function createVelaMissionView(
     void loadTeams(true);
   }
   function setMission(next: MissionProjection | null) {
+    if (!next || mission?.id !== next.id || mission.revision !== next.revision) checkpointAnswered = null;
     if (!next || mission?.id !== next.id || mission.revision !== next.revision || !canRevise(next, scope) ||
       ((revisionReview || executiveAdvisory) && JSON.stringify(mission.tasks) !== JSON.stringify(next.tasks))) clearRevision();
     mission = next;
@@ -1176,6 +1185,36 @@ export function createVelaMissionView(
     const revision = renderRevisionReview(current);
     if (revision) section.append(revision);
     const checkpoint = current.events.findLast(event => event.kind === "settled" || event.kind === "recovered");
+    if (askCheckpoint && checkpoint && sameScope(current.scope, scope) && current.disposition !== "cancelled") {
+      const form = el("form"), label = el("label", undefined, "Question about this checkpoint"), question = el("input");
+      form.dataset.missionCheckpointQuestion = "";
+      question.required = true;
+      question.maxLength = 2000;
+      label.append(question);
+      const submit = el("button", undefined, "Ask Vela");
+      submit.type = "submit";
+      submit.disabled = checkpointAnswerPending;
+      form.append(label, submit);
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        const intent = question.value.trim();
+        if (!intent || checkpointAnswerPending) return;
+        const expectedEpoch = epoch;
+        checkpointAnswerPending = submit.disabled = true;
+        void askCheckpoint(intent, { id: current.id, revision: current.revision, triggerSeq: checkpoint.seq })
+          .then(() => {
+            if (epoch === expectedEpoch && mission?.id === current.id && mission.revision === current.revision)
+              checkpointAnswered = current.id;
+            question.value = "";
+          }, cause => {
+            if (epoch === expectedEpoch && selectedId === current.id) showError(cause);
+          }).finally(() => {
+            checkpointAnswerPending = submit.disabled = false;
+            if (visible) render();
+          });
+      });
+      section.append(form);
+    }
     if (checkpoint && canRevise(current, scope) && current.tasks.some(task => ["failed", "blocked", "uncertain"].includes(task.state))) {
       if (executiveAdvisory) section.append(el("p", "vela-core-meta", executiveAdvisory));
       if (!revision && !executiveAdvisory) {
@@ -1500,8 +1539,9 @@ export function createVelaMissionView(
         );
       next.push(list);
     }
-    const announcement =
-      mission && !review
+    const announcement = mission && !review && checkpointAnswered === mission.id
+      ? "The answer is in Vela chat."
+      : mission && !review
         ? `Mission ${stateLabel[mission.outcome].toLowerCase()}${postedReport === mission.id ? " · Evidence link posted to Vela chat" : ""}`
         : "";
     if (status.textContent !== announcement) status.textContent = announcement;

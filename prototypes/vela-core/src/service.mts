@@ -26,7 +26,7 @@ import type {
 } from './contracts.ts';
 
 export interface VelaSemanticHistorySource extends SemanticHistorySource {
-  sourceKind: 'conversation-exchange' | 'note';
+  sourceKind: NonNullable<SemanticHistorySource['sourceKind']>;
   proofDigest: string;
 }
 

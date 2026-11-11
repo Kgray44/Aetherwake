@@ -23,7 +23,7 @@ test('API specialist controls preserve nonreplayable attempts', () => {
   assert.equal(missionTaskControls(mission, { ...worker, executor: 'sample.cpu' }).retry, true);
 });
 
-async function fixture(handle) {
+async function fixture(handle, askCheckpoint) {
   const dom = componentDocument();
   const state = { projection: initial(), scope };
   const requests = [];
@@ -32,7 +32,7 @@ async function fixture(handle) {
     if (request.name === "list") return state.scope.workspaceId === scope.workspaceId ? [state.projection] : [];
     if (request.name === "read") return state.projection;
     return handle(request, state);
-  });
+  }, undefined, askCheckpoint);
   dom.root.append(view.element);
   const control = key => dom.root.querySelector(`[data-mission-focus="${key}"]`);
   view.setScope(scope);
@@ -116,6 +116,23 @@ test("Executive proposal enters the existing revision review and waits for expli
       { id: "mission-a", revision: 4, triggerSeq: 3 });
     assert.match(f.dom.root.textContent, /Retain the verified CPU sample/);
     assert.equal(f.requests.some(request => request.name === "revision-apply"), false);
+  } finally { f.view.setVisible(false); }
+});
+
+test("a checkpoint question passes the exact active mission revision to native review", async () => {
+  const asked = [];
+  const f = await fixture(() => assert.fail("the question must not invoke a mission control"),
+    async (intent, checkpoint) => { asked.push({ intent, checkpoint }); });
+  try {
+    assert.equal(f.dom.root.querySelector("[data-mission-checkpoint-question]"), null);
+    f.state.projection.events = [{ seq: 3, kind: "settled", taskId: "ram" }];
+    f.view.openReport("mission-a");
+    const form = () => f.dom.root.querySelector("[data-mission-checkpoint-question]");
+    await until(() => !!form());
+    form().querySelector("input").value = "Which check is still unverified?";
+    form().fire("submit");
+    await until(() => f.dom.root.textContent.includes("The answer is in Vela chat."));
+    assert.deepEqual(asked, [{ intent: "Which check is still unverified?", checkpoint: { id: "mission-a", revision: 4, triggerSeq: 3 } }]);
   } finally { f.view.setVisible(false); }
 });
 

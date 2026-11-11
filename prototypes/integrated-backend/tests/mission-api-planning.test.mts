@@ -9,7 +9,7 @@ import { BackendCore } from '../src/core.mts';
 import { nativeMissionExecutors, missionResultAvailable } from '../src/mission-native.mts';
 import type { MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
-import type { VelaBackendState } from '../src/contracts.mts';
+import type { VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
 import type { VelaRequest } from '../../vela-core/src/contracts.ts';
 import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
@@ -484,4 +484,83 @@ test('native adaptive CIE requires qualified stages and reviews the resolved mod
     assert.equal((await f.core.investigateVelaHistory(intent, admission)).state, 'unavailable');
     assert.equal(f.requests.length, 6);
   } finally { await f.close(); }
+});
+
+test('Vela answers from an explicitly reviewed mission checkpoint and rechecks its scope', async () => {
+  const f = fixture(true);
+  try {
+    await f.ready();
+    const objective = 'Measure CPU and RAM';
+    const planned = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    const started = await f.core.command('missions', { name: 'start',
+      input: { objective, requestId: randomUUID(), fingerprint: planned.fingerprint } }) as MissionProjection;
+    let settled = started;
+    for (let attempt = 0; attempt < 150 && ['queued', 'running'].includes(settled.outcome); attempt++) {
+      await new Promise(done => setTimeout(done, 10));
+      settled = await f.core.command('missions', { name: 'read', input: { id: started.id } }) as MissionProjection;
+    }
+    assert.equal(settled.outcome, 'verified');
+    const checkpoint = { id: started.id, revision: settled.revision, triggerSeq: settled.events.findLast(event => event.kind === 'settled')!.seq };
+    const intent = 'Did the checks in this checkpoint verify successfully?';
+    const input = { intent, resourceIds: [], authorizeProvider: true, providerId: 'openai-api-vela',
+      model: 'gpt-6-luna', semanticContext: true as const, missionCheckpoint: checkpoint };
+    const preview = await f.core.command('velaRequestPreview', { ...input, adaptive: true });
+    assert.equal(preview.sendDisposition, 'review-required');
+    assert.deepEqual(preview.missionCheckpoint?.selection, checkpoint);
+    assert.doesNotMatch(JSON.stringify(preview.missionCheckpoint), /basedOnPlanRevision/);
+    await assert.rejects(f.core.command('velaRequestPreview', { ...input, adaptive: true,
+      missionCheckpoint: { ...checkpoint, revision: checkpoint.revision - 1 } }), /vela_mission_checkpoint_changed/);
+    const require = createRequire(import.meta.url);
+    const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    const { reviewPage } = require('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+    const send = (allow: boolean) => velaCommand({
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      directMessageSend: true, routeNative: true, dialog: {}, call: f.core.command.bind(f.core),
+      async reviewProvider({ review }: { review: VelaNativeReview }) {
+        assert.ok(review.missionCheckpoint);
+        assert.equal(JSON.parse(review.missionCheckpoint.text).basedOnRevision, checkpoint.revision);
+        assert.match(reviewPage(review, intent), /Mission checkpoint/);
+        assert.equal(review.history, undefined);
+        return allow;
+      },
+      input: { name: 'request', input },
+    });
+    await assert.rejects(send(false), /authorization_cancelled/);
+    assert.equal(f.requests.length, 0);
+    const interpretation = (key: string, question: string) => ({ version: 2, objective: question, clarification: '',
+      perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: [{ key, question, query: 'inspection verification' }] });
+    const assessment = (key: string, quote: string) => ({ version: 3, clarification: '', assessment: [
+      { key, status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
+    ] });
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    const quote = '"outcome": "verified"';
+    const answerAssessment = reply(assessment('result', quote));
+    f.replies.push(reply(interpretation('day', 'Which weekday?')), reply(assessment('day', 'The pump inspection is on Tuesday.')),
+      reply(interpretation('result', intent)), body => {
+        const excerpts = JSON.parse(body.input[0].content).excerpts;
+        assert.equal(excerpts.length, 1);
+        assert.equal(excerpts[0].sourceKind, 'mission-checkpoint');
+        assert.equal(JSON.parse(excerpts[0].text).outcome, 'verified');
+        assert.doesNotMatch(JSON.stringify(excerpts), new RegExp(checkpoint.id));
+        return answerAssessment(body);
+      }, body => {
+        const packet = JSON.parse(body.input[0].content).evidence;
+        assert.deepEqual(packet.coverage[0].passages, [{ sourceId: checkpoint.id, title: 'Mission checkpoint', quote }]);
+        assert.equal(body.tools, undefined);
+        return response('The mission checkpoint records verified checks.', body.model);
+      });
+    assert.equal((await send(true)).state, 'responded');
+    assert.equal(f.requests.length, 5);
+    f.replies.push(reply(interpretation('result', intent)), async body => {
+      await f.core.command('desktop', { type: 'createWorkspace', title: 'Other test workspace', projectId: null });
+      return answerAssessment(body);
+    });
+    assert.equal((await send(true)).state, 'failed');
+    assert.equal(f.requests.length, 7, 'scope change must block the answer POST');
+    await assert.rejects(f.core.command('velaRequestPreview', { ...input, adaptive: true }), /mission_.*(?:not_found|scope|unavailable)/);
+    assert.equal(f.requests.length, 7);
+  } finally {
+    await f.close();
+  }
 });
