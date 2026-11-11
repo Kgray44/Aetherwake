@@ -1193,7 +1193,7 @@ export class BackendCore {
         return this.missions.list(scope);
       case 'execution-profile': {
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
-        const mission = this.missions.read(request.input.id, scope);
+        const mission = this.missions.read(request.input.id, scope, { includeReadyQueue: true });
         let publication: ReportPublication | null = null, delivery: ReportDelivery | null = null;
         if (this.streamScopeMatches(scope, mission.scope)) {
           publication = this.missionReportPublication(mission.id);

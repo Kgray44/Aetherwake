@@ -756,9 +756,28 @@ test('pressure defers admission and cancelling a branch preserves an independent
     assert.equal(waiting.waits.branch, 'resource-pressure');
     assert.equal(waiting.waits.dependent, 'dependencies');
     assert.equal(f.active.size, 0);
+    assert.equal(waiting.readyQueueObservation, undefined);
+    assert.throws(() => service.read(m.id, { ...scope, workspaceId: 'unrelated' }, { includeReadyQueue: true }));
+    const readProfile = () => projectMissionExecution(service.read(m.id, scope, { includeReadyQueue: true }));
+    const queue = readProfile().work.liveReadyQueue;
+    assert.equal(queue?.clock, service.fullProfilingClock());
+    assert.deepEqual(queue?.tasks.map(task => task.taskId), ['branch', 'independent']);
+    for (const task of queue!.tasks) {
+      assert.equal(task.wait, 'resource-pressure');
+      assert.ok(task.blockers['worker-budget']!.samples >= 1);
+      assert.equal(task.elapsedSinceFirstObservedMs, queue!.monotonicMs - task.firstObservedMs);
+      assert.ok(task.elapsedSinceFirstObservedMs >= 0);
+    }
     f.pressure(false);
     service.control(m.id, scope, waiting.revision, { type: 'concurrency', concurrency: 2 });
     await flush();
+    const admitted = readProfile();
+    assert.equal(admitted.work.liveReadyQueue, null);
+    for (const queued of queue!.tasks) {
+      const attempt = admitted.attempts.find(attempt => attempt.taskId === queued.taskId);
+      assert.equal(attempt?.phases?.readyQueue?.firstObservedMs, queued.firstObservedMs);
+      assert.deepEqual(attempt?.phases?.readyQueue?.blockers, queued.blockers);
+    }
     assert.equal(f.active.size, 2);
     const cancelling = service.control(m.id, scope, service.read(m.id, scope).revision, { type: 'cancel-branch', taskId: 'branch' });
     const open = projectMissionExecution(cancelling).work.live;

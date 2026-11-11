@@ -315,10 +315,10 @@ export class MissionService {
     return this.project(m);
   }
 
-  read(id: string, scope: MissionScope) {
+  read(id: string, scope: MissionScope, options?: { includeReadyQueue: boolean }) {
     const m = this.lookup(id);
     this.requireAccess(m, scope);
-    return this.project(m);
+    return this.project(m, options?.includeReadyQueue);
   }
 
   /** Trusted outbox lookup. Publication ports enforce their own disclosure boundaries. */
@@ -647,7 +647,7 @@ export class MissionService {
       return true;
     } catch { return false; }
   }
-  private project(m: Mission): MissionProjection {
+  private project(m: Mission, includeReadyQueue = false): MissionProjection {
     const checked = new Map<string, boolean>();
     const visibleTask = (task: MissionTask): MissionTask => {
       let staleLatest = false;
@@ -699,7 +699,9 @@ export class MissionService {
     const ended = ['queued', 'running', 'cancelling'].includes(outcome) ? Date.now() :
       Date.parse(m.events.findLast(event => event.kind !== 'workroom')!.time);
     const answer = missionMeasurementAnswer(m.tasks);
+    const readyQueueObservation = includeReadyQueue ? this.projectReadyQueue(m, waits) : undefined;
     return { ...m, outcome, ...(answer.length ? { answer } : {}), waits,
+      ...(readyQueueObservation ? { readyQueueObservation } : {}),
       ...(admission ? { admission: structuredClone(admission) } : {}), profile: {
       elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0) +
         (m.planning?.context?.elapsedMs ?? 0), peakWorkers, attempts: attempts.length,
@@ -708,6 +710,19 @@ export class MissionService {
       verifiedObjectivesPerReportedToken: outcome === 'verified' && providerCalls === usage.length &&
         reportedTotalTokens && reportedTotalTokens > 0 ? 1 / reportedTotalTokens : null,
     } };
+  }
+
+  private projectReadyQueue(mission: Mission, waits: MissionProjection['waits']): MissionProjection['readyQueueObservation'] {
+    const clock = this.fullProfilingClock();
+    if (!clock || mission.disposition !== 'active' || !this.readyObservations.size) return;
+    const tasks = mission.tasks.flatMap(task => {
+      if (task.state !== 'queued' || waits[task.id] === 'dependencies') return [];
+      const observed = this.readyObservations.get(mission.id + '/' + task.id);
+      if (!observed || observed.planRevision !== mission.planRevision || observed.queuedAt !== task.queuedAt ||
+        observed.attemptCount !== task.attempts.length) return [];
+      return [{ taskId: task.id, ...structuredClone(observed.evidence) }];
+    });
+    if (tasks.length) return { clock, monotonicMs: performance.now(), tasks };
   }
 
   capacityChanged() { this.wake(); }

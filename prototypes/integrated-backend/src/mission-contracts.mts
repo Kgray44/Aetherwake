@@ -184,6 +184,11 @@ export interface MissionProjection extends Mission {
   conversationPending?: true;
   cognitiveReceipts?: import('./vela-api-runtime.mts').VelaMissionCognitiveReceipts;
   waits: Record<string, 'dependencies' | 'capacity' | 'resource-conflict' | 'resource-pressure'>;
+  readyQueueObservation?: {
+    clock: string;
+    monotonicMs: number;
+    tasks: (MissionReadyQueueEvidence & { taskId: string })[];
+  };
   profile: {
     elapsedMs: number;
     peakWorkers: number;
