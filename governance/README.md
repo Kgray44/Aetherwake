@@ -4,7 +4,7 @@
 
 Start with **[00 — The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md)**. It defines the governing intent, principles, invariants, authority hierarchy, and acceptance obligations for Project Aetherwake, Aerynth, Vela, and all related subsystems.
 
-> **Current owner-ratified baseline (2026-11-05):** Constitution 00 and all specialized governing charters 01–16 are formally approved as binding product/design requirements. This governance acceptance does **not** certify that their implementation, providers, visual experiences or release gates are complete.
+> **Current owner-ratified baseline (2026-11-05; Fluid Intelligence amendments 2026-11-10):** Constitution 00 and all specialized governing charters 01–16 are binding product/design requirements, including the 2026-11-10 Fluid Intelligence amendments. Governance approval does **not** certify that implementation, provider integrations, visual experiences or release gates are complete.
 
 ## Document authority
 
@@ -20,23 +20,23 @@ The repository owner retains final decision authority. Amendments must be explic
 
 | ID | Document | Status |
 |---|---|---|
-| 00 | [Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 01 | [Experience and Interaction](01-EXPERIENCE-AND-INTERACTION.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 02 | [Liquid Intelligence and Motion](02-LIQUID-INTELLIGENCE-AND-MOTION.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 03 | [Projects, Workspaces, and Resources](03-PROJECTS-WORKSPACES-AND-RESOURCES.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 04 | [Conversations and Connected Branches](04-CONVERSATIONS-AND-CONNECTED-BRANCHES.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
+| 00 | [Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) | **Owner-ratified — v1.1.0, 2026-11-05; supporting FI amendment 2026-11-10** |
+| 01 | [Experience and Interaction](01-EXPERIENCE-AND-INTERACTION.md) | **Owner-ratified — v1.1.0, 2026-11-05; supporting FI amendment 2026-11-10** |
+| 02 | [Liquid Intelligence and Motion](02-LIQUID-INTELLIGENCE-AND-MOTION.md) | **Owner-ratified — v1.1.0, 2026-11-05; supporting FI amendment 2026-11-10** |
+| 03 | [Projects, Workspaces, and Resources](03-PROJECTS-WORKSPACES-AND-RESOURCES.md) | **Owner-ratified — v1.1.0, 2026-11-05; supporting FI amendment 2026-11-10** |
+| 04 | [Conversations and Connected Branches](04-CONVERSATIONS-AND-CONNECTED-BRANCHES.md) | **Owner-ratified — v1.1.0, 2026-11-05; supporting FI amendment 2026-11-10** |
 | 05 | [Agents, Tasks, and Workflows](05-AGENTS-TASKS-AND-WORKFLOWS.md) | **Owner-ratified baseline + owner-directed FI amendment — v1.2.0, 2026-11-10** |
 | 06 | [Vela Intelligence and Adaptation](06-VELA-INTELLIGENCE-AND-ADAPTATION.md) | **Owner-ratified baseline + owner-directed FI amendment — v1.3.0, 2026-11-10** |
-| 07 | [Notes, Knowledge, and Thought Stream](07-NOTES-KNOWLEDGE-AND-THOUGHT-STREAM.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
+| 07 | [Notes, Knowledge, and Thought Stream](07-NOTES-KNOWLEDGE-AND-THOUGHT-STREAM.md) | **Owner-ratified — v1.1.0, 2026-11-05; supporting FI amendment 2026-11-10** |
 | 08 | [Context Intelligence and Memory](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md) | **Owner-ratified baseline + owner-directed FI amendment — v1.3.0, 2026-11-10** |
-| 09 | [Intelligence Streams and Observability](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
+| 09 | [Intelligence Streams and Observability](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md) | **Owner-ratified baseline + owner-directed FI amendment — v1.2.0, FI-2026-11-10** |
 | 10 | [AI Execution Profiler](10-AI-EXECUTION-PROFILER.md) | **Owner-ratified baseline + owner-directed FI amendment — v1.2.0, 2026-11-10** |
-| 11 | [Timelines and Replay](11-TIMELINES-AND-REPLAY.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 12 | [Codex Execution and Integrations](12-CODEX-EXECUTION-AND-INTEGRATIONS.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 13 | [Platform, Performance, and Displays](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 14 | [Trust, Privacy, and Autonomy](14-TRUST-PRIVACY-AND-AUTONOMY.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 15 | [Quality, Verification, and Acceptance](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md) | **Owner-ratified — v1.1.0, 2026-11-05** |
-| 16 | [Engineering and Delivery](16-ENGINEERING-AND-DELIVERY.md) | **Owner-ratified — v1.2.0 clarification, 2026-11-05** |
+| 11 | [Timelines and Replay](11-TIMELINES-AND-REPLAY.md) | **Owner-ratified — v1.1.0, 2026-11-05; supporting FI amendment 2026-11-10** |
+| 12 | [Codex Execution and Integrations](12-CODEX-EXECUTION-AND-INTEGRATIONS.md) | **Owner-ratified — v1.1.0, 2026-11-05; supporting FI amendment 2026-11-10** |
+| 13 | [Platform, Performance, and Displays](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md) | **Owner-ratified baseline + owner-directed FI amendment — v1.2.0, FI-2026-11-10** |
+| 14 | [Trust, Privacy, and Autonomy](14-TRUST-PRIVACY-AND-AUTONOMY.md) | **Owner-ratified — v1.1.0, 2026-11-05; supporting FI amendment 2026-11-10** |
+| 15 | [Quality, Verification, and Acceptance](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md) | **Owner-ratified baseline + owner-directed FI amendment — v1.2.0, FI-2026-11-10** |
+| 16 | [Engineering and Delivery](16-ENGINEERING-AND-DELIVERY.md) | **Owner-ratified — v1.2.0 clarification, 2026-11-05; supporting FI amendment 2026-11-10** |
 
 See Section 20 of the Constitution for domain boundaries.
 
@@ -92,6 +92,25 @@ These charters reconcile with the 05/06/08/10 Fluid Intelligence amendments, pre
 **Canonical ownership remains unchanged:** MissionService owns task state; AIR/Vela owns cognition; CIE owns context projections and retrieval; AEP owns measurements and experimental evidence; the existing Platform Governor/ARIE owns local resource-policy enforcement; Trust owns permission; observability owns event projections. The expanded work belongs to **Full Aerynth Realization**, not an unapproved enlargement of Architecture Recovery. Companion architecture, supporting-charter revisions, system tests and integration remain separate follow-on deliverables.
 
 The deterministic section-level Governance Context Router indexes normative requirement lines from the charter source files. Future agents must explicitly retrieve applicable FI requirements by task/path or stable requirement ID and validate substantive section sufficiency; a documentation merge is not an implementation test.
+
+### Fluid Intelligence implementation packet and retrieval
+
+These ten companion files operationalize the binding FI-2026-11-10 amendments without creating another governance authority. They are **design/specifications and a milestone plan**, not evidence of an implemented AI-native runtime:
+
+| Domain | Companion document |
+|---|---|
+| Decision and system ownership | [ADR-003 AI-Native Fluid Intelligence](../docs/decisions/ADR-003-AI-NATIVE-FLUID-INTELLIGENCE.md) |
+| Perception, CIE, AI planning and executive | [Vela Cognitive Intelligence Runtime](../docs/architecture/VELA-COGNITIVE-INTELLIGENCE-RUNTIME.md) |
+| Resource governor / ARIE architecture | [Vela Adaptive Resource Intelligence](../docs/architecture/VELA-ADAPTIVE-RESOURCE-INTELLIGENCE.md) |
+| Learning, policy lifecycle, rollback | [Vela Experiential Learning Loop](../docs/architecture/VELA-EXPERIENTIAL-LEARNING-LOOP.md) |
+| Model/agent/task/transport strategies | [AIR Dynamic Execution Strategy](../docs/specifications/AIR-DYNAMIC-EXECUTION-STRATEGY.md) |
+| Hardware/worker execution contract | [ARIE Resource and Scheduler Contract](../docs/specifications/ARIE-RESOURCE-AND-SCHEDULER-CONTRACT.md) |
+| Measurement, experiments, promotion | [AEP Adaptive Optimization and Experiments](../docs/specifications/AEP-ADAPTIVE-OPTIMIZATION-AND-EXPERIMENTS.md) |
+| Six connected, source-backed spatial regions | [Adaptive Intelligence Workspace](../docs/design/VELA-ADAPTIVE-INTELLIGENCE-WORKSPACE.md) |
+| Native, provider, quality and privacy acceptance | [Fluid Intelligence Verification and Acceptance](../docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md) |
+| Sequencing, owner work packages, gates | [Fluid Intelligence Realization](../plans/milestones/FLUID-INTELLIGENCE-REALIZATION.md) |
+
+For Codex instructions use [AGENTS.md](../AGENTS.md). Governance Context Router V2 indexes requirement IDs in the updated charters, while the original deterministic task router needs current FI vocabulary to route the appropriate domains. The router is a **documentation retrieval aid**, not Vela's runtime semantic interpreter or proof that all applicable governance was selected. Test both novel FI tasks and explicit requirement IDs; expand to full charters whenever domain selection or explanatory coverage is uncertain. The older [AIR 0.1 specification](../docs/specifications/VELA-ADAPTIVE-INTELLIGENCE-ROUTING.md) documents an early routing baseline, not a limitation on the accepted AI-native expansion.
 
 ## Rules for contributors and agents
 
