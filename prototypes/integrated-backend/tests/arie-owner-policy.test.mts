@@ -16,6 +16,11 @@ test('trusted owner profile and one-step rollback survive separate backend proce
   let backend = new Backend(options, host);
   const command = (input: ResourcePolicyNativeRequest) => backend.call('resourcePolicyNative', input);
   try {
+    await backend.call('desktop', { type: 'createWorkspace', title: 'Synthetic ARIE experiment scope', projectId: null });
+    const experimentInput = { id: 'missing-mission', hypothesisId: 'fabricated-hypothesis', expectedRevision: 1, cpuSlots: 1 };
+    await assert.rejects(backend.call('missions', { name: 'resource-experiment-preview', input: experimentInput }), /mission_not_found/u);
+    const forged = { ...experimentInput, observed: { workerBudget: 1 } };
+    await assert.rejects(backend.call('missions', { name: 'resource-experiment-preview', input: forged }), /invalid_mission_command/u);
     const first = await command({ name: 'inspect' });
     assert.equal(first.mode, 'balanced');
     assert.equal(first.externalActivityProtection, false);
@@ -75,6 +80,7 @@ test('trusted owner profile and one-step rollback survive separate backend proce
 
     backend = new Backend(options);
     await assert.rejects(command({ name: 'inspect' }), /native_resource_policy_required/u);
+    await assert.rejects(backend.call('missions', { name: 'resource-experiment-preview', input: experimentInput }), /native_resource_policy_required/u);
     await backend.close();
 
     backend = new Backend({ ...options, path: join(root, 'preset.sqlite') }, {

@@ -1270,6 +1270,14 @@ export class BackendCore {
           Number.isSafeInteger(expectedRevision) && expectedRevision > 0, 'invalid_mission_command');
         return resolveMissionHypothesis(this.missions.read(id, scope), hypothesisId, expectedRevision);
       }
+      case 'resource-experiment-preview': {
+        ensure(!this.closed && this.privateMode && this.nativeHostServices, 'native_resource_policy_required');
+        const { id, hypothesisId, expectedRevision, cpuSlots } = request.input;
+        ensure(Object.keys(request.input).length === 4 && identifier(id) && identifier(hypothesisId) &&
+          Number.isSafeInteger(expectedRevision) && expectedRevision > 0 && Number.isSafeInteger(cpuSlots), 'invalid_mission_command');
+        const observed = resolveMissionHypothesis(this.missions.read(id, scope), hypothesisId, expectedRevision);
+        return observed ? this.missionAdmission.previewWorkerBudgetExperiment(observed, cpuSlots) : null;
+      }
       case 'execution-profile': {
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
         const mission = this.missions.read(request.input.id, scope, { includeReadyQueue: true });

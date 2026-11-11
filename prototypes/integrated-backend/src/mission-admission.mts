@@ -4,7 +4,7 @@ import { isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import { aggregateGpuEngines, readCpuCounters } from '../../vela-core/src/system-utilization.mts';
 import type { MissionAdmission, MissionAdmissionReading } from './mission-contracts.mts';
-import { createResourcePolicy, type ResourcePolicyConfig, type ResourcePolicyPersistence } from './resource-policy.mts';
+import { createResourcePolicy, previewWorkerBudgetExperiment, type ResourcePolicyConfig, type ResourcePolicyPersistence } from './resource-policy.mts';
 import type { HostPower, ResourceSignal } from './resource-signals.mts';
 import { createWindowsGpuCapacityCache, estimateDedicatedHeadroom } from './windows-gpu-memory.mts';
 import { createWindowsGpuThermalsProbe, type WindowsGpuThermals } from './windows-gpu-thermals.mts';
@@ -513,6 +513,9 @@ export function createMissionAdmission(options: AdmissionOptions) {
       reconcileWindowsMonitoring();
     },
     previewAdjustment: policy.previewAdjustment,
+    previewWorkerBudgetExperiment(observed: Parameters<typeof previewWorkerBudgetExperiment>[1], cpuSlots: number) {
+      return previewWorkerBudgetExperiment(policy, observed, cpuSlots, wallNow());
+    },
     canLease: policy.canLease,
     tryLease: policy.tryLease,
     noteGpuBudget: policy.noteGpuBudget,

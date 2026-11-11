@@ -10,6 +10,7 @@ import { MISSION_LIMITS, type Mission, type MissionAdmission, type MissionExecut
   type MissionTaskPlan } from '../src/mission-contracts.mts';
 import type { MissionContextSource } from '../../vela-core/src/mission-context.mts';
 import { createMissionAdmission } from '../src/mission-admission.mts';
+import { createResourcePolicy, previewWorkerBudgetExperiment } from '../src/resource-policy.mts';
 
 const scope = { workspaceId: 'workspace-1', projectId: 'project-1' };
 const task = (id: string, dependencies: string[] = [], resource?: string): MissionTaskPlan => ({
@@ -250,6 +251,28 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.deepEqual(resolveMissionHypothesis(constrained, hypothesis.id, constrained.revision), {
       kind: 'experiment-hypothesis', missionRevision: constrained.revision, hypothesis,
     });
+    const resolved = resolveMissionHypothesis(constrained, hypothesis.id, constrained.revision)!;
+    const governor = createResourcePolicy(3, 512 * 2 ** 20, () => 0, () => 100_000);
+    try {
+      governor.update({ workerLimit: 3, reasons: [], readings: {
+        cpuPercent: { value: 20, observedAt: '' }, availableMemoryBytes: { value: 4 * 2 ** 30, observedAt: '' },
+      } });
+      const before = governor.inspect();
+      const preview = (limit: number) => previewWorkerBudgetExperiment(governor, resolved, limit, 100_000);
+      const result = preview(1);
+      assert.equal(result.status, 'preview');
+      if (result.status !== 'preview') throw Error('expected resource experiment preview');
+      assert.equal(result.kind, 'resource-experiment-preview');
+      assert.deepEqual(result.observed, resolved);
+      assert.deepEqual(result.current, before.effective);
+      assert.equal(result.prediction.cpu, 1);
+      assert.equal(result.prediction.remote, before.effective.remote);
+      assert.equal(result.policyEpoch, before.epoch);
+      assert.equal(result.baseRevision, before.revision);
+      assert.deepEqual(governor.inspect(), before);
+      assert.equal(preview(0).status, 'invalid_proposal');
+      assert.equal(preview(3).status, 'increase_requires_review');
+    } finally { governor.dispose(); }
     assert.equal(resolveMissionHypothesis(constrained, hypothesis.id, constrained.revision + 1), null);
     assert.equal(resolveMissionHypothesis(constrained, 'unrelated-hypothesis', constrained.revision), null);
     assert.deepEqual(projectMissionExecution(structuredClone(constrained)).experiment.hypothesis, hypothesis);
