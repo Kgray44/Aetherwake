@@ -1639,3 +1639,29 @@ test("actual Core accepts legacy Vela state1/2 and writes3 with default history 
     await h.close();
   }
 });
+
+test("semantic shadow reaches the canonical history owner and leaves the transcript unchanged", async () => {
+  const f = fixture();
+  try {
+    const seeded = await f.ask("Settle the refinery interlock using a cobalt latch.");
+    await f.ask("Choose a moss color for the board game tokens.");
+    const { VelaService } = await import("../../vela-core/src/service.mts");
+    const vela = (f.core as unknown as { vela: InstanceType<typeof VelaService> }).vela;
+    const before = (await f.state()).conversation?.messages;
+    const result = await vela.investigateHistory("How did we secure the valve?", async (call, sources, _signal, revalidate) => {
+      assert.equal(revalidate(), true);
+      if (call.stage === "interpret") return { version: 1, objective: "Locate the interlock decision", clarification: "",
+        needs: [{ key: "mechanism", question: "How was the valve secured?", query: "refinery interlock" }] };
+      assert.equal(sources.length, 1);
+      assert.equal(sources[0].sourceId, seeded.request.id);
+      assert.match(call.excerpts[0].text, /cobalt latch/);
+      assert.doesNotMatch(call.excerpts[0].text, /moss color/);
+      return { version: 1, assessment: [{ key: "mechanism", status: "supported", sources: ["e1"], query: "" }] };
+    });
+    assert.equal(result.state, "assessed");
+    assert.equal(result.coverage[0].sources[0].sourceId, seeded.request.id);
+    assert.deepEqual((await f.state()).conversation?.messages, before);
+  } finally {
+    await f.close();
+  }
+});

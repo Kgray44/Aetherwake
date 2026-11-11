@@ -19,7 +19,7 @@ export interface HistoryRequestRecord extends Pick<VelaRequest, 'id' | 'conversa
 export interface HistoryHeader { id: string; requestId?: string; role: VelaMessage['role']; source: VelaMessage['source']; ordinal: number; contentBytes: number }
 export interface HistorySnapshot { conversationId: string; revision: number; headers: readonly HistoryHeader[]; hasEarlier: boolean;
   /** HOST ONLY: the current user query and canonical tail, never renderer-selected history IDs. */
-  retrieval?: { query: string; tailOrdinal: number; partial: boolean } }
+  retrieval?: { query: string; tailOrdinal: number; partial: boolean; mode?: 'semantic-query' } }
 export interface HistoryTail { conversationId: string; revision: number; ordinal: number }
 export interface CanonicalHistoryMessage { conversationId: string; ordinal: number; message: VelaMessage }
 /** Does not materialize or hash message bodies. The exact conversation revision fences body changes. */
@@ -314,7 +314,7 @@ export function selectBoundedHistory(input: {
 /** Exact eligible exchanges are proved before local ranking. Only the selected whole messages leave the host. */
 function selectQueriedHistory(input: { origin: HistoryOrigin; snapshot: HistorySnapshot; reader: HistoryProofReader;
   fits(history: ProviderHistory | undefined): boolean; maxMessages: number; maxEncodedBytes: number }): HistorySelection {
-  const { snapshot } = input, retrieval = snapshot.retrieval!, query = canonicalRetrievalQuery(retrieval.query, true);
+  const { snapshot } = input, retrieval = snapshot.retrieval!, query = canonicalRetrievalQuery(retrieval.query, retrieval.mode !== 'semantic-query');
   requireValue(query && integer(retrieval.tailOrdinal) && retrieval.tailOrdinal >= snapshot.headers.at(-1)!.ordinal && typeof retrieval.partial === 'boolean', 'invalid-history-snapshot');
   const verifier = new Verifier(input.reader, input.origin, snapshot.conversationId), omissions: HistoryOmission[] = [];
   const pairs: { id: string; values: CanonicalHistoryMessage[]; entries: ProviderHistoryMessage[]; proofs: HistoryMessageDependency[]; dependencies: HistoryDependency[] }[] = [];
@@ -339,7 +339,8 @@ function selectQueriedHistory(input: { origin: HistoryOrigin; snapshot: HistoryS
   const ranked = rankCanonicalRetrieval(query, pairs.map(pair => ({ id: pair.id, text: pair.entries.map(entry => entry.content).join('\n'),
     identities: [pair.id, ...pair.entries.map(entry => entry.id)] })));
   const recent = [...pairs].sort((a, b) => b.values[1].ordinal - a.values[1].ordinal);
-  const order = [...new Set([...ranked.ids.slice(0, ranked.ambiguous ? 2 : 1), ...recent.map(pair => pair.id)])];
+  const order = retrieval.mode === 'semantic-query' ? ranked.ids
+    : [...new Set([...ranked.ids.slice(0, ranked.ambiguous ? 2 : 1), ...recent.map(pair => pair.id)])];
   let chosen: typeof pairs = [], dependencies: HistoryDependency[] = [];
   const payload = (selected: typeof pairs): ProviderHistory => ({ ...historyPayload(selected.flatMap(pair => pair.entries)), retrieval: {
     method: 'lexical-canonical-exchanges', queryDigest: query.digest, selectedRequestIds: selected.map(pair => pair.id),

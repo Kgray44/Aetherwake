@@ -3,6 +3,7 @@ import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 import { test } from 'node:test';
 import { setImmediate as flush } from 'node:timers/promises';
 import { MissionService, validateMissionPlan, type MissionServiceHost } from '../src/mission-service.mts';
+import { proposeMissionExecutiveRevision } from '../src/mission-executive.mts';
 import { nativeMissionPlan, replanNativeMission } from '../src/mission-native.mts';
 import { projectMissionExecution } from '../src/execution-profiler.mts';
 import { MISSION_LIMITS, type Mission, type MissionAdmission, type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionScope,
@@ -662,7 +663,19 @@ test('reviewed replacement preserves failed evidence and rewires dispatch after 
     const failed = read();
     const originalProbe = failed.tasks.find(node => node.id === 'probe')!;
     assert.equal(originalProbe.state, 'failed');
-    const review = service.previewRevision(id, scope, failed.revision, change);
+    const trigger = failed.events.findLast(event => event.kind === 'settled')!;
+    const executive = await proposeMissionExecutiveRevision(trigger.seq, {
+      read,
+      disclose: async packet => ({
+        version: 1, action: 'replace', target: packet.trigger.task, related: [],
+        reason: 'The probe failed verification with a known outcome.',
+      }),
+      preview: (revision, proposal) => service.previewRevision(id, scope, revision, proposal),
+    });
+    assert.equal(executive.state, 'reviewable');
+    if (executive.state !== 'reviewable') assert.fail('expected a reviewable proposal');
+    assert.deepEqual(executive.change, change);
+    const review = executive.preview;
     assert.deepEqual(read(), failed, 'Preview does not change the journal');
     assert.throws(() => service.applyRevision(id, scope, failed.revision, change, '0'.repeat(64)), /mission_revision_preview_changed/);
     const revised = service.applyRevision(id, scope, failed.revision, change, review.fingerprint);

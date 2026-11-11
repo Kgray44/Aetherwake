@@ -12,6 +12,7 @@ import { evaluateLocalCapability, validateLocalRecord } from './local-capabiliti
 import { requiresVelaPlanAttention } from './manifestation-state.ts';
 import { validateRoutingDefaults, validateRoutingScope, type VelaRoutingProfile, type VelaRoutingSettingsChange } from './routing-settings.ts';
 import { HISTORY_LIMITS, HistorySelectionError, createHistoryProvenance, historyDependenciesFromContext, historyDigest, selectBoundedHistory, selectVelaHandoff, unionHistoryDependencies, validateFrozenHistory, validateFrozenHistoryMetadata } from './bounded-history.mts';
+import { investigateSemanticHistory, type SemanticHistoryCall, type SemanticHistoryScan, type SemanticHistorySource } from './semantic-history.mts';
 import type { VelaHandoff } from './history-contracts.ts';
 import type { AcceptedHistoryAppend, HistoryFence, HistoryMessageMetadata, HistoryMetadataReader, HistoryOmission, HistoryOrigin, HistoryProofReader, HistoryRequestRecord, HistorySnapshot, HistoryTail, PrivateFrozenProviderContext } from './bounded-history.mts';
 import type {
@@ -23,6 +24,10 @@ import type {
   VelaLocalCapabilityId, VelaLocalDispatch, VelaLocalHost, VelaLocalRecord, VelaLocalResult,
   VelaPresentationState, VelaPresentationPatch, VelaProjectCheckReceipt, VelaProviderRecovery,
 } from './contracts.ts';
+
+export interface VelaSemanticHistorySource extends SemanticHistorySource {
+  proofDigest: string;
+}
 
 type StoredActionReceipt = ActionReceipt & { foundSubjects?: (VelaSubjectRef&{version?:number})[] };
 const subjectKey = ({ id, kind }: VelaSubjectRef) => kind + ':' + id;
@@ -52,7 +57,7 @@ export interface VelaServiceOptions {
   onPlanRejected?(plan:VelaPlan):void;
   /** Explicit bounded canonical projections. Absent means no implicit conversational history. */
   history?: {
-    snapshot(conversationId: string, limit: number, query?: string): HistorySnapshot | null;
+    snapshot(conversationId: string, limit: number, query?: string, mode?: 'semantic-query'): HistorySnapshot | null;
     tail?(conversationId: string): HistoryTail | null;
     message: HistoryProofReader['message']; content: HistoryProofReader['content'];
     messageMetadata(conversationId: string, messageId: string): HistoryMessageMetadata | null;
@@ -418,7 +423,7 @@ export class VelaService {
     return { full, metadata };
   }
   /** Core-only prospective egress. Opening/selection never appends, creates a conversation or invokes a provider. */
-  previewProviderContext(resourceIds: string[], options: { includeHistory: boolean; activeResourceId?: string; historyQuery?: string;
+  previewProviderContext(resourceIds: string[], options: { includeHistory: boolean; activeResourceId?: string; historyQuery?: string; historyQueryMode?: 'semantic-query';
     agent?: { ref: ResourceRef; instructions: string };
     handoff?: { requestId: string; destinationProviderId: string }; fits(context: ContextManifest): boolean
   }): { context: ContextManifest; origin: HistoryOrigin; historyFence?: HistoryFence; historyOmissions: readonly HistoryOmission[]; handoff?: VelaHandoff } {
@@ -453,7 +458,7 @@ export class VelaService {
       if (!this.data.conversationId) return { context, origin, historyOmissions: [{ reason: 'no-conversation' }] };
       const conversation = this.opts.host.resolve({ id: this.data.conversationId, kind: 'resource' }, scope);
       if (!conversation || this.opts.host.canReadContent?.(conversation, scope) !== true) return { context, origin, historyOmissions: [{ reason: 'message-unavailable' }] };
-      const readers = this.historyReaders(), snapshot = this.opts.history!.snapshot(this.data.conversationId, HISTORY_LIMITS.lookbackMessages, options.historyQuery);
+      const readers = this.historyReaders(), snapshot = this.opts.history!.snapshot(this.data.conversationId, HISTORY_LIMITS.lookbackMessages, options.historyQuery, options.historyQueryMode);
       if (snapshot === null) return { context, origin, historyOmissions: [{ reason: 'message-unavailable' }] };
       const selection = selectBoundedHistory({ enabled: true, origin, snapshot, reader: readers.full, fits: history => options.fits({ ...context, ...(history ? { history } : {}) }) });
       if (selection.fence) {
@@ -465,6 +470,51 @@ export class VelaService {
         ...(selection.fence ? { historyFence: selection.fence } : {}), historyOmissions: selection.omissions });
     });
   }
+  /** Native shadow investigation. The disclosure gateway must authorize each exact outbound payload.
+   * No exchange or model assessment is appended or used as a turn result. */
+  investigateHistory(intent: string, disclose: (call: SemanticHistoryCall, sources: readonly VelaSemanticHistorySource[],
+    signal: AbortSignal, revalidate: () => boolean) => Promise<unknown>, signal?: AbortSignal) {
+    const origin = this.read(() => this.historyOrigin());
+    const previews = new WeakMap<VelaSemanticHistorySource, { context: ContextManifest; historyFence?: HistoryFence }>();
+    const isCurrent = (source: VelaSemanticHistorySource) => {
+      const preview = previews.get(source);
+      if (!preview) return false;
+      try { this.validateProviderHistory(preview); return true; }
+      catch (error) {
+        if (error instanceof HistorySelectionError || error instanceof VelaError) return false;
+        throw error;
+      }
+    };
+    return investigateSemanticHistory<VelaSemanticHistorySource>(intent, {
+      search: query => {
+        if (historyDigest(this.read(() => this.historyOrigin())) !== historyDigest(origin)) return { sources: [], scan: 'unavailable' };
+        const preview = this.previewProviderContext([], { includeHistory: true, historyQuery: query,
+          historyQueryMode: 'semantic-query', fits: () => true });
+        const { history } = preview.context;
+        const scan: SemanticHistoryScan = preview.historyOmissions.some(item => item.reason === 'message-unavailable' || item.reason === 'unknown-origin')
+          ? 'unavailable' : history?.retrieval?.partial || preview.historyOmissions.some(item => item.reason !== 'no-history' && item.reason !== 'no-conversation')
+            ? 'partial' : 'bounded';
+        if (!preview.historyFence || !history?.retrieval || history.retrieval.resolution === 'no-match') return { sources: [], scan };
+        const fence = preview.historyFence;
+        const sources = history.retrieval.selectedRequestIds.map(sourceId => {
+          const source = Object.freeze({
+            sourceId, revision: String(fence.baseRevision), proofDigest: fence.digest,
+            text: JSON.stringify(history.messages.filter(message => message.requestId === sourceId)
+              .map(({ role, content }) => ({ role, content }))),
+          });
+          previews.set(source, preview);
+          return source;
+        });
+        return { sources, scan };
+      },
+      isCurrent,
+      disclose: (call, sources, abort) => {
+        const revalidate = () => historyDigest(this.read(() => this.historyOrigin())) === historyDigest(origin) && sources.every(isCurrent);
+        return revalidate() ? disclose(call, sources, abort, revalidate) : Promise.resolve(null);
+      },
+    }, signal);
+  }
+
   /** Validates the exact private reviewed window; metadataOnly is safe for schema tools and never reselects. */
   validateProviderHistory(preview: { context: ContextManifest; historyFence?: HistoryFence }, options: { metadataOnly?: boolean; acceptedAppend?: AcceptedHistoryAppend } = {}): void {
     this.read(() => {
