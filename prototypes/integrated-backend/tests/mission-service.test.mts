@@ -132,11 +132,36 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
       [right.start.eventSeq, 2], [right.end!.eventSeq, 10], [join.start.eventSeq, 12], [join.end!.eventSeq, 15]]);
     replay.events = replay.events.map(event => times.has(event.seq) ?
       { ...event, timing: { ...event.timing!, monotonicMs: times.get(event.seq)! } } : event);
+    const timingById = new Map([
+      [left.id, { contextAssembly: [0, 1] as [number, number] }],
+      [right.id, { contextAssembly: [1, 2] as [number, number], execution: [3, 9] as [number, number] }],
+      [join.id, { contextAssembly: [11, 12] as [number, number], execution: [12, 14] as [number, number] }],
+    ]);
+    for (const task of replay.tasks) for (const attempt of task.attempts) {
+      attempt.timing!.phases = { clock: left.start.clock!, ...timingById.get(attempt.id)! };
+    }
     const { work } = projectMissionExecution(replay);
     assert.equal(work.activeMs, 12);
     assert.equal(work.workerMs, 16);
     assert.equal(work.overlapMs, 4);
     assert.deepEqual(work.criticalPath, { durationMs: 11, attemptIds: [right.id, join.id] });
+    const readiness = work.dependencyReadinessPath;
+    assert.ok(readiness);
+    assert.deepEqual(readiness.attempts.map(node => [node.attemptId, node.gapBeforeAssemblyMs]), [[right.id, null], [join.id, 1]]);
+    assert.equal(readiness.elapsedMs, 14);
+    assert.equal(readiness.betweenAttemptsMs, 1);
+    assert.equal(readiness.unattributedWithinAttemptsMs, 3);
+    assert.deepEqual(readiness.phaseMs, { contextAssembly: 2, execution: 8 });
+    const invalid = structuredClone(replay);
+    invalid.tasks.find(task => task.id === 'join')!.attempts[0].timing!.phases!.contextAssembly[0] = 9;
+    assert.equal(projectMissionExecution(invalid).work.dependencyReadinessPath, null);
+    const shorterLateBranch = structuredClone(replay);
+    for (const event of shorterLateBranch.events)
+      if (event.seq === right.start.eventSeq) event.timing!.monotonicMs = 6;
+    shorterLateBranch.tasks.find(task => task.id === 'right')!.attempts[0].timing!.phases!.execution = [7, 9];
+    const split = projectMissionExecution(shorterLateBranch).work;
+    assert.deepEqual(split.criticalPath?.attemptIds, [left.id, join.id]);
+    assert.deepEqual(split.dependencyReadinessPath?.attempts.map(node => node.attemptId), [right.id, join.id]);
     const recoveredPublication = projectMissionExecution(replay, {
       eventId: 'report-after-restart', cursor: 99, receivedAt: '2026-11-10T22:00:00.000Z',
       timing: { clock: 'reopened-process', compositionStartedMs: 20, composedMs: 21, stagedMs: 22 },

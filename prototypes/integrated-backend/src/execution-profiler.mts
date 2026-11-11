@@ -1,4 +1,4 @@
-import type { MissionEvent, MissionProjection } from './mission-contracts.mts';
+import type { MissionAttemptPhaseTiming, MissionEvent, MissionProjection } from './mission-contracts.mts';
 import type { ConversationProviderTiming, MissionReportTiming, StreamEvent } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
 import type { TurnEvent } from '../../openai-provider/contracts.mts';
@@ -102,6 +102,62 @@ function criticalPath(attempts: { id: string; predecessors: string[] | null; int
     if (!longest || path.durationMs > longest.durationMs) longest = path;
   }
   return longest;
+}
+
+const attemptPhases = ['contextAssembly', 'dispatchValidation', 'execution', 'postExecutionContextValidation', 'verification'] as const;
+type PhaseDurations = Partial<Record<typeof attemptPhases[number], number>>;
+
+/** Trace the final settlement back through the last finishing explicit prerequisite at each join. */
+function dependencyReadinessPath(attempts: {
+  id: string; taskId: string; interval: Interval | null; predecessors: string[] | null;
+  phases: MissionAttemptPhaseTiming | null;
+}[]) {
+  type Node = { attemptId: string; taskId: string; clock: string; assemblyStartedMs: number; settledMs: number;
+    gapBeforeAssemblyMs: number | null; unattributedMs: number; phaseMs: PhaseDurations; previous: Node | null };
+  const nodes = new Map<string, Node>();
+  let tail: Node | null = null;
+  for (const { id, taskId, interval, predecessors, phases } of attempts) {
+    if (!interval || !predecessors || !phases || phases.clock !== interval.clock) return null;
+    const [assemblyStartedMs, assemblyEndedMs] = phases.contextAssembly;
+    if (assemblyEndedMs > interval.start) return null;
+    const phaseMs: PhaseDurations = {};
+    let elapsedPhases = 0, lastEnd = interval.start;
+    for (const phase of attemptPhases) {
+      const bounds = phases[phase];
+      if (!bounds) continue;
+      const [start, end] = bounds;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start ||
+        (phase !== 'contextAssembly' && (start < lastEnd || end > interval.end))) return null;
+      phaseMs[phase] = end - start;
+      elapsedPhases += end - start;
+      lastEnd = Math.max(lastEnd, end);
+    }
+    let previous: Node | null = null;
+    for (const predecessor of predecessors) {
+      const node = nodes.get(predecessor);
+      if (!node || node.clock !== interval.clock || node.settledMs > assemblyStartedMs) return null;
+      if (!previous || node.settledMs > previous.settledMs) previous = node;
+    }
+    const node: Node = { attemptId: id, taskId, clock: interval.clock, assemblyStartedMs, settledMs: interval.end,
+      gapBeforeAssemblyMs: previous ? assemblyStartedMs - previous.settledMs : null,
+      unattributedMs: Math.max(0, interval.end - assemblyStartedMs - elapsedPhases), phaseMs, previous };
+    nodes.set(id, node);
+    if (!tail || node.settledMs >= tail.settledMs) tail = node;
+  }
+  if (!tail) return null;
+  const chain: Node[] = [];
+  for (let node: Node | null = tail; node; node = node.previous) chain.push(node);
+  chain.reverse();
+  const phaseMs: PhaseDurations = {};
+  for (const node of chain) for (const phase of attemptPhases) {
+    const duration = node.phaseMs[phase];
+    if (duration !== undefined) phaseMs[phase] = (phaseMs[phase] ?? 0) + duration;
+  }
+  return { clock: tail.clock, elapsedMs: tail.settledMs - chain[0].assemblyStartedMs, phaseMs,
+    betweenAttemptsMs: chain.reduce((sum, node) => sum + (node.gapBeforeAssemblyMs ?? 0), 0),
+    unattributedWithinAttemptsMs: chain.reduce((sum, node) => sum + node.unattributedMs, 0),
+    attempts: chain.map(({ attemptId, taskId, assemblyStartedMs, settledMs, gapBeforeAssemblyMs }) =>
+      ({ attemptId, taskId, assemblyStartedMs, settledMs, gapBeforeAssemblyMs })) };
 }
 
 /** Read model of already-authorized mission receipts. No independent journal or content retention. */
@@ -218,6 +274,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
         attempts: byAttempt.size },
       // Measures occupied work on explicit dependency/retry edges. Queue gaps are separate.
       criticalPath: path,
+      dependencyReadinessPath: complete && !active ? dependencyReadinessPath(attempts) : null,
       longestOccupiedAttemptOnPath: longestOnPath ? { attemptId: longestOnPath.id, taskId: longestOnPath.taskId,
         durationMs: longestOnPath.interval!.end - longestOnPath.interval!.start,
         eventSeqs: [longestOnPath.start.eventSeq, longestOnPath.end!.eventSeq] } : null,

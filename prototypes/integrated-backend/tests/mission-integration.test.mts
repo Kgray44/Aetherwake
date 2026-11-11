@@ -150,6 +150,10 @@ test('canonical backend runs a native mission without inference, restores eviden
       mission.tasks.flatMap(task => task.attempts.map(attempt => attempt.id)).sort());
     assert.equal(profile.economics.usageCoverage, 'not-applicable');
     assert.ok(profile.work.criticalPath);
+    const readiness = profile.work.dependencyReadinessPath;
+    assert.ok(readiness);
+    assert.equal(readiness.attempts.at(-1)?.settledMs, profile.lastSettlement?.monotonicMs);
+    assert.ok(readiness.elapsedMs <= profile.admissionToLastSettlementMs!);
     assert.ok(profile.requestIntake && profile.admission && profile.requestIntake.clock === profile.admission.clock);
     assert.ok(profile.intakeToAdmissionMs! >= 0);
     assert.equal(profile.userDelivery, null);
