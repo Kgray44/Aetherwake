@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import { SqliteNativeVault, type SecretProtector, type NativeVaultOptions } from '../native-storage.mts';
 import type { PrivateRegistration } from '../contracts.mts';
@@ -30,10 +31,19 @@ if (process.argv[2] === '--child') {
     const path = process.argv[3], mode = process.argv[4];
     let connection: DatabaseSync | undefined;
     try {
-        const { db, vault } = openVault(path, { limits: { leaseMs: 300, operationMs: 3000, waitMs: 100 } });
+        const limits = mode === 'hold' ? { leaseMs: 3000, operationMs: 8000, waitMs: 100 } :
+            { leaseMs: 300, operationMs: 3000, waitMs: 100 };
+        const { db, vault } = openVault(path, { limits });
         connection = db;
         if (mode === 'hold')
-            await vault.withLock('profile', async () => { process.send?.({ event: 'held' }); await new Promise(resolve => setTimeout(resolve, 650)); db.prepare('INSERT INTO synthetic_probe VALUES(?)').run('holder'); });
+            await vault.withLock('profile', async () => {
+                const release = once(process, 'message', { signal: AbortSignal.timeout(6000) });
+                process.send?.({ event: 'held' });
+                const [command] = await release;
+                if (command !== 'release-holder')
+                    throw Error('fixture_release_required');
+                db.prepare('INSERT INTO synthetic_probe VALUES(?)').run('holder');
+            });
         else if (mode === 'write')
             await vault.withLock('profile', async () => { const current = await vault.read('profile'); if (!current)
                 throw Error('missing_fixture'); await vault.compareAndSwap('profile', current.version, { ...current, version: current.version + 1 }); });

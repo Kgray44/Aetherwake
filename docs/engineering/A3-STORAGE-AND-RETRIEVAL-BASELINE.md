@@ -23,6 +23,8 @@ Run `node --test prototypes/integrated-backend/tests/transaction-coordination.te
 
 Three hosted Windows runs reached different subprocess deadlines in the unchanged native review and worker fixtures. The worker probe now reports the phase it reached, detects a request that settles before it reaches the native port, and allows up to 30 seconds on Windows for the probe that can start and reopen source workers. The desktop review fixture allows 10 seconds for the first reply, including host startup, and keeps five seconds for each subsequent reply. The shutdown, authorization, persistence, and zero-provider assertions remain in effect.
 
+In the combined Ubuntu suite, a 300 ms synthetic lease returned recovery-required before the contender reached its expected busy result. The holder/contender fixture now uses explicit release over test IPC and checks a real renewal in SQLite before release. The crash fixture still verifies expiry and reviewed recovery. [Hosted failure](https://github.com/Kgray44/Aetherwake/actions/runs/42981337133/job/130392222337)
+
 ## Disk-backed continuity and retrieval
 
 Run `node prototypes/integrated-backend/src/transaction-benchmark.mjs` for the existing disk-backed mutation, restart and writer-fence workload. The Windows run completed all seven synthetic profiles with four warmups and 24 measured samples per operation. Examples from that run follow. Peak RSS is cumulative across the process. Other host activity overlapped this run, so the latency numbers describe this run and should not be used as quiet-host thresholds.
