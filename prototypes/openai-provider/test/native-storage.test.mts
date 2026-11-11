@@ -6,6 +6,7 @@ import { join, resolve, sep } from 'node:path';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { setTimeout as delay } from 'node:timers/promises';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { createElectronSecretProtector, NATIVE_AUTH_SCHEMA_SQL, SqliteNativeVault, type NativeVaultOptions } from '../native-storage.mts';
 import { syntheticProtector, transaction, registration, fixtureHost, openVault } from './native-fixture.mts';
@@ -29,7 +30,7 @@ function child(path: string, mode: string) { const process = fork(fileURLToPath(
     resolve({ ok: false, code: 'child_exit_' + code }); }); }); const held = new Promise<void>(resolve => { process.on('message', message => { if ((message as {
     event?: string;
 }).event === 'held')
-    resolve(); }); }); const exited = new Promise<void>(resolve => process.once('exit', () => resolve())); const deadline = setTimeout(() => process.kill(), 5000); void exited.then(() => clearTimeout(deadline)); return { process, result, held, exited }; }
+    resolve(); }); }); const exited = new Promise<void>(resolve => process.once('exit', () => resolve())); const deadline = setTimeout(() => process.kill(), mode === 'hold' ? 10000 : 5000); void exited.then(() => clearTimeout(deadline)); return { process, result, held, exited }; }
 test('offline same-canonical SQLite: encrypted at rest, metadata-only ownership, CAS and durable restart', async () => { const f = fixture(); try {
     await seed(f);
     const current = (await f.vault.read('profile'))!, secret = { ...current, version: 2, identity: { issuer: 'https://auth.openai.com' as const, subject: 'synthetic-subject', clientId: current.clientId }, enabled: true, accessToken: 'SYNTHETIC_ACCESS_MARKER', refreshToken: 'SYNTHETIC_REFRESH_MARKER', idToken: 'SYNTHETIC_ID_MARKER', scopes: ['chatgpt.tokens.use.direct'], expiresAt: Date.now() + 60000 };
@@ -88,8 +89,14 @@ finally {
 test('offline real process: holder renews without holding canonical write transaction, contender bounded, subsequent writer succeeds', async () => { const f = fixture(); let a: ReturnType<typeof child> | undefined, b: ReturnType<typeof child> | undefined; try {
     await seed(f);
     a = child(f.path, 'hold');
-    await a.held;
-    const start = performance.now();
+    const holder = a.process;
+    await Promise.race([a.held, a.result.then(result => {
+        throw Error('holder settled before acquiring the lease: ' + (result.code ?? 'unexpected_success'));
+    })]);
+    const expiresAt = () => Number(f.db.prepare('SELECT expires_at FROM openai_native_auth_lease WHERE registration_id=?')
+        .get('profile')?.expires_at ?? 0);
+    const originalExpiry = expiresAt();
+    assert.ok(originalExpiry > Date.now());
     f.db.prepare('INSERT INTO synthetic_probe VALUES(?)').run('unrelated-canonical-write');
     assert.equal(a.process.exitCode, null);
     assert.equal(f.db.prepare("SELECT count(*) AS n FROM synthetic_probe WHERE value='holder'").get()!.n, 0);
@@ -98,6 +105,11 @@ test('offline real process: holder renews without holding canonical write transa
     assert.equal(denied.ok, false);
     assert.match(denied.code ?? '', /auth_(?:lock|storage)_busy/);
     await b.exited;
+    const renewalDeadline = performance.now() + 3500;
+    while (expiresAt() <= originalExpiry && performance.now() < renewalDeadline)
+        await delay(20);
+    assert.ok(expiresAt() > originalExpiry, 'the real holder did not renew its lease');
+    await new Promise<void>((resolve, reject) => holder.send('release-holder', error => error ? reject(error) : resolve()));
     assert.equal((await a.result).ok, true);
     await a.exited;
     const after = child(f.path, 'write');
