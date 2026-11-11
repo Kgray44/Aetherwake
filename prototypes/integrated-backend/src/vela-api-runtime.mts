@@ -227,9 +227,10 @@ export class VelaApiRuntime {
           .run(Math.round(performance.now() - started), input.attemptId);
         return result;
       } catch {
-        this.options.db.prepare("UPDATE vela_api_runs SET state='unknown',error_code='image_result_unknown',elapsed_ms=? WHERE execution_id=?")
-          .run(Math.round(performance.now() - started), input.attemptId);
-        throw new VelaError('image_result_unknown', 'unknown');
+        try {
+          this.options.db.prepare("UPDATE vela_api_runs SET state='unknown',error_code='image_result_unknown',elapsed_ms=? WHERE execution_id=?")
+            .run(Math.round(performance.now() - started), input.attemptId);
+        } finally { throw new VelaError('image_result_unknown', 'unknown'); }
       }
     } finally {
       this.running.delete(input.attemptId);

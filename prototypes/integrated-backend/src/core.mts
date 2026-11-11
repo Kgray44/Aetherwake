@@ -1213,11 +1213,18 @@ export class BackendCore {
           context.validatePlanningContext?.();
         };
         const admit = () => (this.nativeHostServices?.fileEditAdmission ?? admitVelaFileEdit)(root, root);
-        validate();
-        admit();
         const started = performance.now();
-        const result = await this.velaApiRuntime.generateMissionImage({ attemptId, version: image.configurationVersion,
-          prompt: image.prompt, approvedDigest: image.digest, validate }, signal);
+        let result: Awaited<ReturnType<VelaApiRuntime['generateMissionImage']>>;
+        try {
+          validate();
+          admit();
+          result = await this.velaApiRuntime.generateMissionImage({ attemptId, version: image.configurationVersion,
+            prompt: image.prompt, approvedDigest: image.digest, validate }, signal);
+        } catch (error) {
+          if (error instanceof VelaError && error.outcome === 'unknown') throw error;
+          return { source: missionArtifactSource, value: { artifacts: [] }, outcome: 'blocked',
+            telemetry: { durationMs: performance.now() - started, providerCalls: 0 } };
+        }
         const durationMs = performance.now() - started;
         validate();
         admit();

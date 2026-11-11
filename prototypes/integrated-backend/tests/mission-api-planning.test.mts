@@ -139,6 +139,33 @@ test('a native-reviewed illustration mission publishes two readable workspace ar
   await verifyIllustrationMission();
 });
 
+test('an illustration with an unconfirmed provider result never publishes or retries', async () => {
+  const f = fixture(false, true, undefined, undefined, true);
+  try {
+    f.setCatalogModels([missionImageModel]);
+    await f.ready();
+    const objective = 'Run a mission to generate an illustration: A synthetic shape';
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    const input = { objective, fingerprint: preview.fingerprint, requestId: randomUUID(), approvedArtifactDigest: preview.artifactReview!.digest };
+    f.replies.push(() => { throw Error('synthetic connection loss'); });
+    const { id } = await f.core.command('missionStartReviewed', input) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
+    let mission = await read();
+    for (let i = 0; i < 100 && ['queued', 'running'].includes(mission.outcome); i++) {
+      await delay(25);
+      mission = await read();
+    }
+    assert.equal(mission.outcome, 'uncertain');
+    assert.equal(mission.tasks[0].attempts.length, 1);
+    assert.equal(mission.tasks[0].attempts[0].evidence, undefined);
+    assert.ok(!(await f.core.command('desktop', { type: 'snapshot' })).resources.some(resource => resource.title === 'illustration.png'));
+    await f.reopen();
+    assert.equal((await f.core.command('missionStartReviewed', input) as MissionProjection).id, id);
+    assert.equal((await read()).outcome, 'uncertain');
+    assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});
+
 test('one qualified live illustration mission delivers a verified file, image and narrative', {
   skip: process.env.AERYNTH_VERIFY_LIVE_MISSION_ARTIFACTS !== '1', timeout: 145_000,
 }, async () => {
