@@ -4,6 +4,7 @@ import { isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import { aggregateGpuEngines, readCpuCounters } from '../../vela-core/src/system-utilization.mts';
 import type { MissionAdmission, MissionAdmissionReading } from './mission-contracts.mts';
+import { createResourcePolicy, type ResourcePolicyConfig } from './resource-policy.mts';
 
 const memoryFloorBytes = 512 * 1024 * 1024;
 const cpuIntervalMs = 500;
@@ -37,6 +38,7 @@ type AdmissionOptions = {
   availableMemory?(): number;
   cpuCounters?(): CpuCounters;
   readWindowsPressure?: ((signal: AbortSignal) => Promise<WindowsPressure>) | null;
+  resourcePolicy?: ResourcePolicyConfig;
 };
 
 const numeric = (value: unknown, max: number): value is number =>
@@ -119,6 +121,7 @@ function observePressure(previous: Pressure, sample: TimedReading | undefined, h
 export function createMissionAdmission(options: AdmissionOptions) {
   const now = options.now ?? (() => performance.now());
   const wallNow = options.wallNow ?? Date.now;
+  const policy = createResourcePolicy(options.maxWorkers, memoryFloorBytes, now, wallNow, options.resourcePolicy);
   const availableMemory = options.availableMemory ?? freemem;
   const readCpu = options.cpuCounters ?? readCpuCounters;
   const readWindows = options.readWindowsPressure === null ? undefined :
@@ -244,13 +247,20 @@ export function createMissionAdmission(options: AdmissionOptions) {
       if (time - lastInput <= inputFreshMs && ((cpuPercent?.value ?? -1) >= 80 || (gpuEnginePercent?.value ?? -1) >= 85))
         reasons.push('active-input');
       const workerLimit = reasons.includes('physical-memory') ? 0 : reasons.length ? Math.min(1, options.maxWorkers) : options.maxWorkers;
-      return { workerLimit, reasons, readings: {
+      const snapshot = { workerLimit, reasons, readings: {
         ...(cpuPercent ? { cpuPercent: { ...cpuPercent } } : {}),
         ...(availableMemoryBytes ? { availableMemoryBytes: { ...availableMemoryBytes } } : {}),
         ...(gpuEnginePercent ? { gpuEnginePercent: { ...gpuEnginePercent } } : {}),
         ...(diskQueueLength ? { diskQueueLength: { ...diskQueueLength } } : {}),
       } };
+      policy.update(snapshot, memory ? memory.time + demandGapMs : -Infinity);
+      return snapshot;
     },
+    inspectPolicy: policy.inspect,
+    configurePolicy: policy.configure,
+    rollbackPolicy: policy.rollback,
+    canLease: policy.canLease,
+    tryLease: policy.tryLease,
     telemetry() {
       const time = now();
       function metric(name: string, unit: string, source: string, maxAge: number, derived = false, supported = true) {
@@ -283,6 +293,6 @@ export function createMissionAdmission(options: AdmissionOptions) {
     },
     noteActivity() { if (!disposed) lastInput = now(); },
     stopDemand() { lastDemand = -Infinity; probe?.abort(); },
-    dispose() { disposed = true; probe?.abort(); samples.clear(); errors.clear(); },
+    dispose() { disposed = true; probe?.abort(); policy.dispose(); samples.clear(); errors.clear(); },
   };
 }
