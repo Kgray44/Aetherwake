@@ -9,11 +9,13 @@ This draft assembles Architecture Recovery A3 and A4 and Fluid Intelligence FI-0
 | 01, storage and retrieval | [#36](https://github.com/Kgray44/Aetherwake/pull/36) | `51406e35629b7181abdf43d42834f1d5d7991571` |
 | 01, runtime recovery | [#38](https://github.com/Kgray44/Aetherwake/pull/38) | `d422229aa3753099b43ba3c87adc8c2489bfae41` |
 | 01, common contracts | [#40](https://github.com/Kgray44/Aetherwake/pull/40) | `5a72594b2259d850da70810183234797d2e34ab1` |
-| 02, profiling | [#41](https://github.com/Kgray44/Aetherwake/pull/41) and [combined-base follow-up](https://github.com/Kgray44/Aetherwake/commit/7eb21fca3c40cb0ba02c35524fa1224ac147d3f7) | `5028aaefcbc0e56398eb49c5af7b88c1147c854f` plus the FI-1 delta from `7aac5163` through `7eb21fca3c40cb0ba02c35524fa1224ac147d3f7` |
-| 03, resources | [#37](https://github.com/Kgray44/Aetherwake/pull/37), [#39](https://github.com/Kgray44/Aetherwake/pull/39), [#42](https://github.com/Kgray44/Aetherwake/pull/42) | `8dd54d1347349ba199b4af5dae28e3caaf4804d9` |
-| 04, cognition | [#43–52 stack tip](https://github.com/Kgray44/Aetherwake/pull/52) | `8363758f87d1ded17a64acdf96425f973df6cbda` |
+| 02, profiling | [#41](https://github.com/Kgray44/Aetherwake/pull/41) and [combined-base follow-up](https://github.com/Kgray44/Aetherwake/commit/7eb21fca3c40cb0ba02c35524fa1224ac147d3f7) | `5028aaefcbc0e56398eb49c5af7b88c1147c854f` plus the FI-1 delta from `7aac5163` through `7eb21fca3c40cb0ba02c35524fa1224ac147d3f7` and the consolidated handoff `359b513da3e53d2f3e99f82d4afb3586fd4eafce` |
+| 03, resources | [#37](https://github.com/Kgray44/Aetherwake/pull/37), [#39](https://github.com/Kgray44/Aetherwake/pull/39), [#42](https://github.com/Kgray44/Aetherwake/pull/42), [#57](https://github.com/Kgray44/Aetherwake/pull/57) | `8dd54d1347349ba199b4af5dae28e3caaf4804d9` plus `07a6dc920669e2ecf6a0739bb1dd6c91179727ff` |
+| 04, cognition | [#43–52 stack tip](https://github.com/Kgray44/Aetherwake/pull/52) and [cognition handoff](https://github.com/Kgray44/Aetherwake/commit/786d9ef4227b6728e943375e068b03d5faf1d0d7) | `786d9ef4227b6728e943375e068b03d5faf1d0d7` |
 
 The integration branch replays and reconciles the source changes. Its commit IDs differ from the individual branch IDs. The combined planner retains exact reviewed note and configuration binding, one-use provider admission, and the AEP transport observations on the same request. Timing starts at the planner stage after CIE retrieval. MissionService preserves separate AEP ready-queue timing, ARIE preparation and release, evidence verification, and blocked versus uncertain settlement. The focused integration test joins the planning execution ID, bodyless cognition receipt, transport timing, and versioned resource leases for one reviewed-note mission.
+
+The final handoff batch retains the AEP native-sample comparison alongside the ARIE read-only experiment preview. The preview resolves its hypothesis through the scoped mission and exact revision before using existing resource policy. FI-2 buffers internal text with cancellation and configuration checks, records event types and transport timing, and revalidates full source proofs at dispatch and completion. Its reviewed gap follow-up and the existing output presentation share the Vela reply contract.
 
 ## Validation
 
