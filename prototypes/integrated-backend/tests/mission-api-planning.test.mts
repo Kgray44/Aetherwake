@@ -414,6 +414,9 @@ test('native Start review binds the complete objective to current host proofs ac
       dialog: { showMessageBox: async (_window: unknown, review: { detail: string }) => {
         assert.match(review.detail, /physical|RAM/);
         assert.ok(review.detail.includes(objective));
+        assert.match(review.detail, /operating system CPU counters/i);
+        assert.match(review.detail, /operating system memory counters/i);
+        assert.match(review.detail, /total and available physical memory/i);
         return { response: choice };
       } }, input: { name: 'start', input: startInput } }) as Promise<MissionProjection>;
     const forged = { ...input, approvedObjectiveDigest };

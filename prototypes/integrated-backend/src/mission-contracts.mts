@@ -55,6 +55,9 @@ export interface MissionObjectiveReview {
   planRevision: 1;
   obligations: { taskId: string; objective: string; executor: string; criterion: string; evidenceSource: string }[];
 }
+export interface MissionObjectiveReviewPreview extends MissionObjectiveReview {
+  obligations: (MissionObjectiveReview['obligations'][number] & { proofDescription: string })[];
+}
 export interface MissionObjectiveAssessment {
   model: string;
   requestId: string;
@@ -244,7 +247,7 @@ export interface MissionPreview {
   executors: { id: string; available: boolean }[];
   externalReview?: { provider: string; model: string; effort?: ReasoningEffort; calls: number };
   localReview?: { kind: 'node-test'; maxFiles: number };
-  objectiveReview?: MissionObjectiveReview;
+  objectiveReview?: MissionObjectiveReviewPreview;
   proposalId?: string;
 }
 export interface MissionPlanningOffer {

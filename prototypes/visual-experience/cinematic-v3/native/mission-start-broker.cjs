@@ -20,7 +20,8 @@ async function startReviewedMission({win,event,localURL,storage,call,dialog,inpu
           let approvedProjectCheck, approvedObjectiveDigest;
           const objective = preview.objectiveReview;
           const objectiveDetail = objective
-            ? `Original objective:\n${preview.plan.objective}\n\nResults that would complete it:\n${objective.obligations.map(item => item.objective).join('\n')}\n\nConfirm these results cover the full objective, or keep the mission's coverage partial.`
+            ? `Original objective:\n${preview.plan.objective}\n\nResults that would complete it:\n${objective.obligations.map(item =>
+              `${item.objective}\n${item.proofDescription}`).join('\n\n')}\n\nConfirm these results cover the full objective, or keep the mission's coverage partial.`
             : '';
           const startButtons = objective ? ["Cancel", "Run and verify objective", "Run with partial coverage"] : ["Cancel", "Run reviewed mission"];
           const acceptStart = choice => {
