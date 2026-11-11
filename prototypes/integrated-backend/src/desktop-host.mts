@@ -125,6 +125,8 @@ lines.on("line", async (line) => {
         "missionCheckReview",
         "missionPlanReviewed",
         "missionPlanningReview",
+        "missionExecutiveReview",
+        "missionExecutiveReviewed",
         "velaRequestPreview",
         "velaNextWorkflowStage",
         "velaWorkflowReview",

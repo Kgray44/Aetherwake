@@ -53,6 +53,7 @@ const {createWindowsMaintenanceBroker}=require('./windows-maintenance-broker.cjs
 const {createWindowsComputerBroker}=require('./windows-computer-broker.cjs');
 const {reviewVelaOwner}=require('./vela-owner-review.cjs');
 const {startReviewedMission}=require('./mission-start-broker.cjs');
+const { reviewMissionExecutive } = require("./mission-executive-broker.cjs");
 const { createVelaVoiceBroker } = require('./vela-voice-broker.cjs');
 const { createWakeMediaBroker } = require('./wake-media-broker.cjs');
 const { loadWakeController } = require('./wake-controller-loader.cjs');
@@ -845,7 +846,10 @@ app.whenReady().then(async () => {
       } else if (command === "notes") {
         result = await call("notes", input);
       } else if (command === "missions") {
-        if (input?.name === "plan") {
+        if (input?.name === "executive-review") {
+          result = await reviewMissionExecutive({ request: input.input, parent: win, call, reviewProvider,
+            isCurrent: () => trustedActiveFrame(event), allowWrite: () => storage.allowWrite() });
+        } else if (input?.name === "plan") {
           const { objective, noteIds, fingerprint } = input.input ?? {};
           const offer = await call("missions", { name: "preview", input: { objective, ...(noteIds === undefined ? {} : { noteIds }) } });
           if (offer?.kind !== "planning-offer" || offer.fingerprint !== input.input?.fingerprint)

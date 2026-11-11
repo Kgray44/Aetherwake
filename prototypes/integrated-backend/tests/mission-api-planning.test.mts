@@ -186,12 +186,30 @@ test('Executive reviews a real native mission checkpoint through the synthetic R
       return response(JSON.stringify({ version: 1, action: 'request-completion-review', target: '', related: [],
         reason: 'Check the native verification receipts before reporting completion.' }), body.model);
     });
-    const result = await f.core.proposeVelaMissionRevision(started.id, trigger.seq, { ...options, authorize: review => {
-      assert.equal(review.packet.basedOnRevision, settled.revision);
-      assert.equal(review.packet.trigger.sequence, trigger.seq);
+    const request = { id: started.id, revision: settled.revision, triggerSeq: trigger.seq };
+    const review = await f.core.command('missionExecutiveReview', request);
+    assert.equal(review.packet.basedOnRevision, settled.revision);
+    assert.equal(review.packet.trigger.sequence, trigger.seq);
+    await assert.rejects(f.core.command('missionExecutiveReviewed', { ...request, fingerprint: 'wrong' }), /mission_executive_review_changed/);
+    assert.equal(f.requests.length, 0);
+    const approved = { ...request, fingerprint: review.fingerprint };
+    const require = createRequire(import.meta.url);
+    const { reviewMissionExecutive } = require('../../visual-experience/cinematic-v3/native/mission-executive-broker.cjs');
+    const { reviewPage } = require('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+    let current = true;
+    const broker = { request, parent: {}, call: f.core.command.bind(f.core), isCurrent: () => current, allowWrite: async () => true };
+    await assert.rejects(reviewMissionExecutive({ ...broker, reviewProvider: async () => false }), /mission_review_declined/);
+    await assert.rejects(reviewMissionExecutive({ ...broker, reviewProvider: async () => true,
+      allowWrite: async () => { current = false; return true; } }), /unauthorized_sender/);
+    assert.equal(f.requests.length, 0);
+    current = true;
+    const result = await reviewMissionExecutive({ ...broker, reviewProvider: async ({ review: nativeReview }: { review: unknown }) => {
+      assert.match(reviewPage(nativeReview), /one request with the mission objective/);
+      assert.match(reviewPage(nativeReview), /basedOnPlanRevision/);
       return true;
-    } });
-    assert.equal(result.state, 'advisory');
+    } }) as Awaited<ReturnType<typeof f.core.command<'missionExecutiveReviewed'>>>;
+    assert.equal(result.result.state, 'advisory');
+    await assert.rejects(f.core.command('missionExecutiveReviewed', approved), /mission_executive_already_attempted/);
     assert.equal(f.requests.length, 1);
     const after = await f.core.command('missions', { name: 'read', input: { id: started.id } }) as MissionProjection;
     assert.equal(after.revision, settled.revision);

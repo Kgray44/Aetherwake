@@ -194,7 +194,16 @@ export interface MissionRevisionPreview {
     webSearch?: true;
   };
 }
+export interface MissionExecutiveRequest { id: string; revision: number; triggerSeq: number }
+export interface MissionExecutiveReview {
+  request: MissionExecutiveRequest;
+  fingerprint: string;
+  configurationVersion: number;
+  model: string;
+  packet: import('./mission-executive.mts').ExecutivePacket;
+}
 export type MissionRequest =
+  | { name: 'executive-review'; input: MissionExecutiveRequest }
   | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string; teamId?: string; noteIds?: string[] } }
   | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string; noteIds?: string[] } }
   | { name: 'start'; input: { objective: string; fingerprint: string; requestId: string; agentProfileId?: string; proposalId?: string; teamId?: string } }
@@ -317,6 +326,7 @@ export type MissionWorkroomResource = {
 );
 
 export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomResource |
+  { kind: 'executive-result'; result: import('./mission-executive.mts').ExecutiveResult } |
   MissionWorkroomPreview | MissionRevisionPreview | MissionTeam | MissionTeamLibrary |
   { kind: 'mission-report'; missionId: string; messageId: string } | null;
 
