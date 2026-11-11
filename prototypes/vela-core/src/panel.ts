@@ -6,7 +6,8 @@ import { confirmedVelaPlan, projectVelaManifestation, type VelaManifestationStat
 import { summarizeSystemMemory } from './system-information.ts';
 import { createVelaProposalView, type VelaProposalChoice } from './proposal-view.ts';
 import { githubRepository } from '../../application-contract/github-timeline.ts';
-import type { MissionPlanningOffer, MissionPreview } from '../../integrated-backend/src/mission-contracts.mts';
+import { EXPLICIT_MISSION_PREFIX } from '../../integrated-backend/src/mission-contracts.mts';
+import type { MissionPlanningEvidenceSelection, MissionPlanningOffer, MissionPreview } from '../../integrated-backend/src/mission-contracts.mts';
 
 function conciseObservedAnswer(content:string|undefined,facts:VelaLocalFacts|undefined){
   if(!content)return '';
@@ -38,7 +39,7 @@ export interface VelaPanelOptions {
   permissions?: { element: HTMLElement; setVisible(visible: boolean): void };
   missions?: {
     element: HTMLElement;
-    preview(intent: string, agentProfileId?: string): Promise<MissionPreview | MissionPlanningOffer | null>;
+    preview(intent: string, agentProfileId?: string, evidence?: MissionPlanningEvidenceSelection): Promise<MissionPreview | MissionPlanningOffer | null>;
     review(preview: MissionPreview | MissionPlanningOffer, onStarted: (missionId: string) => void, agentProfileId?: string): void;
     openReport?(id: string): void;
     setVisible(visible: boolean): void;
@@ -46,6 +47,7 @@ export interface VelaPanelOptions {
 }
 export interface VelaPanelManifestation {
   projection: Readonly<VelaManifestationState>; view: 'current' | 'history'; baseline: boolean;
+  output?: import('../../application-contract/contracts.ts').VelaOutputObservation;
   elements: { shell: HTMLElement; reading: HTMLElement; manifestation: HTMLElement; composer: HTMLFormElement };
 }
 const providerName = (id: string | null | undefined) => id === 'codex-app-server' ? 'Codex' : id === 'chatgpt-plan-responses' ? 'ChatGPT plan' : id === 'openai-api-vela' ? 'Vela API' : id || 'Provider';
@@ -55,7 +57,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const doc = root.ownerDocument;
   let current: VelaState | null = null, disposed = false, busy = false, nativeBusy = false, composing = false, draftRevision = 0, lastDisclosure: HTMLDetailsElement | null = null;
   let activeContext: string | null = null, contextTrigger: HTMLButtonElement | null = null, chosenProviderId: string | null = null, presentationSignature = '';
-  let handoffSelection: { requestId: string; sourceProviderId: string } | null = null;
+  let handoffSelection: { requestId: string; sourceProviderId: string; reviewedEvidence?: true } | null = null;
   let routingAgentSelection: ResourceRef | null = null;
   let manifestationSignature = '', manifestationBaseline = true, observing = true, presentationBusy = false, readSequence = 0, viewRevision = 0, transientView: 'current' | 'history' | null = null;
   const instanceId = 'vela-context-' + ++panelSequence;
@@ -101,11 +103,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   history.append(historyBack, openHistory, historyRequests, conversation, planHistory.node, historyEmpty);
   const pin = icon('Pin response', '◇', 'pin', () => updatePresentation({ pinnedRequestIds: toggle(presentation().pinnedRequestIds, project().currentRequestId) }));
   const dismiss = icon('Dismiss response', '×', 'dismiss', () => { const id = project().currentRequestId; if (id) return updatePresentation({ dismissedRequestIds: [...new Set([...presentation().dismissedRequestIds, id])], selectedRequestId: null }); });
-  const handoffButton = button('Continue with another provider', () => {
+  function selectExchange(destination: string, reviewedEvidence?: true) {
     const request = current?.requests.find(item => item.id === project().currentRequestId);
-    const destination = handoffButton.dataset.destination;
     if (busy || !request?.providerId || !destination) return;
-    handoffSelection = { requestId: request.id, sourceProviderId: request.providerId };
+    handoffSelection = { requestId: request.id, sourceProviderId: request.providerId, ...(reviewedEvidence ? { reviewedEvidence } : {}) };
     if (chosenProviderId !== destination) clearModelOptions();
     chosenProviderId = destination;
     if (routeMode.value === 'codex' && destination !== 'codex-app-server') routeMode.value = 'auto';
@@ -113,8 +114,11 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     renderProviderChoice();
     renderSelection();
     intent.focus();
-  });
+  }
+  const handoffButton = button('Continue with another provider', () => selectExchange(handoffButton.dataset.destination ?? ''));
+  const exchangeEvidence = button('Use this exchange as evidence', () => selectExchange('openai-api-vela', true));
   handoffButton.hidden = true;
+  exchangeEvidence.hidden = true;
   const rateResponse = (feedback: 'useful' | 'needs-correction') => async () => {
     const requestId = project().currentRequestId;
     if (!requestId || !client.rateRoutingResponse) return;
@@ -123,7 +127,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   };
   const useful = button('Mark useful', rateResponse('useful')), needsCorrection = button('Mark needs correction', rateResponse('needs-correction'));
   useful.hidden = needsCorrection.hidden = true;
-  const responseActions = el('div', 'vela-manifestation-actions'); responseActions.append(handoffButton, useful, needsCorrection, pin, dismiss);
+  const responseActions = el('div', 'vela-manifestation-actions'); responseActions.append(handoffButton, exchangeEvidence, useful, needsCorrection, pin, dismiss);
   manifestation.tabIndex = -1; manifestation.append(manifestationKicker, localAlongsidePlan, manifestationBody, plans, fileEditActions);
   const more = el('section', 'vela-core-contextual vela-core-more'); more.hidden = true; more.id = instanceId; more.setAttribute('aria-label', 'Vela controls');
   const resultPanel = disclosure('Plan and response details', 'vela-core-result-panel');
@@ -256,6 +260,56 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   routeEscalation.type = 'checkbox';
   const routeHistory = el('input');
   routeHistory.type = 'checkbox';
+  const semanticContext = el('input');
+  semanticContext.type = 'checkbox';
+  const workspaceState = el('input');
+  workspaceState.type = 'checkbox';
+  const projectEvidence = el('input');
+  projectEvidence.type = 'checkbox';
+  workspaceState.addEventListener('change', updateSemanticContext);
+  projectEvidence.addEventListener('change', updateSemanticContext);
+  let preparingEvidencePlan = false;
+  const planWithEvidence: HTMLButtonElement | undefined = options.missions && button('Plan mission with reviewed evidence', async () => {
+    const missions = options.missions!;
+    if (busy || !intent.value.trim() || planWithEvidence?.disabled) return;
+    const objective = intent.value;
+    const sources = [...selected.values()];
+    const noteIds = sources.filter(ref => ref.resourceKind === 'note').map(ref => ref.id);
+    const fileIds = sources.filter(ref => ref.resourceKind === 'file').map(ref => ref.id);
+    preparingEvidencePlan = true;
+    updateSemanticContext();
+    try {
+      const preview = await missions.preview(objective, undefined, {
+        ...(noteIds.length ? { noteIds } : {}), ...(fileIds.length ? { fileIds } : {}),
+        ...(projectEvidence.checked ? { projectEvidence: true } : {}),
+      });
+      if (!preview) throw Error('mission_scope_denied');
+      reveal('missions');
+      missions.review(preview, missionId => missions.openReport?.(missionId));
+    } finally {
+      preparingEvidencePlan = false;
+      updateSemanticContext();
+    }
+  });
+  sourcePanel.body.append(label('Find evidence in this project', projectEvidence));
+  if (planWithEvidence) sourcePanel.body.append(planWithEvidence);
+  function updateSemanticContext() {
+    const sources = [...selected.values()];
+    const incompatibleScope = (!!handoffSelection && !handoffSelection.reviewedEvidence) || !!routingAgentSelection;
+    const incompatibleSource = sources.some(ref => ref.resourceKind !== 'note' && ref.resourceKind !== 'file') || incompatibleScope;
+    const apiUnavailable = !current?.planningProviders || chosenProviderId !== 'openai-api-vela';
+    const sourceCount = selected.size + Number(!!handoffSelection?.reviewedEvidence);
+    const ineligible = !selected.size || sourceCount > 4 || incompatibleSource;
+    semanticContext.disabled = apiUnavailable || ineligible;
+    if (semanticContext.disabled) semanticContext.checked = false;
+    workspaceState.disabled = apiUnavailable || incompatibleSource || sourceCount + Number(projectEvidence.checked) > 3 || !current?.applicationContext?.currentWorkspaceId;
+    if (workspaceState.disabled) workspaceState.checked = false;
+    projectEvidence.disabled = apiUnavailable || incompatibleSource || sourceCount + Number(workspaceState.checked) > 3 || !current?.applicationContext?.currentProjectId;
+    if (projectEvidence.disabled) projectEvidence.checked = false;
+    if (planWithEvidence) planWithEvidence.disabled = (ineligible && !projectEvidence.checked) ||
+      !!handoffSelection || workspaceState.checked || busy || preparingEvidencePlan || !intent.value.trim();
+  }
+  updateSemanticContext();
   const modes = [['auto', 'Auto'], ['fast', 'Fast'], ['deep', 'Deep'], ['codex', 'Codex'], ['custom', 'Custom']] as const;
   function setOptions(select: HTMLSelectElement, values: readonly (readonly [string, string])[]) {
     select.replaceChildren(...values.map(([id, title]) => {
@@ -315,6 +369,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   if (client.routingOptions) providerRoutes.append(label('Routing mode', routeMode), refreshModels, label('Model', routeModel),
     label('Reasoning effort', routeEffort), label('Allow one deeper attempt if Auto hits an output limit', routeEscalation));
   providerRoutes.append(label('Start fresh for this send', routeHistory));
+  providerRoutes.append(label('Investigate selected notes or files', semanticContext));
+  providerRoutes.append(label('Review current workspace state', workspaceState));
   const savedRoutes = disclosure('Saved routing defaults', 'vela-core-routing-defaults');
   const scopeChoice = el('select', 'vela-core-input');
   const effectiveRoute = el('p', 'vela-core-meta');
@@ -435,9 +491,48 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   composeActions.append(stop, send);
   connection.body.append(providerChoice);
   form.append(intent, selection, composeActions);
-  intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
+  intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
   form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return;
+    const missions = options.missions;
+    if (missions && EXPLICIT_MISSION_PREFIX.test(intent.value.normalize('NFKC').trim())) {
+      const objective = intent.value, revision = draftRevision, sources = [...selected.values()];
+      void run(async () => {
+        if (handoffSelection || routingAgentSelection || workspaceState.checked) throw Error('mission_composer_context_unsupported');
+        const noteIds = sources.filter(ref => ref.resourceKind === 'note').map(ref => ref.id);
+        const fileIds = sources.filter(ref => ref.resourceKind === 'file').map(ref => ref.id);
+        if (noteIds.length + fileIds.length !== sources.length) throw Error('mission_composer_evidence_unsupported');
+        busy = true; send.disabled = true; errorBox.hidden = true;
+        form.setAttribute('aria-busy', 'true');
+        try {
+          const evidence: MissionPlanningEvidenceSelection = {
+            ...(noteIds.length ? { noteIds } : {}),
+            ...(fileIds.length ? { fileIds } : {}),
+            ...(projectEvidence.checked && !projectEvidence.disabled ? { projectEvidence: true } : {}),
+          };
+          const preview = await missions.preview(objective, undefined, Object.keys(evidence).length ? evidence : undefined);
+          if (disposed || draftRevision !== revision) return;
+          if (!preview) throw Error('mission_scope_denied');
+          const usesProvider = 'plan' in preview ? !!(preview.externalReview || preview.artifactReview) : true;
+          const reviewedProvider = 'plan' in preview ? (preview.artifactReview ? 'openai-api-vela' : preview.externalReview?.provider) : preview.planner?.provider;
+          if (usesProvider && ((chosenProviderId && chosenProviderId !== reviewedProvider) || useAutomaticOnce || (routeMode.value && routeMode.value !== 'auto') ||
+            routeModel.value || routeEffort.value || routeEscalation.checked || routeHistory.checked))
+            throw Error('mission_composer_routing_options');
+          reveal('missions');
+          missions.review(preview, missionId => {
+            if (disposed) return;
+            if (draftRevision === revision && intent.value === objective) {
+              intent.value = ''; draftRevision++; send.disabled = true; updateSemanticContext();
+            }
+            missions.openReport?.(missionId);
+          });
+        } finally {
+          busy = false; send.disabled = !intent.value.trim();
+          form.setAttribute('aria-busy', 'false'); updateSemanticContext(); present();
+        }
+      });
+      return;
+    }
     if (options.voice && /^\s*(?:vela[,!]?\s+)?(?:let['’]?s talk(?: instead)?|switch to voice|start (?:a )?voice(?: conversation)?)[.!?]*\s*$/iu.test(intent.value)) {
       const text = intent.value, revision = draftRevision;
       reveal('voice');
@@ -446,17 +541,22 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       void run(async () => { await starting; if (draftRevision === revision && intent.value === text) { intent.value = ''; draftRevision++; send.disabled = true; } await refresh(); });
       return;
     }
-    const connected = !!current?.planningProviders, submitted = { intent: intent.value, resourceIds: [...selected.keys()],...(selected.size?{resourceRefs:[...selected.values()].map(ref=>({...ref}))}:{}), authorizeProvider: connected || allowProvider.checked && chosenProviderId === current?.planner.providerId, ...(connected && chosenProviderId ? { providerId: chosenProviderId } : {}),
+    const connected = !!current?.planningProviders, reviewWorkspace = connected && !workspaceState.disabled && workspaceState.checked;
+    const reviewProject = connected && !projectEvidence.disabled && projectEvidence.checked;
+    const submitted = { intent: intent.value, resourceIds: [...selected.keys()],...(selected.size?{resourceRefs:[...selected.values()].map(ref=>({...ref}))}:{}), authorizeProvider: connected || allowProvider.checked && chosenProviderId === current?.planner.providerId, ...(connected && chosenProviderId ? { providerId: chosenProviderId } : {}),
     ...(connected && routeMode.value && routeMode.value !== 'auto' ? { mode: routeMode.value as typeof modes[number][0] } : {}),
     ...(connected && routeModel.value ? { model: routeModel.value } : {}),
     ...(connected && routeEffort.value ? { reasoningEffort: routeEffort.value as import('../../openai-provider/model-controls.ts').ReasoningEffort } : {}),
     ...(connected && !routeEscalation.disabled && routeEscalation.checked ? { allowEscalation: true as const } : {}),
     ...(connected && routeHistory.checked ? { includeRecentHistory: false as const } : {}),
+    ...(reviewProject || reviewWorkspace || connected && (handoffSelection?.reviewedEvidence || !semanticContext.disabled && semanticContext.checked) ? { semanticContext: true as const } : {}),
+    ...(reviewWorkspace ? { workspaceState: true as const } : {}),
+    ...(reviewProject ? { projectEvidence: true as const } : {}),
     ...(connected && handoffSelection ? { handoffSourceRequestId: handoffSelection.requestId } : {}),
     ...(connected && routingAgentSelection ? { routingAgentId: routingAgentSelection.id } : {}),
     ...(connected && (useAutomaticOnce || handoffSelection && !routingAgentSelection) ? { overrideDefaults: true as const } : {}),
   }, revision = draftRevision, submittedView = ++viewRevision;
-    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
+    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; projectEvidence.checked = workspaceState.checked = semanticContext.checked = routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
       try {
         const recorded = await client.request(submitted);
@@ -484,6 +584,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function closeContext(restoreFocus = true) { if (more.hidden) return; const previous = contextTrigger; for (const entry of contextPanels.values()) { entry.panel.node.hidden = true; entry.trigger.setAttribute('aria-expanded', 'false'); } activeContext = null; more.hidden = true; lastDisclosure = null; options.missions?.setVisible(false); options.voice?.setVisible(false); options.permissions?.setVisible(false); updatePresence(); if (restoreFocus) previous?.focus(); present(); }
   shell.addEventListener('keydown', event => { if (event.key !== 'Escape') return; const target = event.target as HTMLElement, opened = target.closest<HTMLDetailsElement>('details[open]') ?? (lastDisclosure?.open && shell.contains(lastDisclosure) && !lastDisclosure.closest('[hidden]') ? lastDisclosure : null); if (!more.hidden && (!opened || opened === contextPanels.get(activeContext!)?.panel.node)) { event.preventDefault(); event.stopPropagation(); closeContext(); } else if (opened) { event.preventDefault(); event.stopPropagation(); opened.open = false; opened.querySelector('summary')?.focus(); } });
   function renderSelection() {
+    updateSemanticContext();
     selection.replaceChildren(); selection.hidden = !selected.size && !handoffSelection && !routingAgentSelection;
     routeHistory.disabled = !!handoffSelection;
     if (handoffSelection) {
@@ -512,6 +613,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     updateWorkspaceAvailability();
   }
   function renderProviderChoice() {
+    updateSemanticContext();
     const connected = current?.planningProviders;
     refreshModels.disabled = !connected || (!chosenProviderId && routeMode.value !== 'codex');
     routeEscalation.disabled = !connected || !!chosenProviderId || (!!routeMode.value && routeMode.value !== 'auto');
@@ -586,7 +688,13 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const projection = project(), signature = JSON.stringify({ projection, view: view(), context: shell.dataset.context }); if (signature === manifestationSignature) return;
     manifestationSignature = signature;
     const baseline = manifestationBaseline; manifestationBaseline = false;
-    const value: VelaPanelManifestation = { projection: Object.freeze({ ...projection, requiredPlanIds: Object.freeze([...projection.requiredPlanIds]) }), view: view(), baseline, elements: { shell, reading: flow, manifestation, composer: form } };
+    const message = current?.conversation?.messages.find(item => item.id === projection.currentMessageId);
+    const executionId = message?.providerId === 'openai-api-vela' ? message.providerContribution?.executionId : undefined;
+    const output = message?.missionReport && projection.kind === 'insight' ?
+      { missionId: message.missionReport.missionId, messageId: message.id } :
+      executionId && message && projection.currentRequestId && projection.kind !== 'action' ?
+        { executionId, messageId: message.id, requestId: projection.currentRequestId } : undefined;
+    const value: VelaPanelManifestation = { projection: Object.freeze({ ...projection, requiredPlanIds: Object.freeze([...projection.requiredPlanIds]) }), view: view(), baseline, output, elements: { shell, reading: flow, manifestation, composer: form } };
     try { options.onManifestation?.(value); } catch { /* Geometry cannot block useful content or grant an action. */ }
   }
   function renderReading() {
@@ -598,7 +706,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const readJobs=selectedRequest?.toolWorkflow?.completedReadJobs;
     const completedReadJobs=Number.isSafeInteger(readJobs)&&readJobs!>=0&&readJobs!<=16?readJobs!:0;
     const completedPlan = selectedRequest && current?.plans.find(plan => plan.id === projection.currentPlanId && confirmedVelaPlan(current!, selectedRequest, plan));
-    const speakable=message&&view()==='current'&&projection.kind!=='action'&&(missionReport||completedPlan||selectedRequest?.state==='responded'&&selectedRequest.response?.messageId===message.id)?message:undefined;
+    const speakable=message&&view()==='current'&&projection.kind!=='action'&&!missionReport?.stale&&(missionReport||completedPlan||selectedRequest?.state==='responded'&&selectedRequest.response?.messageId===message.id)?message:undefined;
     const actionPlan = current?.plans.find(plan => plan.id === projection.currentPlanId);
     const reviewPlan = actionPlan?.state === 'prepared' && !actionPlan.steps.some(step=>step.action.type==='delegateTask') ? actionPlan : null;
     const fileProposal = current?.fileProposals?.find(item => item.requestId === selectedRequest?.id && item.state === 'proposed' && item.count === item.files.length && item.count > 0);
@@ -630,7 +738,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       else if (reviewPlan) manifestationBody.append(planProposalView.element,responseFooter(undefined,[],completedReadJobs));
       else if (actionMessage) manifestationBody.append(el('p', undefined, actionMessage), responseFooter(undefined,[],completedReadJobs));
       else if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content));
-      if (missionReport) manifestationBody.append(missionReplyFooter(missionReport,speakable));
+      if (missionReport) appendMissionReportDetails(manifestationBody, missionReport, speakable);
       else if (message && projection.kind !== 'action') {
         const footer=responseFooter(completedPlan || undefined,hostOperations,(completedFiles&&!completedPlan?1:0)+completedReadJobs,speakable);
         manifestationBody.append(footer);
@@ -774,6 +882,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     handoffButton.title = destination?.available === false ? 'The destination connection will be checked on Send.' : '';
     handoffButton.dataset.destination = destination?.providerId ?? '';
     if (destination) handoffButton.textContent = 'Continue with ' + providerName(destination.providerId);
+    exchangeEvidence.hidden = !sourceProvider || !selectedRequest?.provenance || selectedRequest.response?.kind !== 'answer' ||
+      message?.source !== 'provider' || !current?.planningProviders?.some(item => item.providerId === 'openai-api-vela' && item.available);
+    exchangeEvidence.disabled = busy;
     const canRate = !!client.rateRoutingResponse && !!selectedRequest &&
       current?.routingSettings?.calibration?.feedbackRequestIds.includes(selectedRequest.id) === true;
     useful.hidden = needsCorrection.hidden = !canRate;
@@ -826,8 +937,15 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       status.dataset.actionState = 'failed'; errorBox.hidden = false;
       const code = error instanceof Error ? error.message : String(error);
       const messages: Record<string, string> = {
+        vela_project_evidence_unavailable: 'Open a project with readable notes or short text files to search for evidence.',
+        vela_project_evidence_changed: 'Project evidence changed. Review the current sources and send again.',
         vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',
         mission_scope_denied: 'The mission workspace changed. Review the current workspace and try again.',
+        mission_composer_routing_options: 'Clear the one-turn routing options before opening mission review. Your draft is still here.',
+        mission_composer_context_unsupported: 'Clear the selected handoff, agent or workspace state before opening mission review. Your draft is still here.',
+        mission_composer_evidence_unsupported: 'Choose workspace notes or text files for mission evidence. Your draft is still here.',
+        mission_planning_note_unavailable: 'Select up to four short notes attached to the active workspace.',
+        mission_planning_file_unavailable: 'Select a current, short UTF-8 text file attached to the active workspace.',
         vela_planner_sign_in_required: 'Connect Codex or choose ChatGPT plan. Your draft is still here.',
         vela_chatgpt_sign_in_required: 'Connect your ChatGPT plan in Connections. Your draft is still here.',
         vela_deep_model_unavailable: 'The connected catalog has no verified deep reasoning controls. Choose an available model or reconnect. Your draft is still here.',
@@ -909,6 +1027,16 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     developmentTimeline.disabled = activityTimeline.disabled || !githubRepository(repositoryInput.value);
   }
   function renderStatus(state: Pick<VelaState, 'requests' | 'plans' | 'receipts'>) { const recorded = velaPanelStatus(state); status.dataset.requestState = recorded.requestState; if (recorded.requestId) status.dataset.requestId = recorded.requestId; else delete status.dataset.requestId; if (recorded.planState) status.dataset.planState = recorded.planState; else delete status.dataset.planState; delete status.dataset.actionState; delete status.dataset.refreshState; status.textContent = recorded.message; status.hidden = recorded.requestState === 'idle'; }
+  function appendMissionReportDetails(container: HTMLElement, link: NonNullable<VelaMessage['missionReport']>, message?: VelaMessage) {
+    if (link.assessment?.gaps.length) {
+      const gaps = el('ul');
+      for (const gap of link.assessment.gaps) gaps.append(el('li', undefined, gap));
+      const assessment = el('section', 'vela-mission-assessment');
+      assessment.append(el('strong', undefined, 'Still unverified'), gaps);
+      container.append(assessment);
+    }
+    container.append(missionReplyFooter(link, message));
+  }
   function missionReplyFooter(link: NonNullable<VelaMessage['missionReport']>,message?:VelaMessage) {
     const footer = el('div', 'vela-mission-reply-footer');
     if (link.jobsDone !== undefined) footer.append(el('span', 'vela-mission-jobs-done', `${link.jobsDone} ${link.jobsDone === 1 ? 'job' : 'jobs'} done`));
@@ -927,7 +1055,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function appendSpeechAction(footer:HTMLElement,message?:VelaMessage){
     if(message&&options.voice?.speak){
       const speech=replySpeech,stopping=!!speech?.attemptId&&speech.messageId===message.id&&['starting','speaking'].includes(speech.state);
-      const speak=icon(stopping?'Stop speaking':'Speak response',stopping?'■':'♩','speak',()=>void run(async()=>{
+      const speak=icon(stopping?'Stop speaking':'Speak response',stopping?'■':'♩',stopping?'stop':'speak',()=>void run(async()=>{
         speak.disabled=true;
         try{if(stopping&&speech?.attemptId&&options.voice?.stopSpeech)await options.voice.stopSpeech(speech.attemptId);else await options.voice!.speak!({id:message.id,content:message.content});}
         finally{speak.disabled=false;}
@@ -963,7 +1091,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       const entry = el('article', 'vela-core-message'); entry.dataset.messageId = message.id; entry.dataset.source = message.source;
       if (message.missionReport) {
         entry.setAttribute('aria-label', 'Vela');
-        entry.append(el('p', undefined, message.content), missionReplyFooter(message.missionReport));
+        entry.append(el('p', undefined, message.content));
+        appendMissionReportDetails(entry, message.missionReport);
       } else entry.append(el('strong', 'vela-core-message-author', message.role === 'user' ? 'You' : 'Vela'), el('p', undefined, message.content));
       messages.set(message.id, { node: entry, signature }); target.push(entry);
     }

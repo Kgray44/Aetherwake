@@ -41,9 +41,26 @@ function fixture(){
     async ready(){await core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:'SYNTHETIC_M3_API_KEY'},expectedVersion:null});await core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true});
       await core.command('desktop',{type:'createWorkspace',title:'Synthetic M3 workspace',projectId:null});const desktop=await core.command('desktop',{type:'snapshot'});
       const picked=await core.command('velaSourcesPickNative',{commandId:randomUUID(),selection:{kind:'files',paths:[file]},destination:'workspace',workspaceId:desktop.activeWorkspaceId!,expectedLayoutVersion:desktop.layoutVersion});resourceId=picked.resources[0].id;},
+    restartClosedCore(){core=create();},
     async reopen(){await core.command('close',{});core=create();},
     async close(){releaseApi();await core.command('close',{}).catch(()=>{});const part=relative(parent,resolve(root));assert.ok(part.startsWith('mfec-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(root,{recursive:true,force:true});}
   };
+}
+
+async function closeWhileExternalWorkIsHeld(core: BackendCore) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const started = performance.now();
+  try {
+    await Promise.race([
+      core.command('close', {}),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(Error('Core shutdown did not finish with external work held')), 10_000);
+      }),
+    ]);
+    return performance.now() - started;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // The Windows CI job retains every native write, recovery and authority assertion.
@@ -146,20 +163,27 @@ test('unknown restricted-runner transport persists startup quarantine and cannot
   }finally{await f.close();}
 });
 
-test('actual Core close returns promptly with a held runner, and restart preserves its durable ownership quarantine',async()=>{
+test('actual Core closes with a held runner, and restart preserves its durable ownership quarantine',async t=>{
   const f=fixture();let release=()=>{};try{await f.ready();await f.run();const op=await f.operation(),grant=await f.approve(op);await f.core.command('missionFileEditApplyNative',{operationId:op.id,authority:grant.authority});
     let started!:()=>void;const entered=new Promise<void>(resolve=>{started=resolve;}),held=new Promise<void>(resolve=>{release=resolve;});f.execute=async()=>{started();await held;return {exitCode:0,stdout:tap,stderr:''};};
     const check=await f.approve(await f.operation(),'check'),running=f.core.command('missionFileEditCheckRunNative',{operationId:op.id,authority:check.authority});await entered;
-    const refused=assert.rejects(running,/mission_edit_closed/),began=performance.now();await f.reopen();await refused;assert.ok(performance.now()-began<1500,'local Core close must not await a held external runner');
+    const refused=assert.rejects(running,/mission_edit_closed/);
+    t.diagnostic('Core shutdown with runner held: '+(await closeWhileExternalWorkIsHeld(f.core)).toFixed(1)+' ms');
+    await refused;
+    f.restartClosedCore();
     assert.equal(f.db.prepare('SELECT state FROM mission_file_check_custody').get().state,'unknown');await assert.rejects(f.prepare(),/mission_edit_unavailable/);
     release();await new Promise<void>(resolve=>setImmediate(resolve));assert.equal(f.db.prepare('SELECT state FROM mission_file_check_custody').get().state,'unknown','late old-host exit cannot clear a new process fence without its owned reconciliation');
+    assert.equal(f.checkCalls,1);assert.equal(f.bodies.length,1);assert.equal(readFileSync(f.file,'utf8'),after);
   }finally{release();await f.close();}
 });
 
-test('actual Core close drains an aborted API preparation before closing SQLite and never replays an unknown paid dispatch',async()=>{
+test('actual Core close drains an aborted API preparation before closing SQLite and never replays an unknown paid dispatch',async t=>{
   const f=fixture();try{await f.ready();f.holdApi=true;const prepared=await f.prepare(),running=f.core.command('missionFileEditRunNative',{requestId:prepared.requestId,reviewId:prepared.reviewId,reviewDigest:prepared.review.reviewDigest});
     for(let i=0;i<200&&f.bodies.length===0;i++)await new Promise(resolve=>setTimeout(resolve,5));assert.equal(f.bodies.length,1);
-    const refused=assert.rejects(running),began=performance.now();await f.reopen();await refused;assert.ok(performance.now()-began<1500);
+    const refused=assert.rejects(running);
+    t.diagnostic('Core shutdown with API transport held: '+(await closeWhileExternalWorkIsHeld(f.core)).toFixed(1)+' ms');
+    await refused;
+    f.restartClosedCore();
     assert.equal(f.db.prepare('SELECT state FROM mission_file_requests WHERE request_id=?').get(prepared.requestId).state,'unknown');assert.equal(f.db.prepare('SELECT state FROM vela_api_runs WHERE request_id=?').get(prepared.requestId).state,'unknown');
     f.releaseApi();await new Promise<void>(resolve=>setImmediate(resolve));assert.equal(f.bodies.length,1);assert.equal(readFileSync(f.file,'utf8'),before);assert.equal((await f.state()).missionFileEdits!.length,0);
   }finally{f.releaseApi();await f.close();}

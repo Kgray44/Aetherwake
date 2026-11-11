@@ -19,7 +19,7 @@ export interface HistoryRequestRecord extends Pick<VelaRequest, 'id' | 'conversa
 export interface HistoryHeader { id: string; requestId?: string; role: VelaMessage['role']; source: VelaMessage['source']; ordinal: number; contentBytes: number }
 export interface HistorySnapshot { conversationId: string; revision: number; headers: readonly HistoryHeader[]; hasEarlier: boolean;
   /** HOST ONLY: the current user query and canonical tail, never renderer-selected history IDs. */
-  retrieval?: { query: string; tailOrdinal: number; partial: boolean } }
+  retrieval?: { query: string; tailOrdinal: number; partial: boolean; mode?: 'semantic-query' } }
 export interface HistoryTail { conversationId: string; revision: number; ordinal: number }
 export interface CanonicalHistoryMessage { conversationId: string; ordinal: number; message: VelaMessage }
 /** Does not materialize or hash message bodies. The exact conversation revision fences body changes. */
@@ -314,7 +314,7 @@ export function selectBoundedHistory(input: {
 /** Exact eligible exchanges are proved before local ranking. Only the selected whole messages leave the host. */
 function selectQueriedHistory(input: { origin: HistoryOrigin; snapshot: HistorySnapshot; reader: HistoryProofReader;
   fits(history: ProviderHistory | undefined): boolean; maxMessages: number; maxEncodedBytes: number }): HistorySelection {
-  const { snapshot } = input, retrieval = snapshot.retrieval!, query = canonicalRetrievalQuery(retrieval.query, true);
+  const { snapshot } = input, retrieval = snapshot.retrieval!, query = canonicalRetrievalQuery(retrieval.query, retrieval.mode !== 'semantic-query');
   requireValue(query && integer(retrieval.tailOrdinal) && retrieval.tailOrdinal >= snapshot.headers.at(-1)!.ordinal && typeof retrieval.partial === 'boolean', 'invalid-history-snapshot');
   const verifier = new Verifier(input.reader, input.origin, snapshot.conversationId), omissions: HistoryOmission[] = [];
   const pairs: { id: string; values: CanonicalHistoryMessage[]; entries: ProviderHistoryMessage[]; proofs: HistoryMessageDependency[]; dependencies: HistoryDependency[] }[] = [];
@@ -339,7 +339,8 @@ function selectQueriedHistory(input: { origin: HistoryOrigin; snapshot: HistoryS
   const ranked = rankCanonicalRetrieval(query, pairs.map(pair => ({ id: pair.id, text: pair.entries.map(entry => entry.content).join('\n'),
     identities: [pair.id, ...pair.entries.map(entry => entry.id)] })));
   const recent = [...pairs].sort((a, b) => b.values[1].ordinal - a.values[1].ordinal);
-  const order = [...new Set([...ranked.ids.slice(0, ranked.ambiguous ? 2 : 1), ...recent.map(pair => pair.id)])];
+  const order = retrieval.mode === 'semantic-query' ? ranked.ids
+    : [...new Set([...ranked.ids.slice(0, ranked.ambiguous ? 2 : 1), ...recent.map(pair => pair.id)])];
   let chosen: typeof pairs = [], dependencies: HistoryDependency[] = [];
   const payload = (selected: typeof pairs): ProviderHistory => ({ ...historyPayload(selected.flatMap(pair => pair.entries)), retrieval: {
     method: 'lexical-canonical-exchanges', queryDigest: query.digest, selectedRequestIds: selected.map(pair => pair.id),
@@ -365,6 +366,7 @@ function selectQueriedHistory(input: { origin: HistoryOrigin; snapshot: HistoryS
 /** An explicit handoff selects one canonical exchange. No fallback or neighbor bodies. */
 export function selectVelaHandoff(input: {
   requestId: string; destinationProviderId: string; origin: HistoryOrigin;
+  purpose?: VelaHandoff['purpose'];
   tail: HistoryTail; reader: HistoryProofReader; fits(history: ProviderHistory): boolean;
 }): { history: ProviderHistory; fence: HistoryFence; handoff: VelaHandoff } {
   const { requestId, destinationProviderId, origin, tail, reader } = input;
@@ -373,7 +375,7 @@ export function selectVelaHandoff(input: {
   const verifier = new Verifier(reader, origin, tail.conversationId);
   const request = verifier.request(requestId);
   requireValue(identifier(request.providerId),'non-conversational');
-  requireValue(request.providerId !== destinationProviderId, 'handoff-same-provider');
+  requireValue(request.providerId !== destinationProviderId || input.purpose === 'reviewed-evidence', 'handoff-same-provider');
   requireValue(request.response?.kind === 'answer', 'non-conversational');
   verifier.dependencies(request.provenance!.dependencies);
   const user = verifier.accepted(tail.conversationId, request.inputMessageId!, request);
@@ -387,7 +389,8 @@ export function selectVelaHandoff(input: {
     baseTailOrdinal: tail.ordinal, origin: structuredClone(origin), messages,
     dependencies: unionHistoryDependencies(request.provenance!.dependencies, messages), historyDigest: contextDigest };
   return { history, fence: { ...body, digest: historyDigest(fenceBody(body)) },
-    handoff: { taskId: request.taskId ?? requestId, sourceRequestId: requestId, sourceMessageId: answer.message.id, sourceProviderId: request.providerId!,
+    handoff: { ...(input.purpose ? { purpose: input.purpose } : {}), taskId: request.taskId ?? requestId,
+      sourceRequestId: requestId, sourceMessageId: answer.message.id, sourceProviderId: request.providerId!,
       destinationProviderId, contextDigest } };
 }
 

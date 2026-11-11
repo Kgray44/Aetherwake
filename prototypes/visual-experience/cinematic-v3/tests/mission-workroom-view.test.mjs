@@ -215,16 +215,19 @@ test("a visible performance card reports host pressure and refreshes until its m
     reads++;
     return { ...binding({ kind: "performance", profile: { elapsedMs: 30, peakWorkers: 1, attempts: 1, retries: 0,
       providerCalls: 0, usageReports: 0, reportedTotalTokens: null, verifiedObjectivesPerReportedToken: null },
-      admission: { workerLimit: running ? 1 : 3, reasons: running ? ["cpu-load"] : [], readings: {
+      admission: { workerLimit: running ? 1 : 3, reasons: running ? ["renderer-latency"] : [],
+        ...(running ? { effectiveLimits: { cpu: 1, build: 0, gpu: 0, host_io: 3, remote: 3 } } : {}), readings: {
         cpuPercent: { value: 96, observedAt }, diskQueueLength: { value: 0, observedAt },
+        ...(running ? { rendererFrameP95Ms: { value: 50, observedAt } } : {}),
       } } }), outcome: running ? "running" : "verified" };
   }, undefined, () => {});
   try {
     await view.refresh();
     const detail = () => root.querySelector('[data-mission-admission="current"]');
-    assert.equal(detail().querySelector("summary").textContent, "Scheduler limit · 1 worker · High CPU load");
+    assert.equal(detail().querySelector("summary").textContent, "Resource admission · CPU 1 · Remote 3 · Slow renderer frames");
     assert.equal(detail().querySelector('[data-admission-metric="gpuEnginePercent"]').textContent, "Busiest GPU engine · Unavailable");
     assert.equal(detail().querySelector('[data-admission-metric="diskQueueLength"]').textContent, `Disk queue length · 0 · Observed ${observedAt}`);
+    assert.equal(detail().querySelector('[data-admission-metric="rendererFrameP95Ms"]').textContent, `Renderer frame interval p95 · 50 ms · Observed ${observedAt}`);
     detail().open = true;
     detail().querySelector("summary").focus();
     running = false;

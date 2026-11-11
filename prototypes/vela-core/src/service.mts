@@ -12,6 +12,7 @@ import { evaluateLocalCapability, validateLocalRecord } from './local-capabiliti
 import { requiresVelaPlanAttention } from './manifestation-state.ts';
 import { validateRoutingDefaults, validateRoutingScope, type VelaRoutingProfile, type VelaRoutingSettingsChange } from './routing-settings.ts';
 import { HISTORY_LIMITS, HistorySelectionError, createHistoryProvenance, historyDependenciesFromContext, historyDigest, selectBoundedHistory, selectVelaHandoff, unionHistoryDependencies, validateFrozenHistory, validateFrozenHistoryMetadata } from './bounded-history.mts';
+import { investigateSemanticHistory, type SemanticHistoryCall, type SemanticHistoryScan, type SemanticHistorySource } from './semantic-history.mts';
 import type { VelaHandoff } from './history-contracts.ts';
 import type { AcceptedHistoryAppend, HistoryFence, HistoryMessageMetadata, HistoryMetadataReader, HistoryOmission, HistoryOrigin, HistoryProofReader, HistoryRequestRecord, HistorySnapshot, HistoryTail, PrivateFrozenProviderContext } from './bounded-history.mts';
 import type {
@@ -23,6 +24,11 @@ import type {
   VelaLocalCapabilityId, VelaLocalDispatch, VelaLocalHost, VelaLocalRecord, VelaLocalResult,
   VelaPresentationState, VelaPresentationPatch, VelaProjectCheckReceipt, VelaProviderRecovery,
 } from './contracts.ts';
+
+export interface VelaSemanticHistorySource extends SemanticHistorySource {
+  sourceKind: NonNullable<SemanticHistorySource['sourceKind']>;
+  proofDigest: string;
+}
 
 type StoredActionReceipt = ActionReceipt & { foundSubjects?: (VelaSubjectRef&{version?:number})[] };
 const subjectKey = ({ id, kind }: VelaSubjectRef) => kind + ':' + id;
@@ -50,9 +56,10 @@ export interface VelaServiceOptions {
   providerContextAdvance?(requestId:string):{context:ContextManifest;historyFence?:HistoryFence;navigation:{currentProjectId:string|null;currentWorkspaceId:string|null};validate():void}|undefined;
   /** Source-owned negative observation inside the same plan-rejection transaction; never starts a provider. */
   onPlanRejected?(plan:VelaPlan):void;
+  validateMissionGapEvidence?(evidence: NonNullable<VelaRequest['missionGapEvidence']>): boolean;
   /** Explicit bounded canonical projections. Absent means no implicit conversational history. */
   history?: {
-    snapshot(conversationId: string, limit: number, query?: string): HistorySnapshot | null;
+    snapshot(conversationId: string, limit: number, query?: string, mode?: 'semantic-query'): HistorySnapshot | null;
     tail?(conversationId: string): HistoryTail | null;
     message: HistoryProofReader['message']; content: HistoryProofReader['content'];
     messageMetadata(conversationId: string, messageId: string): HistoryMessageMetadata | null;
@@ -247,9 +254,11 @@ export class VelaService {
   }
   private append(content: string, requestId: string, source: 'user' | 'vela-native' | 'provider', plan?: VelaPlan, response?: { kind: ProviderReplyKind; contribution?: ProviderContribution }) {
     const contribution = source === 'provider' ? response?.contribution ?? plan?.contribution : undefined;
+    const gapFollowup = this.data.requests.findLast(request => request.id === requestId)?.missionGapEvidence;
     return this.opts.host.appendMessage(this.conversationId(), {
       role: source === 'user' ? 'user' : 'assistant', content, source,
       classification: source === 'provider' ? 'reported' : 'observed', requestId,
+      ...(gapFollowup ? { missionGapFollowup: true as const } : {}),
       ...(plan ? { planId: plan.id } : {}), ...(contribution ? { providerId: contribution.providerId } : {}),
       ...(source === 'provider' && contribution ? { providerContribution: structuredClone(contribution) } : {}), ...(response ? { responseKind: response.kind } : {}),
     });
@@ -264,7 +273,8 @@ export class VelaService {
     const available = this.opts.planner?.availability() ?? { available: false, busy: false, reason: 'No planning provider connected' };
     const visible = (item: AttentionItem) => item.subject === null || (this.permitted(item.subject.id, item.subject.kind, scope) && !!this.opts.host.resolve(item.subject, scope));
     // Revoke content visibility as well as future collection. Persisted private history remains host-owned.
-    const requests = structuredClone(this.data.requests).map(r => {
+    const requests = structuredClone(this.data.requests.filter(request =>
+      !request.missionGapEvidence || this.opts.validateMissionGapEvidence?.(request.missionGapEvidence) === true)).map(r => {
       const { activeSurface, activeResourceId, activeWorkspaceLayout, ...context } = r.context;
       const projectId = activeSurface?.projectId ?? null, workspaceId = activeSurface?.workspaceId ?? null;
       const visibleWorkspaceId = workspaceId && scope.workspaceIds.includes(workspaceId) ? workspaceId : null;
@@ -391,6 +401,7 @@ export class VelaService {
       const r = this.data.requests.find(value => value.id === id); if (!r) return null;
       const scope = this.scope(), ref = this.opts.host.resolve({ id: r.conversationId, kind: 'resource' }, scope);
       if (!ref || this.opts.host.canReadContent?.(ref, scope) !== true) return null;
+      if (r.missionGapEvidence && this.opts.validateMissionGapEvidence?.(r.missionGapEvidence) !== true) return null;
       if(r.nativeSourceObservation&&this.opts.host.validateNativeSourceObservation?.(r.nativeSourceObservation,scope)!==true)return null;
       let sourceDependencies; try { sourceDependencies = historyDependenciesFromContext(r.context, r.conversationId); } catch { return null; }
       return structuredClone({ id: r.id, conversationId: r.conversationId, state: r.state, providerId: r.providerId,
@@ -418,9 +429,9 @@ export class VelaService {
     return { full, metadata };
   }
   /** Core-only prospective egress. Opening/selection never appends, creates a conversation or invokes a provider. */
-  previewProviderContext(resourceIds: string[], options: { includeHistory: boolean; activeResourceId?: string; historyQuery?: string;
+  previewProviderContext(resourceIds: string[], options: { includeHistory: boolean; activeResourceId?: string; historyQuery?: string; historyQueryMode?: 'semantic-query';
     agent?: { ref: ResourceRef; instructions: string };
-    handoff?: { requestId: string; destinationProviderId: string }; fits(context: ContextManifest): boolean
+    handoff?: { requestId: string; destinationProviderId: string; purpose?: VelaHandoff['purpose'] }; fits(context: ContextManifest): boolean
   }): { context: ContextManifest; origin: HistoryOrigin; historyFence?: HistoryFence; historyOmissions: readonly HistoryOmission[]; handoff?: VelaHandoff } {
     return this.read(() => {
       const scope = this.scope(), origin = this.historyOrigin(scope), context = this.context(resourceIds, scope, options.activeResourceId);
@@ -453,7 +464,7 @@ export class VelaService {
       if (!this.data.conversationId) return { context, origin, historyOmissions: [{ reason: 'no-conversation' }] };
       const conversation = this.opts.host.resolve({ id: this.data.conversationId, kind: 'resource' }, scope);
       if (!conversation || this.opts.host.canReadContent?.(conversation, scope) !== true) return { context, origin, historyOmissions: [{ reason: 'message-unavailable' }] };
-      const readers = this.historyReaders(), snapshot = this.opts.history!.snapshot(this.data.conversationId, HISTORY_LIMITS.lookbackMessages, options.historyQuery);
+      const readers = this.historyReaders(), snapshot = this.opts.history!.snapshot(this.data.conversationId, HISTORY_LIMITS.lookbackMessages, options.historyQuery, options.historyQueryMode);
       if (snapshot === null) return { context, origin, historyOmissions: [{ reason: 'message-unavailable' }] };
       const selection = selectBoundedHistory({ enabled: true, origin, snapshot, reader: readers.full, fits: history => options.fits({ ...context, ...(history ? { history } : {}) }) });
       if (selection.fence) {
@@ -465,6 +476,79 @@ export class VelaService {
         ...(selection.fence ? { historyFence: selection.fence } : {}), historyOmissions: selection.omissions });
     });
   }
+  /** Native shadow investigation. The disclosure gateway must authorize each exact outbound payload.
+   * No exchange or model assessment is appended or used as a turn result. */
+  investigateHistory(intent: string, disclose: (call: SemanticHistoryCall, sources: readonly VelaSemanticHistorySource[],
+    signal: AbortSignal, revalidate: () => boolean) => Promise<unknown>, signal?: AbortSignal,
+    selectedNoteIds: readonly string[] = []) {
+    const noteIds = [...selectedNoteIds];
+    check(noteIds.length <= 4 && noteIds.every(identifier) && new Set(noteIds).size === noteIds.length, 'invalid_semantic_note_selection');
+    const originDigest = historyDigest(this.read(() => this.historyOrigin()));
+    const originCurrent = () => historyDigest(this.read(() => this.historyOrigin())) === originDigest;
+    const proofs = new WeakMap<VelaSemanticHistorySource, () => boolean>();
+    const isCurrent = (source: VelaSemanticHistorySource) => {
+      try { return proofs.get(source)?.() === true; }
+      catch (error) {
+        if (error instanceof HistorySelectionError || error instanceof VelaError) return false;
+        throw error;
+      }
+    };
+    const findHistory = (query?: string) => {
+      if (!originCurrent()) return { sources: [], scan: 'unavailable' as const };
+      const preview = this.previewProviderContext([], { includeHistory: true,
+        ...(query ? { historyQuery: query, historyQueryMode: 'semantic-query' as const } : {}), fits: () => true });
+      const { history } = preview.context;
+      const scan: SemanticHistoryScan = preview.historyOmissions.some(item => item.reason === 'message-unavailable' || item.reason === 'unknown-origin')
+        ? 'unavailable' : (!query && !!history) || history?.retrieval?.partial || preview.historyOmissions.some(item => item.reason !== 'no-history' && item.reason !== 'no-conversation')
+          ? 'partial' : 'bounded';
+      if (!preview.historyFence || !history || (query && (!history.retrieval || history.retrieval.resolution === 'no-match'))) return { sources: [], scan };
+      const fence = preview.historyFence;
+      const requestIds = history.retrieval?.selectedRequestIds ?? [...new Set(history.messages.map(message => message.requestId))];
+      const sources = requestIds.map(sourceId => {
+        const source = Object.freeze({
+          sourceId, sourceKind: 'conversation-exchange' as const, revision: String(fence.baseRevision), proofDigest: fence.digest,
+          text: JSON.stringify(history.messages.filter(message => message.requestId === sourceId)
+            .map(({ role, content }) => ({ role, content }))),
+        });
+        proofs.set(source, () => { this.validateProviderHistory(preview); return true; });
+        return source;
+      });
+      return { sources, scan };
+    };
+    const readNote = (id: string) => this.read(() => {
+      const scope = this.scope();
+      const ref = this.opts.host.resolve({ id, kind: 'resource' }, scope);
+      if (ref?.resourceKind !== 'note' || this.opts.host.canReadContent?.(ref, scope) !== true) return null;
+      const entry = this.context([id], scope).included[0];
+      if (!entry) return null;
+      return Object.freeze({
+        sourceId: id, sourceKind: 'note' as const, revision: String(entry.version), text: entry.content,
+        proofDigest: historyDigest({ originDigest, id, version: entry.version, source: entry.source, digest: entry.contentDigest }),
+      });
+    });
+    const findSelectedNotes = () => {
+      if (!originCurrent()) return { sources: [], scan: 'unavailable' as const };
+      const notes = noteIds.flatMap(id => {
+        const note = readNote(id);
+        if (!note) return [];
+        proofs.set(note, () => readNote(id)?.proofDigest === note.proofDigest);
+        return [note];
+      });
+      const scan: SemanticHistoryScan = notes.length === noteIds.length ? 'bounded' : notes.length ? 'partial' : 'unavailable';
+      return { sources: notes, scan };
+    };
+    return investigateSemanticHistory<VelaSemanticHistorySource>(intent, {
+      ...(noteIds.length ? { selected: findSelectedNotes } : {}),
+      search: findHistory,
+      recent: () => findHistory(),
+      isCurrent,
+      disclose: (call, sources, abort) => {
+        const revalidate = () => originCurrent() && sources.every(isCurrent);
+        return revalidate() ? disclose(call, sources, abort, revalidate) : Promise.resolve(null);
+      },
+    }, signal);
+  }
+
   /** Validates the exact private reviewed window; metadataOnly is safe for schema tools and never reselects. */
   validateProviderHistory(preview: { context: ContextManifest; historyFence?: HistoryFence }, options: { metadataOnly?: boolean; acceptedAppend?: AcceptedHistoryAppend } = {}): void {
     this.read(() => {
@@ -677,13 +761,15 @@ export class VelaService {
       request.updatedAt = recovery.observedAt;
     });
   }
-  async request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean }, frozen?: PrivateFrozenProviderContext, planner = this.opts.planner, routed?: Pick<VelaRequest, 'route' | 'routingSettings' | 'handoff' | 'routingAgent'>): Promise<VelaRequest> {
+  async request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean }, frozen?: PrivateFrozenProviderContext, planner = this.opts.planner, routed?: Pick<VelaRequest, 'route' | 'routingSettings' | 'handoff' | 'routingAgent' | 'missionGapEvidence'>): Promise<VelaRequest> {
     check(text(input.intent, 16000) && typeof input.authorizeProvider === 'boolean', 'invalid_request');
     const scope = this.scope(), navigation = this.contextIdentity();
     if (frozen) check(typeof frozen.validate === 'function' && typeof frozen.onAcceptedAppend === 'function', 'private_provider_context_required');
     const reviewed = frozen ? freeze(structuredClone({ context: frozen.context, ...(frozen.historyFence ? { historyFence: frozen.historyFence } : {}) })) : undefined;
     if (routed?.handoff) check(identifier(routed.handoff.taskId) && reviewed?.historyFence?.historyDigest === routed.handoff.contextDigest &&
       routed.handoff.destinationProviderId === planner?.providerId, 'invalid_vela_handoff');
+    if (routed?.missionGapEvidence) check(!!frozen && input.authorizeProvider &&
+      this.opts.validateMissionGapEvidence?.(routed.missionGapEvidence) === true, 'vela_mission_checkpoint_changed');
     let acceptedAppend: AcceptedHistoryAppend | undefined;
     let completionContext:ReturnType<NonNullable<VelaServiceOptions['providerContextAdvance']>>;
     const validate = (phase: 'before-append' | 'before-provider' | 'before-response') => {

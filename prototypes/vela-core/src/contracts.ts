@@ -111,7 +111,10 @@ export interface VelaMessage {
   requestId?: string; planId?: string; classification: EvidenceClass;
   /** Native captured transcript evidence; never a completed conversational turn. */
   voice?: { sessionId:string;startMs:number;endMs:number;completedTurn:false;transcription:'provider-reported';sealed:boolean;acceptedRequestId?:string };
-  missionReport?: { missionId: string; workspaceId: string; projectId: string | null; jobsDone?: number };
+  missionReport?: { missionId: string; workspaceId: string; projectId: string | null; jobsDone?: number; stale?: true;
+    assessment?: { model: string; planRevision: number; gaps: string[] } };
+  missionPresentation?: import('../../application-contract/contracts.ts').RendererOutputPresentation & { publicationEventId?: string };
+  missionGapFollowup?: true;
   /** Parsed conversational content remains attributed to the actual observed provider output. */
   responseKind?: ProviderReplyKind; providerContribution?: ProviderContribution;
 }
@@ -211,6 +214,8 @@ export interface VelaRequest {
   operationContext?: { contract: 'aerynth.vela-operations@1'; digest: string; receiptIds: string[] };
   handoff?: import('./history-contracts.ts').VelaHandoff;
   routingAgent?: VelaRoutingAgent;
+  /** Reference only. The current mission and project source owners revalidate this reviewed evidence. */
+  missionGapEvidence?: import('./adaptive-routing.ts').VelaMissionGapEvidence;
   /** Raw provider plans are preserved locally, including invalid plans; never interpreted as commands. */
   invalidProposal?: unknown;
 }

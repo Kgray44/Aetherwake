@@ -4,6 +4,7 @@ import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:
 import {DatabaseSync} from 'node:sqlite';
 import {VelaApiRuntime} from '../src/vela-api-runtime.mts';
 import {apiRunDiagnostics} from '../src/api-run-diagnostics.mts';
+import {observeConversationProvider} from '../src/execution-profiler.mts';
 import {WEATHER_TOOL_NAME,WEATHER_TOOL,type WeatherQuery} from '../src/weather-tool.mts';
 import {readWeatherData} from '../src/weather-data.mts';
 import {VELA_TOOL_SCHEMAS,VELA_TOOL_INVOKE} from '../src/vela-semantic-tools.mts';
@@ -18,13 +19,41 @@ import type { VelaRequest, VelaState } from '../../vela-core/src/contracts.ts';
 import type { StreamEvent } from '../src/contracts.mts';
 const marker = 'SYNTHETIC_ONLY_VELA_API_RUNTIME_CREDENTIAL';
 const message = (content: string) => ({ type: 'message', id: 'msg-fixture', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: content, annotations: [] }] });
-function response(content: string, id = 'resp-fixture', output = [message(content)], outcome = 'completed') {
+function response(content: string, id = 'resp-fixture', output = [message(content)], outcome = 'completed',
+  deltas = content ? [content] : []) {
   const events = [{ type: 'response.created', response: { id, status: 'in_progress' } },
-    ...(content ? [{ type: 'response.output_text.delta', delta: content }] : []),
+    ...deltas.map(delta => ({ type: 'response.output_text.delta', delta })),
     { type: outcome === 'completed' ? 'response.completed' : 'response.incomplete', response: { id, status: outcome, model: 'gpt-6-luna', output,
       ...(outcome === 'incomplete' ? { incomplete_details: { reason: 'max_output_tokens' } } : {}), usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 } } }];
   return new Response(events.map(event => 'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
 }
+
+test('conversation timing retains only the first nonblank provider output milestone and its kind', () => {
+  const timing = observeConversationProvider('ordinary-adapter-entry', true, 'request-fixture');
+  const identity = { providerId: 'chatgpt-plan-responses' as const, executionId: 'execution-fixture' };
+  timing.observe({ ...identity, type: 'provider/text-delta', delta: ' \n\t' });
+  const blank = timing.settlement();
+  assert.notEqual(blank.firstTextDeltaMs, null);
+  assert.equal(blank.firstNonblankOutput, null);
+  timing.observe({ ...identity, type: 'provider/refusal-delta', delta: 'SYNTHETIC_REFUSAL' });
+  const first = timing.settlement().firstNonblankOutput;
+  assert.ok(first && first.elapsedMs >= blank.settlementStagedMs);
+  assert.equal(first.kind, 'refusal');
+  timing.observe({ ...identity, type: 'provider/text-delta', delta: 'SYNTHETIC_TEXT' });
+  assert.deepEqual(timing.settlement().firstNonblankOutput, first);
+  assert.doesNotMatch(JSON.stringify(timing.settlement()), /SYNTHETIC_/u);
+});
+
+test('conversation timing joins only a preview that finished in the same clock domain', () => {
+  const clock = { domain: 'domain-fixture', startedMs: 10, readyMs: 20 };
+  const observe = (domain: string, started: number) => observeConversationProvider(
+    'reviewed-api-dispatch-staging', true, 'request-fixture', started,
+    { domain, preview: { id: 'preview-fixture', clock } });
+  const linked = observe(clock.domain, 30).settlement().fromPreview;
+  assert.deepEqual(linked, { id: 'preview-fixture', toAdapterMs: 20, toFirstNonblankOutputMs: null });
+  assert.equal(observe('after-restart', 30).settlement().fromPreview, undefined);
+  assert.equal(observe(clock.domain, 19).settlement().fromPreview, undefined);
+});
 function fixture() {
   const base = resolve(tmpdir()), dir = mkdtempSync(join(base,'aerynth-api-runtime-')), path = join(dir,'canonical.sqlite'), requests: any[] = [], events: StreamEvent[] = [], replies: ((body:any)=>Response|Promise<Response>)[] = [];
   const encryptionKey = randomBytes(32);
@@ -154,18 +183,95 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     await f.configure(); assert.equal((await f.core.command('velaApiUsageStatus',{})).enabled,false);
     await assert.rejects(f.send('Explain the difference between mass and weight',{providerId:'openai-api-vela'}),/vela_api_usage_authorization_required/);
     assert.equal(f.requests.length,0); await f.authorize();
-    f.replies.push(()=>response('Mass measures inertia; weight is gravitational force.'));
+    const answer = ' Mass measures inertia; weight is gravitational force.';
+    f.replies.push(()=>response(answer, undefined, undefined, undefined, [' ', answer.slice(1)]));
     const first=await f.send('Explain the difference between mass and weight'); assert.equal(first.state,'responded'); assert.equal(first.providerId,'openai-api-vela');
     const wire=f.requests[0]; assert.equal(wire.model,'gpt-6-luna'); assert.deepEqual(wire.reasoning,{effort:'none'}); assert.equal(wire.max_output_tokens,2048); assert.equal(wire.store,false); assert(wire.tools.some((tool:any)=>tool.name===VELA_TOOL_INVOKE)); assert.ok(wire.instructions.includes('Vela is Aerynth'));
     const snapshot=await f.core.command('snapshot',{}); assert.equal(snapshot.conversations.length,1); assert.equal(snapshot.graph.messages.length,2);
     const output=snapshot.graph.messages.find(message=>message.role==='assistant')!;
-    assert.equal(output.content,'Mass measures inertia; weight is gravitational force.'); assert.equal(snapshot.messageEvidence[output.id].providerId,'openai-api-vela');
+    assert.equal(output.content,answer); assert.equal(snapshot.messageEvidence[output.id].providerId,'openai-api-vela');
     const execution=Object.values(snapshot.executions)[0]; assert.equal(execution.resourceId,first.conversationId); assert.equal(execution.outputMessageId,output.id); assert.equal(execution.usage?.totalTokens,28); assert.equal(execution.taskVerified,false);
+    const timing=f.events.find(event=>event.executionId===execution.id&&event.type==='execution/provider_completed')?.payload.providerTiming;
+    assert.ok(timing&&timing.firstTextDeltaMs!==null&&timing.responseCreatedMs!==null&&timing.resultObservedMs!==null);
+    assert.equal(timing.source,'simulated');
+    assert.equal(timing.parentRequestId,first.id);
+    const transport = timing.transport;
+    assert.ok(transport && transport.postAttemptMs !== null && transport.headersMs !== null && transport.firstSseBytesMs !== null);
+    assert.ok(transport.postAttemptMs <= transport.headersMs && transport.headersMs <= transport.firstSseBytesMs &&
+      transport.firstSseBytesMs <= transport.finishedMs);
+    assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.resultObservedMs&&
+      timing.resultObservedMs<=timing.settlementStagedMs);
+    assert.ok(timing.firstNonblankOutput?.kind === 'text' &&
+      timing.firstTextDeltaMs < timing.firstNonblankOutput.elapsedMs &&
+      timing.firstNonblankOutput.elapsedMs <= timing.resultObservedMs);
+    const routing = f.events.find(event => event.correlationId === first.id && event.type === 'vela.routing.stage_started');
+    assert.ok(routing?.payload.timing?.previewClock && timing.fromPreview);
+    const admission = routing.payload.requestAdmission;
+    assert.ok(admission && first.inputMessageId);
+    assert.equal(execution.inputMessageId, first.inputMessageId);
+    assert.equal(admission.source, 'canonical-user-message-staged');
+    assert.ok(admission.requestToInputStagingMs >= 0 &&
+      admission.requestToInputStagingMs <= admission.requestToProviderContextCheckMs);
+    assert.ok(admission.previewToInputStagingMs !== null &&
+      admission.previewToInputStagingMs >= routing.payload.timing.previewMs &&
+      admission.previewToInputStagingMs <= timing.fromPreview.toAdapterMs);
+    assert.equal(timing.fromPreview.id, routing.payload.previewId);
+    assert.ok(timing.fromPreview.toAdapterMs >= routing.payload.timing.previewMs);
+    assert.equal(timing.fromPreview.toFirstNonblankOutputMs,
+      timing.fromPreview.toAdapterMs + timing.firstNonblankOutput.elapsedMs);
+    assert.equal(timing.outputStagedMs,null);
+    const outputTiming=execution.outputTiming;
+    assert.ok(outputTiming);
+    assert.equal(outputTiming.messageId,output.id);
+    assert.equal(outputTiming.parentRequestId,first.id);
+    assert.equal(outputTiming.source,'simulated');
+    assert.ok(timing.settlementStagedMs<=outputTiming.compositionStartedMs&&
+      outputTiming.compositionStartedMs<=outputTiming.readyMs&&outputTiming.readyMs<=outputTiming.stagedMs);
+    assert.deepEqual(outputTiming.fromPreview, { id: timing.fromPreview.id,
+      toStagingMs: timing.fromPreview.toAdapterMs + outputTiming.stagedMs });
+    assert.ok(outputTiming.requestToStagingMs !== undefined &&
+      outputTiming.requestToStagingMs >= admission.requestToInputStagingMs &&
+      outputTiming.requestToStagingMs <= outputTiming.fromPreview.toStagingMs);
+    assert.doesNotMatch(JSON.stringify(outputTiming),/Mass measures inertia/u);
+    const readOutputTiming=async()=> (await f.core.command('conversationActivity',{resourceIds:[execution.resourceId]}))
+      .executions.find(item=>item.id===execution.id)?.outputTiming;
+    assert.deepEqual(await readOutputTiming(),outputTiming);
+    assert.deepEqual((await f.core.command('conversationActivity',{resourceIds:['unavailable-conversation']})).executions,[]);
+    const presented={executionId:execution.id,requestId:first.id,messageId:output.id};
+    assert.equal((await f.core.command('rendererVelaOutput',{...presented,messageId:'different-message'})).accepted,false);
+    assert.equal((await f.core.command('rendererVelaOutput',presented)).accepted,true);
+    const observed=(await readOutputTiming())?.presentation;
+    assert.ok(observed && observed.stagingToReceiptMs!==null && observed.stagingToReceiptMs>=0);
+    assert.equal(observed.previewToReceiptMs,
+      outputTiming.fromPreview!.toStagingMs + observed.stagingToReceiptMs);
+    assert.equal(observed.requestToReceiptMs, outputTiming.requestToStagingMs + observed.stagingToReceiptMs);
+    assert.equal((await f.core.command('rendererVelaOutput',presented)).accepted,true);
+    assert.deepEqual((await readOutputTiming())?.presentation,observed);
     assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,1); assert.ok(!JSON.stringify({snapshot,events:f.events}).includes(marker));
     await f.reopen(); assert.equal((await f.core.command('velaApiUsageStatus',{})).enabled,true);
+    const replayedTiming = (await f.core.command('replay', { limit: 1000 })).events
+      .find(event => event.executionId === execution.id && event.type === 'execution/provider_completed')?.payload.providerTiming;
+    assert.deepEqual(replayedTiming?.fromPreview, timing.fromPreview);
+    assert.deepEqual(replayedTiming?.transport, transport);
+    const replayedAdmission = (await f.core.command('replay', { limit: 1000 })).events
+      .filter(event => event.correlationId === first.id && event.type === 'vela.routing.stage_started');
+    assert.equal(replayedAdmission.length, 1);
+    assert.deepEqual(replayedAdmission[0].payload.requestAdmission, admission);
+    assert.deepEqual(await readOutputTiming(),{...outputTiming,presentation:observed});
     f.replies.push(()=>response('Weight changes with gravity; mass stays the same.','resp-next'));
     const next=await f.send('And on the Moon?'); assert.equal(next.state,'responded'); assert.ok(next.history?.messages.some(message=>message.messageId===output.id));
     assert.ok(f.requests[1].input[0].content.includes('Mass measures inertia'));
+    const nextExecution=Object.values((await f.core.command('snapshot',{})).executions)
+      .find(item=>item.outputTiming?.parentRequestId===next.id)!;
+    await f.reopen();
+    assert.equal((await f.core.command('rendererVelaOutput',presented)).accepted,false);
+    const newObservation={executionId:nextExecution.id,requestId:next.id,messageId:nextExecution.outputMessageId!};
+    assert.equal((await f.core.command('rendererVelaOutput',newObservation)).accepted,true);
+    const restored=(await f.core.command('snapshot',{})).executions[nextExecution.id];
+    assert.ok(restored.outputTiming?.fromPreview);
+    assert.equal(restored.outputTiming?.presentation?.stagingToReceiptMs,null);
+    assert.equal(restored.outputTiming?.presentation?.previewToReceiptMs,null);
+    assert.equal(restored.outputTiming?.presentation?.requestToReceiptMs,null);
   } finally { await f.close(); }
 });
 
@@ -185,7 +291,13 @@ test('actual Core semantic application action uses standing source policy and co
     const result=await f.send('Create a workspace called Research');
     const state=await f.core.command('vela',{name:'state',input:{}}) as any,plan=state.plans.find((item:any)=>item.requestId===result.id);assert.equal(result.state,'responded',JSON.stringify({state:result.state,workflow:result.toolWorkflow,planState:plan?.state,requests:f.requests.length}));assert.equal(plan?.state,'applied');assert.equal(plan.steps[0].action.title,'Research'); const desktop=await f.core.command('desktop',{type:'snapshot'});assert.equal(desktop.workspaces.filter(item=>item.title==='Research').length,1);
     assert.equal(f.requests.length,3); assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,3);assert.equal(state.requests.length,1);assert.equal(state.conversation.messages.filter((item:any)=>item.role==='user').length,1);
-    assert.equal((await f.core.command('snapshot',{})).conversations.length,1);
+    const snapshot=await f.core.command('snapshot',{});
+    assert.equal(snapshot.conversations.length,1);
+    const staged=Object.values(snapshot.executions).filter(execution=>execution.outputTiming);
+    assert.equal(staged.length,1);
+    assert.equal(staged[0].responseId,'resp-confirmation');
+    assert.equal(staged[0].outputTiming?.parentRequestId,result.id);
+    assert.equal(staged[0].outputTiming?.messageId,staged[0].outputMessageId);
   } finally { await f.close(); }
 });
 
@@ -196,6 +308,7 @@ test('API model pins and usage revocation fail closed and incomplete output neve
     await assert.rejects(f.send('Hello',{providerId:'openai-api-vela',model:'unavailable-model'}),/unsupported_model/); assert.equal(f.requests.length,0);
     f.replies.push(()=>response('Partial answer','resp-incomplete',[message('Partial answer')],'incomplete'));
     const result=await f.send('Explain rainfall'); assert.equal(result.toolWorkflow?.phase,'blocked');assert.equal(result.state,'responded');assert.equal(result.response?.kind,'inability'); assert.equal(f.requests.length,1);
+    assert.ok(Object.values((await f.core.command('snapshot',{})).executions).every(execution=>!execution.outputTiming));
     const state=await f.core.command('vela',{name:'state',input:{}}) as VelaState,visible=state.conversation!.messages.find(message=>message.id===result.response!.messageId)!;
     assert.equal(visible.source,'vela-native');assert.equal(visible.classification,'observed');assert.equal(visible.providerContribution,undefined);assert(!visible.content.includes('Partial answer'));
     const snapshot=await f.core.command('snapshot',{}); assert.equal(Object.values(snapshot.executions)[0].state,'failed');
@@ -283,7 +396,9 @@ test('Vela API deferred terminal commit failure keeps receipt, execution and rep
       BEGIN INSERT INTO api_child VALUES(1); END;
     `);
     const input = { requestId: 'synthetic-api-terminal', version: 1, model: 'gpt-6-luna',
-      prompt: 'Synthetic terminal transaction', contextDigest: 'a'.repeat(64), oneUse: true as const, validate() {} };
+      prompt: 'Synthetic terminal transaction', contextDigest: 'a'.repeat(64), oneUse: true as const, validate() {},
+      outputSchema: { type: 'object' as const, properties: {}, required: [], additionalProperties: false },
+      missionCognition: { owner: { kind: 'planning' as const, requestId: 'synthetic-planning-owner' }, stage: 'planning' as const } };
     f.replies.push(() => response('Uncommitted answer', 'resp-api-terminal-fault'));
     const run = await runtime.run(input, new AbortController().signal);
     assert.equal(run.result.outcome, 'unknown');
@@ -295,6 +410,10 @@ test('Vela API deferred terminal commit failure keeps receipt, execution and rep
     assert.equal(execution.state, 'unknown');
     assert.equal(execution.responseId, 'resp-api-terminal-fault');
     assert.equal(receipt.responseId, execution.responseId);
+    const observed = runtime.missionCognitiveReceipts('synthetic-planning-owner', 'unrelated-mission')!;
+    assert.equal(observed.runs[0].transportOutcome, 'unknown');
+    assert.equal(observed.runs[0].dispatched, true);
+    assert.doesNotMatch(JSON.stringify(observed), /Uncommitted answer|Synthetic terminal transaction/);
     assert.deepEqual(early, []);
     const replay = (await f.core.command('replay', {})).events.filter(event => event.correlationId === input.requestId);
     assert.deepEqual(replay.filter(event => event.type.startsWith('vela.api/')).map(event => event.type),
@@ -306,6 +425,8 @@ test('Vela API deferred terminal commit failure keeps receipt, execution and rep
     assert.deepEqual((await f.core.command('snapshot', {})).executions[receipt.executionId], execution);
     const reopened = (f.core as any).velaApiRuntime as VelaApiRuntime;
     assert.deepEqual(reopened.receiptsForRequest(input.requestId), [receipt]);
+    assert.deepEqual(reopened.missionCognitiveReceipts('synthetic-planning-owner', 'unrelated-mission'), observed);
+    assert.equal(reopened.missionCognitiveReceipts(null, 'unrelated-mission'), undefined);
     f.replies.push(() => response('Synthetic subsequent answer', 'resp-api-after-fault'));
     assert.equal((await reopened.run({ ...input, requestId: 'synthetic-api-fresh' }, new AbortController().signal)).result.outcome, 'completed');
     assert.equal(f.requests.length, 2);

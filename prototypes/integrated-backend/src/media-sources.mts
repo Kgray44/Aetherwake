@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { open, realpath } from 'node:fs/promises';
-import { openSync,closeSync,fstatSync,readFileSync,realpathSync } from 'node:fs';
+import { openSync,closeSync,fstatSync,lstatSync,readSync,realpathSync } from 'node:fs';
 import { basename, extname, isAbsolute } from 'node:path';
 import type { BigIntStats } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
@@ -101,12 +101,28 @@ export function mediaCapabilities(source: MediaSource) {
 
 /** Only an explicitly selected canonical text resource may call this synchronous host content port. */
 export function readSelectedMediaText(source:MediaSource,maxBytes=12000):string|null{
-  if(!source.path||source.metadata.source!=='file'||source.metadata.format!=='text'||source.metadata.byteLength>maxBytes)return null;
-  ensure(realpathSync(source.path)===source.path,'source_changed');const fd=openSync(source.path,'r');
-  try{const current=()=>{const stat=fstatSync(fd,{bigint:true});ensure(stat.isFile()&&sourceRevision(stat)===source.metadata.sourceRevision,'source_changed');};current();
-    const bytes=readFileSync(fd);ensure(bytes.byteLength===source.metadata.byteLength&&bytes.byteLength<=maxBytes,'source_changed');
-    let text:string;try{text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);}finally{bytes.fill(0);}current();return text;
-  }finally{closeSync(fd);}
+  if (!source.path || source.metadata.source !== 'file' || source.metadata.format !== 'text' || source.metadata.byteLength > maxBytes) return null;
+  const { path, metadata } = source;
+  ensure(realpathSync(path) === path, 'source_changed');
+  const fd = openSync(path, 'r');
+  try {
+    const check = (stat: BigIntStats) => ensure(stat.isFile() && stat.size === BigInt(metadata.byteLength) &&
+      sourceRevision(stat) === metadata.sourceRevision, 'source_changed');
+    check(fstatSync(fd, { bigint: true }));
+    const bytes = Buffer.alloc(metadata.byteLength);
+    try {
+      let offset = 0;
+      while (offset < bytes.length) {
+        const read = readSync(fd, bytes, offset, bytes.length - offset, offset);
+        ensure(read > 0, 'source_changed');
+        offset += read;
+      }
+      check(fstatSync(fd, { bigint: true }));
+      ensure(realpathSync(path) === path, 'source_changed');
+      check(lstatSync(path, { bigint: true }));
+      return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+    } finally { bytes.fill(0); }
+  } finally { closeSync(fd); }
 }
 
 async function withCurrentFile<T>(source: MediaSource, inspect: (file: Awaited<ReturnType<typeof open>>) => Promise<T>): Promise<T> {

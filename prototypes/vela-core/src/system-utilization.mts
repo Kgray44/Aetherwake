@@ -10,10 +10,14 @@ export type SystemUtilization =
 
 export function readCpuCounters() {
   const processors = cpus();
+  const logicalProcessors = processors.map(({ times }) => ({
+    idle: times.idle, total: Object.values(times).reduce((a, b) => a + b, 0),
+  }));
   return {
     logicalCpus: processors.length,
-    idle: processors.reduce((sum, cpu) => sum + cpu.times.idle, 0),
-    total: processors.reduce((sum, cpu) => sum + Object.values(cpu.times).reduce((a, b) => a + b, 0), 0),
+    idle: logicalProcessors.reduce((sum, cpu) => sum + cpu.idle, 0),
+    total: logicalProcessors.reduce((sum, cpu) => sum + cpu.total, 0),
+    logicalProcessors,
   };
 }
 

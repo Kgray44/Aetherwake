@@ -1,10 +1,13 @@
 import { platform } from 'node:os';
-import { open } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { inspectBackendSource } from './mission-cpu-worker.mts';
+import type { createMissionCpuPool } from './mission-cpu-pool.mts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { readCpuUtilization, readGpuUtilization } from '../../vela-core/src/system-utilization.mts';
 import { readSystemMemory } from '../../vela-core/src/system-memory.mts';
 import { validateSystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
+import { verifiedGpuReadback } from './windows-gpu-readback.mts';
+import { EXPLICIT_MISSION_PREFIX } from './mission-contracts.mts';
+import { missionArtifactFiles, missionArtifactSource } from './mission-artifacts.mts';
 import type { Mission, MissionExecutor, MissionPlan, MissionProjection, MissionScope, MissionTask, MissionTaskPlan } from './mission-contracts.mts';
 
 const numberIn = (n: unknown, min: number, max: number) =>
@@ -61,8 +64,14 @@ export function missionCompletion(mission: Mission) {
       lines.push(`Backend ${mib(value.rssBytes)} MiB RSS, ${mib(value.heapUsedBytes)} MiB heap, ${value.timerOvershootMs.toFixed(1)} ms timer delay.`);
     } else if (evidence?.source === 'aerynth.shipped-backend-source') {
       lines.push(`Found ${value.sqlitePrepareSites} SQLite prepare sites and ${value.transactionSites} transaction sites in the shipped source.`);
+    } else if (evidence?.source === 'windows:d3d11-verified-readback' && verifiedGpuReadback(value)) {
+      lines.push(`Verified all ${value.verifiedBuffers} GPU buffer digests across ${value.allocatedBytes / 2 ** 20} MiB of test data.`);
     } else if (evidence?.source === 'aerynth.authorized-workspace-notes' && Array.isArray(value.references)) {
       lines.push(`Found ${value.references.length} relevant ${value.references.length === 1 ? 'note' : 'notes'}.`);
+    } else if (evidence?.source === missionArtifactSource && Array.isArray(value.artifacts) &&
+      evidence.attemptId === task.attempts.at(-1)?.id && task.attempts.at(-1)?.verification?.evidenceIds.includes(evidence.id) &&
+      value.artifacts.length === missionArtifactFiles.length && value.artifacts.every((file, index) => file?.name === missionArtifactFiles[index])) {
+      lines.push(`Generated and verified ${missionArtifactFiles[0]} (1024 × 1024 PNG) and ${missionArtifactFiles[1]}. Both files are available in this workspace.`);
     } else if (evidence?.source === 'codex-app-server:read-only-command') {
       lines.push(`${value.testCount} ${value.testCount === 1 ? 'test passed' : 'tests passed'}.`);
     } else if ((evidence?.source === 'chatgpt-plan-responses:reported' || evidence?.source === 'openai-api-vela:reported') && Array.isArray(value.observations) &&
@@ -121,32 +130,7 @@ export const nativeMissionExecutors: Readonly<Record<string, MissionExecutor>> =
   },
   'inspect.backend-source': {
     lane: 'native', replaySafe: true, available: () => true,
-    async run({ signal }) {
-      signal.throwIfAborted();
-      // This is the application's own shipped module. The objective cannot select a path or command.
-      const file = await open(new URL('./core.mts', import.meta.url), 'r');
-      try {
-        const before = await file.stat();
-        if (!before.isFile() || before.size < 1 || before.size > 768 * 1024) throw Error('backend_source_unavailable');
-        const bytes = Buffer.alloc(before.size + 1);
-        let read = 0;
-        while (read < bytes.length) {
-          signal.throwIfAborted();
-          const { bytesRead } = await file.read(bytes, read, bytes.length - read, read);
-          if (!bytesRead) break;
-          read += bytesRead;
-        }
-        const after = await file.stat();
-        if (after.mtimeMs !== before.mtimeMs || after.size !== read || read !== before.size) throw Error('backend_source_changed');
-        const source = bytes.subarray(0, read).toString('utf8');
-        return { source: 'aerynth.shipped-backend-source', value: {
-          module: 'core.mts', sha256: createHash('sha256').update(bytes.subarray(0, read)).digest('hex'), bytes: read,
-          sqlitePrepareSites: [...source.matchAll(/\bthis\.db\.prepare\(/gu)].length,
-          transactionSites: [...source.matchAll(/\bthis\.kernel\.withTransaction\(/gu)].length,
-          note: 'Counts are static inspection clues. They do not measure runtime cost or establish a bottleneck.',
-        } };
-      } finally { await file.close(); }
-    },
+    run: ({ signal }) => inspectBackendSource(signal),
     verify({ value, source }) {
       const v = object(value);
       const passed = source === 'aerynth.shipped-backend-source' && v.module === 'core.mts' &&
@@ -182,6 +166,21 @@ export const nativeMissionExecutors: Readonly<Record<string, MissionExecutor>> =
   },
 });
 
+export function createPooledBackendSourceExecutor(pool: ReturnType<typeof createMissionCpuPool>): MissionExecutor {
+  return {
+    ...nativeMissionExecutors['inspect.backend-source']!,
+    async run({ signal, resourceCheckpoint }) {
+      try {
+        const stop = resourceCheckpoint ? AbortSignal.any([signal, resourceCheckpoint]) : signal;
+        return (await pool.inspect(stop)).evidence;
+      } catch (error) {
+        if (signal.aborted || !resourceCheckpoint?.aborted) throw error;
+        return { source: 'aerynth.shipped-backend-source', outcome: 'blocked', value: { status: 'resource_checkpoint' } };
+      }
+    },
+  };
+}
+
 const probes: Record<string, { executor: string; objective: string; resource: string }> = {
   cpu: { executor: 'sample.cpu', objective: 'Sample host CPU utilization', resource: 'host.cpu-counter' },
   ram: { executor: 'sample.ram', objective: 'Read host physical memory utilization', resource: 'host.ram-counter' },
@@ -207,9 +206,8 @@ export function missionPlanningCatalog() {
 export function nativeMissionPlan(intent: string, scope: MissionScope): MissionPlan | null {
   if (typeof intent !== 'string' || Buffer.byteLength(intent) > 4096) return null;
   const normalized = intent.normalize('NFKC').toLowerCase().trim().replace(/^vela[,:]?\s+/u, '');
-  const prefix = /^(?:please\s+)?(?:run|start|plan|create) (?:a )?mission (?:to|for)\s+/u;
-  const explicit = prefix.test(normalized);
-  const text = normalized.replace(prefix, '').replace(/[.!?]+$/u, '');
+  const explicit = EXPLICIT_MISSION_PREFIX.test(normalized);
+  const text = normalized.replace(EXPLICIT_MISSION_PREFIX, '').replace(/[.!?]+$/u, '');
   let ids: string[];
   const check = /^run (?:the )?selected node(?:\.js)? tests and (?:measure|sample|check) cpu and ram(?: in parallel)?$/u.test(text);
   if (/^(?:investigate|profile|measure) (?:the )?aerynth backend(?:'s)? performance(?: using workspace notes)?$/u.test(text))

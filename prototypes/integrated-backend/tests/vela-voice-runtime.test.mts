@@ -18,6 +18,38 @@ import type {VelaPlan} from '../../vela-core/src/contracts.ts';
 import type {MissionPlan,MissionProjection} from '../src/mission-contracts.mts';
 
 const credential = 'SYNTHETIC_ONLY_VELA_VOICE_CREDENTIAL';
+
+test('live voice revalidates the exact messages sent in its bounded canonical context', async () => {
+  const f = fixture();
+  try {
+    const owner = f.core as any;
+    const { conversationId, trimmed, included, excluded } = owner.atomic(() => {
+      const conversationId = owner.ensureVelaConversation();
+      const graphId = owner.gid(conversationId);
+      return {
+        conversationId,
+        trimmed: owner.graph.addMessage(graphId, 'user', 'x'.repeat(8192)),
+        included: owner.graph.addMessage(graphId, 'assistant', 'Synthetic approved history'),
+        excluded: owner.graph.addMessage(graphId, 'system', 'Synthetic excluded history'),
+      };
+    });
+    const context = await owner.voiceContext(conversationId, 'conversation');
+    assert.deepEqual(context.history, [{ role: 'assistant', content: included.content }]);
+    owner.atomic(() => {
+      owner.graph.markUnavailable(trimmed.id);
+      owner.graph.markUnavailable(excluded.id);
+    });
+    owner.validateVoiceContext(context.contextRef, context.contextDigest);
+    const sourceAllowed = owner.missionConversations.sourceAllowed.bind(owner.missionConversations);
+    owner.missionConversations.sourceAllowed = (id: string) => id !== included.id && sourceAllowed(id);
+    assert.throws(() => owner.validateVoiceContext(context.contextRef, context.contextDigest), /live_context_changed/);
+    owner.missionConversations.sourceAllowed = sourceAllowed;
+    owner.atomic(() => owner.graph.markUnavailable(included.id));
+    assert.throws(() => owner.validateVoiceContext(context.contextRef, context.contextDigest), /live_context_changed/);
+  } finally {
+    await f.close();
+  }
+});
 const offer = 'v=0\r\no=SYNTHETIC_PRIVATE_VOICE_OFFER\r\n';
 const answer = 'v=0\r\no=SYNTHETIC_PRIVATE_VOICE_ANSWER\r\n';
 const idleMedia = (): GptLiveMediaState => ({ contract:'aerynth.gpt-live-media@1',connection:'idle',microphoneAccess:'not-requested',localTrackEnabled:false,
@@ -149,6 +181,39 @@ test('a final API tool answer remains the current primary after real source effe
  const f=fixture();try{await f.ready();const tool=(name:string,args:unknown)=>{const id=randomUUID();return new Response([{type:'response.created',response:{id,status:'in_progress'}},{type:'response.completed',response:{id,status:'completed',model:'gpt-6-luna',usage:{input_tokens:20,output_tokens:8,total_tokens:28},output:[{type:'function_call',id:'item-'+id,call_id:'call-'+id,name,arguments:JSON.stringify(args),status:'completed'}]}}].map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});},catalog=()=>[...(f.core as any).toolWorkflowRuns.values()][0].port.catalog;
   f.replies.push(()=>tool(VELA_TOOL_SCHEMAS,{catalogDigest:catalog().digest,ids:['application.createWorkspace']}),()=>{const c=catalog(),d=c.descriptors.find((item:any)=>item.id==='application.createWorkspace');return tool(VELA_TOOL_INVOKE,{catalogDigest:c.digest,capabilityId:d.id,schemaDigest:d.schemaDigest,invocationId:randomUUID(),argumentsJson:JSON.stringify({type:'createWorkspace',title:'Synthetic API result workspace',projectId:null})});},()=>response('The requested workspace is created.','final-native-api-result'));await f.send('Create one workspace and confirm its saved result.');const state=await f.vela(),request=state.requests[0],projection=projectVelaManifestation(state,state.presentation),message=state.conversation!.messages.find(message=>message.id===request.response!.messageId)!;assert.equal(request.state,'responded');assert.equal(projection.kind,'insight');assert.equal(projection.currentMessageId,message.id);assert.equal(projection.currentPlanId,request.planId);assert.equal(message.classification,'reported');assert.equal(request.toolWorkflow?.phase,'partial');const before=state.conversation!.messages,speech=await speakReply(f,{messageId:message.id,contentDigest:replyDigest(message.content)});assert.equal(speech.speech?.messageId,message.id);assert.equal(f.requests.filter(request=>request.url.endsWith('/responses')).length,3);assert.deepEqual((await f.vela()).conversation!.messages,before);await f.core.command('velaVoice',{name:'stopSpeech',input:{attemptId:speech.session.attemptId!}});
  }finally{await f.close();}
+});
+
+test('actual Core keeps conversation and operation context out of output-only voice requests', async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    await nativeWorkspaceReply(f, 'SYNTHETIC_UNRELATED_VOICE_WORKSPACE');
+    const sample = 'Synthetic audition sample.';
+    const grant = await f.grant('audition');
+    await f.core.command('velaVoiceNative', { name: 'audition',
+      input: { attemptId: grant.attemptId, authorizationRef: grant.authorizationRef, sample } });
+    const audition = f.requests.find(request => request.url === LIVE_ENDPOINT)!.body.session;
+    assert.deepEqual(audition.input.map((message: { role: string }) => message.role), ['developer']);
+    assert.ok(audition.input[0].content[0].text.endsWith(sample));
+    assert.doesNotMatch(JSON.stringify(audition), /SYNTHETIC_UNRELATED_VOICE_WORKSPACE|Current authorized application state/u);
+    assert.equal(audition.delegation, undefined);
+    const { session } = await f.voice();
+    await f.emit({ type: 'session.started', event_id: 'audition-started', session: { id: session.sessionId } });
+    await f.core.command('velaVoice', { name: 'stop', input: {} });
+
+    const reply = await speechReply(f, 'Synthetic canonical readback.');
+    const spoken = await speakReply(f, reply);
+    const readback = f.requests.filter(request => request.url === LIVE_ENDPOINT).at(-1)!.body.session;
+    assert.equal(readback.input.length, 1);
+    assert.ok(readback.input[0].content[0].text.endsWith(reply.content));
+    assert.doesNotMatch(JSON.stringify(readback), /SYNTHETIC_UNRELATED_VOICE_WORKSPACE|Current authorized application state/u);
+    await f.core.command('velaVoice', { name: 'stopSpeech', input: { attemptId: spoken.session.attemptId! } });
+
+    await f.start();
+    const interactive = f.requests.filter(request => request.url === LIVE_ENDPOINT).at(-1)!.body.session;
+    assert.ok(interactive.input.some((message: { role: string }) => message.role === 'assistant'));
+    assert.match(JSON.stringify(interactive), /SYNTHETIC_UNRELATED_VOICE_WORKSPACE/u);
+  } finally { await f.close(); }
 });
 
 test('actual Core reads one visible canonical primary reply with selected Vela 2, output-only media, and zero duplicate turns or delegation',async()=>{

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ResponsesTransport, prepareResponsesTurn, fetchModelCatalog, RESPONSES_ENDPOINT, MODELS_ENDPOINT } from '../responses.mts';
-import type { ModelCatalogDiagnostic, NativeCredential, NativeDispatchPort, TurnHttpDiagnostic, TurnInput, TurnEvent } from '../contracts.mts';
+import type { ModelCatalogDiagnostic, NativeCredential, NativeDispatchPort, TurnHttpDiagnostic, TurnInput, TurnEvent, TurnTransportTiming } from '../contracts.mts';
 import { digest } from '../common.mts';
 const boundary = 'a'.repeat(64);
 const input = (): TurnInput => ({ executionId: 'execution-1', requestId: 'request-1', configurationId: 'ordinary-profile', providerId: 'chatgpt-plan-responses', assistant: 'ordinary', model: 'fixture-model', instructions: 'Ordinary assistant instruction, no coding agent harness.', messages: [{ role: 'user', content: 'Hello\n世界' }], contextDigest: 'b'.repeat(64) });
@@ -30,6 +30,37 @@ test('offline: exact approved egress, fixed endpoint, native identity, Unicode f
     assert.equal(result.usage?.source, 'provider-reported');
     assert.equal(result.usage?.cachedInputTokens, 4);
     assert.deepEqual(events.map(event => event.type), ['provider/response-created', 'provider/text-delta', 'provider/usage']);
+});
+test('offline: transport milestones distinguish rejection before POST, failed fetch, and received SSE bytes', async () => {
+    const observations: TurnTransportTiming[] = [];
+    const observeTiming = (timing: TurnTransportTiming) => {
+        observations.push(timing);
+        if (timing.postAttemptMs === null) throw Error('observer failed');
+        return Promise.reject(Error('observer rejected'));
+    };
+    const run = (native: NativeDispatchPort, fetch: typeof globalThis.fetch) => new ResponsesTransport({
+        native, fetch, observeTiming, onEvent: () => {},
+    }).turn(input());
+    const denied = await run(ports({ authorize: async () => { throw Error('denied'); } }), async () => assert.fail('unexpected POST'));
+    assert.equal(denied.dispatched, false);
+    const blocked = observations.shift();
+    assert.ok(blocked && blocked.finishedMs >= 0);
+    assert.equal(blocked.postAttemptMs, null);
+    assert.equal(blocked.headersMs, null);
+    assert.equal(blocked.firstSseBytesMs, null);
+    const failed = await run(ports(), async () => { throw Error('connection failed'); });
+    assert.equal(failed.outcome, 'unknown');
+    const unreachable = observations.shift();
+    assert.ok(unreachable && unreachable.postAttemptMs !== null && unreachable.postAttemptMs <= unreachable.finishedMs);
+    assert.equal(unreachable.headersMs, null);
+    assert.equal(unreachable.firstSseBytesMs, null);
+    const completedTurn = await run(ports(), async () => stream([created, delta, completed], 1));
+    assert.equal(completedTurn.outcome, 'completed');
+    const received = observations.shift();
+    assert.ok(received && received.postAttemptMs !== null && received.headersMs !== null && received.firstSseBytesMs !== null);
+    assert.ok(received.postAttemptMs <= received.headersMs && received.headersMs <= received.firstSseBytesMs &&
+      received.firstSseBytesMs <= received.finishedMs);
+    assert.equal(observations.length, 0);
 });
 test('offline: separate Vela API billing route never accepts a ChatGPT credential', async () => {
     const vela = { ...input(), providerId: 'openai-api-vela', assistant: 'vela', configurationId: 'separate-api' } as TurnInput;

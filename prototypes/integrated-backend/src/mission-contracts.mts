@@ -1,8 +1,12 @@
 import type { MissionContextPackage } from '../../vela-core/src/mission-context.mts';
 import type { ReasoningEffort } from '../../openai-provider/model-controls.ts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
-import type { StreamEvent } from './contracts.mts';
+import type { ProviderStreamTiming, StreamEvent } from './contracts.mts';
 import type { MissionTeam, MissionTeamSave } from './mission-teams.mts';
+
+/** Only an explicit command enters mission review before ordinary composer routing. */
+export const EXPLICIT_MISSION_PREFIX = /^(?:vela[,:]?\s+)?(?:please\s+)?(?:run|start|plan|create)\s+(?:a\s+)?mission\s+(?:to|for)\s+(?=\S)/iu;
+export const ARTIFACT_MISSION_PREFIX = /^run a mission to generate an illustration:\s*(?=\S)/iu;
 
 export const MISSION_CONTRACT = 'aerynth.vela-mission@1' as const;
 export const MISSION_LIMITS = { missions: 128, active: 8, tasks: 16, attempts: 3, workers: 3, revisions: 4, events: 256 } as const;
@@ -25,6 +29,7 @@ export interface MissionTaskPlan {
   timeoutMs: number;
   maxAttempts: number;
   projectCheck?: { paths: string[]; digest: string };
+  artifactImage?: { prompt: string; digest: string; configurationVersion: number };
   teamMember?: { profileId: string; title: string; responsibility: string };
   specialist?: {
     role: string;
@@ -49,6 +54,22 @@ export interface MissionPlan {
   coverage?: MissionCoverage;
 }
 export interface MissionCoverage { status: 'partial'; limitations: string[] }
+export interface MissionObjectiveReview {
+  digest: string;
+  planFingerprint: string;
+  planRevision: 1;
+  obligations: { taskId: string; objective: string; executor: string; criterion: string; evidenceSource: string }[];
+}
+export interface MissionObjectiveReviewPreview extends MissionObjectiveReview {
+  obligations: (MissionObjectiveReview['obligations'][number] & { proofDescription: string })[];
+}
+export interface MissionObjectiveAssessment {
+  model: string;
+  requestId: string;
+  planRevision: number;
+  triggerSeq: number;
+  findings: { status: 'supported' | 'unverified'; statement: string; evidence: { taskId: string; evidenceId: string }[] }[];
+}
 export type MissionTeamBinding = Pick<MissionTeam, 'id' | 'title' | 'version'>;
 export interface MissionTeamLibrary {
   kind: 'team-library';
@@ -60,10 +81,19 @@ export interface MissionPlanningReceipt {
   model: string;
   effort?: ReasoningEffort;
   responseId: string;
+  executionId?: string;
   startedAt: string;
   durationMs: number;
+  /** Stream and result offsets use the planning start. Validation is an elapsed duration. */
+  timing?: ProviderStreamTiming & { providerResultMs: number; validationMs: number;
+    lifecycleClock?: { domain: string; commandStartedMs: number; validatedMs: number } };
+  providerEvidence?: 'reported' | 'simulated';
   usage?: ReportedUsage;
+  context?: { notes: MissionPlanningSourceRef[]; files?: MissionPlanningSourceRef[]; projectEvidence?: import('./contracts.mts').VelaProjectEvidencePreview;
+    evidenceDigest: string; elapsedMs: number; providerCalls: number; usage: ReportedUsage[] };
 }
+export interface MissionPlanningSourceRef { id: string; title: string; version: number; proofDigest: string }
+export interface MissionPlanningEvidenceSelection { noteIds?: string[]; fileIds?: string[]; projectEvidence?: true }
 export interface MissionEvidence {
   id: string;
   attemptId: string;
@@ -77,17 +107,40 @@ export interface MissionVerification {
   detail: string;
   evidenceIds: string[];
 }
-export type MissionAdmissionReason = 'physical-memory' | 'storage-reserve' | 'cpu-load' | 'gpu-load' | 'disk-io' | 'active-input';
+export type MissionAdmissionReason = 'physical-memory' | 'storage-reserve' | 'cpu-load' | 'gpu-load' | 'disk-io' | 'active-input' | 'external-desktop-activity' |
+  'renderer-latency' | 'battery-power' | 'suspended' | 'cpu-speed-limit' | 'os-memory-pressure' | 'windows-commit-pressure' |
+  'gpu-thermal-throttling' | 'gpu-load-unavailable';
 export interface MissionAdmissionReading { value: number; observedAt: string }
 export interface MissionAdmission {
   workerLimit: number;
+  effectiveLimits?: { cpu: number; build: number; gpu: number; host_io: number; remote: number };
   reasons: MissionAdmissionReason[];
   readings: {
     cpuPercent?: MissionAdmissionReading;
     availableMemoryBytes?: MissionAdmissionReading;
+    windowsLowMemory?: MissionAdmissionReading;
+    windowsCommitHeadroomBytes?: MissionAdmissionReading;
     gpuEnginePercent?: MissionAdmissionReading;
     diskQueueLength?: MissionAdmissionReading;
+    rendererFrameP95Ms?: MissionAdmissionReading;
   };
+}
+type MissionPhaseInterval = [startedMs: number, endedMs: number];
+export type MissionReadyBlocker = 'worker-budget' | 'capacity' | 'resource-conflict';
+export interface MissionReadyQueueEvidence {
+  firstObservedMs: number;
+  /** Scheduler observations. The samples do not establish a continuous blocked duration. */
+  blockers: Partial<Record<MissionReadyBlocker, { samples: number; lastObservedMs: number }>>;
+}
+/** Local monotonic intervals in the attempt's capture domain. */
+export interface MissionAttemptPhaseTiming {
+  clock: string;
+  contextAssembly: MissionPhaseInterval;
+  readyQueue?: MissionReadyQueueEvidence;
+  dispatchValidation?: MissionPhaseInterval;
+  execution?: MissionPhaseInterval;
+  postExecutionContextValidation?: MissionPhaseInterval;
+  verification?: MissionPhaseInterval;
 }
 export interface MissionAttempt {
   id: string;
@@ -99,8 +152,11 @@ export interface MissionAttempt {
   verification?: MissionVerification;
   context?: MissionContextPackage['manifest'];
   admission?: MissionAdmission;
-  timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number };
-  telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string };
+  resourceLease?: import('./resource-policy.mts').ResourceLease['receipt'];
+  timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number; phases?: MissionAttemptPhaseTiming };
+  telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string;
+    providerEvidence?: MissionPlanningReceipt['providerEvidence'];
+    providerExecutionId?: string; providerStream?: ProviderStreamTiming };
 }
 export type MissionTaskState = 'queued' | 'running' | 'cancelling' | 'verified' | 'failed' | 'blocked' | 'cancelled' | 'uncertain';
 export interface MissionTask extends MissionTaskPlan {
@@ -113,9 +169,11 @@ export interface MissionTask extends MissionTaskPlan {
 export interface MissionEvent {
   seq: number;
   time: string;
-  kind: 'created' | 'revised' | 'control' | 'started' | 'settled' | 'recovered' | 'workroom';
+  timing?: { domain: string; monotonicMs: number; planRevision: number; intakeMonotonicMs?: number };
+  kind: 'created' | 'revised' | 'control' | 'started' | 'settled' | 'recovered' | 'workroom' | 'objective-assessed';
   taskId?: string;
   attemptId?: string;
+  cancellationRequestedAttemptIds?: string[];
   detail?: string;
   change?: MissionRevisionChange;
   replacementTaskId?: string;
@@ -136,6 +194,8 @@ export interface Mission {
   team?: MissionTeamBinding;
   originConversationId?: string;
   coverage?: MissionCoverage;
+  objectiveReview?: MissionObjectiveReview;
+  objectiveAssessment?: MissionObjectiveAssessment;
   workroom?: MissionWorkroom;
   tasks: MissionTask[];
   retiredTasks?: MissionTask[];
@@ -148,7 +208,13 @@ export interface MissionProjection extends Mission {
   streamPending?: true;
   reportPending?: true;
   conversationPending?: true;
+  cognitiveReceipts?: import('./vela-api-runtime.mts').VelaMissionCognitiveReceipts;
   waits: Record<string, 'dependencies' | 'capacity' | 'resource-conflict' | 'resource-pressure'>;
+  readyQueueObservation?: {
+    clock: string;
+    monotonicMs: number;
+    tasks: (MissionReadyQueueEvidence & { taskId: string })[];
+  };
   profile: {
     elapsedMs: number;
     peakWorkers: number;
@@ -192,9 +258,19 @@ export interface MissionRevisionPreview {
     webSearch?: true;
   };
 }
+export interface MissionExecutiveRequest { id: string; revision: number; triggerSeq: number }
+export interface MissionExecutiveReview {
+  request: MissionExecutiveRequest;
+  fingerprint: string;
+  configurationVersion: number;
+  model: string;
+  effort?: ReasoningEffort;
+  packet: import('./mission-executive.mts').ExecutivePacket;
+}
 export type MissionRequest =
-  | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string; teamId?: string } }
-  | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string } }
+  | { name: 'executive-review'; input: MissionExecutiveRequest }
+  | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string; teamId?: string } & MissionPlanningEvidenceSelection }
+  | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string; chooseProjectTests?: true } & MissionPlanningEvidenceSelection }
   | { name: 'start'; input: { objective: string; fingerprint: string; requestId: string; agentProfileId?: string; proposalId?: string; teamId?: string } }
   | { name: 'team-library'; input: Record<string, never> }
   | { name: 'team-save'; input: MissionTeamSave }
@@ -203,6 +279,11 @@ export type MissionRequest =
   | { name: 'workroom-resource'; input: { resourceId: string } }
   | { name: 'list'; input: Record<string, never> }
   | { name: 'read'; input: { id: string } }
+  | { name: 'execution-profile'; input: { id: string } }
+  | { name: 'experiment-hypothesis'; input: { id: string; hypothesisId: string; expectedRevision: number } }
+  | { name: 'compare-native-samples'; input: {
+    baseline: { id: string; expectedRevision: number }; candidate: { id: string; expectedRevision: number } } }
+  | { name: 'resource-experiment-preview'; input: { id: string; hypothesisId: string; expectedRevision: number; cpuSlots: number } }
   | { name: 'revision-preview'; input: MissionRevisionInput }
   | { name: 'revision-apply'; input: MissionRevisionInput & { fingerprint: string } }
   | { name: 'workroom-preview'; input: { id: string } }
@@ -213,7 +294,9 @@ export interface MissionPreview {
   plan: MissionPlan;
   executors: { id: string; available: boolean }[];
   externalReview?: { provider: string; model: string; effort?: ReasoningEffort; calls: number };
-  localReview?: { kind: 'node-test'; maxFiles: number };
+  localReview?: { kind: 'node-test'; maxFiles: number; preselected?: true };
+  objectiveReview?: MissionObjectiveReviewPreview;
+  artifactReview?: { prompt: string; digest: string; model: string; width: number; height: number; files: readonly string[] };
   proposalId?: string;
 }
 export interface MissionPlanningOffer {
@@ -221,7 +304,10 @@ export interface MissionPlanningOffer {
   scope: MissionScope;
   objective: string;
   fingerprint: string;
-  planner?: { provider?: 'chatgpt-plan-responses' | 'openai-api-vela'; model: string; effort?: ReasoningEffort; capabilities: string[] };
+  notes?: MissionPlanningSourceRef[];
+  files?: MissionPlanningSourceRef[];
+  projectEvidence?: import('./contracts.mts').VelaProjectEvidencePreview;
+  planner?: { provider?: 'chatgpt-plan-responses' | 'openai-api-vela'; model: string; effort?: ReasoningEffort; capabilities: string[]; projectCheck?: true };
 }
 export interface MissionWorkroom {
   kind: 'workroom';
@@ -314,10 +400,17 @@ export type MissionWorkroomResource = {
 );
 
 export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomResource |
+  import('./execution-profiler.mts').MissionExecutionProfile |
+  ReturnType<typeof import('./execution-profiler.mts').resolveMissionHypothesis> |
+  ReturnType<typeof import('./execution-profiler.mts').compareNativeSamples> |
+  ReturnType<typeof import('./resource-policy.mts').previewWorkerBudgetExperiment> |
+  { kind: 'executive-result'; result: import('./mission-executive.mts').ExecutiveResult } |
   MissionWorkroomPreview | MissionRevisionPreview | MissionTeam | MissionTeamLibrary |
   { kind: 'mission-report'; missionId: string; messageId: string } | null;
 
 export interface MissionExecutionContext {
+  /** Cooperative checkpoint request. Task cancellation remains a separate signal. */
+  resourceCheckpoint?: AbortSignal;
   missionId: string;
   scope: MissionScope;
   task: MissionTaskPlan;
@@ -325,6 +418,7 @@ export interface MissionExecutionContext {
   dependencies: readonly MissionEvidence[];
   context: MissionContextPackage;
   signal: AbortSignal;
+  validatePlanningContext?(): void;
 }
 export interface MissionExecutor {
   readonly lane: string;

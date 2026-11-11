@@ -7,11 +7,78 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { PersonalContextService } from '../src/service.mts';
 import type { ContextRequest, FactDraft, OriginalImport, OriginalInput, PersonalContextHost, PersonalCrypto, PersonalScope } from '../src/contracts.ts';
+import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 
 const ordinary: PersonalScope = { kind: 'assistant.ordinary' }, vela: PersonalScope = { kind: 'assistant.vela' }, shared: PersonalScope = { kind: 'user.shared' };
 const original = (patch: Partial<OriginalInput> = {}): OriginalInput => ({ source: 'user-paste', kind: 'memories', scope: ordinary, text: 'Synthetic user prefers concise engineering explanations.', sensitive: false, expiresAt: null, ...patch });
 const fact = (source?: OriginalImport, patch: Partial<FactDraft> = {}): FactDraft => ({ scope: ordinary, purpose: 'knowledge', category: 'technical', text: 'Synthetic fictional hardware is a fictional processor.', keywords: ['hardware', 'processor'], certainty: 'explicit-statement', sensitive: false, expiresAt: null, source: source ? { kind: 'import', id: source.id, version: source.version, start: 0, end: source.text.length } : { kind: 'user-statement' }, ...patch });
 const request = (patch: Partial<ContextRequest> = {}): ContextRequest => ({ requestId: 'synthetic:request', assistant: 'ordinary', providerId: 'synthetic:provider', query: 'Which hardware processor?', projectId: null, conversationId: null, sharedFactIds: [], includeBehavior: true, maxBytes: 16384, maxItems: 8, ...patch });
+
+test('encrypted online backup preserves correction provenance and enforces current disclosure after restore', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aerynth-personal-context-backup-'));
+  const sourcePath = join(dir, 'canonical.sqlite'), copyPath = join(dir, 'backup.sqlite');
+  const key = randomBytes(32);
+  let kernel: WorkspaceKernel | undefined;
+  let writer: ReturnType<typeof fixture> | undefined;
+  let restored: ReturnType<typeof fixture> | undefined;
+  let wrongKey: ReturnType<typeof fixture> | undefined;
+  try {
+    kernel = WorkspaceKernel.open(sourcePath);
+    writer = fixture(sourcePath, key);
+    writer.enable();
+    const source = writer.service.importOriginal(original());
+    const previous = writer.service.reviewFact(fact(source));
+    const { replacement } = writer.service.correctFact({
+      id: previous.id, expectedVersion: previous.version,
+      replacement: fact(source, { scope: { kind: 'project', id: 'p1' }, text: 'Synthetic corrected hardware processor.' }),
+    });
+    const input = request({ projectId: 'p1' });
+    const preview = writer.service.previewContext(input);
+    assert.deepEqual(preview.items.map(item => item.factId), [replacement.id]);
+    await kernel.backupTo(copyPath);
+    const bytes = readFileSync(copyPath);
+    for (const text of [source.text, previous.text, replacement.text]) {
+      assert(!bytes.includes(Buffer.from(text)));
+    }
+    assert(!bytes.includes(key));
+    const removed = writer.service.hardDelete({ id: source.id, expectedVersion: source.version });
+    assert(removed.deleted.some(record => record.id === replacement.id));
+    assert.throws(() => writer!.service.readFact(replacement.id), /personal_record_unavailable/);
+    writer.close();
+    writer = undefined;
+    kernel.close();
+    kernel = undefined;
+
+    restored = fixture(copyPath, key);
+    assert.deepEqual(restored.service.readImport(source.id), source);
+    assert.deepEqual(restored.service.readFact(replacement.id), replacement);
+    assert.equal(restored.service.readFact(previous.id).supersededBy, replacement.id);
+    assert.equal(restored.service.validateContext(preview, input).context.digest, preview.digest);
+    const newDestination = { ...input, providerId: 'synthetic:other-provider' };
+    assert.throws(() => restored!.service.validateContext(preview, newDestination), /stale_personal_context/);
+    const rebound = restored.service.previewContext(newDestination);
+    assert.deepEqual(rebound.items, preview.items);
+    assert.equal(restored.service.validateContext(rebound, newDestination).context.digest, rebound.digest);
+    restored.scopes.set('project:p1', '2');
+    assert.throws(() => restored!.service.validateContext(rebound, newDestination), /stale_personal_scope/);
+    restored.scopes.set('project:p1', '1');
+    restored.denied.add('context.disclose');
+    assert.throws(() => restored!.service.validateContext(preview, input), /personal_context_not_authorized/);
+    restored.close();
+    restored = undefined;
+
+    wrongKey = fixture(copyPath);
+    assert.throws(() => wrongKey!.service.readFact(replacement.id), /private_content_unavailable/);
+  } finally {
+    wrongKey?.close();
+    restored?.close();
+    writer?.close();
+    kernel?.close();
+    assert.equal(dirname(resolve(dir)), resolve(tmpdir()));
+    assert(basename(dir).startsWith('aerynth-personal-context-backup-'));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 /** All contents, users and scopes are synthetic. AES-GCM fixture key lives ONLY in test memory, never SQLite/Git. */
 function fixture(file = ':memory:', key = randomBytes(32)) {

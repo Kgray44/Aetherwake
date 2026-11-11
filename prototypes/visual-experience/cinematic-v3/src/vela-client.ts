@@ -90,7 +90,7 @@ export function createVelaClient(options: {
     search: (input) => invoke("search", input),
     presentation: (input) => invoke("presentation", input),
     request: (input) => {
-      const activeCard = options.activeCard?.();
+      const activeCard = input.semanticContext ? undefined : options.activeCard?.();
       return invoke("request", activeCard ? { ...input, activeCard } : input);
     },
     native: (input) => invoke("native", input),

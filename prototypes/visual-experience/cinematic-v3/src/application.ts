@@ -66,6 +66,7 @@ import type { VelaPlan, VelaRequest, VelaState } from "../../../vela-core/src/co
 import { createVelaExperience } from "./vela-experience";
 import { velaVisualState, velaVisualLabels, type VelaVisualEvidence } from './vela-visual-state.ts';
 import { createVelaManifestation } from "./vela-manifestation.ts";
+import { createVelaOutputObservation } from "./vela-output-observation.ts";
 import { createVelaMissionView } from "./vela-missions.ts";
 import { mountMissionWorkroomView, type MissionWorkroomView } from "./mission-workroom-view.ts";
 import type { MissionResponse, MissionProjection } from "../../../integrated-backend/src/mission-contracts.mts";
@@ -320,6 +321,12 @@ export function installApplication(hooks: Hooks) {
       await run({ type: "navigate", target: { kind: "workspace", workspaceId } });
       if (state?.activeWorkspaceId === workspaceId) surfaces.close("vela");
     },
+    async (intent, missionCheckpoint) => {
+      const result = await velaClient.request({ intent, missionCheckpoint, resourceIds: [], authorizeProvider: true,
+        semanticContext: true, providerId: "openai-api-vela",
+        ...(missionCheckpoint.gapIndex === undefined ? {} : { projectEvidence: true }) });
+      if (result?.state !== "responded") throw Error(result?.errorCode ?? "vela_mission_checkpoint_unavailable");
+    },
   );
   document.addEventListener("visibilitychange", velaMissions.observe);
   let velaOpen = false;
@@ -335,6 +342,7 @@ export function installApplication(hooks: Hooks) {
     wake: hooks.wake,
     resize: (size) => surfaces.resize("vela", size),
   });
+  const observeVelaOutput = createVelaOutputObservation(async output => host.command?.("rendererVelaOutput", output));
   const velaExperience = createVelaExperience({
     motion: hooks.motion,
     root: velaContent,
@@ -351,6 +359,7 @@ export function installApplication(hooks: Hooks) {
       velaPermissions.dispose();
       velaWake.dispose();
       velaManifestation.dispose();
+      observeVelaOutput(null);
       velaExperience.dispose();
     },
     { once: true },
@@ -2591,7 +2600,7 @@ export function installApplication(hooks: Hooks) {
         voice: {...velaVoice,setVisible(visible){velaVoice.setVisible(visible);velaWake.setVisible(visible);}},
         permissions: velaPermissions,
         onPresentation: (value) => { visualEvidence.panelPhase = value.phase; velaExperience.observe(value); },
-        onManifestation: (value) => velaManifestation.observe(value),
+        onManifestation: (value) => { velaManifestation.observe(value); observeVelaOutput(value); },
         onConnectProvider: () => host.command!("capabilities", {}),
         onOpenConnections: () => { surfaces.close("vela"); connections(); },
         listTimelineRepositories: async () => {

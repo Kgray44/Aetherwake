@@ -11,6 +11,7 @@ import type { TimelineDocument } from '../../timeline-product/contracts.ts';
 import type { NoteDocument } from '../../block-library/note-contracts.ts';
 import type { VelaState } from '../../vela-core/src/contracts.ts';
 import type { MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomDashboard, MissionWorkroomPreview, MissionWorkroomResource } from '../src/mission-contracts.mts';
+import type { MissionExecutionProfile } from '../src/execution-profiler.mts';
 
 type EvidenceRow = Extract<MissionWorkroomDashboard, { kind: 'evidence' }>['rows'][number];
 
@@ -132,23 +133,99 @@ test('canonical backend runs a native mission without inference, restores eviden
       await delay(25); mission = await read();
     }
     assert.equal(mission.outcome, 'verified', JSON.stringify(mission.tasks.map(t => [t.id, t.state, t.detail])));
-    const backendAttempt = mission.tasks.find(t => t.id === 'backend')!.attempts[0];
-    const cpu = mission.tasks.find(t => t.id === 'cpu')!.attempts[0];
-    assert.ok(Date.parse(cpu.admittedAt) < Date.parse(backendAttempt.finishedAt!));
-    assert.ok(Date.parse(backendAttempt.admittedAt) < Date.parse(cpu.finishedAt!));
-    assert.ok((mission.tasks.find(t => t.id === 'report')?.attempts[0].context?.dependencies.length ?? 0) >= 4);
     assert.equal(mission.tasks.find(t => t.id === 'code')?.attempts[0].evidence?.source, 'aerynth.shipped-backend-source');
+    assert.equal(mission.tasks.find(t => t.id === 'code')?.attempts[0].resourceLease?.kind, 'cpu');
+    assert.equal(mission.tasks.find(t => t.id === 'code')?.attempts[0].resourceLease?.reservedRamBytes, 64 * 2 ** 20);
     assert.deepEqual(await backend.call('providerActivity', {}), providerActivity);
     assert.equal(mission.profile.providerCalls, 0);
     assert.ok(mission.profile.peakWorkers >= 2);
     assert.equal(mission.profile.reportedTotalTokens, null);
+    const readProfile = () => backend.call('missions', { name: 'execution-profile', input: { id } });
+    const lookupHypothesis = () => backend.call('missions', { name: 'experiment-hypothesis',
+      input: { id, hypothesisId: 'unrelated-hypothesis', expectedRevision: mission.revision } });
+    assert.equal(await lookupHypothesis(), null);
+    const profile = await readProfile();
+    assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+    assert.deepEqual(profile.attempts.map(attempt => attempt.id).sort(),
+      mission.tasks.flatMap(task => task.attempts.map(attempt => attempt.id)).sort());
+    const reportTask = mission.tasks.find(task => task.id === 'report')!;
+    const requiredTasks = ['backend', 'cpu', 'ram', 'code'];
+    const repeat = mission.tasks.find(task => task.id === 'backend-repeat');
+    assert.deepEqual([...reportTask.dependencies].sort(), [...requiredTasks, ...(repeat ? [repeat.id] : [])].sort());
+    const expectedSources = new Map([['backend', 'aerynth.backend.node'], ['cpu', 'node:os.cpus'],
+      ['ram', 'node:os.totalmem+freemem'], ['code', 'aerynth.shipped-backend-source'], ['backend-repeat', 'aerynth.backend.node']]);
+    const join = profile.attempts.find(attempt => attempt.taskId === reportTask.id)!;
+    assert.equal(join.state, 'verified');
+    const sources = reportTask.dependencies.map(taskId => {
+      const task = mission.tasks.find(item => item.id === taskId)!;
+      assert.deepEqual(task.dependencies, taskId === repeat?.id ? ['backend'] : []);
+      const attempt = task.attempts[0];
+      const span = profile.attempts.find(item => item.id === attempt.id)!;
+      assert.equal(span.state, 'verified');
+      assert.equal(attempt.evidence?.source, expectedSources.get(taskId));
+      assert.ok(span.interval && join.interval && span.interval.clock === join.interval.clock);
+      assert.ok(span.interval.end <= join.interval.start && span.end!.eventSeq < join.start.eventSeq);
+      assert.deepEqual(span.verifiedEvidenceIds, [attempt.evidence!.id]);
+      return { taskId, attemptId: attempt.id, evidenceId: attempt.evidence!.id };
+    });
+    assert.deepEqual(join.predecessors?.toSorted(), sources.map(source => source.attemptId).sort());
+    const boundSources = reportTask.attempts[0].context?.dependencies.map(({ taskId, attemptId, evidenceId }) =>
+      ({ taskId, attemptId, evidenceId }));
+    const byTaskId = (a: { taskId: string }, b: { taskId: string }) => a.taskId.localeCompare(b.taskId);
+    assert.deepEqual(boundSources?.sort(byTaskId), sources.toSorted(byTaskId));
+    const backendSpan = profile.attempts.find(attempt => attempt.taskId === 'backend')!.interval!;
+    const cpuSpan = profile.attempts.find(attempt => attempt.taskId === 'cpu')!.interval!;
+    assert.ok(Math.min(backendSpan.end, cpuSpan.end) > Math.max(backendSpan.start, cpuSpan.start));
+    assert.equal(profile.resourcePolicy.admittedAttemptsWithSample, profile.attempts.length);
+    assert.equal(profile.resourcePolicy.currentAdmission, null);
+    for (const task of mission.tasks) for (const attempt of task.attempts) {
+      const admission: MissionExecutionProfile['attempts'][number]['resourceAdmission'] | undefined =
+        profile.attempts.find(item => item.id === attempt.id)?.resourceAdmission;
+      assert.ok(admission && attempt.admission?.readings.availableMemoryBytes);
+      assert.deepEqual(admission.reasons, attempt.admission.reasons);
+      assert.equal(admission.observedAt.availableMemoryBytes, attempt.admission.readings.availableMemoryBytes.observedAt);
+    }
+    assert.equal(profile.economics.usageCoverage, 'not-applicable');
+    assert.equal(profile.economics.costCoverage, 'not-applicable');
+    assert.deepEqual(profile.economics.usageGaps, []);
+    assert.ok(profile.work.criticalPath);
+    const readiness = profile.work.dependencyReadinessPath;
+    assert.ok(readiness);
+    assert.equal(readiness.attempts.at(-1)?.settledMs, profile.lastSettlement?.monotonicMs);
+    assert.ok(readiness.elapsedMs <= profile.admissionToLastSettlementMs!);
+    assert.ok(readiness.entry && readiness.entry.attemptId === readiness.attempts[0].attemptId);
+    assert.equal(readiness.entry.admissionEventSeq, profile.admission?.eventSeq);
+    assert.ok(Math.abs(readiness.entry.elapsedMs + readiness.elapsedMs - profile.admissionToLastSettlementMs!) < 0.001);
+    const segment = readiness.largestMeasuredSegment;
+    assert.ok(segment && readiness.attempts.some(attempt => attempt.attemptId === segment.attemptId));
+    assert.equal(segment.durationMs, segment.endedMs - segment.startedMs);
+    assert.ok(segment.startedMs >= readiness.attempts[0].assemblyStartedMs);
+    assert.ok(segment.durationMs <= readiness.elapsedMs);
+    assert.equal(readiness.readyQueueCoverage.observedEdges, readiness.readyQueueCoverage.totalEdges);
+    assert.ok(readiness.readyQueueCoverage.observedEdges > 0);
+    assert.ok(Math.abs(readiness.betweenAttemptsMs - readiness.observedReadyBetweenAttemptsMs! -
+      readiness.unattributedBetweenAttemptsMs) < 0.001);
+    assert.ok(profile.requestIntake && profile.admission && profile.requestIntake.clock === profile.admission.clock);
+    assert.ok(profile.intakeToAdmissionMs! >= 0);
+    assert.deepEqual(profile.requestAcknowledgement, {
+      source: 'mission-created', event: profile.admission, intakeToAcknowledgementMs: profile.intakeToAdmissionMs,
+    });
+    const { first, last } = profile.verifiedTaskMilestones;
+    assert.ok(first && last && first.settlement.eventSeq < last.settlement.eventSeq);
+    assert.equal(first.intakeToSettlementMs, first.settlement.monotonicMs! - profile.requestIntake.monotonicMs);
+    assert.equal(last.intakeToSettlementMs, last.settlement.monotonicMs! - profile.requestIntake.monotonicMs);
+    assert.ok(last.intakeToSettlementMs! >= first.intakeToSettlementMs!);
+    assert.equal(profile.userDelivery, null);
     const other = await backend.call('desktop', { type: 'createWorkspace', title: 'Other synthetic workspace', projectId: null });
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: other.workspaces.find(w => w.id !== workspaceId)!.id } });
     await assert.rejects(read(), /mission_not_found/);
+    await assert.rejects(readProfile(), /mission_not_found/);
+    await assert.rejects(lookupHypothesis(), /mission_not_found/);
     await backend.close();
     backend = new Backend(options);
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
     assert.deepEqual(await read(), mission);
+    assert.deepEqual(await readProfile(), profile);
     const prior = await backend.call('desktop', { type: 'snapshot' });
     const draft = await backend.call('missions', { name: 'workroom-preview', input: { id } }) as MissionWorkroomPreview;
     assert.deepEqual(draft.cards[0], { title: 'Mission graph', kind: 'note', mode: 'new' });
@@ -245,7 +322,9 @@ test('canonical backend runs a native mission without inference, restores eviden
       let result = await backend.call('missions', { name: 'start', input: {
         objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
       } }) as MissionProjection;
-      const until = performance.now() + 4000;
+      // Give the real counters and dependent join their declared attempt budgets, even if admitted serially.
+      const attemptBudgetMs = preview.plan.tasks.reduce((total, task) => total + task.timeoutMs * task.maxAttempts, 0);
+      const until = performance.now() + attemptBudgetMs + 3000;
       while (['queued', 'running'].includes(result.outcome) && performance.now() < until) {
         await delay(25);
         result = await backend.call('missions', { name: 'read', input: { id: result.id } }) as MissionProjection;
@@ -255,6 +334,24 @@ test('canonical backend runs a native mission without inference, restores eviden
       return result;
     };
     const measured = await measure(), measuredAgain = await measure(), single = await measure('Run a mission to measure CPU');
+    const ref = (mission: MissionProjection) => ({ id: mission.id, expectedRevision: mission.revision });
+    const compare = (candidate: MissionProjection) => backend.call('missions', { name: 'compare-native-samples',
+      input: { baseline: ref(measured), candidate: ref(candidate) } });
+    const comparison = await compare(measuredAgain);
+    assert.ok(comparison && 'kind' in comparison && comparison.kind === 'native-sample-comparison');
+    assert.equal(comparison.status, 'observed-pair');
+    assert.equal(comparison.deltas?.elapsedMs, comparison.candidate.elapsedMs! - comparison.baseline.elapsedMs!);
+    assert.deepEqual(comparison.baseline.attemptIds, measured.tasks.flatMap(task => task.attempts.map(attempt => attempt.id)));
+    assert.equal(comparison.independentEvaluation, null);
+    const mismatch = await compare(single);
+    assert.ok(mismatch && 'kind' in mismatch && mismatch.kind === 'native-sample-comparison');
+    assert.equal(mismatch.status, 'different-workload');
+    assert.equal(mismatch.deltas, null);
+    assert.equal(await compare({ ...measuredAgain, revision: measuredAgain.revision + 1 }), null);
+    await assert.rejects(compare(measured), /invalid_mission_command/);
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: other.workspaces.find(w => w.id !== workspaceId)!.id } });
+    await assert.rejects(compare(measuredAgain), /mission_not_found/);
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
     assert.deepEqual(single.tasks.map(task => task.id), ['cpu']);
     assert.match(measured.answer?.[0] ?? '', /^CPU [\d.]+% \(\d+ ms sample\)\.$/u);
     assert.match(measured.answer?.[1] ?? '', /^RAM [\d.]+% \([\d.]+\/[\d.]+ GiB used, [\d.]+ GiB (available|free)\)\.$/u);
@@ -266,8 +363,82 @@ test('canonical backend runs a native mission without inference, restores eviden
       assert.deepEqual(messages[0].missionReport, { missionId: result.id, workspaceId: room.workspaceId, projectId: null, jobsDone });
       assert.deepEqual(await backend.call('missions', { name: 'post-report', input: { id: result.id } }),
         { kind: 'mission-report', missionId: result.id, messageId: messages[0].id });
+      const profile = await backend.call('missions', { name: 'execution-profile', input: { id: result.id } });
+      assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+      const posted = (await backend.call('replay', { limit: 1000 })).events
+        .find(event => event.mission?.id === result.id && event.type === 'vela.mission/report-posted');
+      assert.ok(posted);
+      const publication = profile.reportPublication;
+      assert.ok(publication?.timing);
+      assert.deepEqual(publication.timing, posted.mission?.reportTiming);
+      assert.equal(publication.eventId, posted.eventId);
+      assert.equal(publication.cursor, posted.cursor);
+      assert.equal(publication.receivedAt, posted.receivedAt);
+      const { compositionStartedMs, composedMs, stagedMs, clock } = publication.timing;
+      assert.ok(compositionStartedMs <= composedMs && composedMs <= stagedMs);
+      assert.equal(clock, profile.lastSettlement?.clock);
+      assert.equal(profile.settlementToReportStagedMs, stagedMs - profile.lastSettlement!.monotonicMs!);
+      assert.equal(profile.intakeToReportStagedMs, stagedMs - profile.requestIntake!.monotonicMs);
+      assert.deepEqual(profile.reportLatency, {
+        publicationEventId: posted.eventId,
+        settlementEventSeq: profile.lastSettlement!.eventSeq,
+        settlementToCompositionMs: compositionStartedMs - profile.lastSettlement!.monotonicMs!,
+        compositionMs: composedMs - compositionStartedMs,
+        compositionToStagingMs: stagedMs - composedMs,
+        stagingToRendererReceiptMs: null,
+      });
+      assert.equal(profile.userDelivery, null);
+      assert.equal(profile.firstMeaningfulOutput, null);
     }
     assert.deepEqual(await backend.call('providerActivity', {}), providerActivity);
+    const readPublication = () => backend.call('missions', { name: 'execution-profile', input: { id: single.id } });
+    const latestReport = vela.conversation!.messages.find(message => message.missionReport?.missionId === single.id)!;
+    const receipt = { missionId: single.id, messageId: latestReport.id };
+    assert.deepEqual(await backend.call('rendererVelaOutput', { ...receipt, missionId: measured.id }), { accepted: false });
+    assert.deepEqual(await backend.call('rendererVelaOutput', receipt), { accepted: true });
+    const beforeReopen = await readPublication();
+    assert.ok(beforeReopen && 'kind' in beforeReopen && beforeReopen.kind === 'execution-profile');
+    assert.equal(beforeReopen.userDelivery?.messageId, latestReport.id);
+    assert.equal(beforeReopen.userDelivery?.publicationEventId, beforeReopen.reportPublication?.eventId);
+    assert.equal(beforeReopen.userDelivery?.source, 'renderer-visible-frame');
+    assert.ok(beforeReopen.userDelivery?.stagingToReceiptMs != null && beforeReopen.userDelivery.stagingToReceiptMs >= 0);
+    assert.equal(beforeReopen.intakeToUserDeliveryMs,
+      beforeReopen.intakeToReportStagedMs! + beforeReopen.userDelivery.stagingToReceiptMs);
+    assert.equal(beforeReopen.reportLatency?.stagingToRendererReceiptMs, beforeReopen.userDelivery.stagingToReceiptMs);
+    assert.equal(beforeReopen.wallTime?.from, 'mission-start-command');
+    assert.equal(beforeReopen.wallTime?.through, 'renderer-receipt');
+    assert.equal(beforeReopen.wallTime?.elapsedMs, beforeReopen.intakeToUserDeliveryMs);
+    assert.deepEqual(beforeReopen.firstMeaningfulOutput, {
+      kind: 'mission-report', source: 'renderer-visible-frame', messageId: latestReport.id,
+      publicationEventId: beforeReopen.reportPublication!.eventId, receivedAt: beforeReopen.userDelivery.receivedAt,
+      intakeToReceiptMs: beforeReopen.intakeToUserDeliveryMs,
+    });
+    assert.deepEqual(await backend.call('rendererVelaOutput', receipt), { accepted: true });
+    assert.deepEqual(await readPublication(), beforeReopen);
+    await backend.close();
+    backend = new Backend(options);
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
+    assert.deepEqual(await readPublication(), beforeReopen);
+    await backend.close();
+    backend = new Backend({ ...options, retention: { maxEvents: 4 } });
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
+    for (let i = 0; i < 4; i++) await backend.call('desktop', {
+      type: 'createResource', kind: 'note', title: `Synthetic retention ${i}`, workspaceId: room.workspaceId,
+    });
+    const pruned = await readPublication();
+    assert.ok(pruned && 'kind' in pruned && pruned.kind === 'execution-profile');
+    assert.equal(pruned.reportPublication, null);
+    assert.equal(pruned.intakeToUserDeliveryMs, null);
+    assert.equal(pruned.wallTime?.through, 'last-settlement');
+    assert.equal(pruned.wallTime?.publicationEventId, null);
+    assert.deepEqual(pruned.userDelivery, beforeReopen.userDelivery);
+    assert.deepEqual(pruned.firstMeaningfulOutput, { ...beforeReopen.firstMeaningfulOutput, intakeToReceiptMs: null });
+    assert.deepEqual(pruned.verifiedTaskMilestones, beforeReopen.verifiedTaskMilestones);
+    await backend.close();
+    backend = new Backend(options);
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
+    assert.deepEqual(await backend.call('rendererVelaOutput', receipt), { accepted: true });
+    assert.deepEqual(await readPublication(), pruned);
   } finally {
     await backend.close();
     const target = resolve(directory);

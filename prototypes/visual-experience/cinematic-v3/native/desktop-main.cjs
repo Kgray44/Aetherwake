@@ -10,6 +10,9 @@ const {
   safeStorage,
   clipboard,
   powerMonitor,
+  Menu,
+  MenuItem,
+  screen,
 } = require("electron");
 const { createMediaPlayback, scheme: mediaScheme } = require("./media-playback.cjs");
 protocol.registerSchemesAsPrivileged([
@@ -36,7 +39,7 @@ const {
 } = require("./conversation-broker.cjs");
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
-const {showVelaReview}=require('./vela-review.cjs');
+const {showVelaReview,projectEvidenceMatches}=require('./vela-review.cjs');
 const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
@@ -53,6 +56,7 @@ const {createWindowsMaintenanceBroker}=require('./windows-maintenance-broker.cjs
 const {createWindowsComputerBroker}=require('./windows-computer-broker.cjs');
 const {reviewVelaOwner}=require('./vela-owner-review.cjs');
 const {startReviewedMission}=require('./mission-start-broker.cjs');
+const { reviewMissionExecutive } = require("./mission-executive-broker.cjs");
 const { createVelaVoiceBroker } = require('./vela-voice-broker.cjs');
 const { createWakeMediaBroker } = require('./wake-media-broker.cjs');
 const { loadWakeController } = require('./wake-controller-loader.cjs');
@@ -112,6 +116,8 @@ const source = {
 };
 const verifyAirPlan = process.argv.includes("--integration-vela-air-plan");
 const verifyMissions = process.argv.includes("--integration-vela-missions");
+const missionProfilerFlags = process.argv.filter(arg => arg.startsWith("--missions-aep-benchmark="));
+const missionProfilerMode = missionProfilerFlags[0]?.slice("--missions-aep-benchmark=".length);
 const verify = verifyAirPlan ||
   verifyMissions ||
   process.argv.includes("--integration-chat-motion") ||
@@ -162,6 +168,14 @@ if (verifyMissions) {
   if(process.argv.includes('--missions-persistence-reopen-only'))require('./mission-persistence.cjs').assertMissionPersistenceReopen({profile:privateRoot,argv:process.argv,source});
   else if(!/^review-vela-missions-\d+$/u.test(path.basename(privateRoot))||existsSync(privateRoot))throw Error('fresh_offline_mission_profile_required');
 }
+if (missionProfilerFlags.length && (missionProfilerFlags.length !== 1 || !verifyMissions ||
+  !["off", "minimal", "full"].includes(missionProfilerMode) ||
+  !process.argv.includes("--missions-aep-presentation-only") || !process.argv.includes("--missions-aep-composer") ||
+  process.argv.some(arg => arg === "--bootstrap-vela-api" ||
+    arg.startsWith("--integration-") && arg !== "--integration-vela-missions" ||
+    arg.startsWith("--missions-") &&
+    ![missionProfilerFlags[0], "--missions-aep-presentation-only", "--missions-aep-composer"].includes(arg))))
+  throw Error("owned_mission_profiler_benchmark_required");
 if(process.argv.includes('--weather-deny-fixture')&&(!verifyMissions||!process.argv.includes('--missions-weather-product-only')||!process.env.LOCALAPPDATA||path.resolve(path.dirname(privateRoot)).toLowerCase()!==path.resolve(process.env.LOCALAPPDATA,'Aerynth').toLowerCase()||process.argv.filter(value=>value.startsWith('--profile=')).length!==1))throw Error('owned_weather_fixture_journey_required');
 if (verifyAirPlan && (!/^review-vela-air-plan-\d+$/u.test(path.basename(privateRoot)) || !existsSync(privateRoot)))
   throw Error("signed_in_air_test_profile_required");
@@ -369,6 +383,7 @@ app.whenReady().then(async () => {
       "--native-maintenance",
       "--native-computer",
       "--native-documents",
+      ...(missionProfilerMode ? ["--mission-profiler-benchmark=" + missionProfilerMode] : []),
     ],
     { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
   );
@@ -477,6 +492,47 @@ app.whenReady().then(async () => {
     },
   });
   const owner = win.webContents;
+  let displayFrameBudget = null;
+  const publishDisplayBudget = (force = false) => {
+    if (win.isDestroyed() || owner.isDestroyed() || owner.getURL() !== localURL) return;
+    let hz;
+    try { hz = screen.getDisplayMatching(win.getBounds()).displayFrequency; } catch { hz = null; }
+    const next = Number.isFinite(hz) && hz >= 1 && hz <= 1000 ? 1000 / hz : null;
+    if (!force && next === displayFrameBudget) return;
+    displayFrameBudget = next;
+    owner.send("application-resource-frame-budget", next);
+  };
+  const refreshDisplayBudget = () => publishDisplayBudget();
+  owner.on("did-finish-load", () => publishDisplayBudget(true));
+  win.on("move", refreshDisplayBudget);
+  const displayEvents = ["display-metrics-changed", "display-added", "display-removed"];
+  for (const event of displayEvents) screen.on(event, refreshDisplayBudget);
+  const resourcePower = require("./resource-power.cjs").observeResourcePower(powerMonitor, sendMissionHostSignal, () =>
+    !win.isDestroyed() && !owner.isDestroyed() && win.isVisible() && !win.isMinimized() &&
+    win.isFocused() && owner.getURL() === localURL);
+  owner.on("did-finish-load", resourcePower.refreshFocus);
+  for (const event of ["focus", "blur", "show", "hide", "minimize", "restore"]) win.on(event, resourcePower.refreshFocus);
+  let lastResourceTiming = -Infinity;
+  const observeResourceTiming = (event, sample) => {
+    if (closing || win.isDestroyed() || !win.isVisible() || win.isMinimized() || !win.isFocused() ||
+        event.sender !== owner || event.senderFrame !== owner.mainFrame || event.senderFrame?.url !== localURL ||
+        !sample || Object.keys(sample).length !== 4) return;
+    const { frameP95Ms, budgetRatioP95, samples, windowMs } = sample;
+    if (!Number.isFinite(frameP95Ms) || frameP95Ms < 1 || frameP95Ms > 1000 ||
+        !Number.isFinite(budgetRatioP95) || budgetRatioP95 < 0.01 || budgetRatioP95 > 60 ||
+        !Number.isSafeInteger(samples) || samples < 12 || samples > 256 ||
+        !Number.isFinite(windowMs) || windowMs < 1000 || windowMs > 5000) return;
+    const at = performance.now();
+    if (at - lastResourceTiming < 1500) return;
+    lastResourceTiming = at;
+    sendMissionHostSignal({ rendererTiming: { frameP95Ms, budgetRatioP95, samples, windowMs } });
+  };
+  ipcMain.on("application-resource-timing", observeResourceTiming);
+  win.once("closed", () => {
+    resourcePower.close();
+    for (const event of displayEvents) screen.off(event, refreshDisplayBudget);
+    ipcMain.off("application-resource-timing", observeResourceTiming);
+  });
   let lastMissionActivity = -Infinity;
   const observeMissionActivity = () => {
     const at = performance.now();
@@ -554,6 +610,15 @@ app.whenReady().then(async () => {
   const nativeReviewGate=async work=>{if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
   const reviewProvider=args=>nativeReviewGate(()=>showVelaReview(args));
   const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
+  if (!verify) {
+    const menu = Menu.getApplicationMenu() ?? new Menu();
+    menu.append(new MenuItem(require("./resource-policy-menu.cjs").resourcePolicyMenu({
+      call, show: options => reviewDialogs.showMessageBox(win, options),
+      ready: () => !closing && !backendFailed && !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
+      canWrite: () => storage.allowWrite(),
+    })));
+    Menu.setApplicationMenu(menu);
+  }
   const validateHostOperation=async(binding,{phase='before-dispatch'}={})=>{
       const frame=maintenanceReviewFrames.get(binding.operationId);
       const trusted=()=>!closing&&!backendFailed&&!!frame&&maintenanceReviewFrames.get(binding.operationId)===frame&&(phase==='after-dispatch'?trustedApplicationFrame:trustedActiveFrame)({sender:win.webContents,senderFrame:frame});
@@ -599,7 +664,7 @@ app.whenReady().then(async () => {
   win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
-      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative'].includes(command))throw Error('unauthorized_private_command');
+      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative'].includes(command))throw Error('unauthorized_private_command');
       if (
         event.sender !== win.webContents ||
         event.senderFrame !== win.webContents.mainFrame ||
@@ -672,6 +737,7 @@ app.whenReady().then(async () => {
       if (
         ![
           "rendererEventPage",
+          "rendererVelaOutput",
           "replay",
           "executionStatus",
           "conversationActivity",
@@ -683,7 +749,7 @@ app.whenReady().then(async () => {
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && (isVelaRead(input) || input?.name === "submissionStatus")) &&
-        !(command === "missions" && ["preview", "list", "read", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
+        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experiment-hypothesis", "compare-native-samples", "resource-experiment-preview", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
         !(command === "workspaceRecovery" && ["state", "preview"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
@@ -750,6 +816,8 @@ app.whenReady().then(async () => {
         result = await call("capabilities", {});
       else if (command === "rendererEventPage")
         result = await call("rendererEventPage", input);
+      else if (command === "rendererVelaOutput")
+        result = trustedActiveFrame(event) ? await call("rendererVelaOutput", input) : { accepted: false };
       else if (command === "replay") {
         // Legacy review callers receive the old bounded tail shape, still
         // projected by Core under the current renderer authorization.
@@ -845,22 +913,79 @@ app.whenReady().then(async () => {
       } else if (command === "notes") {
         result = await call("notes", input);
       } else if (command === "missions") {
-        if (input?.name === "plan") {
-          const offer = await call("missions", { name: "preview", input: { objective: input.input?.objective } });
+        if (input?.name === "executive-review") {
+          if (!trustedActiveFrame(event)) throw Error("unauthorized_sender");
+          result = await reviewMissionExecutive({ request: input.input, parent: win, call, reviewProvider,
+            isCurrent: () => trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized(),
+            allowWrite: () => storage.allowWrite() });
+        } else if (input?.name === "plan") {
+          const { objective, noteIds, fileIds, projectEvidence, fingerprint, requestId, chooseProjectTests } = input.input ?? {};
+          if (Object.keys(input.input ?? {}).some(key => !["objective", "noteIds", "fileIds", "projectEvidence", "fingerprint",
+            "requestId", "chooseProjectTests"].includes(key)) || (chooseProjectTests !== undefined && chooseProjectTests !== true))
+            throw Error("invalid_mission_command");
+          const evidenceSelection = { objective, noteIds, fileIds, projectEvidence };
+          const offer = await call("missions", { name: "preview", input: evidenceSelection });
           if (offer?.kind !== "planning-offer" || offer.fingerprint !== input.input?.fingerprint)
             throw Error("mission_preview_changed");
           if (!offer.planner) throw Error("mission_planner_unavailable");
           const { model, effort, capabilities, provider } = offer.planner;
-          const choice = await reviewDialogs.showMessageBox(win, {
+          let approved, approvedProjectCheck, projectCheckReviewFingerprint;
+          if (chooseProjectTests) {
+            if (!trustedActiveFrame(event)) throw Error("unauthorized_sender");
+            if (offer.planner.projectCheck !== true) throw Error("mission_project_check_unavailable");
+            const selected = await reviewDialogs.showOpenDialog(win, {
+              title: "Choose tracked Node tests for mission planning",
+              properties: ["openFile", "multiSelections"],
+              filters: [{ name: "Node test sources", extensions: ["js", "cjs", "mjs", "ts", "mts"] }],
+            });
+            if (!trustedActiveFrame(event)) throw Error("unauthorized_sender");
+            if (selected.canceled || !selected.filePaths.length) throw Error("mission_review_declined");
+            if (selected.filePaths.length > 4) throw Error("mission_project_check_selection_limit");
+            const check = await call("missionCheckReview", { paths: selected.filePaths });
+            if (!trustedActiveFrame(event)) throw Error("unauthorized_sender");
+            approvedProjectCheck = { paths: selected.filePaths, digest: check.digest };
+          }
+          const hasSources = Boolean(offer.notes || offer.files || offer.projectEvidence || approvedProjectCheck);
+          if (hasSources) {
+            const reviewed = await call("missionPlanningReview", { ...evidenceSelection, fingerprint,
+              ...(approvedProjectCheck ? { approvedProjectCheck } : {}) });
+            const matches = (sources, expected) => Array.isArray(sources) &&
+              JSON.stringify(sources.map(({ text, ...ref }) => ref)) === JSON.stringify(expected ?? []);
+            if (!trustedActiveFrame(event) || reviewed?.offer?.fingerprint !== fingerprint ||
+              reviewed.offer.planner?.provider !== "openai-api-vela" ||
+              !matches(reviewed.notes, offer.notes) || !matches(reviewed.files, offer.files) ||
+              !projectEvidenceMatches(offer.projectEvidence, reviewed.projectEvidence) ||
+              Boolean(reviewed.projectCheck) !== Boolean(approvedProjectCheck))
+              throw Error("mission_preview_changed");
+            projectCheckReviewFingerprint = reviewed.projectCheck?.fingerprint;
+            const prompt = JSON.stringify({ objective, capabilities,
+              ...(reviewed.projectCheck ? { reviewedProjectCheck: reviewed.projectCheck.context } : {}) }, null, 2);
+            approved = await reviewProvider({ parent: win, intent: objective, expiresAt: new Date(Date.now() + 90_000).toISOString(),
+              review: { providerId: provider, semanticContext: true, missionPlanning: true, prompt,
+                promptDigest: createHash("sha256").update(JSON.stringify(prompt)).digest("hex"),
+                route: { kind: "app-planning", model, effort },
+                ...(reviewed.projectEvidence ? { projectEvidence: reviewed.projectEvidence } : {}),
+                context: { included: [
+                  ...reviewed.notes.map(note => ({ id: note.id, kind: "resource", resourceKind: "note", title: note.title, content: note.text })),
+                  ...reviewed.files.map(file => ({ id: file.id, kind: "resource", resourceKind: "file", title: file.title, content: file.text })),
+                ] },
+              },
+            });
+          } else {
+            const choice = await reviewDialogs.showMessageBox(win, {
             type: "question", buttons: ["Cancel", "Request plan"], defaultId: 0, cancelId: 0,
             title: "Review mission planning request", message: `Send one planning request to ${provider==='openai-api-vela'?'Vela’s dedicated API':'ChatGPT plan'}?`,
             detail: `Model: ${model}${effort ? " · " + effort : ""}\n\nObjective:\n${offer.objective}\n\nCapability descriptions:\n${capabilities.join("\n")}\n\nReview the resulting tasks before starting the mission.`,
-          });
-          if (choice.response !== 1) throw Error("mission_review_declined");
+            });
+            approved = choice.response === 1;
+          }
+          if (approved !== true) throw Error("mission_review_declined");
           if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
             throw Error("unauthorized_sender");
           if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
-          result = await call("missionPlanReviewed", input.input);
+          if (hasSources && !trustedActiveFrame(event)) throw Error("unauthorized_sender");
+          result = await call("missionPlanReviewed", { ...evidenceSelection, fingerprint, requestId,
+            ...(approvedProjectCheck ? { approvedProjectCheck, projectCheckReviewFingerprint } : {}) });
         } else if (input?.name === "revision-apply") {
           const { fingerprint, ...revisionInput } = input.input ?? {};
           const preview = await call("missions", { name: "revision-preview", input: revisionInput });
@@ -1059,6 +1184,7 @@ app.whenReady().then(async () => {
     if (verifyMissions) {
       await require("./integration-vela-missions.cjs").verify({
         win, app, privateRoot, call, source, startupErrors, moduleStartedMonotonicMs,systemFactsAudit:()=>windowsSystemBroker.audit(),
+        benchmarkMode: missionProfilerMode,
       });
       return;
     }

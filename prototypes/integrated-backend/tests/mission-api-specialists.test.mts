@@ -79,6 +79,12 @@ test('actual Core admits two API specialists before either HTTP request is relea
     await until(() => f.requests.length, count => count === 2);
     const during = await f.core.command('missions', { name: 'read', input: { id: mission.id } }) as MissionProjection;
     assert.equal(during.tasks.filter(task => task.state === 'running').length, 2, 'both transports must overlap before release');
+    const live = await f.core.command('missions', { name: 'execution-profile', input: { id: mission.id } });
+    assert.ok(live && 'kind' in live && live.kind === 'execution-profile');
+    assert.equal(live.work.live?.attempts.length, 2);
+    assert.ok(live.work.live?.attempts.every(attempt => attempt.state === 'running' &&
+      attempt.elapsedSinceDispatchMs !== null && attempt.elapsedSinceDispatchMs >= 0));
+    assert.equal(live.work.criticalPath, null);
     const payloads = f.requests.map(body => {
       assert.equal(body.model, 'gpt-6.1-sol'); assert.deepEqual(body.reasoning, { effort: 'high' });
       assert.equal(body.store, false); assert.equal(body.tools, undefined); assert.equal(body.max_output_tokens, 2048);
@@ -93,7 +99,7 @@ test('actual Core admits two API specialists before either HTTP request is relea
     assert.notEqual(f.requests[0].instructions, f.requests[1].instructions);
     const db = (f.core as any).db;
     assert.equal(db.prepare('SELECT count(*) AS n FROM vela_api_runs').get().n, 2);
-    const receipts = db.prepare('SELECT request_id,body_digest,context_digest FROM vela_api_runs').all();
+    const receipts = db.prepare('SELECT execution_id,request_id,body_digest,context_digest FROM vela_api_runs').all();
     const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
     for (const [index, body] of f.requests.entries()) assert.ok(receipts.some((receipt: any) => receipt.body_digest === hash(body) && receipt.context_digest === hash(payloads[index])));
     const canonicalPlan = db.prepare('SELECT request_digest,json FROM vela_missions WHERE id=?').get(mission.id);
@@ -104,12 +110,26 @@ test('actual Core admits two API specialists before either HTTP request is relea
     assert.equal(done.outcome, 'blocked'); assert.ok(done.tasks.every(task => task.state === 'verified'));
     const attempts = done.tasks.filter(task => task.specialist).map(task => task.attempts[0]);
     assert.ok(attempts.every(attempt => attempt.evidence?.source === 'openai-api-vela:reported' && attempt.verification?.passed && attempt.telemetry?.usage?.totalTokens === 50));
+    const readProfile = () => f.core.command('missions', { name: 'execution-profile', input: { id: mission.id } });
+    const profile = await readProfile();
+    assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+    assert.equal(profile.work.live, null);
+    const specialistTimings = profile.attempts.filter(attempt => attempt.providerExecutionId !== null);
+    assert.equal(specialistTimings.length, 2);
+    for (const attempt of specialistTimings) {
+      assert.equal(attempt.providerExecutionId, receipts.find((row: { request_id: string }) => row.request_id === attempt.id)?.execution_id);
+      assert.equal(attempt.providerEvidence, 'simulated');
+      assert.ok(attempt.providerStream?.transport?.firstSseBytesMs != null);
+    }
     assert.equal(done.profile.verifiedObjectivesPerReportedToken, null);
     assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 2);
     assert.equal((await f.core.command('providerActivity', {})).codexConnections, 0);
     const snapshot = await f.core.command('snapshot', {}); assert.ok(!JSON.stringify(snapshot).includes(marker));
     assert.equal(snapshot.graph.messages.filter(message => message.role === 'assistant').length, 1, 'only the joined canonical mission report is published');
     await f.reopen(); assert.equal((await settled(f, mission.id)).outcome, 'blocked'); assert.equal(f.requests.length, 2);
+    const restored = await readProfile();
+    assert.ok(restored && 'kind' in restored && restored.kind === 'execution-profile');
+    assert.deepEqual(restored.attempts.filter(attempt => attempt.providerExecutionId !== null), specialistTimings);
   } finally { await f.close(); }
 });
 
@@ -170,7 +190,11 @@ test('API planned temporary specialists consume only named verified handoffs and
     const tasks = new Map(done.tasks.map(task => [task.id, task]));
     for (const task of done.tasks) for (const dependency of task.dependencies) assert.ok(Date.parse(task.attempts[0].admittedAt) >= Date.parse(tasks.get(dependency)!.attempts[0].finishedAt!));
     assert.equal(f.requests.length, 4); assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 4);
-    assert.equal(done.profile.providerCalls, 4); assert.equal(done.profile.reportedTotalTokens, 200);
+    assert.equal(done.profile.providerCalls, 4);
+    assert.equal(done.profile.reportedTotalTokens, null);
+    const profile = await f.core.command('missions', { name: 'execution-profile', input: { id: done.id } });
+    assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+    assert.equal(profile.economics.simulatedTotalTokens, 200);
     assert.equal(done.tasks.find(task => task.id === 'temporary-specialist-1')!.specialist?.role, 'Processor experiment reviewer');
   } finally { await f.close(); }
 });
@@ -267,6 +291,17 @@ test('cancelling dispatched API workers retains an uncertain outcome and cannot 
     const current = await f.core.command('missions', { name: 'read', input: { id: mission.id } }) as MissionProjection;
     await f.core.command('missions', { name: 'control', input: { id: mission.id, revision: current.revision, control: { type: 'cancel' } } }); f.release();
     const done = await settled(f, mission.id); assert.ok(done.tasks.filter(task => task.specialist).every(task => task.state === 'uncertain'));
+    const readTrace = () => f.core.command('missions', { name: 'execution-profile', input: { id: mission.id } });
+    const trace = await readTrace();
+    assert.ok(trace && 'kind' in trace && trace.kind === 'execution-profile');
+    const [cancellation] = trace.work.cancellations;
+    assert.equal(cancellation.kind, 'cancel');
+    assert.deepEqual(cancellation.attempts?.map(attempt => attempt.attemptId).sort(),
+      current.tasks.filter(task => task.state === 'running').map(task => task.attempts.at(-1)!.id).sort());
+    assert.ok(cancellation.attempts?.every(attempt => attempt.outcome === 'uncertain'));
     await f.reopen(); assert.equal(f.requests.length, 2); assert.notEqual((await settled(f, mission.id)).outcome, 'verified');
+    const restored = await readTrace();
+    assert.ok(restored && 'kind' in restored && restored.kind === 'execution-profile');
+    assert.deepEqual(restored.work.cancellations, [cancellation]);
   } finally { await f.close(); }
 });

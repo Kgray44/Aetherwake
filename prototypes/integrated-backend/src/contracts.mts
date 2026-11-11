@@ -4,7 +4,7 @@ import type { Resource } from '../../workspace-kernel/kernel.mts';
 import type { DesktopCommand, DesktopSnapshot, PublicConversationExecution, ConversationActivitySnapshot, WorkspacePresentationContext, WorkspacePanelRequest } from '../../application-contract/contracts.ts';
 import type { ResourceOpeningInput, ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import type { ProviderConnectionRequest, ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
-import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnResult,TurnOutcome,TurnHttpDiagnostic } from '../../openai-provider/contracts.mts';
+import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnResult,TurnOutcome,TurnHttpDiagnostic,TurnTransportTiming } from '../../openai-provider/contracts.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import type { AttachedContext } from '../../conversation-product/src/service.mts';
 import type { VelaLocalCapabilityId, VelaClient, VelaState, ContextManifest, VelaActiveCard, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
@@ -41,12 +41,15 @@ export interface VelaWorkflowReview {
   files: { path: string; operation: 'create' | 'replace' }[];
   check: { cwd: string; argv: string[] };
 }
-export interface VelaRequestPreview { workflowScope?: VelaWorkflowScope; id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};handoff?:import('../../vela-core/src/history-contracts.ts').VelaHandoff;nativeReviewRequired?:boolean; workingDirectory?:string; route?:import('../../vela-core/src/adaptive-routing.ts').VelaRouteDecision; routingSettings?:import('../../vela-core/src/contracts.ts').VelaRequest['routingSettings'];routingAgent?:import('../../vela-core/src/contracts.ts').VelaRoutingAgent;
+export interface VelaWorkspaceStatePreview { id: string; revision: number; digest: string; partial?: true }
+export interface VelaProjectEvidencePreview { projectId: string; sourceIds: string[]; partial: boolean; digest: string }
+export interface VelaCheckpointPreview { selection: import('../../vela-core/src/adaptive-routing.ts').VelaMissionCheckpointRef; digest: string }
+export interface VelaRequestPreview { semanticContext?:true; missionCheckpoint?: VelaCheckpointPreview; workspaceState?: VelaWorkspaceStatePreview; projectEvidence?: VelaProjectEvidencePreview; workflowScope?: VelaWorkflowScope; id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};handoff?:import('../../vela-core/src/history-contracts.ts').VelaHandoff;nativeReviewRequired?:boolean; workingDirectory?:string; route?:import('../../vela-core/src/adaptive-routing.ts').VelaRouteDecision; routingSettings?:import('../../vela-core/src/contracts.ts').VelaRequest['routingSettings'];routingAgent?:import('../../vela-core/src/contracts.ts').VelaRoutingAgent;
   /** Core-derived foreground send policy, rechecked against the private frozen preview at grant time. */
   sendDisposition?: 'routine' | 'review-required';
 }
 /** Trusted host inspection only; never registered in renderer command/subcommand allowlists. */
-export interface VelaNativeReview {previewId:string;signature:string;providerId:string;prompt:string;promptDigest:string;reviewDigest:string;context:ContextManifest;history?:ProviderHistory;handoff?:VelaRequestPreview['handoff'];historyOmissions:{reason:HistoryOmissionReason;count?:number}[];route?:VelaRequestPreview['route'];workingDirectory?:string;routingSettings?:VelaRequestPreview['routingSettings'];routingAgent?:VelaRequestPreview['routingAgent'];agentInstructions?:string;editPaths?:string[]}
+export interface VelaNativeReview {semanticContext?:true;missionCheckpoint?: VelaCheckpointPreview & { text: string };workspaceState?: VelaWorkspaceStatePreview & { text: string };projectEvidence?: VelaProjectEvidencePreview & { sources: ContextManifest['included'] };previewId:string;signature:string;providerId:string;prompt:string;promptDigest:string;reviewDigest:string;context:ContextManifest;history?:ProviderHistory;handoff?:VelaRequestPreview['handoff'];historyOmissions:{reason:HistoryOmissionReason;count?:number}[];route?:VelaRequestPreview['route'];workingDirectory?:string;routingSettings?:VelaRequestPreview['routingSettings'];routingAgent?:VelaRequestPreview['routingAgent'];agentInstructions?:string;editPaths?:string[]}
 export interface VelaNativeCapabilities {
   supportedActions: VelaNativeAction['type'][];
   /** Registered released Universal Block/application capability; no fallback implementation is supplied by Vela. */
@@ -106,6 +109,7 @@ export interface Execution extends PublicConversationExecution {
   /** Actual Responses facts, never a fabricated Codex thread/turn binding. */
   responseId?:string;responseOutcome?:TurnOutcome;usage?:ReportedUsage;reportedModel?:string;
   velaFirstOutputMs?: number;
+  outputStagingClock?: { domain: string; monotonicMs: number };
   incompleteReason?: import('../../openai-provider/contracts.mts').TurnResult['incompleteReason'];
   /** Canonical admission counted once per AIR provider stage, including unknown outcomes. */
   velaAdmission?: { projectId: string | null; utcDay: string };
@@ -150,6 +154,38 @@ export interface VelaRouteTiming {
   capabilityMs: number;
   contextMs: number;
   previewMs: number;
+  previewClock?: { domain: string; startedMs: number; readyMs: number };
+}
+export interface VelaRequestAdmissionTiming {
+  source: 'canonical-user-message-staged';
+  requestToInputStagingMs: number;
+  requestToProviderContextCheckMs: number;
+  previewToInputStagingMs: number | null;
+}
+export interface ProviderStreamTiming {
+  responseCreatedMs: number | null;
+  firstTextDeltaMs: number | null;
+  transport?: TurnTransportTiming;
+}
+/** Local monotonic offsets within one provider execution. */
+export interface ConversationProviderTiming extends ProviderStreamTiming {
+  source: 'observed' | 'simulated';
+  origin: 'ordinary-adapter-entry' | 'reviewed-api-dispatch-staging';
+  parentRequestId: string | null;
+  /** Backend receipt of nonblank provider output. Historical observations may omit this field. */
+  firstNonblankOutput?: { kind: 'text' | 'refusal'; elapsedMs: number } | null;
+  /** Elapsed time from the original backend preview, including any intervening review or wait. */
+  fromPreview?: { id: string; toAdapterMs: number; toFirstNonblankOutputMs: number | null };
+  resultObservedMs: number | null;
+  outputStagedMs: number | null;
+  settlementStagedMs: number;
+}
+export interface MissionReportTiming {
+  clock: string;
+  compositionStartedMs: number;
+  composedMs: number;
+  /** The conversation append and report link were staged inside the publication transaction. */
+  stagedMs: number;
 }
 /** Scoped lifecycle metadata only. Mission objectives, prompts and evidence stay with their owning resources. */
 export interface MissionStreamEvent {
@@ -162,6 +198,7 @@ export interface MissionStreamEvent {
   taskId?: string;
   attemptId?: string;
   executor?: string;
+  reportTiming?: MissionReportTiming;
 }
 export interface StreamEvent {
   schemaVersion: 1; eventId: string; cursor: number;
@@ -172,13 +209,14 @@ export interface StreamEvent {
   correlationId: string | null; causationId: string | null;
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
-  status: string | null; payload: { redacted: true; taskId?: string; timing?: VelaRouteTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'>;
+  status: string | null; payload: { redacted: true; taskId?: string; previewId?: string; timing?: VelaRouteTiming; requestAdmission?: VelaRequestAdmissionTiming; providerTiming?: ConversationProviderTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'>;
     workspaceRecovery?: {workspaceId:string;action:'undo-creation'|'restore';creationEventId:string;workspaceVersion:number};
     clockTimer?: Pick<TimerDomainEvent, 'resourceVersion' | 'commandId' | 'timerIds' | 'expiryIds' | 'operations'>;
     api?: { maxOutputTokens?: number; callId?: string; elapsedMs?: number; enabled?: boolean; executionId?: string; bodyDigest?: string; contextDigest?: string };
     voice?: {sessionId?:string;attemptId?:string;state?:string;usageSeconds?:number;messageId?:string;delegationId?:string;catalogCount?:number;errorCode?:string};
     tools?:{workflowId:string;receiptId?:string};
-    wake?: {phase:string;enabled:boolean;microphone:string;voice:string;detector:string;owner:string|null;sessionId:string|null;settingsVersion:number;errorCode:string|null};files?:{count:number;state:string} };
+    wake?: {phase:string;enabled:boolean;microphone:string;voice:string;detector:string;owner:string|null;sessionId:string|null;settingsVersion:number;errorCode:string|null};files?:{count:number;state:string};
+    executive?: { contextDigest: string; proposalDigest: string; state: 'reviewable' | 'advisory' | 'completion-assessed'; triggerSequence: number; planRevision: number } };
   mission?: MissionStreamEvent;
 }
 export interface HandoffReview {
@@ -210,6 +248,8 @@ export interface Options {
   nativeMedia?: boolean;
   /** Trusted desktop transport applies current visibility before forwarding journal events. */
   rendererEventTransport?: boolean;
+  /** Native benchmark host option. The ordinary desktop always uses full profiling. */
+  missionProfilerMode?: 'off' | 'minimal' | 'full';
   /** Trusted native-reviewed bounded context; disabled until native consent integration is qualified. */
   velaHistoryContext?:boolean;
   instanceId?: string; accountScope?: string;
@@ -248,11 +288,30 @@ export interface CommandMap {
   missions: { input: MissionRequest; output: MissionResponse };
   workspaceRecovery: { input: WorkspaceRecoveryRequest; output: WorkspaceRecoveryResponse };
   missionStartReviewed: { input: Extract<MissionRequest, { name: 'start' }>['input'] & {
-    approvedProjectCheck?: { paths: string[]; digest: string } }; output: MissionResponse };
-  missionCheckReview: { input: { paths: string[] }; output: { cwd: string; argv: string[]; head: string; digest: string } };
-  missionPlanReviewed: { input: Extract<MissionRequest, { name: 'plan' }>['input']; output: MissionResponse };
+    approvedProjectCheck?: { paths: string[]; digest: string }; approvedObjectiveDigest?: string; approvedArtifactDigest?: string }; output: MissionResponse };
+  missionCheckReview: { input: { paths: string[] } | { proposalId: string; fingerprint: string };
+    output: { cwd: string; argv: string[]; head: string; digest: string } };
+  missionPlanReviewed: { input: Omit<Extract<MissionRequest, { name: 'plan' }>['input'], 'chooseProjectTests'> & {
+    approvedProjectCheck?: { paths: string[]; digest: string }; projectCheckReviewFingerprint?: string }; output: MissionResponse };
+  missionExecutiveReview: { input: import('./mission-contracts.mts').MissionExecutiveRequest; output: import('./mission-contracts.mts').MissionExecutiveReview };
+  missionExecutiveReviewed: { input: import('./mission-contracts.mts').MissionExecutiveRequest & { fingerprint: string }; output: Extract<MissionResponse, { kind: 'executive-result' }> };
+  missionPlanningReview: {
+    input: { objective: string; fingerprint: string; approvedProjectCheck?: { paths: string[]; digest: string } } & import('./mission-contracts.mts').MissionPlanningEvidenceSelection;
+    output: { offer: import('./mission-contracts.mts').MissionPlanningOffer;
+      notes: (import('./mission-contracts.mts').MissionPlanningSourceRef & { text: string })[];
+      files: (import('./mission-contracts.mts').MissionPlanningSourceRef & { text: string })[];
+      projectEvidence?: VelaNativeReview['projectEvidence']; projectCheck?: {
+        context: import('../../vela-core/src/semantic-history.mts').ReviewedProjectCheckContext; fingerprint: string } };
+  };
   missionRevisionReviewed: { input: Extract<MissionRequest, { name: 'revision-apply' }>['input']; output: MissionResponse };
-  missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true }; output: null };
+  missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true } |
+    import('./resource-signals.mts').ResourceSignal; output: null };
+  /** Owned desktop command, excluded from renderer and model routes. */
+  resourcePolicyNative: { input: import('./resource-policy.mts').ResourcePolicyNativeRequest;
+    output: import('./resource-policy.mts').ResourcePolicyNativeView };
+  /** Fixed GPU diagnostic, accessible only through the native desktop review. */
+  gpuReadbackNative: { input: import('./mission-gpu-readback.mts').GpuReadbackNativeRequest;
+    output: import('./mission-gpu-readback.mts').GpuReadbackNativeResponse };
   /** Private desktop-host command. Local paths never cross renderer IPC. */
   mediaImportTrusted: {
     input: Omit<MediaImportRequest, 'url'> & { commandId: string; selection: MediaSelection };
@@ -340,6 +399,10 @@ export interface CommandMap {
   rendererEventPage: {
     input: { after?: number; limit?: number; recent?: boolean };
     output: { events: StreamEvent[]; earliest: number | null; latest: number; scannedThrough: number; truncated: boolean; scope: string };
+  };
+  rendererVelaOutput: {
+    input: import('../../application-contract/contracts.ts').VelaOutputObservation;
+    output: { accepted: boolean };
   };
   replay: { input: { after?: number; limit?: number }; output: { events: StreamEvent[]; earliest: number | null; latest: number; truncated: boolean } };
   close: { input: Record<string, never>; output: null };

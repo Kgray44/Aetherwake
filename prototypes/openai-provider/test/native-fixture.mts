@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import { SqliteNativeVault, type SecretProtector, type NativeVaultOptions } from '../native-storage.mts';
 import type { PrivateRegistration } from '../contracts.mts';
@@ -15,13 +16,34 @@ catch (error) {
 } }; }
 export const fixtureHost = 'urn:uuid:aa6c2d48-875e-40d6-8f52-a09e461a9787';
 export function registration(id = 'profile', version = 1, client = 'oaiapp_native_fixture'): PrivateRegistration { return { registrationId: id, version, hostId: fixtureHost, clientId: client, identity: null, accessToken: null, refreshToken: null, idToken: null, scopes: [], expiresAt: 0, nonce: '', enabled: false }; }
-export function openVault(path: string, overrides: Partial<NativeVaultOptions> = {}) { const db = new DatabaseSync(path, { timeout: 50 }); const vault = new SqliteNativeVault({ db, transaction: transaction(db), protector: syntheticProtector(), ...overrides }); return { db, vault }; }
+export function openVault(path: string, overrides: Partial<NativeVaultOptions> = {}) {
+    const db = new DatabaseSync(path, { timeout: 50 });
+    try {
+        const vault = new SqliteNativeVault({ db, transaction: transaction(db), protector: syntheticProtector(), ...overrides });
+        return { db, vault };
+    } catch (error) {
+        db.close();
+        throw error;
+    }
+}
 // Owned child-process entry point. Only synthetic fixture paths supplied by the parent test.
 if (process.argv[2] === '--child') {
-    const path = process.argv[3], mode = process.argv[4], { db, vault } = openVault(path, { limits: { leaseMs: 300, operationMs: 3000, waitMs: 100 } });
+    const path = process.argv[3], mode = process.argv[4];
+    let connection: DatabaseSync | undefined;
     try {
+        const limits = mode === 'hold' ? { leaseMs: 3000, operationMs: 8000, waitMs: 100 } :
+            { leaseMs: 300, operationMs: 3000, waitMs: 100 };
+        const { db, vault } = openVault(path, { limits });
+        connection = db;
         if (mode === 'hold')
-            await vault.withLock('profile', async () => { process.send?.({ event: 'held' }); await new Promise(resolve => setTimeout(resolve, 650)); db.prepare('INSERT INTO synthetic_probe VALUES(?)').run('holder'); });
+            await vault.withLock('profile', async () => {
+                const release = once(process, 'message', { signal: AbortSignal.timeout(6000) });
+                process.send?.({ event: 'held' });
+                const [command] = await release;
+                if (command !== 'release-holder')
+                    throw Error('fixture_release_required');
+                db.prepare('INSERT INTO synthetic_probe VALUES(?)').run('holder');
+            });
         else if (mode === 'write')
             await vault.withLock('profile', async () => { const current = await vault.read('profile'); if (!current)
                 throw Error('missing_fixture'); await vault.compareAndSwap('profile', current.version, { ...current, version: current.version + 1 }); });
@@ -35,6 +57,6 @@ if (process.argv[2] === '--child') {
         process.send?.({ event: 'result', ok: false, code: error instanceof Error ? error.message : 'fixture_failed' });
     }
     finally {
-        db.close();
+        connection?.close();
     }
 }

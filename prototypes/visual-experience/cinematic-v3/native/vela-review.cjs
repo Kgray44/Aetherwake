@@ -19,8 +19,10 @@ function handoffMatches(preview, review) {
   const handoff = review.handoff;
   if (handoff === undefined) return true;
   const history = review.history;
+  const evidence = handoff?.purpose === "reviewed-evidence";
   if (!handoff || typeof handoff.taskId !== 'string' || !/^[a-f0-9-]{36}$/u.test(handoff.taskId) ||
-      handoff.destinationProviderId !== review.providerId || handoff.sourceProviderId === review.providerId ||
+      (evidence ? review.semanticContext !== true : handoff.purpose !== undefined || review.semanticContext === true) ||
+      handoff.destinationProviderId !== review.providerId || (!evidence && handoff.sourceProviderId === review.providerId) ||
       !hash(handoff.contextDigest) || handoff.contextDigest !== preview.history?.digest ||
       history?.schemaVersion !== 1 || history.coverage !== "bounded-authorized-whole-messages" ||
       !Array.isArray(history.messages) || history.messages.length !== 2 || Buffer.byteLength(JSON.stringify(history)) > 4096)
@@ -56,6 +58,28 @@ function validateFileEditReview(requestId, review) {
 }
 const css = `:root{color-scheme:dark;font:14px/1.5 system-ui,sans-serif;color:#ece9f4;background:#0c0d17}*{box-sizing:border-box}body{margin:0}.review{height:100vh;padding:24px;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:16px}.review>*{min-width:0}h1{font-size:22px;font-weight:550;margin:0 0 6px}header p{margin:0;color:#bcb7cb}.intent{margin:0 0 16px;white-space:pre-wrap;overflow-wrap:anywhere}.content{overflow:auto;min-height:0;scrollbar-gutter:stable}details{margin:8px 0;border:1px solid #c6bce72a;border-radius:12px;background:linear-gradient(145deg,#c5b4ff0c,#c1deff04);overflow:hidden}summary{padding:12px 14px;cursor:pointer;color:#d9d1ed}section{padding:0 14px 14px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 ui-monospace,Consolas,monospace;margin:8px 0}article+article{border-top:1px solid #c6bce724;margin-top:14px;padding-top:14px}h2{font-size:13px;font-weight:550;color:#c9bfdf;margin:0}footer{display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #c6bce724;padding-top:16px}button{font:inherit;color:inherit;padding:8px 18px;border:1px solid #c6bce744;border-radius:10px;background:#c3b0ff0c;cursor:pointer}button:focus-visible,summary:focus-visible{outline:2px solid #c2a7ff;outline-offset:3px}#approve{background:#b59ae725}small{color:#a8a2ba;overflow-wrap:anywhere}`;
 
+function reviewedStateMatches(preview, review) {
+  if (!preview) return review === undefined;
+  if (!review) return false;
+  const { text, ...reference } = review;
+  return JSON.stringify(reference) === JSON.stringify(preview) && typeof text === "string" &&
+    !!text.trim() && Buffer.byteLength(text) <= 4096;
+}
+
+function projectEvidenceMatches(preview, review) {
+  if (!preview || !review) return preview === review;
+  const { sources, ...reference } = review;
+  return JSON.stringify(reference) === JSON.stringify(preview) && Array.isArray(sources) &&
+    sources.length > 0 && sources.length <= 12 &&
+    JSON.stringify(sources.map(source => source?.id)) === JSON.stringify(reference.sourceIds) &&
+    Buffer.byteLength(JSON.stringify(sources)) <= 16000 &&
+    new Set(sources.map(source => source?.id)).size === sources.length &&
+    sources.every(source => source && source.projectId === reference.projectId &&
+      ["file", "note"].includes(source.resourceKind) && typeof source.content === "string" &&
+      Buffer.byteLength(source.content) <= 2048 && digest(source.content) === source.contentDigest) &&
+    digest(sources.map(source => [source.id, source.version, source.title, source.resourceKind, source.contentDigest, source.source])) === reference.digest;
+}
+
 /** Read-only native disclosure. No renderer receives approval authority. */
 function validateReview(preview, review) {
   if (
@@ -64,6 +88,14 @@ function validateReview(preview, review) {
     review.previewId !== preview.id ||
     review.signature !== preview.signature ||
     review.providerId !== preview.providerId ||
+    review.semanticContext !== preview.semanticContext ||
+    !reviewedStateMatches(preview.missionCheckpoint, review.missionCheckpoint) ||
+    !reviewedStateMatches(preview.workspaceState, review.workspaceState) ||
+    !projectEvidenceMatches(preview.projectEvidence, review.projectEvidence) ||
+    ((preview.missionCheckpoint || preview.workspaceState || preview.projectEvidence) && !review.semanticContext) ||
+    (review.semanticContext && (review.providerId !== "openai-api-vela" || (!!review.history !== (review.handoff?.purpose === "reviewed-evidence")) ||
+      !Array.isArray(review.context?.included) || (!review.context.included.length && !review.missionCheckpoint && !review.workspaceState && !review.projectEvidence && !review.handoff) ||
+      review.context.included.some(source => !["note", "file"].includes(source?.resourceKind)))) ||
     (preview.workingDirectory !== undefined && review.workingDirectory !== preview.workingDirectory) ||
     JSON.stringify(review.route) !== JSON.stringify(preview.route) ||
     JSON.stringify(review.routingSettings) !== JSON.stringify(preview.routingSettings) ||
@@ -178,7 +210,8 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
   const route = review.route;
   const origins = review.routingSettings?.origins;
   const routeSummary = route ? [
-    review.handoff && "Handoff from " + providerLabel(review.handoff.sourceProviderId) + " to " + provider,
+    review.handoff?.purpose === "reviewed-evidence" ? "Reviewed exchange from " + providerLabel(review.handoff.sourceProviderId) :
+      review.handoff && "Handoff from " + providerLabel(review.handoff.sourceProviderId) + " to " + provider,
     review.routingAgent && "Agent profile " + review.routingAgent.title + " · version " + review.routingAgent.profileVersion,
     route.kind === "file-edit" ? "Read-only Codex proposal. File changes require a separate review." +
       (route.followUpCheck ? " The requested project check also requires a separate review." : "")
@@ -225,8 +258,22 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
   const historyLabel = review.handoff ? "Selected prior exchange" : view.historyLabel;
   const agentInstructions = review.agentInstructions
     ? `<details open><summary>Additional agent instructions</summary><section><pre>${escape(review.agentInstructions)}</pre></section></details>` : "";
+  const semanticDetails = review.missionPlanning
+    ? "<p>Vela will investigate these reviewed sources and send checked passages to the mission planner. This uses up to six API calls, including synthetic compatibility checks. You’ll review the proposed tasks before they can start.</p>"
+    : review.semanticContext
+      ? `<p>Vela will interpret your question and check the selected evidence using this model. The answer uses checked passages. ${review.handoff ? "Only the selected exchange is included from the conversation." : "Conversation history is excluded."} Tools are disabled. This can use up to six API calls, including synthetic compatibility checks.</p>` : "";
+  const checkpointDetails = review.missionCheckpoint
+    ? `<details open><summary>Mission checkpoint</summary><section><pre>${escape(review.missionCheckpoint.text)}</pre></section></details>` : "";
+  const workspaceDetails = review.workspaceState
+    ? `<details open><summary>Workspace state</summary><section><p>Placed resource titles and types.</p><pre>${escape(review.workspaceState.text)}</pre></section></details>` : "";
+  const projectDetails = review.projectEvidence
+    ? `<details open><summary>Project evidence (${review.projectEvidence.sources.length})</summary><section><p>Vela can search these reviewed sources and send matching source text for evidence checking. ${review.projectEvidence.partial ? "Some project sources are outside this review." : ""}</p>${review.projectEvidence.sources.map(source => `<article><h2>${escape(source.title)}</h2><pre>${escape(source.content)}</pre></article>`).join("")}</section></details>` : "";
+  const executiveDetails = review.missionExecutive
+    ? review.missionObjectiveAssessment
+      ? "<p>Vela will send the mission objective and the checked observations shown below to assess what the results support and what still needs evidence. The assessment is saved with the mission.</p>"
+      : "<p>Vela will send one request with the mission objective, task states and verification summaries shown below. A suggested revision needs a separate decision before it can take effect.</p>" : "";
   const styleHash = createHash("sha256").update(css).digest("base64");
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">${workflow ? "Run this workflow?" : "Send to " + escape(provider) + "?"}</h1><p>${workflow ? "Review once to share the selected evidence, make the listed edits, and run the check." : escape(view.subtitle)}</p>${routeSummary ? `<p>${escape(routeSummary)}</p>` : ""}</header><div class="content" tabindex="0" aria-label="Review what will be shared"><p class="intent">${escape(intent)}</p>${agentInstructions}${workflowScope}<details${sources ? " open" : ""}><summary>Shared resources (${resources.length})</summary><section>${sources || "No selected source content."}</section></details><details${history ? " open" : ""}><summary>${escape(historyLabel)} (${review.history?.messages.length ?? 0})</summary><section>${history || escape(view.emptyHistory)}</section></details><details><summary>Exact provider request</summary><section><pre>${escape(review.prompt)}</pre><small>Request digest: ${escape(review.promptDigest)}</small></section></details></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">${workflow ? "Run workflow" : "Send once"}</button></footer></main></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">${workflow ? "Run this workflow?" : review.missionExecutive ? "Review this mission checkpoint?" : "Send to " + escape(provider) + "?"}</h1><p>${workflow ? "Review once to share the selected evidence, make the listed edits, and run the check." : escape(view.subtitle)}</p>${routeSummary ? `<p>${escape(routeSummary)}</p>` : ""}</header><div class="content" tabindex="0" aria-label="Review what will be shared"><p class="intent">${escape(intent)}</p>${agentInstructions}${workflowScope}${semanticDetails}${executiveDetails}${checkpointDetails}${workspaceDetails}${projectDetails}<details${sources ? " open" : ""}><summary>Shared resources (${resources.length})</summary><section>${sources || "No selected source content."}</section></details><details${history ? " open" : ""}><summary>${escape(historyLabel)} (${review.history?.messages.length ?? 0})</summary><section>${history || escape(view.emptyHistory)}</section></details><details${review.missionExecutive ? " open" : ""}><summary>${review.semanticContext ? "Reviewed source envelope" : "Exact provider request"}</summary><section><pre>${escape(review.prompt)}</pre><small>Request digest: ${escape(review.promptDigest)}</small></section></details></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">${workflow ? "Run workflow" : review.missionExecutive ? "Request review" : "Send once"}</button></footer></main></body></html>`;
   if (Buffer.byteLength(html) > view.htmlBytes)
     throw Error(experience === "vela" ? "native_vela_review_capacity_exceeded" : "native_ordinary_review_capacity_exceeded");
   return html;
@@ -387,6 +434,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
   });
 }
 exports.validateReview = validateReview;
+exports.projectEvidenceMatches = projectEvidenceMatches;
 exports.validateFileEditReview = validateFileEditReview;
 exports.reviewPage = reviewPage;
 exports.showVelaReview = showVelaReview;

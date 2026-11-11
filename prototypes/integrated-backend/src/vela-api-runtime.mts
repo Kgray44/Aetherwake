@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { prepareResponsesTurn, ResponsesTransport } from '../../openai-provider/responses.mts';
-import type { ApiContinuation, ApiContextTransition, ApiFunctionCall, ApiJsonSchema, ApiResponseItem, ApiToolOutput, DispatchReview, ReviewedApiFunction, TurnEvent, TurnResult } from '../../openai-provider/contracts.mts';
+import { missionImageModel, prepareImageGeneration, sendReviewedImageGeneration } from '../../openai-provider/images.mts';
+import type { ApiContinuation, ApiContextTransition, ApiFunctionCall, ApiJsonSchema, ApiResponseItem, ApiToolOutput, DispatchReview, ReviewedApiFunction, TurnEvent, TurnResult, TurnTransportTiming } from '../../openai-provider/contracts.mts';
 import { VELA_API_PROVIDER } from '../../openai-provider/api-connection-contracts.mts';
 import { VELA_IDENTITY_VERSION, renderVelaIdentityPrompt } from '../../vela-core/src/vela-identity.mts';
 import { capabilitySchemaTool, CAPABILITY_SCHEMA_TOOL, type CapabilityCatalogSnapshot } from '../../vela-core/src/capability-catalog.mts';
@@ -27,6 +28,38 @@ const digest = (value: string) => createHash('sha256').update(value).digest('hex
 const check: (value: unknown, code: string) => asserts value = (value, code) => { if (!value) throw new VelaError(code); };
 export interface VelaApiUsageStatus { enabled: boolean; configurationVersion: number | null; maxOutputTokens: number; requestsPerDay: number; usedToday: number }
 export interface VelaApiRunReceipt extends ApiRunDiagnostics {executionId:string;bodyDigest:string;contextDigest:string;state:TurnResult['outcome']|'dispatching';responseId:string|null;elapsedMs:number|null}
+export type VelaMissionCognitionAttribution =
+  | { owner: { kind: 'planning'; requestId: string };
+      stage: 'qualify-perception' | 'qualify-assessment' | 'perception' | 'evidence-assessment' | 'planning'; round?: number }
+  | { owner: { kind: 'checkpoint'; missionId: string; revision: number; planRevision: number; triggerSeq: number }; stage: 'executive' };
+interface VelaMissionCognitionObservation {
+  attribution: VelaMissionCognitionAttribution;
+  providerEvidence: 'reported' | 'simulated';
+  requestedModel: string;
+  effort: ReasoningEffort | null;
+  clockDomain: string;
+  startedAt: string;
+  startedMs: number;
+  settledMs: number | null;
+  dispatched: boolean | null;
+  reportedModel: string | null;
+}
+export interface VelaMissionCognitiveReceipt extends VelaMissionCognitionObservation {
+  executionId: string;
+  requestId: string;
+  configurationVersion: number;
+  contextDigest: string;
+  provider: typeof VELA_API_PROVIDER;
+  transportOutcome: VelaApiRunReceipt['state'];
+  errorCode: ApiRunDiagnostics['errorCode'] | null;
+  elapsedMs: number | null;
+  usage: NonNullable<TurnResult['usage']> | null;
+}
+export interface VelaMissionCognitiveReceipts {
+  contract: 'aerynth.vela.mission-cognition@1';
+  runs: VelaMissionCognitiveReceipt[];
+  truncated: boolean;
+}
 export interface VelaApiWeatherTool {run(input:WeatherQuery,signal:AbortSignal):Promise<WeatherData>}
 export interface VelaApiRuntimeTestServices { fetch: typeof fetch; voice?: {fetch:typeof fetch;acknowledgementMs?:number};wake?:import('./vela-wake-runtime.mts').VelaWakeTestServices }
 export interface VelaApiRuntimeOptions {
@@ -44,6 +77,7 @@ export interface VelaApiRuntimeOptions {
 export interface VelaApiRun {
   requestId: string; version: number; model: string; prompt: string; instruction?: string; contextDigest: string;
   reasoningEffort?: ReasoningEffort;
+  missionCognition?: VelaMissionCognitionAttribution;
   catalog?: CapabilityCatalogSnapshot; outputSchema?: ApiJsonSchema;
   /** Native, code-reviewed port only. Never enabled for mission workers. */
   weatherTool?:VelaApiWeatherTool;
@@ -57,9 +91,12 @@ export interface VelaApiRun {
   /** Shares the canonical admission pool; never creates a second runtime or conversation. */
   lane?: 'mission-specialist';
   oneUse?: true;
+  bufferedText?: true;
   validate(): void;
   stage?(executionId: string, review: DispatchReview): void | (() => void);
   event?(event: TurnEvent): void;
+  observeEventType?(type: TurnEvent['type']): void;
+  observeTransport?(executionId: string, timing: TurnTransportTiming): void;
   completed?(executionId: string, result: TurnResult): void;
 }
 export interface VelaApiToolContinuationRef {id:string;digest:string}
@@ -71,8 +108,23 @@ export interface VelaApiToolContinuation {
   items:ApiResponseItem[];receipts:ApiToolOutput[];fetchedIds:string[];continuation:ApiContinuation;final:VelaApiRunResult;
   pending:{call:ApiFunctionCall;invocation:VelaToolInvocation;receipt:VelaToolReceipt}[];
 }
+export interface VelaStructuredQualification {
+  version: 1;
+  provider: typeof VELA_API_PROVIDER;
+  configurationVersion: number;
+  model: string;
+  contractDigest: string;
+  observedAt: number;
+  expiresAt: number;
+  elapsedMs: number;
+  evidence: 'observed' | 'simulated';
+}
+
 /** Metadata and receipts only. Canonical VelaService owns every conversation body. */
 export class VelaApiRuntime {
+  private readonly cognitionClock = randomUUID();
+  private readonly structuredQualifications = new Map<string, Readonly<VelaStructuredQualification>>();
+  private qualificationEpoch = 0;
   private readonly options: VelaApiRuntimeOptions;
   private readonly lifetime = new AbortController();
   private readonly running = new Map<string, VelaApiRun['lane']>();
@@ -88,6 +140,9 @@ export class VelaApiRuntime {
     const columns=new Set(db.prepare('PRAGMA table_info(vela_api_runs)').all().map(row=>row.name));
     if(!columns.has('error_code'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN error_code TEXT');
     if(!columns.has('http_diagnostic_json'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN http_diagnostic_json TEXT');
+    if(!columns.has('cognition_owner'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN cognition_owner TEXT');
+    if(!columns.has('cognition_json'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN cognition_json TEXT');
+    db.exec('CREATE INDEX IF NOT EXISTS vela_api_runs_cognition_owner ON vela_api_runs(cognition_owner) WHERE cognition_owner IS NOT NULL');
     const toolColumns=new Set(db.prepare('PRAGMA table_info(vela_api_tool_receipts)').all().map(row=>row.name));
     for(const column of ['workflow_id','continuation_json','continuation_digest','continuation_state'])if(!toolColumns.has(column))db.exec('ALTER TABLE vela_api_tool_receipts ADD COLUMN '+column+' TEXT');
     // An interrupted transport has no confirmed outcome. No automatic replay or invented remote failure.
@@ -111,6 +166,8 @@ export class VelaApiRuntime {
       this.options.db.prepare('INSERT INTO vela_api_usage VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET configuration_version=excluded.configuration_version,enabled=excluded.enabled,observed_at=excluded.observed_at')
         .run(expectedVersion, Number(enabled), new Date().toISOString());
     });
+    this.qualificationEpoch++;
+    this.structuredQualifications.clear();
     return this.usageStatus();
   }
   authorized(version = this.configurationVersion()): boolean {
@@ -136,6 +193,49 @@ export class VelaApiRuntime {
     const catalog = await this.options.connection.resolveCatalog(version); this.knownCatalog = { version, expiresAt: catalog.expiresAt, models: [...catalog.models] }; return [...catalog.models];
   }
   knownModels() { return this.knownCatalog && this.authorized(this.knownCatalog.version) && this.knownCatalog.expiresAt > Date.now() ? [...this.knownCatalog.models] : []; }
+
+  async generateMissionImage(input: { attemptId: string; version: number; prompt: string; approvedDigest: string;
+    validate(): void }, signal: AbortSignal) {
+    const combined = AbortSignal.any([signal, this.lifetime.signal]);
+    const review = prepareImageGeneration(input.prompt);
+    const fence = () => {
+      check(!combined.aborted, 'vela_execution_cancelled');
+      this.validate(input.version);
+      input.validate();
+    };
+    fence();
+    check(review.digest === input.approvedDigest, 'image_review_changed');
+    check(!this.running.has(input.attemptId) && this.running.size < VELA_API_RUNTIME_LIMITS.concurrent, 'vela_api_busy');
+    this.running.set(input.attemptId, 'mission-specialist');
+    try {
+      check((await abortable(this.models(input.version), combined)).includes(missionImageModel), 'mission_image_model_unavailable');
+      const credential = await abortable(this.options.connection.resolveNativeCredential(input.version), combined);
+      fence();
+      const started = performance.now();
+      this.options.transaction(() => {
+        fence();
+        check(this.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay, 'vela_api_daily_limit_reached');
+        this.options.db.prepare(`INSERT INTO vela_api_runs
+          (execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state)
+          VALUES(?,?,?,?,?,?,'dispatching')`).run(input.attemptId, input.attemptId, input.version,
+          new Date().toISOString().slice(0,10), review.digest, review.digest);
+      });
+      try {
+        const result = await sendReviewedImageGeneration(review, input.approvedDigest, credential.bearer, combined, this.options.test?.fetch);
+        fence();
+        this.options.db.prepare("UPDATE vela_api_runs SET state='completed',elapsed_ms=? WHERE execution_id=?")
+          .run(Math.round(performance.now() - started), input.attemptId);
+        return result;
+      } catch {
+        try {
+          this.options.db.prepare("UPDATE vela_api_runs SET state='unknown',error_code='image_result_unknown',elapsed_ms=? WHERE execution_id=?")
+            .run(Math.round(performance.now() - started), input.attemptId);
+        } finally { throw new VelaError('image_result_unknown', 'unknown'); }
+      }
+    } finally {
+      this.running.delete(input.attemptId);
+    }
+  }
   matchesResult(executionId: string, content: string): boolean {
     const row = this.options.db.prepare('SELECT state,result_digest FROM vela_api_runs WHERE execution_id=?').get(executionId);
     return row?.state === 'completed' && row.result_digest === digest(content);
@@ -153,6 +253,22 @@ export class VelaApiRuntime {
       return {...receipt,...apiRunDiagnostics({errorCode:error_code,httpDiagnostic})} as unknown as VelaApiRunReceipt;
     });
   }
+  /** Existing API receipts are the source. The mission owner authorizes which IDs may be queried. */
+  missionCognitiveReceipts(planningRequestId: string | null, missionId: string): VelaMissionCognitiveReceipts | undefined {
+    const rows = this.options.db.prepare(`SELECT execution_id,request_id,configuration_version,context_digest,state,elapsed_ms,usage_json,error_code,cognition_json
+      FROM vela_api_runs WHERE cognition_owner IN (?,?) ORDER BY rowid LIMIT 65`)
+      .all(planningRequestId ? 'planning:' + planningRequestId : null, 'checkpoint:' + missionId);
+    if (!rows.length) return;
+    const runs = rows.slice(0, 64).map(row => ({
+      ...JSON.parse(String(row.cognition_json)) as VelaMissionCognitionObservation,
+      executionId: String(row.execution_id), requestId: String(row.request_id), configurationVersion: Number(row.configuration_version),
+      contextDigest: String(row.context_digest), provider: VELA_API_PROVIDER, transportOutcome: row.state as VelaApiRunReceipt['state'],
+      errorCode: apiRunDiagnostics({ errorCode: row.error_code }).errorCode ?? null,
+      elapsedMs: row.elapsed_ms === null ? null : Number(row.elapsed_ms),
+      usage: typeof row.usage_json === 'string' ? JSON.parse(row.usage_json) as NonNullable<TurnResult['usage']> : null,
+    }));
+    return { contract: 'aerynth.vela.mission-cognition@1', runs, truncated: rows.length > runs.length };
+  }
   retainContinuation(workflowId:string,value:VelaApiToolContinuation):VelaApiToolContinuationRef{
     const text=JSON.stringify(value);check(value.workflowId===workflowId&&value.pending.length>0&&Buffer.byteLength(text)<=VELA_TOOL_LIMITS.continuationBytes,'vela_tool_continuation_capacity');
     const first=value.receipts.find(item=>item.callId===value.pending[0].call.callId);check(first,'api_tool_receipt_mismatch');const ref={id:first.receiptId,digest:digest(text)};
@@ -163,6 +279,10 @@ export class VelaApiRuntime {
     check(row&&typeof row.continuation_json==='string'&&row.continuation_digest===ref.digest&&digest(row.continuation_json)===ref.digest,'vela_tool_continuation_replayed');const value=parseVelaToolJson(row.continuation_json,VELA_TOOL_LIMITS.continuationBytes) as unknown as VelaApiToolContinuation;check(value.contract==='aerynth.vela.tool-continuation@1'&&value.workflowId===workflowId,'vela_tool_continuation_invalid');return value;
   }
   async run(input: VelaApiRun, signal: AbortSignal):Promise<VelaApiRunResult> {
+    check(!input.missionCognition || input.outputSchema && !input.tools && !input.weatherTool, 'vela_mission_cognition_requires_structured_output');
+    const attribution = input.missionCognition && structuredClone(input.missionCognition);
+    const owner = attribution?.owner;
+    const cognitionOwner = owner ? owner.kind + ':' + (owner.kind === 'planning' ? owner.requestId : owner.missionId) : null;
     check(!input.weatherTool||input.lane!=='mission-specialist','weather_tool_not_allowed_for_mission');
     check(!input.tools||input.lane!=='mission-specialist','vela_tools_not_allowed_for_mission');
     check(!input.resume&&!input.resumeReceipt||!!input.tools,'vela_tool_continuation_invalid');
@@ -222,6 +342,11 @@ export class VelaApiRuntime {
         fence();
         if(semantic)check(semantic.budget.providerRequests<semantic.budget.maxProviderRequests,'vela_workflow_budget_exhausted');
         const executionId = randomUUID(), started = performance.now();
+        const cognition: VelaMissionCognitionObservation | undefined = attribution && {
+          attribution, providerEvidence: this.options.test ? 'simulated' : 'reported',
+          requestedModel: input.model, effort: input.reasoningEffort ?? null, clockDomain: this.cognitionClock,
+          startedAt: new Date().toISOString(), startedMs: started, settledMs: null, dispatched: null, reportedModel: null,
+        };
         const turn = { executionId, requestId: input.requestId, configurationId: VELA_API_CONFIGURATION_ID, providerId: VELA_API_PROVIDER,
           assistant: 'vela' as const, model: input.model,
           instructions: renderVelaIdentityPrompt('assistant') + '\n' + (input.instruction ?? 'Answer naturally and concisely using the supplied context. Never claim an action occurred without an observed host receipt.')+(catalog?'\nPinned host tools: '+JSON.stringify(velaToolCatalogEnvelope(catalog))+'\nFetch exact schemas before invocation. Tool receipts report actual host outcomes; pending review/job is not completion. Provider reports do not independently verify the objective.':''),
@@ -249,7 +374,22 @@ export class VelaApiRuntime {
           }
         };
         const transport = new ResponsesTransport({ ...(this.options.test ? { fetch: this.options.test.fetch } : {}), limits: { outputBytes: 65536, timeoutMs: 45000 },
-          onEvent: event => { fence(); if (input.event) input.event(event); else this.options.observe?.event(event,input.requestId); }, native: {
+          ...(input.observeTransport ? { observeTiming: (timing: TurnTransportTiming) => input.observeTransport?.(executionId, timing) } : {}),
+          onEvent: event => {
+            // Internal CIE text is buffered by the transport. Recheck full source proofs
+            // at dispatch and completion, and never publish these partial strings.
+            if (input.bufferedText && input.oneUse && input.outputSchema && !input.event && !input.tools && !input.weatherTool &&
+              (event.type === 'provider/text-delta' || event.type === 'provider/refusal-delta')) {
+              check(!combined.aborted, 'vela_execution_cancelled');
+              this.validate(input.version);
+              input.observeEventType?.(event.type);
+              return;
+            }
+            fence();
+            input.observeEventType?.(event.type);
+            if (input.event) input.event(event);
+            else this.options.observe?.event(event, input.requestId);
+          }, native: {
             authorize: async review => {
               exactReview(review); check(!admitted, 'api_execution_already_dispatched');
               const before = semantic?.budget.providerRequests;
@@ -258,8 +398,9 @@ export class VelaApiRuntime {
                 afterCommit = commitExecution(() => {
                   fence(); check(this.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay, 'vela_api_daily_limit_reached');
                   if(semantic){check(semantic.budget.providerRequests<semantic.budget.maxProviderRequests,'vela_workflow_budget_exhausted');semantic.budget.providerRequests++;fence();checkpoint('running');}
-                  this.options.db.prepare('INSERT INTO vela_api_runs(execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state) VALUES(?,?,?,?,?,?,?)')
-                    .run(executionId,input.requestId,input.version,new Date().toISOString().slice(0,10),review.bodyDigest,currentContext,'dispatching');
+                  this.options.db.prepare('INSERT INTO vela_api_runs(execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state,cognition_owner,cognition_json) VALUES(?,?,?,?,?,?,?,?,?)')
+                    .run(executionId,input.requestId,input.version,new Date().toISOString().slice(0,10),review.bodyDigest,currentContext,'dispatching',
+                      cognitionOwner, cognition ? JSON.stringify(cognition) : null);
                   return input.stage ? input.stage(executionId, review) : this.options.observe?.stage(executionId, input.requestId, review);
                 });
               } catch (error) {
@@ -289,11 +430,13 @@ export class VelaApiRuntime {
         let result = await transport.turn(turn, combined);
         const settle = (receipt: TurnResult) => commitExecution(() => {
           const diagnostic = apiRunDiagnostics(receipt);
-          const elapsed = Math.round(performance.now() - started);
-          this.options.db.prepare('UPDATE vela_api_runs SET state=?,result_digest=?,response_id=?,usage_json=?,elapsed_ms=?,error_code=?,http_diagnostic_json=? WHERE execution_id=?')
+          const settledMs = performance.now(), elapsed = Math.round(settledMs - started);
+          const observed = cognition && { ...cognition, settledMs, dispatched: receipt.dispatched,
+            reportedModel: /^[a-zA-Z0-9._:-]{1,128}$/.test(receipt.reportedModel ?? '') ? receipt.reportedModel : null };
+          this.options.db.prepare('UPDATE vela_api_runs SET state=?,result_digest=?,response_id=?,usage_json=?,elapsed_ms=?,error_code=?,http_diagnostic_json=?,cognition_json=? WHERE execution_id=?')
             .run(receipt.outcome, receipt.outcome === 'completed' ? digest(receipt.partialText) : null, receipt.responseId ?? null,
               receipt.usage ? JSON.stringify(receipt.usage) : null, elapsed, diagnostic.errorCode ?? null,
-              diagnostic.httpDiagnostic ? JSON.stringify(diagnostic.httpDiagnostic) : null, executionId);
+              diagnostic.httpDiagnostic ? JSON.stringify(diagnostic.httpDiagnostic) : null, observed ? JSON.stringify(observed) : null, executionId);
           if (input.completed) input.completed(executionId, receipt);
           else this.options.observe?.completed(executionId, input.requestId, receipt, elapsed);
         });
@@ -380,14 +523,103 @@ export class VelaApiRuntime {
       if(semantic){const code=String((error as {code?:string})?.code??''),reason=code==='vela_workflow_budget_exhausted'?code:invoking?'vela_tool_owner_unknown':/^vela_tool_[a-z_]{1,64}$/.test(code)?code:'vela_tool_rejected',phase=reason==='vela_workflow_budget_exhausted'?'budget-exhausted':invoking?'unknown':'blocked';checkpoint(phase,reason);if(final)return {...final,workflow:{workflowId:semantic.workflowId,phase,reason}};}throw error;
     } finally { this.running.delete(input.requestId); }
   }
-  async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;validate(): void }, signal: AbortSignal): Promise<unknown> {
+  private structuredContract(schema: ApiJsonSchema, instruction: string) {
+    return digest(JSON.stringify([VELA_IDENTITY_VERSION, instruction, schema]));
+  }
+
+  async qualifyStructuredRoute(input: Parameters<VelaApiRuntime['structuredProposal']>[0] & { model: string; binding: NonNullable<Parameters<VelaApiRuntime['structuredProposal']>[0]['binding']> },
+    verify: (output: unknown) => boolean, signal: AbortSignal): Promise<Readonly<VelaStructuredQualification>> {
+    const { model, binding, schema, instruction } = input;
+    check(!input.weatherTool && !input.reasoningEffort, 'vela_structured_probe_requires_default_controls');
+    const epoch = this.qualificationEpoch;
+    const contractDigest = this.structuredContract(schema, instruction);
+    const start = performance.now();
+    const validate = () => {
+      input.validate();
+      signal.throwIfAborted();
+      check(this.qualificationEpoch === epoch, 'vela_api_usage_authorization_changed');
+    };
+    const output = await this.structuredProposal({ ...input, validate }, signal);
+    check(verify(output), 'vela_structured_probe_failed');
+    validate();
+    this.validate(binding.configurationVersion);
+    const observedAt = Date.now();
+    const receipt = Object.freeze({ version: 1 as const, provider: VELA_API_PROVIDER, configurationVersion: binding.configurationVersion,
+      model, contractDigest, observedAt, expiresAt: observedAt + 15 * 60_000,
+      elapsedMs: Math.round(performance.now() - start), evidence: this.options.test ? 'simulated' as const : 'observed' as const });
+    const key = JSON.stringify([binding.configurationVersion, model, contractDigest]);
+    this.structuredQualifications.delete(key);
+    if (this.structuredQualifications.size >= 32) this.structuredQualifications.delete(this.structuredQualifications.keys().next().value!);
+    this.structuredQualifications.set(key, receipt);
+    return receipt;
+  }
+
+  private currentStructuredQualifications(version: number, allowed: readonly string[], schema: ApiJsonSchema, instruction: string) {
+    if (!this.authorized(version)) return [];
+    const contract = this.structuredContract(schema, instruction);
+    const now = Date.now();
+    return allowed.flatMap(model => {
+      const record = this.structuredQualifications.get(JSON.stringify([version, model, contract]));
+      return record && record.expiresAt > now ? [record] : [];
+    });
+  }
+
+  qualifiedStructuredRoute(version: number, allowed: readonly string[], schema: ApiJsonSchema, instruction: string) {
+    const listed = new Set(this.knownModels());
+    return this.currentStructuredQualifications(version, allowed, schema, instruction).find(record => listed.has(record.model));
+  }
+
+  isStructuredQualificationCurrent(receipt: VelaStructuredQualification): boolean {
+    const { configurationVersion, model, contractDigest, expiresAt } = receipt;
+    const key = JSON.stringify([configurationVersion, model, contractDigest]);
+    // Catalog freshness gates dispatch. A newer catalog can exclude a model, but age
+    // alone does not revoke an admitted stream or its still-current qualification.
+    return this.authorized(configurationVersion) && expiresAt > Date.now() &&
+      this.structuredQualifications.get(key) === receipt && this.knownCatalog?.version === configurationVersion &&
+      this.knownCatalog.models.includes(model);
+  }
+
+  async resolveQualifiedStructuredRoute(version: number, allowed: readonly string[], schema: ApiJsonSchema, instruction: string,
+    signal: AbortSignal) {
+    if (!this.currentStructuredQualifications(version, allowed, schema, instruction).length) return;
+    await abortable(this.models(version), signal);
+    return this.qualifiedStructuredRoute(version, allowed, schema, instruction);
+  }
+
+  async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;
+    bufferedText?: true;
+    missionCognition?: VelaMissionCognitionAttribution;
+    /** Native binding for a reviewed cognitive payload and its current source provenance. */
+    binding?: { configurationVersion: number; contextDigest: string };
+    observeEventType?: VelaApiRun['observeEventType'];
+    observeTransport?: VelaApiRun['observeTransport'];
+    validate(): void }, signal: AbortSignal): Promise<unknown> {
     const version = this.configurationVersion(); check(version !== null, 'api_configuration_disconnected');
+    const binding = input.binding;
+    if (binding) {
+      check(binding.configurationVersion === version && /^[a-f0-9]{64}$/.test(binding.contextDigest), 'api_configuration_changed');
+      input.validate();
+    }
     const model=input.model??'gpt-6-luna',models = await this.models(version); check(models.includes(model), 'vela_api_default_model_unavailable');
     const prompt = JSON.stringify(input.payload); check(Buffer.byteLength(prompt) <= 32768, 'context_budget_exceeded');
+    const reasoningEffort = input.reasoningEffort ?? (binding ? undefined : 'low');
     const { result } = await this.run({ requestId: input.requestId, version, model, prompt,
-      instruction: input.instruction, reasoningEffort:input.reasoningEffort??'low', contextDigest: digest(prompt), outputSchema: input.schema,...(input.weatherTool?{weatherTool:input.weatherTool}:{}),validate: input.validate }, signal);
+      instruction: input.instruction, ...(reasoningEffort ? { reasoningEffort } : {}),
+      contextDigest: binding?.contextDigest ?? digest(prompt), ...(binding ? { oneUse: true as const } : {}),
+      missionCognition: input.missionCognition, bufferedText: input.bufferedText,
+      outputSchema: input.schema,...(input.weatherTool?{weatherTool:input.weatherTool}:{}),validate: input.validate,
+      observeEventType: input.observeEventType, observeTransport: input.observeTransport }, signal);
     input.onResult?.(result);
     check(result.outcome === 'completed', result.errorCode ?? 'vela_api_proposal_failed');
+    if (binding) {
+      input.validate();
+      check(result.responseId && result.reportedModel === model && !result.refusalText, 'vela_api_proposal_unconfirmed');
+      const items = result.api?.outputItems.filter(item => item.type !== 'reasoning') ?? [];
+      const [message] = items;
+      check(items.length === 1 && message.type === 'message' && message.status === 'completed' && message.content.length === 1, 'vela_api_proposal_unconfirmed');
+      const [output] = message.content;
+      check(output.type === 'output_text' && output.text === result.partialText && Buffer.byteLength(output.text) <= 8192, 'vela_api_proposal_unconfirmed');
+    }
     try{return JSON.parse(result.partialText);}catch{throw new VelaError('vela_api_proposal_invalid');}
   }
   close() { this.lifetime.abort(); }

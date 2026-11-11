@@ -20,7 +20,19 @@ const RECORD = SURFACE + " .vela-mission-record";
 const missionControl = name => SURFACE + ' [data-mission-focus=' + JSON.stringify(name) + ']';
 const LIMIT_MS = 45000;
 const MiB = 1024 * 1024;
+const FRAME_WINDOW_MS = 2500;
+const FRAME_SAMPLE_LIMIT = 720;
 const quote = JSON.stringify;
+
+function summarizeFrames({ intervals, windowMs, hidden, discarded }) {
+  assert.equal(hidden, false, "mission_profiler_renderer_was_hidden");
+  assert.equal(discarded, 0, "mission_profiler_frame_sample_limit");
+  assert.ok(windowMs >= FRAME_WINDOW_MS && intervals.length > 1 &&
+    intervals.every(interval => Number.isFinite(interval) && interval > 0), "mission_profiler_incomplete_frame_window");
+  const sorted = intervals.toSorted((a, b) => a - b);
+  return { windowMs, samples: intervals.length, discarded, p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1],
+    p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1], maxMs: sorted.at(-1) };
+}
 
 async function bounded(promise, ms, code) {
   assert(ms > 0, code);
@@ -98,7 +110,7 @@ function verifyJournal(mission, scope, shippedCoreHash) {
   return { tasks: [...attempt].map(([id, entry]) => ({ id, ...entry })), overlapMs, events: mission.events };
 }
 
-exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs,systemFactsAudit }) {
+exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, systemFactsAudit, benchmarkMode }) {
   const argv = process.argv;
   const receipt = {
     contract: "aerynth.vela-missions-integration@1", objective: OBJECTIVE, passed: false,
@@ -680,6 +692,228 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     }
     await click("#vela");
     const composer = SURFACE + ' textarea[aria-label="Message Vela"]';
+    if (argv.includes('--missions-aep-presentation-only')) {
+      const retryNotes = argv.includes("--missions-aep-retry");
+      const observeStart = argv.includes("--missions-aep-start-ui");
+      const composerStart = argv.includes("--missions-aep-composer");
+      assert(!retryNotes || !argv.includes("--bootstrap-vela-api"), "native_retry_requires_offline_profile");
+      assert(!observeStart || !argv.includes("--bootstrap-vela-api"), "native_start_ack_requires_offline_profile");
+      assert(!composerStart || !argv.includes("--bootstrap-vela-api"), "native_composer_start_requires_offline_profile");
+      // The panel preserves active edits instead of refreshing their controls from events.
+      key("Tab");
+      assert.equal(await js('document.activeElement?.matches("input,textarea,select")'), false);
+      const baseObjective = retryNotes ? OBJECTIVE + " using workspace notes" :
+        composerStart ? "measure CPU and RAM" : OBJECTIVE;
+      const objective = composerStart ? "Run a mission to " + baseObjective : baseObjective;
+      const preview = await rpc("missions", { name: "preview", input: { objective } });
+      assert.equal(preview.externalReview, undefined);
+      const missionsControl = SURFACE + ' button[aria-label="Missions"]';
+      if (observeStart && !composerStart) await click(missionsControl);
+      let submitted, mission;
+      if (composerStart) {
+        const before = await list();
+        await fillNative({ click, key, js, wait, insertText: text => operation(() => win.webContents.insertText(text), "mission_text_input_deadline") }, composer, objective);
+        await click(SURFACE + ' button[aria-label="Send to Vela"]');
+        const start = PREVIEW + ' [data-mission-focus="start-mission"]';
+        await wait("Explicit composer command opens local mission review", () => js(`(() => {
+          const preview = document.querySelector(${quote(PREVIEW)});
+          return preview?.textContent.includes(${quote(objective)}) && preview.textContent.includes('Local read-only tasks') &&
+            document.querySelector(${quote(start)})?.getClientRects().length > 0;
+        })()`));
+        assert.deepEqual(await list(), before, "composer_mission_started_before_review");
+        assert.equal((await rpc("providerActivity", {})).providerRequests, 0);
+        if (benchmarkMode) await js(`new Promise(resolve => {
+          requestAnimationFrame(startedAt => {
+            const sample = { startedAt, intervals: [], windowMs: null, discarded: 0, hidden: false };
+            window.__missionProfilerBenchmark = sample;
+            let previous = startedAt;
+            sample.finished = new Promise(finish => {
+              const tick = at => {
+                sample.hidden ||= document.visibilityState !== 'visible' || !document.hasFocus();
+                if (sample.intervals.length < ${FRAME_SAMPLE_LIMIT}) sample.intervals.push(at - previous);
+                else sample.discarded++;
+                previous = at;
+                if (at - startedAt < ${FRAME_WINDOW_MS}) requestAnimationFrame(tick);
+                else { sample.windowMs = at - startedAt; finish(); }
+              };
+              requestAnimationFrame(tick);
+            });
+            resolve(true);
+          });
+        })`);
+        submitted = performance.now();
+        await click(start);
+        const existing = new Set(before.map(item => item.id));
+        mission = await wait("Reviewed Start creates the explicit composer mission", async () =>
+          (await list()).find(item => item.objective === objective && !existing.has(item.id)));
+        await wait("Accepted Start clears the unchanged mission draft", () =>
+          js(`document.querySelector(${quote(composer)})?.value === ''`));
+        receipt.composerStart = { missionId: mission.id, reviewBeforeStart: true };
+      } else {
+        submitted = performance.now();
+        mission = await rpc("missions", { name: "start", input: {
+          objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
+        } });
+        receipt.actions.push({ method: "application-capability-fixture", type: "startLocalMission" });
+      }
+      const missionId = mission.id;
+      if (observeStart) {
+        const selector = SURFACE + " .vela-missions-list [data-mission-focus=" + quote(missionId) + "]";
+        const label = await wait("Visible canonical mission status acknowledges Start", () => js(`(() => {
+          const node = document.querySelector(${quote(selector)}), rect = node?.getBoundingClientRect();
+          return document.visibilityState === "visible" && document.hasFocus() && rect?.height > 0 &&
+            rect.bottom > 0 && rect.top < innerHeight && !node.closest("[hidden],[inert]") && node.textContent;
+        })()`));
+        assert.match(label, / · (Queued|Running)$/u, "mission_start_status_was_not_observed_before_completion");
+        receipt.visibleStartAcknowledgement = { missionId, label, commandToVisibleObservationMs: performance.now() - submitted };
+        await click(missionsControl);
+      }
+      let failedAttemptId = null;
+      if (retryNotes) {
+        const failed = await wait("Native note verification fails without an authorized note", async () => {
+          const profile = await rpc("missions", { name: "execution-profile", input: { id: missionId } });
+          return profile.attempts.find(attempt => attempt.taskId === "notes" && attempt.state === "failed" && attempt.end);
+        });
+        failedAttemptId = failed.id;
+        const title = "Backend performance notes";
+        const created = await rpc("desktop", { type: "createResource", kind: "note", title, workspaceId: scope.workspaceId });
+        const note = created.resources.find(resource => resource.kind === "note" && resource.title === title);
+        assert.ok(note, "native_retry_source_missing");
+        await rpc("desktop", { type: "content", resourceId: note.id, expectedVersion: note.version,
+          content: "Synthetic backend performance timing baseline and code sampling notes." });
+        await wait("Canonical retry is accepted after the note is supplied", async () => {
+          const current = await rpc("missions", { name: "read", input: { id: missionId } });
+          try {
+            return await rpc("missions", { name: "control", input: {
+              id: missionId, revision: current.revision, control: { type: "retry", taskId: "notes" },
+            } });
+          } catch (error) {
+            if (!String(error.message).includes("mission_revision_changed")) throw error;
+            return false;
+          }
+        });
+        receipt.actions.push({ method: "application-capability-fixture", type: "retryAfterCanonicalNote" });
+      }
+      const report = await wait("Canonical mission report is available", async () => {
+        const state = await rpc("vela", { name: "state", input: {} });
+        return state.conversation?.messages.find(message => message.missionReport?.missionId === missionId);
+      });
+      const reportLink = SURFACE + ' .vela-manifestation [data-mission-report-link=' + quote(missionId) + ']';
+      await wait("The report link is rendered in the current Vela reply", () =>
+        js(`document.querySelector(${quote(reportLink)})?.getClientRects().length > 0`));
+      if (benchmarkMode) {
+        const reportObservedInWindowMs = await js("performance.now() - window.__missionProfilerBenchmark.startedAt");
+        const profile = await wait("Benchmark observes canonical renderer delivery", async () => {
+          const current = await rpc("missions", { name: "execution-profile", input: { id: missionId } });
+          return current.userDelivery?.messageId === report.id && current;
+        });
+        const startToReceiptReadbackMs = performance.now() - submitted;
+        const frames = summarizeFrames(await js(`(async () => {
+          const sample = window.__missionProfilerBenchmark;
+          await sample.finished;
+          delete window.__missionProfilerBenchmark;
+          const { intervals, windowMs, hidden, discarded } = sample;
+          return { intervals, windowMs, hidden, discarded };
+        })()`));
+        assert.ok(reportObservedInWindowMs > 0 && reportObservedInWindowMs <= frames.windowMs, "mission_report_outside_frame_window");
+        const verified = await read(missionId);
+        assert.equal(verified.outcome, "verified");
+        assert.deepEqual(verified.tasks.map(task => [task.executor, task.state, task.attempts.length, task.attempts[0]?.evidence?.source]), [
+          ["sample.cpu", "verified", 1, "node:os.cpus"], ["sample.ram", "verified", 1, "node:os.totalmem+freemem"],
+          ["join.samples", "verified", 1, "aerynth.mission.journal"],
+        ]);
+        assert.equal(profile.userDelivery.source, "renderer-visible-frame");
+        const stagingToReceiptMs = profile.userDelivery.stagingToReceiptMs;
+        if (benchmarkMode === "full") assert.ok(Number.isFinite(stagingToReceiptMs) && stagingToReceiptMs >= 0);
+        else assert.equal(stagingToReceiptMs, null);
+        assert.equal(profile.outcome, "verified");
+        assert.equal(profile.attempts.length, verified.tasks.length);
+        const measured = profile.attempts.filter(attempt => attempt.interval).length;
+        const phased = profile.attempts.filter(attempt => attempt.phases?.verification).length;
+        assert.equal(measured, benchmarkMode === "off" ? 0 : verified.tasks.length);
+        assert.equal(phased, benchmarkMode === "full" ? verified.tasks.length : 0);
+        const { providerRequests, codexConnections } = await rpc("providerActivity", {});
+        assert.equal(providerRequests, 0);
+        assert.equal(codexConnections, 0);
+        receipt.profilerBenchmark = { mode: benchmarkMode, frames, reportObservedInWindowMs, startToReceiptReadbackMs,
+          stagingToReceiptMs, measuredAttempts: measured, phasedAttempts: phased,
+          verifiedAttempts: verified.tasks.length, providerRequests, codexConnections };
+        receipt.passed = true;
+        return;
+      }
+      const presentation = await wait("Visible mission report has a scoped execution-profile receipt", async () => {
+        const profile = await rpc("missions", { name: "execution-profile", input: { id: missionId } });
+        return profile.userDelivery?.messageId === report.id && profile;
+      });
+      assert.equal(presentation.userDelivery.source, "renderer-visible-frame");
+      assert.equal(presentation.outcome, "verified");
+      assert.ok(Number.isFinite(presentation.userDelivery.stagingToReceiptMs) && presentation.userDelivery.stagingToReceiptMs >= 0);
+      assert.ok(Number.isFinite(presentation.intakeToReportStagedMs) && presentation.intakeToReportStagedMs >= 0);
+      assert.equal(presentation.intakeToUserDeliveryMs,
+        presentation.intakeToReportStagedMs + presentation.userDelivery.stagingToReceiptMs);
+      if (composerStart) {
+        assert.equal(presentation.wallTime?.from, "mission-start-command");
+        assert.equal(presentation.wallTime?.through, "renderer-receipt");
+        assert.equal(presentation.wallTime?.elapsedMs, presentation.intakeToUserDeliveryMs);
+      }
+      assert.deepEqual(presentation.firstMeaningfulOutput, {
+        kind: "mission-report", source: "renderer-visible-frame", messageId: report.id,
+        publicationEventId: presentation.reportPublication.eventId,
+        receivedAt: presentation.userDelivery.receivedAt, intakeToReceiptMs: presentation.intakeToUserDeliveryMs,
+      });
+      const { reportLatency, reportPublication, lastSettlement } = presentation;
+      const { compositionStartedMs, composedMs, stagedMs, clock } = reportPublication.timing;
+      assert.equal(lastSettlement.clock, clock);
+      assert.ok(lastSettlement.monotonicMs <= compositionStartedMs && compositionStartedMs <= composedMs && composedMs <= stagedMs);
+      assert.deepEqual(reportLatency, {
+        publicationEventId: reportPublication.eventId,
+        settlementEventSeq: lastSettlement.eventSeq,
+        settlementToCompositionMs: compositionStartedMs - lastSettlement.monotonicMs,
+        compositionMs: composedMs - compositionStartedMs,
+        compositionToStagingMs: stagedMs - composedMs,
+        stagingToRendererReceiptMs: presentation.userDelivery.stagingToReceiptMs,
+      });
+      if (failedAttemptId) {
+        const retry = presentation.work.retries.find(item => item.taskId === "notes");
+        const join = presentation.attempts.find(attempt => attempt.taskId === "report");
+        assert.equal(retry?.previousAttemptId, failedAttemptId);
+        assert.equal(retry.previousOutcome, "failed");
+        assert.ok(retry.previousSettlement.eventSeq < retry.retryRequest.eventSeq &&
+          retry.retryRequest.eventSeq < retry.retryDispatch.eventSeq);
+        assert.ok(retry.settlementToRetryRequestMs >= 0 && retry.retryRequestToDispatchMs >= 0);
+        assert.ok(join?.predecessors.includes(retry.attemptId));
+        assert.ok(!join.predecessors.includes(failedAttemptId));
+        assert.ok(presentation.work.overlapMs > 0);
+        const failed = presentation.work.occupancyByOutcome.find(item => item.outcome === "failed");
+        assert.ok(failed?.clockSegments.some(segment => segment.attemptIds.includes(failedAttemptId)));
+        receipt.nativeRetry = { retry, failed, joinAttemptId: join.id, overlapMs: presentation.work.overlapMs };
+      }
+      const verifiedMission = await rpc("missions", { name: "read", input: { id: missionId } });
+      const canonicalLeases = new Map(verifiedMission.tasks.flatMap(task =>
+        task.attempts.map(attempt => [attempt.id, attempt.resourceLease])));
+      const leases = presentation.attempts.map(({ id, taskId, resourceLease }) => {
+        assert.ok(resourceLease?.leaseId && resourceLease.epoch, "native_mission_attempt_lease_missing");
+        assert.equal(resourceLease.leaseId, canonicalLeases.get(id)?.leaseId);
+        assert.equal(resourceLease.epoch, canonicalLeases.get(id)?.epoch);
+        assert.equal(Object.hasOwn(resourceLease, "gpuContextId"), false);
+        return { attemptId: id, taskId, leaseId: resourceLease.leaseId, epoch: resourceLease.epoch, kind: resourceLease.kind };
+      });
+      assert.equal(leases.length, canonicalLeases.size);
+      assert.equal(new Set(leases.map(lease => lease.leaseId)).size, leases.length);
+      assert.equal(presentation.resourcePolicy.leaseCoverage.withReceipt, leases.length);
+      assert.equal(presentation.resourcePolicy.leaseCoverage.withoutReceipt, 0);
+      receipt.executionPresentation = { missionId, messageId: report.id,
+        stagingToReceiptMs: presentation.userDelivery.stagingToReceiptMs,
+        intakeToReceiptMs: presentation.intakeToUserDeliveryMs,
+        reportEventId: reportPublication.eventId, reportLatency, firstMeaningfulOutput: presentation.firstMeaningfulOutput, leases };
+      await capture("01-native-mission-report");
+      receipt.providerActivity = { before: providerBefore, after: await rpc("providerActivity", {}) };
+      assert.equal(receipt.providerActivity.after.providerRequests, 0);
+      assert.equal(receipt.providerActivity.after.codexConnections, 0);
+      assert.deepEqual(receipt.errors, [], "mission_presentation_renderer_errors");
+      receipt.passed = true;
+      return;
+    }
     const unmatchedObjective = "Plan a mission to read physical memory after recording processor load";
     await fill(composer, unmatchedObjective);
     await click(SURFACE + ' button[aria-label="Send to Vela"]');

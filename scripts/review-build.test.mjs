@@ -80,6 +80,18 @@ test('actual native closure retains the Electron decision preload and fails if i
  const missing=new Set(tracked);missing.delete(preload);await assert.rejects(nodeClosure(root,missing,NATIVE_RUNTIME_ENTRIES),/untracked_or_missing_runtime_import/);
 });
 
+test('actual native closure retains the protected API setup preload and fails if it is missing', async () => {
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  const tracked = new Set(execFileSync('git', ['-C', root, 'ls-files', '-z'], {
+    encoding: 'utf8', windowsHide: true,
+  }).split('\0').filter(Boolean));
+  const preload = 'prototypes/visual-experience/cinematic-v3/native/vela-api-setup-preload.cjs';
+  const result = await nodeClosure(root, tracked, NATIVE_RUNTIME_ENTRIES);
+  assert(result.files.includes(preload));
+  tracked.delete(preload);
+  await assert.rejects(nodeClosure(root, tracked, NATIVE_RUNTIME_ENTRIES), /untracked_or_missing_runtime_import/);
+});
+
 test('the ordinary Responses runtime resolves its exact reviewed model controls offline', async () => {
   const root = fileURLToPath(new URL('../', import.meta.url));
   const tracked = new Set(execFileSync('git', ['-C', root, 'ls-files', '-z'], {

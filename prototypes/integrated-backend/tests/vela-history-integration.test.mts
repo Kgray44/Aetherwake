@@ -18,7 +18,7 @@ import type { VelaRequest } from "../../vela-core/src/contracts.ts";
 import { planningDigest } from "../../vela-core/src/codex-planning-adapter.mts";
 import { parseVelaFileEdit, upgradeVelaFileEdit } from "../src/vela-file-edit.mts";
 
-import { fixtureFileEditHost } from './fixture-file-edit-admission.mts';
+import { fixtureFileEditHost, fixtureFileEditScratchRoot } from './fixture-file-edit-admission.mts';
 
 // These protocol fixtures deliberately exercise the Codex owner; ordinary user
 // questions use the primary API unless the user selects this destination.
@@ -27,8 +27,7 @@ const explicitCodex = { mode: "codex" as const, providerId: "codex-app-server" a
 test("Check my logs, fix the code, and keep the original file until I approve", {
   skip: process.platform !== "win32",
 }, async () => {
-  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-  mkdirSync(runtime, { recursive: true });
+  const runtime = fixtureFileEditScratchRoot();
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const file = join(dir, "sample.json"), alias = join(dir, "linked.json");
   const f = fixture(false, "air-file-edit", false,[dir]);
@@ -130,9 +129,7 @@ test("AIR batch parser permits an exact selected subset and rejects duplicates o
 test("Edit this file, create the other one, and run the tests", {
   skip: process.platform !== "win32",
 }, async () => {
-  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-
-  mkdirSync(runtime, { recursive: true });
+  const runtime = fixtureFileEditScratchRoot();
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const original = join(dir, "sample.json"), created = join(dir, "created.json");
   const f = fixture(false, "air-file-edit", false,[dir]);
@@ -260,9 +257,7 @@ console.log(JSON.stringify({ samples: times.length, medianMs: times[5], p95Ms: t
 test("AIR file batch detects a stale later file and reports an actual partial write across restart", {
   skip: process.platform !== "win32",
 }, async () => {
-  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-
-  mkdirSync(runtime, { recursive: true });
+  const runtime = fixtureFileEditScratchRoot();
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const names = ["sample.json", "second.json", "third.json"], paths = names.map(name => join(dir, name));
   const f = fixture(false, "air-file-edit", false,[dir]);
@@ -333,9 +328,7 @@ test("AIR file batch detects a stale later file and reports an actual partial wr
 test("Run the tests and build a file I can review before saving", {
   skip: process.platform !== "win32",
 }, async () => {
-  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-
-  mkdirSync(runtime, { recursive: true });
+  const runtime = fixtureFileEditScratchRoot();
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const path = join(dir, "standalone.test.mjs");
   const build = join(dir, "sample.build.mjs"), artifact = join(dir, "generated.json");
@@ -493,9 +486,7 @@ test("AIR sends authorized inspection through native Codex protocol with discove
 });
 
 test("Inspect the repository I picked and ask again if its revision changed", { skip: process.platform !== "win32" }, async () => {
-  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-
-  mkdirSync(runtime, { recursive: true });
+  const runtime = fixtureFileEditScratchRoot();
   const root = realpathSync.native(mkdtempSync(join(runtime, "vela-air-inspection-")));
   const git = (...args: string[]) => execFileSync("git.exe", ["-C", root, "-c", "core.hooksPath=NUL", ...args],
     { windowsHide: true, timeout: 6000, stdio: "pipe" });
@@ -1637,5 +1628,71 @@ test("actual Core accepts legacy Vela state1/2 and writes3 with default history 
     );
   } finally {
     await h.close();
+  }
+});
+
+test("semantic shadow reaches the canonical history owner and leaves the transcript unchanged", async () => {
+  const f = fixture();
+  try {
+    const seeded = await f.ask("Settle the refinery interlock using a cobalt latch.");
+    await f.ask("Choose a moss color for the board game tokens.");
+    const { VelaService } = await import("../../vela-core/src/service.mts");
+    const vela = (f.core as unknown as { vela: InstanceType<typeof VelaService> }).vela;
+    const before = (await f.state()).conversation?.messages;
+    const result = await vela.investigateHistory("How did we secure the valve?", async (call, sources, _signal, revalidate) => {
+      assert.equal(revalidate(), true);
+      if (call.stage === "interpret") return { version: 1, objective: "Locate the interlock decision", clarification: "",
+        needs: [{ key: "mechanism", question: "How was the valve secured?", query: "refinery interlock" }] };
+      assert.equal(sources.length, 1);
+      assert.equal(sources[0].sourceId, seeded.request.id);
+      assert.match(call.excerpts[0].text, /cobalt latch/);
+      assert.doesNotMatch(call.excerpts[0].text, /moss color/);
+      return { version: 1, assessment: [{ key: "mechanism", status: "supported", sources: ["e1"], query: "" }] };
+    });
+    assert.equal(result.state, "assessed");
+    assert.equal(result.coverage[0].sources[0].sourceId, seeded.request.id);
+    assert.deepEqual((await f.state()).conversation?.messages, before);
+  } finally {
+    await f.close();
+  }
+});
+
+test("semantic CIE binds explicitly selected notes and invalidates a corrected source", async () => {
+  const f = fixture();
+  try {
+    const create = async (title: string, content: string) => {
+      const state = await f.core.command("desktop", { type: "createResource", kind: "note", title, workspaceId: null });
+      const note = state.resources.find(item => item.title === title)!;
+      const saved = await f.core.command("desktop", { type: "content", resourceId: note.id, expectedVersion: note.version, content });
+      return saved.resources.find(item => item.id === note.id)!;
+    };
+    const selected = await create("Approved schedule", "The inspection is on Thursday.");
+    await create("Unselected draft", "The inspection is on Friday.");
+    const { VelaService } = await import("../../vela-core/src/service.mts");
+    const vela = (f.core as unknown as { vela: InstanceType<typeof VelaService> }).vela;
+    const run = (expected: string, correct: boolean) => vela.investigateHistory(
+      "When do we give the equipment its once-over?", async (call, sources, _signal, revalidate) => {
+        if (call.stage === "interpret") {
+          assert.deepEqual(sources, []);
+          return { version: 1, objective: "Find the schedule", clarification: "",
+            needs: [{ key: "date", question: "When is the inspection?", query: "inspection date" }] };
+        }
+        assert.deepEqual(sources.map(source => [source.sourceKind, source.sourceId]), [["note", selected.id]]);
+        assert.match(call.excerpts[0].text, new RegExp(expected));
+        assert.doesNotMatch(JSON.stringify(call), /Friday/);
+        assert.equal(revalidate(), true);
+        if (correct) {
+          await f.core.command("desktop", { type: "content", resourceId: selected.id, expectedVersion: selected.version,
+            content: "The inspection is on Monday." });
+          assert.equal(revalidate(), false);
+        }
+        return { version: 1, assessment: [{ key: "date", status: "supported", sources: ["e1"], query: "" }] };
+      }, undefined, [selected.id]);
+    assert.equal((await run("Thursday", true)).state, "stale");
+    const current = await run("Monday", false);
+    assert.equal(current.state, "assessed");
+    assert.notEqual(current.coverage[0].sources[0].revision, String(selected.version));
+  } finally {
+    await f.close();
   }
 });

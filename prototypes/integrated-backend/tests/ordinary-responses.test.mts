@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { fixtureFileEditHost } from './fixture-file-edit-admission.mts';
+import { fixtureFileEditHost, fixtureFileEditScratchRoot } from './fixture-file-edit-admission.mts';
 import { tmpdir } from 'node:os';
 import { join,resolve,relative,isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -83,6 +83,10 @@ test('a reviewed planning request compiles one graph and runs native dependencie
     ]));
     const proposed = await f.core.command('missionPlanReviewed', input) as MissionPreview;
     assert.equal(proposed.proposalId, input.requestId);
+    const planningTiming = proposed.plan.planning?.timing;
+    assert.ok(planningTiming && planningTiming.responseCreatedMs !== null && planningTiming.firstTextDeltaMs !== null);
+    assert.ok(planningTiming.responseCreatedMs <= planningTiming.firstTextDeltaMs &&
+      planningTiming.firstTextDeltaMs <= planningTiming.providerResultMs);
     assert.deepEqual(proposed.plan.tasks.map(task => [task.id, task.dependencies]), [
       ['cpu', []], ['ram', ['cpu']], ['temporary-specialist-1', []], ['report', ['cpu', 'ram', 'temporary-specialist-1']],
     ]);
@@ -125,7 +129,11 @@ test('a reviewed planning request compiles one graph and runs native dependencie
     assert.ok(mission.events.find(event => event.kind === 'settled' && event.taskId === 'cpu')!.seq <
       mission.events.find(event => event.kind === 'started' && event.taskId === 'ram')!.seq);
     assert.equal(mission.profile.providerCalls, 2);
-    assert.equal(mission.profile.reportedTotalTokens, 142);
+    assert.equal(mission.profile.reportedTotalTokens, null);
+    assert.equal(mission.profile.verifiedObjectivesPerReportedToken, null);
+    const profile = await f.core.command('missions', { name: 'execution-profile', input: { id } });
+    assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+    assert.equal(profile.economics.simulatedTotalTokens, 142);
     assert.equal(f.requests.length, 2);
     assert.deepEqual(f.requests[1].input, [{ role: 'user', content: objective }]);
     assert(f.requests[1].instructions.includes(role.responsibility));
@@ -175,8 +183,11 @@ test('reviewed mission runs two isolated stateless specialists concurrently and 
     assert.ok(f.requests.every(req => !req.tools && req.store === false && req.reasoning?.effort === 'low'));
     release();
     const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
+    // Dispatch and post-release verification have separate bounded waits.
+    // A slow dispatch must not spend the native follow-up/report settlement budget.
+    const settledUntil = performance.now() + 5000;
     let completed = await read();
-    while (['queued', 'running'].includes(completed.outcome) && performance.now() < until) {
+    while (['queued', 'running'].includes(completed.outcome) && performance.now() < settledUntil) {
       await wait(25); completed = await read();
     }
     assert.equal(completed.outcome, 'verified', JSON.stringify(completed.tasks.map(t => [t.id, t.state, t.detail])));
@@ -624,6 +635,9 @@ test('Check my CPU, explain the number, then look through my repository logs', a
       const timing = stage?.payload.timing;
       assert(timing && [timing.routingMs, timing.capabilityMs, timing.contextMs, timing.previewMs].every(ms => Number.isFinite(ms) && ms >= 0));
       assert(timing.previewMs >= timing.routingMs + timing.capabilityMs + timing.contextMs);
+      const providerTiming = f.events.find(event =>
+        event.type === 'execution/provider_completed' && event.providerId === providerId)?.payload.providerTiming;
+      assert.equal(providerTiming?.parentRequestId, first.id);
       assert.equal(outcome.conversationId, first.conversationId);
       assert.equal(outcome.handoff?.taskId, approveCodex ? first.id : undefined);
       assert(f.events.some(event => event.type === 'vela.routing.native_stage_observed' && event.payload.taskId === first.id));
@@ -657,8 +671,7 @@ test('Read this log, tell me what happened, then fix the code and benchmark it',
 test('Read the log, explain the slowdown, fix the count, and run the tests after I approve once', {
   skip: process.platform !== 'win32',
 }, async () => {
-  const runtime = fileURLToPath(new URL('../.runtime/', import.meta.url));
-  mkdirSync(runtime, { recursive: true });
+  const runtime = fixtureFileEditScratchRoot();
   const dir = mkdtempSync(join(runtime, 'vela-file-edit-'));
   const file = join(dir, 'sample.json');
   const testFile = join(dir, 'sample.test.mjs');
@@ -910,6 +923,11 @@ test('a Vela response sends shared identity once and scoped current application 
     assert.equal(body.instructions.split(VELA_IDENTITY_VERSION).length - 1, 1);
     assert(body.instructions.startsWith(VELA_IDENTITY_PROMPT));
     assert.doesNotMatch(JSON.stringify(body.input), /aerynth\.vela-identity@1|PRIVATE_UNSELECTED_NOTE_BODY/);
+    const timing = f.events.find(event => event.type === 'execution/provider_completed')?.payload.providerTiming;
+    assert.ok(timing?.fromPreview && timing.firstNonblankOutput);
+    assert.equal(timing.fromPreview.id, preview.id);
+    assert.equal(timing.fromPreview.toFirstNonblankOutputMs,
+      timing.fromPreview.toAdapterMs + timing.firstNonblankOutput.elapsedMs);
     assert.equal(f.codexCalls, 0);
   } finally { await f.close(); }
 });
@@ -1770,8 +1788,24 @@ test('ordinary Responses uses canonical identity, exact grant and stateless loca
   const first=await prepare(f,c.resourceId,'Synthetic first question');assert(first.preview.responses);assert.deepEqual(first.preview.responses.messages.filter(m=>m.role!=='developer'),[{role:'user',content:'Synthetic first question'}]);
   await assert.rejects(f.core.command('conversationSend',{previewId:first.preview.id,fingerprint:first.preview.fingerprint,commandId:first.input.commandId,grantId:'missing'}),/native_send_grant_required/);assert.equal(f.requests.length,0);
   f.responses.push(()=>{const reply=complete('resp-synthetic-first','Synthetic first answer');reply.headers.delete('content-type');return reply;});const firstGrant=await grant(f,first.preview),e1=await f.core.command('conversationSend',firstGrant);assert.equal(e1.state,'provider_completed');assert.equal(e1.binding,null);assert.equal(e1.turnId,null);assert.equal(e1.responseId,'resp-synthetic-first');assert.equal(e1.httpDiagnostic?.contentType,'missing');assert.equal(e1.usage?.source,'provider-reported');assert.equal(e1.taskVerified,false);await assert.rejects(f.core.command('conversationSend',firstGrant),/native_send_grant_consumed/);
+  const readTiming=async()=> (await f.core.command('replay',{limit:1000})).events
+    .find(event=>event.executionId===e1.id&&event.type==='execution/provider_completed')?.payload.providerTiming;
+  const timing=await readTiming();
+  assert.ok(timing&&timing.firstTextDeltaMs!==null&&timing.responseCreatedMs!==null&&
+    timing.resultObservedMs!==null&&timing.outputStagedMs!==null);
+  assert.equal(timing.source,'simulated');
+  assert.equal(timing.parentRequestId,null);
+  assert.ok(timing.transport?.firstSseBytesMs != null && timing.transport.headersMs != null &&
+    timing.transport.headersMs <= timing.transport.firstSseBytesMs);
+  assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.resultObservedMs&&
+    timing.resultObservedMs<=timing.outputStagedMs&&timing.outputStagedMs<=timing.settlementStagedMs);
+  assert.ok(timing.firstNonblankOutput?.kind === 'text' &&
+    timing.firstTextDeltaMs <= timing.firstNonblankOutput.elapsedMs &&
+    timing.firstNonblankOutput.elapsedMs <= timing.resultObservedMs);
+  assert.doesNotMatch(JSON.stringify(timing),/Synthetic first (?:question|answer)/u);
   f.responses.push(()=>complete('resp-synthetic-second','Synthetic follow-up answer'));const second=await prepare(f,c.resourceId,'Synthetic follow-up');assert.deepEqual(second.preview.responses!.messages.filter(m=>m.role!=='developer').map(m=>[m.role,m.content]),[['user','Synthetic first question'],['assistant','Synthetic first answer'],['user','Synthetic follow-up']]);await f.core.command('conversationSend',await grant(f,second.preview));
   const before=await f.core.command('snapshot',{}),beforeIds=before.graph.messages.map(m=>m.id);assert.equal(before.bindings[c.resourceId],undefined);assert.equal(before.graph.messages.length,4);await f.reopen();
+  assert.deepEqual(await readTiming(),timing);
   const third=await prepare(f,c.resourceId,'Synthetic after restart');assert.equal(third.preview.responses!.messages.length,6);f.responses.push(()=>complete('resp-synthetic-third','Synthetic restored answer'));await f.core.command('conversationSend',await grant(f,third.preview));
   const after=await f.core.command('snapshot',{});assert.deepEqual(after.graph.messages.slice(0,4).map(m=>m.id),beforeIds);assert.equal(after.graph.conversations.length,1);assert.equal(after.graph.conversations[0].kind,'ordinary');assert.equal(after.graph.messages.length,6);assert.equal(Object.values(after.executions).length,3);assert.equal(f.codexCalls,0);
   const delta=f.events.find(e=>e.payload.delta);assert.equal(delta?.providerId,providerId);assert.equal(delta?.threadId,null);assert.equal(delta?.turnId,null);assert(f.events.some(e=>e.payload.usage?.source==='provider-reported'));assert(!JSON.stringify(after).includes('SYNTHETIC_PLAN_TOKEN'));

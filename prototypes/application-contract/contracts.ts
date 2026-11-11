@@ -87,6 +87,24 @@ export type ConversationExecutionState =
   | "failed"
   | "interrupted"
   | "unknown";
+/** Offsets within the reviewed API execution, through canonical message staging. */
+export type ConversationOutputTiming = {
+  source: "observed" | "simulated";
+  parentRequestId: string;
+  messageId: string;
+  compositionStartedMs: number;
+  readyMs: number;
+  stagedMs: number;
+  /** Elapsed from the reviewed backend request entry to canonical answer staging. */
+  requestToStagingMs?: number;
+  /** Elapsed from the originating backend request preview. */
+  fromPreview?: { id: string; toStagingMs: number };
+  presentation?: RendererOutputPresentation & { previewToReceiptMs?: number | null; requestToReceiptMs?: number | null };
+};
+export type RendererOutputPresentation = { source: "renderer-visible-frame"; receivedAt: string; stagingToReceiptMs: number | null };
+export type VelaOutputObservation =
+  | { executionId: string; requestId: string; messageId: string }
+  | { missionId: string; messageId: string };
 export type PublicConversationExecution = {
   id: string;
   resourceId: string;
@@ -99,6 +117,7 @@ export type PublicConversationExecution = {
   recoveryAvailable?: true;
   errorCode?: string;
   httpDiagnostic?: Readonly<import("../openai-provider/contracts.mts").TurnHttpDiagnostic>;
+  outputTiming?: ConversationOutputTiming;
 };
 /** Read-only, scoped to at most 64 requested conversations per call. Live text
  * is the existing ephemeral provider buffer, never a second transcript store. */

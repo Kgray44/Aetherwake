@@ -1,8 +1,9 @@
-import { MISSION_LIMITS } from "../../../integrated-backend/src/mission-contracts.mts";
+import { MISSION_CONTRACT, MISSION_LIMITS } from "../../../integrated-backend/src/mission-contracts.mts";
 import type {
   MissionAdmission,
   MissionAdmissionReason,
   MissionControl,
+  MissionPlanningEvidenceSelection,
   MissionPlanningOffer,
   MissionPreview,
   MissionProjection,
@@ -17,6 +18,7 @@ import type {
   MissionWorkroomPreview,
 } from "../../../integrated-backend/src/mission-contracts.mts";
 import type { MissionTeam, MissionTeamSave } from "../../../integrated-backend/src/mission-teams.mts";
+import type { VelaMissionCheckpointRef } from "../../../vela-core/src/adaptive-routing.ts";
 
 const stateLabel: Record<MissionProjection["outcome"], string> = {
   queued: "Queued",
@@ -43,16 +45,26 @@ const eventLabel = {
   settled: "Attempt settled",
   recovered: "Recovered from journal",
   workroom: "Workroom created",
+  "objective-assessed": "Objective assessed",
 } as const;
 export { eventLabel as missionEventLabel, stateLabel as missionStateLabel };
 
 const admissionReasonLabel: Record<MissionAdmissionReason, string> = {
   "physical-memory": "Low available memory",
+  "os-memory-pressure": "Windows reports low memory",
+  "windows-commit-pressure": "Low Windows commit headroom",
   "storage-reserve": "Storage reserve",
   "cpu-load": "High CPU load",
   "gpu-load": "High GPU load",
+  "gpu-load-unavailable": "Waiting for a GPU load reading after contention",
+  "gpu-thermal-throttling": "GPU driver reports thermal slowdown",
   "disk-io": "High disk I/O load",
   "active-input": "Recent Aerynth activity",
+  "external-desktop-activity": "Recent desktop activity during contention",
+  "renderer-latency": "Slow renderer frames",
+  "battery-power": "Battery power",
+  suspended: "System suspended",
+  "cpu-speed-limit": "OS CPU speed limit",
 };
 const admissionNumber = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 export const missionAdmissionRefreshMs = 2000;
@@ -69,25 +81,33 @@ export function missionAdmissionDetails(
     disclosure.dataset.missionDisclosure = focusKey;
     summary.dataset.missionFocus = focusKey;
   }
+  const effective = admission.effectiveLimits;
+  const headline = effective
+    ? [phase === "current" ? "Resource admission" : "Resource admission at start", `CPU ${effective.cpu}`, `Remote ${effective.remote}`]
+    : [phase === "current" ? "Scheduler limit" : "Scheduler limit at admission",
+      `${admission.workerLimit} ${admission.workerLimit === 1 ? "worker" : "workers"}`];
   summary.textContent = [
-    phase === "current" ? "Scheduler limit" : "Scheduler limit at admission",
-    `${admission.workerLimit} ${admission.workerLimit === 1 ? "worker" : "workers"}`,
+    ...headline,
     ...admission.reasons.map(reason => admissionReasonLabel[reason]),
   ].join(" · ");
   const description = doc.createElement("small");
-  description.textContent = "The limit applies to new starts across missions.";
+  description.textContent = effective
+    ? `Build limit ${effective.build} · Host I/O limit ${effective.host_io} · GPU limit ${effective.gpu}`
+    : "The limit applies to new starts across missions.";
   disclosure.append(summary, description);
   const readings = [
     ["cpuPercent", "CPU usage", "%"],
     ["availableMemoryBytes", "Available physical memory", " MiB"],
+    ["windowsCommitHeadroomBytes", "Windows commit headroom", " MiB"],
     ["gpuEnginePercent", "Busiest GPU engine", "%"],
     ["diskQueueLength", "Disk queue length", ""],
+    ["rendererFrameP95Ms", "Renderer frame interval p95", " ms"],
   ] as const;
   for (const [key, label, unit] of readings) {
     const row = doc.createElement("small"), reading = admission.readings[key];
     row.dataset.admissionMetric = key;
     if (reading) {
-      const value = key === "availableMemoryBytes" ? reading.value / (1024 * 1024) : reading.value;
+      const value = unit === " MiB" ? reading.value / (1024 * 1024) : reading.value;
       const time = doc.createElement("time");
       time.dateTime = reading.observedAt;
       time.textContent = reading.observedAt;
@@ -121,6 +141,8 @@ const unattempted = (task: RevisionTask) => task.state === "queued" && !task.att
 const canRevise = (mission: MissionProjection, scope: MissionScope | null) => sameScope(mission.scope, scope) &&
   mission.disposition === "paused" && !mission.tasks.some((task) => task.state === "running" || task.state === "cancelling") &&
   mission.events.filter((event) => event.kind === "revised").length < MISSION_LIMITS.revisions;
+const canAssessObjective = (mission: MissionProjection, scope: MissionScope | null) => sameScope(mission.scope, scope) &&
+  mission.outcome === "blocked" && !!mission.coverage && mission.tasks.every(task => task.state === "verified");
 
 export function missionTaskControls(
   mission: MissionProjection,
@@ -149,6 +171,7 @@ export function createVelaMissionView(
   doc: Document,
   command: (request: MissionRequest) => Promise<MissionResponse>,
   openWorkspace?: (id: string) => Promise<void>,
+  askCheckpoint?: (question: string, selection: VelaMissionCheckpointRef) => Promise<void>,
 ) {
   function el<K extends keyof HTMLElementTagNameMap>(
     tag: K,
@@ -186,7 +209,10 @@ export function createVelaMissionView(
     onStarted: (missionId: string) => void;
   } | null = null;
   let workroomReview: MissionWorkroomPreview | null = null;
-  let revisionReview: { preview: MissionRevisionPreview; change: MissionRevisionChange } | null = null;
+  let revisionReview: { preview: MissionRevisionPreview; change: MissionRevisionChange; reason?: string } | null = null;
+  let executiveAdvisory: string | null = null;
+  let checkpointAnswerPending = false;
+  let checkpointAnswered: string | null = null;
   const revisionDrafts = new Map<string, MissionRevisionChange>();
   let revisionProfilesRequested = false;
   let commandPending = false;
@@ -230,6 +256,16 @@ export function createVelaMissionView(
         "The specialist connection or reviewed scope changed. Submit the objective again.",
       mission_review_declined:
         "The review was cancelled. Your draft is still here.",
+      mission_executive_review_changed:
+        "The mission checkpoint changed. Review the latest task results.",
+      mission_executive_already_attempted:
+        "Vela already attempted a review for this checkpoint.",
+      mission_executive_unavailable:
+        "Vela could not review this checkpoint. Check the dedicated API connection and the mission’s current state.",
+      vela_mission_checkpoint_changed: "The checkpoint changed. Ask about the current checkpoint.",
+      vela_mission_checkpoint_too_large: "This checkpoint is too large for a reviewed question.",
+      vela_mission_checkpoint_unavailable: "Vela could not answer from this checkpoint. Check the dedicated API connection.",
+      authorization_cancelled: "The review was cancelled.",
       mission_project_check_unavailable:
         "The installed Codex read-only sandbox is unavailable.",
       mission_planner_unavailable:
@@ -240,6 +276,14 @@ export function createVelaMissionView(
         "The planner returned an invalid specialist assignment. Review the objective and request a new plan.",
       mission_planning_already_attempted:
         "This planning request was already admitted. Submit the objective again for a fresh review.",
+      mission_planning_context_changed:
+        "A reviewed note changed. Request a new plan before starting the mission.",
+      mission_planning_context_unavailable:
+        "Vela could not assess the selected sources. No mission was started.",
+      mission_planning_context_invalid:
+        "Vela could not verify the model’s assessment against the reviewed sources. No mission was started.",
+      mission_planning_context_timeout:
+        "The evidence review ran out of time before a plan could be prepared.",
       mission_team_not_found: "This team is no longer available. Refresh the team library.",
       mission_team_scope_denied: "Team templates are unavailable in this workspace.",
       mission_team_version_conflict: "This team changed. Reload its saved version before continuing.",
@@ -561,12 +605,13 @@ export function createVelaMissionView(
     value: MissionResponse,
     expected: MissionScope | null,
   ): value is MissionProjection {
-    return !!value && "contract" in value && (sameScope(value.scope, expected) ||
+    return !!value && "contract" in value && value.contract === MISSION_CONTRACT && (sameScope(value.scope, expected) ||
       value.workroom?.workspaceId === expected?.workspaceId && value.scope.projectId === expected?.projectId);
   }
   function clearRevision() {
     revisionDrafts.clear();
     revisionReview = null;
+    executiveAdvisory = null;
     revisionProfilesRequested = false;
   }
   function requestRevisionProfiles() {
@@ -575,8 +620,9 @@ export function createVelaMissionView(
     void loadTeams(true);
   }
   function setMission(next: MissionProjection | null) {
+    if (!next || mission?.id !== next.id || mission.revision !== next.revision) checkpointAnswered = null;
     if (!next || mission?.id !== next.id || mission.revision !== next.revision || !canRevise(next, scope) ||
-      (revisionReview && JSON.stringify(mission.tasks) !== JSON.stringify(next.tasks))) clearRevision();
+      ((revisionReview || executiveAdvisory) && JSON.stringify(mission.tasks) !== JSON.stringify(next.tasks))) clearRevision();
     mission = next;
     syncAdmissionRefresh();
   }
@@ -749,7 +795,7 @@ export function createVelaMissionView(
     if (!review) return null;
     const { preview, requestId, agentProfileId } = review;
     if ("kind" in preview) return renderPlanningOffer(preview);
-    const { plan, executors, externalReview, localReview } = preview;
+    const { plan, executors, externalReview, localReview, objectiveReview } = preview;
     const section = el("section", "vela-core-plan vela-mission-preview");
     const heading = el("h3", undefined, "Review mission");
     if (plan.team) {
@@ -757,7 +803,9 @@ export function createVelaMissionView(
       heading.dataset.missionFocus = "team-review-heading";
     }
     section.append(heading, el("p", undefined, plan.objective));
-    if(plan.coverage)section.append(el("p","vela-core-meta","Partial investigation: "+plan.coverage.limitations.join(' ')+' The original objective will remain blocked until the missing evidence is available.'));
+    if (objectiveReview) section.append(el("p", "vela-core-meta",
+      "On Start, confirm whether these results cover your full objective. Each result must pass verification."));
+    else if(plan.coverage)section.append(el("p","vela-core-meta","Partial investigation: "+plan.coverage.limitations.join(' ')+' The original objective will remain blocked until the missing evidence is available.'));
     if (plan.team) section.append(teamLabel(plan.team));
     if (localReview) section.append(el("p", "vela-core-meta",
       "Start opens a native picker for up to four tracked Node tests. You will review the exact checkout and command before it runs."));
@@ -881,19 +929,25 @@ export function createVelaMissionView(
     const section = el("section", "vela-core-plan vela-mission-preview");
     section.append(el("h3", undefined, "Plan a mission"), el("p", undefined, offer.objective),
       el("p", "vela-core-meta", offer.planner
-        ? `One planning request to ${offer.planner.model}${offer.planner.provider==='openai-api-vela'?' through Vela’s dedicated API':''}. You’ll review the resulting tasks separately.`
+        ? `${offer.notes || offer.files || offer.projectEvidence ? 'Investigate the reviewed sources and request a plan' : 'Request a plan'} using ${offer.planner.model}${offer.planner.provider==='openai-api-vela'?' through Vela’s dedicated API':''}. You’ll review the resulting tasks separately.`
         : "A planning model is unavailable for this workspace. Check Connections and request limits."));
     const controls = actions();
     const plan = button("Review planning request", "plan-mission", () => { void preparePlan(offer); });
     plan.classList.add("vela-core-primary");
     plan.disabled = commandPending || !offer.planner;
-    controls.append(plan, button("Dismiss preview", "dismiss-preview", () => {
+    controls.append(plan);
+    if (offer.planner?.projectCheck) {
+      const choose = button("Choose tracked tests first", "plan-mission-with-tests", () => { void preparePlan(offer, true); });
+      choose.disabled = commandPending;
+      controls.append(choose);
+    }
+    controls.append(button("Dismiss preview", "dismiss-preview", () => {
       if (!commandPending) { review = null; render(); }
     }));
     section.append(controls);
     return section;
   }
-  async function preparePlan(offer: MissionPlanningOffer) {
+  async function preparePlan(offer: MissionPlanningOffer, chooseProjectTests?: true) {
     const pending = review;
     if (commandPending || !visible || pending?.preview !== offer || !offer.planner) return;
     const generation = epoch;
@@ -902,7 +956,11 @@ export function createVelaMissionView(
     body.setAttribute("aria-busy", "true");
     try {
       const result = await command({ name: "plan",
-        input: { objective: offer.objective, fingerprint: offer.fingerprint, requestId: pending.requestId } });
+        input: { objective: offer.objective, fingerprint: offer.fingerprint, requestId: pending.requestId,
+          ...(chooseProjectTests ? { chooseProjectTests } : {}),
+          ...(offer.notes ? { noteIds: offer.notes.map(note => note.id) } : {}),
+          ...(offer.files ? { fileIds: offer.files.map(file => file.id) } : {}),
+          ...(offer.projectEvidence ? { projectEvidence: true } : {}) } });
       if (generation !== epoch || review !== pending) return;
       if (!result || !("plan" in result) || !sameScope(result.plan.scope, scope) || result.proposalId !== pending.requestId)
         throw new Error("mission_preview_changed");
@@ -968,6 +1026,28 @@ export function createVelaMissionView(
       body.querySelector<HTMLElement>('[data-mission-focus="revision-review-heading"]')?.focus();
     refresh();
   }
+  async function requestExecutiveReview(current: MissionProjection, triggerSeq: number) {
+    const assessing = canAssessObjective(current, scope);
+    if (commandPending || (assessing ? mission?.id !== current.id || mission.revision !== current.revision : !currentRevision(current))) return;
+    await scopedCommand({ name: "executive-review", input: { id: current.id, revision: current.revision, triggerSeq } }, value => {
+      if (!value || !("kind" in value) || value.kind !== "executive-result") throw Error("mission_executive_unavailable");
+      const { result } = value;
+      if (assessing) {
+        if (result.state === "completion-assessed") refresh();
+        else if (result.state === "stale") throw Error("mission_executive_review_changed");
+        else throw Error("mission_executive_unavailable");
+        return;
+      }
+      if (!currentRevision(current) || JSON.stringify(current.tasks) !== JSON.stringify(mission?.tasks)) return;
+      if (result.state === "advisory") {
+        executiveAdvisory = result.reason;
+      } else if (result.state === "reviewable" && result.preview.missionId === current.id && result.preview.revision === current.revision) {
+        revisionReview = { preview: result.preview, change: result.change, reason: result.reason };
+      } else if (result.state === "rejected") {
+        executiveAdvisory = "Vela’s suggestion could not be applied to this checkpoint.";
+      } else throw Error(result.state === "stale" ? "mission_executive_review_changed" : "mission_executive_unavailable");
+    });
+  }
   async function applyRevision(current: MissionProjection, reviewed: NonNullable<typeof revisionReview>) {
     if (!currentRevision(current) || revisionReview !== reviewed || commandPending) return;
     const readGeneration = readEpoch;
@@ -991,6 +1071,7 @@ export function createVelaMissionView(
     heading.tabIndex = -1;
     heading.dataset.missionFocus = "revision-review-heading";
     section.append(heading, el("p", undefined, reviewed.preview.summary));
+    if (reviewed.reason) section.append(el("p", "vela-core-meta", reviewed.reason));
     const external = reviewed.preview.externalReview;
     if (external) section.append(el("p", "vela-core-meta",
       `${external.provider} · ${external.model}${external.effort ? ` · ${external.effort}` : ""} · Native review required before reassignment`));
@@ -1146,7 +1227,72 @@ export function createVelaMissionView(
     if (current.conversationPending) section.append(el("p", "vela-core-meta", "The verified handoff is waiting to reach the mission conversation."));
     const revision = renderRevisionReview(current);
     if (revision) section.append(revision);
+    const checkpoint = current.events.findLast(event => event.kind === "settled" || event.kind === "recovered");
+    const canAskCheckpoint = !!askCheckpoint && !!checkpoint && sameScope(current.scope, scope) && current.disposition !== "cancelled";
+    const askAboutCheckpoint = async (intent: string, gapIndex?: number) => {
+      if (!canAskCheckpoint || checkpointAnswerPending || mission?.id !== current.id || mission.revision !== current.revision) return;
+      const expectedEpoch = epoch;
+      checkpointAnswerPending = true;
+      try {
+        await askCheckpoint!(intent, { id: current.id, revision: current.revision, triggerSeq: checkpoint!.seq,
+          ...(gapIndex === undefined ? {} : { gapIndex }) });
+        if (epoch === expectedEpoch && mission?.id === current.id && mission.revision === current.revision)
+          checkpointAnswered = current.id;
+      } catch (cause) {
+        if (epoch === expectedEpoch && selectedId === current.id) showError(cause);
+      } finally {
+        checkpointAnswerPending = false;
+        if (visible) render();
+      }
+    };
+    if (canAskCheckpoint) {
+      const form = el("form"), label = el("label", undefined, "Question about this checkpoint"), question = el("input");
+      form.dataset.missionCheckpointQuestion = "";
+      question.required = true;
+      question.maxLength = 2000;
+      label.append(question);
+      const submit = el("button", undefined, "Ask Vela");
+      submit.type = "submit";
+      submit.disabled = checkpointAnswerPending;
+      form.append(label, submit);
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        const intent = question.value.trim();
+        if (!intent || checkpointAnswerPending) return;
+        submit.disabled = true;
+        void askAboutCheckpoint(intent);
+      });
+      section.append(form);
+    }
+    if (checkpoint && canRevise(current, scope) && current.tasks.some(task => ["failed", "blocked", "uncertain"].includes(task.state))) {
+      if (executiveAdvisory) section.append(el("p", "vela-core-meta", executiveAdvisory));
+      if (!revision && !executiveAdvisory) {
+        const ask = button("Ask Vela to review this checkpoint", "executive-review", () => { void requestExecutiveReview(current, checkpoint.seq); });
+        ask.disabled = commandPending;
+        section.append(ask);
+      }
+    }
     if(current.coverage)section.append(el("p","vela-core-meta","Investigation incomplete: "+current.coverage.limitations.join(' ')));
+    if (current.objectiveAssessment) {
+      section.append(el("h4", undefined, "Objective assessment"),
+        el("p", "vela-core-meta", `Reviewed by ${current.objectiveAssessment.model}`));
+      for (const [index, finding] of current.objectiveAssessment.findings.entries()) {
+        section.append(el("p", undefined, `${finding.status === "supported" ? "Supported by checked evidence" : "Still unverified"} — ${finding.statement}`));
+        if (finding.evidence.length) section.append(el("p", "vela-core-meta", finding.evidence.map(ref =>
+          current.tasks.find(task => task.id === ref.taskId)?.objective ?? ref.taskId).join(" · ")));
+        if (finding.status === "unverified" && canAskCheckpoint && current.scope.projectId) {
+          const investigate = button("Find project evidence for this gap", `mission-gap-${index}`, () => {
+            void askAboutCheckpoint("What evidence in this project can address the selected mission gap?", index);
+          });
+          investigate.disabled = commandPending || checkpointAnswerPending;
+          section.append(investigate);
+        }
+      }
+    } else if (checkpoint && canAssessObjective(current, scope)) {
+      const assess = button("Review objective against results", "assess-objective", () => { void requestExecutiveReview(current, checkpoint.seq); });
+      assess.disabled = commandPending;
+      section.append(assess);
+    }
     if (sameScope(current.scope, scope) && (current.outcome === "verified" || current.outcome==='blocked'&&current.coverage&&current.tasks.every(task=>task.state==='verified'))) {
       const post = button("Post evidence link to Vela chat", "post-report", () => { postReport(current.id); });
       post.disabled = commandPending || postedReport === current.id;
@@ -1462,8 +1608,9 @@ export function createVelaMissionView(
         );
       next.push(list);
     }
-    const announcement =
-      mission && !review
+    const announcement = mission && !review && checkpointAnswered === mission.id
+      ? "The answer is in Vela chat."
+      : mission && !review
         ? `Mission ${stateLabel[mission.outcome].toLowerCase()}${postedReport === mission.id ? " · Evidence link posted to Vela chat" : ""}`
         : "";
     if (status.textContent !== announcement) status.textContent = announcement;
@@ -1491,7 +1638,7 @@ export function createVelaMissionView(
 
   return {
     element,
-    async preview(objective: string, agentProfileId?: string) {
+    async preview(objective: string, agentProfileId?: string, evidence?: MissionPlanningEvidenceSelection) {
       if (!scope) return null;
       const expected = scope,
         activeEpoch = epoch;
@@ -1499,7 +1646,7 @@ export function createVelaMissionView(
       try {
         response = await command({
           name: "preview",
-          input: { objective, ...(agentProfileId ? { agentProfileId } : {}) },
+          input: { objective, ...(agentProfileId ? { agentProfileId } : {}), ...evidence },
         });
       } catch (cause) {
         if (cause instanceof Error && cause.message === "unsupported_command")

@@ -4,11 +4,16 @@ import { compileMissionContext, createMissionContextCache, validateMissionContex
   type MissionContextSource } from '../../vela-core/src/mission-context.mts';
 import { historyDigest } from '../../vela-core/src/bounded-history.mts';
 import { ServiceError } from './contracts.mts';
-import { missionMeasurementAnswer } from './mission-native.mts';
+import { summarizeMissionUsage } from './execution-profiler.mts';
+import { missionCompletion, missionMeasurementAnswer } from './mission-native.mts';
 import { buildMissionRevision } from './mission-revision.mts';
+import type { ResourceLease, ResourceLeaseRequest } from './resource-policy.mts';
+import { projectExecutiveCheckpoint } from './mission-executive.mts';
+import { reviewedMissionObjectiveVerified, reviewableMissionObjective } from './mission-objective-review.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
-  type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
-  type MissionAdmission, type MissionAttempt, type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
+  type MissionExecutionContext, type MissionExecutor, type MissionObjectiveAssessment, type MissionObjectiveReview, type MissionPlan, type MissionProjection,
+  type MissionAdmission, type MissionAttempt, type MissionAttemptPhaseTiming, type MissionReadyBlocker, type MissionReadyQueueEvidence,
+  type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
   type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomCard, type MissionWorkroomDashboard,
   type MissionWorkroomResource, type MissionAgentAttempt, type MissionAgentDashboard } from './mission-contracts.mts';
 
@@ -16,11 +21,18 @@ export interface MissionServiceHost {
   db: DatabaseSync;
   atomic<T>(work: () => T): T;
   authorized(scope: MissionScope): boolean;
+  planningContextCurrent?(mission: Pick<MissionPlan, 'scope' | 'planning'>): boolean;
   executors: Readonly<Record<string, MissionExecutor>>;
   laneLimit(lane: string): number;
   underPressure?(): boolean;
   admission?(demand: boolean): MissionAdmission;
+  resources?: {
+    canAcquire(lane: string, executorId: string): boolean;
+    prepare?(lane: string, executorId: string): void;
+    acquire(lane: string, identity: Omit<ResourceLeaseRequest, 'kind' | 'estimatedRamBytes'>, executorId: string): ResourceLease | undefined;
+  };
   contextSource?(mission: Mission, task: MissionTaskPlan): MissionContextSource | undefined;
+  profilerMode?: 'off' | 'minimal' | 'full';
   reassign?(mission: Mission, task: MissionTask, agentProfileId: string): MissionTaskPlan['specialist'];
   replan?(mission: Mission, task: MissionTask): { additions: MissionTaskPlan[]; dependents: Record<string, string[]>; reason: string } | undefined;
   /** Stage only newly appended events inside the journal transaction. */
@@ -35,6 +47,16 @@ const stamp = () => new Date().toISOString();
 const digest = (input: unknown) => createHash('sha256').update(JSON.stringify(input)).digest('hex');
 const makeTask = (plan: MissionTaskPlan): MissionTask => ({ ...plan, queuedAt: stamp(), state: 'queued', priority: 0, attempts: [] });
 const own = (table: object, key: string) => Object.hasOwn(table, key);
+function publicMissionTask(task: MissionTask): MissionTask {
+  if (task.executor !== 'codex.project-check') return task;
+  const { projectCheck: _localSelection, ...visible } = task;
+  return { ...visible, attempts: task.attempts.map(attempt => {
+    const evidence = attempt.evidence;
+    if (!evidence?.value || typeof evidence.value !== 'object') return attempt;
+    const { head: _checkout, inputDigest: _digest, ...value } = evidence.value as Record<string, unknown>;
+    return { ...attempt, evidence: { ...evidence, value } };
+  }) };
+}
 /** Shared scoped evidence summary. Evidence bodies and profile instructions stay with their owners. */
 function workroomEvidence(task: MissionTask, attempt?: MissionAttempt): Pick<MissionAgentAttempt,
   'evidenceId' | 'source' | 'observedAt' | 'verification' | 'passed' | 'findings' | 'citations'> {
@@ -63,6 +85,7 @@ const active = (m: Mission) => busy(m) || m.disposition !== 'cancelled' && m.tas
 const recordLimitBytes = 160 * 1024;
 const admissionLimitBytes = 1024;
 const priorityAgingMs = 30_000;
+type ReadyObservation = { planRevision: number; queuedAt: string; attemptCount: number; evidence: MissionReadyQueueEvidence };
 
 function readyTasks(mission: Mission): MissionTask[] {
   const tasks = new Map(mission.tasks.map(task => [task.id, task]));
@@ -153,6 +176,8 @@ export class MissionService {
   private lastAdmitted = new Map<string, number>();
   private turn = 0;
   private readonly host: MissionServiceHost;
+  private readonly profilerClock = randomUUID();
+  private readyObservations = new Map<string, ReadyObservation>();
 
   constructor(host: MissionServiceHost) {
     this.host = host;
@@ -191,14 +216,42 @@ export class MissionService {
     check(m.contract === MISSION_CONTRACT, 'unsupported_mission_contract');
     return m;
   }
-  private event(m: Mission, event: Omit<MissionEvent, 'seq' | 'time'>) {
+  private event(m: Mission, event: Omit<MissionEvent, 'seq' | 'time' | 'timing'>, intakeMonotonicMs?: number) {
     check(m.events.length < L.events, 'mission_journal_full');
-    const recorded = { ...event, seq: ++m.revision, time: stamp() };
+    const mode = this.host.profilerMode ?? 'full';
+    const capture = mode === 'full' || mode === 'minimal' &&
+      (event.kind === 'started' || event.kind === 'settled' && !!event.attemptId);
+    const recorded: MissionEvent = { ...event, seq: ++m.revision, time: stamp(),
+      ...(capture ? { timing: { domain: this.profilerClock, monotonicMs: performance.now(), planRevision: m.planRevision,
+        ...(intakeMonotonicMs !== undefined ? { intakeMonotonicMs } : {}) } } : {}) };
     m.events.push(recorded);
     return recorded;
   }
+  fullProfilingClock() {
+    return (this.host.profilerMode ?? 'full') === 'full' ? this.profilerClock : null;
+  }
+
+  private encode(m: Mission) {
+    let json = JSON.stringify(m);
+    if (Buffer.byteLength(json) > recordLimitBytes) {
+      let trimmed = false;
+      for (const task of [...m.tasks, ...(m.retiredTasks ?? [])]) {
+        for (const attempt of task.attempts) if (attempt.timing?.phases) {
+          delete attempt.timing.phases;
+          trimmed = true;
+        }
+      }
+      if (trimmed) json = JSON.stringify(m);
+    }
+    if (Buffer.byteLength(json) > recordLimitBytes && m.events.some(event => event.timing)) {
+      // Mission evidence takes priority at the existing storage limit.
+      m.events = m.events.map(({ timing: _timing, ...event }) => event);
+      json = JSON.stringify(m);
+    }
+    return json;
+  }
   private store(m: Mission, from: number) {
-    const json = JSON.stringify(m);
+    const json = this.encode(m);
     check(Buffer.byteLength(json) <= recordLimitBytes, 'mission_record_full');
     this.host.db.prepare('UPDATE vela_missions SET pending=?,active=?,json=? WHERE id=?')
       .run(Number(scheduled(m)), Number(active(m)), json, m.id);
@@ -237,12 +290,17 @@ export class MissionService {
       'mission_queue_full');
   }
 
-  create(requestId: string, plan: MissionPlan): MissionProjection {
+  create(requestId: string, plan: MissionPlan, intakeMonotonicMs?: number, objectiveReview?: MissionObjectiveReview): MissionProjection {
     this.requireOpen();
     check(identifier(requestId), 'invalid_mission_request');
     validateMissionPlan(plan, this.host.executors);
     check(this.host.authorized(plan.scope), 'mission_scope_denied');
-    const fingerprint = digest(plan);
+    check(this.host.planningContextCurrent?.(plan) !== false, 'mission_planning_context_changed');
+    if (objectiveReview) {
+      const expected = reviewableMissionObjective(plan, objectiveReview.planFingerprint);
+      check(expected && digest(expected) === digest(objectiveReview), 'mission_objective_review_changed');
+    }
+    const fingerprint = digest(objectiveReview ? { ...plan, objectiveReview } : plan);
     let created = false;
     const m = this.host.atomic(() => {
       const existing = this.host.db.prepare('SELECT request_digest,json FROM vela_missions WHERE request_id=?').get(requestId);
@@ -251,7 +309,7 @@ export class MissionService {
         this.requireAccess(value, plan.scope);
         const { originConversationId: _origin, ...legacyPlan } = plan;
         check(existing.request_digest === fingerprint ||
-          value.originConversationId === undefined && existing.request_digest === digest(legacyPlan), 'mission_request_conflict');
+          !objectiveReview && value.originConversationId === undefined && existing.request_digest === digest(legacyPlan), 'mission_request_conflict');
         return value;
       }
       this.capacity();
@@ -260,9 +318,10 @@ export class MissionService {
         criteria: [...plan.criteria], createdAt: stamp(), disposition: 'active', revision: 0, planRevision: 1, concurrency: 2,
         tasks: plan.tasks.map(makeTask), events: [], ...(plan.planning ? { planning: plan.planning } : {}),
         ...(plan.coverage?{coverage:structuredClone(plan.coverage)}:{}),
+        ...(objectiveReview ? { objectiveReview: structuredClone(objectiveReview) } : {}),
         ...(plan.team ? { team: plan.team } : {}),
         ...(plan.originConversationId ? { originConversationId: plan.originConversationId } : {}) };
-      this.event(value, { kind: 'created' });
+      this.event(value, { kind: 'created' }, intakeMonotonicMs);
       this.host.db.prepare('INSERT INTO vela_missions VALUES(?,?,?,?,1,1,?)')
         .run(value.id, requestId, fingerprint, digest(value.scope), JSON.stringify(value));
       this.host.stagePublication?.(value, 0);
@@ -274,10 +333,49 @@ export class MissionService {
     return this.project(m);
   }
 
-  read(id: string, scope: MissionScope) {
+  read(id: string, scope: MissionScope, options?: { includeReadyQueue: boolean }) {
     const m = this.lookup(id);
     this.requireAccess(m, scope);
-    return this.project(m);
+    return this.project(m, options?.includeReadyQueue);
+  }
+
+  readReport(id: string, scope: MissionScope) {
+    const mission = this.lookup(id);
+    this.requireAccess(mission, scope);
+    const checked = new Map<string, boolean>();
+    if (mission.disposition === 'cancelled' || !mission.tasks.length || this.host.planningContextCurrent?.(mission) === false ||
+      !mission.tasks.every(task => {
+        const attempt = task.attempts.at(-1);
+        return task.state === 'verified' && attempt?.verification?.passed &&
+          (!attempt.context || this.contextIsCurrent(mission, task, attempt, checked, true));
+      })) return null;
+    const assessment = mission.objectiveAssessment?.planRevision === mission.planRevision ? mission.objectiveAssessment : undefined;
+    return { ...missionCompletion(mission.objectiveReview ? this.project(mission) : mission), ...(assessment ? { assessment: {
+      model: assessment.model, planRevision: assessment.planRevision,
+      gaps: assessment.findings.filter(finding => finding.status === 'unverified').map(finding => finding.statement),
+    } } : {}) };
+  }
+
+  recordObjectiveAssessment(id: string, scope: MissionScope, revision: number, checkpointDigest: string, assessment: MissionObjectiveAssessment) {
+    this.requireOpen();
+    this.update(id, mission => {
+      this.requireAccess(mission, scope);
+      check(mission.revision === revision && mission.planRevision === assessment.planRevision &&
+        mission.objectiveAssessment?.planRevision !== assessment.planRevision,
+        'mission_executive_review_changed');
+      const checkpoint = projectExecutiveCheckpoint(this.project(mission), assessment.triggerSeq);
+      check(checkpoint?.packet.completion &&
+        createHash('sha256').update(JSON.stringify(checkpoint.packet)).digest('hex') === checkpointDigest,
+        'mission_executive_review_changed');
+      const evidence = new Map([...checkpoint.observations.values()].map(reference => [reference.taskId, reference]));
+      check(assessment.findings.every(finding => finding.evidence.every(ref => {
+        const current = evidence.get(ref.taskId);
+        return current?.evidenceId === ref.evidenceId && current.statement === finding.statement;
+      })),
+        'mission_executive_review_changed');
+      mission.objectiveAssessment = structuredClone(assessment);
+      this.event(mission, { kind: 'objective-assessed', detail: 'provider_reviewed_partial_coverage' });
+    });
   }
 
   /** Trusted outbox lookup. Publication ports enforce their own disclosure boundaries. */
@@ -440,7 +538,8 @@ export class MissionService {
           control.concurrency <= L.workers, 'invalid_mission_concurrency'); value.concurrency = control.concurrency; break;
         default: throw new ServiceError('invalid_mission_control');
       }
-      this.event(value, { kind: 'control', detail: control.type, ...(task ? { taskId: task.id } : {}) });
+      this.event(value, { kind: 'control', detail: control.type, ...(task ? { taskId: task.id } : {}),
+        ...(control.type === 'cancel' || control.type === 'cancel-branch' ? { cancellationRequestedAttemptIds: aborts } : {}) });
     });
     for (const attempt of aborts) this.abort(attempt, 'user');
     this.wake();
@@ -450,6 +549,7 @@ export class MissionService {
   private prepareRevision(mission: Mission, scope: MissionScope, revision: number, change: MissionRevisionChange) {
     this.requireAccess(mission, scope);
     check(mission.revision === revision, 'mission_revision_changed');
+    check(this.host.planningContextCurrent?.(mission) !== false, 'mission_planning_context_changed');
     check(sameScope(mission.scope, scope) && mission.disposition === 'paused' && !busy(mission) &&
       mission.events.filter(event => event.kind === 'revised').length < L.revisions, 'mission_revision_denied');
     const candidate = buildMissionRevision(mission, change, {
@@ -527,7 +627,7 @@ export class MissionService {
     if (!active(value)) this.capacity();
     const amended = { ...value, tasks, planRevision: value.planRevision + 1, events: [...value.events] };
     this.event(amended, { kind: 'revised', detail: reason, ...trigger });
-    check(Buffer.byteLength(JSON.stringify(amended)) <= recordLimitBytes, 'mission_record_full');
+    check(Buffer.byteLength(this.encode(amended)) <= recordLimitBytes, 'mission_record_full');
     Object.assign(value, amended);
   }
 
@@ -583,12 +683,14 @@ export class MissionService {
     clearTimeout(this.wakeTimer);
     this.wakeTimer = undefined;
   }
-  private contextIsCurrent(m: Mission, task: MissionTask, attempt: MissionAttempt, checked: Map<string, boolean>): boolean {
+  private contextIsCurrent(m: Mission, task: MissionTask, attempt: MissionAttempt, checked: Map<string, boolean>,
+    planningCurrent?: true): boolean {
     const cached = checked.get(attempt.id);
     if (cached !== undefined) return cached;
     checked.set(attempt.id, false);
     const { context } = attempt;
     try {
+      check(planningCurrent || this.host.planningContextCurrent?.(m) !== false, 'mission_planning_context_changed');
       check(context && context.binding.missionId === m.id && context.binding.taskId === task.id &&
         sameScope(context.binding.scope, m.scope), 'mission_context_changed');
       validateMissionContextSources(context, this.host.contextSource?.(m, task));
@@ -597,13 +699,13 @@ export class MissionService {
         const evidence = parent?.evidence;
         check(predecessor?.state === 'verified' && parent && evidence && parent.id === proof.attemptId && evidence.id === proof.evidenceId &&
           historyDigest({ source: evidence.source, observedAt: evidence.observedAt, value: evidence.value }) === proof.digest &&
-          this.contextIsCurrent(m, predecessor, parent, checked), 'mission_dependency_context_changed');
+          this.contextIsCurrent(m, predecessor, parent, checked, planningCurrent), 'mission_dependency_context_changed');
       }
       checked.set(attempt.id, true);
       return true;
     } catch { return false; }
   }
-  private project(m: Mission): MissionProjection {
+  private project(m: Mission, includeReadyQueue = false): MissionProjection {
     const checked = new Map<string, boolean>();
     const visibleTask = (task: MissionTask): MissionTask => {
       let staleLatest = false;
@@ -619,6 +721,10 @@ export class MissionService {
     };
     m = { ...m, tasks: m.tasks.map(visibleTask),
       ...(m.retiredTasks ? { retiredTasks: m.retiredTasks.map(visibleTask) } : {}) };
+    if (m.objectiveAssessment && (m.planRevision !== m.objectiveAssessment.planRevision ||
+      m.disposition === 'cancelled' || m.tasks.some(task => task.state !== 'verified'))) delete m.objectiveAssessment;
+    if (m.objectiveReview && m.tasks.every(task => task.state === 'verified') &&
+      this.host.planningContextCurrent?.(m) === true && reviewedMissionObjectiveVerified(m)) delete m.coverage;
     const outcome = m.tasks.some(t => t.state === 'cancelling') ? 'cancelling' :
       busy(m) ? 'running' : m.tasks.some(t => t.state === 'uncertain') ? 'uncertain' :
       m.disposition === 'cancelled' ? 'cancelled' : m.tasks.every(t => t.state === 'verified') ? m.coverage?'blocked':'verified' :
@@ -633,16 +739,17 @@ export class MissionService {
       if (!task.dependencies.every(id => taskOf(m, id)?.state === 'verified')) waits[task.id] = 'dependencies';
       else if (this.conflict(task)) waits[task.id] = 'resource-conflict';
       else if (executor && !this.capacityFor(m, executor.lane)) waits[task.id] = 'capacity';
-      else if (pressure) waits[task.id] = 'resource-pressure';
+      else if (this.host.resources ?
+        this.host.underPressure?.() || executor && !this.host.resources.canAcquire(executor.lane, task.executor) : pressure)
+        waits[task.id] = 'resource-pressure';
     }
     const allTasks = [...m.tasks, ...(m.retiredTasks ?? [])];
     const attempts = allTasks.flatMap(task => task.attempts);
     const expectedRemote = attempts.filter(attempt => this.host.executors[attempt.executor]?.lane !== 'native');
-    const usage = expectedRemote.flatMap(attempt => attempt.telemetry?.usage ? [attempt.telemetry.usage] : []);
-    if (m.planning?.usage) usage.push(m.planning.usage);
-    const reportedTotalTokens = usage.length ? usage.reduce((total, reading) => total + reading.totalTokens, 0) : null;
     const providerCalls = expectedRemote.every(attempt => attempt.telemetry) ?
-      expectedRemote.reduce((total, attempt) => total + attempt.telemetry!.providerCalls, m.planning ? 1 : 0) : null;
+      expectedRemote.reduce((total, attempt) => total + attempt.telemetry!.providerCalls,
+        (m.planning ? 1 : 0) + (m.planning?.context?.providerCalls ?? 0)) : null;
+    const { usageReports, reportedTotalTokens, completeReportedUsage } = summarizeMissionUsage(attempts, m.planning, providerCalls);
     let peakWorkers = 0, admitted = 0;
     for (const event of m.events) {
       if (event.kind === 'started') peakWorkers = Math.max(peakWorkers, ++admitted);
@@ -651,14 +758,32 @@ export class MissionService {
     const ended = ['queued', 'running', 'cancelling'].includes(outcome) ? Date.now() :
       Date.parse(m.events.findLast(event => event.kind !== 'workroom')!.time);
     const answer = missionMeasurementAnswer(m.tasks);
-    return { ...m, outcome, ...(answer.length ? { answer } : {}), waits,
+    const readyQueueObservation = includeReadyQueue ? this.projectReadyQueue(m, waits) : undefined;
+    return { ...m, tasks: m.tasks.map(publicMissionTask),
+      ...(m.retiredTasks ? { retiredTasks: m.retiredTasks.map(publicMissionTask) } : {}),
+      outcome, ...(answer.length ? { answer } : {}), waits,
+      ...(readyQueueObservation ? { readyQueueObservation } : {}),
       ...(admission ? { admission: structuredClone(admission) } : {}), profile: {
-      elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0), peakWorkers, attempts: attempts.length,
+      elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0) +
+        (m.planning?.context?.elapsedMs ?? 0), peakWorkers, attempts: attempts.length,
       retries: allTasks.reduce((total, task) => total + Math.max(0, task.attempts.length - 1), 0),
-      providerCalls, usageReports: usage.length, reportedTotalTokens,
-      verifiedObjectivesPerReportedToken: outcome === 'verified' && providerCalls === usage.length &&
+      providerCalls, usageReports, reportedTotalTokens,
+      verifiedObjectivesPerReportedToken: outcome === 'verified' && completeReportedUsage &&
         reportedTotalTokens && reportedTotalTokens > 0 ? 1 / reportedTotalTokens : null,
     } };
+  }
+
+  private projectReadyQueue(mission: Mission, waits: MissionProjection['waits']): MissionProjection['readyQueueObservation'] {
+    const clock = this.fullProfilingClock();
+    if (!clock || mission.disposition !== 'active' || !this.readyObservations.size) return;
+    const tasks = mission.tasks.flatMap(task => {
+      if (task.state !== 'queued' || waits[task.id] === 'dependencies') return [];
+      const observed = this.readyObservations.get(mission.id + '/' + task.id);
+      if (!observed || observed.planRevision !== mission.planRevision || observed.queuedAt !== task.queuedAt ||
+        observed.attemptCount !== task.attempts.length) return [];
+      return [{ taskId: task.id, ...structuredClone(observed.evidence) }];
+    });
+    if (tasks.length) return { clock, monotonicMs: performance.now(), tasks };
   }
 
   capacityChanged() { this.wake(); }
@@ -676,18 +801,29 @@ export class MissionService {
     const rows = this.host.db.prepare('SELECT json FROM vela_missions WHERE pending=1 ORDER BY rowid LIMIT ?').all(L.active);
     const ready = rows.map(row => this.decode(row.json)).map(mission => ({ mission, tasks: readyTasks(mission) }))
       .filter(entry => entry.tasks.length);
-    if (!ready.length) { this.clearAdmissionDemand(); return; }
-    const demand = ready.some(({ mission }) => this.host.authorized(mission.scope));
+    this.observeReadyQueue(ready);
+    const monitorRunning = !!this.host.resources && this.running.size > 0;
+    if (!ready.length && !monitorRunning) { this.clearAdmissionDemand(); return; }
+    const demand = monitorRunning || ready.some(({ mission }) => this.host.authorized(mission.scope));
     const admission = this.sampleAdmission(demand);
     this.admissionSnapshot = demand ? admission : undefined;
-    const workerLimit = this.host.underPressure?.() ? 0 : admission?.workerLimit ?? L.workers;
+    const workerLimit = this.host.underPressure?.() ? 0 :
+      this.host.resources ? L.workers : admission?.workerLimit ?? L.workers;
     if (workerLimit === 0 || demand && this.host.admission)
       this.wakeTimer ??= setTimeout(() => { this.wakeTimer = undefined; this.wake(); }, 1500).unref();
-    if (workerLimit === 0) return;
+    if (workerLimit === 0) {
+      if (this.readyObservations.size) for (const { mission, tasks } of ready)
+        for (const task of tasks) this.observeReadyBlocker(mission.id, task.id, 'worker-budget');
+      return;
+    }
     ready.sort((a, b) => (this.lastAdmitted.get(a.mission.id) ?? 0) - (this.lastAdmitted.get(b.mission.id) ?? 0));
     const now = Date.now();
-    for (const { mission: m, tasks } of ready) {
-      if (this.running.size >= workerLimit) return;
+    for (const [index, { mission: m, tasks }] of ready.entries()) {
+      if (this.running.size >= workerLimit) {
+        if (this.readyObservations.size) for (const deferred of ready.slice(index))
+          for (const task of deferred.tasks) this.observeReadyBlocker(deferred.mission.id, task.id, 'worker-budget');
+        return;
+      }
       for (const task of orderReadyTasks(m, tasks, now)) {
         const executor = own(this.host.executors, task.executor) ? this.host.executors[task.executor] : undefined;
         if (!this.host.authorized(m.scope) || !executor?.available(m.scope, task)) {
@@ -698,8 +834,20 @@ export class MissionService {
           });
           continue;
         }
-        if (!this.capacityFor(m, executor.lane) || this.conflict(task)) continue;
-        this.start(m, task, executor, admission);
+        if (!this.capacityFor(m, executor.lane)) {
+          this.observeReadyBlocker(m.id, task.id, 'capacity');
+          continue;
+        }
+        if (this.conflict(task)) {
+          this.observeReadyBlocker(m.id, task.id, 'resource-conflict');
+          continue;
+        }
+        const resources = this.host.resources;
+        if (resources && !resources.canAcquire(executor.lane, task.executor)) {
+          resources.prepare?.(executor.lane, task.executor);
+          continue;
+        }
+        if (!this.start(m, task, executor, admission)) continue;
         this.lastAdmitted.set(m.id, ++this.turn);
         this.wake();
         break;
@@ -707,15 +855,44 @@ export class MissionService {
     }
   }
 
+  private observeReadyQueue(ready: { mission: Mission; tasks: MissionTask[] }[]) {
+    if (!this.fullProfilingClock()) return;
+    if (!ready.length) { this.readyObservations.clear(); return; }
+    const now = performance.now();
+    const next = new Map<string, ReadyObservation>();
+    for (const { mission, tasks } of ready) for (const task of tasks) {
+      const key = mission.id + '/' + task.id;
+      const prior = this.readyObservations.get(key);
+      next.set(key, prior?.planRevision === mission.planRevision && prior.queuedAt === task.queuedAt &&
+        prior.attemptCount === task.attempts.length ? prior : {
+          planRevision: mission.planRevision, queuedAt: task.queuedAt, attemptCount: task.attempts.length,
+          evidence: { firstObservedMs: now, blockers: {} },
+        });
+    }
+    this.readyObservations = next;
+  }
+  private observeReadyBlocker(missionId: string, taskId: string, blocker: MissionReadyBlocker) {
+    if (!this.readyObservations.size) return;
+    const evidence = this.readyObservations.get(missionId + '/' + taskId)?.evidence;
+    if (!evidence) return;
+    evidence.blockers[blocker] = { samples: (evidence.blockers[blocker]?.samples ?? 0) + 1, lastObservedMs: performance.now() };
+  }
+
   private start(m: Mission, task: MissionTask, executor: MissionExecutor, admission?: MissionAdmission) {
     const id = randomUUID();
     const compilingAt = performance.now();
+    const queueKey = this.readyObservations.size ? m.id + '/' + task.id : undefined;
+    const readyQueue = queueKey ? this.readyObservations.get(queueKey)?.evidence : undefined;
     const abort = new AbortController();
     const dependencies = task.dependencies.map(dep => taskOf(m, dep)!.attempts.at(-1)!.evidence!);
     const { attempts: _attempts, queuedAt: _queued, state: _state, priority: _priority, detail: _detail, ...plan } = task;
     const source = this.host.contextSource?.(m, plan);
+    const reviewedNotes = task.executor === 'inspect.workspace-notes' ? m.planning?.context?.notes : undefined;
     const request = { missionId: m.id, revision: m.planRevision, taskId: task.id, scope: m.scope,
       missionObjective: m.objective, taskObjective: task.objective, criteria: m.criteria, dependencyTaskIds: task.dependencies,
+      ...(reviewedNotes ? { requiredSources: reviewedNotes.map(note => ({
+        kind: 'resource' as const, id: note.id, expectedVersion: note.version,
+      })) } : {}),
       dependencies: dependencies.map((e, i) => ({ taskId: task.dependencies[i], evidenceId: e.id,
         source: e.source, attemptId: e.attemptId, observedAt: e.observedAt, value: e.value })), maxTokens: 48 * 1024 };
     let context: MissionExecutionContext;
@@ -729,7 +906,9 @@ export class MissionService {
       };
       validateDependencies();
       const pkg = compileMissionContext(request, source, this.contextCache);
-      context = { missionId: m.id, task: plan, scope: m.scope, attemptId: id, dependencies, context: pkg, signal: abort.signal };
+      context = { missionId: m.id, task: plan, scope: m.scope, attemptId: id, dependencies, context: pkg, signal: abort.signal,
+        ...(m.planning?.context ? { validatePlanningContext: () =>
+          check(this.host.planningContextCurrent?.(m) !== false, 'mission_planning_context_changed') } : {}) };
     } catch {
       this.update(m.id, current => {
         const value = taskOf(current, task.id)!;
@@ -737,23 +916,42 @@ export class MissionService {
         this.event(current, { kind: 'settled', taskId: task.id, detail: value.detail });
       });
       this.wake();
-      return;
+      return false;
     }
+    const assembledAt = performance.now(), clock = this.fullProfilingClock();
+    const phases: MissionAttemptPhaseTiming | undefined =
+      clock ? { clock, contextAssembly: [compilingAt, assembledAt], ...(readyQueue ? { readyQueue } : {}) } : undefined;
     const timing: NonNullable<MissionAttempt['timing']> = {
       queueMs: Math.max(0, Date.now() - Date.parse(task.queuedAt)),
-      contextPreparationMs: performance.now() - compilingAt,
+      contextPreparationMs: assembledAt - compilingAt,
     };
-    this.update(m.id, current => {
-      const value = taskOf(current, task.id)!;
-      check(value.state === 'queued' && value.attempts.length < value.maxAttempts, 'mission_dispatch_denied');
-      const attempt: MissionAttempt = { id, executor: task.executor, admittedAt: stamp(), context: context.context.manifest, timing };
-      value.state = 'running'; value.attempts.push(attempt);
-      this.event(current, { kind: 'started', taskId: task.id, attemptId: id });
-      if (admission) {
-        attempt.admission = admission;
-        if (Buffer.byteLength(JSON.stringify(current)) > recordLimitBytes) delete attempt.admission;
-      }
-    });
+    const resources = this.host.resources;
+    const lease = resources?.acquire(executor.lane,
+      { missionId: m.id, taskId: task.id, attemptId: id, timeoutMs: task.timeoutMs }, task.executor);
+    if (resources && !lease) return false;
+    if (queueKey) this.readyObservations.delete(queueKey);
+    if (lease) context.resourceCheckpoint = lease.checkpointRequested;
+    try {
+      this.update(m.id, current => {
+        const value = taskOf(current, task.id)!;
+        check(value.state === 'queued' && value.attempts.length < value.maxAttempts, 'mission_dispatch_denied');
+        const attempt: MissionAttempt = { id, executor: task.executor, admittedAt: stamp(), context: context.context.manifest, timing };
+        value.state = 'running'; value.attempts.push(attempt);
+        this.event(current, { kind: 'started', taskId: task.id, attemptId: id });
+        if (lease) {
+          attempt.resourceLease = lease.receipt;
+          if (Buffer.byteLength(JSON.stringify(current)) > recordLimitBytes) delete attempt.resourceLease;
+        }
+        if (admission) {
+          attempt.admission = admission;
+          if (Buffer.byteLength(JSON.stringify(current)) > recordLimitBytes) delete attempt.admission;
+        }
+        if (phases) timing.phases = phases;
+      });
+    } catch (error) {
+      lease?.release();
+      throw error;
+    }
     const timer = setTimeout(() => this.abort(id, 'timeout'), task.timeoutMs).unref();
     const started = performance.now();
     const settled = Promise.resolve().then(async () => {
@@ -766,6 +964,7 @@ export class MissionService {
         abort.signal.throwIfAborted();
         check(this.host.authorized(m.scope), 'mission_scope_revoked');
         const validateInputs = () => {
+          context.validatePlanningContext?.();
           validateMissionContext(context.context, request, source);
           const current = this.lookup(m.id), checked = new Map<string, boolean>();
           for (const [i, dep] of task.dependencies.entries()) {
@@ -777,22 +976,40 @@ export class MissionService {
         const recheckingAt = performance.now();
         try { validateInputs(); }
         catch (error) { reportedOutcome = 'blocked'; detail = 'mission_context_unavailable'; throw error; }
-        finally { timing.contextPreparationMs += performance.now() - recheckingAt; }
+        finally {
+          const validatedAt = performance.now();
+          timing.contextPreparationMs += validatedAt - recheckingAt;
+          if (phases) phases.dispatchValidation = [recheckingAt, validatedAt];
+        }
         const executingAt = performance.now();
-        const result = await executor.run(context).finally(() => { timing.executionMs = performance.now() - executingAt; });
+        let result: Awaited<ReturnType<MissionExecutor['run']>>;
+        try { result = await executor.run(context); }
+        finally {
+          const executedAt = performance.now();
+          timing.executionMs = executedAt - executingAt;
+          if (phases) phases.execution = [executingAt, executedAt];
+        }
         telemetry = result.telemetry;
         const verifyingAt = performance.now();
-        try { validateInputs(); }
-        catch (error) { reportedOutcome = executor.replaySafe ? 'blocked' : 'uncertain'; detail = 'mission_context_changed_during_execution'; throw error; }
-        check(bounded(result.source, 128) && JSON.stringify(result.value) !== undefined &&
-          Buffer.byteLength(JSON.stringify(result.value)) <= 2048, 'invalid_mission_evidence');
-        evidence = { source: result.source, value: result.value, id: randomUUID(), attemptId: id, observedAt: stamp() };
-        reportedOutcome = result.outcome;
-        const verdict = executor.verify(structuredClone(evidence), context);
-        check(typeof verdict.passed === 'boolean' && bounded(verdict.detail, 160), 'invalid_mission_verification');
-        verification = { ...verdict, criterion: task.criterion, evidenceIds: [evidence.id] };
-        timing.verificationMs = performance.now() - verifyingAt;
-        detail = verdict.detail;
+        let verifyingEvidenceAt: number | undefined;
+        try {
+          try { validateInputs(); }
+          catch (error) { reportedOutcome = executor.replaySafe || telemetry?.providerCalls === 0 ? 'blocked' : 'uncertain'; detail = 'mission_context_changed_during_execution'; throw error; }
+          finally { if (phases) phases.postExecutionContextValidation = [verifyingAt, performance.now()]; }
+          verifyingEvidenceAt = phases?.postExecutionContextValidation?.[1];
+          check(bounded(result.source, 128) && JSON.stringify(result.value) !== undefined &&
+            Buffer.byteLength(JSON.stringify(result.value)) <= 2048, 'invalid_mission_evidence');
+          evidence = { source: result.source, value: result.value, id: randomUUID(), attemptId: id, observedAt: stamp() };
+          reportedOutcome = result.outcome;
+          const verdict = executor.verify(structuredClone(evidence), context);
+          check(typeof verdict.passed === 'boolean' && bounded(verdict.detail, 160), 'invalid_mission_verification');
+          verification = { ...verdict, criterion: task.criterion, evidenceIds: [evidence.id] };
+          detail = verdict.detail;
+        } finally {
+          const verifiedAt = performance.now();
+          timing.verificationMs = verifiedAt - verifyingAt;
+          if (phases && verifyingEvidenceAt !== undefined) phases.verification = [verifyingEvidenceAt, verifiedAt];
+        }
       } catch { detail ??= 'executor_failed_or_evidence_invalid'; }
       const cancellation = this.running.get(id)?.cancellation;
       const authorized = this.host.authorized(m.scope);
@@ -817,9 +1034,10 @@ export class MissionService {
         }
       });
     }).catch(() => { this.healthy = false; }).finally(() => {
-      clearTimeout(timer); this.running.delete(id); this.wake();
+      clearTimeout(timer); lease?.release(); this.running.delete(id); this.wake();
     });
     this.running.set(id, { missionId: m.id, task: plan, lane: executor.lane, abort, settled });
+    return true;
   }
   private abort(id: string, reason: NonNullable<Running['cancellation']>) {
     const current = this.running.get(id);

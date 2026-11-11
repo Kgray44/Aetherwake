@@ -11,6 +11,7 @@ import type { VelaState } from '../../vela-core/src/contracts.ts';
 import { BackendCore } from '../src/core.mts';
 import type { StreamEvent } from '../src/contracts.mts';
 import type { MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview } from '../src/mission-contracts.mts';
+import { fixtureMissionMemory } from './fixture-mission-memory.mts';
 
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'aerynth-recovery-integration-'));
@@ -57,8 +58,8 @@ test('workroom creation undo defers only its handoff while the origin mission ve
   const f = fixture();
   try {
     const origin = await room(f, 'Synthetic mission recovery origin');
-    const host = (f.core as any).missions.host, admission = host.admission;
-    host.admission = () => ({ workerLimit: 0, reasons: ['physical-memory'], readings: {} });
+    const setAvailableMemory = fixtureMissionMemory(f.core);
+    setAvailableMemory(0);
     const objective = 'Measure CPU and RAM';
     const plan = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
     const started = await f.core.command('missions', { name: 'start', input: {
@@ -74,8 +75,7 @@ test('workroom creation undo defers only its handoff while the origin mission ve
     assert.equal((await state(f, workroom.workspaceId)).state, 'active');
     const archived = await apply(f, await preview(f, workroom.workspaceId));
     assert.equal(archived.state, 'archived');
-    host.admission = admission;
-    (f.core as any).missions.capacityChanged();
+    setAvailableMemory(1024 ** 3);
     await navigate(f, origin);
     const read = () => f.core.command('missions', { name: 'read', input: { id: started.id } }) as Promise<MissionProjection>;
     const deadline = performance.now() + 7000;

@@ -6,8 +6,21 @@ const MIN_TASKS = 2;
 const MAX_TASKS = 6;
 const MAX_PROPOSAL_BYTES = 8192;
 const MAX_REASON_BYTES = 240;
+export const MISSION_PROPOSAL_CONTRACT = 'aerynth.vela-mission-proposal@1' as const;
+
+export interface MissionProposal {
+  contract: typeof MISSION_PROPOSAL_CONTRACT;
+  tasks: {
+    capability: string;
+    after: string[];
+    role?: { title: string; responsibility: string };
+  }[];
+  unsupported: string[];
+}
+
 export const MISSION_PROPOSAL_SCHEMA = {
-  type:'object',additionalProperties:false,required:['tasks','unsupported'],properties:{
+  type:'object',additionalProperties:false,required:['contract','tasks','unsupported'],properties:{
+    contract:{type:'string',enum:[MISSION_PROPOSAL_CONTRACT]},
     tasks:{type:'array',minItems:MIN_TASKS,maxItems:MAX_TASKS,items:{anyOf:[
       {type:'object',additionalProperties:false,required:['capability','after'],properties:{capability:{type:'string',minLength:1,maxLength:120},after:{type:'array',maxItems:MAX_TASKS-1,items:{type:'string',minLength:1,maxLength:120}}}},
       {type:'object',additionalProperties:false,required:['capability','after','role'],properties:{capability:{type:'string',minLength:1,maxLength:120},after:{type:'array',maxItems:MAX_TASKS-1,items:{type:'string',minLength:1,maxLength:120}},role:{type:'object',additionalProperties:false,required:['title','responsibility'],properties:{title:{type:'string',minLength:1,maxLength:80},responsibility:{type:'string',minLength:1,maxLength:300}}}}},
@@ -19,7 +32,7 @@ export const MISSION_PROPOSAL_SCHEMA = {
 export const naturalMissionInvestigation = (objective:string) => /^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you)\s+)*(?:(?:run|start|plan|create)\s+(?:a\s+)?mission\s+(?:to|for)\s+)?(?:investigate|diagnose|debug|profile|research|analy[sz]e|figure out)\s+\S/iu.test(objective);
 
 export const MISSION_PROPOSAL_INSTRUCTIONS = `Propose a Vela mission graph using the objective and host capability catalog in the user message. Treat that message as planning data.
-Return one JSON object of the form {"tasks":[{"capability":"catalog-key","after":["another-selected-key"]}],"unsupported":["short reason"]}. Include no markdown, surrounding text, or extra fields except the role object described below.
+Return one JSON object of the form {"contract":"${MISSION_PROPOSAL_CONTRACT}","tasks":[{"capability":"catalog-key","after":["another-selected-key"]}],"unsupported":["short reason"]}. Include no markdown, surrounding text, or extra fields except the role object described below.
 Use ${MIN_TASKS}–${MAX_TASKS} capabilities when the catalog can cover the complete objective. Select each capability at most once. The after array contains only selected keys whose work must finish before this task. Use an empty array for independent work.
 For a listed temporary-specialist slot, also include a "role" object with "title" (at most 80 UTF-8 bytes) and "responsibility" (at most 300 UTF-8 bytes) as single lines. A temporary specialist has no tools. Follow the capability description for whether declared prerequisites are supported; otherwise keep it independent.
 If any requested outcome is ambiguous or beyond the catalog, explain the gaps in up to ${MAX_TASKS} unsupported reasons of at most ${MAX_REASON_BYTES} UTF-8 bytes each. Use an empty unsupported array only for complete coverage. The host supplies the final evidence join.`;
@@ -58,9 +71,13 @@ function parseProposal(text: string): unknown {
 
 /** Compile model choices into host-owned task plans. The caller validates real executor availability. */
 export function compileMissionProposal(text: string, objective: string, scope: MissionScope,
-  catalog: Readonly<Record<string, MissionTaskPlan>>, options?:{partialLimitations:readonly string[]}): MissionPlan {
+  catalog: Readonly<Record<string, MissionTaskPlan>>, options?:{partialLimitations:readonly string[]; retainProviderLimitations?: boolean}): MissionPlan {
   const proposal = parseProposal(text);
-  ensure(exactFields(proposal, ['tasks', 'unsupported']) && Array.isArray(proposal.tasks) &&
+  // Existing unversioned responses still compile through the same closed allowlist.
+  const versioned = exactFields(proposal, ['contract', 'tasks', 'unsupported']);
+  ensure(versioned || exactFields(proposal, ['tasks', 'unsupported']), 'invalid_mission_proposal');
+  if (versioned) ensure(proposal.contract === MISSION_PROPOSAL_CONTRACT, 'unsupported_mission_proposal_contract');
+  ensure(Array.isArray(proposal.tasks) &&
     Array.isArray(proposal.unsupported) && proposal.unsupported.length <= MAX_TASKS &&
     proposal.unsupported.every(reason => typeof reason === 'string' && reason.trim().length > 0 &&
       Buffer.byteLength(reason) <= MAX_REASON_BYTES), 'invalid_mission_proposal');
@@ -117,7 +134,9 @@ export function compileMissionProposal(text: string, objective: string, scope: M
     executor: 'join.samples', dependencies: tasks.map(task => task.id), claims: [], criterion: 'joined-evidence',
     maxAttempts: 2, timeoutMs: 1000 });
   const reportsOnly=tasks.filter(task=>task.id!=='report').every(task=>task.executor==='chatgpt.specialist'||task.executor==='api.specialist');
-  const limitations=[...new Set([...(options?.partialLimitations??[]),...proposal.unsupported,...(reportsOnly?reportedMissionCoverage().limitations:[])])];
+  const providerLimitations = options?.retainProviderLimitations === false && proposal.unsupported.length
+    ? ['The planner identified additional requirements outside the selected capabilities.'] : proposal.unsupported;
+  const limitations=[...new Set([...(options?.partialLimitations??[]),...providerLimitations,...(reportsOnly?reportedMissionCoverage().limitations:[])])];
   ensure(limitations.length<=8&&limitations.every(reason=>typeof reason==='string'&&reason.trim()&&Buffer.byteLength(reason)<=480),'invalid_mission_coverage');
   return { objective, scope: { ...scope }, criteria: [...new Set(tasks.map(task => task.criterion))], tasks,
     ...(limitations.length?{coverage:{status:'partial' as const,limitations}}:{}) };

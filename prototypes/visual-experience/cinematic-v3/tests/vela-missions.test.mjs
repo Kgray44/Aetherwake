@@ -23,7 +23,7 @@ test('API specialist controls preserve nonreplayable attempts', () => {
   assert.equal(missionTaskControls(mission, { ...worker, executor: 'sample.cpu' }).retry, true);
 });
 
-async function fixture(handle) {
+async function fixture(handle, askCheckpoint) {
   const dom = componentDocument();
   const state = { projection: initial(), scope };
   const requests = [];
@@ -32,7 +32,7 @@ async function fixture(handle) {
     if (request.name === "list") return state.scope.workspaceId === scope.workspaceId ? [state.projection] : [];
     if (request.name === "read") return state.projection;
     return handle(request, state);
-  });
+  }, undefined, askCheckpoint);
   dom.root.append(view.element);
   const control = key => dom.root.querySelector(`[data-mission-focus="${key}"]`);
   view.setScope(scope);
@@ -93,6 +93,47 @@ test("prerequisite picker avoids cycles and discards a pending review on workspa
   await until(() => !f.dom.root.querySelector(".vela-missions-body").getAttribute("aria-busy"));
   assert.equal(f.control("revision-apply"), null);
   assert.doesNotMatch(f.dom.root.textContent, /stale prior-workspace/);
+});
+
+test("Executive proposal enters the existing revision review and waits for explicit apply", async () => {
+  const f = await fixture(async request => {
+    assert.equal(request.name, "executive-review");
+    return { kind: "executive-result", result: {
+      state: "reviewable", reason: "Retain the verified CPU sample.",
+      change: { type: "replace", taskId: "ram" },
+      preview: { kind: "revision-preview", missionId: "mission-a", revision: 4,
+        fingerprint: "reviewed-executive-change", summary: "Replace the failed RAM sample." },
+    } };
+  });
+  try {
+    f.state.projection.tasks[1].state = "failed";
+    f.state.projection.events = [{ seq: 3, kind: "settled", taskId: "ram" }];
+    f.view.openReport("mission-a");
+    await until(() => !!f.control("executive-review"));
+    f.control("executive-review").fire("click");
+    await until(() => !!f.control("revision-apply"));
+    assert.deepEqual(f.requests.find(request => request.name === "executive-review").input,
+      { id: "mission-a", revision: 4, triggerSeq: 3 });
+    assert.match(f.dom.root.textContent, /Retain the verified CPU sample/);
+    assert.equal(f.requests.some(request => request.name === "revision-apply"), false);
+  } finally { f.view.setVisible(false); }
+});
+
+test("a checkpoint question passes the exact active mission revision to native review", async () => {
+  const asked = [];
+  const f = await fixture(() => assert.fail("the question must not invoke a mission control"),
+    async (intent, checkpoint) => { asked.push({ intent, checkpoint }); });
+  try {
+    assert.equal(f.dom.root.querySelector("[data-mission-checkpoint-question]"), null);
+    f.state.projection.events = [{ seq: 3, kind: "settled", taskId: "ram" }];
+    f.view.openReport("mission-a");
+    const form = () => f.dom.root.querySelector("[data-mission-checkpoint-question]");
+    await until(() => !!form());
+    form().querySelector("input").value = "Which check is still unverified?";
+    form().fire("submit");
+    await until(() => f.dom.root.textContent.includes("The answer is in Vela chat."));
+    assert.deepEqual(asked, [{ intent: "Which check is still unverified?", checkpoint: { id: "mission-a", revision: 4, triggerSeq: 3 } }]);
+  } finally { f.view.setVisible(false); }
 });
 
 test("partial investigation preview discloses missing server evidence before Start and names the dedicated API planning route", async () => {

@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline";
+import { basename } from "node:path";
 import { Backend } from "./service.mts";
 import {createNativeHostClient,isNativeHostEnvelope} from './native-host.mts';
 import {createNativeLiveHostClient,isNativeLiveHostEnvelope} from './live-media-host.mts';
@@ -9,7 +10,12 @@ import {createWindowsMaintenanceClient,isWindowsMaintenanceEnvelope} from './win
 import {createWindowsComputerClient,isWindowsComputerEnvelope} from './windows-computer-host.mts';
 const [path, privateRoot, cwd,...flags] = process.argv.slice(2);
 const write = (v: unknown) => process.stdout.write(JSON.stringify(v) + "\n");
-if (flags.some(flag => !["--native-secrets", "--native-media", "--native-system-facts", "--native-wake-capture","--native-documents","--native-maintenance","--native-computer"].includes(flag)) || new Set(flags).size !== flags.length)
+const profilerFlags = flags.filter(flag => flag.startsWith('--mission-profiler-benchmark='));
+const profilerMode = profilerFlags[0]?.slice('--mission-profiler-benchmark='.length);
+if (profilerFlags.length && (profilerFlags.length !== 1 || !/^review-vela-missions-\d+$/u.test(basename(privateRoot)) ||
+  (profilerMode !== 'off' && profilerMode !== 'minimal' && profilerMode !== 'full')))
+  throw Error('invalid_mission_profiler_benchmark');
+if (flags.some(flag => !profilerFlags.includes(flag) && !["--native-secrets", "--native-media", "--native-system-facts", "--native-wake-capture","--native-documents","--native-maintenance","--native-computer"].includes(flag)) || new Set(flags).size !== flags.length)
   throw Error("invalid_native_host_flags");
 const nativeClient=flags.includes('--native-secrets')?createNativeHostClient(write):undefined;
 const liveClient=flags.includes('--native-media')?createNativeLiveHostClient(write):undefined;
@@ -27,6 +33,7 @@ const backend = new Backend({
   nativeMedia: flags.includes("--native-media"),
   retention: { maxEvents: 10000 },
   rendererEventTransport: true,
+  ...(profilerMode === 'off' || profilerMode === 'minimal' || profilerMode === 'full' ? { missionProfilerMode: profilerMode } : {}),
 },nativeClient?{...nativeClient.services,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{}),...(maintenanceClient?{maintenance:maintenanceClient.services}:{}),...(computerClient?{computer:computerClient.services}:{})}:undefined);
 let closeTask:Promise<void>|null=null;
 const closeBackend=()=>{
@@ -56,6 +63,18 @@ lines.on("line", async (line) => {
       return;
     }
     id = request.id;
+    if (request.command === 'resourcePolicyNative') {
+      if (!nativeClient || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
+        throw new Error('native_resource_policy_required');
+      write({ id, result: await backend.call('resourcePolicyNative', request.input) });
+      return;
+    }
+    if (request.command === 'gpuReadbackNative') {
+      if (!nativeClient || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
+        throw new Error('native_gpu_readback_required');
+      write({ id, result: await backend.call('gpuReadbackNative', request.input) });
+      return;
+    }
     if (['velaApiConfigure', 'velaApiUsageAuthorize', 'velaApiUsageStatus','velaVoiceNative','velaWeatherPermissionNative','velaWakeNative','velaWakeFrame','velaWakeCaptureState','velaFileProposalPrepareNative','velaSourcesPickNative','folderOpenNative',
       'hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative',
       'missionFileEditPrepareNative','missionFileEditRunNative','missionFileEditReviewNative','missionFileEditChoiceNative','missionFileEditApplyNative','missionFileEditCheckReviewNative','missionFileEditCheckRunNative','missionFileEditRead'].includes(request.command)) {
@@ -86,6 +105,7 @@ lines.on("line", async (line) => {
         "capabilities",
         "replay",
         "rendererEventPage",
+        "rendererVelaOutput",
         "close",
         "viewState",
         "branch",
@@ -124,6 +144,9 @@ lines.on("line", async (line) => {
         "missionRevisionReviewed",
         "missionCheckReview",
         "missionPlanReviewed",
+        "missionPlanningReview",
+        "missionExecutiveReview",
+        "missionExecutiveReviewed",
         "velaRequestPreview",
         "velaNextWorkflowStage",
         "velaWorkflowReview",

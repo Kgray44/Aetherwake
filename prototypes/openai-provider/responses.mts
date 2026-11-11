@@ -295,6 +295,9 @@ export class ResponsesTransport {
     constructor(options: TransportOptions) { this.options = options; this.limits = { ...defaults, ...options.limits }; for (const [key, value] of Object.entries(this.limits))
         requireValue(Number.isSafeInteger(value) && value > 0 && value <= defaults[key as keyof typeof defaults], 'invalid_transport_limit'); }
     async turn(input: TurnInput, signal?: AbortSignal): Promise<TurnResult> {
+        const observeTiming = this.options.observeTiming;
+        const started = observeTiming ? performance.now() : null;
+        let postAttemptMs: number | null = null, headersMs: number | null = null, firstSseBytesMs: number | null = null;
         const frozen = structuredClone(input), { body, review } = prepareResponsesTurn(frozen, this.limits.requestBytes);
         requireValue(!this.active.has(frozen.executionId), 'execution_already_in_flight');
         this.active.add(frozen.executionId);
@@ -332,7 +335,9 @@ export class ResponsesTransport {
             }
             result.dispatched = true;
             if (result.api) result.api.recovery = { ...result.api.recovery, boundaryDigest: credential.boundaryDigest };
+            if (started !== null) postAttemptMs = performance.now() - started;
             const response = await abortable((this.options.fetch ?? fetch)(RESPONSES_ENDPOINT, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body, signal: controller.signal, redirect: 'error', credentials: 'omit', cache: 'no-store' }), controller.signal);
+            if (started !== null) headersMs = performance.now() - started;
             result.httpDiagnostic = turnHttpDiagnostic(response, credential);
             if (!response.ok) {
                 let code = 'provider_failed';
@@ -509,6 +514,7 @@ export class ResponsesTransport {
                     decoder.decode();
                     break;
                 }
+                if (started !== null && firstSseBytesMs === null && next.value.length) firstSseBytesMs = performance.now() - started;
                 streamBytes += next.value.length;
                 requireValue(streamBytes <= this.limits.streamBytes, 'stream_capacity_exceeded');
                 buffer = (buffer + decoder.decode(next.value, { stream: true })).replace(/\r\n/g, '\n');
@@ -541,6 +547,13 @@ export class ResponsesTransport {
             signal?.removeEventListener('abort', cancelled);
             void reader?.cancel().catch(() => { });
             this.active.delete(frozen.executionId);
+            if (started !== null) {
+                try {
+                    const observation: unknown = observeTiming?.({ postAttemptMs, headersMs, firstSseBytesMs, finishedMs: performance.now() - started });
+                    if (observation instanceof Promise) void Promise.prototype.then.call(observation, undefined, () => {});
+                }
+                catch { /* Optional observation cannot change the transport outcome. */ }
+            }
         }
     }
     /** Read/reconcile only an explicitly retained API response. Never reruns a turn. */

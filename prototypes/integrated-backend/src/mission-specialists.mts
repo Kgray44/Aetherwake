@@ -4,6 +4,7 @@ import type { MissionExecutionContext, MissionExecutor, MissionPlan, MissionScop
 import { nativeMissionPlan } from './mission-native.mts';
 import type { MissionTeam } from './mission-teams.mts';
 import {apiRunDiagnostics} from './api-run-diagnostics.mts';
+import { observeProviderStream, type ProviderStreamObserver } from './execution-profiler.mts';
 
 type Selection = Omit<NonNullable<MissionTaskPlan['specialist']>, 'role' | 'instructions'>;
 export const specialistExecutorId = (provider: NonNullable<MissionTaskPlan['specialist']>['provider']) => provider === 'openai-api-vela' ? 'api.specialist' : 'chatgpt.specialist';
@@ -153,8 +154,9 @@ export function specialistMissionPlan(intent: string, scope: MissionScope, defau
 }
 
 export interface SpecialistPort {
+  providerEvidence?: 'reported' | 'simulated';
   available(scope: MissionScope, task: MissionTaskPlan): boolean;
-  turn(context: MissionExecutionContext): Promise<TurnResult>;
+  turn(context: MissionExecutionContext, observe: ProviderStreamObserver): Promise<TurnResult>;
 }
 function recommendations(value: unknown): value is { observations: string[] } {
   if (!value || typeof value !== 'object' || Object.keys(value).length !== 1 || !Object.hasOwn(value, 'observations')) return false;
@@ -191,8 +193,12 @@ export function createSpecialistExecutor(port: SpecialistPort, provider: NonNull
     available: (scope, task) => task.specialist?.provider === provider && task.executor === specialistExecutorId(provider) && port.available(scope, task),
     async run(context) {
       const start = performance.now();
-      const result = await port.turn(context);
-      const telemetry = { durationMs: performance.now() - start, providerCalls: Number(result.dispatched),
+      const stream = observeProviderStream(start);
+      const result = await port.turn(context, stream);
+      const providerStream = stream.read();
+      const telemetry = { durationMs: performance.now() - start, providerCalls: Number(result.dispatched), providerExecutionId: result.executionId,
+        ...(port.providerEvidence ? { providerEvidence: port.providerEvidence } : {}),
+        ...(providerStream.responseCreatedMs !== null || providerStream.firstTextDeltaMs !== null || providerStream.transport ? { providerStream } : {}),
         ...(result.usage ? { usage: result.usage } : {}), ...(result.responseId ? { responseId: result.responseId } : {}),
         ...(result.reportedModel ? { reportedModel: result.reportedModel } : {}) };
       const source = provider + ':reported';

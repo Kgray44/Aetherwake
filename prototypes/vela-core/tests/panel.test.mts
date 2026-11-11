@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mountVelaPanel, type VelaPanelPresentation, type VelaPanelManifestation } from '../src/panel.ts';
 import { velaPanelStatus } from '../src/panel-status.ts';
 import { VELA_CONTRACT, type VelaClient, type VelaState, type VelaRequest, type VelaPlan, type ActionReceipt, type VelaLocalDispatch, type VelaMessage } from '../src/contracts.ts';
@@ -116,6 +117,35 @@ test('source-observed read jobs repaint for the current request without promotin
  }finally{panel.dispose();}
 });
 
+test('an existing mission reply shows assessment gaps until its source evidence is stale', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const scope = { missionId: 'mission:assessed', workspaceId: 'workspace:1', projectId: null };
+  const message: NonNullable<VelaState['conversation']>['messages'][number] = {
+    id: 'message:mission-report', role: 'assistant', content: 'Read-only check passed.',
+    source: 'vela-native', classification: 'observed', responseKind: 'answer', missionReport: { ...scope, jobsDone: 1 },
+  };
+  canonical.conversation!.messages = [message];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical), {
+    voice: { element: doc.createElement('section') as unknown as HTMLElement, setVisible() {}, start: async () => {}, speak: async () => {} },
+  });
+  try {
+    await settles(() => !!named(root, 'Speak response'));
+    assert.equal(root.find(node => node.className === 'vela-mission-assessment'), undefined);
+    message.missionReport!.assessment = { model: 'gpt-6-luna', planRevision: 2, gaps: ['External sign-off is unverified.'] };
+    await panel.refresh();
+    assert.ok(root.find(node => node.className === 'vela-mission-assessment')?.find(node => node.textContent === 'External sign-off is unverified.'));
+    canonical.presentation = { ...canonical.presentation!, version: 2, view: 'history' };
+    await panel.refresh();
+    assert.ok(root.find(node => node.className === 'vela-mission-assessment'));
+    message.missionReport = { ...scope, stale: true };
+    message.content = 'Mission evidence became unavailable.';
+    canonical.presentation = { ...canonical.presentation!, version: 3, view: 'current' };
+    await panel.refresh();
+    assert.equal(root.find(node => node.className === 'vela-mission-assessment'), undefined);
+    assert.equal(named(root, 'Speak response'), undefined);
+  } finally { panel.dispose(); }
+});
+
 test('completed typed replies expose one speak icon and stop only the same speech attempt without resending text',async()=>{
  const doc=new Document(),root=doc.createElement('main'),canonical=state(),spoken:unknown[]=[],stopped:string[]=[];let turns=0;
  const message={id:'message:reply',role:'assistant' as const,requestId:'request:synthetic',content:'Here is your answer.',source:'provider' as const,providerId:'openai-api-vela',classification:'reported' as const,responseKind:'answer' as const,providerContribution:{providerId:'openai-api-vela',classification:'reported' as const,executionId:'execution:synthetic'}};
@@ -125,7 +155,13 @@ test('completed typed replies expose one speak icon and stop only the same speec
   voice:{element:doc.createElement('section') as unknown as HTMLElement,setVisible(){},start:async()=>{},speak:async value=>{spoken.push(value);listener?.({active:true,microphoneOn:false,speaking:true,speech:{state:'speaking',messageId:message.id,attemptId:'speech:exact',contentDigest:'a'.repeat(64)}});},stopSpeech:async id=>{stopped.push(id);},subscribe:fn=>{listener=fn;return ()=>{listener=undefined;};}}
  });
  await settles(()=>!!named(root,'Speak response'));assert.equal(spoken.length,0,'hydration never speaks automatically');
- named(root,'Speak response').fire('click');await settles(()=>!!named(root,'Stop speaking'));
+ const styles = readFileSync(new URL('../src/panel.css', import.meta.url), 'utf8');
+ const speak = named(root, 'Speak response');
+ assert.equal(speak.children[0].dataset.icon, 'speak');
+ assert.ok(/\.vela-core-icon-mark\[data-icon="speak"\]\s*\{\s*--vela-icon:\s*url\("data:image\/svg\+xml,/.test(styles),
+   'Speak response has a CSS mask instead of a solid currentColor box');
+ speak.fire('click');await settles(()=>!!named(root,'Stop speaking'));
+ assert.equal(named(root, 'Stop speaking').children[0].dataset.icon, 'stop');
  assert.deepEqual(spoken,[{id:message.id,content:message.content}]);named(root,'Stop speaking').fire('click');await settles(()=>stopped.length===1);
  assert.deepEqual(stopped,['speech:exact']);assert.equal(turns,0);assert.equal(canonical.conversation!.messages.length,1);
  listener?.({active:true,microphoneOn:false,speaking:true,speech:{state:'speaking',messageId:'message:other',attemptId:'speech:other',contentDigest:'b'.repeat(64)}});
@@ -204,6 +240,74 @@ test('ordinary investigations reach the canonical intelligence request without a
   const unfamiliar='My computer feels like it is wading through mud; work out what is going on.';
   composer.value=unfamiliar;composer.fire('input');composer.fire('keydown',{key:'Enter'});
   await settles(()=>turns.length===3);assert.deepEqual(previews,[]);assert.equal(turns[2],unfamiliar);panel.dispose();
+});
+
+test('an explicit mission request opens canonical review without sending an ordinary turn', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const previews: string[] = [], reports: string[] = [];
+  const scope = { workspaceId: 'workspace:synthetic', projectId: null };
+  const offer = { kind: 'planning-offer' as const, scope, objective: 'Synthetic mission', fingerprint: 'preview:synthetic' };
+  let started: ((id: string) => void) | undefined;
+  let available = true, ordinary = 0;
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async () => { ordinary++; return request(); },
+  }), { missions: {
+    element: doc.createElement('section') as unknown as HTMLElement,
+    preview: async intent => { previews.push(intent); return available ? offer : null; },
+    review: (preview, onStarted) => { assert.equal(preview, offer); started = onStarted; },
+    openReport: id => { reports.push(id); }, setVisible() {},
+  } });
+  await settles(() => !!named(root, 'Send to Vela'));
+  const composer = root.find(node => node.tagName === 'textarea')!;
+  const objective = 'Run a mission to measure CPU and RAM';
+  composer.value = objective; composer.fire('input'); composer.fire('keydown', { key: 'Enter' });
+  await settles(() => !!started);
+  assert.deepEqual(previews, [objective]);
+  assert.equal(ordinary, 0);
+  assert.equal(composer.value, objective);
+  started!('mission:verified');
+  assert.deepEqual(reports, ['mission:verified']);
+  assert.equal(composer.value, '');
+  available = false;
+  composer.value = objective; composer.fire('input'); composer.fire('keydown', { key: 'Enter' });
+  await settles(() => root.find(node => node.className === 'vela-core-error')!.textContent.includes('mission workspace'));
+  assert.equal(ordinary, 0);
+  assert.equal(composer.value, objective);
+  panel.dispose();
+});
+
+test('explicit mission review carries the selected project evidence and matching API route', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const scope = { workspaceId: 'workspace:synthetic', projectId: 'project:synthetic' };
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  canonical.applicationContext = { currentProjectId: scope.projectId, currentWorkspaceId: scope.workspaceId, references: [] };
+  const offer = { kind: 'planning-offer' as const, scope, objective: 'Run a mission to verify the release',
+    fingerprint: 'preview:project', planner: { provider: 'openai-api-vela' as const, model: 'gpt-6-luna', capabilities: [] } };
+  const seen: unknown[] = [];
+  let reviewed = false, ordinary = 0;
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async () => { ordinary++; return request(); },
+  }), { missions: {
+    element: doc.createElement('section') as unknown as HTMLElement,
+    preview: async (_objective, _agent, evidence) => { seen.push(evidence); return offer; },
+    review: preview => { reviewed = preview === offer; }, setVisible() {},
+  } });
+  try {
+    await settles(() => !!named(root, 'Vela API'));
+    named(root, 'Vela API').fire('click');
+    const choice = root.find(node => node.tagName === 'label' && node.textContent === 'Find evidence in this project')!.querySelector('input')!;
+    assert.equal(choice.disabled, false);
+    choice.checked = true;
+    const composer = root.find(node => node.tagName === 'textarea')!;
+    composer.value = offer.objective;
+    composer.fire('input');
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => reviewed || !!root.find(node => node.className === 'vela-core-error' && !node.hidden));
+    assert.deepEqual(seen, [{ projectEvidence: true }]);
+    assert.equal(reviewed, true, 'the matching API route opens project evidence review');
+    assert.equal(ordinary, 0);
+    assert.equal(composer.value, offer.objective);
+  } finally { panel.dispose(); }
 });
 
 test('saved routing controls show origins, preserve preferences when editing limits and offer one-send Auto', async () => {
@@ -326,6 +430,64 @@ test('terminal status survives request completion and refresh; connection probe 
   form.fire('submit'); await settles(() => status.dataset.actionState === 'failed' && status.dataset.requestState === 'unknown');
   await panel.refresh(); assert.match(status.textContent, /outcome is unknown/); assert.equal(status.dataset.actionState, undefined);
   panel.dispose(); assert.equal(root.children.length, 0);
+});
+
+test('workspace evidence is an explicit dedicated API composer choice', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  canonical.applicationContext = { currentProjectId: null, currentWorkspaceId: 'workspace:synthetic', references: [] };
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => { turns.push(input); throw Error('authorization_cancelled'); },
+  }));
+  try {
+    await settles(() => !!named(root, 'Vela API'));
+    await panel.refresh();
+    const option = root.find(node => node.tagName === 'label' && node.textContent === 'Review current workspace state')!.querySelector('input')!;
+    assert.equal(option.disabled, true);
+    named(root, 'Vela API').fire('click');
+    assert.equal(option.disabled, false);
+    assert.equal(option.checked, false);
+    option.checked = true;
+    const composer = root.find(node => node.tagName === 'textarea')!;
+    composer.value = 'Which placed material supports a release?';
+    composer.fire('input');
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => turns.length === 1);
+    assert.equal(turns[0].semanticContext, true);
+    assert.equal(turns[0].workspaceState, true);
+    assert.equal(turns[0].providerId, 'openai-api-vela');
+    assert.deepEqual(turns[0].resourceIds, []);
+    assert.equal(option.checked, false);
+  } finally { panel.dispose(); }
+});
+
+test('selecting a prior exchange uses reviewed evidence even when Vela API answered it', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const source = request({ id: '11111111-1111-4111-8111-111111111111', state: 'responded', providerId: 'openai-api-vela',
+    response: { kind: 'answer', messageId: 'synthetic:earlier' }, provenance: { schemaVersion: 1, dependencies: [], digest: 'a'.repeat(64) } });
+  canonical.requests = [source];
+  canonical.conversation!.messages = [{ id: source.response!.messageId, requestId: source.id, role: 'assistant', content: 'Earlier schedule.',
+    source: 'provider', classification: 'reported', responseKind: 'answer', providerId: source.providerId!,
+    providerContribution: { providerId: source.providerId!, classification: 'reported', executionId: 'synthetic:execution' } }];
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => { turns.push(input); throw Error('authorization_cancelled'); },
+  }));
+  try {
+    await settles(() => named(root, 'Use this exchange as evidence')?.hidden === false);
+    named(root, 'Use this exchange as evidence').fire('click');
+    assert.equal(turns.length, 0);
+    const composer = root.find(node => node.tagName === 'textarea')!;
+    composer.value = 'What did we agree earlier?';
+    composer.fire('input');
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => turns.length === 1);
+    assert.equal(turns[0].semanticContext, true);
+    assert.equal(turns[0].handoffSourceRequestId, source.id);
+    assert.equal(turns[0].providerId, 'openai-api-vela');
+  } finally { panel.dispose(); }
 });
 
 test('a timed-out API reply stays unknown with concise visible text and no fabricated completion', async () => {

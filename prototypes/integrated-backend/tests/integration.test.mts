@@ -170,16 +170,33 @@ test('an explicit capability check recovers a lost App Server without replaying 
   } finally { await b.close(); }
 });
 
-test('a reviewed direct Codex send recovers its exact native turn after restart without resending', { timeout: 20000 }, async t => {
+test('a reviewed direct Codex send recovers its exact native turn after restart without resending', async t => {
   const path = temp(t);
   const startedAcknowledgment=join(dirname(path),'observed-turn-started');
   const server = fileURLToPath(new URL('../../codex-bridge/tests/fake-server.mjs', import.meta.url));
   const backend = (mode: string) => new Backend({
     path, contentPolicy: 'synthetic-only', provider: 'codex', codexExecutable: process.execPath, codexArgs: [server, mode,...(mode==='recoverable-crash'?[startedAcknowledgment]:[])],
   });
-  let b = backend('recoverable-crash');
-  let recovery: { resourceId: string; executionId: string };
-  try {
+  // Five independent cold workers must not consume one shared recovery clock.
+  // Each phase is still bounded, and a failure names readiness, work or cleanup.
+  const phase = async (name: string, action: () => Promise<unknown>) => {
+    let completed = false;
+    await t.test(name, { timeout: 20000 }, async () => { await action(); completed = true; });
+    assert.ok(completed, `${name} did not complete; do not continue the recovery sequence`);
+  };
+  const withBackend = async (mode: string, action: (b: Backend) => Promise<void>, connect = true) => {
+    const b = backend(mode);
+    try {
+      await phase(`${mode}: worker readiness`, () => b.call('snapshot', {}));
+      if (connect) await phase(`${mode}: synthetic App Server readiness`, () => b.call('capabilities', {}));
+      await phase(`${mode}: recovery assertions`, () => action(b));
+    } finally {
+      try { await phase(`${mode}: graceful shutdown`, () => b.close()); }
+      finally { await b.terminate(); }
+    }
+  };
+  let recovery!: { resourceId: string; executionId: string };
+  await withBackend('recoverable-crash', async b => {
     const chat = await b.call('createConversation', { title: 'Synthetic direct Codex', providerId: 'codex-app-server', commandId: 'chat' });
     const input = { resourceId: chat.resourceId, expectedRevision: chat.revision, commandId: 'synthetic-send', content: 'Synthetic request to recover.' };
     await b.call('conversation', { name: 'saveDraft', input: { resourceId: chat.resourceId, expectedVersion: 0, content: input.content } });
@@ -199,25 +216,22 @@ test('a reviewed direct Codex send recovers its exact native turn after restart 
     recovery = { resourceId: chat.resourceId, executionId: lost.id };
     assert.equal((await b.call('conversationActivity', { resourceIds: [chat.resourceId] })).executions[0].recoveryAvailable, true);
     await assert.rejects(b.call('conversationSendPreview', { ...input, expectedRevision: chat.revision + 1 }), /reconciliation_required/);
-  } finally { await b.close(); }
+  });
 
   for (const mode of ['recovered-foreign', 'recovered-truncated']) {
-    b = backend(mode);
-    try {
+    await withBackend(mode, async b => {
       assert.deepEqual(await b.call('reconcileConversationTurn', recovery), { state: 'unchanged' });
       assert.equal((await b.call('snapshot', {})).executions[recovery.executionId].state, 'unknown');
-    } finally { await b.close(); }
+    });
   }
-  b = backend('recovered');
-  try {
+  await withBackend('recovered', async b => {
     await assert.rejects(b.call('reconcileConversationTurn', { ...recovery, resourceId: 'foreign' }), /source_unavailable/);
     const results = await Promise.all([b.call('reconcileConversationTurn', recovery), b.call('reconcileConversationTurn', recovery)]);
     assert.deepEqual(results.map(result => result.state).sort(), ['provider_completed', 'unchanged']);
     assert.equal((await b.call('providerActivity', {})).providerRequests, 0);
-  } finally { await b.close(); }
+  });
 
-  b = backend('recovered');
-  try {
+  await withBackend('recovered', async b => {
     const snapshot = await b.call('snapshot', {});
     const e = snapshot.executions[recovery.executionId];
     assert.equal(e.state, 'provider_completed');
@@ -231,7 +245,7 @@ test('a reviewed direct Codex send recovers its exact native turn after restart 
     assert.equal(events.filter(event => event.type === 'execution/recovered').length, 1);
     const draft = await b.call('conversation', { name: 'readDraft', input: { resourceId: recovery.resourceId } }) as { content: string };
     assert.equal(draft.content, 'Synthetic request to recover.');
-  } finally { await b.close(); }
+  }, false);
 });
 
 test('an explicit App Server rejection does not leave a Codex conversation blocked as unknown', async t => {
