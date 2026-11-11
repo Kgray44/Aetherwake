@@ -2,6 +2,7 @@ import type { MissionAdmission, MissionAdmissionReason, MissionAttempt, MissionA
 import type { ConversationProviderTiming, MissionReportTiming, ProviderStreamTiming, StreamEvent, VelaRouteTiming } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
 import type { TurnEvent, TurnTransportTiming } from '../../openai-provider/contracts.mts';
+import type { VelaMissionCognitiveReceipts } from './vela-api-runtime.mts';
 
 /** Bodyless milestones measured relative to the caller's monotonic start. */
 export function observeProviderStream(started: number) {
@@ -242,7 +243,8 @@ function dependencyReadinessPath(attempts: {
 
 /** Read model of already-authorized mission receipts. No independent journal or content retention. */
 export function projectMissionExecution(mission: MissionProjection, reportPublication: ReportPublication | null = null,
-  userDelivery: ReportDelivery | null = null, observation: { clock: string; monotonicMs: number } | null = null) {
+  userDelivery: ReportDelivery | null = null, observation: { clock: string; monotonicMs: number } | null = null,
+  cognitionSource?: VelaMissionCognitiveReceipts) {
   const events = [...new Map(mission.events.map(event => [event.seq, event])).values()].sort((a, b) => a.seq - b.seq);
   const byAttempt = new Map([...mission.tasks, ...(mission.retiredTasks ?? [])].flatMap(task =>
     task.attempts.map((attempt, i) => [attempt.id, { task, attempt, previous: task.attempts[i - 1]?.id }] as const)));
@@ -426,6 +428,33 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const active = ['queued', 'running', 'cancelling', 'paused'].includes(mission.outcome);
   const profile = mission.profile;
   const planningUsage = reportedUsage(plan?.usage);
+  const cognition = cognitionSource ? {
+    contract: cognitionSource.contract,
+    truncated: cognitionSource.truncated,
+    runs: [...new Map(cognitionSource.runs.map(run => [run.executionId, run])).values()].flatMap(run => {
+      const { attribution, executionId, clockDomain, startedMs, settledMs } = run;
+      const owner = attribution.owner;
+      let checkpointEventSeq: number | null = null;
+      if (owner.kind === 'planning') {
+        if (plan?.provider !== run.provider || owner.requestId !== mission.requestId ||
+          (attribution.stage === 'planning' && plan.executionId && plan.executionId !== executionId)) return [];
+      } else {
+        if (owner.missionId !== mission.id || owner.revision > mission.revision || owner.planRevision > mission.planRevision) return [];
+        const trigger = events.find(event => event.seq === owner.triggerSeq);
+        if (trigger && (trigger.kind !== 'settled' && trigger.kind !== 'recovered' ||
+          trigger.timing?.planRevision !== undefined && trigger.timing.planRevision !== owner.planRevision)) return [];
+        checkpointEventSeq = trigger?.seq ?? null;
+      }
+      return [{
+        executionId, attribution: structuredClone(attribution), checkpointEventSeq, provider: run.provider,
+        providerEvidence: run.providerEvidence, requestedModel: run.requestedModel, reportedModel: run.reportedModel,
+        effort: run.effort, configurationVersion: run.configurationVersion, clockDomain, startedMs, settledMs,
+        elapsedMs: run.elapsedMs, dispatched: run.dispatched, outcome: run.transportOutcome,
+        errorCode: run.errorCode, usage: reportedUsage(run.usage ?? undefined),
+      }];
+    }),
+  } : null;
+  const executiveRuns = cognition?.runs.filter(run => run.attribution.owner.kind === 'checkpoint') ?? [];
   // Attempt receipts can outlive their lifecycle events in the bounded journal.
   const claims = Array.from(byAttempt.values()).flatMap(({ attempt }) => {
     const telemetry = attempt.telemetry;
@@ -433,6 +462,10 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       receipt: reportedUsage(telemetry.usage), source: telemetry.providerEvidence ?? null }] : [];
   });
   if (plan) claims.push({ executionId: plan.executionId, receipt: planningUsage, source: plan.providerEvidence ?? null });
+  for (const receipt of plan?.context?.usage ?? [])
+    claims.push({ executionId: undefined, receipt: reportedUsage(receipt), source: plan?.providerEvidence ?? null });
+  for (const run of executiveRuns) if (run.dispatched === true)
+    claims.push({ executionId: run.executionId, receipt: run.usage, source: run.providerEvidence });
   const usage: { receipt: ReportedUsage; source: 'reported' | 'simulated' | null }[] = [];
   const executionClaims = new Map<string, typeof claims>();
   for (const claim of claims) {
@@ -461,7 +494,10 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     if (conflict) conflictingUsageExecutionIds.push(id);
     else if (receipt) usage.push({ receipt, source: sources.values().next().value ?? null });
   }
-  const providerCalls = profile.providerCalls !== null && profile.providerCalls >= duplicateCalls ? profile.providerCalls - duplicateCalls : null;
+  const knownProviderCalls = profile.providerCalls === null ? null :
+    profile.providerCalls + executiveRuns.filter(run => run.dispatched === true).length;
+  const providerCalls = knownProviderCalls !== null && knownProviderCalls >= duplicateCalls &&
+    !cognition?.truncated && !executiveRuns.some(run => run.dispatched === null) ? knownProviderCalls - duplicateCalls : null;
   const usageReceipts = { reported: 0, simulated: 0, unattributed: 0,
     missing: providerCalls !== null && providerCalls >= usage.length ? providerCalls - usage.length : null };
   const usageBySource = { reported: emptyTokenObservations(), simulated: emptyTokenObservations(), unattributed: emptyTokenObservations() };
@@ -587,7 +623,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     planning: plan ? { durationMs: plan.durationMs, provider: plan.provider, model: plan.model,
       executionId: plan.executionId ?? null, timing: plan.timing ? structuredClone(plan.timing) : null,
       lifecycle: planningLifecycle, providerEvidence: plan.providerEvidence ?? null, usage: planningUsage } : null,
-    attempts, waits: mission.waits,
+    attempts, waits: mission.waits, cognition,
     work: {
       causalBoundary: 'attempt-dependencies-and-retries' as const,
       openAttempts: openAttempts.map(attempt => attempt.id),

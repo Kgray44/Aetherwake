@@ -1248,7 +1248,9 @@ export class BackendCore {
         const clock = this.missions.fullProfilingClock();
         const observation = clock && (mission.outcome === 'running' || mission.outcome === 'cancelling') ?
           { clock, monotonicMs: performance.now() } : null;
-        return projectMissionExecution(mission, publication, delivery, observation);
+        const cognition = this.velaApiRuntime.missionCognitiveReceipts(
+          mission.planning?.provider === VELA_API_PROVIDER ? mission.requestId : null, mission.id);
+        return projectMissionExecution(mission, publication, delivery, observation, cognition);
       }
       case 'read': {
         ensure(Object.keys(request.input).length === 1, 'invalid_mission_command');
