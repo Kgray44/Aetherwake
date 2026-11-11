@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as wait } from 'node:timers/promises';
@@ -16,6 +17,7 @@ import { planVelaProjectCheck } from './vela-project-check.mts';
 
 if (process.platform !== 'win32' || process.env.AERYNTH_VERIFY_WINDOWS_BUILD !== '1')
   throw Error('Windows and AERYNTH_VERIFY_WINDOWS_BUILD=1 are required');
+const parallelTypecheck = process.argv.includes('--parallel-typecheck');
 const path = Object.entries(process.env).find(([name]) => name.toUpperCase() === 'PATH')?.[1] ?? '';
 const launch = windowsCodexLaunch(path, process.execPath, ['app-server', '--listen', 'stdio://']);
 assert.ok(launch, 'installed Codex CLI is unavailable');
@@ -35,6 +37,7 @@ const readyEntered = latch(), readyGate = latch();
 let commandEntered = latch();
 const eventLoop = monitorEventLoopDelay({ resolution: 5 });
 let nativeCommandMs = 0;
+let compilerOverlapMs: number | undefined;
 let holdReadiness = true, nativeRuns = 0, occupied = false;
 const check = createMissionProjectCheck({ digest, runner: {
   async ready() {
@@ -45,7 +48,13 @@ const check = createMissionProjectCheck({ digest, runner: {
     nativeRuns++;
     commandEntered.resolve();
     const started = performance.now();
-    try { return await adapter.execReadOnly({ command, cwd, timeoutMs: 8000 }); }
+    try {
+      const result = await adapter.execReadOnly({ command, cwd, timeoutMs: 8000 });
+      if (parallelTypecheck && result.exitCode !== 0) console.error(JSON.stringify({ stdout: result.stdout, stderr: result.stderr }));
+      const overlap = /^(?:# )?verified compiler overlap ms: (\d+(?:\.\d+)?)\r?$/mu.exec(result.stdout)?.[1];
+      compilerOverlapMs = overlap === undefined ? undefined : Number(overlap);
+      return result;
+    }
     finally { nativeCommandMs = Math.round(performance.now() - started); }
   },
 }, lease() {
@@ -78,9 +87,62 @@ async function settle(id: string) {
   throw Error('sandbox command did not settle');
 }
 
+function compilerFixture() {
+  const installed = dirname(createRequire(import.meta.url).resolve('typescript'));
+  const compiler = join(root, 'compiler');
+  mkdirSync(compiler);
+  const files = readdirSync(installed).filter(name => /^(?:typescript\.js|lib(?:\.[a-z0-9]+)*\.d\.ts)$/u.test(name));
+  assert.ok(files.includes('typescript.js'));
+  assert.ok(files.reduce((total, name) => total + statSync(join(installed, name)).size, 0) < 24 * 2 ** 20);
+  for (const name of files) copyFileSync(join(installed, name), join(compiler, name));
+  for (const project of ['service', 'worker']) {
+    const directory = join(root, project);
+    mkdirSync(directory);
+    for (let index = 0; index < 24; index++) {
+      const source = index === 0 ? 'export const value: number = 1;\n' :
+        `import { value as prior } from './module-${index - 1}.js';\nexport const value: number = prior + ${index};\n`;
+      writeFileSync(join(directory, `module-${index}.ts`), source);
+    }
+    writeFileSync(join(directory, 'tsconfig.json'), JSON.stringify({ compilerOptions: { strict: true, target: 'ES2023',
+      module: 'NodeNext', types: [], lib: ['ES2023'] }, include: ['*.ts'] }));
+  }
+  return `import test from 'node:test';
+import assert from 'node:assert/strict';
+import { Worker, parentPort, workerData, threadId } from 'node:worker_threads';
+if (parentPort) {
+  const { default: ts } = await import('./compiler/typescript.js');
+  const file = './' + workerData + '/tsconfig.json';
+  const config = ts.readConfigFile(file, ts.sys.readFile);
+  assert.equal(config.error, undefined);
+  const options = ts.parseJsonConfigFileContent(config.config, ts.sys, './' + workerData);
+  assert.equal(options.errors.length, 0);
+  assert.equal(options.fileNames.length, 24);
+  const started = performance.now();
+  const program = ts.createProgram(options.fileNames, { ...options.options, noEmit: true, incremental: false });
+  assert.equal(ts.getPreEmitDiagnostics(program).length, 0);
+  parentPort.postMessage({ threadId, started, ended: performance.now() });
+} else {
+  test('typecheck two independent module graphs', async () => {
+    const results = await Promise.all(['service', 'worker'].map(project => new Promise((resolve, reject) => {
+      const worker = new Worker(new URL(import.meta.url), { workerData: project, execArgv: [],
+        resourceLimits: { maxOldGenerationSizeMb: 96 } });
+      let result;
+      worker.once('message', value => { result = value; });
+      worker.once('error', reject);
+      worker.once('exit', code => code === 0 && result ? resolve(result) : reject(Error('Compiler worker failed')));
+    })));
+    const [a, b] = results;
+    assert.notEqual(a.threadId, b.threadId);
+    const overlap = Math.min(a.ended, b.ended) - Math.max(a.started, b.started);
+    assert.ok(overlap > 0);
+    console.log('verified compiler overlap ms: ' + overlap.toFixed(2));
+  });
+}\n`;
+}
+
 try {
   const input = join(root, 'bounded.test.mjs');
-  writeFileSync(input, `import test from 'node:test';\nimport { setTimeout as wait } from 'node:timers/promises';\n` +
+  writeFileSync(input, parallelTypecheck ? compilerFixture() : `import test from 'node:test';\nimport { setTimeout as wait } from 'node:timers/promises';\n` +
     `test('synthetic sandbox test', async () => { await wait(2500); });\n`);
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, windowsHide: true, timeout: 5000, stdio: 'ignore' });
   git('init', '--quiet');
@@ -106,6 +168,10 @@ try {
 
   holdReadiness = false;
   mode('balanced');
+  if (parallelTypecheck) {
+    await wait(550);
+    governor.read(true);
+  }
   eventLoop.enable();
   await wait(20);
   const active = service.create('after-dispatch-pressure', plan);
@@ -117,9 +183,12 @@ try {
   assert.equal(governor.canLease('remote'), true);
   const terminal = await settle(active.id);
   assert.equal(terminal.outcome, 'verified', terminal.tasks[0].detail);
-  assert.equal(terminal.tasks[0].attempts[0].resourceLease?.kind, 'build');
+  const attempt = terminal.tasks[0].attempts[0];
+  assert.equal(attempt.resourceLease?.kind, 'build');
   assert.equal(governor.inspectPolicy().active.build, 0);
   assert.equal(nativeRuns, 1);
+  const verifiedOverlapMs = compilerOverlapMs;
+  if (parallelTypecheck) assert.ok(verifiedOverlapMs !== undefined && verifiedOverlapMs > 0);
   eventLoop.disable();
   const verifiedCommandMs = nativeCommandMs;
 
@@ -137,8 +206,11 @@ try {
   assert.equal(nativeRuns, 2);
   console.log(JSON.stringify({ sandboxReady: true, preDispatchOutcome: blocked.outcome, nativeRuns,
     activeLeaseRetainedUntilVerified: true, remoteAvailableUnderPressure: true,
-    executionMs: terminal.tasks[0].attempts[0].timing?.executionMs, nativeCommandMs: verifiedCommandMs,
-    backendEventLoopMaxMs: Math.round(eventLoop.max / 1e6), changedInputOutcome: invalidated.outcome }));
+    executionMs: attempt.timing?.executionMs, nativeCommandMs: verifiedCommandMs,
+    backendEventLoopMaxMs: Math.round(eventLoop.max / 1e6), changedInputOutcome: invalidated.outcome,
+    ...(parallelTypecheck ? { compilerWorkers: 2, compilerOverlapMs: verifiedOverlapMs,
+      cpuAtAdmissionPercent: attempt.admission?.readings.cpuPercent?.value ?? null,
+      cpuPressureAtAdmission: attempt.admission?.reasons.includes('cpu-load') ?? false } : {}) }));
 } finally {
   eventLoop.disable();
   readyGate.resolve();
