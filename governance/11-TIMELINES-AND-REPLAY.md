@@ -627,3 +627,31 @@ This is an **owner-ratified governing charter (2026-11-05)**. Publication alone 
 **AW-TIME-133 — Motion consistency.** Timeline, Intelligence Stream and Vela Mind MUST share canonical event state, motion semantics and reduced-motion accessibility without mutating task truth.
 
 **Acceptance:** Add and edit a time point, display a live branched task, restart, scrub history, and demonstrate no external replay side effect.
+
+---
+
+## Owner-directed supporting amendment FI-2026-11-10: adaptation and performance history
+
+> **Design obligations.** Timeline is the view and replay owner, not the authoritative storage location for execution, profiler, resource or adaptive policy data. Existing historical truth and side-effect-free replay obligations remain binding.
+
+**AW-TIME-134 — Inspectable learning chronology.** Timelines MUST be capable of presenting model/tool strategy proposals, experiment starts, evaluation windows, policy promotions, reversions and user feedback with immutable historical identity and actual observation timestamps.
+
+**AW-TIME-135 — Decision-to-evidence links.** A policy change or orchestration decision SHOULD link to its governing mission, task graph version, model/tool configuration, source-backed evidence, AEP comparison and ARIE resource conditions, subject to permissions.
+
+**AW-TIME-136 — Actual versus projected state.** Historical observations, AI hypotheses, performance forecasts, replay simulations, in-progress experiments and verified results MUST have visibly distinct semantics. A prediction MUST NOT be backfilled as a measured result.
+
+**AW-TIME-137 — Critical-path and parallelism visualization.** Task timelines SHOULD show genuine overlap, dependencies, wait time, tool/API latency, CPU scheduling constraints and causal joins from authoritative events. They MUST NOT manufacture concurrency or attribute remote inference CPU work to the local device.
+
+**AW-TIME-138 — Policy version continuity.** Timeline readers MUST be able to identify when a strategy version became active, what workloads it covered, and whether it was superseded or rolled back. Prior outcomes MUST retain the policy applicable at the time, even after current defaults change.
+
+**AW-TIME-139 — Scrub without effects.** Exploring historical missions, optimization experiments or a previous Vela state MUST NOT replay billable model requests, make fresh tool calls, change permissions, re-run tests, or activate old resource policies.
+
+**AW-TIME-140 — Partial and missing telemetry.** Late events, clock differences, unknown provider timing, retention loss and trace gaps MUST be represented honestly. Missing measurement segments MUST NOT become zero-duration tasks or inferred success.
+
+**AW-TIME-141 — Event-sourced spatial synchronization.** Timeline, Intelligence Stream, AEP Workspace and Vela Mind MUST project the same canonical event IDs, policy references and verification outcomes, with motion effects remaining presentation-only.
+
+**AW-TIME-142 — Adaptive performance comparison.** Timeline comparison SHOULD allow users to examine before/after strategies against comparable tasks, including quality, critical-path duration, p50/p95 latency, resource contention and conditions of measurement; insufficient sample sizes MUST be disclosed.
+
+**AW-TIME-143 — Privacy-aware replay and export.** Sensitive user input, screenshots, telemetry and private project evidence MUST honor original scope, retention and revocation rules during scrub, export and shared playback.
+
+**Acceptance:** Replay two parallel mission branches and one adaptive strategy experiment; inspect a policy promotion followed by rollback; demonstrate correct timestamp/provenance reconciliation, missing-data disclosure and zero billable/repeated side effects. See [09 Observability](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md), [10 AEP](10-AI-EXECUTION-PROFILER.md), [13 Platform](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md).
