@@ -1022,8 +1022,9 @@ export class BackendCore {
     selection: NonNullable<CommandMap['missionStartReviewed']['input']['approvedProjectCheck']>) {
     ensure(offer.planner?.projectCheck === true, 'mission_project_check_unavailable');
     const plan = this.checkedMissionProjectSelection(selection);
-    const files = plan.inputs.map(path => path.split('/').at(-1)!);
-    return { files, fingerprint: planningDigest({ offer: offer.fingerprint, selection: selection.digest, files }) };
+    const context = { files: plan.inputs.map(path => path.split('/').at(-1)!), commandKind: 'node-test',
+      commandState: 'validated-locally', requiresStartApproval: true } as const;
+    return { context, fingerprint: planningDigest({ offer: offer.fingerprint, selection: selection.digest, context }) };
   }
   private startMissionPlanning(request: CommandMap['missionPlanReviewed']['input']): Promise<MissionResponse> {
     ensure(request && Object.keys(request).every(key => ['objective', 'fingerprint', 'requestId', 'noteIds', 'fileIds', 'projectEvidence',
@@ -1084,7 +1085,7 @@ export class BackendCore {
           { planningRequestId: requestId, reviewedMissionCapabilities, observeResult: result => {
             if (result.dispatched) providerCalls++;
             if (result.usage) usage.push(result.usage);
-          }, ...(projectCheck && approvedProjectCheck ? { reviewedProjectTests: projectCheck.files,
+          }, ...(projectCheck && approvedProjectCheck ? { reviewedProjectCheck: projectCheck.context,
             validateReviewedTests: () => { this.checkedMissionProjectSelection(approvedProjectCheck); } } : {}) },
           project ? { sources: project.sources.map(toVelaReviewedEvidenceSource), partial: project.reference.partial } : undefined);
           ensure(evidence.state === 'assessed' && evidence.coverage.length, 'mission_planning_context_unavailable');
@@ -1099,9 +1100,9 @@ export class BackendCore {
         if (approvedProjectCheck) this.checkedMissionProjectSelection(approvedProjectCheck);
         let observed:TurnResult|undefined;
         const planningInstructions = projectCheck ? instructions +
-          ' reviewedProjectTests lists the tracked files selected and disclosed for planning. The project-tests capability uses exactly those files. Starting the command still requires native approval. Do not treat file selection as missing or claim the check has run.' : instructions;
+          ' reviewedProjectCheck describes the locally validated Node test command and its selected tracked files. The project-tests capability uses exactly this selection. The command and checkout remain private and are reviewed locally at Start. Their absence from the prompt is not a missing prerequisite. Do not claim the check has run.' : instructions;
         await this.velaApiRuntime.structuredProposal({instruction:planningInstructions,payload:{objective,capabilities,
-          ...(projectCheck ? { reviewedProjectTests: projectCheck.files } : {}), ...(evidence ? { evidence } : {})},schema:MISSION_PROPOSAL_SCHEMA,
+          ...(projectCheck ? { reviewedProjectCheck: projectCheck.context } : {}), ...(evidence ? { evidence } : {})},schema:MISSION_PROPOSAL_SCHEMA,
           requestId,model:apiPlanner.model,reasoningEffort:apiPlanner.effort,
           missionCognition: { owner: { kind: 'planning', requestId }, stage: 'planning' },
           binding:{configurationVersion:apiPlanner.version,contextDigest:context || projectCheck ?

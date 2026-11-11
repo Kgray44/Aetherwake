@@ -411,7 +411,9 @@ test('preselected tracked tests bind provider review and Start without disclosin
     const approvedProjectCheck = { paths: [path], digest: check.digest };
     const baseReview = { ...selection, fingerprint: offer.fingerprint, approvedProjectCheck };
     const reviewed = await f.core.command('missionPlanningReview', baseReview);
-    assert.deepEqual(reviewed.projectCheck?.files, ['harness.test.mjs']);
+    const checkContext = { files: ['harness.test.mjs'], commandKind: 'node-test',
+      commandState: 'validated-locally', requiresStartApproval: true };
+    assert.deepEqual(reviewed.projectCheck?.context, checkContext);
     const requestId = randomUUID();
     const input = { ...baseReview, requestId, projectCheckReviewFingerprint: reviewed.projectCheck!.fingerprint };
     await assert.rejects(f.core.command('missionPlanReviewed', { ...input, projectCheckReviewFingerprint: 'f'.repeat(64) }),
@@ -436,7 +438,7 @@ test('preselected tracked tests bind provider review and Start without disclosin
     ] });
     const reply = (value: unknown, disclosed: boolean) => (body: any) => {
       const payload = JSON.parse(body.input[0].content);
-      assert.deepEqual(payload.reviewedProjectTests, disclosed ? ['harness.test.mjs'] : undefined);
+      assert.deepEqual(payload.reviewedProjectCheck, disclosed ? checkContext : undefined);
       if (payload.stage) assert.deepEqual(payload.reviewedMissionCapabilities, disclosed ? offer.planner?.capabilities : undefined);
       for (const secret of [repo, freshCheck.digest, freshCheck.head, process.execPath])
         assert.ok(!JSON.stringify(payload).includes(JSON.stringify(secret).slice(1, -1)));

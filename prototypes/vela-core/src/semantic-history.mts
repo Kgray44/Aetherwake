@@ -58,11 +58,17 @@ export interface SemanticHistorySource {
 interface Passage { source: string; quote: string }
 interface Assessment { key: string; status: Status; sources: string[]; query: string; passages?: Passage[] }
 interface EvidenceReview { rows: Assessment[]; clarification: string }
+export interface ReviewedProjectCheckContext {
+  files: readonly string[];
+  commandKind: 'node-test';
+  commandState: 'validated-locally';
+  requiresStartApproval: true;
+}
 export type SemanticHistoryCall = (
   | { stage: 'interpret'; request: string; reviewedSourceTitles?: readonly string[]; reviewedMissionGap?: string }
   | { stage: 'assess'; request: string; proposedClarification?: string; needs: readonly Need[];
     excerpts: readonly { handle: string; text: string; title?: string; partial?: true; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number }
-) & { missionPlanning?: true; reviewedProjectTests?: readonly string[]; reviewedMissionCapabilities?: readonly string[] };
+) & { missionPlanning?: true; reviewedProjectCheck?: ReviewedProjectCheckContext; reviewedMissionCapabilities?: readonly string[] };
 
 interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan }
 interface SemanticHistoryOwner<T extends SemanticHistorySource> {

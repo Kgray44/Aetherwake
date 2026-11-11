@@ -264,7 +264,8 @@ export interface CommandMap {
     output: { offer: import('./mission-contracts.mts').MissionPlanningOffer;
       notes: (import('./mission-contracts.mts').MissionPlanningSourceRef & { text: string })[];
       files: (import('./mission-contracts.mts').MissionPlanningSourceRef & { text: string })[];
-      projectEvidence?: VelaNativeReview['projectEvidence']; projectCheck?: { files: string[]; fingerprint: string } };
+      projectEvidence?: VelaNativeReview['projectEvidence']; projectCheck?: {
+        context: import('../../vela-core/src/semantic-history.mts').ReviewedProjectCheckContext; fingerprint: string } };
   };
   missionRevisionReviewed: { input: Extract<MissionRequest, { name: 'revision-apply' }>['input']; output: MissionResponse };
   missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true }; output: null };

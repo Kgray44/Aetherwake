@@ -892,7 +892,7 @@ app.whenReady().then(async () => {
               throw Error("mission_preview_changed");
             projectCheckReviewFingerprint = reviewed.projectCheck?.fingerprint;
             const prompt = JSON.stringify({ objective, capabilities,
-              ...(reviewed.projectCheck ? { reviewedProjectTests: reviewed.projectCheck.files } : {}) }, null, 2);
+              ...(reviewed.projectCheck ? { reviewedProjectCheck: reviewed.projectCheck.context } : {}) }, null, 2);
             approved = await reviewProvider({ parent: win, intent: objective, expiresAt: new Date(Date.now() + 90_000).toISOString(),
               review: { providerId: provider, semanticContext: true, missionPlanning: true, prompt,
                 promptDigest: createHash("sha256").update(JSON.stringify(prompt)).digest("hex"),
