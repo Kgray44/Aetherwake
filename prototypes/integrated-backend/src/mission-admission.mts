@@ -429,7 +429,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
   function externalDesktopActivity(time: number) {
     if (!policy.externalActivityProtection() || focused === null || !power || power.value.suspended ||
         power.value.idleSeconds === null || time - power.time > desktopActivityFreshMs) return undefined;
-    return !focused && power.value.idleSeconds * 1000 < inputFreshMs;
+    return !focused && power.value.idleSeconds * 1000 + time - power.time < inputFreshMs;
   }
 
   function windowsMemoryReading(name: EarlyMemoryMetric, time: number) {
@@ -567,11 +567,14 @@ export function createMissionAdmission(options: AdmissionOptions) {
     noteResourceSignal(signal: ResourceSignal) {
       if (disposed) return;
       const time = now();
-      if ('aerynthFocused' in signal) {
-        focused = signal.aerynthFocused;
+      const reportedFocus = 'aerynthFocused' in signal ? signal.aerynthFocused :
+        'hostPower' in signal ? signal.hostPower.aerynthFocused : undefined;
+      if (reportedFocus !== undefined) {
+        focused = reportedFocus;
         if (!focused) clearRendererTiming();
         capture('aerynthFocused', Number(focused), time);
-      } else if ('hostPower' in signal) {
+      }
+      if ('hostPower' in signal) {
         const next = signal.hostPower;
         if (next.suspended !== (power?.value.suspended ?? false)) {
           probe?.abort();
@@ -594,7 +597,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
         if (next.speedLimitPercent === null) samples.delete('cpuSpeedLimitPercent');
         else capture('cpuSpeedLimitPercent', next.speedLimitPercent, time);
         capture('suspended', Number(next.suspended), time);
-      } else {
+      } else if ('rendererTiming' in signal) {
         if (!focused || power?.value.suspended || frame && time - frame.timing.time < 1_500) return;
         const { frameP95Ms, budgetRatioP95, samples: count, windowMs } = signal.rendererTiming;
         const previous = fresh(frame?.timing, time, rendererFreshMs) ? frame : undefined;
