@@ -19,8 +19,23 @@ The previous append scanned the table and constructed a membership list for the 
 
 Run `node prototypes/integrated-backend/src/journal-retention-benchmark.mjs` for a synthetic, in-memory SQLite comparison with gapped cursors and exact row assertions. On Windows with Node 24.18.0, 20 warmups and 100 measured deletes per configuration, p95 at 100, 10,000 and 100,000 retained rows was 0.087, 16.70 and 244.48 ms for the prior query and 0.009, 0.069 and 1.34 ms for the range query. This single comparison measures pruning SQL, including walking the rank, and excludes provider, disk commit, renderer and full application latency.
 
-Run `node --test prototypes/integrated-backend/tests/transaction-coordination.test.mts` for the integrated journal checks. The new regression verifies the range query plan, sparse cursor retention, authorized renderer bounds and restart with the normal `stream/reopened` event. All 12 tests passed locally, including interruption before and after SQLite release.
+Run `node --test prototypes/integrated-backend/tests/transaction-coordination.test.mts` for the integrated journal checks. The retention regression verifies the range query plan, sparse cursor retention, authorized renderer bounds and restart with the normal `stream/reopened` event. The suite includes interruption before and after SQLite release.
+
+## Disk-backed continuity and retrieval
+
+Run `node prototypes/integrated-backend/src/transaction-benchmark.mjs` for the existing disk-backed mutation, restart and writer-fence workload. The Windows run completed all seven synthetic profiles with four warmups and 24 measured samples per operation. Examples from that run follow. Peak RSS is cumulative across the process. Other host activity overlapped this run, so the latency numbers describe this run and should not be used as quiet-host thresholds.
+
+| Profile | SQLite bytes before and after workload | Reopen and snapshot p95 | Process peak RSS |
+| --- | ---: | ---: | ---: |
+| Almost empty | 831,488 → 2,949,120 | 495 ms | 352,352 KiB |
+| Conversation heavy | 5,259,264 → 7,405,568 | 3,915 ms | 566,620 KiB |
+| Event heavy | 1,183,744 → 3,330,048 | 393 ms | 576,804 KiB |
+| Near snapshot limit | 14,761,984 → 17,035,264 | 1,481 ms | 928,496 KiB |
+
+The backup regression uses the existing SQLite online backup and opens the copy through Core. It checks the exact conversation, message, event ID and cursor, and verifies that a source appended after backup is absent from the restored copy.
+
+Run `node prototypes/vela-core/tests/mission-context-evaluation.mts` for the frozen starter corpus. The current lexical compiler found five of six expected source IDs, including both conflicting records, and missed the paraphrase about the night shift. The fixture denied a superseded source and a restricted source at their owner boundary. It also verified rejection of an old policy-stamped package, reconstruction with the same source identities under a new stamp and denial after revocation. Two 150-sample runs measured p50 0.20–0.33 ms and p95 1.53–16.46 ms under concurrent host load. The fixture adapter supplies its own authorization and policy stamps. These results establish a regression baseline for the compiler and proof checks. Live provider continuity and independently labeled semantic quality require separate evidence.
 
 ## Remaining acceptance evidence
 
-The current lexical baseline uses [bounded history retrieval](../../prototypes/vela-core/src/history-retrieval.mts) and scoped [mission context](../../prototypes/vela-core/src/mission-context.mts). The [semantic CIE specification](../specifications/CIE-SEMANTIC-INTERPRETATION-AND-EVIDENCE-RETRIEVAL.md) requires an independently labeled split for paraphrase, conflict, correction, permissions, revocation and provider continuity. A3 still needs that comparative evaluation, restored encrypted-backup evidence, repeated disk-backed retrieval and replay baselines, and a qualified native profile. No independent CIE database or transcript copy is introduced.
+The current lexical baseline uses [bounded history retrieval](../../prototypes/vela-core/src/history-retrieval.mts) and scoped [mission context](../../prototypes/vela-core/src/mission-context.mts). The [semantic CIE specification](../specifications/CIE-SEMANTIC-INTERPRETATION-AND-EVIDENCE-RETRIEVAL.md) requires an independently labeled split for paraphrase, conflict, correction, permissions, revocation and provider continuity. A3 still needs that comparative evaluation, encrypted backup recovery with native key custody, repeated disk-backed retrieval and replay baselines, and a qualified native profile. No independent CIE database or transcript copy is introduced.

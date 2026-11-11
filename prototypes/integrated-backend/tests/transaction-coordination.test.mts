@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { BackendCore } from '../src/core.mts';
 import type { Options } from '../src/contracts.mts';
 
@@ -349,4 +349,37 @@ test('journal retention uses a cursor range and preserves the newest rows across
   const [sql] = retentionStatements;
   const queryPlan = db.prepare('EXPLAIN QUERY PLAN ' + sql).all(4);
   assert.match(queryPlan[0].detail, /SEARCH intelligence_events USING INTEGER PRIMARY KEY/i);
+});
+
+test('a kernel backup restores canonical conversation and journal identities through Core', async t => {
+  const {core, path} = fixture(t, {rendererEventTransport: true});
+  const copyPath = join(dirname(path), 'backup.sqlite');
+  const created = await core.command('createConversation', {
+    title: 'Synthetic backup continuity', providerId: 'local', commandId: 'backup-conversation',
+  });
+  const message = await core.command('addMessage', {
+    resourceId: created.resourceId, content: 'Synthetic source preserved in backup', role: 'user', expectedRevision: 1,
+  });
+  const event = (core as any).record('synthetic/backup', 'observed', undefined, 'backup-observation');
+  await (core as any).kernel.backupTo(copyPath);
+  await core.command('addMessage', {
+    resourceId: created.resourceId, content: 'Synthetic source after backup', role: 'user', expectedRevision: 2,
+  });
+
+  const restored = new BackendCore({
+    path: copyPath, provider: 'fixture', contentPolicy: 'synthetic-only', rendererEventTransport: true,
+  });
+  try {
+    const snapshot = await restored.command('snapshot', {});
+    assert(snapshot.conversations.some(conversation => conversation.resourceId === created.resourceId));
+    assert.deepEqual(snapshot.graph.messages.map(({id, content}) => ({id, content})), [
+      {id: message.id, content: message.content},
+    ]);
+    const replay = await restored.command('rendererEventPage', {after: event.cursor - 1});
+    assert.equal(replay.events[0]?.eventId, event.eventId);
+    assert.equal(replay.events[0]?.cursor, event.cursor);
+    assert.equal(replay.events.at(-1)?.type, 'stream/reopened');
+  } finally {
+    await restored.command('close', {});
+  }
 });
