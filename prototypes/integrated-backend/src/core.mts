@@ -9,7 +9,7 @@ import { missionExecutiveSchema, missionObjectiveAssessmentSchema, projectExecut
 import { maxReviewedFileBytes, maxReviewedStateBytes } from '../../vela-core/src/semantic-history.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
-import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
+import { missionCompletion, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
 import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS, MISSION_PROPOSAL_SCHEMA, naturalMissionInvestigation } from './mission-proposal.mts';
 import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, reassignMissionSpecialist, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
 import { MissionTeams } from './mission-teams.mts';
@@ -2170,12 +2170,20 @@ export class BackendCore {
     }).map(m=>{
       const meta=this.state.vela!.messages[m.id],evidence=this.state.messageEvidence[m.id];
       const link=meta?.missionReport;
-      if(link&&link.jobsDone===undefined){
+      if (link) {
+        const { missionId, workspaceId, projectId } = link;
         try {
-          const mission=this.missions.read(link.missionId,{workspaceId:link.workspaceId,projectId:link.projectId});
-          if(mission.outcome==='verified')return {id:m.id,role:m.role,content:m.content,...meta,
-            missionReport:{...link,jobsDone:missionJobsDone(mission)}} as VelaMessage;
-        }catch { /* Keep the older chat receipt when its backing journal is unavailable. */ }
+          const published = this.db.prepare('SELECT message_id FROM vela_mission_report_links WHERE mission_id=?').get(missionId);
+          const report = published?.message_id === m.id && this.missions.readReport(missionId, { workspaceId, projectId });
+          if (report && report.content === m.content && (link.jobsDone === undefined || link.jobsDone === report.jobsDone)) {
+            const { content: _content, ...details } = report;
+            return { id: m.id, role: m.role, ...meta, content: m.content,
+              missionReport: { missionId, workspaceId, projectId, ...details } } as VelaMessage;
+          }
+        } catch { /* The canonical message remains in the journal, but current evidence is unavailable. */ }
+        return { id: m.id, role: m.role, ...meta,
+          content: 'The evidence for this mission report changed or became unavailable. Open the mission to review its current state.',
+          missionReport: { missionId, workspaceId, projectId, stale: true } } as VelaMessage;
       }
       return {id:m.id,role:m.role,content:m.content,...(meta??{source:m.role==='user'?'user':evidence?'provider':'user',classification:evidence?.classification==='reported'?'reported':evidence?'unknown':'observed',...(evidence?{providerId:evidence.providerId}:{})})} as VelaMessage;
     });

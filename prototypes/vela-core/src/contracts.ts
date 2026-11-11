@@ -111,7 +111,8 @@ export interface VelaMessage {
   requestId?: string; planId?: string; classification: EvidenceClass;
   /** Native captured transcript evidence; never a completed conversational turn. */
   voice?: { sessionId:string;startMs:number;endMs:number;completedTurn:false;transcription:'provider-reported';sealed:boolean;acceptedRequestId?:string };
-  missionReport?: { missionId: string; workspaceId: string; projectId: string | null; jobsDone?: number };
+  missionReport?: { missionId: string; workspaceId: string; projectId: string | null; jobsDone?: number; stale?: true;
+    assessment?: { model: string; planRevision: number; gaps: string[] } };
   /** Parsed conversational content remains attributed to the actual observed provider output. */
   responseKind?: ProviderReplyKind; providerContribution?: ProviderContribution;
 }

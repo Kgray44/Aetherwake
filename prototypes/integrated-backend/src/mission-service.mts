@@ -4,7 +4,7 @@ import { compileMissionContext, createMissionContextCache, validateMissionContex
   type MissionContextSource } from '../../vela-core/src/mission-context.mts';
 import { historyDigest } from '../../vela-core/src/bounded-history.mts';
 import { ServiceError } from './contracts.mts';
-import { missionMeasurementAnswer } from './mission-native.mts';
+import { missionCompletion, missionMeasurementAnswer } from './mission-native.mts';
 import { buildMissionRevision } from './mission-revision.mts';
 import { projectExecutiveCheckpoint } from './mission-executive.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
@@ -281,6 +281,23 @@ export class MissionService {
     const m = this.lookup(id);
     this.requireAccess(m, scope);
     return this.project(m);
+  }
+
+  readReport(id: string, scope: MissionScope) {
+    const mission = this.lookup(id);
+    this.requireAccess(mission, scope);
+    const checked = new Map<string, boolean>();
+    if (mission.disposition === 'cancelled' || !mission.tasks.length || this.host.planningContextCurrent?.(mission) === false ||
+      !mission.tasks.every(task => {
+        const attempt = task.attempts.at(-1);
+        return task.state === 'verified' && attempt?.verification?.passed &&
+          (!attempt.context || this.contextIsCurrent(mission, task, attempt, checked, true));
+      })) return null;
+    const assessment = mission.objectiveAssessment?.planRevision === mission.planRevision ? mission.objectiveAssessment : undefined;
+    return { ...missionCompletion(mission), ...(assessment ? { assessment: {
+      model: assessment.model, planRevision: assessment.planRevision,
+      gaps: assessment.findings.filter(finding => finding.status === 'unverified').map(finding => finding.statement),
+    } } : {}) };
   }
 
   recordObjectiveAssessment(id: string, scope: MissionScope, revision: number, checkpointDigest: string, assessment: MissionObjectiveAssessment) {
@@ -609,13 +626,14 @@ export class MissionService {
     clearTimeout(this.wakeTimer);
     this.wakeTimer = undefined;
   }
-  private contextIsCurrent(m: Mission, task: MissionTask, attempt: MissionAttempt, checked: Map<string, boolean>): boolean {
+  private contextIsCurrent(m: Mission, task: MissionTask, attempt: MissionAttempt, checked: Map<string, boolean>,
+    planningCurrent?: true): boolean {
     const cached = checked.get(attempt.id);
     if (cached !== undefined) return cached;
     checked.set(attempt.id, false);
     const { context } = attempt;
     try {
-      check(this.host.planningContextCurrent?.(m) !== false, 'mission_planning_context_changed');
+      check(planningCurrent || this.host.planningContextCurrent?.(m) !== false, 'mission_planning_context_changed');
       check(context && context.binding.missionId === m.id && context.binding.taskId === task.id &&
         sameScope(context.binding.scope, m.scope), 'mission_context_changed');
       validateMissionContextSources(context, this.host.contextSource?.(m, task));
@@ -624,7 +642,7 @@ export class MissionService {
         const evidence = parent?.evidence;
         check(predecessor?.state === 'verified' && parent && evidence && parent.id === proof.attemptId && evidence.id === proof.evidenceId &&
           historyDigest({ source: evidence.source, observedAt: evidence.observedAt, value: evidence.value }) === proof.digest &&
-          this.contextIsCurrent(m, predecessor, parent, checked), 'mission_dependency_context_changed');
+          this.contextIsCurrent(m, predecessor, parent, checked, planningCurrent), 'mission_dependency_context_changed');
       }
       checked.set(attempt.id, true);
       return true;

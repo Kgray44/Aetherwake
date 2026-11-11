@@ -246,6 +246,11 @@ test('Executive assessment records canonical observations and unresolved objecti
       settled = await read();
     }
     assert.equal(settled.outcome, 'blocked');
+    const chatReports = async () => (await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState)
+      .conversation!.messages.filter(message => message.missionReport?.missionId === started.id);
+    const [priorReport] = await chatReports();
+    assert.ok(priorReport?.missionReport);
+    assert.equal(priorReport.missionReport.assessment, undefined);
     const checkpoint = settled.events.findLast(event => event.kind === 'settled')!;
     const request = { id: settled.id, revision: settled.revision, triggerSeq: checkpoint.seq };
     const review = await f.core.command('missionExecutiveReview', request);
@@ -283,9 +288,17 @@ test('Executive assessment records canonical observations and unresolved objecti
     assert.match(assessed.objectiveAssessment!.findings[0].statement, /^RAM \d/);
     assert.doesNotMatch(JSON.stringify(assessed.objectiveAssessment), /definitely fixed/);
     assert.match(assessed.objectiveAssessment!.findings[1].statement, /tick timings and logs/);
+    const reports = await chatReports();
+    assert.equal(reports.length, 1);
+    const [currentReport] = reports;
+    assert.equal(currentReport.id, priorReport.id);
+    assert.equal(currentReport.content, priorReport.content);
+    assert.deepEqual(currentReport.missionReport?.assessment, { model: 'gpt-6-luna', planRevision: settled.planRevision,
+      gaps: ['Server tick timings and logs are needed to establish the cause.'] });
     await assert.rejects(f.core.command('missionExecutiveReview', { ...request, revision: assessed.revision }), /mission_executive_already_attempted/);
     await f.reopen();
     assert.deepEqual((await read()).objectiveAssessment, assessed.objectiveAssessment);
+    assert.deepEqual(await chatReports(), reports);
     assert.equal(f.requests.length, 2);
   } finally { await f.close(); }
 });
@@ -874,6 +887,10 @@ test('project evidence supplies a mission plan across workspaces and remains bou
     const assessed = await f.core.command('missionExecutiveReviewed', { ...assessmentRequest, fingerprint: assessmentReview.fingerprint });
     assert.equal(assessed.result.state, 'completion-assessed');
     assert.ok((await read()).objectiveAssessment);
+    const chatReport = async () => (await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState)
+      .conversation!.messages.find(message => message.missionReport?.missionId === running.id)!;
+    const displayed = await chatReport();
+    assert.deepEqual(displayed.missionReport?.assessment?.gaps, ['The host counters do not certify readiness.']);
     const nextId = randomUUID();
     enqueue();
     const next = await f.core.command('missionPlanReviewed', { ...selection, fingerprint: offer.fingerprint, requestId: nextId }) as MissionPreview;
@@ -886,6 +903,11 @@ test('project evidence supplies a mission plan across workspaces and remains bou
     const restored = await read();
     assert.deepEqual(restored.planning?.context?.projectEvidence, offer.projectEvidence);
     assert.equal(restored.objectiveAssessment, undefined);
+    const stale = await chatReport();
+    assert.equal(stale.id, displayed.id);
+    assert.equal(stale.missionReport?.stale, true);
+    assert.equal(stale.missionReport?.assessment, undefined);
+    assert.doesNotMatch(stale.content, /RAM \d|timer delay|certify readiness/);
     assert.ok(restored.tasks.every(task => task.state === 'blocked' && task.detail === 'mission_source_changed_since_verification'));
     assert.deepEqual(restored.tasks.map(task => task.attempts.map(attempt => attempt.id)),
       settled.tasks.map(task => task.attempts.map(attempt => attempt.id)));
