@@ -682,18 +682,55 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const composer = SURFACE + ' textarea[aria-label="Message Vela"]';
     if (argv.includes('--missions-aep-presentation-only')) {
       const retryNotes = argv.includes("--missions-aep-retry");
+      const useStartControl = argv.includes("--missions-aep-start-ui");
       assert(!retryNotes || !argv.includes("--bootstrap-vela-api"), "native_retry_requires_offline_profile");
       // The panel preserves active edits instead of refreshing their controls from events.
       key("Tab");
       assert.equal(await js('document.activeElement?.matches("input,textarea,select")'), false);
-      const objective = retryNotes ? OBJECTIVE + " using workspace notes" : OBJECTIVE;
+      const objective = retryNotes ? OBJECTIVE + " using workspace notes" : useStartControl ? "Measure CPU and RAM" : OBJECTIVE;
       const preview = await rpc("missions", { name: "preview", input: { objective } });
       assert.equal(preview.externalReview, undefined);
-      const mission = await rpc("missions", { name: "start", input: {
-        objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
-      } });
-      receipt.actions.push({ method: "application-capability-fixture", type: "startLocalMission" });
-      const missionId = mission.id;
+      let missionId;
+      if (useStartControl) {
+        const start = PREVIEW + ' [data-mission-focus="start-mission"]';
+        await fill(composer, objective);
+        await click(SURFACE + ' button[aria-label="Send to Vela"]');
+        await wait("The canonical mission preview exposes Start", () => js(
+          `document.querySelector(${quote(start)})?.disabled === false`));
+        await js(`(() => {
+          const start = document.querySelector(${quote(start)});
+          start.addEventListener("click", event => {
+            if (!event.isTrusted) return;
+            const clicked = performance.now();
+            function observeFrame() {
+              const node = document.querySelector(${quote(SURFACE + " " + RECORD)});
+              if (document.visibilityState === "visible" && document.hasFocus() && node?.dataset.missionId &&
+                  node.getClientRects().length && !node.closest("[hidden],[inert]")) {
+                window.__aerynthMissionStartReceipt = { missionId: node.dataset.missionId,
+                  outcome: node.dataset.missionOutcome, clickToVisibleFrameMs: performance.now() - clicked };
+                return;
+              }
+              if (performance.now() - clicked < 5000) requestAnimationFrame(observeFrame);
+            }
+            requestAnimationFrame(observeFrame);
+          }, { once: true, capture: true });
+        })()`);
+        await click(start);
+        const visible = await wait("Visible canonical mission status acknowledges Start",
+          () => js("window.__aerynthMissionStartReceipt"));
+        assert.ok(["queued", "running"].includes(visible.outcome), "mission_start_status_was_not_observed_before_completion");
+        assert.ok(Number.isFinite(visible.clickToVisibleFrameMs) && visible.clickToVisibleFrameMs >= 0);
+        missionId = visible.missionId;
+        const canonical = await rpc("missions", { name: "read", input: { id: missionId } });
+        assert.equal(canonical.objective, objective);
+        receipt.visibleStartAcknowledgement = visible;
+      } else {
+        const mission = await rpc("missions", { name: "start", input: {
+          objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
+        } });
+        missionId = mission.id;
+        receipt.actions.push({ method: "application-capability-fixture", type: "startLocalMission" });
+      }
       let failedAttemptId = null;
       if (retryNotes) {
         const failed = await wait("Native note verification fails without an authorized note", async () => {
@@ -722,7 +759,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       }
       const report = await wait("Canonical mission report is available", async () => {
         const state = await rpc("vela", { name: "state", input: {} });
-        return state.conversation?.messages.find(message => message.missionReport?.missionId === mission.id);
+        return state.conversation?.messages.find(message => message.missionReport?.missionId === missionId);
       });
       const reportLink = SURFACE + ' .vela-manifestation [data-mission-report-link=' + quote(missionId) + ']';
       await wait("The report link is rendered in the current Vela reply", () =>
