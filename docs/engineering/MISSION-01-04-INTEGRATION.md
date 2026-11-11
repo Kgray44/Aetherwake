@@ -10,8 +10,8 @@ This draft assembles Architecture Recovery A3 and A4 and Fluid Intelligence FI-0
 | 01, runtime recovery | [#38](https://github.com/Kgray44/Aetherwake/pull/38) | `d422229aa3753099b43ba3c87adc8c2489bfae41` |
 | 01, common contracts | [#40](https://github.com/Kgray44/Aetherwake/pull/40) | `5a72594b2259d850da70810183234797d2e34ab1` |
 | 02, profiling | [#41](https://github.com/Kgray44/Aetherwake/pull/41) | `5028aaefcbc0e56398eb49c5af7b88c1147c854f` |
-| 03, resources | [#37](https://github.com/Kgray44/Aetherwake/pull/37), [#39](https://github.com/Kgray44/Aetherwake/pull/39), [#42](https://github.com/Kgray44/Aetherwake/pull/42) | `2293809424aba1558032f015b7c8cb026f0b7f61` |
-| 04, cognition | [#43–52 stack tip](https://github.com/Kgray44/Aetherwake/pull/52) | `c96d61b7ac5c6074cae7815f29b3a2174cec7a31` |
+| 03, resources | [#37](https://github.com/Kgray44/Aetherwake/pull/37), [#39](https://github.com/Kgray44/Aetherwake/pull/39), [#42](https://github.com/Kgray44/Aetherwake/pull/42) | `8dd54d1347349ba199b4af5dae28e3caaf4804d9` |
+| 04, cognition | [#43–52 stack tip](https://github.com/Kgray44/Aetherwake/pull/52) | `0c8c2a88ffca343db3a1231057a4497de0b78f9f` |
 
 The integration branch replays and reconciles the source changes. Its commit IDs differ from the individual branch IDs. The combined planner retains exact reviewed note and configuration binding, one-use provider admission, and the AEP transport observations on the same request. Timing starts at the planner stage after CIE retrieval. MissionService preserves separate AEP ready-queue timing, ARIE preparation and release, evidence verification, and blocked versus uncertain settlement. The focused integration test joins the planning execution ID, bodyless cognition receipt, transport timing, and versioned resource leases for one reviewed-note mission.
 
@@ -40,6 +40,10 @@ The `0104d28cc02fdbcd0a017b32e6c1300515cb8173` checkpoint passed all 17 local Wi
 The `c3f52f69e0d9103cedec2809ca3f61307f5df58b` checkpoint passed all 17 local Windows groups, with 3,060 tests passed and eight skipped. Live Luna planning and Executive replacement, a real Codex project check, failed and retried native RAM verification, and report join reconciled with AEP timing and four ARIE leases after restart. Whole-objective coverage remained partial. The harness simulated native approvals.
 
 The current draft adds FI-2 reviewed mission checkpoints, workspace placement, selected file evidence, an explicitly reviewed prior exchange, and selected UTF-8 file inputs for mission planning. The planner preserves AEP's command-start timing alongside the FI-2 allowlist and source-version fences. Source-side live checks observed exact citations, scope denials before dispatch and restart readback. The newer FI-2 pin is under combined qualification. The prior `54235d1e` pin retains its completed checkpoint evidence.
+
+The next cumulative FI-2 pin adds explicit reviewed project search, project-grounded plans, and reviewed objective assessment against verified mission observations. It carries source IDs and digests through the existing plan and Executive boundaries. Source-stale assessments suppress their prior projection. Reviewed-source plans use bounded canonical coverage limitations and omit free-form provider limitation text that echoed an unrelated marker in a live producer regression. The integration retains AEP timing fields and the ARIE lease interface while accepting the additive objective-assessed event.
+
+The Vela reply's Speak response control now supplies the speaker mask used by the existing icon component. During that reply's playback, the control selects the existing stop mask and stops only the matching speech attempt.
 
 ## Performance investigations
 
