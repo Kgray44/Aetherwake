@@ -7,6 +7,7 @@ import { nativeMissionPlan, replanNativeMission } from '../src/mission-native.mt
 import { MISSION_LIMITS, type Mission, type MissionAdmission, type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionScope,
   type MissionTaskPlan } from '../src/mission-contracts.mts';
 import type { MissionContextSource } from '../../vela-core/src/mission-context.mts';
+import { createMissionAdmission } from '../src/mission-admission.mts';
 
 const scope = { workspaceId: 'workspace-1', projectId: 'project-1' };
 const task = (id: string, dependencies: string[] = [], resource?: string): MissionTaskPlan => ({
@@ -50,6 +51,36 @@ function revisionFixture(reassign?: MissionServiceHost['reassign']) {
 }
 
 const revisionTask = (id: string, executor: string, dependencies: string[] = []) => ({ ...task(id, dependencies), executor });
+
+test('MissionService admits remote work under local pressure and releases attempt leases on settlement', async () => {
+  const f = fixture();
+  let available = 0;
+  const governor = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers, availableMemory: () => available,
+    readWindowsPressure: null });
+  const kind = (lane: string) => lane === 'native' ? 'cpu' as const : 'remote' as const;
+  const service = new MissionService({ ...f.host, admission: governor.read,
+    executors: { local: { ...f.host.executors.fixture, lane: 'native' }, remote: f.host.executors.fixture },
+    resources: {
+      canAcquire: (lane: string) => governor.canLease(kind(lane)),
+      acquire: (lane: string, request: { missionId: string; taskId: string; attemptId: string; timeoutMs: number }) =>
+        governor.tryLease({ ...request, kind: kind(lane) }),
+    },
+  });
+  try {
+    const { id } = service.create('resource-separation', plan(revisionTask('local', 'local'), revisionTask('remote', 'remote')));
+    await flush();
+    assert.equal(f.active.has('local'), false);
+    assert.ok(f.active.has('remote'));
+    assert.equal(service.read(id, scope).tasks.find(t => t.id === 'remote')?.attempts[0]?.resourceLease?.kind, 'remote');
+    f.active.get('remote')!.release();
+    await flush();
+    assert.equal(governor.inspectPolicy().active.remote, 0);
+    available = 1024 ** 3;
+    service.capacityChanged();
+    await flush();
+    assert.ok(f.active.has('local'));
+  } finally { await service.close(); governor.dispose(); f.db.close(); }
+});
 
 test('a source edit fences in-flight results, invalidates downstream proof and permits reviewed native retry', async () => {
   const f = fixture();

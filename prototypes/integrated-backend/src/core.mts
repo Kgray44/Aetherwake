@@ -486,7 +486,10 @@ export class BackendCore {
       }, VELA_API_PROVIDER),
       };
       this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
+        resourcePolicy: nativeHostServices?.resourcePolicy,
         onChange: () => this.missions?.capacityChanged() });
+      const resourceKind = (lane: string) => lane === 'codex-local-check' ? 'build' as const :
+        lane === CHATGPT_PLAN_PROVIDER || lane === VELA_API_PROVIDER ? 'remote' as const : 'cpu' as const;
       this.missionPublication = new MissionPublication(this.db);
       // Persisted publication is recovery, even when its first message is appended later.
       for(const row of this.db.prepare('SELECT mission_id FROM vela_mission_report_outbox').all())this.missionSpeechBacklog.add(String(row.mission_id));
@@ -496,6 +499,12 @@ export class BackendCore {
         executors: this.missionExecutors, laneLimit: lane => lane === 'codex-local-check' ? 1 :
           lane === CHATGPT_PLAN_PROVIDER ? 2 - Number(this.active?.providerId === lane) - Number(!!this.missionPlanningRun) :
           lane === VELA_API_PROVIDER ? VELA_API_RUNTIME_LIMITS.concurrent - this.velaApiRuntime.nonMissionInFlight() : 2,
+        underPressure: () => !this.missionStorageAdmitted,
+        resources: {
+          canAcquire: lane => this.missionStorageAdmitted && this.missionAdmission.canLease(resourceKind(lane)),
+          acquire: (lane, identity) => this.missionStorageAdmitted ?
+            this.missionAdmission.tryLease({ ...identity, kind: resourceKind(lane) }) : undefined,
+        },
         admission: demand => {
           if (!demand || !this.missionStorageAdmitted) this.missionAdmission.stopDemand();
           const snapshot = this.missionAdmission.read(demand && this.missionStorageAdmitted);

@@ -10,16 +10,17 @@ import { MissionService } from './mission-service.mts';
 const scope = { workspaceId: 'benchmark-workspace', projectId: null };
 const template = nativeMissionPlan('Measure CPU and RAM', scope)!;
 const [cpu, ram, report] = template.tasks;
-const samples = Array.from({ length: 8 }, (_, index) => {
+const quick = process.argv.includes('--quick');
+const samples = Array.from({ length: quick ? 3 : 8 }, (_, index) => {
   const id = `cpu-${index + 1}`;
   return { ...cpu, id, criterion: id };
 });
 const inputs = [...samples, ram];
 const tasks = [...inputs, { ...report, dependencies: inputs.map(task => task.id) }];
 const plan = { ...template, tasks, criteria: tasks.map(task => task.criterion) };
-const batchSize = 4;
+const batchSize = quick ? 1 : 4;
 const laneWorkers = 2;
-type Arm = 'memory-only' | 'measured-admission';
+type Arm = 'memory-only' | 'measured-admission' | 'arie-leases';
 let current: MissionService | undefined;
 const admission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers, onChange: () => current?.capacityChanged() });
 const round = (value: number) => Math.round(value * 100) / 100;
@@ -41,6 +42,10 @@ async function run(arm: Arm) {
         return admission.read(demand);
       },
     }),
+    ...(arm === 'arie-leases' ? { resources: {
+      canAcquire: () => admission.canLease('cpu'),
+      acquire: (_lane, identity) => admission.tryLease({ ...identity, kind: 'cpu' }),
+    } } : {}),
     observe(_mission, event) {
       if (!event.attemptId) return;
       if (event.kind === 'started') {
@@ -49,7 +54,7 @@ async function run(arm: Arm) {
       } else if (event.kind === 'settled') running.delete(event.attemptId);
     },
   });
-  if (arm === 'measured-admission') current = service;
+  if (arm !== 'memory-only') current = service;
   const loop = monitorEventLoopDelay({ resolution: 10 });
   const start = performance.now(), cpuStart = process.cpuUsage();
   let sampledPeakRss = process.memoryUsage.rss();
@@ -64,18 +69,22 @@ async function run(arm: Arm) {
       sampledPeakRss = Math.max(sampledPeakRss, process.memoryUsage.rss());
     }
     if (peakWorkers > laneWorkers || running.size || !reports.every(result => result.outcome === 'verified' && result.profile.providerCalls === 0))
-      throw Error('mission_admission_benchmark_incomplete');
+      throw Error(`mission_admission_benchmark_incomplete: ${arm}: ${reports.map(report => report.outcome).join(', ')}`);
     const elapsedMs = round(performance.now() - start);
     const cpuUse = process.cpuUsage(cpuStart);
     const receipts = reports.flatMap(result => result.tasks.flatMap(task => task.attempts));
     const readings = (metric: keyof ReturnType<typeof admission.read>['readings']) =>
       receipts.filter(attempt => attempt.admission?.readings[metric] !== undefined).length;
+    const queueTimes = receipts.flatMap(attempt => attempt.timing ? [attempt.timing.queueMs] : []).sort((a, b) => a - b);
     return { arm, elapsedMs, verified: reports.length, attempts: receipts.length, peakWorkers,
+      attemptsPerSecond: round(receipts.length / (elapsedMs / 1000)),
+      queueP95Ms: queueTimes[Math.ceil(queueTimes.length * 0.95) - 1] ?? null,
       processCpuMs: round((cpuUse.user + cpuUse.system) / 1000),
       sampledPeakRssBytes: sampledPeakRss,
       eventLoopP95Ms: loop.count ? round(loop.percentile(95) / 1e6) : null,
       admittedWith: { cpu: readings('cpuPercent'), memory: readings('availableMemoryBytes'), gpu: readings('gpuEnginePercent'), disk: readings('diskQueueLength') },
-      constrainedAttempts: receipts.filter(attempt => attempt.admission?.reasons.length).length };
+      constrainedAttempts: receipts.filter(attempt => attempt.admission?.reasons.length).length,
+      leaseCount: receipts.filter(attempt => attempt.resourceLease).length };
   } finally {
     loop.disable();
     await service.close();
@@ -85,15 +94,17 @@ async function run(arm: Arm) {
 }
 
 try {
-  await run('memory-only');
-  await run('measured-admission');
+  const arms: readonly Arm[] = ['memory-only', 'measured-admission', 'arie-leases'];
+  for (const arm of arms) await run(arm);
   const rows: Awaited<ReturnType<typeof run>>[] = [];
-  for (const arm of ['memory-only', 'measured-admission', 'measured-admission', 'memory-only', 'memory-only', 'measured-admission'] as const)
-    rows.push(await run(arm));
-  const medians = Object.fromEntries((['memory-only', 'measured-admission'] as const).map(arm => [arm,
+  for (let index = 0; index < arms.length; index++) {
+    for (const arm of [...arms.slice(index), ...arms.slice(0, index)]) rows.push(await run(arm));
+  }
+  const medians = Object.fromEntries(arms.map(arm => [arm,
     rows.filter(row => row.arm === arm).map(row => row.elapsedMs).sort((a, b) => a - b)[1]]));
   console.log(JSON.stringify({ contract: 'aerynth.mission-admission-benchmark@1', node: process.version, platform: process.platform,
     logicalParallelism: availableParallelism(), ramBytes: totalmem(), batchSize, laneWorkers, warmupsPerArm: 1,
+    cpuSamplesPerMission: samples.length,
     medians, rows, providerCalls: 0,
     boundary: 'Real native samples with in-memory journals and ambient host pressure. Process CPU and RSS cover Node only. No induced host saturation, renderer measurement, or provider activity.' }));
 } finally { admission.dispose(); }
