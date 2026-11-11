@@ -518,6 +518,18 @@ test('native Start review binds the complete objective to current host proofs ac
     await assert.rejects(f.core.command('missionStartReviewed', { ...unsupported.input, approvedObjectiveDigest: 'a'.repeat(64) }), /mission_objective_review_changed/);
     const { preview, input } = await plan([]);
     assert.deepEqual(preview.objectiveReview?.obligations.map(row => row.taskId), ['cpu', 'ram']);
+    const rejectedId = randomUUID();
+    const invented = 'Invented quote about approval';
+    f.replies.push(reply(perceive('meters')), reply(assess('meters', invented)));
+    await assert.rejects(f.core.command('missionPlanReviewed', { ...selection, requestId: rejectedId, fingerprint: offer.fingerprint }),
+      /mission_planning_context_invalid/);
+    const db = (f.core as unknown as { db: import('node:sqlite').DatabaseSync }).db;
+    const row = db.prepare("SELECT json FROM intelligence_events WHERE json_extract(json, '$.type') = 'vela.mission/context-rejected' AND json_extract(json, '$.correlationId') = ?").get(rejectedId);
+    const event = JSON.parse(String(row?.json));
+    assert.equal(event.status, 'assessment-passage');
+    assert.deepEqual(event.payload, { redacted: true });
+    assert.ok(!String(row?.json).includes(invented));
+    assert.equal(f.requests.length, 10, 'invalid context cannot dispatch the graph planner');
     const approvedObjectiveDigest = preview.objectiveReview!.digest;
     await assert.rejects(f.core.command('missionStartReviewed', { ...input, approvedObjectiveDigest: 'a'.repeat(64) }), /mission_objective_review_changed/);
     await assert.rejects(f.core.command('missionStartReviewed', { ...input, fingerprint: 'b'.repeat(64), approvedObjectiveDigest }), /mission_preview_changed/);
@@ -569,7 +581,7 @@ test('native Start review binds the complete objective to current host proofs ac
     assert.equal((await read()).outcome, 'blocked');
     assert.equal((await read()).coverage?.status, 'partial');
     assert.equal((await report())?.missionReport?.stale, true);
-    assert.equal(f.requests.length, 8);
+    assert.equal(f.requests.length, 10);
   } finally { await f.close(); }
 });
 

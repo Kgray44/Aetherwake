@@ -1088,8 +1088,16 @@ export class BackendCore {
           }, ...(projectCheck && approvedProjectCheck ? { reviewedProjectCheck: projectCheck.context,
             validateReviewedTests: () => { this.checkedMissionProjectSelection(approvedProjectCheck); } } : {}) },
           project ? { sources: project.sources.map(toVelaReviewedEvidenceSource), partial: project.reference.partial } : undefined);
-          ensure(evidence.state === 'assessed' && evidence.coverage.length, 'mission_planning_context_unavailable');
-          if (project) ensure(evidence.coverage.some(need => need.passages.length), 'mission_planning_context_unavailable');
+          if (evidence.state !== 'assessed' || !evidence.coverage.length ||
+            project && !evidence.coverage.some(need => need.passages.length)) {
+            const status = evidence.failure ?? (evidence.coverage.length ? 'missing-passages' : 'empty-coverage');
+            this.record('vela.mission/context-rejected', 'observed', undefined, randomUUID(), {
+              providerId: 'aerynth-native', detached: true, correlationId: requestId, status, payload: { redacted: true },
+            });
+            throw new ServiceError(evidence.state === 'invalid' ? 'mission_planning_context_invalid' :
+              status === 'deadline' ? 'mission_planning_context_timeout' :
+              evidence.state === 'stale' ? 'mission_planning_context_changed' : 'mission_planning_context_unavailable');
+          }
           context = { notes: offer.notes ?? [], ...(offer.files ? { files: offer.files } : {}),
             ...(offer.projectEvidence ? { projectEvidence: offer.projectEvidence } : {}),
             evidenceDigest: planningDigest(evidence), elapsedMs: performance.now() - evidenceStarted,

@@ -205,6 +205,7 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
   if (!questions.size && result.proposal?.clarification) questions.set('clarification', result.proposal.clarification);
   return {
     state: result.state,
+    ...(result.failure ? { failure: result.failure } : {}),
     searchCoverage: result.searchCoverage,
     clarification: result.clarification,
     coverage: result.coverage.map(need => ({

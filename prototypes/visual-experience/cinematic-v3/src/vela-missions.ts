@@ -263,6 +263,10 @@ export function createVelaMissionView(
         "A reviewed note changed. Request a new plan before starting the mission.",
       mission_planning_context_unavailable:
         "Vela could not assess the selected sources. No mission was started.",
+      mission_planning_context_invalid:
+        "Vela could not verify the model’s assessment against the reviewed sources. No mission was started.",
+      mission_planning_context_timeout:
+        "The evidence review ran out of time before a plan could be prepared.",
       mission_team_not_found: "This team is no longer available. Refresh the team library.",
       mission_team_scope_denied: "Team templates are unavailable in this workspace.",
       mission_team_version_conflict: "This team changed. Reload its saved version before continuing.",
