@@ -160,6 +160,7 @@ type PendingVelaProjectCheck = {
 type PendingVelaTemplate = { projectId: string | null; projectVersion?: number; expires: number; plan?: VelaTemplatePlan };
 const VELA_TEMPLATE_REVIEW_MS = 120_000;
 const VELA_TEMPLATE_REVIEW_LIMIT = 16;
+const VELA_REVIEWED_GAP_TURN_MS = 85_000;
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const itemType = (value: unknown) => ['userMessage','agentMessage','commandExecution','fileChange','mcpToolCall','dynamicToolCall','reasoning','webSearch','imageView','imageGeneration','collabAgentToolCall','contextCompaction'].includes(String(value)) ? String(value) : 'unknown';
 interface State {
@@ -2638,7 +2639,7 @@ export class BackendCore {
     const controller = new AbortController(), cancel = () => controller.abort();
     const gapFollowup = preview.missionCheckpoint?.selection.gapIndex !== undefined;
     // Leave room for the host to return a terminal result before the desktop command deadline.
-    const turnSignal = gapFollowup ? AbortSignal.any([controller.signal, AbortSignal.timeout(85_000)]) : controller.signal;
+    const turnSignal = gapFollowup ? AbortSignal.any([controller.signal, AbortSignal.timeout(VELA_REVIEWED_GAP_TURN_MS)]) : controller.signal;
     const planning = preview.route.kind === 'app-planning';
     const tools=preview.semanticContext ? undefined : this.toolPort(input,preview);
     const weatherTool=preview.semanticContext ? undefined : this.apiWeatherTool(input.requestId);
@@ -4576,7 +4577,12 @@ export class BackendCore {
     if (input.directSend) ensure(preview.nativeReviewed && preview.sendDisposition==='routine' &&
       this.velaSendDisposition(preview)==='routine', 'vela_attached_context_review_required');
     if(preview.nativeReviewRequired||preview.nativeReviewed||input.reviewDigest!==undefined)ensure(preview.nativeReviewed&&typeof input.reviewDigest==='string'&&input.reviewDigest===preview.reviewDigest,'vela_native_review_required');
-    const grantId=randomUUID(),expiresAt=new Date(Math.min(Date.now()+60000,Date.parse(preview.expiresAt))).toISOString();this.velaGrants.set(grantId,{previewId:preview.id,expiresAt,consumed:false,...(preview.nativeReviewed?{reviewDigest:preview.reviewDigest}:{})});return {grantId,expiresAt};
+    // The read-only gap investigation can spend its turn budget before composition consumes the grant.
+    const grantLifetime = preview.missionCheckpoint?.selection.gapIndex === undefined ? 60_000 : VELA_REVIEWED_GAP_TURN_MS + 5_000;
+    const grantId = randomUUID(), expiresAt = new Date(Math.min(Date.now() + grantLifetime, Date.parse(preview.expiresAt))).toISOString();
+    this.velaGrants.set(grantId, { previewId: preview.id, expiresAt, consumed: false,
+      ...(preview.nativeReviewed ? { reviewDigest: preview.reviewDigest } : {}) });
+    return { grantId, expiresAt };
   }
   private validateVelaGrant(id:string) {const g=this.velaGrants.get(id);ensure(g&&!g.consumed,'native_vela_grant_required');ensure(Date.parse(g.expiresAt)>Date.now()&&this.velaPreviews.has(g.previewId),'native_vela_grant_expired');if(g.reviewDigest)ensure(this.velaPreviews.get(g.previewId)!.reviewDigest===g.reviewDigest,'native_vela_review_mismatch');return g;}
   private frozenVelaProviderContext(grantId:string):PrivateFrozenProviderContext {
