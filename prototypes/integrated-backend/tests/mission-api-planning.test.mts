@@ -842,7 +842,7 @@ test('reviewed project evidence expands a model-proposed search and fences corre
         const { round, excerpts } = JSON.parse(body.input[0].content);
         assert.equal(round, 2);
         assert.equal(excerpts.find((entry: { handle: string }) => entry.handle === 'e2').text, correction);
-        return reply(assessment('approval', 'supported', '', [{ source: 'e2', quote: correction }]))(body);
+        return reply(assessment('approval', 'supported', '', [{ source: 'e2', quote: 'release approval to the duty engineer.' }]))(body);
       }, body => {
         const packet = JSON.parse(body.input[0].content).evidence;
         assert.deepEqual(packet.coverage[0].passages, [{ sourceId: selected, title: 'Harbor decision', quote: correction }]);
