@@ -4,6 +4,9 @@ import type { ReportedUsage } from '../../openai-provider/contracts.mts';
 import type { ProviderStreamTiming, StreamEvent } from './contracts.mts';
 import type { MissionTeam, MissionTeamSave } from './mission-teams.mts';
 
+/** Only an explicit command enters mission review before ordinary composer routing. */
+export const EXPLICIT_MISSION_PREFIX = /^(?:vela[,:]?\s+)?(?:please\s+)?(?:run|start|plan|create)\s+(?:a\s+)?mission\s+(?:to|for)\s+(?=\S)/iu;
+
 export const MISSION_CONTRACT = 'aerynth.vela-mission@1' as const;
 export const MISSION_LIMITS = { missions: 128, active: 8, tasks: 16, attempts: 3, workers: 3, revisions: 4, events: 256 } as const;
 

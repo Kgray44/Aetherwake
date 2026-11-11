@@ -19,7 +19,7 @@ import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, 
 import { MissionTeams } from './mission-teams.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
 import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningEvidenceSelection, MissionPlanningOffer, MissionPlanningSourceRef, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
-import { MISSION_LIMITS } from './mission-contracts.mts';
+import { EXPLICIT_MISSION_PREFIX, MISSION_LIMITS } from './mission-contracts.mts';
 import { createMissionAdmission } from './mission-admission.mts';
 import { createResourcePolicyStore } from './resource-policy-store.mts';
 import { isResourceSignal } from './resource-signals.mts';
@@ -1209,7 +1209,7 @@ export class BackendCore {
         if (!plan && request.name === 'preview') {
           ensure(teamId === undefined, 'invalid_mission_team_objective');
           if (agentProfileId === undefined && typeof objective === 'string' && Buffer.byteLength(objective) <= 1536 &&
-            (/^\s*(?:vela[,:]?\s+)?(?:please\s+)?(?:plan|create|start|run)\s+a\s+mission\s+(?:to|for)\s+\S/iu.test(objective)||naturalMissionInvestigation(objective))) {
+            (EXPLICIT_MISSION_PREFIX.test(objective.normalize('NFKC').trim()) || naturalMissionInvestigation(objective))) {
             ensure(this.missionScopeAllowed(scope), 'mission_scope_denied');
             return this.missionPlanningInputs(objective, scope).offer;
           }
