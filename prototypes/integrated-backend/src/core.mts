@@ -10,7 +10,7 @@ import { missionExecutiveSchema, proposeMissionExecutiveRevision, type Executive
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission, createPooledBackendSourceExecutor } from './mission-native.mts';
-import { createMissionCpuPool } from './mission-cpu-pool.mts';
+import { createMissionCpuPool, missionCpuInspectionRamBytes } from './mission-cpu-pool.mts';
 import { createGpuReadbackAdapter, gpuReadbackExecutor, gpuReadbackPlan } from './mission-gpu-readback.mts';
 import { gpuReadbackRamReservationBytes, gpuReadbackReservationBytes } from './windows-gpu-readback.mts';
 import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS, MISSION_PROPOSAL_SCHEMA, naturalMissionInvestigation } from './mission-proposal.mts';
@@ -516,6 +516,7 @@ export class BackendCore {
         lane === 'codex-local-check' ? 'build' as const :
         lane === CHATGPT_PLAN_PROVIDER || lane === VELA_API_PROVIDER ? 'remote' as const :
         lane === 'native' ? 'host_io' as const : 'cpu' as const;
+      const resourceRam = (executorId: string) => executorId === 'inspect.backend-source' ? missionCpuInspectionRamBytes : 0;
       this.missionPublication = new MissionPublication(this.db);
       // Persisted publication is recovery, even when its first message is appended later.
       for(const row of this.db.prepare('SELECT mission_id FROM vela_mission_report_outbox').all())this.missionSpeechBacklog.add(String(row.mission_id));
@@ -528,12 +529,12 @@ export class BackendCore {
         underPressure: () => !this.missionStorageAdmitted,
         resources: {
           canAcquire: (lane, executorId) => this.missionStorageAdmitted && (executorId === gpuReadbackExecutor ?
-            this.gpuReadback.canAcquire() : this.missionAdmission.canLease(resourceKind(lane, executorId))),
+            this.gpuReadback.canAcquire() : this.missionAdmission.canLease(resourceKind(lane, executorId), resourceRam(executorId))),
           prepare: (_lane, executorId) => { if (executorId === gpuReadbackExecutor) this.gpuReadback.prepare(); },
           acquire: (lane, identity, executorId) => {
             if (!this.missionStorageAdmitted) return;
             return executorId === gpuReadbackExecutor ? this.gpuReadback.acquire(identity) :
-              this.missionAdmission.tryLease({ ...identity, kind: resourceKind(lane, executorId) });
+              this.missionAdmission.tryLease({ ...identity, kind: resourceKind(lane, executorId), estimatedRamBytes: resourceRam(executorId) });
           },
         },
         admission: demand => {
@@ -541,6 +542,7 @@ export class BackendCore {
           const snapshot = this.missionAdmission.read(demand && this.missionStorageAdmitted);
           if (!demand || !this.missionStorageAdmitted || !this.missionAdmission.mayPrepareGpu()) this.gpuReadback.stopIdle();
           const effectiveLimits = this.missionAdmission.inspectPolicy().effective;
+          if (!this.missionStorageAdmitted || effectiveLimits.cpu === 0) this.missionCpuPool.trimIdle();
           return this.missionStorageAdmitted ? { ...snapshot, effectiveLimits } : { ...snapshot, workerLimit: 0,
             effectiveLimits: { cpu: 0, build: 0, gpu: 0, host_io: 0, remote: 0 },
             reasons: ['storage-reserve', ...snapshot.reasons] };
