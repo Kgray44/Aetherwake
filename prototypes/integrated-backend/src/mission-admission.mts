@@ -118,7 +118,18 @@ public static class AerynthMemoryPressure {
 try { $commitHeadroom = [AerynthMemoryPressure]::ReadCommitHeadroom() } catch {}
 ConvertTo-Json -InputObject @{windowsLowMemory=$memoryPressure; windowsCommitHeadroomBytes=$commitHeadroom} -Compress
 try {
-  $gpu = @(Get-CimInstance -ClassName Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine | Select-Object -First 8193 -Property Name,UtilizationPercentage)
+  function Read-GpuEngineCounters {
+    Get-CimInstance -ClassName Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine |
+      Select-Object -First 8193 -Property Name,UtilizationPercentage
+  }
+  $gpu = @(Read-GpuEngineCounters)
+  # WDDM can briefly return out-of-range percentages. Obtain a new observation before publishing.
+  if ($gpu.Count -le 8192 -and ($gpu | Where-Object {
+    $null -eq $_.UtilizationPercentage -or $_.UtilizationPercentage -lt 0 -or $_.UtilizationPercentage -gt 100
+  } | Select-Object -First 1)) {
+    Start-Sleep -Milliseconds 350
+    $gpu = @(Read-GpuEngineCounters)
+  }
 } catch {}
 try {
   $disks = @(Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_PhysicalDisk | Select-Object -First 130 -Property Name,AvgDiskQueueLength,DiskBytesPersec)
