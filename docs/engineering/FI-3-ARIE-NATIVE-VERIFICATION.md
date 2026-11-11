@@ -216,6 +216,15 @@ Run `node prototypes/integrated-backend/src/mission-cpu-benchmark.mts` to compar
 
 The two-thread arm demonstrated concurrent execution and higher median throughput for this batch. Inline elapsed times ranged from 163 to 1,408 ms. These results leave the responsiveness effect and the optimal admission budget unqualified.
 
+A windowless Windows Electron 45.2.1 fixture drove the shipped power observer, real governor, and shipped-source inspection pool together. The desktop was idle by the Windows input counter. It used the fixture's three-slot ceiling, with one 64 MiB reservation per inspection and a shared warmed pool. The fixture dispatched each inspection only after receiving a lease and verified every digest. It ran three batches of 24 inspections per mode after one warm-up per mode. Peak active leases and distinct worker threads were two in Balanced and three in High Throughput. All 144 measured inspections verified and released their leases.
+
+| Idle inspection arm | Median batch time | Jobs/sec | Median queue p95 | Median event-loop p95 | Median process CPU |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Balanced | 57.61 ms | 416.56 | 51.18 ms | 6.30 ms | 265 ms |
+| High Throughput | 28.89 ms | 830.69 | 24.10 ms | 5.82 ms | 93 ms |
+
+The interrupted second series retained one completed batch per mode. Balanced finished in 34.13 ms and High Throughput in 82.14 ms, with all 48 digests verified. The first post-reboot repeat stopped before its first batch because an actual Windows CPU speed-limit event caused High Throughput to retain a one-slot CPU budget. The remote budget remained at three. These observations verify native idle workload concurrency and the power guard. Timing varied between series, leaving a repeatable speedup and any renderer or input effect unqualified. The benchmark drove the governor and pool directly, so queue time is the harness's batch-relative wait before each lease.
+
 ## Windows read-only build lane
 
 With `AERYNTH_VERIFY_WINDOWS_BUILD=1`, `node prototypes/integrated-backend/src/mission-build-pressure-verify.mts` uses the installed App Server, the reviewed Node test planner, and MissionService with a disposable tracked test. A resource checkpoint during readiness blocked dispatch with zero native commands. Pressure after dispatch closed build admission and left the active build reservation held until the bounded sandbox command returned verified evidence. The remote budget remained available throughout. A separate sandbox probe rejected a write with `EPERM`, and the target file stayed absent.
