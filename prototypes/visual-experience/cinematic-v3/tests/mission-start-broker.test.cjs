@@ -51,6 +51,16 @@ test('local project selection and exact reviewed digest are carried into the can
   }
 });
 
+test('Start reviews a preselected project check without reopening the file picker',async()=>{
+  const f=fixture({local:true});
+  f.preview.localReview.preselected=true;
+  f.preview.proposalId='proposal-1';
+  await f.run();
+  assert.deepEqual(f.log.filter(item=>item!=='storage'),['missions:preview','missionCheckReview','message-box','beforeStart','missionStartReviewed']);
+  assert.deepEqual(f.calls.find(call=>call.name==='missionCheckReview').payload,{proposalId:'proposal-1',fingerprint:'sealed-preview'});
+  assert.deepEqual(starts(f)[0].payload,f.input.input);
+});
+
 test('upfront owner, focus and visibility guards prevent even preview dispatch',async()=>{
   for(const fault of ['focus','visible','minimized','destroyed','sender','frame','frame-url','document-url']){
     const f=fixture({external:true});if(fault==='focus')f.focus(false);if(fault==='visible')f.visible(false);if(fault==='minimized')f.minimized(true);if(fault==='destroyed')f.alive(false);

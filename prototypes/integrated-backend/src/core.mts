@@ -298,7 +298,8 @@ export class BackendCore {
   private missionSpecialistsInFlight = 0;
   private missionTeams: MissionTeams;
   private missionPlanningRun?: { abort: AbortController; settled: Promise<MissionResponse> };
-  private missionProposals = new Map<string, { plan: MissionPlan; expires: number; objectiveReviewEligible?: true }>();
+  private missionProposals = new Map<string, { plan: MissionPlan; expires: number; objectiveReviewEligible?: true;
+    projectCheck?: NonNullable<CommandMap['missionStartReviewed']['input']['approvedProjectCheck']> }>();
   private missionProjectCheckRunning = false;
   private missionFileEdits!: MissionFileEdits;
   private toolWorkflows!:VelaToolWorkflows;
@@ -989,28 +990,52 @@ export class BackendCore {
       ...(fileBindings ? { files: fileBindings } : {}),
       ...(project ? { projectEvidence: project.reference } : {}),
       ...(apiPlanner||available ? { planner: { provider:apiPlanner?VELA_API_PROVIDER:CHATGPT_PLAN_PROVIDER,model:(apiPlanner??selection)!.model, effort:(apiPlanner??selection)!.effort,
-        capabilities: capabilities.map(entry => entry.id + ' · ' + entry.description) } } : {}) };
+        capabilities: capabilities.map(entry => entry.id + ' · ' + entry.description),
+        ...(apiPlanner && tasks.some(task => task.executor === 'codex.project-check' && catalog[task.id]) ? { projectCheck: true as const } : {}) } } : {}) };
     return { catalog, capabilities, selection, apiPlanner, offer, notes, files, project, instructions };
   }
   private missionPlanningReview(input: CommandMap['missionPlanningReview']['input']) {
-    ensure(input && Object.keys(input).every(key => ['objective', 'fingerprint', 'noteIds', 'fileIds', 'projectEvidence'].includes(key)) &&
-      (input.noteIds !== undefined || input.fileIds !== undefined || input.projectEvidence !== undefined), 'invalid_mission_command');
-    const { objective, noteIds, fileIds, projectEvidence, fingerprint } = input;
+    ensure(input && Object.keys(input).every(key => ['objective', 'fingerprint', 'noteIds', 'fileIds', 'projectEvidence', 'approvedProjectCheck'].includes(key)) &&
+      (input.noteIds !== undefined || input.fileIds !== undefined || input.projectEvidence !== undefined || input.approvedProjectCheck !== undefined), 'invalid_mission_command');
+    const { objective, noteIds, fileIds, projectEvidence, fingerprint, approvedProjectCheck } = input;
     const offer = this.missionCommand({ name: 'preview', input: { objective, noteIds, fileIds, projectEvidence } });
     ensure(offer && 'kind' in offer && offer.kind === 'planning-offer' && offer.fingerprint === fingerprint &&
       offer.planner?.provider === VELA_API_PROVIDER, 'mission_preview_changed');
+    const projectCheck = approvedProjectCheck === undefined ? undefined : this.missionPlanningProjectCheck(offer, approvedProjectCheck);
     return { offer, notes: noteIds ? this.missionPlanningNotes(offer.scope, noteIds) : [],
       files: fileIds ? this.missionPlanningFiles(offer.scope, fileIds) : [],
+      ...(projectCheck ? { projectCheck } : {}),
       ...(offer.projectEvidence ? { projectEvidence: { ...offer.projectEvidence,
         sources: this.revalidateVelaProjectEvidence(offer.projectEvidence, this.missionContextHost(offer.scope)) } } : {}) };
   }
-  private startMissionPlanning(request: Extract<MissionRequest, { name: 'plan' }>['input']): Promise<MissionResponse> {
-    ensure(request && Object.keys(request).every(key => ['objective', 'fingerprint', 'requestId', 'noteIds', 'fileIds', 'projectEvidence'].includes(key)) &&
+  private checkedMissionProjectSelection(selection: NonNullable<CommandMap['missionStartReviewed']['input']['approvedProjectCheck']>) {
+    ensure(selection && Object.keys(selection).length === 2 && Array.isArray(selection.paths) &&
+      typeof selection.digest === 'string' && /^[a-f0-9]{64}$/u.test(selection.digest),
+      'mission_project_check_scope_changed');
+    let plan: ReturnType<typeof planVelaProjectCheck>;
+    try { plan = planVelaProjectCheck(undefined, 'node-test', selection.paths, this.privateRoot); }
+    catch { throw new ServiceError('mission_project_check_scope_changed'); }
+    ensure(planningDigest(plan) === selection.digest, 'mission_project_check_scope_changed');
+    return plan;
+  }
+  private missionPlanningProjectCheck(offer: MissionPlanningOffer,
+    selection: NonNullable<CommandMap['missionStartReviewed']['input']['approvedProjectCheck']>) {
+    ensure(offer.planner?.projectCheck === true, 'mission_project_check_unavailable');
+    const plan = this.checkedMissionProjectSelection(selection);
+    const files = plan.inputs.map(path => path.split('/').at(-1)!);
+    return { files, fingerprint: planningDigest({ offer: offer.fingerprint, selection: selection.digest, files }) };
+  }
+  private startMissionPlanning(request: CommandMap['missionPlanReviewed']['input']): Promise<MissionResponse> {
+    ensure(request && Object.keys(request).every(key => ['objective', 'fingerprint', 'requestId', 'noteIds', 'fileIds', 'projectEvidence',
+      'approvedProjectCheck', 'projectCheckReviewFingerprint'].includes(key)) &&
       identifier(request.requestId), 'invalid_mission_command');
     const { objective, fingerprint, requestId, noteIds, fileIds, projectEvidence } = request;
     const evidenceSelection = { noteIds, fileIds, projectEvidence };
     const offer = this.missionCommand({ name: 'preview', input: { objective, ...evidenceSelection } });
     ensure(offer && 'kind' in offer && offer.kind === 'planning-offer' && offer.fingerprint === fingerprint, 'mission_preview_changed');
+    const { approvedProjectCheck, projectCheckReviewFingerprint } = request;
+    const projectCheck = approvedProjectCheck === undefined ? undefined : this.missionPlanningProjectCheck(offer, approvedProjectCheck);
+    ensure(projectCheck?.fingerprint === projectCheckReviewFingerprint, 'mission_project_check_scope_changed');
     const { scope } = offer;
     const inputs = this.missionPlanningInputs(objective, scope, evidenceSelection);
     ensure(inputs.offer.fingerprint === fingerprint, 'mission_preview_changed');
@@ -1058,7 +1083,9 @@ export class BackendCore {
           { planningRequestId: requestId, observeResult: result => {
             if (result.dispatched) providerCalls++;
             if (result.usage) usage.push(result.usage);
-          } }, project ? { sources: project.sources.map(toVelaReviewedEvidenceSource), partial: project.reference.partial } : undefined);
+          }, ...(projectCheck && approvedProjectCheck ? { reviewedProjectTests: projectCheck.files,
+            validateReviewedTests: () => { this.checkedMissionProjectSelection(approvedProjectCheck); } } : {}) },
+          project ? { sources: project.sources.map(toVelaReviewedEvidenceSource), partial: project.reference.partial } : undefined);
           ensure(evidence.state === 'assessed' && evidence.coverage.length, 'mission_planning_context_unavailable');
           if (project) ensure(evidence.coverage.some(need => need.passages.length), 'mission_planning_context_unavailable');
           context = { notes: offer.notes ?? [], ...(offer.files ? { files: offer.files } : {}),
@@ -1068,11 +1095,17 @@ export class BackendCore {
           plannerStarted = performance.now();
           plannerStartedAt = now();
         }
+        if (approvedProjectCheck) this.checkedMissionProjectSelection(approvedProjectCheck);
         let observed:TurnResult|undefined;
-        await this.velaApiRuntime.structuredProposal({instruction:instructions,payload:{objective,capabilities,...(evidence ? { evidence } : {})},schema:MISSION_PROPOSAL_SCHEMA,
+        const planningInstructions = projectCheck ? instructions +
+          ' reviewedProjectTests lists the tracked files selected and disclosed for planning. The project-tests capability uses exactly those files. Starting the command still requires native approval. Do not treat file selection as missing or claim the check has run.' : instructions;
+        await this.velaApiRuntime.structuredProposal({instruction:planningInstructions,payload:{objective,capabilities,
+          ...(projectCheck ? { reviewedProjectTests: projectCheck.files } : {}), ...(evidence ? { evidence } : {})},schema:MISSION_PROPOSAL_SCHEMA,
           requestId,model:apiPlanner.model,reasoningEffort:apiPlanner.effort,
           missionCognition: { owner: { kind: 'planning', requestId }, stage: 'planning' },
-          binding:{configurationVersion:apiPlanner.version,contextDigest:context ? planningDigest({ fingerprint, evidenceDigest: context.evidenceDigest }) : fingerprint},validate:fence,onResult:value=>{observed=value;}},abort.signal);
+          binding:{configurationVersion:apiPlanner.version,contextDigest:context || projectCheck ?
+            planningDigest({ fingerprint, evidenceDigest: context?.evidenceDigest, projectCheck: projectCheck?.fingerprint }) : fingerprint},
+          validate:fence,onResult:value=>{observed=value;}},abort.signal);
         fence();ensure(observed,'mission_planning_response_unavailable');result=observed;proposal=result.partialText;
       }else{ensure(task&&turn,'mission_planner_unavailable');result=await this.runMissionProvider(scope,task,turn,abort.signal,requestId,true);proposal=result.partialText;}
       const planner=apiPlanner??selection!;
@@ -1084,6 +1117,10 @@ export class BackendCore {
         apiPlanner?{partialLimitations:[provisionalObjectiveCoverage]}:undefined;
       const plan = compileMissionProposal(proposal, objective, scope, catalog,
         partial && (notes || files || project) ? { ...partial, retainProviderLimitations: false } : partial);
+      if (approvedProjectCheck) {
+        this.checkedMissionProjectSelection(approvedProjectCheck);
+        ensure(plan.tasks.some(task => task.executor === 'codex.project-check'), 'mission_proposal_unsupported_objective');
+      }
       ensure(!plan.tasks.some(step => step.specialist?.provider === CHATGPT_PLAN_PROVIDER && step.dependencies.length), 'mission_proposal_unsupported_objective');
       validateMissionPlan(plan, this.missionExecutors);
       plan.planning = { provider: apiPlanner?VELA_API_PROVIDER:CHATGPT_PLAN_PROVIDER, model: planner.model, effort: planner.effort,
@@ -1092,6 +1129,7 @@ export class BackendCore {
       const objectiveReviewEligible = evidence?.searchCoverage === 'bounded' && !evidence.clarification &&
         evidence.coverage.every(need => need.status === 'supported' && need.passages.length > 0);
       this.missionProposals.set(requestId, { plan, expires: Date.now() + 5 * 60_000,
+        ...(approvedProjectCheck ? { projectCheck: structuredClone(approvedProjectCheck) } : {}),
         ...(objectiveReviewEligible ? { objectiveReviewEligible: true } : {}) });
       return this.missionCommand({ name: 'preview', input: { objective, proposalId: requestId } });
     }).finally(() => {
@@ -1101,10 +1139,22 @@ export class BackendCore {
     this.missionPlanningRun = { abort, settled };
     return settled;
   }
-  private async missionCheckReview(paths: string[]): Promise<CommandMap['missionCheckReview']['output']> {
+  private async missionCheckReview(input: CommandMap['missionCheckReview']['input']): Promise<CommandMap['missionCheckReview']['output']> {
     const runner = this.port.projectChecks;
     ensure(runner && !this.active && !this.velaProjectCheckTask && !this.missionProjectCheckRunning, 'mission_project_check_unavailable');
-    const plan = planVelaProjectCheck(undefined, 'node-test', paths, this.privateRoot);
+    ensure(input && typeof input === 'object', 'mission_project_check_scope_changed');
+    let plan: ReturnType<typeof planVelaProjectCheck>;
+    if ('proposalId' in input) {
+      ensure(Object.keys(input).length === 2 && identifier(input.proposalId), 'mission_project_check_scope_changed');
+      const stored = this.missionProposals.get(input.proposalId);
+      ensure(stored?.projectCheck, 'mission_project_check_scope_changed');
+      const preview = this.missionCommand({ name: 'preview', input: { objective: stored.plan.objective, proposalId: input.proposalId } });
+      ensure(preview && 'fingerprint' in preview && preview.fingerprint === input.fingerprint, 'mission_preview_changed');
+      plan = this.checkedMissionProjectSelection(stored.projectCheck);
+    } else {
+      ensure(Object.keys(input).length === 1, 'mission_project_check_scope_changed');
+      plan = planVelaProjectCheck(undefined, 'node-test', input.paths, this.privateRoot);
+    }
     await this.port.connect();
     ensure(await runner.ready(), 'mission_project_check_unavailable');
     return { cwd: plan.cwd, argv: plan.argv, head: plan.head, digest: planningDigest(plan) };
@@ -1157,7 +1207,7 @@ export class BackendCore {
           return null;
         }
         ensure(plan && this.missionScopeAllowed(scope), 'mission_scope_or_plan_unavailable');
-        const fingerprint = planningDigest(plan);
+        const fingerprint = planningDigest(stored?.projectCheck ? { plan, projectCheckDigest: stored.projectCheck.digest } : plan);
         const objectiveReview = stored?.objectiveReviewEligible ? reviewableMissionObjective(plan, fingerprint) : undefined;
         const remote = plan.tasks.filter(task => task.executor === 'chatgpt.specialist' || task.executor === 'api.specialist');
         const projectCheck = plan.tasks.find(task => task.executor === 'codex.project-check');
@@ -1165,7 +1215,8 @@ export class BackendCore {
         if (request.name === 'preview') return { fingerprint, plan,
           ...(proposalId ? { proposalId } : {}),
           executors: plan.tasks.map(task => ({ id: task.id, available: this.missionExecutors[task.executor].available(scope, task) })),
-          ...(projectCheck ? { localReview: { kind: 'node-test', maxFiles: 4 } as const } : {}),
+          ...(projectCheck ? { localReview: { kind: 'node-test', maxFiles: 4,
+            ...(stored?.projectCheck ? { preselected: true } : {}) } as const } : {}),
           ...(objectiveReview ? { objectiveReview: describeMissionObjectiveReview(objectiveReview) } : {}),
           ...(remote.length ? { externalReview: { provider: [...new Set(remote.map(task => task.specialist?.provider === VELA_API_PROVIDER ? 'Vela dedicated API' : 'ChatGPT plan'))].join(' + '), model: selected?.model ?? 'Unavailable',
             effort: selected?.effort, calls: remote.length } } : {}) };
@@ -1174,10 +1225,12 @@ export class BackendCore {
           ensure(reviewed && objectiveReview && approvedObjectiveDigest === objectiveReview.digest, 'mission_objective_review_changed');
         ensure(!remote.length || reviewed && remote.every(task => this.missionSpecialistAvailable(scope, task)), 'mission_native_review_or_connection_required');
         if (projectCheck) {
-          ensure(reviewed && approvedProjectCheck && this.port.projectChecks, 'mission_project_check_review_required');
-          const checked = planVelaProjectCheck(undefined, 'node-test', approvedProjectCheck.paths, this.privateRoot);
-          ensure(planningDigest(checked) === approvedProjectCheck.digest, 'mission_project_check_scope_changed');
-          projectCheck.projectCheck = { paths: [...approvedProjectCheck.paths], digest: approvedProjectCheck.digest };
+          const preselected = stored?.projectCheck;
+          ensure(!preselected || approvedProjectCheck === undefined, 'mission_project_check_scope_changed');
+          const selection = preselected ?? approvedProjectCheck;
+          ensure(reviewed && selection && this.port.projectChecks, 'mission_project_check_review_required');
+          this.checkedMissionProjectSelection(selection);
+          projectCheck.projectCheck = { paths: [...selection.paths], digest: selection.digest };
         }
         const requestId = request.input.requestId;
         const toolOwner=this.toolWorkflows.ownerOperations('specialist-mission').find(op=>op.binding.ownerRef.id===requestId);if(toolOwner)this.toolWorkflows.assertOwnerDispatch(toolOwner.binding.requestId,{id:requestId,digest:toolOwner.binding.ownerRef.digest});
@@ -6341,7 +6394,7 @@ export class BackendCore {
       const { approvedProjectCheck, approvedObjectiveDigest, ...request } = a as CommandMap['missionStartReviewed']['input'];
       return await this.missionCommand({ name: 'start', input: request }, true, approvedProjectCheck, approvedObjectiveDigest) as CommandMap[K]['output'];
     }
-    if (name === 'missionCheckReview') return await this.missionCheckReview(a?.paths) as CommandMap[K]['output'];
+    if (name === 'missionCheckReview') return await this.missionCheckReview(a) as CommandMap[K]['output'];
     if (name === 'missionPlanReviewed') return await this.startMissionPlanning(a) as CommandMap[K]['output'];
     if (name === 'missionExecutiveReview') return this.missionExecutiveReview(a) as CommandMap[K]['output'];
     if (name === 'missionExecutiveReviewed') return await this.missionExecutiveReviewed(a) as CommandMap[K]['output'];

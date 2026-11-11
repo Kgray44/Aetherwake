@@ -227,7 +227,7 @@ export interface MissionExecutiveReview {
 export type MissionRequest =
   | { name: 'executive-review'; input: MissionExecutiveRequest }
   | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string; teamId?: string } & MissionPlanningEvidenceSelection }
-  | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string } & MissionPlanningEvidenceSelection }
+  | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string; chooseProjectTests?: true } & MissionPlanningEvidenceSelection }
   | { name: 'start'; input: { objective: string; fingerprint: string; requestId: string; agentProfileId?: string; proposalId?: string; teamId?: string } }
   | { name: 'team-library'; input: Record<string, never> }
   | { name: 'team-save'; input: MissionTeamSave }
@@ -246,7 +246,7 @@ export interface MissionPreview {
   plan: MissionPlan;
   executors: { id: string; available: boolean }[];
   externalReview?: { provider: string; model: string; effort?: ReasoningEffort; calls: number };
-  localReview?: { kind: 'node-test'; maxFiles: number };
+  localReview?: { kind: 'node-test'; maxFiles: number; preselected?: true };
   objectiveReview?: MissionObjectiveReviewPreview;
   proposalId?: string;
 }
@@ -258,7 +258,7 @@ export interface MissionPlanningOffer {
   notes?: MissionPlanningSourceRef[];
   files?: MissionPlanningSourceRef[];
   projectEvidence?: import('./contracts.mts').VelaProjectEvidencePreview;
-  planner?: { provider?: 'chatgpt-plan-responses' | 'openai-api-vela'; model: string; effort?: ReasoningEffort; capabilities: string[] };
+  planner?: { provider?: 'chatgpt-plan-responses' | 'openai-api-vela'; model: string; effort?: ReasoningEffort; capabilities: string[]; projectCheck?: true };
 }
 export interface MissionWorkroom {
   kind: 'workroom';

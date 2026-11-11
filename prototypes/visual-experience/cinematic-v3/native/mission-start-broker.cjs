@@ -43,22 +43,27 @@ async function startReviewedMission({win,event,localURL,storage,call,dialog,inpu
           }
           if (preview.localReview) {
             if (preview.executors.some(executor => !executor.available)) throw Error("mission_project_check_unavailable");
-            const selected = await checkedDialog.showOpenDialog(win, {
-              title: "Choose tracked Node test files in one Git checkout",
-              properties: ["openFile", "multiSelections"],
-              filters: [{ name: "Node test sources", extensions: ["js", "cjs", "mjs", "ts", "mts"] }],
-            });
-            if (selected.canceled || !selected.filePaths.length) throw Error("mission_review_declined");
-            const paths = selected.filePaths;
-            if (paths.length > preview.localReview.maxFiles) throw Error("mission_project_check_selection_limit");
-            const review = await call("missionCheckReview", { paths });
+            let paths, review;
+            if (preview.localReview.preselected) {
+              review = await call("missionCheckReview", { proposalId: preview.proposalId, fingerprint: preview.fingerprint });
+            } else {
+              const selected = await checkedDialog.showOpenDialog(win, {
+                title: "Choose tracked Node test files in one Git checkout",
+                properties: ["openFile", "multiSelections"],
+                filters: [{ name: "Node test sources", extensions: ["js", "cjs", "mjs", "ts", "mts"] }],
+              });
+              if (selected.canceled || !selected.filePaths.length) throw Error("mission_review_declined");
+              paths = selected.filePaths;
+              if (paths.length > preview.localReview.maxFiles) throw Error("mission_project_check_selection_limit");
+              review = await call("missionCheckReview", { paths });
+            }
             const choice = await checkedDialog.showMessageBox(win, {
               type: "question", buttons: startButtons, defaultId: 0, cancelId: 0,
               title: "Review read-only project tests", message: "Run the selected Node tests alongside native measurements?",
               detail: `Checkout: ${review.cwd}\nCommit: ${review.head}\nArguments: ${JSON.stringify(review.argv)}\n\nCodex runs the selected command in a read-only sandbox with zero model requests. The sandbox requests restricted networking. Effective isolation depends on the installed Windows sandbox mode.${objective ? '\n\n' + objectiveDetail : ''}`,
             });
             acceptStart(choice);
-            approvedProjectCheck = { paths, digest: review.digest };
+            if (paths) approvedProjectCheck = { paths, digest: review.digest };
           } else if (objective) {
             if (preview.executors.some(executor => !executor.available)) throw Error("mission_scope_or_plan_unavailable");
             acceptStart(await checkedDialog.showMessageBox(win, {
@@ -73,7 +78,7 @@ async function startReviewedMission({win,event,localURL,storage,call,dialog,inpu
           guard();
           if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
           guard();
-          if (preview.externalReview || approvedProjectCheck || approvedObjectiveDigest) {
+          if (preview.externalReview || preview.localReview?.preselected || approvedProjectCheck || approvedObjectiveDigest) {
             if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
               throw Error("unauthorized_sender");
             if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");

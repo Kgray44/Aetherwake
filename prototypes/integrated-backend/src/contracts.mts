@@ -253,16 +253,18 @@ export interface CommandMap {
   workspaceRecovery: { input: WorkspaceRecoveryRequest; output: WorkspaceRecoveryResponse };
   missionStartReviewed: { input: Extract<MissionRequest, { name: 'start' }>['input'] & {
     approvedProjectCheck?: { paths: string[]; digest: string }; approvedObjectiveDigest?: string }; output: MissionResponse };
-  missionCheckReview: { input: { paths: string[] }; output: { cwd: string; argv: string[]; head: string; digest: string } };
-  missionPlanReviewed: { input: Extract<MissionRequest, { name: 'plan' }>['input']; output: MissionResponse };
+  missionCheckReview: { input: { paths: string[] } | { proposalId: string; fingerprint: string };
+    output: { cwd: string; argv: string[]; head: string; digest: string } };
+  missionPlanReviewed: { input: Omit<Extract<MissionRequest, { name: 'plan' }>['input'], 'chooseProjectTests'> & {
+    approvedProjectCheck?: { paths: string[]; digest: string }; projectCheckReviewFingerprint?: string }; output: MissionResponse };
   missionExecutiveReview: { input: import('./mission-contracts.mts').MissionExecutiveRequest; output: import('./mission-contracts.mts').MissionExecutiveReview };
   missionExecutiveReviewed: { input: import('./mission-contracts.mts').MissionExecutiveRequest & { fingerprint: string }; output: Extract<MissionResponse, { kind: 'executive-result' }> };
   missionPlanningReview: {
-    input: { objective: string; fingerprint: string } & import('./mission-contracts.mts').MissionPlanningEvidenceSelection;
+    input: { objective: string; fingerprint: string; approvedProjectCheck?: { paths: string[]; digest: string } } & import('./mission-contracts.mts').MissionPlanningEvidenceSelection;
     output: { offer: import('./mission-contracts.mts').MissionPlanningOffer;
       notes: (import('./mission-contracts.mts').MissionPlanningSourceRef & { text: string })[];
       files: (import('./mission-contracts.mts').MissionPlanningSourceRef & { text: string })[];
-      projectEvidence?: VelaNativeReview['projectEvidence'] };
+      projectEvidence?: VelaNativeReview['projectEvidence']; projectCheck?: { files: string[]; fingerprint: string } };
   };
   missionRevisionReviewed: { input: Extract<MissionRequest, { name: 'revision-apply' }>['input']; output: MissionResponse };
   missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true }; output: null };

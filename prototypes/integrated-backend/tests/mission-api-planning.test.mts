@@ -2,14 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCipheriv,createDecipheriv,createHash,randomBytes,randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync,rmSync,writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
 import { nativeMissionExecutors, missionResultAvailable } from '../src/mission-native.mts';
 import type { MissionExecutor,MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
-import type { VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
+import type { ProviderPort, VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
+import { createMissionProjectCheck } from '../src/mission-project-check.mts';
+import { planningDigest } from '../../vela-core/src/codex-planning-adapter.mts';
 import type { VelaRequest } from '../../vela-core/src/contracts.ts';
 import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
 import type { NativeDocumentTextServices } from '../src/document-text-host.mts';
@@ -364,6 +367,113 @@ test('reviewed API mission planning rejects a terminal response that disagrees w
     assert.equal(f.requests.length, 1);
     assert.deepEqual(await f.core.command('missions', { name: 'list', input: {} }), []);
   } finally { await f.close(); }
+});
+
+test('preselected tracked tests bind provider review and Start without disclosing local checkout data',
+  { skip: process.platform !== 'win32' }, async () => {
+  const f = fixture(true);
+  const base = resolve(homedir());
+  const repo = mkdtempSync(join(base, 'aerynth-reviewed-tests-'));
+  try {
+    const path = join(repo, 'harness.test.mjs'), secondPath = join(repo, 'alternative.test.mjs');
+    const source = 'export const observed = true;\n';
+    writeFileSync(path, source);
+    writeFileSync(secondPath, source);
+    const git = (...args: string[]) => execFileSync('git.exe', ['-C', repo, '-c', 'core.hooksPath=NUL', ...args],
+      { stdio: 'pipe', windowsHide: true, timeout: 5000 });
+    git('init', '-q', '--template=');
+    git('add', '.');
+    const commit = (message: string) => git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+      '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', message);
+    commit('Track two test fixtures');
+    await f.ready();
+    let effects = 0;
+    const runner = { ready: async () => true, execute: async (argv: string[], cwd: string) => {
+      effects++;
+      assert.equal(cwd.toLowerCase(), repo.toLowerCase());
+      assert.equal(argv.at(-1), './harness.test.mjs');
+      return { exitCode: 0, stderr: '', stdout: 'TAP version 13\nok 1 - fixture\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1\n' };
+    } };
+    const host = f.core as unknown as { port: ProviderPort; missionExecutors: Record<string, MissionExecutor> };
+    host.port.projectChecks = runner;
+    host.missionExecutors['codex.project-check'] = createMissionProjectCheck({ runner, digest: planningDigest, lease: () => () => {} });
+    const objective = 'Plan a mission to run my chosen check and measure physical RAM.';
+    const workspace = await f.core.command('desktop', { type: 'snapshot' });
+    const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Check instructions',
+      workspaceId: workspace.activeWorkspaceId });
+    const note = created.resources.find(item => item.title === 'Check instructions')!;
+    const content = 'Run the operator-selected tracked test and measure physical RAM.';
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content });
+    const selection = { objective, noteIds: [note.id] };
+    const offer = await f.core.command('missions', { name: 'preview', input: selection }) as MissionPlanningOffer;
+    assert.equal(offer.planner?.projectCheck, true);
+    const check = await f.core.command('missionCheckReview', { paths: [path] });
+    const approvedProjectCheck = { paths: [path], digest: check.digest };
+    const baseReview = { ...selection, fingerprint: offer.fingerprint, approvedProjectCheck };
+    const reviewed = await f.core.command('missionPlanningReview', baseReview);
+    assert.deepEqual(reviewed.projectCheck?.files, ['harness.test.mjs']);
+    const requestId = randomUUID();
+    const input = { ...baseReview, requestId, projectCheckReviewFingerprint: reviewed.projectCheck!.fingerprint };
+    await assert.rejects(f.core.command('missionPlanReviewed', { ...input, projectCheckReviewFingerprint: 'f'.repeat(64) }),
+      /mission_project_check_scope_changed/);
+    await assert.rejects(f.core.command('missionPlanReviewed', { ...input, approvedProjectCheck: { ...approvedProjectCheck, paths: [secondPath] } }),
+      /mission_project_check_scope_changed/);
+    writeFileSync(path, 'export const observed = false;\n');
+    await assert.rejects(f.core.command('missionPlanReviewed', input), /mission_project_check_scope_changed/);
+    writeFileSync(path, source);
+    await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
+    await assert.rejects(f.core.command('missionPlanReviewed', input), /mission_preview_changed/);
+    assert.equal(f.requests.length, 0);
+    await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: true });
+    const freshCheck = await f.core.command('missionCheckReview', { paths: [path] });
+    const freshSelection = { paths: [path], digest: freshCheck.digest };
+    const freshReview = await f.core.command('missionPlanningReview', { ...baseReview, approvedProjectCheck: freshSelection });
+    const perceive = (key: string) => ({ version: 2, objective, clarification: '',
+      perception: { kind: 'plan', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: [{ key, question: 'Which requirements does the instruction record establish?', query: 'tracked test physical RAM' }] });
+    const assess = (key: string, quote: string) => ({ version: 3, clarification: '', assessment: [
+      { key, status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
+    ] });
+    const reply = (value: unknown, disclosed: boolean) => (body: any) => {
+      const payload = JSON.parse(body.input[0].content);
+      assert.deepEqual(payload.reviewedProjectTests, disclosed ? ['harness.test.mjs'] : undefined);
+      for (const secret of [repo, freshCheck.digest, freshCheck.head, process.execPath]) assert.ok(!JSON.stringify(payload).includes(secret));
+      return response(JSON.stringify(value), body.model);
+    };
+    f.replies.push(reply(perceive('day'), false), reply(assess('day', 'The pump inspection is on Tuesday.'), false),
+      reply(perceive('checks'), true), reply(assess('checks', content), true),
+      reply({ tasks: [{ capability: 'project-tests', after: [] }, { capability: 'ram', after: [] }], unsupported: [] }, true));
+    const plan = await f.core.command('missionPlanReviewed', { ...input, approvedProjectCheck: freshSelection,
+      projectCheckReviewFingerprint: freshReview.projectCheck!.fingerprint }) as MissionPreview;
+    assert.equal(plan.localReview?.preselected, true);
+    assert.ok(plan.objectiveReview);
+    assert.ok(!JSON.stringify(plan).includes(freshCheck.digest) && !JSON.stringify(plan).includes(repo));
+    const start = { objective, requestId, proposalId: requestId, fingerprint: plan.fingerprint };
+    await assert.rejects(f.core.command('missionStartReviewed', { ...start, approvedProjectCheck }), /mission_project_check_scope_changed/);
+    const checkAtStart = await f.core.command('missionCheckReview', { proposalId: requestId, fingerprint: plan.fingerprint });
+    assert.equal(checkAtStart.digest, freshCheck.digest);
+    const approvedStart = { ...start, approvedObjectiveDigest: plan.objectiveReview!.digest };
+    const started = await f.core.command('missionStartReviewed', approvedStart) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id: started.id } }) as Promise<MissionProjection>;
+    let settled = await read();
+    for (let index = 0; index < 150 && ['queued', 'running'].includes(settled.outcome); index++) {
+      await new Promise(done => setTimeout(done, 10));
+      settled = await read();
+    }
+    assert.ok(settled.tasks.every(task => task.state === 'verified'));
+    assert.equal(settled.outcome, 'verified');
+    assert.ok(!JSON.stringify(settled).includes(freshCheck.digest) && !JSON.stringify(settled).includes(repo) &&
+      !JSON.stringify(settled).includes(freshCheck.head));
+    commit('Advance checkout after review');
+    await assert.rejects(f.core.command('missionStartReviewed', approvedStart), /mission_project_check_scope_changed/);
+    assert.equal(effects, 1);
+    assert.equal(f.requests.length, 5);
+  } finally {
+    await f.close();
+    const part = relative(base, resolve(repo));
+    assert.ok(part.startsWith('aerynth-reviewed-tests-') && !part.startsWith('..') && !isAbsolute(part));
+    rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test('native Start review binds the complete objective to current host proofs across restart', async () => {

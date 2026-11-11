@@ -38,6 +38,16 @@ const stamp = () => new Date().toISOString();
 const digest = (input: unknown) => createHash('sha256').update(JSON.stringify(input)).digest('hex');
 const makeTask = (plan: MissionTaskPlan): MissionTask => ({ ...plan, queuedAt: stamp(), state: 'queued', priority: 0, attempts: [] });
 const own = (table: object, key: string) => Object.hasOwn(table, key);
+function publicMissionTask(task: MissionTask): MissionTask {
+  if (task.executor !== 'codex.project-check') return task;
+  const { projectCheck: _localSelection, ...visible } = task;
+  return { ...visible, attempts: task.attempts.map(attempt => {
+    const evidence = attempt.evidence;
+    if (!evidence?.value || typeof evidence.value !== 'object') return attempt;
+    const { head: _checkout, inputDigest: _digest, ...value } = evidence.value as Record<string, unknown>;
+    return { ...attempt, evidence: { ...evidence, value } };
+  }) };
+}
 /** Shared scoped evidence summary. Evidence bodies and profile instructions stay with their owners. */
 function workroomEvidence(task: MissionTask, attempt?: MissionAttempt): Pick<MissionAgentAttempt,
   'evidenceId' | 'source' | 'observedAt' | 'verification' | 'passed' | 'findings' | 'citations'> {
@@ -708,7 +718,9 @@ export class MissionService {
     const ended = ['queued', 'running', 'cancelling'].includes(outcome) ? Date.now() :
       Date.parse(m.events.findLast(event => event.kind !== 'workroom')!.time);
     const answer = missionMeasurementAnswer(m.tasks);
-    return { ...m, outcome, ...(answer.length ? { answer } : {}), waits,
+    return { ...m, tasks: m.tasks.map(publicMissionTask),
+      ...(m.retiredTasks ? { retiredTasks: m.retiredTasks.map(publicMissionTask) } : {}),
+      outcome, ...(answer.length ? { answer } : {}), waits,
       ...(admission ? { admission: structuredClone(admission) } : {}), profile: {
       elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0) +
         (m.planning?.context?.elapsedMs ?? 0), peakWorkers, attempts: attempts.length,

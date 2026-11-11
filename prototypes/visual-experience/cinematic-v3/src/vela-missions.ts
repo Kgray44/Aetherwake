@@ -914,13 +914,19 @@ export function createVelaMissionView(
     const plan = button("Review planning request", "plan-mission", () => { void preparePlan(offer); });
     plan.classList.add("vela-core-primary");
     plan.disabled = commandPending || !offer.planner;
-    controls.append(plan, button("Dismiss preview", "dismiss-preview", () => {
+    controls.append(plan);
+    if (offer.planner?.projectCheck) {
+      const choose = button("Choose tracked tests first", "plan-mission-with-tests", () => { void preparePlan(offer, true); });
+      choose.disabled = commandPending;
+      controls.append(choose);
+    }
+    controls.append(button("Dismiss preview", "dismiss-preview", () => {
       if (!commandPending) { review = null; render(); }
     }));
     section.append(controls);
     return section;
   }
-  async function preparePlan(offer: MissionPlanningOffer) {
+  async function preparePlan(offer: MissionPlanningOffer, chooseProjectTests?: true) {
     const pending = review;
     if (commandPending || !visible || pending?.preview !== offer || !offer.planner) return;
     const generation = epoch;
@@ -930,6 +936,7 @@ export function createVelaMissionView(
     try {
       const result = await command({ name: "plan",
         input: { objective: offer.objective, fingerprint: offer.fingerprint, requestId: pending.requestId,
+          ...(chooseProjectTests ? { chooseProjectTests } : {}),
           ...(offer.notes ? { noteIds: offer.notes.map(note => note.id) } : {}),
           ...(offer.files ? { fileIds: offer.files.map(file => file.id) } : {}),
           ...(offer.projectEvidence ? { projectEvidence: true } : {}) } });
