@@ -123,3 +123,49 @@ test('separate short missions do not combine their Windows sampler warmup', asyn
     assert.equal(probes, 1);
   } finally { admission.dispose(); }
 });
+
+test('an early Windows low-memory notification checkpoints local work before the other counters finish', async () => {
+  let time = 0, changes = 0, probes = 0;
+  let observe!: (value: unknown) => void, finish!: (result: { windowsLowMemory: number }) => void;
+  const pending = new Promise<{ windowsLowMemory: number }>(resolve => { finish = resolve; });
+  const admission = createMissionAdmission({ maxWorkers: 3, now: () => time, wallNow: () => epoch + time,
+    availableMemory: () => 1024 * mib, readWindowsPressure: async (_signal, onMemory) => {
+      if (++probes > 1) return { windowsLowMemory: 0 };
+      observe = onMemory;
+      return pending;
+    }, onChange: () => { changes++; } });
+  try {
+    admission.read(true);
+    time = 2000;
+    admission.read(true);
+    await yieldToProbe();
+    const active = admission.tryLease({ missionId: 'memory', taskId: 'observe', attemptId: 'first', kind: 'host_io', timeoutMs: 4000 });
+    assert.ok(active);
+    observe(1);
+    assert.equal(changes, 1);
+    const held = admission.read(true);
+    assert.equal(held.workerLimit, 0);
+    assert.deepEqual(held.reasons, ['os-memory-pressure']);
+    assert.equal(held.readings.availableMemoryBytes?.value, 1024 * mib);
+    assert.equal(held.readings.windowsLowMemory?.value, 1);
+    assert.equal(admission.telemetry().metrics.windowsLowMemory.availability, 'observed');
+    assert.equal(admission.inspectPolicy().reason, 'os_memory_pressure');
+    assert.equal(admission.canLease('remote'), true);
+    assert.equal(admission.canLease('host_io'), false);
+    assert.equal(active.checkpointRequested.aborted, true);
+    assert.equal(active.active, true);
+    active.release();
+    finish({ windowsLowMemory: 1 });
+    await yieldToProbe();
+    assert.equal(changes, 1);
+    time = 32_001;
+    assert.equal(admission.read(true).readings.windowsLowMemory, undefined);
+    assert.equal(admission.telemetry().metrics.windowsLowMemory.availability, 'stale');
+    assert.equal(admission.canLease('host_io'), true);
+    time += 2000;
+    admission.read(true);
+    await yieldToProbe();
+    assert.equal(admission.read(true).readings.windowsLowMemory?.value, 0);
+    assert.equal(admission.telemetry().metrics.windowsLowMemory.availability, 'observed');
+  } finally { finish({ windowsLowMemory: 1 }); admission.dispose(); }
+});
