@@ -1002,7 +1002,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function appendSpeechAction(footer:HTMLElement,message?:VelaMessage){
     if(message&&options.voice?.speak){
       const speech=replySpeech,stopping=!!speech?.attemptId&&speech.messageId===message.id&&['starting','speaking'].includes(speech.state);
-      const speak=icon(stopping?'Stop speaking':'Speak response',stopping?'■':'♩','speak',()=>void run(async()=>{
+      const speak=icon(stopping?'Stop speaking':'Speak response',stopping?'■':'♩',stopping?'stop':'speak',()=>void run(async()=>{
         speak.disabled=true;
         try{if(stopping&&speech?.attemptId&&options.voice?.stopSpeech)await options.voice.stopSpeech(speech.attemptId);else await options.voice!.speak!({id:message.id,content:message.content});}
         finally{speak.disabled=false;}

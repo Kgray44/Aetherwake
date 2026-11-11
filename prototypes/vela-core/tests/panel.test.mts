@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mountVelaPanel, type VelaPanelPresentation, type VelaPanelManifestation } from '../src/panel.ts';
 import { velaPanelStatus } from '../src/panel-status.ts';
 import { VELA_CONTRACT, type VelaClient, type VelaState, type VelaRequest, type VelaPlan, type ActionReceipt, type VelaLocalDispatch, type VelaMessage } from '../src/contracts.ts';
@@ -125,7 +126,13 @@ test('completed typed replies expose one speak icon and stop only the same speec
   voice:{element:doc.createElement('section') as unknown as HTMLElement,setVisible(){},start:async()=>{},speak:async value=>{spoken.push(value);listener?.({active:true,microphoneOn:false,speaking:true,speech:{state:'speaking',messageId:message.id,attemptId:'speech:exact',contentDigest:'a'.repeat(64)}});},stopSpeech:async id=>{stopped.push(id);},subscribe:fn=>{listener=fn;return ()=>{listener=undefined;};}}
  });
  await settles(()=>!!named(root,'Speak response'));assert.equal(spoken.length,0,'hydration never speaks automatically');
- named(root,'Speak response').fire('click');await settles(()=>!!named(root,'Stop speaking'));
+ const styles = readFileSync(new URL('../src/panel.css', import.meta.url), 'utf8');
+ const speak = named(root, 'Speak response');
+ assert.equal(speak.children[0].dataset.icon, 'speak');
+ assert.ok(/\.vela-core-icon-mark\[data-icon="speak"\]\s*\{\s*--vela-icon:\s*url\("data:image\/svg\+xml,/.test(styles),
+   'Speak response has a CSS mask instead of a solid currentColor box');
+ speak.fire('click');await settles(()=>!!named(root,'Stop speaking'));
+ assert.equal(named(root, 'Stop speaking').children[0].dataset.icon, 'stop');
  assert.deepEqual(spoken,[{id:message.id,content:message.content}]);named(root,'Stop speaking').fire('click');await settles(()=>stopped.length===1);
  assert.deepEqual(stopped,['speech:exact']);assert.equal(turns,0);assert.equal(canonical.conversation!.messages.length,1);
  listener?.({active:true,microphoneOn:false,speaking:true,speech:{state:'speaking',messageId:'message:other',attemptId:'speech:other',contentDigest:'b'.repeat(64)}});
