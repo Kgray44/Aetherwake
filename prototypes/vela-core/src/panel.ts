@@ -56,7 +56,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const doc = root.ownerDocument;
   let current: VelaState | null = null, disposed = false, busy = false, nativeBusy = false, composing = false, draftRevision = 0, lastDisclosure: HTMLDetailsElement | null = null;
   let activeContext: string | null = null, contextTrigger: HTMLButtonElement | null = null, chosenProviderId: string | null = null, presentationSignature = '';
-  let handoffSelection: { requestId: string; sourceProviderId: string } | null = null;
+  let handoffSelection: { requestId: string; sourceProviderId: string; reviewedEvidence?: true } | null = null;
   let routingAgentSelection: ResourceRef | null = null;
   let manifestationSignature = '', manifestationBaseline = true, observing = true, presentationBusy = false, readSequence = 0, viewRevision = 0, transientView: 'current' | 'history' | null = null;
   const instanceId = 'vela-context-' + ++panelSequence;
@@ -102,11 +102,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   history.append(historyBack, openHistory, historyRequests, conversation, planHistory.node, historyEmpty);
   const pin = icon('Pin response', '◇', 'pin', () => updatePresentation({ pinnedRequestIds: toggle(presentation().pinnedRequestIds, project().currentRequestId) }));
   const dismiss = icon('Dismiss response', '×', 'dismiss', () => { const id = project().currentRequestId; if (id) return updatePresentation({ dismissedRequestIds: [...new Set([...presentation().dismissedRequestIds, id])], selectedRequestId: null }); });
-  const handoffButton = button('Continue with another provider', () => {
+  function selectExchange(destination: string, reviewedEvidence?: true) {
     const request = current?.requests.find(item => item.id === project().currentRequestId);
-    const destination = handoffButton.dataset.destination;
     if (busy || !request?.providerId || !destination) return;
-    handoffSelection = { requestId: request.id, sourceProviderId: request.providerId };
+    handoffSelection = { requestId: request.id, sourceProviderId: request.providerId, ...(reviewedEvidence ? { reviewedEvidence } : {}) };
     if (chosenProviderId !== destination) clearModelOptions();
     chosenProviderId = destination;
     if (routeMode.value === 'codex' && destination !== 'codex-app-server') routeMode.value = 'auto';
@@ -114,8 +113,11 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     renderProviderChoice();
     renderSelection();
     intent.focus();
-  });
+  }
+  const handoffButton = button('Continue with another provider', () => selectExchange(handoffButton.dataset.destination ?? ''));
+  const exchangeEvidence = button('Use this exchange as evidence', () => selectExchange('openai-api-vela', true));
   handoffButton.hidden = true;
+  exchangeEvidence.hidden = true;
   const rateResponse = (feedback: 'useful' | 'needs-correction') => async () => {
     const requestId = project().currentRequestId;
     if (!requestId || !client.rateRoutingResponse) return;
@@ -124,7 +126,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   };
   const useful = button('Mark useful', rateResponse('useful')), needsCorrection = button('Mark needs correction', rateResponse('needs-correction'));
   useful.hidden = needsCorrection.hidden = true;
-  const responseActions = el('div', 'vela-manifestation-actions'); responseActions.append(handoffButton, useful, needsCorrection, pin, dismiss);
+  const responseActions = el('div', 'vela-manifestation-actions'); responseActions.append(handoffButton, exchangeEvidence, useful, needsCorrection, pin, dismiss);
   manifestation.tabIndex = -1; manifestation.append(manifestationKicker, localAlongsidePlan, manifestationBody, plans, fileEditActions);
   const more = el('section', 'vela-core-contextual vela-core-more'); more.hidden = true; more.id = instanceId; more.setAttribute('aria-label', 'Vela controls');
   const resultPanel = disclosure('Plan and response details', 'vela-core-result-panel');
@@ -282,15 +284,16 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   if (planWithNotes) sourcePanel.body.append(planWithNotes);
   function updateSemanticContext() {
     const sources = [...selected.values()];
-    const incompatibleScope = !!handoffSelection || !!routingAgentSelection;
+    const incompatibleScope = (!!handoffSelection && !handoffSelection.reviewedEvidence) || !!routingAgentSelection;
     const incompatibleSource = sources.some(ref => ref.resourceKind !== 'note' && ref.resourceKind !== 'file') || incompatibleScope;
     const apiUnavailable = !current?.planningProviders || chosenProviderId !== 'openai-api-vela';
-    const ineligible = !selected.size || selected.size > 4 || incompatibleSource;
+    const sourceCount = selected.size + Number(!!handoffSelection?.reviewedEvidence);
+    const ineligible = !selected.size || sourceCount > 4 || incompatibleSource;
     semanticContext.disabled = apiUnavailable || ineligible;
     if (semanticContext.disabled) semanticContext.checked = false;
-    workspaceState.disabled = apiUnavailable || incompatibleSource || selected.size > 3 || !current?.applicationContext?.currentWorkspaceId;
+    workspaceState.disabled = apiUnavailable || incompatibleSource || sourceCount > 3 || !current?.applicationContext?.currentWorkspaceId;
     if (workspaceState.disabled) workspaceState.checked = false;
-    if (planWithNotes) planWithNotes.disabled = ineligible || sources.some(ref => ref.resourceKind !== 'note') || busy || preparingNotePlan || !intent.value.trim();
+    if (planWithNotes) planWithNotes.disabled = ineligible || !!handoffSelection || sources.some(ref => ref.resourceKind !== 'note') || busy || preparingNotePlan || !intent.value.trim();
   }
   updateSemanticContext();
   const modes = [['auto', 'Auto'], ['fast', 'Fast'], ['deep', 'Deep'], ['codex', 'Codex'], ['custom', 'Custom']] as const;
@@ -492,7 +495,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     ...(connected && routeEffort.value ? { reasoningEffort: routeEffort.value as import('../../openai-provider/model-controls.ts').ReasoningEffort } : {}),
     ...(connected && !routeEscalation.disabled && routeEscalation.checked ? { allowEscalation: true as const } : {}),
     ...(connected && routeHistory.checked ? { includeRecentHistory: false as const } : {}),
-    ...(reviewWorkspace || connected && !semanticContext.disabled && semanticContext.checked ? { semanticContext: true as const } : {}),
+    ...(reviewWorkspace || connected && (handoffSelection?.reviewedEvidence || !semanticContext.disabled && semanticContext.checked) ? { semanticContext: true as const } : {}),
     ...(reviewWorkspace ? { workspaceState: true as const } : {}),
     ...(connected && handoffSelection ? { handoffSourceRequestId: handoffSelection.requestId } : {}),
     ...(connected && routingAgentSelection ? { routingAgentId: routingAgentSelection.id } : {}),
@@ -824,6 +827,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     handoffButton.title = destination?.available === false ? 'The destination connection will be checked on Send.' : '';
     handoffButton.dataset.destination = destination?.providerId ?? '';
     if (destination) handoffButton.textContent = 'Continue with ' + providerName(destination.providerId);
+    exchangeEvidence.hidden = !sourceProvider || !selectedRequest?.provenance || selectedRequest.response?.kind !== 'answer' ||
+      message?.source !== 'provider' || !current?.planningProviders?.some(item => item.providerId === 'openai-api-vela' && item.available);
+    exchangeEvidence.disabled = busy;
     const canRate = !!client.rateRoutingResponse && !!selectedRequest &&
       current?.routingSettings?.calibration?.feedbackRequestIds.includes(selectedRequest.id) === true;
     useful.hidden = needsCorrection.hidden = !canRate;

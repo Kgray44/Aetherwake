@@ -205,7 +205,8 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       for (const source of sources.slice(0, 2 * maxCandidates)) {
         if (observed.has(source.sourceId)) continue;
         const textLimit = source.sourceKind === 'file' ? maxReviewedFileBytes :
-          source.sourceKind === 'mission-checkpoint' || source.sourceKind === 'workspace-state' ? maxReviewedStateBytes : maxExcerptBytes;
+          source.sourceKind === 'mission-checkpoint' || source.sourceKind === 'workspace-state' || source.sourceKind === 'conversation-exchange'
+            ? maxReviewedStateBytes : maxExcerptBytes;
         if (evidence.size === maxCandidates || !bounded(source.text, textLimit) || !owner.isCurrent(source)) {
           partial();
           if (evidence.size === maxCandidates) break;
@@ -244,7 +245,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         ...(pendingClarification ? { proposedClarification: pendingClarification } : {}),
         excerpts: [...evidence].map(([handle, source]) => ({
           handle, text: source.text, ...(source.sourceKind ? { sourceKind: source.sourceKind } : {}),
-          ...(source.sourceKind !== 'conversation-exchange' && bounded(source.title, 512) ? { title: source.title } : {}),
+          ...(bounded(source.title, 512) ? { title: source.title } : {}),
           ...(source.partial ? { partial: true as const } : {}),
         })) }, sources);
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale');
