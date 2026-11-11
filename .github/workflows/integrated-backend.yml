@@ -31,7 +31,8 @@ permissions:
   contents: read
 jobs:
   synthetic-integration:
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 35 || 20 }}
+    # Windows compiles and exercises the native helpers before the cross-package suite.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 20 }}
     strategy:
       fail-fast: false
       matrix:
