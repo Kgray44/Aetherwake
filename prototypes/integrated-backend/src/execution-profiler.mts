@@ -283,6 +283,19 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     };
   });
   const traceByAttempt = new Map(attempts.map(attempt => [attempt.id, attempt]));
+  const cancellations = events.flatMap(event => {
+    if (event.kind !== 'control' || (event.detail !== 'cancel' && event.detail !== 'cancel-branch')) return [];
+    const request = boundary(event);
+    const cancelledAttempts = event.cancellationRequestedAttemptIds?.map(attemptId => {
+      const source = byAttempt.get(attemptId);
+      const trace = traceByAttempt.get(attemptId);
+      const settlement = trace?.end && trace.end.eventSeq > request.eventSeq ? trace.end : null;
+      const elapsed = trace && !trace.interrupted && trace.start.eventSeq < request.eventSeq ? interval(attemptId, request, settlement) : null;
+      return { taskId: source?.task.id ?? null, attemptId, outcome: source?.attempt.outcome ?? null, settlement,
+        requestToSettlementMs: elapsed ? elapsed.end - elapsed.start : null };
+    });
+    return [{ kind: event.detail, targetTaskId: event.taskId ?? null, request, attempts: cancelledAttempts ?? null }];
+  });
   const retries = Array.from(byAttempt.values()).flatMap(({ task, attempt, previous }) => {
     if (!previous) return [];
     const prior = traceByAttempt.get(previous), retry = traceByAttempt.get(attempt.id);
@@ -406,6 +419,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       causalBoundary: 'attempt-dependencies-and-retries' as const,
       openAttempts: attempts.filter(attempt => attempt.state === 'running' && !attempt.end).map(attempt => attempt.id),
       retries,
+      cancellations,
       clockSegments, workerMs: total?.workerMs ?? null, activeMs: total?.activeMs ?? null,
       overlapMs: total?.overlapMs ?? null, peakWorkers: total?.peakWorkers ?? null,
       intervalCoverage: { measured: clockSegments.reduce((count, segment) => count + segment.attemptIds.length, 0),

@@ -716,6 +716,23 @@ test('pressure defers admission and cancelling a branch preserves an independent
     assert.equal(outcome.tasks.find(t => t.id === 'dependent')?.state, 'cancelled');
     assert.equal(outcome.tasks.find(t => t.id === 'independent')?.state, 'verified');
     assert.equal(outcome.outcome, 'blocked');
+    const profile = projectMissionExecution(outcome);
+    const branch = profile.attempts.find(attempt => attempt.taskId === 'branch')!;
+    const [cancel] = profile.work.cancellations;
+    assert.equal(cancel.kind, 'cancel-branch');
+    assert.equal(cancel.targetTaskId, 'branch');
+    assert.deepEqual(cancel.attempts, [{ taskId: 'branch', attemptId: branch.id, outcome: 'cancelled',
+      settlement: branch.end, requestToSettlementMs: branch.end!.monotonicMs! - cancel.request.monotonicMs! }]);
+    const legacy = structuredClone(outcome);
+    delete legacy.events.find(event => event.seq === cancel.request.eventSeq)!.cancellationRequestedAttemptIds;
+    assert.equal(projectMissionExecution(legacy).work.cancellations[0].attempts, null);
+    const afterRestart = structuredClone(outcome);
+    afterRestart.events.find(event => event.seq === branch.end!.eventSeq)!.timing!.domain = 'after-restart';
+    assert.equal(projectMissionExecution(afterRestart).work.cancellations[0].attempts?.[0].requestToSettlementMs, null);
+    f.pressure(true);
+    const queued = service.create('cancel-before-dispatch', plan(task('queued')));
+    const stopped = service.control(queued.id, scope, queued.revision, { type: 'cancel' });
+    assert.deepEqual(projectMissionExecution(stopped).work.cancellations[0].attempts, []);
   } finally { await service.close(); f.db.close(); }
 });
 

@@ -145,6 +145,7 @@ export interface MissionEvent {
   kind: 'created' | 'revised' | 'control' | 'started' | 'settled' | 'recovered' | 'workroom';
   taskId?: string;
   attemptId?: string;
+  cancellationRequestedAttemptIds?: string[];
   detail?: string;
   change?: MissionRevisionChange;
   replacementTaskId?: string;

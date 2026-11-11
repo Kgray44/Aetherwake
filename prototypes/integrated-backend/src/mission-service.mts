@@ -479,7 +479,8 @@ export class MissionService {
           control.concurrency <= L.workers, 'invalid_mission_concurrency'); value.concurrency = control.concurrency; break;
         default: throw new ServiceError('invalid_mission_control');
       }
-      this.event(value, { kind: 'control', detail: control.type, ...(task ? { taskId: task.id } : {}) });
+      this.event(value, { kind: 'control', detail: control.type, ...(task ? { taskId: task.id } : {}),
+        ...(control.type === 'cancel' || control.type === 'cancel-branch' ? { cancellationRequestedAttemptIds: aborts } : {}) });
     });
     for (const attempt of aborts) this.abort(attempt, 'user');
     this.wake();
