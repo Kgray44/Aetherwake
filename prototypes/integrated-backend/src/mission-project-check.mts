@@ -16,7 +16,7 @@ export function createMissionProjectCheck(host: ProjectCheckHost): MissionExecut
     lane: 'codex-local-check',
     replaySafe: true,
     available: () => !!host.runner,
-    async run({ task, signal }) {
+    async run({ task, signal, validatePlanningContext }) {
       const source = 'codex-app-server:read-only-command';
       const start = performance.now();
       const telemetry = () => ({ providerCalls: 0, durationMs: performance.now() - start });
@@ -32,6 +32,7 @@ export function createMissionProjectCheck(host: ProjectCheckHost): MissionExecut
         const plan = planVelaProjectCheck(undefined, 'node-test', target.paths, host.privateRoot);
         if (host.digest(plan) !== target.digest) return blocked('reviewed_check_changed');
         admitVelaFileEdit(plan.cwd, host.privateRoot);
+        validatePlanningContext?.();
         dispatched = true;
         const result = interpretVelaProjectCheck('node-test', await runner.execute(plan.argv, plan.cwd));
         const observed = planVelaProjectCheck(undefined, 'node-test', target.paths, host.privateRoot);

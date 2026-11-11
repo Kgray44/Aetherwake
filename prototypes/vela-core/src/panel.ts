@@ -38,7 +38,7 @@ export interface VelaPanelOptions {
   permissions?: { element: HTMLElement; setVisible(visible: boolean): void };
   missions?: {
     element: HTMLElement;
-    preview(intent: string, agentProfileId?: string): Promise<MissionPreview | MissionPlanningOffer | null>;
+    preview(intent: string, agentProfileId?: string, noteIds?: string[]): Promise<MissionPreview | MissionPlanningOffer | null>;
     review(preview: MissionPreview | MissionPlanningOffer, onStarted: (missionId: string) => void, agentProfileId?: string): void;
     openReport?(id: string): void;
     setVisible(visible: boolean): void;
@@ -258,12 +258,33 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   routeHistory.type = 'checkbox';
   const semanticContext = el('input');
   semanticContext.type = 'checkbox';
+  let preparingNotePlan = false;
+  const planWithNotes: HTMLButtonElement | undefined = options.missions && button('Plan mission with selected notes', async () => {
+    const missions = options.missions!;
+    if (busy || !intent.value.trim() || planWithNotes?.disabled) return;
+    const objective = intent.value;
+    const noteIds = [...selected.keys()];
+    preparingNotePlan = true;
+    updateSemanticContext();
+    try {
+      const preview = await missions.preview(objective, undefined, noteIds);
+      if (!preview) throw Error('mission_scope_denied');
+      reveal('missions');
+      missions.review(preview, missionId => missions.openReport?.(missionId));
+    } finally {
+      preparingNotePlan = false;
+      updateSemanticContext();
+    }
+  });
+  if (planWithNotes) sourcePanel.body.append(planWithNotes);
   function updateSemanticContext() {
-    semanticContext.disabled = !current?.planningProviders || chosenProviderId !== 'openai-api-vela' ||
-      !selected.size || selected.size > 4 || [...selected.values()].some(ref => ref.resourceKind !== 'note') ||
+    const ineligible = !selected.size || selected.size > 4 || [...selected.values()].some(ref => ref.resourceKind !== 'note') ||
       !!handoffSelection || !!routingAgentSelection;
+    semanticContext.disabled = !current?.planningProviders || chosenProviderId !== 'openai-api-vela' || ineligible;
     if (semanticContext.disabled) semanticContext.checked = false;
+    if (planWithNotes) planWithNotes.disabled = ineligible || busy || preparingNotePlan || !intent.value.trim();
   }
+  updateSemanticContext();
   const modes = [['auto', 'Auto'], ['fast', 'Fast'], ['deep', 'Deep'], ['codex', 'Codex'], ['custom', 'Custom']] as const;
   function setOptions(select: HTMLSelectElement, values: readonly (readonly [string, string])[]) {
     select.replaceChildren(...values.map(([id, title]) => {
@@ -444,7 +465,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   composeActions.append(stop, send);
   connection.body.append(providerChoice);
   form.append(intent, selection, composeActions);
-  intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
+  intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
   form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return;
     if (options.voice && /^\s*(?:vela[,!]?\s+)?(?:let['’]?s talk(?: instead)?|switch to voice|start (?:a )?voice(?: conversation)?)[.!?]*\s*$/iu.test(intent.value)) {
@@ -840,6 +861,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       const messages: Record<string, string> = {
         vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',
         mission_scope_denied: 'The mission workspace changed. Review the current workspace and try again.',
+        mission_planning_note_unavailable: 'Select up to four short notes attached to the active workspace.',
         vela_planner_sign_in_required: 'Connect Codex or choose ChatGPT plan. Your draft is still here.',
         vela_chatgpt_sign_in_required: 'Connect your ChatGPT plan in Connections. Your draft is still here.',
         vela_deep_model_unavailable: 'The connected catalog has no verified deep reasoning controls. Choose an available model or reconnect. Your draft is still here.',

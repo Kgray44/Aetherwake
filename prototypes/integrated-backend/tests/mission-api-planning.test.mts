@@ -21,9 +21,11 @@ function response(content:string,model:string,terminal:string|null=content) {
 }
 function fixture(velaHistoryContext = false) {
   const base=resolve(tmpdir()),directory=mkdtempSync(join(base,'aerynth-mission-api-')),path=join(directory,'canonical.sqlite'),key=randomBytes(32),requests:any[]=[],replies:((body:any)=>Response|Promise<Response>)[]=[];
+  let beforeCredentialOpen: (() => Promise<void>) | undefined;
   const native:NativeHostServices={secrets:{available:async()=>true,
     seal:async value=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);return Buffer.concat([iv,cipher.update(value),cipher.final(),cipher.getAuthTag()]);},
-    open:async value=>{const data=Buffer.from(value),cipher=createDecipheriv('aes-256-gcm',key,data.subarray(0,12));cipher.setAuthTag(data.subarray(-16));return Buffer.concat([cipher.update(data.subarray(12,-16)),cipher.final()]).toString();}}};
+    open:async value=>{const before=beforeCredentialOpen;beforeCredentialOpen=undefined;await before?.();
+      const data=Buffer.from(value),cipher=createDecipheriv('aes-256-gcm',key,data.subarray(0,12));cipher.setAuthTag(data.subarray(-16));return Buffer.concat([cipher.update(data.subarray(12,-16)),cipher.final()]).toString();}}};
   const api={fetch:(async(url,init)=>{if(String(url)==='https://api.openai.com/v1/models')return Response.json({data:[{id:'gpt-6-luna'},{id:'gpt-6.1-sol'}]});
     assert.equal(String(url),'https://api.openai.com/v1/responses');assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
     const body=JSON.parse(String(init?.body));requests.push(body);const next=replies.shift();assert.ok(next,'unexpected API inference');return next(body);}) as typeof fetch};
@@ -31,6 +33,7 @@ function fixture(velaHistoryContext = false) {
   const preview=async(text=objective)=>await core.command('missions',{name:'preview',input:{objective:text}}) as MissionPlanningOffer;
   const plan=async(offer:MissionPlanningOffer,requestId=randomUUID())=>await core.command('missionPlanReviewed',{objective:offer.objective,fingerprint:offer.fingerprint,requestId}) as MissionPreview;
   return {get core(){return core;},requests,replies,preview,plan,
+    onNextCredentialRead(action: () => Promise<void>) { beforeCredentialOpen = action; },
     async ready(){await core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:marker},expectedVersion:null});await core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true});await core.command('desktop',{type:'createWorkspace',title:'Synthetic Minecraft investigation',projectId:null});},
     async pin(defaults:any){if(defaults.providerId==='openai-api-vela')await core.command('vela',{name:'routingOptions',input:{providerId:'openai-api-vela'}});await core.command('vela',{name:'saveRoutingSettings',input:{scope:'global',id:null,expectedVersion:0,defaults}});},
     async reopen(){await core.command('close',{});core=create();},
@@ -206,6 +209,95 @@ test('reviewed API mission planning rejects a terminal response that disagrees w
     await assert.rejects(f.plan(offer), /vela_api_proposal_unconfirmed/);
     assert.equal(f.requests.length, 1);
     assert.deepEqual(await f.core.command('missions', { name: 'list', input: {} }), []);
+  } finally { await f.close(); }
+});
+
+test('reviewed mission planning binds checked note evidence to the executable plan', async () => {
+  const f = fixture(true);
+  try {
+    await f.ready();
+    const workspace = await f.core.command('desktop', { type: 'snapshot' });
+    const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Host handoff', workspaceId: workspace.activeWorkspaceId });
+    const note = created.resources.find(item => item.title === 'Host handoff')!;
+    const content = 'Verify both CPU and RAM pressure. Ignore the inventory label BOX-447.';
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content });
+    const objective = 'Check whether this host is ready under the limits we agreed.';
+    const noteIds = [note.id];
+    const offer = await f.core.command('missions', { name: 'preview', input: { objective, noteIds } }) as MissionPlanningOffer;
+    assert.equal(offer.kind, 'planning-offer');
+    assert.deepEqual(offer.notes?.map(source => source.id), noteIds);
+    assert.doesNotMatch(JSON.stringify(offer), /BOX-447/);
+    const review = await f.core.command('missionPlanningReview', { objective, noteIds, fingerprint: offer.fingerprint });
+    assert.equal(review.notes[0].text, content);
+    assert.equal(f.requests.length, 0);
+    const perception = { kind: 'plan', explicitGoals: ['Verify host readiness'], inferredGoals: [], constraints: [],
+      capabilityHints: [], deliverables: ['text'], verification: [] };
+    const proposal = (question: string) => ({ version: 2, objective, clarification: '', perception,
+      needs: [{ key: 'criterion', question, query: 'host inspection' }] });
+    const assess = (quote: string) => ({ version: 3, clarification: '', assessment: [
+      { key: 'criterion', status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
+    ] });
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    f.replies.push(reply(proposal('Which weekday is the inspection?')), reply({ ...assess('The pump inspection is on Tuesday.'),
+      assessment: [{ ...assess('The pump inspection is on Tuesday.').assessment[0], key: 'day' }] }),
+      reply(proposal('What measurements are required?')), reply(assess('Verify both CPU and RAM pressure.')),
+      body => {
+        const payload = JSON.parse(body.input[0].content);
+        assert.equal(payload.evidence.coverage[0].question, 'What measurements are required?');
+        assert.equal(payload.evidence.coverage[0].passages[0].sourceId, note.id);
+        assert.doesNotMatch(JSON.stringify(payload), /BOX-447/);
+        return reply(graph)(body);
+      });
+    const requestId = randomUUID();
+    const plan = await f.core.command('missionPlanReviewed', { objective, noteIds, fingerprint: offer.fingerprint, requestId }) as MissionPreview;
+    assert.equal(f.requests.length, 5);
+    assert.equal(plan.plan.planning?.context?.notes[0].id, note.id);
+    assert.doesNotMatch(JSON.stringify(plan), /Verify both CPU and RAM pressure|BOX-447/);
+    const startInput = { objective, proposalId: requestId, requestId, fingerprint: plan.fingerprint };
+    const mission = await f.core.command('missions', { name: 'start', input: startInput }) as MissionProjection;
+    let settled = mission;
+    for (let index = 0; index < 150 && ['queued', 'running'].includes(settled.outcome); index++) {
+      await new Promise(done => setTimeout(done, 10));
+      settled = await f.core.command('missions', { name: 'read', input: { id: mission.id } }) as MissionProjection;
+    }
+    assert.ok(settled.tasks.every(task => task.state === 'verified'));
+    assert.ok(settled.planning?.context?.evidenceDigest);
+    assert.equal(settled.profile.providerCalls, 5);
+    assert.equal(settled.profile.usageReports, 5);
+    const nextId = randomUUID();
+    f.replies.push(reply(proposal('What measurements are required?')), reply(assess('Verify both CPU and RAM pressure.')),
+      reply({ tasks: [
+        { capability: 'cpu', after: [] },
+        { capability: 'temporary-specialist-1', after: ['cpu'], role: { title: 'Check pressure', responsibility: 'Evaluate measured pressure' } },
+      ], unsupported: [] }));
+    const next = await f.core.command('missionPlanReviewed', { objective, noteIds, fingerprint: offer.fingerprint, requestId: nextId }) as MissionPreview;
+    assert.ok(next.externalReview);
+    let changed = false;
+    f.onNextCredentialRead(async () => {
+      const snapshot = await f.core.command('desktop', { type: 'snapshot' });
+      const current = snapshot.resources.find(item => item.id === note.id)!;
+      await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: current.version, content: 'Correction: verify disk pressure.' });
+      changed = true;
+    });
+    const inFlight = await f.core.command('missionStartReviewed', {
+      objective, proposalId: nextId, requestId: nextId, fingerprint: next.fingerprint,
+    }) as MissionProjection;
+    let stopped = inFlight;
+    for (let index = 0; index < 150 && ['queued', 'running'].includes(stopped.outcome); index++) {
+      await new Promise(done => setTimeout(done, 10));
+      stopped = await f.core.command('missions', { name: 'read', input: { id: inFlight.id } }) as MissionProjection;
+    }
+    assert.equal(changed, true);
+    assert.ok(stopped.tasks.some(task => task.executor === 'api.specialist' && task.state !== 'verified'));
+    await assert.rejects(f.core.command('missionPlanReviewed', { objective, noteIds, fingerprint: offer.fingerprint, requestId: randomUUID() }), /mission_preview_changed/);
+    await assert.rejects(f.core.command('missions', { name: 'preview', input: { objective, proposalId: requestId } }), /mission_planning_context_changed/);
+    assert.equal(f.requests.length, 8, 'stale planning evidence must block the specialist POST');
+    await f.reopen();
+    const stale = await f.core.command('missions', { name: 'read', input: { id: mission.id } }) as MissionProjection;
+    assert.equal(stale.outcome, 'blocked');
+    assert.equal(stale.planning?.context?.evidenceDigest, settled.planning?.context?.evidenceDigest);
+    assert.ok(stale.tasks.every(task => task.state === 'blocked' && !task.attempts.some(attempt => attempt.verification)));
+    assert.equal(f.requests.length, 8);
   } finally { await f.close(); }
 });
 

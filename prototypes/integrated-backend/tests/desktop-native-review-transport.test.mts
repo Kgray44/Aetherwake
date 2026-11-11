@@ -145,6 +145,8 @@ test("the actual renderer preload still rejects private Vela review and authoriz
     "velaRequestPreview",
     "authorizeVelaRequest",
     "authorizeVelaDelegation",
+    "missionPlanningReview",
+    "missionPlanReviewed",
   ])
     await assert.rejects(publicBridge.command(name, {}), /unsupported_command/);
   assert.equal(ipcCalls.length, 0);
