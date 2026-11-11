@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-006 |
-| Version | 1.2.0 — owner-directed clarification 2026-11-05 |
+| Version | 1.3.0 — owner-directed Fluid Intelligence amendment 2026-11-10 (previous owner approvals preserved) |
 | Status | **Owner-accepted and ratified governing charter (binding requirements; implementation separate)** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem charter subordinate to [The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
