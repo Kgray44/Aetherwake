@@ -61,6 +61,7 @@ export async function evaluateHoldout(retrieve: HoldoutRetriever = lexical) {
       const candidates = authorized.map(source => ({ id: source.sourceId, text: source.text }));
       const byId = new Map(authorized.map(source => [source.sourceId, source]));
       const issued = new Set<HoldoutSource>();
+      let active = true;
       const issue = (sources: readonly HoldoutSource[]) => {
         for (const source of sources) issued.add(source);
         return { sources: Object.freeze([...sources]), scan: 'bounded' as const };
@@ -68,22 +69,28 @@ export async function evaluateHoldout(retrieve: HoldoutRetriever = lexical) {
       const owner: HoldoutOwner = Object.freeze({
         provider: phase.provider,
         search(query: string) {
+          if (!active) return issue([]);
           const parsed = canonicalRetrievalQuery(query);
           const ids = parsed ? rankCanonicalRetrieval(parsed, candidates).ids : [];
           return issue(ids.map(id => byId.get(id)!));
         },
         recent() {
-          return issue(authorized);
+          return issue(active ? authorized : []);
         },
         isCurrent(source: HoldoutSource) {
-          return issued.has(source);
+          return active && issued.has(source);
         },
       });
 
       const started = performance.now();
-      const returned = await retrieve(entry.query, owner);
+      let returned: readonly HoldoutSource[];
+      try {
+        returned = await retrieve(entry.query, owner);
+      } finally {
+        active = false;
+      }
       const elapsedMs = performance.now() - started;
-      const current = [...new Set(returned.filter(source => owner.isCurrent(source)))];
+      const current = [...new Set(returned.filter(source => issued.has(source)))];
       const ids = current.map(source => source.sourceId);
       rows.push({
         case: entry.id, category: entry.category, phase: name, provider: phase.provider,
@@ -91,8 +98,8 @@ export async function evaluateHoldout(retrieve: HoldoutRetriever = lexical) {
         matched: phase.expected.filter(id => ids.includes(id)).length,
         missed: phase.expected.filter(id => !ids.includes(id)),
         unexpected: ids.filter(id => !phase.expected.includes(id)),
-        invalidReturns: returned.filter(source => !owner.isCurrent(source)).length,
-        previousBindingsRejected: previous.filter(source => !owner.isCurrent(source)).length,
+        invalidReturns: returned.filter(source => !issued.has(source)).length,
+        previousBindingsRejected: previous.filter(source => !issued.has(source)).length,
         elapsedMs,
       });
       previous = current;

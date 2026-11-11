@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { evaluateHoldout, type HoldoutSource } from './cie-retrieval-holdout.mts';
+import { evaluateHoldout, type HoldoutOwner, type HoldoutSource } from './cie-retrieval-holdout.mts';
 
 test('held-out comparison scores misses and irrelevant authorized citations separately', async () => {
   const report = await evaluateHoldout((_query, owner) => owner.recent().sources.slice(-1));
@@ -16,6 +16,8 @@ test('phase owner excludes denied sources and detects stale citations even for a
   const deniedIds = new Set(['riverside-closed-minutes', 'birch-return-draft']);
   let previousHarbor: readonly HoldoutSource[] = [];
   let previousScanner: readonly HoldoutSource[] = [];
+  let previousHarborOwner: HoldoutOwner | undefined;
+  let previousScannerOwner: HoldoutOwner | undefined;
   const report = await evaluateHoldout((query, owner) => {
     const { sources } = owner.recent();
     assert.ok(sources.every(source => owner.isCurrent(source) && !deniedIds.has(source.sourceId)));
@@ -23,10 +25,13 @@ test('phase owner excludes denied sources and detects stale citations even for a
     if (query.includes('Harbor')) {
       if (owner.provider === 'fixture-a') {
         previousHarbor = sources;
+        previousHarborOwner = owner;
       } else {
         assert.ok(sources.some(source => source.sourceId === 'harbor-release-register'));
         assert.ok(sources.every(source => source.sourceId !== 'harbor-rehearsal-incident'));
         assert.ok(previousHarbor.every(source => !owner.isCurrent(source)));
+        assert.ok(previousHarbor.every(source => !previousHarborOwner?.isCurrent(source)));
+        assert.deepEqual(previousHarborOwner?.search(query).sources, []);
         return [...sources, ...previousHarbor];
       }
     }
@@ -34,9 +39,11 @@ test('phase owner excludes denied sources and detects stale citations even for a
       if (previousScanner.length) {
         assert.ok(sources.every(source => source.sourceId !== 'scanner-handoff-grant'));
         assert.ok(previousScanner.every(source => !owner.isCurrent(source)));
+        assert.deepEqual(previousScannerOwner?.recent().sources, []);
         return [...sources, ...previousScanner];
       }
       previousScanner = sources;
+      previousScannerOwner = owner;
     }
     return sources;
   });
