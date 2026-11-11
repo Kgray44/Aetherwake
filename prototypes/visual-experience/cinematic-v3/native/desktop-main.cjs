@@ -39,7 +39,7 @@ const {
 } = require("./conversation-broker.cjs");
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
-const {showVelaReview}=require('./vela-review.cjs');
+const {showVelaReview,projectEvidenceMatches}=require('./vela-review.cjs');
 const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
@@ -908,27 +908,30 @@ app.whenReady().then(async () => {
             isCurrent: () => trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized(),
             allowWrite: () => storage.allowWrite() });
         } else if (input?.name === "plan") {
-          const { objective, noteIds, fileIds, fingerprint } = input.input ?? {};
-          const offer = await call("missions", { name: "preview", input: { objective, noteIds, fileIds } });
+          const { objective, noteIds, fileIds, projectEvidence, fingerprint } = input.input ?? {};
+          const evidenceSelection = { objective, noteIds, fileIds, projectEvidence };
+          const offer = await call("missions", { name: "preview", input: evidenceSelection });
           if (offer?.kind !== "planning-offer" || offer.fingerprint !== input.input?.fingerprint)
             throw Error("mission_preview_changed");
           if (!offer.planner) throw Error("mission_planner_unavailable");
           const { model, effort, capabilities, provider } = offer.planner;
           let approved;
-          const hasSources = Boolean(offer.notes || offer.files);
+          const hasSources = Boolean(offer.notes || offer.files || offer.projectEvidence);
           if (hasSources) {
-            const reviewed = await call("missionPlanningReview", { objective, noteIds, fileIds, fingerprint });
+            const reviewed = await call("missionPlanningReview", { ...evidenceSelection, fingerprint });
             const matches = (sources, expected) => Array.isArray(sources) &&
               JSON.stringify(sources.map(({ text, ...ref }) => ref)) === JSON.stringify(expected ?? []);
             if (!trustedActiveFrame(event) || reviewed?.offer?.fingerprint !== fingerprint ||
               reviewed.offer.planner?.provider !== "openai-api-vela" ||
-              !matches(reviewed.notes, offer.notes) || !matches(reviewed.files, offer.files))
+              !matches(reviewed.notes, offer.notes) || !matches(reviewed.files, offer.files) ||
+              !projectEvidenceMatches(offer.projectEvidence, reviewed.projectEvidence))
               throw Error("mission_preview_changed");
             const prompt = JSON.stringify({ objective, capabilities }, null, 2);
             approved = await reviewProvider({ parent: win, intent: objective, expiresAt: new Date(Date.now() + 90_000).toISOString(),
               review: { providerId: provider, semanticContext: true, missionPlanning: true, prompt,
                 promptDigest: createHash("sha256").update(JSON.stringify(prompt)).digest("hex"),
                 route: { kind: "app-planning", model, effort },
+                ...(reviewed.projectEvidence ? { projectEvidence: reviewed.projectEvidence } : {}),
                 context: { included: [
                   ...reviewed.notes.map(note => ({ id: note.id, kind: "resource", resourceKind: "note", title: note.title, content: note.text })),
                   ...reviewed.files.map(file => ({ id: file.id, kind: "resource", resourceKind: "file", title: file.title, content: file.text })),

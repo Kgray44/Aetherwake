@@ -42,7 +42,7 @@ export interface VelaWorkflowReview {
   check: { cwd: string; argv: string[] };
 }
 export interface VelaWorkspaceStatePreview { id: string; revision: number; digest: string; partial?: true }
-export interface VelaProjectEvidencePreview { projectId: string; sourceCount: number; partial: boolean; digest: string }
+export interface VelaProjectEvidencePreview { projectId: string; sourceIds: string[]; partial: boolean; digest: string }
 export interface VelaCheckpointPreview { selection: import('../../vela-core/src/adaptive-routing.ts').VelaMissionCheckpointRef; digest: string }
 export interface VelaRequestPreview { semanticContext?:true; missionCheckpoint?: VelaCheckpointPreview; workspaceState?: VelaWorkspaceStatePreview; projectEvidence?: VelaProjectEvidencePreview; workflowScope?: VelaWorkflowScope; id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};handoff?:import('../../vela-core/src/history-contracts.ts').VelaHandoff;nativeReviewRequired?:boolean; workingDirectory?:string; route?:import('../../vela-core/src/adaptive-routing.ts').VelaRouteDecision; routingSettings?:import('../../vela-core/src/contracts.ts').VelaRequest['routingSettings'];routingAgent?:import('../../vela-core/src/contracts.ts').VelaRoutingAgent;
   /** Core-derived foreground send policy, rechecked against the private frozen preview at grant time. */
@@ -292,10 +292,11 @@ export interface CommandMap {
   missionExecutiveReview: { input: import('./mission-contracts.mts').MissionExecutiveRequest; output: import('./mission-contracts.mts').MissionExecutiveReview };
   missionExecutiveReviewed: { input: import('./mission-contracts.mts').MissionExecutiveRequest & { fingerprint: string }; output: Extract<MissionResponse, { kind: 'executive-result' }> };
   missionPlanningReview: {
-    input: { objective: string; fingerprint: string; noteIds?: string[]; fileIds?: string[] };
+    input: { objective: string; fingerprint: string } & import('./mission-contracts.mts').MissionPlanningEvidenceSelection;
     output: { offer: import('./mission-contracts.mts').MissionPlanningOffer;
       notes: (import('./mission-contracts.mts').MissionPlanningSourceRef & { text: string })[];
-      files: (import('./mission-contracts.mts').MissionPlanningSourceRef & { text: string })[] };
+      files: (import('./mission-contracts.mts').MissionPlanningSourceRef & { text: string })[];
+      projectEvidence?: VelaNativeReview['projectEvidence'] };
   };
   missionRevisionReviewed: { input: Extract<MissionRequest, { name: 'revision-apply' }>['input']; output: MissionResponse };
   missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true } |

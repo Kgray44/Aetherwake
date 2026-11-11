@@ -68,9 +68,11 @@ export interface MissionPlanningReceipt {
     lifecycleClock?: { domain: string; commandStartedMs: number; validatedMs: number } };
   providerEvidence?: 'reported' | 'simulated';
   usage?: ReportedUsage;
-  context?: { notes: MissionPlanningSourceRef[]; files?: MissionPlanningSourceRef[]; evidenceDigest: string; elapsedMs: number; providerCalls: number; usage: ReportedUsage[] };
+  context?: { notes: MissionPlanningSourceRef[]; files?: MissionPlanningSourceRef[]; projectEvidence?: import('./contracts.mts').VelaProjectEvidencePreview;
+    evidenceDigest: string; elapsedMs: number; providerCalls: number; usage: ReportedUsage[] };
 }
 export interface MissionPlanningSourceRef { id: string; title: string; version: number; proofDigest: string }
+export interface MissionPlanningEvidenceSelection { noteIds?: string[]; fileIds?: string[]; projectEvidence?: true }
 export interface MissionEvidence {
   id: string;
   attemptId: string;
@@ -244,8 +246,8 @@ export interface MissionExecutiveReview {
 }
 export type MissionRequest =
   | { name: 'executive-review'; input: MissionExecutiveRequest }
-  | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string; teamId?: string; noteIds?: string[]; fileIds?: string[] } }
-  | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string; noteIds?: string[]; fileIds?: string[] } }
+  | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string; teamId?: string } & MissionPlanningEvidenceSelection }
+  | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string } & MissionPlanningEvidenceSelection }
   | { name: 'start'; input: { objective: string; fingerprint: string; requestId: string; agentProfileId?: string; proposalId?: string; teamId?: string } }
   | { name: 'team-library'; input: Record<string, never> }
   | { name: 'team-save'; input: MissionTeamSave }
@@ -275,6 +277,7 @@ export interface MissionPlanningOffer {
   fingerprint: string;
   notes?: MissionPlanningSourceRef[];
   files?: MissionPlanningSourceRef[];
+  projectEvidence?: import('./contracts.mts').VelaProjectEvidencePreview;
   planner?: { provider?: 'chatgpt-plan-responses' | 'openai-api-vela'; model: string; effort?: ReasoningEffort; capabilities: string[] };
 }
 export interface MissionWorkroom {

@@ -800,6 +800,90 @@ test('reviewed project evidence expands a model-proposed search and fences corre
   } finally { await f.close(); }
 });
 
+test('project evidence supplies a mission plan across workspaces and remains bound through start and restart', async () => {
+  const f = fixture(true, true);
+  try {
+    await f.ready();
+    const global = await f.core.command('desktop', { type: 'snapshot' });
+    const foreign = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Unrelated checklist', workspaceId: global.activeWorkspaceId! });
+    const hidden = foreign.resources.find(resource => resource.title === 'Unrelated checklist')!;
+    await f.core.command('desktop', { type: 'content', resourceId: hidden.id, expectedVersion: hidden.version, content: 'FOREIGN-PLAN-831' });
+    const created = await f.core.command('desktop', { type: 'createProject', title: 'Release operations' });
+    const projectId = created.projects.find(project => project.title === 'Release operations')!.id;
+    const archive = await f.core.command('desktop', { type: 'createWorkspace', title: 'Drafts', projectId });
+    const noteState = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Old checklist', workspaceId: archive.activeWorkspaceId! });
+    const old = noteState.resources.find(resource => resource.title === 'Old checklist')!;
+    await f.core.command('desktop', { type: 'content', resourceId: old.id, expectedVersion: old.version, content: 'Original release check: CPU and RAM.' });
+    const workspace = await f.core.command('desktop', { type: 'createWorkspace', title: 'Operations', projectId });
+    const correction = 'Final release checks: RAM first, then backend RSS. The CPU check was withdrawn.';
+    const path = join(f.directory, 'Current checklist.txt');
+    writeFileSync(path, correction);
+    const { resource: file } = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file',
+      selection: { kind: 'file', path }, workspaceId: workspace.activeWorkspaceId!, expectedLayoutVersion: workspace.layoutVersion });
+    const objective = 'Do the checks the revised project handoff still requires.';
+    const selection = { objective, projectEvidence: true as const };
+    const offer = await f.core.command('missions', { name: 'preview', input: selection }) as MissionPlanningOffer;
+    assert.deepEqual(new Set(offer.projectEvidence?.sourceIds), new Set([old.id, file.id]));
+    assert.doesNotMatch(JSON.stringify(offer), /withdrawn|FOREIGN-PLAN-831/);
+    const reviewed = await f.core.command('missionPlanningReview', { ...selection, fingerprint: offer.fingerprint });
+    const require = createRequire(import.meta.url);
+    const { projectEvidenceMatches, reviewPage } = require('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+    assert.equal(projectEvidenceMatches(offer.projectEvidence, reviewed.projectEvidence), true);
+    assert.match(reviewPage({ missionPlanning: true, semanticContext: true, providerId: offer.planner?.provider,
+      context: { included: [] }, projectEvidence: reviewed.projectEvidence }, objective), /Project evidence \(2\)/);
+    assert.doesNotMatch(JSON.stringify(reviewed), /FOREIGN-PLAN-831/);
+    const tampered = structuredClone(reviewed.projectEvidence!);
+    tampered.sources[0].content = 'changed during review';
+    assert.equal(projectEvidenceMatches(offer.projectEvidence, tampered), false);
+    assert.equal(f.requests.length, 0);
+    const perceive = (key: string, query: string) => ({ version: 2, objective, clarification: '',
+      perception: { kind: 'plan', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: [{ key, question: objective, query }] });
+    const assessment = (key: string, quote: string) => ({ version: 3, clarification: '', assessment: [
+      { key, status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
+    ] });
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    const enqueue = () => f.replies.push(reply(perceive('current', 'backend RSS withdrawn')), reply(assessment('current', correction)), body => {
+      const packet = JSON.parse(body.input[0].content);
+      assert.deepEqual(packet.evidence.coverage[0].passages, [{ sourceId: file.id, title: 'Current checklist.txt', quote: correction }]);
+      assert.ok(!packet.capabilities.some((task: { id: string }) => task.id === 'notes'));
+      return reply({ tasks: [{ capability: 'ram', after: [] }, { capability: 'backend', after: ['ram'] }], unsupported: [] })(body);
+    });
+    f.replies.push(reply(perceive('probe', 'pump inspection')), reply(assessment('day', 'The pump inspection is on Tuesday.')));
+    enqueue();
+    const requestId = randomUUID();
+    const planned = await f.core.command('missionPlanReviewed', { ...selection, fingerprint: offer.fingerprint, requestId }) as MissionPreview;
+    assert.deepEqual(planned.plan.planning?.context?.projectEvidence, offer.projectEvidence);
+    assert.deepEqual(planned.plan.tasks.map(task => task.executor), ['sample.ram', 'sample.backend', 'join.samples']);
+    assert.doesNotMatch(JSON.stringify(planned), /withdrawn|FOREIGN-PLAN-831/);
+    const running = await f.core.command('missions', { name: 'start', input: {
+      objective, requestId, proposalId: requestId, fingerprint: planned.fingerprint,
+    } }) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id: running.id } }) as Promise<MissionProjection>;
+    let settled = running;
+    for (let index = 0; index < 150 && ['running', 'queued'].includes(settled.outcome); index++) {
+      await new Promise(done => setTimeout(done, 10));
+      settled = await read();
+    }
+    assert.ok(settled.tasks.every(task => ['sample.ram', 'sample.backend', 'join.samples'].includes(task.executor)));
+    assert.ok(settled.tasks.every(task => task.state === 'verified'));
+    const nextId = randomUUID();
+    enqueue();
+    const next = await f.core.command('missionPlanReviewed', { ...selection, fingerprint: offer.fingerprint, requestId: nextId }) as MissionPreview;
+    writeFileSync(path, 'A new correction withdraws every previous check.');
+    await assert.rejects(f.core.command('missions', { name: 'start', input: {
+      objective, requestId: nextId, proposalId: nextId, fingerprint: next.fingerprint,
+    } }), /mission_planning_context_changed/);
+    assert.equal(f.requests.length, 8);
+    await f.reopen();
+    const restored = await read();
+    assert.deepEqual(restored.planning?.context?.projectEvidence, offer.projectEvidence);
+    assert.ok(restored.tasks.every(task => task.state === 'blocked' && task.detail === 'mission_source_changed_since_verification'));
+    assert.deepEqual(restored.tasks.map(task => task.attempts.map(attempt => attempt.id)),
+      settled.tasks.map(task => task.attempts.map(attempt => attempt.id)));
+  } finally { await f.close(); }
+});
+
 test('mission planning investigates a placed file correction and fences the plan against physical replacement', async () => {
   const f = fixture(true, true);
   try {
