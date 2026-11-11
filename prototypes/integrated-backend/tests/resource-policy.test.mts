@@ -108,10 +108,18 @@ test('AEP adjustment previews require the current policy epoch and cannot reques
     if (preview.status !== 'preview') throw Error('missing resource prediction');
     assert.equal(preview.prediction.cpu, 0);
     assert.equal(preview.prediction.gpu, 0);
+    assert.equal(preview.prediction.remote, before.effective.remote);
+    assert.equal(preview.currentReason, before.reason);
+    assert.deepEqual(preview.previous, before.previous);
+    assert.equal(preview.expiresAtMs, input.expiresAtMs);
     assert.equal(governor.previewAdjustment({ ...input, baseRevision: before.revision - 1 }).status, 'stale_policy');
     assert.equal(governor.previewAdjustment({ ...input, policyEpoch: 'previous-epoch' }).status, 'stale_policy');
     assert.equal(governor.previewAdjustment({ ...input, expiresAtMs: 1000 }).status, 'invalid_proposal');
     assert.equal(governor.previewAdjustment({ ...input, changes: { cpu: -1, gpu: 1 } }).status, 'increase_requires_review');
+    assert.equal(governor.previewAdjustment({ ...input, changes: { cpu: -1, remote: -1 } }).status, 'remote_budget_requires_separate_review');
+    assert.equal(governor.previewAdjustment({ ...input, changes: { gpu: -1 } }).status, 'no_effective_change');
+    assert.equal(governor.previewAdjustment({ ...input, changes: { cpu: 0 } }).status, 'invalid_proposal');
+    assert.equal(governor.previewAdjustment({ ...input, evidenceRefs: ['experiment-1', 'experiment-1'] }).status, 'invalid_proposal');
     assert.deepEqual(governor.inspectPolicy(), before);
     assert.equal(governor.canLease('cpu'), true);
   } finally { governor.dispose(); }
