@@ -175,6 +175,11 @@ export interface MissionProjection extends Mission {
   reportPending?: true;
   conversationPending?: true;
   waits: Record<string, 'dependencies' | 'capacity' | 'resource-conflict' | 'resource-pressure'>;
+  readyQueueObservation?: {
+    clock: string;
+    monotonicMs: number;
+    tasks: (MissionReadyQueueEvidence & { taskId: string })[];
+  };
   profile: {
     elapsedMs: number;
     peakWorkers: number;

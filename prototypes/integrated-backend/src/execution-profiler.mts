@@ -292,6 +292,16 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     };
   });
   const traceByAttempt = new Map(attempts.map(attempt => [attempt.id, attempt]));
+  const readyQueue = mission.readyQueueObservation;
+  const liveReadyQueue = readyQueue ? {
+    ...readyQueue,
+    planRevision: mission.planRevision,
+    tasks: readyQueue.tasks.map(task => ({
+      ...task,
+      wait: mission.waits[task.taskId] ?? null,
+      elapsedSinceFirstObservedMs: readyQueue.monotonicMs - task.firstObservedMs,
+    })),
+  } : null;
   const tasksById = new Map(mission.tasks.map(task => [task.id, task]));
   const dependencyWaits = mission.tasks.filter(task => mission.waits[task.id] === 'dependencies').map(task => ({
     taskId: task.id,
@@ -510,6 +520,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       openAttempts: openAttempts.map(attempt => attempt.id),
       live: liveAttempts.length ? { observation: observation ? { ...observation } : null, attempts: liveAttempts } : null,
       dependencyWaits,
+      liveReadyQueue,
       retries,
       cancellations,
       clockSegments, workerMs: total?.workerMs ?? null, activeMs: total?.activeMs ?? null,
