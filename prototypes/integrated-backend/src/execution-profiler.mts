@@ -267,8 +267,19 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const intakeMs = created?.timing?.intakeMonotonicMs;
   const intake = initial?.clock && intakeMs !== undefined ?
     { source: 'mission-start-command' as const, eventSeq: initial.eventSeq, clock: initial.clock, monotonicMs: intakeMs } : null;
-  const firstVerified = attempts.filter(attempt => attempt.verifiedEvidenceIds.length && attempt.end)
-    .sort((a, b) => a.end!.eventSeq - b.end!.eventSeq)[0]?.end ?? null;
+  const verifiedAttempts = attempts.filter(attempt => attempt.verifiedEvidenceIds.length && attempt.end)
+    .sort((a, b) => a.end!.eventSeq - b.end!.eventSeq);
+  const firstVerified = verifiedAttempts[0]?.end ?? null;
+  const currentVerifiedIds = new Set(mission.tasks.flatMap(task =>
+    task.state === 'verified' && task.attempts.length ? [task.attempts.at(-1)!.id] : []));
+  const verifiedMilestones = verifiedAttempts.flatMap(({ id, taskId, planRevision, end, interrupted, verifiedEvidenceIds }) => {
+    const source = byAttempt.get(id)?.attempt;
+    if (!currentVerifiedIds.has(id) || interrupted || !end || !source?.verification || !source.evidence ||
+      !verifiedEvidenceIds.includes(source.evidence.id)) return [];
+    const elapsed = intake && initial ? interval(id, { ...initial, monotonicMs: intake.monotonicMs }, end) : null;
+    return [{ taskId, attemptId: id, planRevision, criterion: source.verification.criterion,
+      evidenceIds: verifiedEvidenceIds, settlement: end, intakeToSettlementMs: elapsed ? elapsed.end - elapsed.start : null }];
+  });
   const lastSettlement = attempts.flatMap(attempt => attempt.interval && attempt.end ? [attempt.end] : [])
     .sort((a, b) => b.eventSeq - a.eventSeq)[0] ?? null;
   const plan = mission.planning;
@@ -292,6 +303,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     contract: 'aerynth.mission-execution-profile@1' as const,
     kind: 'execution-profile' as const, missionId: mission.id, revision: mission.revision, outcome: mission.outcome,
     admission: initial, firstVerifiedTask: firstVerified, lastSettlement, reportPublication,
+    verifiedTaskMilestones: { first: verifiedMilestones[0] ?? null, last: verifiedMilestones.at(-1) ?? null },
     settlementToReportStagedMs: complete ? timeToReportStaging(reportPublication?.timing, lastSettlement) : null,
     intakeToReportStagedMs,
     requestIntake: intake, firstMeaningfulOutput: null, userDelivery,
