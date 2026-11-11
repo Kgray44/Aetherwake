@@ -1,5 +1,5 @@
 import type { MissionAttemptPhaseTiming, MissionEvent, MissionProjection } from './mission-contracts.mts';
-import type { ConversationProviderTiming, MissionReportTiming, StreamEvent } from './contracts.mts';
+import type { ConversationProviderTiming, MissionReportTiming, StreamEvent, VelaRouteTiming } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
 import type { TurnEvent } from '../../openai-provider/contracts.mts';
 
@@ -16,9 +16,15 @@ export function observeProviderStream(started: number) {
 }
 
 export function observeConversationProvider(origin: ConversationProviderTiming['origin'], simulated: boolean,
-  parentRequestId: string | null, started = performance.now()) {
+  parentRequestId: string | null, started = performance.now(),
+  correlation?: { domain: string | null; preview: { id: string; clock?: VelaRouteTiming['previewClock'] } }) {
   const stream = observeProviderStream(started);
   const elapsed = () => performance.now() - started;
+  const clock = correlation?.preview.clock;
+  const previewOrigin = correlation && clock && correlation.domain === clock.domain &&
+    clock.startedMs <= clock.readyMs && clock.readyMs <= started
+    ? { id: correlation.preview.id, toAdapterMs: started - clock.startedMs }
+    : undefined;
   let resultObservedMs: number | null = null;
   let firstNonblankOutput: NonNullable<ConversationProviderTiming['firstNonblankOutput']> | null = null;
   return {
@@ -33,7 +39,10 @@ export function observeConversationProvider(origin: ConversationProviderTiming['
     observeResult() { resultObservedMs ??= elapsed(); },
     settlement(outputStagedMs: number | null = null): ConversationProviderTiming {
       return { ...stream.read(), source: simulated ? 'simulated' : 'observed', origin, parentRequestId,
-        firstNonblankOutput, resultObservedMs, outputStagedMs, settlementStagedMs: elapsed() };
+        firstNonblankOutput, resultObservedMs, outputStagedMs, settlementStagedMs: elapsed(),
+        ...(previewOrigin ? { fromPreview: { ...previewOrigin,
+          toFirstNonblankOutputMs: firstNonblankOutput === null ? null :
+            previewOrigin.toAdapterMs + firstNonblankOutput.elapsedMs } } : {}) };
     },
   };
 }

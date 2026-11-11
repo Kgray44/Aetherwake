@@ -43,6 +43,17 @@ test('conversation timing retains only the first nonblank provider output milest
   assert.deepEqual(timing.settlement().firstNonblankOutput, first);
   assert.doesNotMatch(JSON.stringify(timing.settlement()), /SYNTHETIC_/u);
 });
+
+test('conversation timing joins only a preview that finished in the same clock domain', () => {
+  const clock = { domain: 'domain-fixture', startedMs: 10, readyMs: 20 };
+  const observe = (domain: string, started: number) => observeConversationProvider(
+    'reviewed-api-dispatch-staging', true, 'request-fixture', started,
+    { domain, preview: { id: 'preview-fixture', clock } });
+  const linked = observe(clock.domain, 30).settlement().fromPreview;
+  assert.deepEqual(linked, { id: 'preview-fixture', toAdapterMs: 20, toFirstNonblankOutputMs: null });
+  assert.equal(observe('after-restart', 30).settlement().fromPreview, undefined);
+  assert.equal(observe(clock.domain, 19).settlement().fromPreview, undefined);
+});
 function fixture() {
   const base = resolve(tmpdir()), dir = mkdtempSync(join(base,'aerynth-api-runtime-')), path = join(dir,'canonical.sqlite'), requests: any[] = [], events: StreamEvent[] = [], replies: ((body:any)=>Response|Promise<Response>)[] = [];
   const encryptionKey = randomBytes(32);
@@ -189,6 +200,12 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     assert.ok(timing.firstNonblankOutput?.kind === 'text' &&
       timing.firstTextDeltaMs < timing.firstNonblankOutput.elapsedMs &&
       timing.firstNonblankOutput.elapsedMs <= timing.resultObservedMs);
+    const routing = f.events.find(event => event.correlationId === first.id && event.type === 'vela.routing.stage_started');
+    assert.ok(routing?.payload.timing?.previewClock && timing.fromPreview);
+    assert.equal(timing.fromPreview.id, routing.payload.previewId);
+    assert.ok(timing.fromPreview.toAdapterMs >= routing.payload.timing.previewMs);
+    assert.equal(timing.fromPreview.toFirstNonblankOutputMs,
+      timing.fromPreview.toAdapterMs + timing.firstNonblankOutput.elapsedMs);
     assert.equal(timing.outputStagedMs,null);
     const outputTiming=execution.outputTiming;
     assert.ok(outputTiming);
@@ -211,6 +228,9 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     assert.deepEqual((await readOutputTiming())?.presentation,observed);
     assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,1); assert.ok(!JSON.stringify({snapshot,events:f.events}).includes(marker));
     await f.reopen(); assert.equal((await f.core.command('velaApiUsageStatus',{})).enabled,true);
+    const replayedTiming = (await f.core.command('replay', { limit: 1000 })).events
+      .find(event => event.executionId === execution.id && event.type === 'execution/provider_completed')?.payload.providerTiming;
+    assert.deepEqual(replayedTiming?.fromPreview, timing.fromPreview);
     assert.deepEqual(await readOutputTiming(),{...outputTiming,presentation:observed});
     f.replies.push(()=>response('Weight changes with gravity; mass stays the same.','resp-next'));
     const next=await f.send('And on the Moon?'); assert.equal(next.state,'responded'); assert.ok(next.history?.messages.some(message=>message.messageId===output.id));

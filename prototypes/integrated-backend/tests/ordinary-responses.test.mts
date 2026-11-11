@@ -917,6 +917,11 @@ test('a Vela response sends shared identity once and scoped current application 
     assert.equal(body.instructions.split(VELA_IDENTITY_VERSION).length - 1, 1);
     assert(body.instructions.startsWith(VELA_IDENTITY_PROMPT));
     assert.doesNotMatch(JSON.stringify(body.input), /aerynth\.vela-identity@1|PRIVATE_UNSELECTED_NOTE_BODY/);
+    const timing = f.events.find(event => event.type === 'execution/provider_completed')?.payload.providerTiming;
+    assert.ok(timing?.fromPreview && timing.firstNonblankOutput);
+    assert.equal(timing.fromPreview.id, preview.id);
+    assert.equal(timing.fromPreview.toFirstNonblankOutputMs,
+      timing.fromPreview.toAdapterMs + timing.firstNonblankOutput.elapsedMs);
     assert.equal(f.codexCalls, 0);
   } finally { await f.close(); }
 });
