@@ -1665,3 +1665,43 @@ test("semantic shadow reaches the canonical history owner and leaves the transcr
     await f.close();
   }
 });
+
+test("semantic CIE binds explicitly selected notes and invalidates a corrected source", async () => {
+  const f = fixture();
+  try {
+    const create = async (title: string, content: string) => {
+      const state = await f.core.command("desktop", { type: "createResource", kind: "note", title, workspaceId: null });
+      const note = state.resources.find(item => item.title === title)!;
+      const saved = await f.core.command("desktop", { type: "content", resourceId: note.id, expectedVersion: note.version, content });
+      return saved.resources.find(item => item.id === note.id)!;
+    };
+    const selected = await create("Approved schedule", "The inspection is on Thursday.");
+    await create("Unselected draft", "The inspection is on Friday.");
+    const { VelaService } = await import("../../vela-core/src/service.mts");
+    const vela = (f.core as unknown as { vela: InstanceType<typeof VelaService> }).vela;
+    const run = (expected: string, correct: boolean) => vela.investigateHistory(
+      "When do we give the equipment its once-over?", async (call, sources, _signal, revalidate) => {
+        if (call.stage === "interpret") {
+          assert.deepEqual(sources, []);
+          return { version: 1, objective: "Find the schedule", clarification: "",
+            needs: [{ key: "date", question: "When is the inspection?", query: "inspection date" }] };
+        }
+        assert.deepEqual(sources.map(source => [source.sourceKind, source.sourceId]), [["note", selected.id]]);
+        assert.match(call.excerpts[0].text, new RegExp(expected));
+        assert.doesNotMatch(JSON.stringify(call), /Friday/);
+        assert.equal(revalidate(), true);
+        if (correct) {
+          await f.core.command("desktop", { type: "content", resourceId: selected.id, expectedVersion: selected.version,
+            content: "The inspection is on Monday." });
+          assert.equal(revalidate(), false);
+        }
+        return { version: 1, assessment: [{ key: "date", status: "supported", sources: ["e1"], query: "" }] };
+      }, undefined, [selected.id]);
+    assert.equal((await run("Thursday", true)).state, "stale");
+    const current = await run("Monday", false);
+    assert.equal(current.state, "assessed");
+    assert.notEqual(current.coverage[0].sources[0].revision, String(selected.version));
+  } finally {
+    await f.close();
+  }
+});
