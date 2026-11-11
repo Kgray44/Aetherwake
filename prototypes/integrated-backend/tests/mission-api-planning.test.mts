@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCipheriv,createDecipheriv,randomBytes,randomUUID } from 'node:crypto';
+import { createCipheriv,createDecipheriv,createHash,randomBytes,randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { mkdtempSync,rmSync } from 'node:fs';
+import { mkdtempSync,rmSync,writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
@@ -12,6 +12,8 @@ import type { NativeHostServices } from '../src/native-host.mts';
 import type { VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
 import type { VelaRequest } from '../../vela-core/src/contracts.ts';
 import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
+import type { NativeDocumentTextServices } from '../src/document-text-host.mts';
+import { docxFixture } from '../../block-library/tests/media-fixtures.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
 const marker='SYNTHETIC_ONLY_MISSION_API_KEY';
 const graph={tasks:[{capability:'cpu',after:[]},{capability:'ram',after:[]},{capability:'backend',after:['cpu','ram']}],unsupported:['Server tick timings and logs are unavailable.']};
@@ -20,20 +22,20 @@ function response(content:string,model:string,terminal:string|null=content) {
   return new Response([{type:'response.created',response:{id,status:'in_progress'}},{type:'response.output_text.delta',delta:content},{type:'response.completed',response:{id,status:'completed',model,output,
     usage:{input_tokens:100,output_tokens:40,total_tokens:140}}}].map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
 }
-function fixture(velaHistoryContext = false) {
+function fixture(velaHistoryContext = false, nativeMedia = false, documents?: NativeDocumentTextServices) {
   const base=resolve(tmpdir()),directory=mkdtempSync(join(base,'aerynth-mission-api-')),path=join(directory,'canonical.sqlite'),key=randomBytes(32),requests:any[]=[],replies:((body:any)=>Response|Promise<Response>)[]=[];
   let beforeCredentialOpen: (() => Promise<void>) | undefined;
-  const native:NativeHostServices={secrets:{available:async()=>true,
+  const native:NativeHostServices={documents,secrets:{available:async()=>true,
     seal:async value=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);return Buffer.concat([iv,cipher.update(value),cipher.final(),cipher.getAuthTag()]);},
     open:async value=>{const before=beforeCredentialOpen;beforeCredentialOpen=undefined;await before?.();
       const data=Buffer.from(value),cipher=createDecipheriv('aes-256-gcm',key,data.subarray(0,12));cipher.setAuthTag(data.subarray(-16));return Buffer.concat([cipher.update(data.subarray(12,-16)),cipher.final()]).toString();}}};
   const api={fetch:(async(url,init)=>{if(String(url)==='https://api.openai.com/v1/models')return Response.json({data:[{id:'gpt-6-luna'},{id:'gpt-6.1-sol'}]});
     assert.equal(String(url),'https://api.openai.com/v1/responses');assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
     const body=JSON.parse(String(init?.body));requests.push(body);const next=replies.shift();assert.ok(next,'unexpected API inference');return next(body);}) as typeof fetch};
-  const create=()=>new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only',velaHistoryContext},()=>{},native,undefined,api);let core=create();
+  const create=()=>new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only',velaHistoryContext,nativeMedia},()=>{},native,undefined,api);let core=create();
   const preview=async(text=objective)=>await core.command('missions',{name:'preview',input:{objective:text}}) as MissionPlanningOffer;
   const plan=async(offer:MissionPlanningOffer,requestId=randomUUID())=>await core.command('missionPlanReviewed',{objective:offer.objective,fingerprint:offer.fingerprint,requestId}) as MissionPreview;
-  return {get core(){return core;},requests,replies,preview,plan,
+  return {get core(){return core;},directory,requests,replies,preview,plan,
     onNextCredentialRead(action: () => Promise<void>) { beforeCredentialOpen = action; },
     async ready(){await core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:marker},expectedVersion:null});await core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true});await core.command('desktop',{type:'createWorkspace',title:'Synthetic Minecraft investigation',projectId:null});},
     async pin(defaults:any){if(defaults.providerId==='openai-api-vela')await core.command('vela',{name:'routingOptions',input:{providerId:'openai-api-vela'}});await core.command('vela',{name:'saveRoutingSettings',input:{scope:'global',id:null,expectedVersion:0,defaults}});},
@@ -639,6 +641,124 @@ test('reviewed workspace inventory uses active placements and fences changed res
     assert.equal(JSON.parse(boundedReview.workspaceState!.text).coverage, 'partial');
     assert.equal(JSON.parse(boundedReview.workspaceState!.text).placedResources.length, 24);
     assert.equal(f.requests.length, 7);
+  } finally {
+    await f.close();
+  }
+});
+
+test('reviewed CIE cites a selected local file and fences physical replacement before composition', async () => {
+  const f = fixture(true, true);
+  try {
+    await f.ready();
+    const filePath = join(f.directory, 'Release criteria.txt');
+    const quote = 'Release requires approval from the duty engineer.';
+    const fileText = 'Synthetic operational background.\n'.repeat(75) + quote;
+    assert.ok(Buffer.byteLength(fileText) > 2048);
+    writeFileSync(filePath, fileText);
+    const imported = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file', selection: { kind: 'file', path: filePath } });
+    const ref = imported.resource;
+    const intent = 'Whose approval does this release depend on?';
+    const input = { intent, resourceIds: [ref.id], authorizeProvider: true, providerId: 'openai-api-vela', model: 'gpt-6-luna',
+      semanticContext: true as const };
+    const preview = await f.core.command('velaRequestPreview', { ...input, adaptive: true });
+    assert.equal(preview.context.included[0]?.content, fileText);
+    assert.equal(preview.sendDisposition, 'review-required');
+    const require = createRequire(import.meta.url);
+    const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    const { reviewPage } = require('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+    const send = (allow: boolean) => velaCommand({
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      directMessageSend: true, routeNative: true, dialog: {}, call: f.core.command.bind(f.core),
+      async reviewProvider({ review }: { review: VelaNativeReview }) {
+        assert.equal(review.context.included[0]?.content, fileText);
+        assert.match(reviewPage(review, intent), /Release criteria.txt/);
+        assert.ok(!JSON.stringify(review).includes(JSON.stringify(filePath).slice(1, -1)));
+        return allow;
+      },
+      input: { name: 'request', input },
+    });
+    await assert.rejects(send(false), /authorization_cancelled/);
+    assert.equal(f.requests.length, 0);
+    const interpretation = (key: string, question: string) => ({ version: 2, objective: question, clarification: '',
+      perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: [{ key, question, query: 'release approval' }] });
+    const assessment = (key: string, text: string) => ({ version: 3, clarification: '', assessment: [
+      { key, status: 'supported', passages: [{ source: 'e1', quote: text }], query: '' },
+    ] });
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    const answerAssessment = reply(assessment('approval', quote));
+    f.replies.push(reply(interpretation('day', 'Which weekday?')), reply(assessment('day', 'The pump inspection is on Tuesday.')),
+      reply(interpretation('approval', intent)), body => {
+        const excerpts = JSON.parse(body.input[0].content).excerpts;
+        assert.deepEqual(excerpts, [{ handle: 'e1', sourceKind: 'file', title: ref.title, text: fileText }]);
+        assert.ok(!JSON.stringify(body).includes(JSON.stringify(filePath).slice(1, -1)));
+        return answerAssessment(body);
+      }, body => {
+        const packet = JSON.parse(body.input[0].content).evidence;
+        assert.deepEqual(packet.coverage[0].passages, [{ sourceId: ref.id, title: ref.title, quote }]);
+        assert.equal(body.tools, undefined);
+        assert.doesNotMatch(JSON.stringify(body), /Synthetic operational background/);
+        return response('The duty engineer must approve the release.', body.model);
+      });
+    assert.equal((await send(true)).state, 'responded');
+    assert.equal(f.requests.length, 5);
+    f.replies.push(reply(interpretation('approval', intent)), body => {
+      writeFileSync(filePath, 'The file has been replaced.');
+      return answerAssessment(body);
+    });
+    assert.equal((await send(true)).state, 'failed');
+    assert.equal(f.requests.length, 7, 'a physical replacement must stop before the answer POST');
+    await assert.rejects(f.core.command('velaRequestPreview', { ...input, adaptive: true }), /vela_semantic_sources_unavailable|source_changed/);
+    assert.equal(f.requests.length, 7);
+  } finally {
+    await f.close();
+  }
+});
+
+test('reviewed CIE treats extracted document coverage as partial and keeps extraction notices out of citations', async () => {
+  const bytes = docxFixture();
+  let bodyText: string;
+  const f = fixture(true, true, { extract: async (input, signal) => {
+    const { extractDocumentText } = await import('../../visual-experience/cinematic-v3/src/document-text-worker.ts');
+    const extracted = await extractDocumentText(bytes, input.format, input.maxTextBytes, signal);
+    assert.equal(extracted.state, 'complete');
+    bodyText = extracted.text;
+    return { ...extracted, jobId: input.jobId, sourceRevision: input.sourceRevision,
+      textDigest: createHash('sha256').update(bodyText).digest('hex') };
+  } });
+  try {
+    await f.ready();
+    const path = join(f.directory, 'Synthetic table.docx');
+    writeFileSync(path, bytes);
+    const { resource } = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file', selection: { kind: 'file', path } });
+    const intent = 'Which text was extracted from the table?';
+    const resourceIds = [resource.id];
+    const preview = await f.core.command('velaRequestPreview', { intent, resourceIds, adaptive: true, providerId: 'openai-api-vela',
+      model: 'gpt-6-luna', semanticContext: true });
+    const review = await f.core.command('velaNativeReview', { previewId: preview.id, signature: preview.signature });
+    assert.match(review.context.included[0].content, /Extracted DOCX body text/);
+    const { grantId } = await f.core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature, reviewDigest: review.reviewDigest });
+    const proposal = (key: string) => ({ version: 2, objective: intent, clarification: '',
+      perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: [{ key, question: intent, query: 'table text' }] });
+    const assessment = (key: string, quote: string) => ({ version: 3, clarification: '', assessment: [
+      { key, status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
+    ] });
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    f.replies.push(reply(proposal('day')), reply(assessment('day', 'The pump inspection is on Tuesday.')), reply(proposal('table')),
+      body => {
+        assert.deepEqual(JSON.parse(body.input[0].content).excerpts, [
+          { handle: 'e1', sourceKind: 'file', title: resource.title, text: bodyText, partial: true },
+        ]);
+        return reply(assessment('table', 'Table cell'))(body);
+      }, body => {
+        assert.equal(JSON.parse(body.input[0].content).evidence.searchCoverage, 'partial');
+        assert.doesNotMatch(JSON.stringify(body.input), /Extracted DOCX body text/);
+        return response('The extracted body contains “Table cell.”', body.model);
+      });
+    const result = await f.core.command('vela', { name: 'request', input: { intent, resourceIds, authorizeProvider: true, previewId: preview.id, grantId } }) as VelaRequest;
+    assert.equal(result.state, 'responded');
+    assert.equal(f.requests.length, 5);
   } finally {
     await f.close();
   }

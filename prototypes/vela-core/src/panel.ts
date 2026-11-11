@@ -280,14 +280,16 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   });
   if (planWithNotes) sourcePanel.body.append(planWithNotes);
   function updateSemanticContext() {
-    const incompatibleSource = [...selected.values()].some(ref => ref.resourceKind !== 'note') || !!handoffSelection || !!routingAgentSelection;
+    const sources = [...selected.values()];
+    const incompatibleScope = !!handoffSelection || !!routingAgentSelection;
+    const incompatibleSource = sources.some(ref => ref.resourceKind !== 'note' && ref.resourceKind !== 'file') || incompatibleScope;
     const apiUnavailable = !current?.planningProviders || chosenProviderId !== 'openai-api-vela';
     const ineligible = !selected.size || selected.size > 4 || incompatibleSource;
     semanticContext.disabled = apiUnavailable || ineligible;
     if (semanticContext.disabled) semanticContext.checked = false;
     workspaceState.disabled = apiUnavailable || incompatibleSource || selected.size > 3 || !current?.applicationContext?.currentWorkspaceId;
     if (workspaceState.disabled) workspaceState.checked = false;
-    if (planWithNotes) planWithNotes.disabled = ineligible || busy || preparingNotePlan || !intent.value.trim();
+    if (planWithNotes) planWithNotes.disabled = ineligible || sources.some(ref => ref.resourceKind !== 'note') || busy || preparingNotePlan || !intent.value.trim();
   }
   updateSemanticContext();
   const modes = [['auto', 'Auto'], ['fast', 'Fast'], ['deep', 'Deep'], ['codex', 'Codex'], ['custom', 'Custom']] as const;
@@ -349,7 +351,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   if (client.routingOptions) providerRoutes.append(label('Routing mode', routeMode), refreshModels, label('Model', routeModel),
     label('Reasoning effort', routeEffort), label('Allow one deeper attempt if Auto hits an output limit', routeEscalation));
   providerRoutes.append(label('Start fresh for this send', routeHistory));
-  providerRoutes.append(label('Investigate selected notes before answering', semanticContext));
+  providerRoutes.append(label('Investigate selected notes or files', semanticContext));
   providerRoutes.append(label('Review current workspace state', workspaceState));
   const savedRoutes = disclosure('Saved routing defaults', 'vela-core-routing-defaults');
   const scopeChoice = el('select', 'vela-core-input');
