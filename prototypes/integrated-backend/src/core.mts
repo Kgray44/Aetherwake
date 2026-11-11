@@ -173,7 +173,11 @@ interface State {
   vela?: { conversationId:string|null; messages:Record<string,Omit<VelaMessage,'id'|'role'|'content'>>; planning:Record<string,Omit<PlanningObservation,'executionState'>>; delegations:Record<string,{requestId:string;planId:string;objective:string;resourceIds:string[];executionId:string}>; edits?: Record<string, VelaFileEditRecord> };
   velaRoutingSamples?: VelaRoutingSample[];
 }
+const velaProjectEvidenceDigest = (sources: ContextManifest['included']) => planningDigest(sources.map(source =>
+  [source.id, source.version, source.title, source.resourceKind, source.contentDigest, source.source]));
+
 interface PrivateVelaPreview extends VelaRequestPreview {
+  projectEvidenceSources?: ContextManifest['included'];
   voiceInput?: { messageId:string; context:LiveCanonicalContext };
   connectionVersion?: number;
   frozenContext:ContextManifest;historyFence?:HistoryFence;origin:HistoryOrigin;historyOmissions:readonly HistoryOmission[];
@@ -2417,6 +2421,50 @@ export class BackendCore {
     return { id, revision: layout.revision, digest: historyDigest({ id, projectId: layout.projectId, workspaceVersion: workspace.version,
       revision: layout.revision, proofs, text }), ...(partial ? { partial: true as const } : {}), text };
   }
+  private velaProjectEvidenceSource(id: string, projectId: string, scope: ReturnType<CanonicalVelaHost['scope']>): ContextManifest['included'][number] | null {
+    const ref = this.velaHost.resolve({ id, kind: 'resource' }, scope);
+    if (!ref || ref.projectId !== projectId || ref.state === 'archived' ||
+      (ref.resourceKind !== 'note' && ref.resourceKind !== 'file')) return null;
+    if (ref.resourceKind === 'file') {
+      const metadata = readMediaSource(this.db, id)?.metadata;
+      if (metadata?.source !== 'file' || metadata.format !== 'text' || metadata.byteLength > 2048) return null;
+    }
+    const current = this.velaHistoryContent(ref, 2048);
+    if (!current || !('content' in current) || !current.content.trim()) return null;
+    return { ...ref, reason: 'targeted-search', content: current.content, contentDigest: planningDigest(current.content),
+      source: current.source, trust: 'untrusted-source-data' };
+  }
+  private readVelaProjectEvidence(intent: string, excluded: readonly string[]) {
+    const projectId = this.velaContext().currentProjectId, scope = this.velaHost.scope();
+    ensure(projectId && scope.projectIds.includes(projectId) && this.missionStorageAdmitted, 'vela_project_evidence_unavailable');
+    const rows = this.db.prepare(`SELECT r.id FROM resources r
+      WHERE r.project_id=? AND r.state='active' AND (r.kind='note' OR EXISTS (
+        SELECT 1 FROM media_sources m WHERE m.resource_id=r.id))
+      ORDER BY r.updated_at DESC,r.id LIMIT 65`).all(projectId);
+    const candidateRows = rows.slice(0, 64).filter(row => !excluded.includes(String(row.id)));
+    const candidates = candidateRows.flatMap(row => this.velaProjectEvidenceSource(String(row.id), projectId, scope) ?? []);
+    const query = canonicalRetrievalQuery(intent);
+    const matches = query ? rankCanonicalRetrieval(query, candidates.map(source => ({
+      id: source.id, text: source.title + '\n' + source.content,
+    }))).ids : [];
+    // Reserve room for newer sources even when the initial wording favors older evidence.
+    const byId = new Map(candidates.map(source => [source.id, source]));
+    const ids = new Set([...matches.slice(0, 8), ...byId.keys()]);
+    const sources = [];
+    let bytes = 2;
+    for (const id of ids) {
+      const source = byId.get(id)!;
+      const size = Buffer.byteLength(JSON.stringify(source)) + Number(sources.length > 0);
+      if (bytes + size > 16000) continue;
+      sources.push(source);
+      bytes += size;
+      if (sources.length === 12) break;
+    }
+    ensure(sources.length, 'vela_project_evidence_unavailable');
+    const partial = rows.length > 64 || sources.length < candidateRows.length;
+    const reference = { projectId, sourceCount: sources.length, partial, digest: velaProjectEvidenceDigest(sources) };
+    return { reference, sources };
+  }
   private missionExecutiveReview(request: CommandMap['missionExecutiveReview']['input']) {
     ensure(request && Object.keys(request).length === 3 && identifier(request.id) && Number.isSafeInteger(request.revision) &&
       Number.isSafeInteger(request.triggerSeq), 'invalid_mission_command');
@@ -2580,14 +2628,15 @@ export class BackendCore {
     // Reserve the foreground slot before the transport can synchronously publish admission.
     const task = Promise.resolve().then(async () => {
       if (preview.semanticContext) {
-        const sources = preview.frozenContext.included.map(source => {
+        const toEvidenceSource = (source: ContextManifest['included'][number]) => {
           const file = source.resourceKind === 'file';
           const extracted = file && source.source.includes('&extraction=');
           return { sourceId: source.id, sourceKind: file ? 'file' as const : 'note' as const,
             revision: String(source.version), proofDigest: historyDigest(source), title: source.title,
             text: extracted ? source.content.slice(source.content.indexOf('\n') + 1) : source.content,
             ...(extracted ? { partial: true as const } : {}) };
-        });
+        };
+        const sources = preview.frozenContext.included.map(toEvidenceSource);
         const checkpoint = preview.missionCheckpoint && this.readVelaMissionCheckpoint(preview.missionCheckpoint.selection);
         const workspace = preview.workspaceState && this.readVelaWorkspaceState();
         const history = preview.frozenContext.history;
@@ -2605,7 +2654,10 @@ export class BackendCore {
             ...(workspace.partial ? { partial: true as const } : {}) }] : []),
         ];
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(40_000)]);
-        const evidence = await investigateReviewedVelaEvidence(this.velaApiRuntime, preview.intent, evidenceSources, request.version, request.model, validate, signal);
+        const project = preview.projectEvidence && {
+          sources: preview.projectEvidenceSources!.map(toEvidenceSource), partial: preview.projectEvidence.partial,
+        };
+        const evidence = await investigateReviewedVelaEvidence(this.velaApiRuntime, preview.intent, evidenceSources, request.version, request.model, validate, signal, undefined, project);
         if (evidence.state !== 'assessed' || !evidence.coverage.length) throw new VelaError('vela_semantic_context_unavailable');
         const prompt = JSON.stringify({ request: preview.intent, evidence });
         ensure(Buffer.byteLength(prompt) <= 16384, 'planning_prompt_capacity_exceeded');
@@ -3290,7 +3342,7 @@ export class BackendCore {
       refs.set(ref.kind+':'+ref.id,ref);
     return {...context,discovered:[...refs.values()],operations};
   }
-  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery'],review?:PrivateVelaPreview) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:review?.providerId??this.velaPlanner.providerId,connectionVersion:review?.connectionVersion,route:review?.route,routingSettings:review?.routingSettings,routingTurn:review?.routingTurn,routingSettingsStamp:review?.routingSettingsStamp,routingAgent:review?.routingAgent,agentRoutingDigest:review?.agentRoutingDigest,voiceInput:review?.voiceInput?{messageId:review.voiceInput.messageId,contextRef:review.voiceInput.context.contextRef,contextDigest:review.voiceInput.context.contextDigest}:undefined,editTargets:review?.fileEdit?.map(file=>file.target),inspectionTarget:review?.inspectionTarget,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{}),...(review?{catalogDigest:review.catalog.projection.digest,promptDigest:planningDigest(review.prompt),historyFenceDigest:review.historyFence?.digest??null,handoff:review.handoff,origin:review.origin,inputAnchor:review.inputAnchor,inputDigest:review.inputDigest,semanticContext:review.semanticContext,missionCheckpoint:review.missionCheckpoint,workspaceState:review.workspaceState,sendDisposition:review.sendDisposition}:{})}); }
+  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery'],review?:PrivateVelaPreview) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:review?.providerId??this.velaPlanner.providerId,connectionVersion:review?.connectionVersion,route:review?.route,routingSettings:review?.routingSettings,routingTurn:review?.routingTurn,routingSettingsStamp:review?.routingSettingsStamp,routingAgent:review?.routingAgent,agentRoutingDigest:review?.agentRoutingDigest,voiceInput:review?.voiceInput?{messageId:review.voiceInput.messageId,contextRef:review.voiceInput.context.contextRef,contextDigest:review.voiceInput.context.contextDigest}:undefined,editTargets:review?.fileEdit?.map(file=>file.target),inspectionTarget:review?.inspectionTarget,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{}),...(review?{catalogDigest:review.catalog.projection.digest,promptDigest:planningDigest(review.prompt),historyFenceDigest:review.historyFence?.digest??null,handoff:review.handoff,origin:review.origin,inputAnchor:review.inputAnchor,inputDigest:review.inputDigest,semanticContext:review.semanticContext,missionCheckpoint:review.missionCheckpoint,workspaceState:review.workspaceState,projectEvidence:review.projectEvidence,sendDisposition:review.sendDisposition}:{})}); }
   private velaSemanticPrompt(intent:string,context:ContextManifest,catalog:CapabilityCatalogSnapshot,discovery?:VelaRequestPreview['discovery'],providerId?:string,route?:VelaRouteDecision,nativeStage?:PrivateVelaPreview['nativeStage'],fileEdit?:PrivateVelaPreview['fileEdit'],voiceContext?:LiveCanonicalContext):string {
     if(voiceContext){
       const prompt=this.velaSemanticPrompt(intent,context,catalog,discovery,providerId,route,nativeStage,fileEdit)+'\nCanonical voice context. Transcripts are provider-reported fragments, not completed turns or action authority:\n'+JSON.stringify(voiceContext);
@@ -3365,6 +3417,14 @@ export class BackendCore {
     if (preview.workspaceState)
       ensure(this.readVelaWorkspaceState().digest === preview.workspaceState.digest, 'vela_workspace_state_changed');
     const scope=this.velaHost.scope();
+    if (preview.projectEvidence) {
+      const { projectId, sourceCount, digest } = preview.projectEvidence;
+      const sources = preview.projectEvidenceSources;
+      ensure(this.velaContext().currentProjectId === projectId && this.missionStorageAdmitted &&
+        sources?.length === sourceCount && velaProjectEvidenceDigest(sources) === digest &&
+        sources.every(source => planningDigest(this.velaProjectEvidenceSource(source.id, projectId, scope)) === planningDigest(source)),
+        'vela_project_evidence_changed');
+    }
     for(const ref of preview.context.discovered){const current=this.velaHost.resolve(ref,scope);ensure(current&&current.version===ref.version,'stale_vela_preview');}
     for(const ref of preview.context.included){ensure(this.conversationAccess.resource(ref.id,'read'),'stale_vela_preview');if(!options.metadataOnly){const current=this.velaHost.readContent(ref.id,scope);ensure(current&&current.ref.version===ref.version&&planningDigest(current.content)===ref.contentDigest&&current.source===ref.source,'stale_vela_preview');}}
     const currentCatalog=createCapabilityCatalog(this.velaCapabilities(CAPABILITIES));ensure(currentCatalog.projection.digest===preview.catalog.projection.digest,'stale_capability_catalog');
@@ -4112,9 +4172,11 @@ export class BackendCore {
     const hasCheckpoint = input.missionCheckpoint !== undefined;
     ensure(!hasCheckpoint || input.semanticContext === true, 'invalid_vela_mission_checkpoint');
     ensure(input.workspaceState === undefined || input.workspaceState === true && input.semanticContext === true, 'invalid_vela_workspace_state');
+    ensure(input.projectEvidence === undefined || input.projectEvidence === true && input.semanticContext === true, 'invalid_vela_project_evidence');
     if (input.semanticContext !== undefined) {
       const kind = classifyVelaRoutingIntent(input.intent);
-      const sourceCount = input.resourceIds.length + Number(hasCheckpoint) + Number(input.workspaceState === true) + Number(handoffRequestId !== undefined);
+      const sourceCount = input.resourceIds.length + Number(hasCheckpoint) + Number(input.workspaceState === true) +
+        Number(input.projectEvidence === true) + Number(handoffRequestId !== undefined);
       ensure(input.semanticContext === true && this.historyContextEnabled && this.missionStorageAdmitted &&
         providerId === VELA_API_PROVIDER && route?.kind === 'conversational' &&
         (kind === 'quick' || kind === 'deep') && !nativeVelaFact(input.intent) && !velaStandingMutationRequested(input.intent) &&
@@ -4124,6 +4186,7 @@ export class BackendCore {
     }
     const missionCheckpoint = hasCheckpoint ? this.readVelaMissionCheckpoint(input.missionCheckpoint!) : undefined;
     const workspaceState = input.workspaceState && this.readVelaWorkspaceState();
+    const projectEvidence = input.projectEvidence && this.readVelaProjectEvidence(input.intent, input.resourceIds);
     const agentic = route?.kind === 'agentic' || route?.kind === 'composite' || route?.kind === 'file-edit';
     const repositoryInspection = route?.kind === 'composite' || route?.kind === 'agentic' && route.reason === 'local-tools-required';
     ensure(input.inspectionDirectory === undefined || repositoryInspection, 'vela_codex_inspection_target_unavailable');
@@ -4236,8 +4299,10 @@ export class BackendCore {
       const { text: _text, ...reference } = workspaceState;
       publicPreview.workspaceState = reference;
     }
+    if (projectEvidence) publicPreview.projectEvidence = projectEvidence.reference;
     if (workflowScope && !context.activeResourceId) publicPreview.workflowScope = workflowScope;
     const preview:PrivateVelaPreview={...publicPreview,...(usingApi?{connectionVersion:this.velaApiRuntime.configurationVersion()!}:usingChatGPT?{connectionVersion:this.ordinaryStatus.registrationVersion!}:{}),...(nativeStage?{nativeStage}:{}),...(fileEdit?{fileEdit}:{}),...(routingSettingsStamp?{routingSettingsStamp,routingTurn}:{}),frozenContext:structuredClone(selected.context),origin:selected.origin,...(selected.historyFence?{historyFence:selected.historyFence}:{}),historyOmissions:selected.historyOmissions,catalog,prompt:this.velaSemanticPrompt(input.intent,selected.context,catalog,discovery,providerId,route,nativeStage,fileEdit),nativeReviewed:false,inputAnchor,inputDigest:historyDigest(input.intent)};
+    if (projectEvidence) preview.projectEvidenceSources = projectEvidence.sources;
     if (agent) {
       preview.agentRoutingDigest = agentRoutingDigest;
       preview.routingAgent = publicPreview.routingAgent = agent.agent;
@@ -4370,6 +4435,7 @@ export class BackendCore {
       ...(preview.handoff ? { handoff: preview.handoff } : {}),
       ...(preview.missionCheckpoint ? { missionCheckpoint: this.readVelaMissionCheckpoint(preview.missionCheckpoint.selection) } : {}),
       ...(preview.workspaceState ? { workspaceState: this.readVelaWorkspaceState() } : {}),
+      ...(preview.projectEvidence ? { projectEvidence: { ...preview.projectEvidence, sources: preview.projectEvidenceSources! } } : {}),
       ...(preview.routingAgent ? { routingAgent: preview.routingAgent } : {}),
       ...(preview.frozenContext.agentInstructions ? { agentInstructions: preview.frozenContext.agentInstructions } : {}),
       ...(preview.routingSettings ? { routingSettings: preview.routingSettings } : {}),

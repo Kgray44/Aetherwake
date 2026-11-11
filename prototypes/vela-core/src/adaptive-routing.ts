@@ -18,6 +18,7 @@ export interface VelaTurnRouting {
   semanticContext?: true;
   missionCheckpoint?: VelaMissionCheckpointRef;
   workspaceState?: true;
+  projectEvidence?: true;
   handoffSourceRequestId?: string;
   routingAgentId?: string;
   overrideDefaults?: true;

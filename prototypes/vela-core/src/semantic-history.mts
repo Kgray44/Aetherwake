@@ -59,7 +59,7 @@ interface Passage { source: string; quote: string }
 interface Assessment { key: string; status: Status; sources: string[]; query: string; passages?: Passage[] }
 interface EvidenceReview { rows: Assessment[]; clarification: string }
 export type SemanticHistoryCall =
-  | { stage: 'interpret'; request: string }
+  | { stage: 'interpret'; request: string; reviewedSourceTitles?: readonly string[] }
   | { stage: 'assess'; request: string; proposedClarification?: string; needs: readonly Need[];
     excerpts: readonly { handle: string; text: string; title?: string; partial?: true; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number };
 
