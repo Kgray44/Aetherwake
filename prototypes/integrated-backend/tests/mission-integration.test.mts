@@ -153,6 +153,10 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.ok(readiness);
     assert.equal(readiness.attempts.at(-1)?.settledMs, profile.lastSettlement?.monotonicMs);
     assert.ok(readiness.elapsedMs <= profile.admissionToLastSettlementMs!);
+    assert.equal(readiness.readyQueueCoverage.observedEdges, readiness.readyQueueCoverage.totalEdges);
+    assert.ok(readiness.readyQueueCoverage.observedEdges > 0);
+    assert.ok(Math.abs(readiness.betweenAttemptsMs - readiness.observedReadyBetweenAttemptsMs! -
+      readiness.unattributedBetweenAttemptsMs) < 0.001);
     assert.ok(profile.requestIntake && profile.admission && profile.requestIntake.clock === profile.admission.clock);
     assert.ok(profile.intakeToAdmissionMs! >= 0);
     assert.equal(profile.userDelivery, null);
