@@ -7,7 +7,7 @@ import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
 import { observeConversationProvider, observeProviderStream, projectMissionExecution, type ProviderStreamObserver, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
 import { missionExecutiveSchema, projectExecutiveCheckpoint, proposeMissionExecutiveRevision, type ExecutivePacket } from './mission-executive.mts';
-import { maxReviewedStateBytes } from '../../vela-core/src/semantic-history.mts';
+import { maxReviewedFileBytes, maxReviewedStateBytes } from '../../vela-core/src/semantic-history.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission, createPooledBackendSourceExecutor } from './mission-native.mts';
@@ -2723,10 +2723,14 @@ export class BackendCore {
     // Reserve the foreground slot before the transport can synchronously publish admission.
     const task = Promise.resolve().then(async () => {
       if (preview.semanticContext) {
-        const sources = preview.frozenContext.included.map(note => ({
-          sourceId: note.id, sourceKind: 'note' as const, revision: String(note.version),
-          proofDigest: historyDigest(note), title: note.title, text: note.content,
-        }));
+        const sources = preview.frozenContext.included.map(source => {
+          const file = source.resourceKind === 'file';
+          const extracted = file && source.source.includes('&extraction=');
+          return { sourceId: source.id, sourceKind: file ? 'file' as const : 'note' as const,
+            revision: String(source.version), proofDigest: historyDigest(source), title: source.title,
+            text: extracted ? source.content.slice(source.content.indexOf('\n') + 1) : source.content,
+            ...(extracted ? { partial: true as const } : {}) };
+        });
         const checkpoint = preview.missionCheckpoint && this.readVelaMissionCheckpoint(preview.missionCheckpoint.selection);
         const workspace = preview.workspaceState && this.readVelaWorkspaceState();
         const evidenceSources = [...sources,
@@ -4359,8 +4363,9 @@ export class BackendCore {
       }});
     selected.context=this.withVelaOperations(selected.context,operations);
     if (input.semanticContext) ensure(selected.context.included.length === input.resourceIds.length &&
-      selected.context.included.every(note => note.resourceKind === 'note' && input.resourceIds.includes(note.id) &&
-        note.content.trim() && Buffer.byteLength(note.content) <= 2048), 'vela_semantic_notes_unavailable');
+      selected.context.included.every(source => (source.resourceKind === 'note' || source.resourceKind === 'file') &&
+        input.resourceIds.includes(source.id) && source.content.trim() &&
+        Buffer.byteLength(source.content) <= (source.resourceKind === 'file' ? maxReviewedFileBytes : 2048)), 'vela_semantic_sources_unavailable');
     if (usingChatGPT && route?.kind === 'conversational' && !route.nativeLog && !route.nativeMetric &&
         classifyVelaRoutingIntent(input.intent) === 'local-read') {
       ensure(input.resourceIds.every(id => selected.context.included.some(item => item.id === id)),

@@ -78,7 +78,7 @@ function validateReview(preview, review) {
     ((preview.missionCheckpoint || preview.workspaceState) && !review.semanticContext) ||
     (review.semanticContext && (review.providerId !== "openai-api-vela" || review.history || review.handoff ||
       !Array.isArray(review.context?.included) || (!review.context.included.length && !review.missionCheckpoint && !review.workspaceState) ||
-      review.context.included.some(source => source?.resourceKind !== "note"))) ||
+      review.context.included.some(source => !["note", "file"].includes(source?.resourceKind)))) ||
     (preview.workingDirectory !== undefined && review.workingDirectory !== preview.workingDirectory) ||
     JSON.stringify(review.route) !== JSON.stringify(preview.route) ||
     JSON.stringify(review.routingSettings) !== JSON.stringify(preview.routingSettings) ||
