@@ -111,3 +111,23 @@ test('keeps a clarification proposed after current evidence leaves the referent 
   assert.equal(result.clarification, 'Do you mean the batch operation or the scheduler read?');
   assert.deepEqual(result.coverage[0].sources, [candidate, alternative]);
 });
+
+test('selected notes preserve recent evidence after a conversation query miss', async () => {
+  const note = { sourceId: 'selected', revision: '1', text: 'Inspect the equipment on Thursday.' };
+  const correction = { sourceId: 'recent', revision: '2', text: 'Move the maintenance visit to Monday.' };
+  const result = await investigateSemanticHistory('When should we inspect the equipment?', {
+    selected: () => ({ sources: [note], scan: 'bounded' }),
+    search: () => ({ sources: [], scan: 'bounded' }),
+    recent: () => ({ sources: [correction], scan: 'partial' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return { version: 1, objective: 'Resolve inspection date', clarification: '',
+        needs: [{ key: 'date', question: 'When is the inspection?', query: 'inspection equipment' }] };
+      return { version: 1, assessment: [{ key: 'date', status: call.excerpts.length === 2 ? 'contradicted' : 'supported',
+        sources: call.excerpts.map(excerpt => excerpt.handle), query: '' }] };
+    },
+  });
+  assert.equal(result.state, 'assessed');
+  assert.equal(result.coverage[0].status, 'contradicted');
+  assert.deepEqual(result.coverage[0].sources, [note, correction]);
+});
