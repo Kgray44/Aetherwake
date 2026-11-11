@@ -228,3 +228,56 @@ test('reviewed API mission planning rejects a terminal response that disagrees w
     assert.deepEqual(await f.core.command('missions', { name: 'list', input: {} }), []);
   } finally { await f.close(); }
 });
+
+test('native adaptive CIE requires qualified stages and reviews the resolved model', async () => {
+  const f = fixture(true);
+  try {
+    await f.ready();
+    const intent = 'When should I inspect the fictional pump?';
+    const admission = { configurationVersion: 1, models: ['gpt-6.1-sol', 'gpt-6-luna'], authorize: (review: {
+      model: string; purpose: string; qualification?: { evidence: string };
+    }) => {
+      assert.equal(review.purpose, 'investigation');
+      assert.equal(review.qualification?.evidence, 'simulated');
+      return review.model === 'gpt-6-luna';
+    } };
+    assert.equal((await f.core.investigateVelaHistory(intent, admission)).state, 'unavailable');
+    assert.equal(f.requests.length, 0);
+
+    const perception = { kind: 'recall', explicitGoals: ['Find the inspection weekday'], inferredGoals: [],
+      constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] };
+    const interpreted = { version: 2, objective: 'Recall the inspection weekday', clarification: '', perception,
+      needs: [{ key: 'day', question: 'Which weekday is the inspection?', query: 'inspection weekday' }] };
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    const assessment = { key: 'day', status: 'supported', passages: [{ source: 'e1', quote: 'The pump inspection is on Tuesday.' }], query: '' };
+    const qualify = () => f.core.qualifyVelaHistoryModel({ configurationVersion: 1, model: 'gpt-6-luna', authorize: review => {
+      assert.equal(review.model, 'gpt-6-luna');
+      assert.doesNotMatch(JSON.stringify(review.call), /When should I/);
+      assert.equal(review.purpose, 'qualification');
+      return true;
+    } });
+    f.replies.push(reply(interpreted), reply({ version: 3, assessment: [assessment] }));
+    await assert.rejects(qualify(), { code: 'vela_structured_probe_failed' });
+    assert.equal((await f.core.investigateVelaHistory(intent, admission)).state, 'unavailable');
+    assert.equal(f.requests.length, 2);
+
+    f.replies.push(reply(interpreted), reply({ version: 3, clarification: '', assessment: [assessment] }));
+    const qualified = await qualify();
+    assert.deepEqual(qualified.map(item => item.stage), ['interpret', 'assess']);
+    assert.equal(f.requests.length, 4);
+    f.replies.push(reply(interpreted), reply({ version: 3, clarification: '', assessment: [
+      { key: 'day', status: 'missing', passages: [], query: '' },
+    ] }));
+    const result = await f.core.investigateVelaHistory(intent, admission);
+    assert.equal(result.state, 'assessed');
+    assert.equal(f.requests.length, 6);
+    await f.pin({providerId:'openai-api-vela',model:'gpt-6.1-sol'});
+    assert.equal((await f.core.investigateVelaHistory(intent, admission)).state, 'unavailable');
+    assert.equal(f.requests.length, 6);
+    await f.core.command('vela',{name:'saveRoutingSettings',input:{scope:'global',id:null,expectedVersion:1,defaults:{}}});
+    await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:false});
+    await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true});
+    assert.equal((await f.core.investigateVelaHistory(intent, admission)).state, 'unavailable');
+    assert.equal(f.requests.length, 6);
+  } finally { await f.close(); }
+});

@@ -52,7 +52,7 @@ import type { TurnInput,TurnEvent,TurnResult } from '../../openai-provider/contr
 import type { OrdinaryConnectionPort,OrdinaryResponsesTestServices,OrdinaryResponsesPreview } from './contracts.mts';
 import { OpenAIConnections,CHATGPT_PLAN_REGISTRATION } from './openai-connections.mts';
 import { VelaApiConnection } from './vela-api-connection.mts';
-import { investigateVelaHistoryWithApi, type SemanticHistoryAdmission } from './vela-semantic-history.mts';
+import { investigateVelaHistoryWithApi, qualifyVelaHistoryModelWithApi, type SemanticHistoryAdmission, type SemanticHistoryProbeAdmission } from './vela-semantic-history.mts';
 import { VelaApiRuntime, VELA_API_RUNTIME_LIMITS, velaApiReasoningEfforts, type VelaApiRun, type VelaApiRuntimeTestServices } from './vela-api-runtime.mts';
 import { VelaWakeRuntime } from './vela-wake-runtime.mts';
 import { VelaFileProposals, localDocumentIntent,localSourceAttachmentIntent,localFolderListIntent,folderListingAnswer } from './vela-file-proposals.mts';
@@ -2343,11 +2343,33 @@ export class BackendCore {
   /** Native-only FI-2 shadow entry point. No renderer command exposes this disclosure port. */
   investigateVelaHistory(intent: string, admission: SemanticHistoryAdmission, signal?: AbortSignal) {
     const scope = this.velaScopeStamp();
-    const { model, configurationVersion, selectedNoteIds, authorize } = admission;
+    const { configurationVersion, authorize } = admission;
+    if (admission.model === undefined) ensure(Array.isArray(admission.models) && admission.models.length > 0 &&
+      admission.models.length <= 8 && admission.models.every(model => typeof model === 'string' && model.length > 0 && model.length <= 128) &&
+      new Set(admission.models).size === admission.models.length, 'invalid_vela_adaptive_model_selection');
+    const currentRouting = () => resolveRoutingSettings(this.velaRoutingProfiles()).effective;
+    const routing = admission.model === undefined ? currentRouting() : undefined;
+    const routingDigest = routing && historyDigest(routing);
+    const models = admission.models?.filter(model => !routing?.model || routing.model === model);
+    const adaptiveAllowed = !routing || ((!routing.providerId || routing.providerId === VELA_API_PROVIDER) &&
+      (!routing.mode || routing.mode === 'auto') && !routing.reasoningEffort);
+    const effectiveAdmission = admission.model === undefined ? { ...admission, models: adaptiveAllowed ? models! : [] } : admission;
     return investigateVelaHistoryWithApi(this.vela, this.velaApiRuntime, intent, {
-      model, configurationVersion, selectedNoteIds,
+      ...effectiveAdmission,
       authorize: review => !this.closed && this.missionStorageAdmitted && this.historyContextEnabled && scope === this.velaScopeStamp() &&
+        (!routingDigest || historyDigest(currentRouting()) === routingDigest) &&
         this.velaApiRuntime.authorized(configurationVersion) && authorize(review),
+    }, signal);
+  }
+
+  /** Explicit provider compatibility probe with fixed synthetic content. */
+  qualifyVelaHistoryModel(admission: SemanticHistoryProbeAdmission, signal = AbortSignal.timeout(45_000)) {
+    const scope = this.velaScopeStamp();
+    const { configurationVersion, authorize } = admission;
+    return qualifyVelaHistoryModelWithApi(this.velaApiRuntime, {
+      ...admission,
+      authorize: review => !this.closed && this.missionStorageAdmitted && this.historyContextEnabled &&
+        scope === this.velaScopeStamp() && this.velaApiRuntime.authorized(configurationVersion) && authorize(review),
     }, signal);
   }
 
