@@ -1,7 +1,7 @@
 import type { MissionAttemptPhaseTiming, MissionEvent, MissionProjection } from './mission-contracts.mts';
 import type { ConversationProviderTiming, MissionReportTiming, StreamEvent, VelaRouteTiming } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
-import type { TurnEvent } from '../../openai-provider/contracts.mts';
+import type { TurnEvent, TurnTransportTiming } from '../../openai-provider/contracts.mts';
 
 /** Bodyless milestones measured relative to the caller's monotonic start. */
 export function observeProviderStream(started: number) {
@@ -26,6 +26,7 @@ export function observeConversationProvider(origin: ConversationProviderTiming['
     ? { id: correlation.preview.id, toAdapterMs: started - clock.startedMs }
     : undefined;
   let resultObservedMs: number | null = null;
+  let transport: TurnTransportTiming | undefined;
   let firstNonblankOutput: NonNullable<ConversationProviderTiming['firstNonblankOutput']> | null = null;
   return {
     observe(event: TurnEvent) {
@@ -37,10 +38,11 @@ export function observeConversationProvider(origin: ConversationProviderTiming['
     },
     elapsed,
     previewOrigin,
+    observeTransport(timing: TurnTransportTiming) { transport ??= timing; },
     observeResult() { resultObservedMs ??= elapsed(); },
     settlement(outputStagedMs: number | null = null): ConversationProviderTiming {
       return { ...stream.read(), source: simulated ? 'simulated' : 'observed', origin, parentRequestId,
-        firstNonblankOutput, resultObservedMs, outputStagedMs, settlementStagedMs: elapsed(),
+        firstNonblankOutput, resultObservedMs, outputStagedMs, settlementStagedMs: elapsed(), ...(transport ? { transport } : {}),
         ...(previewOrigin ? { fromPreview: { ...previewOrigin,
           toFirstNonblankOutputMs: firstNonblankOutput === null ? null :
             previewOrigin.toAdapterMs + firstNonblankOutput.elapsedMs } } : {}) };

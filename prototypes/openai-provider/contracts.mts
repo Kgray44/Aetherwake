@@ -240,11 +240,19 @@ export interface TurnResult {
     taskVerified: false;
     api?: { configurationVersion: number; instructionVersion: string; outputItems: ApiResponseItem[]; toolCalls: ApiFunctionCall[]; recovery: ApiRecoveryReference };
 }
+/** Local offsets from transport turn entry. POST attempt records a fetch call, not remote receipt. */
+export interface TurnTransportTiming {
+    postAttemptMs: number | null;
+    headersMs: number | null;
+    firstSseBytesMs: number | null;
+    finishedMs: number;
+}
 export interface TransportOptions {
     native: NativeDispatchPort;
     fetch?: typeof fetch;
     now?: () => number;
     onEvent: (event: TurnEvent) => Promise<void> | void;
+    observeTiming?: (timing: TurnTransportTiming) => void;
     limits?: {
         requestBytes?: number;
         eventBytes?: number;
