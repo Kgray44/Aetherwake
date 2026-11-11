@@ -229,6 +229,28 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.deepEqual(readiness.readyQueueCoverage, { observedEdges: 1, totalEdges: 1 });
     assert.deepEqual(readiness.largestMeasuredSegment, { kind: 'execution', attemptId: right.id, taskId: 'right',
       startedMs: 3, endedMs: 9, durationMs: 6 });
+    assert.equal(projectMissionExecution(replay).experiment.hypothesis, null);
+    const constrained = structuredClone(replay);
+    const queuedAttempt = constrained.tasks.find(task => task.id === 'join')!.attempts[0];
+    queuedAttempt.admission = { workerLimit: 1, reasons: ['cpu-load'], readings: {} };
+    const blockers = queuedAttempt.timing!.phases!.readyQueue!.blockers;
+    blockers['worker-budget'] = { samples: 2, lastObservedMs: 10.75 };
+    blockers['resource-conflict'] = { samples: 1, lastObservedMs: 10.5 };
+    const experiment = projectMissionExecution(constrained).experiment;
+    const hypothesis = experiment.hypothesis;
+    assert.ok(hypothesis);
+    assert.equal(hypothesis.id, `${constrained.id}:${constrained.planRevision}:${join.id}:worker-budget`);
+    assert.equal(hypothesis.owner, 'arie');
+    assert.equal(hypothesis.status, 'hypothesis');
+    assert.equal(hypothesis.evidence.observedReadyWaitMs, 0.75);
+    assert.deepEqual(hypothesis.evidence.eventSeqs, [join.start.eventSeq, join.end!.eventSeq]);
+    assert.deepEqual(hypothesis.evidence.blockers, blockers);
+    assert.deepEqual(hypothesis.evidence.verifiedEvidenceIds, join.verifiedEvidenceIds);
+    assert.ok(experiment.blockers.includes('no-independent-quality-evaluation'));
+    assert.deepEqual(projectMissionExecution(structuredClone(constrained)).experiment.hypothesis, hypothesis);
+    assert.equal(projectMissionExecution({ ...constrained, criteria: [...constrained.criteria, 'missing'] }).experiment.hypothesis, null);
+    blockers['worker-budget']!.lastObservedMs = 11.25;
+    assert.equal(projectMissionExecution(constrained).experiment.hypothesis, null);
     const withEntry = structuredClone(replay);
     const created = withEntry.events.find(event => event.kind === 'created')!;
     for (const event of withEntry.events) if (event.seq === created.seq) event.timing!.monotonicMs = 0;

@@ -535,6 +535,33 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const timeToVerified = initial ? interval(mission.id, initial, firstVerified) : null;
   const timeToSettlement = complete && !active && initial ? interval(mission.id, initial, lastSettlement) : null;
   const path = complete && !active ? criticalPath(attempts) : null;
+  const readinessPath = complete && !active ? dependencyReadinessPath(attempts, initial) : null;
+  let workerBudgetEvidence = null;
+  if (objectiveVerified && readinessPath) {
+    for (const [index, node] of readinessPath.attempts.entries()) {
+      const trace = traceByAttempt.get(node.attemptId);
+      const ready = trace?.phases?.readyQueue;
+      const budget = ready?.blockers['worker-budget'];
+      const admission = trace?.resourceAdmission;
+      const observedReadyWaitMs = index === 0 ? readinessPath.entry?.observedReadyWaitMs : node.observedReadyWaitMs;
+      if (!trace?.end || !admission || !ready || !budget || observedReadyWaitMs == null || observedReadyWaitMs <= 0 ||
+        currentProofs.get(node.taskId)?.attemptId !== node.attemptId ||
+        !Number.isSafeInteger(budget.samples) || budget.samples < 1 || !Number.isFinite(budget.lastObservedMs) ||
+        budget.lastObservedMs < ready.firstObservedMs || budget.lastObservedMs > node.assemblyStartedMs ||
+        (workerBudgetEvidence && workerBudgetEvidence.observedReadyWaitMs >= observedReadyWaitMs)) continue;
+      workerBudgetEvidence = { taskId: node.taskId, attemptId: node.attemptId, clock: readinessPath.clock,
+        attemptPlanRevision: trace.planRevision, eventSeqs: [trace.start.eventSeq, trace.end.eventSeq] as const,
+        observedReadyWaitMs, blockers: ready.blockers,
+        admissionAtDispatch: admission, verifiedEvidenceIds: trace.verifiedEvidenceIds };
+    }
+  }
+  const hypothesis = workerBudgetEvidence ? {
+    id: `${mission.id}:${mission.planRevision}:${workerBudgetEvidence.attemptId}:worker-budget`,
+    status: 'hypothesis' as const, owner: 'arie' as const, kind: 'compare-worker-budget' as const,
+    missionId: mission.id, planRevision: mission.planRevision, evidence: workerBudgetEvidence,
+    metrics: ['first-verified-result', 'mission-completion', 'foreground-responsiveness'] as const,
+    guardrails: ['equivalent-verified-work', 'independent-quality-evaluation', 'foreground-interference', 'resource-reserve'] as const,
+  } : null;
   const pathIds = new Set(path?.attemptIds);
   const longestOnPath = attempts.filter(attempt => pathIds.has(attempt.id) && attempt.interval)
     .sort((a, b) => (b.interval!.end - b.interval!.start) - (a.interval!.end - a.interval!.start))[0];
@@ -631,7 +658,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       })),
       // Measures occupied work on explicit dependency/retry edges. Queue gaps are separate.
       criticalPath: path,
-      dependencyReadinessPath: complete && !active ? dependencyReadinessPath(attempts, initial) : null,
+      dependencyReadinessPath: readinessPath,
       longestOccupiedAttemptOnPath: longestOnPath ? { attemptId: longestOnPath.id, taskId: longestOnPath.taskId,
         durationMs: longestOnPath.interval!.end - longestOnPath.interval!.start,
         eventSeqs: [longestOnPath.start.eventSeq, longestOnPath.end!.eventSeq] } : null,
@@ -650,7 +677,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       partialObjectiveCoverage: mission.coverage?.status === 'partial',
       independentComparison: null,
     },
-    experiment: { state: 'baseline-observation' as const, blockers: [
+    experiment: { state: 'baseline-observation' as const, hypothesis, blockers: [
       ...(path ? [] : ['incomplete-causal-timing']),
       ...(objectiveVerified ? [] : ['objective-not-verified']),
       ...(allCriteriaVerified ? [] : ['missing-current-criterion-evidence']),
