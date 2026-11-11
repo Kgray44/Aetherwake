@@ -26,6 +26,7 @@ export interface MissionServiceHost {
     acquire(lane: string, identity: Omit<ResourceLeaseRequest, 'kind' | 'estimatedRamBytes'>, executorId: string): ResourceLease | undefined;
   };
   contextSource?(mission: Mission, task: MissionTaskPlan): MissionContextSource | undefined;
+  profilerMode?: 'off' | 'minimal' | 'full';
   reassign?(mission: Mission, task: MissionTask, agentProfileId: string): MissionTaskPlan['specialist'];
   replan?(mission: Mission, task: MissionTask): { additions: MissionTaskPlan[]; dependents: Record<string, string[]>; reason: string } | undefined;
   /** Stage only newly appended events inside the journal transaction. */
@@ -158,6 +159,7 @@ export class MissionService {
   private lastAdmitted = new Map<string, number>();
   private turn = 0;
   private readonly host: MissionServiceHost;
+  private readonly profilerClock = randomUUID();
 
   constructor(host: MissionServiceHost) {
     this.host = host;
@@ -196,14 +198,32 @@ export class MissionService {
     check(m.contract === MISSION_CONTRACT, 'unsupported_mission_contract');
     return m;
   }
-  private event(m: Mission, event: Omit<MissionEvent, 'seq' | 'time'>) {
+  private event(m: Mission, event: Omit<MissionEvent, 'seq' | 'time' | 'timing'>, intakeMonotonicMs?: number) {
     check(m.events.length < L.events, 'mission_journal_full');
-    const recorded = { ...event, seq: ++m.revision, time: stamp() };
+    const mode = this.host.profilerMode ?? 'full';
+    const capture = mode === 'full' || mode === 'minimal' &&
+      (event.kind === 'started' || event.kind === 'settled' && !!event.attemptId);
+    const recorded: MissionEvent = { ...event, seq: ++m.revision, time: stamp(),
+      ...(capture ? { timing: { domain: this.profilerClock, monotonicMs: performance.now(), planRevision: m.planRevision,
+        ...(intakeMonotonicMs !== undefined ? { intakeMonotonicMs } : {}) } } : {}) };
     m.events.push(recorded);
     return recorded;
   }
+  fullProfilingClock() {
+    return (this.host.profilerMode ?? 'full') === 'full' ? this.profilerClock : null;
+  }
+
+  private encode(m: Mission) {
+    let json = JSON.stringify(m);
+    if (Buffer.byteLength(json) > recordLimitBytes && m.events.some(event => event.timing)) {
+      // Mission evidence takes priority at the existing storage limit.
+      m.events = m.events.map(({ timing: _timing, ...event }) => event);
+      json = JSON.stringify(m);
+    }
+    return json;
+  }
   private store(m: Mission, from: number) {
-    const json = JSON.stringify(m);
+    const json = this.encode(m);
     check(Buffer.byteLength(json) <= recordLimitBytes, 'mission_record_full');
     this.host.db.prepare('UPDATE vela_missions SET pending=?,active=?,json=? WHERE id=?')
       .run(Number(scheduled(m)), Number(active(m)), json, m.id);
@@ -242,7 +262,7 @@ export class MissionService {
       'mission_queue_full');
   }
 
-  create(requestId: string, plan: MissionPlan): MissionProjection {
+  create(requestId: string, plan: MissionPlan, intakeMonotonicMs?: number): MissionProjection {
     this.requireOpen();
     check(identifier(requestId), 'invalid_mission_request');
     validateMissionPlan(plan, this.host.executors);
@@ -267,7 +287,7 @@ export class MissionService {
         ...(plan.coverage?{coverage:structuredClone(plan.coverage)}:{}),
         ...(plan.team ? { team: plan.team } : {}),
         ...(plan.originConversationId ? { originConversationId: plan.originConversationId } : {}) };
-      this.event(value, { kind: 'created' });
+      this.event(value, { kind: 'created' }, intakeMonotonicMs);
       this.host.db.prepare('INSERT INTO vela_missions VALUES(?,?,?,?,1,1,?)')
         .run(value.id, requestId, fingerprint, digest(value.scope), JSON.stringify(value));
       this.host.stagePublication?.(value, 0);
@@ -532,7 +552,7 @@ export class MissionService {
     if (!active(value)) this.capacity();
     const amended = { ...value, tasks, planRevision: value.planRevision + 1, events: [...value.events] };
     this.event(amended, { kind: 'revised', detail: reason, ...trigger });
-    check(Buffer.byteLength(JSON.stringify(amended)) <= recordLimitBytes, 'mission_record_full');
+    check(Buffer.byteLength(this.encode(amended)) <= recordLimitBytes, 'mission_record_full');
     Object.assign(value, amended);
   }
 

@@ -303,6 +303,16 @@ test('real Responses protocol applies long Unicode assignment labels through can
     assert.equal(finished.attempts[0].source, 'chatgpt-plan-responses:reported');
     assert.deepEqual(finished.attempts[0].findings, ['Use controlled inputs.', 'Record observed variance.']);
     assert.equal(finished.attempts[0].telemetry?.usage?.totalTokens, 28);
+    const trace = await core.command('missions', { name: 'execution-profile', input: { id: mission.id } });
+    assert.ok(trace && 'kind' in trace && trace.kind === 'execution-profile');
+    const specialist = trace.attempts.find(attempt => attempt.taskId === 'member-1')!;
+    assert.equal(specialist.providerEvidence, 'simulated');
+    assert.ok(specialist.providerStream);
+    const { responseCreatedMs, firstTextDeltaMs } = specialist.providerStream;
+    assert.ok(responseCreatedMs !== null && firstTextDeltaMs !== null && firstTextDeltaMs >= responseCreatedMs);
+    assert.ok(firstTextDeltaMs <= specialist.providerAdapterMs!);
+    assert.equal(trace.firstMeaningfulOutput, null);
+    assert.ok(!JSON.stringify(specialist).includes('Record observed variance.'));
     const view = await core.command('desktop', { type: 'snapshot' });
     assert.deepEqual(view.resources.filter(resource => resource.kind === 'agent').map(resource => resource.id), savedProfiles);
     for (const id of Object.values(built.missionAgentCards!)) {

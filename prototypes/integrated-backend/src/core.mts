@@ -5,6 +5,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
+import { observeConversationProvider, observeProviderStream, projectMissionExecution, type ReportPublication } from './execution-profiler.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission, createPooledBackendSourceExecutor } from './mission-native.mts';
@@ -482,11 +483,13 @@ export class BackendCore {
           return () => { this.missionProjectCheckRunning = false; };
         },
       }), 'chatgpt.specialist': createSpecialistExecutor({
+        providerEvidence: this.ordinaryTest ? 'simulated' : 'reported',
         available: (scope, task) => this.missionSpecialistAvailable(scope, task),
-        turn: input => this.runMissionSpecialist(input),
+        turn: (input, observe) => this.runMissionSpecialist(input, observe),
       }), 'api.specialist': createSpecialistExecutor({
+        providerEvidence: this.velaApiTest ? 'simulated' : 'reported',
         available: (scope, task) => this.missionSpecialistAvailable(scope, task),
-        turn: input => this.runMissionSpecialist(input),
+        turn: (input, observe) => this.runMissionSpecialist(input, observe),
       }, VELA_API_PROVIDER),
       };
       this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
@@ -723,15 +726,21 @@ export class BackendCore {
         acknowledge();
         return { kind: 'mission-report', missionId: id, messageId: String(existing.message_id) };
       }
+      const clock = this.missions.fullProfilingClock();
+      const compositionStartedMs = clock ? performance.now() : null;
       const { content, jobsDone } = missionCompletion(mission);
+      const composedMs = clock ? performance.now() : null;
       const message = this.appendVelaMessage(origin, {
         role: 'assistant', source: 'vela-native', classification: 'observed', content, responseKind: 'answer',
         missionReport: { missionId: id, workspaceId: scope.workspaceId, projectId: scope.projectId, jobsDone },
       }, !this.missionSpeechBacklog.has(id));
       this.db.prepare('INSERT INTO vela_mission_report_links VALUES(?,?)').run(id, message.id);
+      const reportTiming = clock && compositionStartedMs !== null && composedMs !== null ?
+        { clock, compositionStartedMs, composedMs, stagedMs: performance.now() } : undefined;
       this.record('vela.mission/report-posted', 'observed', undefined, 'mission:report:' + id, {
         providerId: 'aerynth-native', detached: true, correlationId: id,
-        mission: { id, scope, kind: 'report-posted' }, status: 'posted', payload: { redacted: true },
+        mission: { id, scope, kind: 'report-posted', ...(reportTiming ? { reportTiming } : {}) },
+        status: 'posted', payload: { redacted: true },
       });
       acknowledge();
       return { kind: 'mission-report', missionId: id, messageId: message.id };
@@ -782,7 +791,7 @@ export class BackendCore {
       (!checkAdmission || !this.velaQuotaExhausted(assigned.provider, now().slice(0, 10), this.velaRoutingProfiles(scope)) &&
       (assigned.provider !== VELA_API_PROVIDER || this.velaApiRuntime.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay)));
   }
-  private async runMissionSpecialist(context: MissionExecutionContext): Promise<TurnResult> {
+  private async runMissionSpecialist(context: MissionExecutionContext, observe: (type: TurnEvent['type']) => void): Promise<TurnResult> {
     const assigned = context.task.specialist;
     ensure(assigned, 'mission_specialist_unavailable');
     if (assigned.provider === VELA_API_PROVIDER) {
@@ -812,7 +821,7 @@ export class BackendCore {
             detached: true, correlationId: context.missionId, payload: { redacted: true, taskId: context.task.id,
               api: { executionId, bodyDigest: review.bodyDigest, contextDigest: review.contextDigest } } });
         },
-        event: event => { fence(); if (event.type === 'provider/usage') this.record(event.type, this.velaApiTest ? 'simulated' : 'reported',
+        event: event => { fence(); observe(event.type); if (event.type === 'provider/usage') this.record(event.type, this.velaApiTest ? 'simulated' : 'reported',
           undefined, context.attemptId + ':usage', { providerId: VELA_API_PROVIDER, detached: true, correlationId: context.missionId,
             payload: { redacted: true, taskId: context.task.id, usage: event.usage } }); },
         // MissionService owns task results; do not publish worker output as a Vela conversation turn.
@@ -827,10 +836,11 @@ export class BackendCore {
       ...(assigned.effort ? { reasoningEffort: assigned.effort } : {}),
       ...(assigned.webSearch ? { webSearch: true } : {}),
     };
-    return this.runMissionProvider(context.scope, context.task, turn, context.signal, context.missionId);
+    return this.runMissionProvider(context.scope, context.task, turn, context.signal, context.missionId, false, observe);
   }
   private async runMissionProvider(scope: MissionScope, task: Pick<MissionTaskPlan, 'id' | 'specialist'>, turn: TurnInput,
-    signal: AbortSignal, correlationId: string, requireActiveWorkspace = false): Promise<TurnResult> {
+    signal: AbortSignal, correlationId: string, requireActiveWorkspace = false,
+    observe?: (type: TurnEvent['type']) => void): Promise<TurnResult> {
     const assigned = task.specialist;
     ensure(assigned && this.missionSpecialistAvailable(scope, task), 'mission_specialist_unavailable');
     ensure(this.missionSpecialistsInFlight + Number(this.active?.providerId === CHATGPT_PLAN_PROVIDER) < 2, 'mission_planner_busy');
@@ -852,6 +862,7 @@ export class BackendCore {
         limits: { requestBytes: 8192, outputBytes: 2048, timeoutMs: 40_000, streamBytes: 262144 },
         onEvent: event => {
           fence();
+          observe?.(event.type);
           if (event.type === 'provider/usage') this.record(event.type, this.ordinaryTest ? 'simulated' : 'reported',
             undefined, turn.executionId + ':usage', { providerId: CHATGPT_PLAN_PROVIDER, detached: true,
               correlationId, payload: { redacted: true, taskId: task.id, usage: event.usage } });
@@ -929,6 +940,7 @@ export class BackendCore {
     }:undefined;
     const abort = new AbortController();
     const started = performance.now(), startedAt = now();
+    const stream = observeProviderStream(started);
     const settled = Promise.resolve().then(async () => {
       let result:TurnResult,proposal:string;
       if(apiPlanner){
@@ -938,9 +950,11 @@ export class BackendCore {
         fence();this.kernel.withTransaction(()=>this.db.prepare('INSERT INTO vela_mission_provider_admissions VALUES(?,?,?,?)').run(executionId,VELA_API_PROVIDER,scope.projectId,now().slice(0,10)));
         let observed:TurnResult|undefined;
         await this.velaApiRuntime.structuredProposal({instruction:MISSION_PROPOSAL_INSTRUCTIONS,payload:{objective,capabilities},schema:MISSION_PROPOSAL_SCHEMA,
-          requestId,model:apiPlanner.model,reasoningEffort:apiPlanner.effort,validate:fence,onResult:value=>{observed=value;}},abort.signal);
+          requestId,model:apiPlanner.model,reasoningEffort:apiPlanner.effort,validate:fence,
+          observeEventType:stream.observe,onResult:value=>{observed=value;}},abort.signal);
         fence();ensure(observed,'mission_planning_response_unavailable');result=observed;proposal=result.partialText;
-      }else{ensure(task&&turn,'mission_planner_unavailable');result=await this.runMissionProvider(scope,task,turn,abort.signal,requestId,true);proposal=result.partialText;}
+      }else{ensure(task&&turn,'mission_planner_unavailable');result=await this.runMissionProvider(scope,task,turn,abort.signal,requestId,true,stream.observe);proposal=result.partialText;}
+      const validatingAt = performance.now();
       const planner=apiPlanner??selection!;
       ensure(result.outcome === 'completed' && result.dispatched && result.responseId && result.reportedModel === planner.model,
         'mission_planning_response_unavailable');
@@ -952,7 +966,10 @@ export class BackendCore {
       ensure(!plan.tasks.some(step => step.specialist?.provider === CHATGPT_PLAN_PROVIDER && step.dependencies.length), 'mission_proposal_unsupported_objective');
       validateMissionPlan(plan, this.missionExecutors);
       plan.planning = { provider: apiPlanner?VELA_API_PROVIDER:CHATGPT_PLAN_PROVIDER, model: planner.model, effort: planner.effort,
-        responseId: result.responseId, startedAt, durationMs: performance.now() - started, ...(result.usage ? { usage: result.usage } : {}) };
+        providerEvidence: (apiPlanner ? this.velaApiTest : this.ordinaryTest) ? 'simulated' : 'reported',
+        responseId: result.responseId, executionId: result.executionId, startedAt,
+        timing: { ...stream.read(), providerResultMs: validatingAt - started, validationMs: performance.now() - validatingAt },
+        durationMs: performance.now() - started, ...(result.usage ? { usage: result.usage } : {}) };
       this.missionProposals.set(requestId, { plan, expires: Date.now() + 5 * 60_000 });
       return this.missionCommand({ name: 'preview', input: { objective, proposalId: requestId } });
     }).finally(() => {
@@ -972,6 +989,7 @@ export class BackendCore {
   }
   private missionCommand(request: MissionRequest, reviewed = false,
     approvedProjectCheck?: CommandMap['missionStartReviewed']['input']['approvedProjectCheck']): MissionResponse | Promise<MissionResponse> {
+    const intakeMonotonicMs = request?.name === 'start' ? performance.now() : undefined;
     ensure(request && Object.keys(request).length === 2 && request.input &&
       typeof request.input === 'object' && !Array.isArray(request.input), 'invalid_mission_command');
     const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
@@ -1028,7 +1046,7 @@ export class BackendCore {
         }
         const requestId = request.input.requestId;
         const toolOwner=this.toolWorkflows.ownerOperations('specialist-mission').find(op=>op.binding.ownerRef.id===requestId);if(toolOwner)this.toolWorkflows.assertOwnerDispatch(toolOwner.binding.requestId,{id:requestId,digest:toolOwner.binding.ownerRef.digest});
-        const created=this.missions.create(requestId, { ...plan, originConversationId: this.vela.ensureMissionConversation() });if(toolOwner)this.toolWorkflows.witnessOwnerResult(toolOwner.binding,{fence:this.toolFence(toolOwner.binding.requestId,true),sourceDigest:this.toolPlanDigest(toolOwner.binding.ownerRef),receiptRefs:[created.id]});return created;
+        const created=this.missions.create(requestId, { ...plan, originConversationId: this.vela.ensureMissionConversation() }, intakeMonotonicMs);if(toolOwner)this.toolWorkflows.witnessOwnerResult(toolOwner.binding,{fence:this.toolFence(toolOwner.binding.requestId,true),sourceDigest:this.toolPlanDigest(toolOwner.binding.ownerRef),receiptRefs:[created.id]});return created;
       }
       case 'team-library':
         ensure(!Object.keys(request.input).length, 'invalid_mission_command');
@@ -1056,6 +1074,19 @@ export class BackendCore {
       case 'list':
         ensure(!Object.keys(request.input).length, 'invalid_mission_command');
         return this.missions.list(scope);
+      case 'execution-profile': {
+        ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
+        const mission = this.missions.read(request.input.id, scope);
+        let publication: ReportPublication | null = null;
+        if (this.streamScopeMatches(scope, mission.scope)) {
+          const row = this.db.prepare('SELECT json FROM intelligence_events WHERE dedupe=?').get('mission:report:' + mission.id);
+          if (row) {
+            const { eventId, cursor, receivedAt, mission: source } = JSON.parse(String(row.json)) as StreamEvent;
+            publication = { eventId, cursor, receivedAt, timing: source?.reportTiming ?? null };
+          }
+        }
+        return projectMissionExecution(mission, publication);
+      }
       case 'read': {
         ensure(Object.keys(request.input).length === 1, 'invalid_mission_command');
         const mission = this.missions.read(request.input.id, scope);
@@ -2253,6 +2284,7 @@ export class BackendCore {
     const transition=resume&&snapshot&&sourceContinuation?.continuation.contextDigest!==preview.signature?snapshot.certificate:undefined;
     signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) cancel();
     this.ordinaryController = controller;
+    let trace: { executionId: string; timing: ReturnType<typeof observeConversationProvider> } | undefined;
     const request: VelaApiRun = { requestId: input.requestId, version: preview.connectionVersion, model: preview.route.model,
       ...(preview.route.effort ? { reasoningEffort: preview.route.effort } : {}),
       prompt: preview.prompt, contextDigest: preview.signature, validate,tools,...(resume?{resume:resume.ref,resumeReceipt:resume.receipt}:{}),...(transition?{resumeContext:transition}:{}),advanceContext:receipts=>this.advanceToolContext(input.requestId,receipts),validateResumeContext:(certificate,binding)=>this.validateToolContextAdvance(input.requestId,certificate,binding),...(weatherTool?{weatherTool}:{}),
@@ -2261,6 +2293,7 @@ export class BackendCore {
       ...(planning?{catalog:preview.catalog}:{}),
       stage: (executionId, review) => {
         validate(); ensure(!this.active || this.active.state !== 'running' && this.active.state !== 'dispatching', 'execution_busy');
+        const timing = observeConversationProvider('reviewed-api-dispatch-staging', !!this.velaApiTest, input.requestId);
         const execution: Execution = { id: executionId, resourceId: input.conversationId, providerId: VELA_API_PROVIDER,
           commandId: 'vela-api:' + input.requestId, state: 'dispatching', binding: null, turnId: null, startedAt: now(), endedAt: null,
           taskVerified: false, connectionVersion: preview.connectionVersion, requestedModel: preview.route!.model,
@@ -2271,6 +2304,7 @@ export class BackendCore {
         this.record('execution/dispatching', 'observed', undefined, randomUUID(), { providerId: VELA_API_PROVIDER,
           execution, payload: { redacted: true, api: { maxOutputTokens: 2048 } } });
         return () => {
+          trace = { executionId, timing };
           grant.consumed = true;
           this.active = execution;
           this.activeSourceFence = () => {
@@ -2285,6 +2319,7 @@ export class BackendCore {
       },
       event: event => {
         const execution = this.state.executions[event.executionId]; ensure(execution && this.active === execution, 'invalid_provider_response');
+        if (trace?.executionId === event.executionId) trace.timing.observe(event.type);
         if (event.type === 'provider/response-created') this.atomic(() => { execution.responseId = event.responseId; execution.state = 'running'; });
         else if (event.type === 'provider/usage') {
           this.atomic(() => { execution.usage = event.usage; });
@@ -2298,6 +2333,8 @@ export class BackendCore {
       },
       completed: (executionId, result) => {
         const execution = this.state.executions[executionId]; ensure(execution, 'invalid_provider_response');
+        const timing = trace?.executionId === executionId ? trace.timing : undefined;
+        timing?.observeResult();
         this.atomic(() => {
           execution.state = result.outcome === 'completed' ? 'provider_completed' : result.outcome === 'unknown' ? 'unknown' : result.outcome === 'cancelled-before-dispatch' ? 'interrupted' : 'failed';
           execution.responseOutcome = result.outcome; execution.endedAt = now(); execution.cancellation = result.cancellation;
@@ -2307,7 +2344,8 @@ export class BackendCore {
           if (result.httpDiagnostic) execution.httpDiagnostic = projectTurnHttpDiagnostic(result.httpDiagnostic);
         });
         this.record('execution/'+execution.state,this.velaApiTest?'simulated':'reported',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,
-          payload:{redacted:true,api:{elapsedMs:Math.max(0,Date.now()-Date.parse(execution.startedAt))},...(execution.usage?{usage:execution.usage}:{})}});
+          execution, payload:{redacted:true,api:{elapsedMs:Math.max(0,Date.now()-Date.parse(execution.startedAt))},
+            ...(timing ? { providerTiming: timing.settlement() } : {}),...(execution.usage?{usage:execution.usage}:{})}});
       },
     };
     // Reserve the foreground slot before the transport can synchronously publish admission.
@@ -2386,7 +2424,7 @@ export class BackendCore {
       const measure = preview.calibrationProjectId !== undefined && preview.route?.kind === 'conversational' && !!preview.route.effort && !prepared.responses?.webSearch;
       const started = performance.now();
       const liveVelaAnswer = preview.route?.kind === 'conversational' ? { requestId: input.requestId, scopeStamp: preview.scopeStamp } : undefined;
-      const task = this.runOrdinary(send, prepared, {signal, validate: () => this.validateFrozenVelaPreview(preview), countVelaAttempt: !!preview.route, measure, liveVelaAnswer});
+      const task = this.runOrdinary(send, prepared, {signal, validate: () => this.validateFrozenVelaPreview(preview), countVelaAttempt: !!preview.route, measure, liveVelaAnswer, requestId: input.requestId});
       this.ordinaryTask = task;
       try {
         const result = await task;
@@ -5432,13 +5470,15 @@ export class BackendCore {
     }
     this.conversations.nativeAuthorizeContextSources(input.resourceId,sources);
   }
-  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer']}):Promise<Execution> {
-    const measuredStart = authority?.measure ? performance.now() : undefined;
+  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer'];requestId?:string}):Promise<Execution> {
+    const started = performance.now();
+    const measuredStart = authority?.measure ? started : undefined;
     const p=preview.responses;ensure(p&&preview.providerId===CHATGPT_PLAN_PROVIDER&&!this.active&&!this.velaApiTask&&this.missionSpecialistsInFlight<2,'ordinary_execution_unavailable');
     ensure(this.conv(input.resourceId).providerId===CHATGPT_PLAN_PROVIDER&&!this.state.bindings[input.resourceId]?.length,'invalid_cross_provider_reference');
     ensure(this.state.revisions[input.resourceId]===input.expectedRevision,'stale_resource_version');
     const fingerprint=hash({type:'ordinary-responses',...input}),prior=this.state.receipts[input.commandId];
     if(prior){ensure(prior.fingerprint===fingerprint,'idempotency_conflict');return structuredClone(this.state.executions[prior.result]);}
+    const timing = observeConversationProvider('ordinary-adapter-entry', !!this.ordinaryTest, authority?.requestId ?? null, started);
     const e:Execution={id:p.executionId,resourceId:input.resourceId,providerId:CHATGPT_PLAN_PROVIDER,commandId:input.commandId,state:'dispatching',binding:null,turnId:null,startedAt:now(),endedAt:null,taskVerified:false,connectionVersion:p.connectionVersion,requestedModel:p.model,requestBodyDigest:p.bodyDigest,contextDigest:p.contextDigest,instructionVersion:p.instructionVersion};
     if (p.reasoningEffort !== undefined) e.requestedReasoningEffort = p.reasoningEffort;
     const handoff=preview.handoff&&!preview.handoff.continued?this.package(preview.handoff.id):null,controller=new AbortController();
@@ -5458,6 +5498,7 @@ export class BackendCore {
       ensure(event.executionId===e.id&&event.providerId===CHATGPT_PLAN_PROVIDER,'invalid_provider_response');
       if (!ownsTurn() || controller.signal.aborted) return;
       if(!this.conversationAccess.resource(e.resourceId)){controller.abort();throw new ServiceError('source_unavailable');}
+      timing.observe(event.type);
       if (event.type === 'provider/response-created') {
         await supply(event.responseId);
         // A cancelled transport can stop waiting for this callback.
@@ -5488,6 +5529,7 @@ export class BackendCore {
       }});
       this.providerActivity.providerRequests=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.providerRequests+1);
       result=await transport.turn({executionId:e.id,requestId:input.commandId,configurationId:p.configurationId,providerId:CHATGPT_PLAN_PROVIDER,assistant:'ordinary',model:p.model,instructions:p.instructions,messages:p.messages,contextDigest:p.contextDigest,...(p.reasoningEffort === undefined ? {} : { reasoningEffort: p.reasoningEffort }),...(p.webSearch?{webSearch:true}:{})},controller.signal);
+      timing.observeResult();
       let valid=true;try{await fence();}catch{valid=false;}
       if (result.responseId && !e.responseId && valid) {
         await supply(result.responseId);
@@ -5498,13 +5540,16 @@ export class BackendCore {
         e.state=!valid?(result!.dispatched?'unknown':'failed'):result!.outcome==='completed'?'provider_completed':result!.outcome==='unknown'?'unknown':result!.outcome==='cancelled-before-dispatch'?'interrupted':'failed';
         if(!valid)e.errorCode='ordinary_context_changed';else if(result!.errorCode)e.errorCode=result!.errorCode;
         e.endedAt=now();
+        let outputStagedMs: number | null = null;
         if(valid&&this.assistantText.trim()){
           const complete=e.state==='provider_completed',message=this.graph.addMessage(this.gid(e.resourceId),'assistant',this.assistantText,{provenance:'application',referenceIds:preview.handoff?[preview.handoff.id]:[]});e.outputMessageId=message.id;
           this.state.messageEvidence[message.id]={classification,executionId:e.id,providerId:CHATGPT_PLAN_PROVIDER,...(e.responseId?{responseId:e.responseId}:{}),outputState:complete?'complete':'partial',...(complete&&result!.webSearch?{webSearch:result!.webSearch}:{})};
+          outputStagedMs = timing.elapsed();
         }
         this.state.revisions[e.resourceId]++;if(handoff)handoff.state=e.state==='provider_completed'?'applied':e.state==='unknown'?'unknown':e.state==='interrupted'?'interrupted':'failed';
         this.record('execution/' + e.state, e.state === 'provider_completed' ? classification : 'inferred',
-          undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER });
+          undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER, execution: e,
+            payload: { redacted: true, providerTiming: timing.settlement(outputStagedMs) } });
       });
     } catch (error) {
       try {
@@ -5515,7 +5560,8 @@ export class BackendCore {
           if (result?.responseId) e.responseId = result.responseId;
           if (result) e.cancellation = result.cancellation;
           if (handoff) handoff.state = e.state === 'unknown' ? 'unknown' : 'failed';
-          this.record('execution/' + e.state, 'inferred', undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER });
+          this.record('execution/' + e.state, 'inferred', undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER, execution: e,
+            payload: { redacted: true, providerTiming: timing.settlement() } });
         });
       } catch {
         // The durable admission still prevents replay and restart reconciles it as unknown.

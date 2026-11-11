@@ -60,8 +60,12 @@ export interface MissionPlanningReceipt {
   model: string;
   effort?: ReasoningEffort;
   responseId: string;
+  executionId?: string;
   startedAt: string;
   durationMs: number;
+  /** Stream and result offsets use the planning start. Validation is an elapsed duration. */
+  timing?: { responseCreatedMs: number | null; firstTextDeltaMs: number | null; providerResultMs: number; validationMs: number };
+  providerEvidence?: 'reported' | 'simulated';
   usage?: ReportedUsage;
 }
 export interface MissionEvidence {
@@ -101,7 +105,9 @@ export interface MissionAttempt {
   admission?: MissionAdmission;
   resourceLease?: import('./resource-policy.mts').ResourceLease['receipt'];
   timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number };
-  telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string };
+  telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string;
+    providerEvidence?: MissionPlanningReceipt['providerEvidence'];
+    providerStream?: { responseCreatedMs: number | null; firstTextDeltaMs: number | null } };
 }
 export type MissionTaskState = 'queued' | 'running' | 'cancelling' | 'verified' | 'failed' | 'blocked' | 'cancelled' | 'uncertain';
 export interface MissionTask extends MissionTaskPlan {
@@ -114,6 +120,7 @@ export interface MissionTask extends MissionTaskPlan {
 export interface MissionEvent {
   seq: number;
   time: string;
+  timing?: { domain: string; monotonicMs: number; planRevision: number; intakeMonotonicMs?: number };
   kind: 'created' | 'revised' | 'control' | 'started' | 'settled' | 'recovered' | 'workroom';
   taskId?: string;
   attemptId?: string;
@@ -204,6 +211,7 @@ export type MissionRequest =
   | { name: 'workroom-resource'; input: { resourceId: string } }
   | { name: 'list'; input: Record<string, never> }
   | { name: 'read'; input: { id: string } }
+  | { name: 'execution-profile'; input: { id: string } }
   | { name: 'revision-preview'; input: MissionRevisionInput }
   | { name: 'revision-apply'; input: MissionRevisionInput & { fingerprint: string } }
   | { name: 'workroom-preview'; input: { id: string } }
@@ -315,6 +323,7 @@ export type MissionWorkroomResource = {
 );
 
 export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomResource |
+  import('./execution-profiler.mts').MissionExecutionProfile |
   MissionWorkroomPreview | MissionRevisionPreview | MissionTeam | MissionTeamLibrary |
   { kind: 'mission-report'; missionId: string; messageId: string } | null;
 

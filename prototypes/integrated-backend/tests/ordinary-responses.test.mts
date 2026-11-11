@@ -83,6 +83,10 @@ test('a reviewed planning request compiles one graph and runs native dependencie
     ]));
     const proposed = await f.core.command('missionPlanReviewed', input) as MissionPreview;
     assert.equal(proposed.proposalId, input.requestId);
+    const planningTiming = proposed.plan.planning?.timing;
+    assert.ok(planningTiming && planningTiming.responseCreatedMs !== null && planningTiming.firstTextDeltaMs !== null);
+    assert.ok(planningTiming.responseCreatedMs <= planningTiming.firstTextDeltaMs &&
+      planningTiming.firstTextDeltaMs <= planningTiming.providerResultMs);
     assert.deepEqual(proposed.plan.tasks.map(task => [task.id, task.dependencies]), [
       ['cpu', []], ['ram', ['cpu']], ['temporary-specialist-1', []], ['report', ['cpu', 'ram', 'temporary-specialist-1']],
     ]);
@@ -624,6 +628,9 @@ test('Check my CPU, explain the number, then look through my repository logs', a
       const timing = stage?.payload.timing;
       assert(timing && [timing.routingMs, timing.capabilityMs, timing.contextMs, timing.previewMs].every(ms => Number.isFinite(ms) && ms >= 0));
       assert(timing.previewMs >= timing.routingMs + timing.capabilityMs + timing.contextMs);
+      const providerTiming = f.events.find(event =>
+        event.type === 'execution/provider_completed' && event.providerId === providerId)?.payload.providerTiming;
+      assert.equal(providerTiming?.parentRequestId, first.id);
       assert.equal(outcome.conversationId, first.conversationId);
       assert.equal(outcome.handoff?.taskId, approveCodex ? first.id : undefined);
       assert(f.events.some(event => event.type === 'vela.routing.native_stage_observed' && event.payload.taskId === first.id));
@@ -1770,8 +1777,19 @@ test('ordinary Responses uses canonical identity, exact grant and stateless loca
   const first=await prepare(f,c.resourceId,'Synthetic first question');assert(first.preview.responses);assert.deepEqual(first.preview.responses.messages.filter(m=>m.role!=='developer'),[{role:'user',content:'Synthetic first question'}]);
   await assert.rejects(f.core.command('conversationSend',{previewId:first.preview.id,fingerprint:first.preview.fingerprint,commandId:first.input.commandId,grantId:'missing'}),/native_send_grant_required/);assert.equal(f.requests.length,0);
   f.responses.push(()=>{const reply=complete('resp-synthetic-first','Synthetic first answer');reply.headers.delete('content-type');return reply;});const firstGrant=await grant(f,first.preview),e1=await f.core.command('conversationSend',firstGrant);assert.equal(e1.state,'provider_completed');assert.equal(e1.binding,null);assert.equal(e1.turnId,null);assert.equal(e1.responseId,'resp-synthetic-first');assert.equal(e1.httpDiagnostic?.contentType,'missing');assert.equal(e1.usage?.source,'provider-reported');assert.equal(e1.taskVerified,false);await assert.rejects(f.core.command('conversationSend',firstGrant),/native_send_grant_consumed/);
+  const readTiming=async()=> (await f.core.command('replay',{limit:1000})).events
+    .find(event=>event.executionId===e1.id&&event.type==='execution/provider_completed')?.payload.providerTiming;
+  const timing=await readTiming();
+  assert.ok(timing&&timing.firstTextDeltaMs!==null&&timing.responseCreatedMs!==null&&
+    timing.resultObservedMs!==null&&timing.outputStagedMs!==null);
+  assert.equal(timing.source,'simulated');
+  assert.equal(timing.parentRequestId,null);
+  assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.resultObservedMs&&
+    timing.resultObservedMs<=timing.outputStagedMs&&timing.outputStagedMs<=timing.settlementStagedMs);
+  assert.doesNotMatch(JSON.stringify(timing),/Synthetic first (?:question|answer)/u);
   f.responses.push(()=>complete('resp-synthetic-second','Synthetic follow-up answer'));const second=await prepare(f,c.resourceId,'Synthetic follow-up');assert.deepEqual(second.preview.responses!.messages.filter(m=>m.role!=='developer').map(m=>[m.role,m.content]),[['user','Synthetic first question'],['assistant','Synthetic first answer'],['user','Synthetic follow-up']]);await f.core.command('conversationSend',await grant(f,second.preview));
   const before=await f.core.command('snapshot',{}),beforeIds=before.graph.messages.map(m=>m.id);assert.equal(before.bindings[c.resourceId],undefined);assert.equal(before.graph.messages.length,4);await f.reopen();
+  assert.deepEqual(await readTiming(),timing);
   const third=await prepare(f,c.resourceId,'Synthetic after restart');assert.equal(third.preview.responses!.messages.length,6);f.responses.push(()=>complete('resp-synthetic-third','Synthetic restored answer'));await f.core.command('conversationSend',await grant(f,third.preview));
   const after=await f.core.command('snapshot',{});assert.deepEqual(after.graph.messages.slice(0,4).map(m=>m.id),beforeIds);assert.equal(after.graph.conversations.length,1);assert.equal(after.graph.conversations[0].kind,'ordinary');assert.equal(after.graph.messages.length,6);assert.equal(Object.values(after.executions).length,3);assert.equal(f.codexCalls,0);
   const delta=f.events.find(e=>e.payload.delta);assert.equal(delta?.providerId,providerId);assert.equal(delta?.threadId,null);assert.equal(delta?.turnId,null);assert(f.events.some(e=>e.payload.usage?.source==='provider-reported'));assert(!JSON.stringify(after).includes('SYNTHETIC_PLAN_TOKEN'));

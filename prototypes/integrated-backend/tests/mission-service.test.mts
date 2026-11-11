@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { setImmediate as flush } from 'node:timers/promises';
 import { MissionService, validateMissionPlan, type MissionServiceHost } from '../src/mission-service.mts';
 import { nativeMissionPlan, replanNativeMission } from '../src/mission-native.mts';
+import { projectMissionExecution } from '../src/execution-profiler.mts';
 import { MISSION_LIMITS, type Mission, type MissionAdmission, type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionScope,
   type MissionTaskPlan } from '../src/mission-contracts.mts';
 import type { MissionContextSource } from '../../vela-core/src/mission-context.mts';
@@ -80,6 +81,109 @@ test('MissionService admits remote work under local pressure and releases attemp
     await flush();
     assert.ok(f.active.has('local'));
   } finally { await service.close(); governor.dispose(); f.db.close(); }
+});
+
+test('the scoped execution profile reconstructs admitted parallel work and its verified join', async () => {
+  const f = fixture();
+  const service = f.create();
+  try {
+    const mission = service.create('profile-parallel', plan(task('left'), task('right'), task('join', ['left', 'right'])));
+    const readProfile = () => projectMissionExecution(service.read(mission.id, scope));
+    await flush();
+    const live = readProfile();
+    assert.deepEqual(live.attempts.map(a => a.state), ['running', 'running']);
+    assert.equal(live.work.criticalPath, null);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    f.active.get('left')!.release();
+    f.active.get('right')!.release();
+    await flush();
+    f.active.get('join')!.release();
+    await flush();
+    const profile = readProfile();
+    const [left, right, join] = profile.attempts;
+    assert.deepEqual(join.predecessors, [left.id, right.id]);
+    assert.equal(join.planRevision, 1);
+    assert.equal(profile.work.peakWorkers, 2);
+    assert.ok(profile.work.overlapMs! > 0);
+    assert.equal(profile.work.criticalPath!.attemptIds.length, 2);
+    assert.equal(profile.work.criticalPath!.attemptIds.at(-1), join.id);
+    assert.ok(profile.work.workerMs! > profile.work.criticalPath!.durationMs);
+    assert.equal(profile.economics.cost, null);
+    assert.equal(profile.economics.usageCoverage, 'missing');
+    assert.equal(profile.attempts[0].start.eventSeq > 0, true);
+    assert.ok(!JSON.stringify(profile).includes('Independent synthetic evidence check'));
+    const replay = service.read(mission.id, scope);
+    replay.events = [...replay.events, replay.events[0], replay.events.at(-1)!].reverse();
+    assert.deepEqual(projectMissionExecution(replay), profile);
+    // Independent expected intervals: [1, 6], [2, 10], [12, 15].
+    const times = new Map([[left.start.eventSeq, 1], [left.end!.eventSeq, 6],
+      [right.start.eventSeq, 2], [right.end!.eventSeq, 10], [join.start.eventSeq, 12], [join.end!.eventSeq, 15]]);
+    replay.events = replay.events.map(event => times.has(event.seq) ?
+      { ...event, timing: { ...event.timing!, monotonicMs: times.get(event.seq)! } } : event);
+    const { work } = projectMissionExecution(replay);
+    assert.equal(work.activeMs, 12);
+    assert.equal(work.workerMs, 16);
+    assert.equal(work.overlapMs, 4);
+    assert.deepEqual(work.criticalPath, { durationMs: 11, attemptIds: [right.id, join.id] });
+    const recoveredPublication = projectMissionExecution(replay, {
+      eventId: 'report-after-restart', cursor: 99, receivedAt: '2026-11-10T22:00:00.000Z',
+      timing: { clock: 'reopened-process', compositionStartedMs: 20, composedMs: 21, stagedMs: 22 },
+    });
+    assert.equal(recoveredPublication.reportPublication?.eventId, 'report-after-restart');
+    assert.equal(recoveredPublication.settlementToReportStagedMs, null);
+    f.revoke();
+    assert.throws(readProfile, /mission_not_found/);
+  } finally {
+    await service.close();
+    f.db.close();
+  }
+});
+
+test('the execution profile keeps interrupted attempts and leaves their duration unknown', async () => {
+  const f = fixture(false);
+  const running = f.create();
+  const other = fixture(false);
+  let recovered: MissionService | undefined;
+  try {
+    const mission = running.create('profile-restart', plan(task('inspect')));
+    await flush();
+    const row = f.db.prepare('SELECT * FROM vela_missions WHERE id=?').get(mission.id)!;
+    await other.create().close();
+    other.db.prepare('INSERT INTO vela_missions VALUES(?,?,?,?,?,?,?)')
+      .run(row.id, row.request_id, row.request_digest, row.scope_key, row.pending, row.active, row.json);
+    recovered = other.create();
+    const profile = projectMissionExecution(recovered.read(mission.id, scope));
+    assert.equal(profile.attempts[0].state, 'uncertain');
+    assert.equal(profile.attempts[0].interrupted, true);
+    assert.notEqual(profile.attempts[0].start.clock, profile.attempts[0].end?.clock);
+    assert.equal(profile.attempts[0].interval, null);
+    assert.equal(profile.work.criticalPath, null);
+    assert.equal(profile.work.workerMs, null);
+  } finally {
+    await running.close();
+    await recovered?.close();
+    f.db.close();
+    other.db.close();
+  }
+});
+
+test('simulated provider usage stays out of the reported token total', async () => {
+  const f = fixture();
+  const service = f.create();
+  try {
+    const proposed = plan(task('inspect'));
+    proposed.planning = { provider: 'chatgpt-plan-responses', model: 'fixture', responseId: 'fixture',
+      startedAt: new Date().toISOString(), durationMs: 12, providerEvidence: 'simulated',
+      usage: { source: 'provider-reported', inputTokens: 6, outputTokens: 4, totalTokens: 10 } };
+    const mission = service.create('profile-simulated', proposed);
+    const profile = projectMissionExecution(service.read(mission.id, scope));
+    assert.equal(profile.planning?.providerEvidence, 'simulated');
+    assert.equal(profile.economics.reportedTotalTokens, null);
+    assert.equal(profile.economics.simulatedTotalTokens, 10);
+  } finally {
+    await service.close();
+    f.db.close();
+  }
 });
 
 test('a source edit fences in-flight results, invalidates downstream proof and permits reviewed native retry', async () => {

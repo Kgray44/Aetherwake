@@ -161,6 +161,13 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     const output=snapshot.graph.messages.find(message=>message.role==='assistant')!;
     assert.equal(output.content,'Mass measures inertia; weight is gravitational force.'); assert.equal(snapshot.messageEvidence[output.id].providerId,'openai-api-vela');
     const execution=Object.values(snapshot.executions)[0]; assert.equal(execution.resourceId,first.conversationId); assert.equal(execution.outputMessageId,output.id); assert.equal(execution.usage?.totalTokens,28); assert.equal(execution.taskVerified,false);
+    const timing=f.events.find(event=>event.executionId===execution.id&&event.type==='execution/provider_completed')?.payload.providerTiming;
+    assert.ok(timing&&timing.firstTextDeltaMs!==null&&timing.responseCreatedMs!==null&&timing.resultObservedMs!==null);
+    assert.equal(timing.source,'simulated');
+    assert.equal(timing.parentRequestId,first.id);
+    assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.resultObservedMs&&
+      timing.resultObservedMs<=timing.settlementStagedMs);
+    assert.equal(timing.outputStagedMs,null);
     assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,1); assert.ok(!JSON.stringify({snapshot,events:f.events}).includes(marker));
     await f.reopen(); assert.equal((await f.core.command('velaApiUsageStatus',{})).enabled,true);
     f.replies.push(()=>response('Weight changes with gravity; mass stays the same.','resp-next'));

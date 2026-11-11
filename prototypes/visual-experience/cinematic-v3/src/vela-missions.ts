@@ -1,4 +1,4 @@
-import { MISSION_LIMITS } from "../../../integrated-backend/src/mission-contracts.mts";
+import { MISSION_CONTRACT, MISSION_LIMITS } from "../../../integrated-backend/src/mission-contracts.mts";
 import type {
   MissionAdmission,
   MissionAdmissionReason,
@@ -561,7 +561,7 @@ export function createVelaMissionView(
     value: MissionResponse,
     expected: MissionScope | null,
   ): value is MissionProjection {
-    return !!value && "contract" in value && (sameScope(value.scope, expected) ||
+    return !!value && "contract" in value && value.contract === MISSION_CONTRACT && (sameScope(value.scope, expected) ||
       value.workroom?.workspaceId === expected?.workspaceId && value.scope.projectId === expected?.projectId);
   }
   function clearRevision() {
