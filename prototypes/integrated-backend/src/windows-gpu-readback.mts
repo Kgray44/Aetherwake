@@ -49,6 +49,12 @@ public static partial class AerynthDxgiMemory {
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static extern int D3D11CreateDevice(IntPtr adapter, uint driver, IntPtr software, uint flags,
         IntPtr levels, uint levelCount, uint sdk, out IntPtr device, out uint feature, out IntPtr context);
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
     public sealed class ExerciseResult {
         public ulong budgetBytes { get; set; }
         public ulong beforeBytes { get; set; }
@@ -60,6 +66,12 @@ public static partial class AerynthDxgiMemory {
         public int verifiedBuffers { get; set; }
     }
     public static ExerciseResult RunVerifiedCopy() {
+        // Bound native driver work even if the Node lease timer no longer exists.
+        using (var watchdog = new System.Threading.Timer(delegate { TerminateProcess(GetCurrentProcess(), 75); }, null, 12000, -1)) {
+            return CopyUnderLease();
+        }
+    }
+    private static ExerciseResult CopyUnderLease() {
         Guid iid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");
         IntPtr factory, selected = IntPtr.Zero, adapter3 = IntPtr.Zero, device = IntPtr.Zero, context = IntPtr.Zero, initial = IntPtr.Zero;
         var buffers = new List<IntPtr>();
@@ -96,6 +108,14 @@ public static partial class AerynthDxgiMemory {
             Console.WriteLine(String.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "{{\"kind\":\"ready\",\"budgetBytes\":{0},\"usedBytes\":{1}}}", before.Budget, before.CurrentUsage));
             if (Console.ReadLine() != "run") throw new InvalidOperationException("GPU lease not granted");
+            // The parent keeps stdin open while it owns the lease. EOF or an unexpected command ends the process.
+            var leaseWatcher = new System.Threading.Thread(delegate() {
+                try { Console.ReadLine(); }
+                finally { TerminateProcess(GetCurrentProcess(), 74); }
+            });
+            leaseWatcher.IsBackground = true;
+            leaseWatcher.Start();
+            Console.WriteLine("{\"kind\":\"started\"}");
             Action checkBudget = delegate {
                 VideoMemoryInfo current;
                 Marshal.ThrowExceptionForHR(query(adapter3, 0, 0, out current));
@@ -191,22 +211,26 @@ export function openWindowsGpuReadback() {
   const root = process.env.SystemRoot;
   if (platform() !== 'win32' || !root || !isAbsolute(root)) throw Error('windows_gpu_worker_unavailable');
   const executable = join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  // Keep the child attached so libuv's Windows process job can also clean it up on host exit.
   const child = spawn(executable, ['-NoProfile', '-NonInteractive', '-Command', workerScript],
     { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
   const contextId = randomUUID();
   let resolveBudget!: (value: GpuProcessBudget) => void, rejectBudget!: (error: Error) => void;
+  let resolveStarted!: (value: boolean) => void;
   const ready = new Promise<GpuProcessBudget>((resolve, reject) => {
     resolveBudget = resolve;
     rejectBudget = reject;
   });
   void ready.catch(() => {});
+  const started = new Promise<boolean>(resolve => { resolveStarted = resolve; });
   let budget: GpuProcessBudget | undefined, result: WindowsGpuReadback | undefined;
-  let claimed = false, buffer = '';
+  let claimed = false, acknowledged = false, buffer = '';
   const stop = () => { if (child.exitCode === null && !child.killed) child.kill(); };
   let deadline = setTimeout(stop, 20_000).unref();
   const ended = new Promise<number | null>(resolve => child.once('close', code => {
     clearTimeout(deadline);
     if (!budget) rejectBudget(Error('windows_gpu_worker_unavailable'));
+    resolveStarted(false);
     resolve(code);
   }));
   child.on('error', () => rejectBudget(Error('windows_gpu_worker_unavailable')));
@@ -227,13 +251,18 @@ export function openWindowsGpuReadback() {
         clearTimeout(deadline);
         deadline = setTimeout(stop, 5_000).unref();
         resolveBudget({ ...budget });
-      } else if (message?.kind === 'result' && claimed && !result && verifiedGpuReadback(message.value)) {
+      } else if (message?.kind === 'started' && claimed && !acknowledged) {
+        acknowledged = true;
+        resolveStarted(true);
+      } else if (message?.kind === 'result' && acknowledged && !result && verifiedGpuReadback(message.value)) {
         result = message.value;
       } else { stop(); return; }
     }
   });
   return {
+    processId: child.pid,
     budget: ready,
+    started,
     closed: ended.then(() => {}),
     async run(lease: ResourceLease, signal: AbortSignal): Promise<WindowsGpuReadback> {
       const receipt = lease.receipt;
@@ -247,7 +276,7 @@ export function openWindowsGpuReadback() {
       abort.addEventListener('abort', stop, { once: true });
       try {
         if (abort.aborted) stop();
-        else child.stdin.end('run\n');
+        else child.stdin.write('run\n');
         const code = await ended;
         abort.throwIfAborted();
         if (code !== 0 || !result) throw Error('windows_gpu_readback_failed');
