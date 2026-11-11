@@ -135,7 +135,8 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     const timingById = new Map([
       [left.id, { contextAssembly: [0, 1] as [number, number] }],
       [right.id, { contextAssembly: [1, 2] as [number, number], execution: [3, 9] as [number, number] }],
-      [join.id, { contextAssembly: [11, 12] as [number, number], execution: [12, 14] as [number, number] }],
+      [join.id, { contextAssembly: [11, 12] as [number, number], execution: [12, 14] as [number, number],
+        readyQueue: { firstObservedMs: 10.25, blockers: {} } }],
     ]);
     for (const task of replay.tasks) for (const attempt of task.attempts) {
       attempt.timing!.phases = { clock: left.start.clock!, ...timingById.get(attempt.id)! };
@@ -150,11 +151,26 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.deepEqual(readiness.attempts.map(node => [node.attemptId, node.gapBeforeAssemblyMs]), [[right.id, null], [join.id, 1]]);
     assert.equal(readiness.elapsedMs, 14);
     assert.equal(readiness.betweenAttemptsMs, 1);
+    assert.equal(readiness.attempts[1].observedReadyWaitMs, 0.75);
+    assert.equal(readiness.attempts[1].unattributedGapMs, 0.25);
+    assert.equal(readiness.observedReadyBetweenAttemptsMs, 0.75);
+    assert.equal(readiness.unattributedBetweenAttemptsMs, 0.25);
+    assert.deepEqual(readiness.readyQueueCoverage, { observedEdges: 1, totalEdges: 1 });
     assert.equal(readiness.unattributedWithinAttemptsMs, 3);
     assert.deepEqual(readiness.phaseMs, { contextAssembly: 2, execution: 8 });
     const invalid = structuredClone(replay);
     invalid.tasks.find(task => task.id === 'join')!.attempts[0].timing!.phases!.contextAssembly[0] = 9;
     assert.equal(projectMissionExecution(invalid).work.dependencyReadinessPath, null);
+    const staleReady = structuredClone(replay);
+    staleReady.tasks.find(task => task.id === 'join')!.attempts[0].timing!.phases!.readyQueue!.firstObservedMs = 9;
+    const unknownGap = projectMissionExecution(staleReady).work.dependencyReadinessPath!;
+    assert.equal(unknownGap.observedReadyBetweenAttemptsMs, null);
+    assert.equal(unknownGap.unattributedBetweenAttemptsMs, 1);
+    assert.deepEqual(unknownGap.readyQueueCoverage, { observedEdges: 0, totalEdges: 1 });
+    staleReady.tasks.find(task => task.id === 'join')!.attempts[0].timing!.phases!.readyQueue!.firstObservedMs = 11;
+    const instantReady = projectMissionExecution(staleReady).work.dependencyReadinessPath!;
+    assert.equal(instantReady.observedReadyBetweenAttemptsMs, 0);
+    assert.deepEqual(instantReady.readyQueueCoverage, { observedEdges: 1, totalEdges: 1 });
     const shorterLateBranch = structuredClone(replay);
     for (const event of shorterLateBranch.events)
       if (event.seq === right.start.eventSeq) event.timing!.monotonicMs = 6;

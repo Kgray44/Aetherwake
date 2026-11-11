@@ -114,7 +114,8 @@ function dependencyReadinessPath(attempts: {
   phases: MissionAttemptPhaseTiming | null;
 }[]) {
   type Node = { attemptId: string; taskId: string; clock: string; assemblyStartedMs: number; settledMs: number;
-    gapBeforeAssemblyMs: number | null; unattributedMs: number; phaseMs: PhaseDurations; previous: Node | null };
+    gapBeforeAssemblyMs: number | null; observedReadyWaitMs: number | null; unattributedGapMs: number | null;
+    unattributedMs: number; phaseMs: PhaseDurations; previous: Node | null };
   const nodes = new Map<string, Node>();
   let tail: Node | null = null;
   for (const { id, taskId, interval, predecessors, phases } of attempts) {
@@ -139,8 +140,13 @@ function dependencyReadinessPath(attempts: {
       if (!node || node.clock !== interval.clock || node.settledMs > assemblyStartedMs) return null;
       if (!previous || node.settledMs > previous.settledMs) previous = node;
     }
+    const gapBeforeAssemblyMs = previous ? assemblyStartedMs - previous.settledMs : null;
+    const firstObserved = phases.readyQueue?.firstObservedMs;
+    const observedReadyWaitMs = previous && firstObserved !== undefined &&
+      firstObserved >= previous.settledMs && firstObserved <= assemblyStartedMs ? assemblyStartedMs - firstObserved : null;
     const node: Node = { attemptId: id, taskId, clock: interval.clock, assemblyStartedMs, settledMs: interval.end,
-      gapBeforeAssemblyMs: previous ? assemblyStartedMs - previous.settledMs : null,
+      gapBeforeAssemblyMs, observedReadyWaitMs,
+      unattributedGapMs: gapBeforeAssemblyMs === null ? null : gapBeforeAssemblyMs - (observedReadyWaitMs ?? 0),
       unattributedMs: Math.max(0, interval.end - assemblyStartedMs - elapsedPhases), phaseMs, previous };
     nodes.set(id, node);
     if (!tail || node.settledMs >= tail.settledMs) tail = node;
@@ -154,11 +160,15 @@ function dependencyReadinessPath(attempts: {
     const duration = node.phaseMs[phase];
     if (duration !== undefined) phaseMs[phase] = (phaseMs[phase] ?? 0) + duration;
   }
+  const observed = chain.flatMap(node => node.observedReadyWaitMs === null ? [] : [node.observedReadyWaitMs]);
   return { clock: tail.clock, elapsedMs: tail.settledMs - chain[0].assemblyStartedMs, phaseMs,
     betweenAttemptsMs: chain.reduce((sum, node) => sum + (node.gapBeforeAssemblyMs ?? 0), 0),
+    observedReadyBetweenAttemptsMs: observed.length ? observed.reduce((sum, duration) => sum + duration, 0) : null,
+    unattributedBetweenAttemptsMs: chain.reduce((sum, node) => sum + (node.unattributedGapMs ?? 0), 0),
+    readyQueueCoverage: { observedEdges: observed.length, totalEdges: chain.length - 1 },
     unattributedWithinAttemptsMs: chain.reduce((sum, node) => sum + node.unattributedMs, 0),
-    attempts: chain.map(({ attemptId, taskId, assemblyStartedMs, settledMs, gapBeforeAssemblyMs }) =>
-      ({ attemptId, taskId, assemblyStartedMs, settledMs, gapBeforeAssemblyMs })) };
+    attempts: chain.map(({ attemptId, taskId, assemblyStartedMs, settledMs, gapBeforeAssemblyMs, observedReadyWaitMs, unattributedGapMs }) =>
+      ({ attemptId, taskId, assemblyStartedMs, settledMs, gapBeforeAssemblyMs, observedReadyWaitMs, unattributedGapMs })) };
 }
 
 /** Read model of already-authorized mission receipts. No independent journal or content retention. */
