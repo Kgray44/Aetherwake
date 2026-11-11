@@ -43,17 +43,23 @@ interface PerceptionProposal {
 type Proposal = { objective: string; clarification: string; needs: Need[] } &
   ({ version: 1 } | { version: 2; perception: PerceptionProposal });
 export type SemanticHistoryScan = 'bounded' | 'partial' | 'unavailable';
-export interface SemanticHistorySource { sourceId: string; revision: string; text: string }
+export interface SemanticHistorySource {
+  sourceId: string;
+  sourceKind?: 'conversation-exchange' | 'note';
+  revision: string;
+  text: string;
+}
 interface Assessment { key: string; status: Status; sources: string[]; query: string }
 interface EvidenceReview { rows: Assessment[]; clarification: string }
 export type SemanticHistoryCall =
   | { stage: 'interpret'; request: string }
-  | { stage: 'assess'; needs: readonly Need[]; excerpts: readonly { handle: string; text: string }[]; round: number };
+  | { stage: 'assess'; needs: readonly Need[]; excerpts: readonly { handle: string; text: string; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number };
 
 interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan }
 interface SemanticHistoryOwner<T extends SemanticHistorySource> {
   // The owner authorizes the current scope on every search and resolves canonical revisions.
   search(query: string): SemanticHistoryCandidates<T>;
+  selected?(): SemanticHistoryCandidates<T>;
   recent?(): SemanticHistoryCandidates<T>;
   isCurrent(source: T): boolean;
   // Native-only disclosure gateway. Check the exact payload/destination on every call.
@@ -170,6 +176,8 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       }
     };
 
+    if (owner.selected) addCandidates(owner.selected());
+
     while ((next.length || investigateAnchors) && rounds < maxRounds) {
       rounds++;
       const priorCount = evidence.size;
@@ -180,7 +188,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         queries.add(digest);
         addCandidates(owner.search(query));
       }
-      if (owner.recent && !anchorsRead && (evidence.size === 0 || investigateAnchors)) {
+      if (owner.recent && !anchorsRead && ((rounds === 1 && evidence.size === priorCount) || investigateAnchors)) {
         anchorsRead = true;
         addCandidates(owner.recent());
       }
@@ -192,7 +200,9 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       const sources = [...evidence.values()];
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale');
       const reviewed = await disclose({ stage: 'assess', needs: structuredClone(proposal.needs), round: rounds,
-        excerpts: [...evidence].map(([handle, source]) => ({ handle, text: source.text })) }, sources);
+        excerpts: [...evidence].map(([handle, source]) => ({
+          handle, text: source.text, ...(source.sourceKind ? { sourceKind: source.sourceKind } : {}),
+        })) }, sources);
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale');
       if (reviewed == null) return empty('unavailable');
       const assessment = parseAssessment(reviewed, proposal.needs, evidence);

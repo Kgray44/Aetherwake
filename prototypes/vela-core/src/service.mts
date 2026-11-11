@@ -521,22 +521,21 @@ export class VelaService {
         proofDigest: historyDigest({ originDigest, id, version: entry.version, source: entry.source, digest: entry.contentDigest }),
       });
     });
-    const findSources = (query?: string) => {
-      const history = findHistory(query);
-      if (!noteIds.length || !originCurrent()) return history;
+    const findSelectedNotes = () => {
+      if (!originCurrent()) return { sources: [], scan: 'unavailable' as const };
       const notes = noteIds.flatMap(id => {
         const note = readNote(id);
         if (!note) return [];
         proofs.set(note, () => readNote(id)?.proofDigest === note.proofDigest);
         return [note];
       });
-      const scan: SemanticHistoryScan = notes.length === noteIds.length ? history.scan
-        : notes.length || history.sources.length ? 'partial' : 'unavailable';
-      return { sources: [...notes, ...history.sources], scan };
+      const scan: SemanticHistoryScan = notes.length === noteIds.length ? 'bounded' : notes.length ? 'partial' : 'unavailable';
+      return { sources: notes, scan };
     };
     return investigateSemanticHistory<VelaSemanticHistorySource>(intent, {
-      search: findSources,
-      recent: () => findSources(),
+      ...(noteIds.length ? { selected: findSelectedNotes } : {}),
+      search: findHistory,
+      recent: () => findHistory(),
       isCurrent,
       disclose: (call, sources, abort) => {
         const revalidate = () => originCurrent() && sources.every(isCurrent);
