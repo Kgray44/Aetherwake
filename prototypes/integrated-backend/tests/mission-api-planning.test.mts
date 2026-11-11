@@ -712,6 +712,94 @@ test('reviewed workspace inventory uses active placements and fences changed res
   }
 });
 
+test('reviewed project evidence expands a model-proposed search and fences corrections and other projects', async () => {
+  const f = fixture(true, true);
+  try {
+    await f.ready();
+    async function project(title: string) {
+      const created = await f.core.command('desktop', { type: 'createProject', title });
+      const projectId = created.projects.find(item => item.title === title)!.id;
+      const workspace = await f.core.command('desktop', { type: 'createWorkspace', title, projectId });
+      return { projectId, workspaceId: workspace.activeWorkspaceId! };
+    }
+    async function note(title: string, content: string, workspaceId: string) {
+      const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title, workspaceId });
+      const resource = created.resources.find(item => item.title === title)!;
+      await f.core.command('desktop', { type: 'content', resourceId: resource.id, expectedVersion: resource.version, content });
+      return resource.id;
+    }
+    const other = await project('Other project');
+    await note('Private decision', 'FOREIGN-TEXT-459', other.workspaceId);
+    const current = await project('Current project');
+    const history = await note('Launch proposal', 'The launch proposal was superseded by the harbor decision.', current.workspaceId);
+    const correction = 'The harbor decision assigns release approval to the duty engineer.';
+    const selected = await note('Harbor decision', correction, current.workspaceId);
+    const intent = 'Whose call is it before this goes out?';
+    const input = { intent, resourceIds: [], authorizeProvider: true, providerId: 'openai-api-vela',
+      model: 'gpt-6-luna', semanticContext: true as const, projectEvidence: true as const };
+    const preview = await f.core.command('velaRequestPreview', { ...input, adaptive: true });
+    assert.equal(preview.projectEvidence?.projectId, current.projectId);
+    assert.doesNotMatch(JSON.stringify(preview), /duty engineer|FOREIGN-TEXT/);
+    const require = createRequire(import.meta.url);
+    const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    const { reviewPage } = require('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+    const send = (allow: boolean) => velaCommand({
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      directMessageSend: true, routeNative: true, dialog: {}, call: f.core.command.bind(f.core),
+      async reviewProvider({ review }: { review: VelaNativeReview }) {
+        assert.deepEqual(new Set(review.projectEvidence!.sources.map(source => source.id)), new Set([history, selected]));
+        assert.doesNotMatch(JSON.stringify(review), /FOREIGN-TEXT-459/);
+        assert.match(reviewPage(review, intent), /Project evidence \(2\)/);
+        return allow;
+      },
+      input: { name: 'request', input },
+    });
+    await assert.rejects(send(false), /authorization_cancelled/);
+    assert.equal(f.requests.length, 0);
+    const perceive = (key: string, question: string, query: string) => ({ version: 2, objective: question, clarification: '',
+      perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: [{ key, question, query }] });
+    const assessment = (key: string, status: string, query: string, passages: unknown[]) => ({
+      version: 3, clarification: '', assessment: [{ key, status, query, passages }],
+    });
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    const firstQuery = perceive('approval', intent, 'launch proposal');
+    const firstAssessment = assessment('approval', 'missing', 'harbor decision duty engineer', []);
+    f.replies.push(reply(perceive('day', 'Which weekday?', 'pump inspection')),
+      reply(assessment('day', 'supported', '', [{ source: 'e1', quote: 'The pump inspection is on Tuesday.' }])),
+      body => {
+        const payload = JSON.parse(body.input[0].content);
+        assert.deepEqual(new Set(payload.reviewedSourceTitles), new Set(['Launch proposal', 'Harbor decision']));
+        assert.doesNotMatch(JSON.stringify(payload), /duty engineer|FOREIGN-TEXT-459/);
+        return reply(firstQuery)(body);
+      }, body => {
+        const excerpts = JSON.parse(body.input[0].content).excerpts;
+        assert.deepEqual(excerpts.map((entry: { title: string }) => entry.title), ['Launch proposal']);
+        return reply(firstAssessment)(body);
+      }, body => {
+        const { round, excerpts } = JSON.parse(body.input[0].content);
+        assert.equal(round, 2);
+        assert.equal(excerpts.find((entry: { handle: string }) => entry.handle === 'e2').text, correction);
+        return reply(assessment('approval', 'supported', '', [{ source: 'e2', quote: correction }]))(body);
+      }, body => {
+        const packet = JSON.parse(body.input[0].content).evidence;
+        assert.deepEqual(packet.coverage[0].passages, [{ sourceId: selected, title: 'Harbor decision', quote: correction }]);
+        assert.doesNotMatch(JSON.stringify(body), /FOREIGN-TEXT-459|superseded/);
+        return response('The duty engineer approves, per Harbor decision.', body.model);
+      });
+    assert.equal((await send(true)).state, 'responded');
+    assert.equal(f.requests.length, 6);
+    f.replies.push(reply(firstQuery), async body => {
+      const snapshot = await f.core.command('desktop', { type: 'snapshot' });
+      const source = snapshot.resources.find(resource => resource.id === selected)!;
+      await f.core.command('desktop', { type: 'content', resourceId: source.id, expectedVersion: source.version, content: 'Approval changed.' });
+      return reply(firstAssessment)(body);
+    });
+    assert.equal((await send(true)).state, 'failed');
+    assert.equal(f.requests.length, 8);
+  } finally { await f.close(); }
+});
+
 test('mission planning investigates a placed file correction and fences the plan against physical replacement', async () => {
   const f = fixture(true, true);
   try {
