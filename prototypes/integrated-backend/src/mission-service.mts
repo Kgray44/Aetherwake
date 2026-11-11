@@ -7,8 +7,9 @@ import { ServiceError } from './contracts.mts';
 import { missionMeasurementAnswer } from './mission-native.mts';
 import { buildMissionRevision } from './mission-revision.mts';
 import type { ResourceLease, ResourceLeaseRequest } from './resource-policy.mts';
+import { projectExecutiveCheckpoint } from './mission-executive.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
-  type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
+  type MissionExecutionContext, type MissionExecutor, type MissionObjectiveAssessment, type MissionPlan, type MissionProjection,
   type MissionAdmission, type MissionAttempt, type MissionAttemptPhaseTiming, type MissionReadyBlocker, type MissionReadyQueueEvidence,
   type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
   type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomCard, type MissionWorkroomDashboard,
@@ -319,6 +320,28 @@ export class MissionService {
     const m = this.lookup(id);
     this.requireAccess(m, scope);
     return this.project(m, options?.includeReadyQueue);
+  }
+
+  recordObjectiveAssessment(id: string, scope: MissionScope, revision: number, checkpointDigest: string, assessment: MissionObjectiveAssessment) {
+    this.requireOpen();
+    this.update(id, mission => {
+      this.requireAccess(mission, scope);
+      check(mission.revision === revision && mission.planRevision === assessment.planRevision &&
+        mission.objectiveAssessment?.planRevision !== assessment.planRevision,
+        'mission_executive_review_changed');
+      const checkpoint = projectExecutiveCheckpoint(this.project(mission), assessment.triggerSeq);
+      check(checkpoint?.packet.completion &&
+        createHash('sha256').update(JSON.stringify(checkpoint.packet)).digest('hex') === checkpointDigest,
+        'mission_executive_review_changed');
+      const evidence = new Map([...checkpoint.observations.values()].map(reference => [reference.taskId, reference]));
+      check(assessment.findings.every(finding => finding.evidence.every(ref => {
+        const current = evidence.get(ref.taskId);
+        return current?.evidenceId === ref.evidenceId && current.statement === finding.statement;
+      })),
+        'mission_executive_review_changed');
+      mission.objectiveAssessment = structuredClone(assessment);
+      this.event(mission, { kind: 'objective-assessed', detail: 'provider_reviewed_partial_coverage' });
+    });
   }
 
   /** Trusted outbox lookup. Publication ports enforce their own disclosure boundaries. */
@@ -663,6 +686,8 @@ export class MissionService {
     };
     m = { ...m, tasks: m.tasks.map(visibleTask),
       ...(m.retiredTasks ? { retiredTasks: m.retiredTasks.map(visibleTask) } : {}) };
+    if (m.objectiveAssessment && (m.planRevision !== m.objectiveAssessment.planRevision ||
+      m.disposition === 'cancelled' || m.tasks.some(task => task.state !== 'verified'))) delete m.objectiveAssessment;
     const outcome = m.tasks.some(t => t.state === 'cancelling') ? 'cancelling' :
       busy(m) ? 'running' : m.tasks.some(t => t.state === 'uncertain') ? 'uncertain' :
       m.disposition === 'cancelled' ? 'cancelled' : m.tasks.every(t => t.state === 'verified') ? m.coverage?'blocked':'verified' :

@@ -216,7 +216,7 @@ export interface StreamEvent {
     voice?: {sessionId?:string;attemptId?:string;state?:string;usageSeconds?:number;messageId?:string;delegationId?:string;catalogCount?:number;errorCode?:string};
     tools?:{workflowId:string;receiptId?:string};
     wake?: {phase:string;enabled:boolean;microphone:string;voice:string;detector:string;owner:string|null;sessionId:string|null;settingsVersion:number;errorCode:string|null};files?:{count:number;state:string};
-    executive?: { contextDigest: string; proposalDigest: string; state: 'reviewable' | 'advisory'; triggerSequence: number; planRevision: number } };
+    executive?: { contextDigest: string; proposalDigest: string; state: 'reviewable' | 'advisory' | 'completion-assessed'; triggerSequence: number; planRevision: number } };
   mission?: MissionStreamEvent;
 }
 export interface HandoffReview {

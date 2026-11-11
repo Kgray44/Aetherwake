@@ -288,6 +288,68 @@ test('Executive reviews a real native mission checkpoint through the synthetic R
   } finally { await f.close(); }
 });
 
+test('Executive assessment records canonical observations and unresolved objective gaps across restart', async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    const offer = await f.preview();
+    const requestId = randomUUID();
+    f.replies.push(body => response(JSON.stringify(graph), body.model));
+    const planned = await f.plan(offer, requestId);
+    const started = await f.core.command('missions', { name: 'start', input: {
+      objective, proposalId: requestId, requestId, fingerprint: planned.fingerprint,
+    } }) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id: started.id } }) as Promise<MissionProjection>;
+    let settled = started;
+    for (let attempt = 0; attempt < 150 && ['queued', 'running'].includes(settled.outcome); attempt++) {
+      await new Promise(done => setTimeout(done, 10));
+      settled = await read();
+    }
+    assert.equal(settled.outcome, 'blocked');
+    const checkpoint = settled.events.findLast(event => event.kind === 'settled')!;
+    const request = { id: settled.id, revision: settled.revision, triggerSeq: checkpoint.seq };
+    const review = await f.core.command('missionExecutiveReview', request);
+    const observation = review.packet.completion!.observations.find(item => item.kind === 'sample.ram')!;
+    const ram = settled.tasks.find(task => task.executor === 'sample.ram')!;
+    const ramEvidence = ram.attempts.at(-1)!.evidence!;
+    assert.deepEqual(Object.keys(observation.values), ['utilizationPercent', 'totalBytes', 'availableBytes']);
+    assert.ok(!review.packet.completion!.observations.some(item => item.kind === 'join.samples'));
+    const require = createRequire(import.meta.url);
+    const { reviewMissionExecutive } = require('../../visual-experience/cinematic-v3/native/mission-executive-broker.cjs');
+    const { reviewPage } = require('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+    const broker = { request, parent: {}, call: f.core.command.bind(f.core), isCurrent: () => true, allowWrite: async () => true };
+    await assert.rejects(reviewMissionExecutive({ ...broker, reviewProvider: async () => false }), /mission_review_declined/);
+    assert.equal(f.requests.length, 1);
+    f.replies.push(body => {
+      const packet = JSON.parse(body.input[0].content);
+      assert.deepEqual(packet.completion, review.packet.completion);
+      assert.equal(body.tools, undefined);
+      return response(JSON.stringify({ version: 1, findings: [
+        { status: 'supported', statement: 'The server lag is definitely fixed.', evidence: [observation.handle] },
+        { status: 'unverified', statement: 'Server tick timings and logs are needed to establish the cause.', evidence: [] },
+      ] }), body.model);
+    });
+    const result = await reviewMissionExecutive({ ...broker, reviewProvider: async ({ review: nativeReview }: { review: unknown }) => {
+      assert.match(reviewPage(nativeReview), /checked observations/);
+      return true;
+    } }) as Awaited<ReturnType<typeof f.core.command<'missionExecutiveReviewed'>>>;
+    assert.equal(result.result.state, 'completion-assessed');
+    const assessed = await read();
+    assert.equal(assessed.outcome, 'blocked');
+    assert.deepEqual(assessed.tasks, settled.tasks);
+    assert.equal(assessed.events.at(-1)?.kind, 'objective-assessed');
+    assert.equal(assessed.objectiveAssessment?.triggerSeq, checkpoint.seq);
+    assert.deepEqual(assessed.objectiveAssessment?.findings[0].evidence, [{ taskId: ram.id, evidenceId: ramEvidence.id }]);
+    assert.match(assessed.objectiveAssessment!.findings[0].statement, /^RAM \d/);
+    assert.doesNotMatch(JSON.stringify(assessed.objectiveAssessment), /definitely fixed/);
+    assert.match(assessed.objectiveAssessment!.findings[1].statement, /tick timings and logs/);
+    await assert.rejects(f.core.command('missionExecutiveReview', { ...request, revision: assessed.revision }), /mission_executive_already_attempted/);
+    await f.reopen();
+    assert.deepEqual((await read()).objectiveAssessment, assessed.objectiveAssessment);
+    assert.equal(f.requests.length, 2);
+  } finally { await f.close(); }
+});
+
 test('reviewed API mission planning rejects a terminal response that disagrees with streamed plan text', async () => {
   const f = fixture();
   try {
@@ -847,7 +909,8 @@ test('project evidence supplies a mission plan across workspaces and remains bou
       const packet = JSON.parse(body.input[0].content);
       assert.deepEqual(packet.evidence.coverage[0].passages, [{ sourceId: file.id, title: 'Current checklist.txt', quote: correction }]);
       assert.ok(!packet.capabilities.some((task: { id: string }) => task.id === 'notes'));
-      return reply({ tasks: [{ capability: 'ram', after: [] }, { capability: 'backend', after: ['ram'] }], unsupported: [] })(body);
+      return reply({ tasks: [{ capability: 'ram', after: [] }, { capability: 'backend', after: ['ram'] }],
+        unsupported: ['The text mentioning PRIVATE-REVIEW-MARKER cannot establish readiness.'] })(body);
     });
     f.replies.push(reply(perceive('probe', 'pump inspection')), reply(assessment('day', 'The pump inspection is on Tuesday.')));
     enqueue();
@@ -855,7 +918,8 @@ test('project evidence supplies a mission plan across workspaces and remains bou
     const planned = await f.core.command('missionPlanReviewed', { ...selection, fingerprint: offer.fingerprint, requestId }) as MissionPreview;
     assert.deepEqual(planned.plan.planning?.context?.projectEvidence, offer.projectEvidence);
     assert.deepEqual(planned.plan.tasks.map(task => task.executor), ['sample.ram', 'sample.backend', 'join.samples']);
-    assert.doesNotMatch(JSON.stringify(planned), /withdrawn|FOREIGN-PLAN-831/);
+    assert.doesNotMatch(JSON.stringify(planned), /withdrawn|FOREIGN-PLAN-831|PRIVATE-REVIEW-MARKER/);
+    assert.match(planned.plan.coverage!.limitations.join(' '), /additional requirements outside the selected capabilities/);
     const running = await f.core.command('missions', { name: 'start', input: {
       objective, requestId, proposalId: requestId, fingerprint: planned.fingerprint,
     } }) as MissionProjection;
@@ -867,6 +931,15 @@ test('project evidence supplies a mission plan across workspaces and remains bou
     }
     assert.ok(settled.tasks.every(task => ['sample.ram', 'sample.backend', 'join.samples'].includes(task.executor)));
     assert.ok(settled.tasks.every(task => task.state === 'verified'));
+    const assessmentRequest = { id: settled.id, revision: settled.revision,
+      triggerSeq: settled.events.findLast(event => event.kind === 'settled')!.seq };
+    const assessmentReview = await f.core.command('missionExecutiveReview', assessmentRequest);
+    f.replies.push(reply({ version: 1, findings: [
+      { status: 'unverified', statement: 'The host counters do not certify readiness.', evidence: [] },
+    ] }));
+    const assessed = await f.core.command('missionExecutiveReviewed', { ...assessmentRequest, fingerprint: assessmentReview.fingerprint });
+    assert.equal(assessed.result.state, 'completion-assessed');
+    assert.ok((await read()).objectiveAssessment);
     const nextId = randomUUID();
     enqueue();
     const next = await f.core.command('missionPlanReviewed', { ...selection, fingerprint: offer.fingerprint, requestId: nextId }) as MissionPreview;
@@ -874,10 +947,11 @@ test('project evidence supplies a mission plan across workspaces and remains bou
     await assert.rejects(f.core.command('missions', { name: 'start', input: {
       objective, requestId: nextId, proposalId: nextId, fingerprint: next.fingerprint,
     } }), /mission_planning_context_changed/);
-    assert.equal(f.requests.length, 8);
+    assert.equal(f.requests.length, 9);
     await f.reopen();
     const restored = await read();
     assert.deepEqual(restored.planning?.context?.projectEvidence, offer.projectEvidence);
+    assert.equal(restored.objectiveAssessment, undefined);
     assert.ok(restored.tasks.every(task => task.state === 'blocked' && task.detail === 'mission_source_changed_since_verification'));
     assert.deepEqual(restored.tasks.map(task => task.attempts.map(attempt => attempt.id)),
       settled.tasks.map(task => task.attempts.map(attempt => attempt.id)));

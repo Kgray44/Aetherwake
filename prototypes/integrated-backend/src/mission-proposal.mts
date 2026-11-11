@@ -71,7 +71,7 @@ function parseProposal(text: string): unknown {
 
 /** Compile model choices into host-owned task plans. The caller validates real executor availability. */
 export function compileMissionProposal(text: string, objective: string, scope: MissionScope,
-  catalog: Readonly<Record<string, MissionTaskPlan>>, options?:{partialLimitations:readonly string[]}): MissionPlan {
+  catalog: Readonly<Record<string, MissionTaskPlan>>, options?:{partialLimitations:readonly string[]; retainProviderLimitations?: boolean}): MissionPlan {
   const proposal = parseProposal(text);
   // Existing unversioned responses still compile through the same closed allowlist.
   const versioned = exactFields(proposal, ['contract', 'tasks', 'unsupported']);
@@ -134,7 +134,9 @@ export function compileMissionProposal(text: string, objective: string, scope: M
     executor: 'join.samples', dependencies: tasks.map(task => task.id), claims: [], criterion: 'joined-evidence',
     maxAttempts: 2, timeoutMs: 1000 });
   const reportsOnly=tasks.filter(task=>task.id!=='report').every(task=>task.executor==='chatgpt.specialist'||task.executor==='api.specialist');
-  const limitations=[...new Set([...(options?.partialLimitations??[]),...proposal.unsupported,...(reportsOnly?reportedMissionCoverage().limitations:[])])];
+  const providerLimitations = options?.retainProviderLimitations === false && proposal.unsupported.length
+    ? ['The planner identified additional requirements outside the selected capabilities.'] : proposal.unsupported;
+  const limitations=[...new Set([...(options?.partialLimitations??[]),...providerLimitations,...(reportsOnly?reportedMissionCoverage().limitations:[])])];
   ensure(limitations.length<=8&&limitations.every(reason=>typeof reason==='string'&&reason.trim()&&Buffer.byteLength(reason)<=480),'invalid_mission_coverage');
   return { objective, scope: { ...scope }, criteria: [...new Set(tasks.map(task => task.criterion))], tasks,
     ...(limitations.length?{coverage:{status:'partial' as const,limitations}}:{}) };
