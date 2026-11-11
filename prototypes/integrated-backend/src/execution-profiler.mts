@@ -348,11 +348,18 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     if (!previous) return [];
     const prior = traceByAttempt.get(previous), retry = traceByAttempt.get(attempt.id);
     const previousSettlement = prior?.end ?? null, retryDispatch = retry?.start ?? null;
-    const gap = !prior?.interrupted && previousSettlement && retryDispatch && previousSettlement.eventSeq < retryDispatch.eventSeq ?
-      interval(attempt.id, previousSettlement, retryDispatch) : null;
+    const ordered = previousSettlement && retryDispatch && previousSettlement.eventSeq < retryDispatch.eventSeq;
+    const request = ordered ? events.findLast(event => event.kind === 'control' && event.detail === 'retry' &&
+      event.taskId === task.id && event.seq > previousSettlement.eventSeq && event.seq < retryDispatch.eventSeq) : undefined;
+    const retryRequest = request ? boundary(request) : null;
+    const gap = ordered && !prior?.interrupted ? interval(attempt.id, previousSettlement, retryDispatch) : null;
+    const beforeRequest = ordered && !prior?.interrupted ? interval(attempt.id, previousSettlement, retryRequest) : null;
+    const afterRequest = retryRequest ? interval(attempt.id, retryRequest, retryDispatch) : null;
     return [{ taskId: task.id, previousAttemptId: previous, attemptId: attempt.id,
-      previousOutcome: byAttempt.get(previous)?.attempt.outcome ?? null, previousSettlement, retryDispatch,
+      previousOutcome: byAttempt.get(previous)?.attempt.outcome ?? null, previousSettlement, retryRequest, retryDispatch,
       previousOccupiedMs: prior?.interval ? prior.interval.end - prior.interval.start : null,
+      settlementToRetryRequestMs: beforeRequest ? beforeRequest.end - beforeRequest.start : null,
+      retryRequestToDispatchMs: afterRequest ? afterRequest.end - afterRequest.start : null,
       settlementToDispatchMs: gap ? gap.end - gap.start : null }];
   });
   const segments = new Map<string, Interval[]>();
