@@ -30,6 +30,10 @@ test("native resource controls submit only a confirmed versioned selection", asy
   await menu.submenu[1].click();
   assert.deepEqual(calls.at(-1), ["resourcePolicyNative", { name: "inspect" }]);
   assert.match(dialogs.at(-1).detail, /storage reserve/u);
+  admitted = true;
+  await menu.submenu.find(item => item.label === "Desktop Activity Protection…").click();
+  assert.match(dialogs.at(-2).detail, /system idle time and Aerynth focus.*Off/u);
+  assert.deepEqual(calls.at(-1), ["resourcePolicyNative", { name: "set-external-activity-protection", enabled: true, expectedVersion: 7 }]);
 });
 
 test("GPU diagnostic uses a native workspace review and submits only after confirmation", async () => {

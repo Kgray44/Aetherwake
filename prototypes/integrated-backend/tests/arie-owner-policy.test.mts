@@ -18,6 +18,7 @@ test('trusted owner profile and one-step rollback survive separate backend proce
   try {
     const first = await command({ name: 'inspect' });
     assert.equal(first.mode, 'balanced');
+    assert.equal(first.externalActivityProtection, false);
     const chosen = await command({ name: 'set-mode', mode: 'gaming_focus', expectedVersion: first.configVersion });
     assert.equal(chosen.origin, 'user');
     assert.equal(chosen.effective.build, 0);
@@ -39,20 +40,24 @@ test('trusted owner profile and one-step rollback survive separate backend proce
     assert.equal(previous.canRollback, false);
     const limited = await command({ name: 'set-cpu-limit', limit: 0, expectedVersion: previous.configVersion });
     const disabled = await command({ name: 'set-windows-monitoring', enabled: false, expectedVersion: limited.configVersion });
+    const activity = await command({ name: 'set-external-activity-protection', enabled: true, expectedVersion: disabled.configVersion });
+    assert.equal(activity.externalActivityProtection, true);
     await assert.rejects(command({ name: 'set-cpu-limit', limit: disabled.maxCpuWorkers + 1,
-      expectedVersion: disabled.configVersion }), /invalid_resource_policy_request/u);
+      expectedVersion: activity.configVersion }), /invalid_resource_policy_request/u);
     backend.observeMissionHostSignal({ storageAdmitted: false });
     await command({ name: 'inspect' });
-    await assert.rejects(command({ name: 'restore-defaults', expectedVersion: disabled.configVersion }), /storage_reserve_admission_denied/u);
+    await assert.rejects(command({ name: 'restore-defaults', expectedVersion: activity.configVersion }), /storage_reserve_admission_denied/u);
     await backend.close();
     backend = new Backend(options, host);
     const saved = await command({ name: 'inspect' });
     assert.equal(saved.limits.cpu, 0);
     assert.equal(saved.windowsMonitoring, false);
-    assert.equal(saved.configVersion, disabled.configVersion);
+    assert.equal(saved.configVersion, activity.configVersion);
+    assert.equal(saved.externalActivityProtection, true);
     const defaults = await command({ name: 'restore-defaults', expectedVersion: saved.configVersion });
     assert.equal(defaults.limits.cpu, defaults.maxCpuWorkers);
     assert.equal(defaults.windowsMonitoring, true);
+    assert.equal(defaults.externalActivityProtection, false);
     await backend.close();
 
     const db = new DatabaseSync(options.path);

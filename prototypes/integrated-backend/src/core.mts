@@ -6125,10 +6125,12 @@ export class BackendCore {
       const fields = Object.keys(a);
       const governor = this.missionAdmission;
       const policyView = () => {
-        const estimate = governor.telemetry().metrics.vramAvailableBytes;
+        const { vramAvailableBytes: estimate, externalDesktopActivity: activity } = governor.telemetry().metrics;
         return { ...governor.inspectPolicy(), dedicatedVramEstimate:
           estimate.availability === 'estimated' && typeof estimate.value === 'number' && estimate.ageMs !== null ?
-            { bytes: estimate.value, ageMs: estimate.ageMs } : null };
+            { bytes: estimate.value, ageMs: estimate.ageMs } : null,
+        externalDesktopActivity: activity.availability === 'derived' && activity.ageMs !== null ?
+          { active: activity.value === 1, ageMs: activity.ageMs } : null };
       };
       const current = governor.inspectPolicy();
       if (a.name === 'inspect' && fields.length === 1) return policyView() as CommandMap[K]['output'];
@@ -6136,7 +6138,8 @@ export class BackendCore {
         'invalid_resource_policy_request');
       ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
       ensure(a.expectedVersion === current.configVersion, 'stale_resource_policy');
-      const config = { mode: current.mode, limits: current.limits, monitorWindows: current.windowsMonitoring };
+      const config = { mode: current.mode, limits: current.limits, monitorWindows: current.windowsMonitoring,
+        protectExternalActivity: current.externalActivityProtection };
       try {
         if (a.name === 'set-mode' && fields.length === 3 && ['balanced', 'gaming_focus', 'max_throughput'].includes(a.mode)) {
           governor.configurePolicy(a.expectedVersion, { ...config, mode: a.mode });
@@ -6148,6 +6151,8 @@ export class BackendCore {
           governor.configurePolicy(a.expectedVersion, { ...config, limits: { ...current.limits, gpu: a.limit } });
         } else if (a.name === 'set-windows-monitoring' && fields.length === 3 && typeof a.enabled === 'boolean') {
           governor.configurePolicy(a.expectedVersion, { ...config, monitorWindows: a.enabled });
+        } else if (a.name === 'set-external-activity-protection' && fields.length === 3 && typeof a.enabled === 'boolean') {
+          governor.configurePolicy(a.expectedVersion, { ...config, protectExternalActivity: a.enabled });
         } else if (a.name === 'restore-defaults' && fields.length === 2) {
           governor.restorePolicyDefaults(a.expectedVersion);
         } else if (a.name === 'rollback' && fields.length === 2) {

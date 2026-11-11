@@ -8,6 +8,7 @@ const reasons = {
   memory_unavailable: "Available RAM is unknown",
   safety_floor: "Local resources are below the safety floor",
   foreground_protection: "Protecting foreground activity",
+  external_desktop_activity: "Protecting recent desktop activity during contention",
   renderer_latency: "Protecting renderer responsiveness",
   power_protection: "Respecting battery power or a CPU speed limit",
   system_suspended: "System suspended",
@@ -25,6 +26,7 @@ function describe(view) {
   const source = originLabels[view.origin] ?? "Unknown source";
   const effective = view.effective;
   const estimate = view.dedicatedVramEstimate;
+  const activity = view.externalDesktopActivity;
   const detail = [
     `${source} profile: ${profile}`,
     reasons[view.reason] ?? "Waiting for policy evidence",
@@ -32,7 +34,11 @@ function describe(view) {
     `Other admission limits: build ${effective.build}, host I/O ${effective.host_io}, GPU ${effective.gpu}, remote requests ${effective.remote}`,
     `Estimated dedicated VRAM headroom: ${estimate ? `${(estimate.bytes / 2 ** 30).toFixed(2)} GiB (${Math.ceil(estimate.ageMs / 1000)} s old)` : "Unavailable"}`,
     `Supplemental Windows counters: ${!view.windowsCountersSupported ? "Unavailable" : view.windowsMonitoring ? "Enabled" : "Disabled"}`,
+    `Other desktop activity protection (system idle time and Aerynth focus): ${view.externalActivityProtection ? "On" : "Off"}`,
   ];
+  if (view.externalActivityProtection) detail.push(activity ?
+    `Desktop activity sample: ${activity.active ? "Recent input with Aerynth unfocused" : "No recent input outside Aerynth"} (${Math.ceil(activity.ageMs / 1000)} s old)` :
+    "Desktop activity sample: Unavailable");
   if (view.configurationHealth === "fallback") detail.push("Saved preferences were invalid. Safe settings are active.");
   return detail.join("\n");
 }
@@ -97,6 +103,9 @@ exports.resourcePolicyMenu = function resourcePolicyMenu({ call, show, ready, ca
       { label: "Supplemental Windows Counters…", click: choose("Control supplemental Windows counters", view =>
         view.windowsCountersSupported ? [{ label: view.windowsMonitoring ? "Disable" : "Enable",
           request: { name: "set-windows-monitoring", enabled: !view.windowsMonitoring } }] : []) },
+      { label: "Desktop Activity Protection…", click: choose("Protect other desktop activity during contention?", view =>
+        [{ label: view.externalActivityProtection ? "Disable" : "Enable",
+          request: { name: "set-external-activity-protection", enabled: !view.externalActivityProtection } }]) },
       { label: "GPU Diagnostic Limit…", click: choose("Set the local GPU diagnostic limit", view =>
         view.windowsCountersSupported ? [
           { label: "Off", request: { name: "set-gpu-limit", limit: 0 } },

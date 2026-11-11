@@ -73,3 +73,40 @@ test('throughput requires measured idle headroom and backs off on battery', () =
     assert.equal(governor.inspectPolicy().effective.remote, initial.effective.remote);
   } finally { governor.dispose(); }
 });
+
+test('external desktop protection requires opt-in, recent input and measured pressure', () => {
+  let time = 0;
+  const governor = createMissionAdmission({ maxWorkers: 3, now: () => time,
+    availableMemory: () => 1024 ** 3, cpuCounters: () => ({ logicalCpus: 4, total: time * 4, idle: time * 0.6 }),
+    readWindowsPressure: null });
+  const power = (idleSeconds: number | null) => ({ hostPower: { idleSeconds, battery: false,
+    suspended: false, speedLimitPercent: null } });
+  try {
+    governor.noteResourceSignal({ aerynthFocused: false });
+    governor.noteResourceSignal(power(0));
+    governor.read(true);
+    time = 3500;
+    const initial = governor.read(true);
+    assert.equal(initial.readings.cpuPercent?.value, 85);
+    assert.equal(governor.telemetry().metrics.externalDesktopActivity.availability, 'disabled');
+    assert.equal(governor.canLease('build'), true);
+    const settings = governor.inspectPolicy();
+    governor.configurePolicy(settings.configVersion, { mode: settings.mode, limits: settings.limits, protectExternalActivity: true });
+    assert.equal(governor.telemetry().metrics.externalDesktopActivity.value, 1);
+    assert.ok(governor.read(true).reasons.includes('external-desktop-activity'));
+    assert.equal(governor.inspectPolicy().reason, 'external_desktop_activity');
+    assert.equal(governor.canLease('build'), false);
+    assert.equal(governor.canLease('remote'), true);
+    governor.noteResourceSignal({ aerynthFocused: true });
+    assert.equal(governor.telemetry().metrics.externalDesktopActivity.value, 0);
+    assert.equal(governor.canLease('build'), true);
+    governor.noteResourceSignal({ aerynthFocused: false });
+    time = 7000;
+    assert.equal(governor.telemetry().metrics.externalDesktopActivity.availability, 'stale');
+    assert.equal(governor.read(true).reasons.includes('external-desktop-activity'), false);
+    governor.noteResourceSignal(power(null));
+    assert.equal(governor.telemetry().metrics.externalDesktopActivity.value, null);
+    governor.noteResourceSignal(power(20));
+    assert.equal(governor.telemetry().metrics.externalDesktopActivity.value, 0);
+  } finally { governor.dispose(); }
+});
