@@ -311,6 +311,24 @@ test('canonical backend runs a native mission without inference, restores eviden
       return result;
     };
     const measured = await measure(), measuredAgain = await measure(), single = await measure('Run a mission to measure CPU');
+    const ref = (mission: MissionProjection) => ({ id: mission.id, expectedRevision: mission.revision });
+    const compare = (candidate: MissionProjection) => backend.call('missions', { name: 'compare-native-samples',
+      input: { baseline: ref(measured), candidate: ref(candidate) } });
+    const comparison = await compare(measuredAgain);
+    assert.ok(comparison && 'kind' in comparison && comparison.kind === 'native-sample-comparison');
+    assert.equal(comparison.status, 'observed-pair');
+    assert.equal(comparison.deltas?.elapsedMs, comparison.candidate.elapsedMs! - comparison.baseline.elapsedMs!);
+    assert.deepEqual(comparison.baseline.attemptIds, measured.tasks.flatMap(task => task.attempts.map(attempt => attempt.id)));
+    assert.equal(comparison.independentEvaluation, null);
+    const mismatch = await compare(single);
+    assert.ok(mismatch && 'kind' in mismatch && mismatch.kind === 'native-sample-comparison');
+    assert.equal(mismatch.status, 'different-workload');
+    assert.equal(mismatch.deltas, null);
+    assert.equal(await compare({ ...measuredAgain, revision: measuredAgain.revision + 1 }), null);
+    await assert.rejects(compare(measured), /invalid_mission_command/);
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: other.workspaces.find(w => w.id !== workspaceId)!.id } });
+    await assert.rejects(compare(measuredAgain), /mission_not_found/);
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
     assert.deepEqual(single.tasks.map(task => task.id), ['cpu']);
     assert.match(measured.answer?.[0] ?? '', /^CPU [\d.]+% \(\d+ ms sample\)\.$/u);
     assert.match(measured.answer?.[1] ?? '', /^RAM [\d.]+% \([\d.]+\/[\d.]+ GiB used, [\d.]+ GiB (available|free)\)\.$/u);

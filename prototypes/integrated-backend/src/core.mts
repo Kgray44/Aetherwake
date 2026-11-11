@@ -5,7 +5,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
-import { observeConversationProvider, observeProviderStream, projectMissionExecution, resolveMissionHypothesis, type ProviderStreamObserver, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
+import { compareNativeSamples, observeConversationProvider, observeProviderStream, projectMissionExecution, resolveMissionHypothesis, type ProviderStreamObserver, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
 import { missionExecutiveSchema, projectExecutiveCheckpoint, proposeMissionExecutiveRevision, type ExecutivePacket } from './mission-executive.mts';
 import { maxReviewedFileBytes, maxReviewedStateBytes } from '../../vela-core/src/semantic-history.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
@@ -1238,6 +1238,15 @@ export class BackendCore {
         ensure(Object.keys(request.input).length === 3 && identifier(id) && identifier(hypothesisId) &&
           Number.isSafeInteger(expectedRevision) && expectedRevision > 0, 'invalid_mission_command');
         return resolveMissionHypothesis(this.missions.read(id, scope), hypothesisId, expectedRevision);
+      }
+      case 'compare-native-samples': {
+        const { baseline, candidate } = request.input;
+        ensure(Object.keys(request.input).length === 2 && [baseline, candidate].every(ref => ref &&
+          Object.keys(ref).length === 2 && identifier(ref.id) && Number.isSafeInteger(ref.expectedRevision) &&
+          ref.expectedRevision > 0) && baseline.id !== candidate.id, 'invalid_mission_command');
+        const first = this.missions.read(baseline.id, scope), second = this.missions.read(candidate.id, scope);
+        if (first.revision !== baseline.expectedRevision || second.revision !== candidate.expectedRevision) return null;
+        return compareNativeSamples(first, second);
       }
       case 'execution-profile': {
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');

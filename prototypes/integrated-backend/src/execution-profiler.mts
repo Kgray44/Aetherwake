@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { MissionAdmission, MissionAdmissionReason, MissionAttempt, MissionAttemptPhaseTiming, MissionEvent, MissionProjection } from './mission-contracts.mts';
 import type { ConversationProviderTiming, MissionReportTiming, ProviderStreamTiming, StreamEvent, VelaRouteTiming } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
@@ -730,4 +731,46 @@ export function resolveMissionHypothesis(mission: MissionProjection, hypothesisI
   return hypothesis?.id === hypothesisId ? {
     kind: 'experiment-hypothesis' as const, missionRevision: mission.revision, hypothesis,
   } : null;
+}
+
+const nativeSampleExecutors = new Set(['sample.cpu', 'sample.ram', 'join.samples']);
+
+/** Compare two already-authorized observations without attributing their difference to a policy. */
+export function compareNativeSamples(baseline: MissionProjection, candidate: MissionProjection) {
+  const describe = (mission: MissionProjection) => {
+    const profile = projectMissionExecution(mission);
+    const workload = {
+      objective: mission.objective, criteria: mission.criteria,
+      tasks: mission.tasks.map(({ id, objective, executor, criterion, dependencies, claims, timeoutMs, maxAttempts }) =>
+        ({ id, objective, executor, criterion, dependencies, claims, timeoutMs, maxAttempts })),
+    };
+    const attempts = mission.tasks.flatMap(task => task.attempts);
+    const native = !mission.planning && !mission.team && profile.economics.providerCalls === 0 &&
+      mission.tasks.length > 0 && mission.tasks.every(task => nativeSampleExecutors.has(task.executor) &&
+        !task.specialist && !task.teamMember && !task.projectCheck && task.claims.every(claim => claim.mode === 'read'));
+    return { native, workload, observation: {
+      missionId: mission.id, missionRevision: mission.revision, planRevision: mission.planRevision,
+      outcome: mission.outcome, objectiveVerified: profile.quality.objectiveVerified,
+      attemptIds: attempts.map(attempt => attempt.id),
+      verifiedEvidenceIds: profile.quality.criteria.flatMap(criterion => criterion.proofs.flatMap(proof => proof.evidenceIds)),
+      admissionEventSeq: profile.admission?.eventSeq ?? null, settlementEventSeq: profile.lastSettlement?.eventSeq ?? null,
+      elapsedMs: profile.admissionToLastSettlementMs, workerMs: profile.work.workerMs, overlapMs: profile.work.overlapMs,
+      observedWorkerLimits: [...new Set(attempts.flatMap(attempt => attempt.admission ? [attempt.admission.workerLimit] : []))],
+    } };
+  };
+  const a = describe(baseline), b = describe(candidate);
+  const from = a.observation, to = b.observation;
+  const status = !a.native || !b.native ? 'unsupported-workload' :
+    !isDeepStrictEqual(a.workload, b.workload) ? 'different-workload' :
+    !from.objectiveVerified || !to.objectiveVerified ? 'verification-incomplete' :
+    from.elapsedMs === null || to.elapsedMs === null ? 'timing-unavailable' : 'observed-pair';
+  const delta = (before: number | null, after: number | null) => before === null || after === null ? null : after - before;
+  return {
+    kind: 'native-sample-comparison' as const, status,
+    baseline: from, candidate: to, independentEvaluation: null,
+    deltas: status === 'observed-pair' ? {
+      elapsedMs: delta(from.elapsedMs, to.elapsedMs), workerMs: delta(from.workerMs, to.workerMs),
+      overlapMs: delta(from.overlapMs, to.overlapMs),
+    } : null,
+  };
 }

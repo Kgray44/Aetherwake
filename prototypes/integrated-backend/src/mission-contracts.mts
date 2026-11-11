@@ -259,6 +259,8 @@ export type MissionRequest =
   | { name: 'read'; input: { id: string } }
   | { name: 'execution-profile'; input: { id: string } }
   | { name: 'experiment-hypothesis'; input: { id: string; hypothesisId: string; expectedRevision: number } }
+  | { name: 'compare-native-samples'; input: {
+    baseline: { id: string; expectedRevision: number }; candidate: { id: string; expectedRevision: number } } }
   | { name: 'revision-preview'; input: MissionRevisionInput }
   | { name: 'revision-apply'; input: MissionRevisionInput & { fingerprint: string } }
   | { name: 'workroom-preview'; input: { id: string } }
@@ -374,6 +376,7 @@ export type MissionWorkroomResource = {
 export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomResource |
   import('./execution-profiler.mts').MissionExecutionProfile |
   ReturnType<typeof import('./execution-profiler.mts').resolveMissionHypothesis> |
+  ReturnType<typeof import('./execution-profiler.mts').compareNativeSamples> |
   { kind: 'executive-result'; result: import('./mission-executive.mts').ExecutiveResult } |
   MissionWorkroomPreview | MissionRevisionPreview | MissionTeam | MissionTeamLibrary |
   { kind: 'mission-report'; missionId: string; messageId: string } | null;
