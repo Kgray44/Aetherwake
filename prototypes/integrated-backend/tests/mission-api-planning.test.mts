@@ -1058,7 +1058,7 @@ test('reviewed project evidence expands a model-proposed search and fences corre
   } finally { await f.close(); }
 });
 
-test('project evidence supplies a mission plan across workspaces and remains bound through start and restart', async () => {
+test('project evidence supplies a mission plan across workspaces and remains bound through start and restart', async t => {
   const f = fixture(true, true);
   try {
     await f.ready();
@@ -1169,6 +1169,8 @@ test('project evidence supplies a mission plan across workspaces and remains bou
     f.replies.push(body => {
       const packet = JSON.parse(body.input[0].content);
       assert.equal(packet.reviewedMissionGap, 'The host counters do not certify readiness.');
+      const now = Date.now.bind(Date);
+      t.mock.method(Date, 'now', () => now() + 61_000);
       return reply(perceive('signoff', 'release duty engineer signed handoff'))(body);
     }, body => {
       const packet = JSON.parse(body.input[0].content);
