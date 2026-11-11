@@ -150,3 +150,54 @@ test('native semantic shadow dispatch uses strict output and denies revoked admi
     assert.deepEqual((await f.core.command('vela', {name:'state',input:{}}) as VelaBackendState).conversation, before);
   } finally { await f.close(); }
 });
+
+test('Executive reviews a real native mission checkpoint through the synthetic Responses transport', async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    const objective = 'Measure CPU and RAM';
+    const planned = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    const started = await f.core.command('missions', { name: 'start',
+      input: { objective, requestId: randomUUID(), fingerprint: planned.fingerprint } }) as MissionProjection;
+    let settled = started;
+    for (let attempt = 0; attempt < 150 && ['queued', 'running'].includes(settled.outcome); attempt++) {
+      await new Promise(done => setTimeout(done, 10));
+      settled = await f.core.command('missions', { name: 'read', input: { id: started.id } }) as MissionProjection;
+    }
+    assert.equal(settled.outcome, 'verified');
+    const trigger = settled.events.findLast(event => event.kind === 'settled')!;
+    const options = { configurationVersion: 1, model: 'gpt-6-luna', authorize: () => false };
+    assert.equal((await f.core.proposeVelaMissionRevision(started.id, trigger.seq, options)).state, 'unavailable');
+    assert.equal(f.requests.length, 0);
+    f.replies.push(body => {
+      assert.equal(body.text.format.strict, true);
+      assert.equal(body.tools, undefined);
+      assert.match(JSON.stringify(body.input), /basedOnPlanRevision/);
+      return response(JSON.stringify({ version: 1, action: 'request-completion-review', target: '', related: [],
+        reason: 'Check the native verification receipts before reporting completion.' }), body.model);
+    });
+    const result = await f.core.proposeVelaMissionRevision(started.id, trigger.seq, { ...options, authorize: review => {
+      assert.equal(review.packet.basedOnRevision, settled.revision);
+      assert.equal(review.packet.trigger.sequence, trigger.seq);
+      return true;
+    } });
+    assert.equal(result.state, 'advisory');
+    assert.equal(f.requests.length, 1);
+    const after = await f.core.command('missions', { name: 'read', input: { id: started.id } }) as MissionProjection;
+    assert.equal(after.revision, settled.revision);
+    assert.deepEqual(after.tasks, settled.tasks);
+  } finally { await f.close(); }
+});
+
+test('reviewed API mission planning rejects a terminal response that disagrees with streamed plan text', async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    const offer = await f.preview();
+    const validDelta = JSON.stringify(graph);
+    f.replies.push(body => response(validDelta, body.model, null));
+    await assert.rejects(f.plan(offer), /vela_api_proposal_unconfirmed/);
+    assert.equal(f.requests.length, 1);
+    assert.deepEqual(await f.core.command('missions', { name: 'list', input: {} }), []);
+  } finally { await f.close(); }
+});

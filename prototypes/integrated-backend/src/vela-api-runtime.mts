@@ -380,14 +380,34 @@ export class VelaApiRuntime {
       if(semantic){const code=String((error as {code?:string})?.code??''),reason=code==='vela_workflow_budget_exhausted'?code:invoking?'vela_tool_owner_unknown':/^vela_tool_[a-z_]{1,64}$/.test(code)?code:'vela_tool_rejected',phase=reason==='vela_workflow_budget_exhausted'?'budget-exhausted':invoking?'unknown':'blocked';checkpoint(phase,reason);if(final)return {...final,workflow:{workflowId:semantic.workflowId,phase,reason}};}throw error;
     } finally { this.running.delete(input.requestId); }
   }
-  async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;validate(): void }, signal: AbortSignal): Promise<unknown> {
+  async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;
+    /** Native binding for a reviewed cognitive payload and its current source provenance. */
+    binding?: { configurationVersion: number; contextDigest: string };
+    validate(): void }, signal: AbortSignal): Promise<unknown> {
     const version = this.configurationVersion(); check(version !== null, 'api_configuration_disconnected');
+    const binding = input.binding;
+    if (binding) {
+      check(binding.configurationVersion === version && /^[a-f0-9]{64}$/.test(binding.contextDigest), 'api_configuration_changed');
+      input.validate();
+    }
     const model=input.model??'gpt-6-luna',models = await this.models(version); check(models.includes(model), 'vela_api_default_model_unavailable');
     const prompt = JSON.stringify(input.payload); check(Buffer.byteLength(prompt) <= 32768, 'context_budget_exceeded');
+    const reasoningEffort = input.reasoningEffort ?? (binding ? undefined : 'low');
     const { result } = await this.run({ requestId: input.requestId, version, model, prompt,
-      instruction: input.instruction, reasoningEffort:input.reasoningEffort??'low', contextDigest: digest(prompt), outputSchema: input.schema,...(input.weatherTool?{weatherTool:input.weatherTool}:{}),validate: input.validate }, signal);
+      instruction: input.instruction, ...(reasoningEffort ? { reasoningEffort } : {}),
+      contextDigest: binding?.contextDigest ?? digest(prompt), ...(binding ? { oneUse: true as const } : {}),
+      outputSchema: input.schema,...(input.weatherTool?{weatherTool:input.weatherTool}:{}),validate: input.validate }, signal);
     input.onResult?.(result);
     check(result.outcome === 'completed', result.errorCode ?? 'vela_api_proposal_failed');
+    if (binding) {
+      input.validate();
+      check(result.responseId && result.reportedModel === model && !result.refusalText, 'vela_api_proposal_unconfirmed');
+      const items = result.api?.outputItems.filter(item => item.type !== 'reasoning') ?? [];
+      const [message] = items;
+      check(items.length === 1 && message.type === 'message' && message.status === 'completed' && message.content.length === 1, 'vela_api_proposal_unconfirmed');
+      const [output] = message.content;
+      check(output.type === 'output_text' && output.text === result.partialText && Buffer.byteLength(output.text) <= 8192, 'vela_api_proposal_unconfirmed');
+    }
     try{return JSON.parse(result.partialText);}catch{throw new VelaError('vela_api_proposal_invalid');}
   }
   close() { this.lifetime.abort(); }

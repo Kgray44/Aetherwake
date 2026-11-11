@@ -42,17 +42,7 @@ export function investigateVelaHistoryWithApi(vela: VelaService, api: VelaApiRun
     const validate = () => {
       if (!revalidate() || !authorize(structuredClone(review)) || !revalidate()) throw new Error('semantic_history_disclosure_denied');
     };
-    validate();
-    const { result } = await api.run({ requestId: randomUUID(), version: configurationVersion, model,
-      prompt, instruction: instructions[call.stage], contextDigest, oneUse: true,
-      outputSchema: semanticHistoryFormats[call.stage].schema, validate }, abort);
-    validate();
-    if (result.outcome !== 'completed' || !result.responseId || result.reportedModel !== model || result.refusalText) return null;
-    const items = result.api?.outputItems.filter(item => item.type !== 'reasoning') ?? [];
-    const [message] = items;
-    if (items.length !== 1 || message.type !== 'message' || message.status !== 'completed' || message.content.length !== 1) return null;
-    const [output] = message.content;
-    if (output.type !== 'output_text' || output.text !== result.partialText || Buffer.byteLength(output.text) > 8192) return null;
-    return JSON.parse(output.text) as unknown;
+    return api.structuredProposal({ requestId: randomUUID(), model, payload: call, instruction: instructions[call.stage],
+      binding: { configurationVersion, contextDigest }, schema: semanticHistoryFormats[call.stage].schema, validate }, abort);
   }, signal);
 }
