@@ -414,3 +414,29 @@ This document is **owner-ratified (2026-11-05)** as governing design. Its featur
 **AW-EXP-116 — Continuous navigation.** Primary destinations MUST share spatial identity, resource objects, history and state through transitions, rather than resetting as unrelated pages.
 
 **Acceptance:** Continue a live agent task while moving from chat to workspace to constellation, interrupt speech, approve one scoped action, create and restore a functional block; verify no task duplication. See [capability architecture](../docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md).
+
+---
+
+## Owner-directed supporting amendment FI-2026-11-10: visible adaptive intelligence without interaction friction
+
+> **Design obligations, not implementation certification.** Existing charter authority, accessibility, contextual-command consent and continuous navigation remain binding. The primary cognitive/learning/telemetry owners are Charters 06, 08, 09, 10 and 13.
+
+**AW-EXP-218 — Intelligent input from first contact.** Text, voice, selection, multimodal and workspace commands MUST support model-assisted intent interpretation and context recovery when genuinely semantic understanding is needed, before and during planning. The interface MUST NOT disguise keyword matching as understanding; precise local commands MAY use direct no-model paths.
+
+**AW-EXP-219 — One continuous Vela.** Switching models, specialists, execution modes, workspaces or providers MUST retain canonical conversation/mission identity, user intent, authorized context and progress. The user interacts with Vela, not a lineup of disjointed agent chats.
+
+**AW-EXP-220 — Useful early feedback.** Slow, complex missions SHOULD stream verified partial findings and actual stage transitions as soon as available while background work continues. Provisional hypotheses MUST be labeled, and no progress indicator may imply a tool call or completion that did not occur.
+
+**AW-EXP-221 — Explain adaptive decisions.** Users MUST be able to inspect why a model, tool, parallel execution strategy, local-resource limit, learning policy or verification path was selected, using recorded inputs, policy versions, capability evidence and actual outcomes. Unknown reasons MUST be reported as unknown, not generated retrospectively.
+
+**AW-EXP-222 — Adaptive Intelligence Workspace entry points.** Provide discoverable entry from conversation, task, project, resource controls and Vela Presence into the AEP/ARIE learning experience. Navigation MUST preserve live task state and lead into the same persistent spatial environment instead of opening unrelated monitoring popups.
+
+**AW-EXP-223 — User agency over adaptation.** Users MUST be able to inspect applicable adaptive preferences and policy changes, pause optional experiments, control resource profiles, request correction, and see rollback or disablement status. Controls MUST map to real governed state and communicate permission consequences.
+
+**AW-EXP-224 — No intelligence sacrificed for perceived speed.** Fast acknowledgment, streaming, provisional presentation, and reduced render load MUST NOT conceal disabled retrieval, shortened verification, weaker reasoning than required, or dropped outputs. Explain real capability or availability limitations.
+
+**AW-EXP-225 — Accessible and calm observability.** Adaptive intelligence and resource status MUST be available in readable textual and reduced-motion forms, with low-noise notification controls. Gaming/foreground protection SHOULD require minimal intervention and should not clutter the primary conversational flow.
+
+**AW-EXP-226 — Complete result composition.** A single request MAY produce text, images, documents, files, task receipts, structured controls and live views. Each result MUST distinguish proposed, running, partial, failed, verified and unavailable outcomes and retain retrievable artifact identity.
+
+**Acceptance journeys:** (1) ambiguous conversational request triggers source-linked AI context recovery; (2) a mission runs while switching chat → AEP Workspace → project stream without restarting; (3) inspect and revert a learning-policy proposal; (4) gaming protection adjusts local execution while remote AI work continues; (5) accessible reduced-motion mode retains identical action/state semantics. Review against Charters [03](03-PROJECTS-WORKSPACES-AND-RESOURCES.md), [09](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md), [10](10-AI-EXECUTION-PROFILER.md), [13](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md) and [14](14-TRUST-PRIVACY-AND-AUTONOMY.md).

@@ -514,3 +514,29 @@ This charter is **owner-ratified (2026-11-05)**. This is not a claim of complete
 **AW-LIQ-129 — Shared semantic motion.** Timelines, clocks, agent blocks, intelligence streams and the 3D Mind MUST share canonical events and Motion Coordinator semantics rather than isolated simulated data.
 
 **Acceptance:** A moving camera reveals real layered depth; independently completed tasks cause traceable flow transitions; switching spatial destinations preserves geometry; low-performance mode retains understanding.
+
+---
+
+## Owner-directed supporting amendment FI-2026-11-10: Fluid Intelligence as observable spatial behavior
+
+> **Design obligations; visual claims require actual running evidence.** This extends the six-system Motion Coordinator and GPU-rendered Mind requirements; it does not replace event authority in Charters 09/11 or resource ownership in Charter 13.
+
+**AW-LIQ-226 — Adaptive intelligence has real visual sources.** AI-assisted context investigation, agent delegation, mission replanning, verification, AEP experiments and ARIE decisions MAY drive semantic motion only when the source-backed event or derived view is available. An animation is not a measurement.
+
+**AW-LIQ-227 — Continuity across cognition stages.** Input comprehension, context exploration, plan branches, live workers, results and learning must be navigable through the shared spatial universe, retaining object identity, focus and camera continuity rather than presenting a sequence of unrelated screens.
+
+**AW-LIQ-228 — AEP/ARIE observatory surfaces.** The Adaptive Intelligence Workspace SHOULD expose visually distinct but connected Decision Observatory, Execution Profiler, Resource Intelligence, Learning Observatory, Experiment Lab and Adaptation Timeline. Every surface MUST have a truthful textual equivalent and drill-down to recorded evidence.
+
+**AW-LIQ-229 — Real parallel task semantics.** Parallel branches, causal joins, blocked work, speculative read-only work, cancelled work and finalized results MUST have distinguishable, trace-derived visual states. Physical proximity or particle overlap MUST NOT invent task dependencies.
+
+**AW-LIQ-230 — Learning transitions without false sentience.** Adaptation visuals MAY express recorded strategy proposals, experiment comparisons, validated promotion or rollback. They MUST NOT portray an unknowable private thought stream, infer private weights changing, or depict speculative findings as accepted learning.
+
+**AW-LIQ-231 — Resource-sensitive rendering.** The Motion Coordinator MUST accept the canonical Performance Governor/ARIE resource envelope and reduce rendering cost under sustained foreground contention without altering actual mission quality, task ownership, evidence, accessibility or task controls.
+
+**AW-LIQ-232 — Performance isolation.** Particle simulation, visual effects, graph layout and scene rendering MUST NOT block input, orchestration, streaming or durable event handling. Profiling MUST measure renderer frame time, GPU load and visual-induced CPU contention as distinct from remote model/API latency.
+
+**AW-LIQ-233 — Honest temporal animation.** Animated flows MUST align with authoritative event sequence, timestamp precision and known uncertainty; delayed, dropped, replayed, or out-of-order telemetry MUST be labeled or reconciled rather than displayed as fresh verified activity.
+
+**AW-LIQ-234 — Reduced-motion equivalence.** Reduced-motion, power-saving and gaming visual tiers MUST preserve navigable topology, pending decisions, learned-policy visibility, accessible explanations and all usable controls; beauty MUST NOT be a prerequisite for understanding.
+
+**Required evidence:** GPU capture of a true 3D Mind, a parallel mission with source-correlated branches, an adaptive policy proposed→validated→applied→rolled-back, and foreground/gaming contention with measured frame-rate and comprehension parity. Coordinate with [09 Observability](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md), [10 AEP](10-AI-EXECUTION-PROFILER.md), [11 Timelines](11-TIMELINES-AND-REPLAY.md), [13 Platform](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md) and [15 Quality](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md).

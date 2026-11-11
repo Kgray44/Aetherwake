@@ -657,3 +657,39 @@ The repository owner should be able to verify that:
 **AW-ENG-140 — Observable backend elegance.** Maintainability SHOULD be evaluated by comprehensible responsibilities, narrow typed contracts, predictable lifecycle and recovery, performance, proven feature continuity and absence of duplicate authority, not lines generated, number of abstractions or visual ornament. A fluent frontend requires reliable canonical backend projections, not fabricated animation states.
 
 **Status:** Accepted engineering sequencing and design clarification; implementation remains independently qualified.
+
+---
+
+## Owner-directed supporting amendment FI-2026-11-10: Fluid Intelligence delivery and acceptance discipline
+
+> **Owner-scoped design revision (2026-11-10); implementation not certified.** Preserve Architecture Recovery (Program A) and Full Aerynth Realization (Program B) as distinct efforts. This amendment does not authorize a recovery branch to implement unrelated Program B features or ratify other concurrent major charter amendments.
+
+**AW-ENG-141 — Scope-respecting governance coordination.** Fluid Intelligence changes MUST be traced to the Constitution and affected specialist charters, preserving the authoritative owners for AIR, CIE, MissionService, AEP, Performance Governor/ARIE, trust and observability. Parallel documentation PRs MUST avoid overlapping edits or silently superseding unmerged work.
+
+**AW-ENG-142 — Canonical boundaries first.** Before implementing new engines or workspaces, document input/output contracts, source-of-truth state, event identities, authority, schema validation and recovery for each proposed role. Prefer extending existing services rather than creating duplicate memory, mission, routing, profiler or scheduler authority.
+
+**AW-ENG-143 — Intelligence-pervasiveness acceptance.** At least one novel, ambiguous request MUST demonstrate actual model-assisted semantic understanding and grounded iterative context investigation *before* planning, then model-informed mission supervision and independent semantic verification where justified. Keyword-only equivalents do not pass.
+
+**AW-ENG-144 — End-to-end latency baselines.** Establish reproducible baseline workloads before tuning. Measure time-to-first-useful-output, full verified completion, critical path, p50/p95 latency, API/tool wait, throughput, tokens/cost, retries and instrumentation overhead; distinguish remote API latency from local CPU scheduling.
+
+**AW-ENG-145 — Quality-preserving optimization experiments.** Every promoted adaptive strategy MUST have a stated hypothesis, comparable workloads, quality evidence, sample coverage, confounders, effect size, rollback criteria and held-out evaluation. Faster but lower-quality or less reliable behavior MUST NOT pass.
+
+**AW-ENG-146 — Parallelism proof.** Tests MUST demonstrate actual overlap for independent model, retrieval, tool and agent work; preserve DAG dependencies, per-task identity, write isolation, deterministic locks, cancellation and restart-safe idempotency. Report critical-path savings rather than sum of worker durations.
+
+**AW-ENG-147 — Real hardware qualification.** ARIE and local worker pools MUST be tested on representative Windows hardware under idle, busy, gaming, battery/power and constrained-memory conditions. Record actual foreground responsiveness, frame-time impact, thermals where available and scheduler stability; synthetic telemetry alone is insufficient.
+
+**AW-ENG-148 — Rich API feature qualification.** Every advanced API/tool mode MUST be gated by dated provider evidence, live compatibility testing, cost/privacy/account-entitlement checks and negative cases. Avoid hardcoded current model identities or assumed latency guarantees in invariant architecture.
+
+**AW-ENG-149 — Learning safety and non-optimization test.** Include controlled cases where a plausible optimization must be rejected for quality regression, insufficient evidence, permissions, privacy or unacceptable foreground impact. Test correction propagation, experiment rollback and policy-version replay over restarts.
+
+**AW-ENG-150 — Connected adaptive workspace acceptance.** The AEP/ARIE learning experience MUST be validated against authentic engine and policy records with durable spatial navigation, drill-down, editable permitted controls, full textual accessibility and no fabricated insights. UI-only simulations do not establish completion.
+
+**AW-ENG-151 — Multi-output mission completeness.** Verify authorized missions producing combinations of text, images, documents, repository changes, tool effects and UI blocks, each with durable artifact identities, provenance, partial/failed states and independent acceptance evidence.
+
+**AW-ENG-152 — Required engineering slices.** Full Realization SHOULD sequence: (1) source/telemetry contracts, (2) cognitive interpretation and adaptive planning, (3) concurrent execution and ARIE, (4) AEP learning evaluation and CIE policy retrieval, (5) Adaptive Intelligence Workspace, and (6) full-system longitudinal testing. Slices MAY overlap only across defined interfaces.
+
+**AW-ENG-153 — Claims and status discipline.** PR descriptions MUST distinguish proposed architecture, documented requirements, code merged, tests passed, live API effects, native desktop acceptance and product release. Documentation-only PRs MUST NOT assert active adaptive learning or measured performance gains.
+
+**AW-ENG-154 — Governance and integration verification.** Changes MUST pass charter ID uniqueness, Markdown/link and reference validation, Governance Router scope coverage for novel Fluid Intelligence tasks, integration tests of affected canonical boundaries, and an explicit cross-charter conflict review. Record unavailable checks honestly; merge does not waive future implementation acceptance.
+
+**Delivery review:** Provide an ownership map (existing owner vs extension), a before/after requirement trace, reproducible benchmark definitions, negative tests, acceptance evidence by subsystem, and a rollback plan. Cooperate with major overhaul owners of [05 Agents](05-AGENTS-TASKS-AND-WORKFLOWS.md), [06 Vela](06-VELA-INTELLIGENCE-AND-ADAPTATION.md), [08 CIE](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md), [09 Observability](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md), [10 AEP](10-AI-EXECUTION-PROFILER.md), [13 Platform](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md) and [15 Quality](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md).

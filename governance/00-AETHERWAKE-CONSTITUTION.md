@@ -442,3 +442,32 @@ A reviewer MUST be able to point to evidence for: (1) a real local information r
 
 **Implementation companions:** [capability runtime](../docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md), [provider/tool contracts](../docs/specifications/VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md), [acceptance matrix](../docs/specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md). These subordinate documents describe mechanisms, not overrides of constitutional rights.
 
+---
+
+## Owner-directed supporting amendment FI-2026-11-10: AI-native Fluid Intelligence doctrine
+
+> **Owner-directed design revision (2026-11-10).** This amendment states intended product and engineering behavior; it is **not** evidence of implemented, tested or released functionality. It preserves the 2026-11-05 ratification and the Constitution's existing change-control authority. Detailed mechanisms belong to the appropriate specialist charters, not to a second constitutional runtime.
+
+**AW-CON-103 — Intelligence throughout meaningful interpretation.** Aerynth MUST treat Vela as an AI-native intelligence system, not a conventional keyword router with one model call at the planning stage. Appropriate API-backed cognition MUST be available at input interpretation, evidence-seeking context construction, strategy formation, mission supervision, outcome evaluation and response composition. Exact, deterministic operations MAY bypass a model where this cannot impair understanding or quality.
+
+**AW-CON-104 — Evidence before intelligent action.** AI-guided context investigation MUST identify ambiguity, provenance, relevant project and conversation scope, confidence and missing evidence. Model guesses MUST NOT become permission, historical truth, resource identity or proof of action. The Context Intelligence Engine remains the authorized retrieval/provenance interface defined by Charter 08.
+
+**AW-CON-105 — Persistent intelligent orchestration.** Complex missions MUST support AI-assisted decisions throughout execution, including dependency-aware task changes, model/tool choice, specialist delegation, reflection and replanning. A deterministic kernel MUST retain canonical authorization, task identity, idempotency, recovery, scheduling constraints, and side-effect verification under Charter 05.
+
+**AW-CON-106 — Capability-preserving efficiency.** Vela MUST aim for the shortest reliable path to a **verified** high-quality outcome, not the fewest AI calls, smallest model, maximum agent count or shortest unverified response. Optimizations MUST NOT silently remove necessary reasoning, retrieval, context, verification, accessibility or authorized capabilities. Additional calls or stronger models are appropriate when they improve whole-mission outcomes.
+
+**AW-CON-107 — Parallelism and critical-path discipline.** Architecture MUST support concurrent independent AI calls, context retrieval, agent and tool work, verification and bounded local CPU computation, with actual dependencies and ownership enforced. Measure critical-path time and outcome quality; do not imply that all work can be parallelized.
+
+**AW-CON-108 — Adaptive resource respect.** A single canonical adaptive resource policy owner, extending the existing Performance Governor through ARIE, MUST protect foreground use, gaming, thermals, memory, GPU, disk and battery constraints while exploiting genuine idle headroom. Remote model reasoning and local compute MUST be budgeted separately; foreground protection MUST NOT covertly downgrade intelligence.
+
+**AW-CON-109 — Evidence-backed experiential adaptation.** AIR, CIE, AEP and ARIE MUST be able to use validated outcomes and user corrections to improve future choices through versioned, context-sensitive learning policies. Proposals, experiments, promotion, rollback, and provenance MUST remain distinguishable; provider model retraining or autonomous code modification is not implied.
+
+**AW-CON-110 — Learn when not to optimize.** A purported speedup MUST be rejected, deferred or rolled back when evidence indicates degraded result quality, privacy, user control, foreground responsiveness or reliability. No metric may be optimized by falsifying, omitting or reducing its underlying verification.
+
+**AW-CON-111 — Observable adaptation, not simulated cognition.** Aerynth SHOULD make authentic decisions, strategy versions, resource-policy changes, experiments, quality findings and outcomes inspectable through persistent spatial views. Visuals and explanations MUST derive from source-backed records and MUST NOT claim access to private hidden reasoning or fabricate reasons after the fact.
+
+**AW-CON-112 — Consent and release evidence.** Adaptation and telemetry MUST respect revocable data permissions, security, retention and source ownership under Charter 14. A user-approved design change, GitHub merge, synthetic demonstration, favorable benchmark or reported model completion does not independently certify behavior; Charter 15 remains acceptance authority and Charter 16 remains delivery authority.
+
+**Traceability and delegated owners:** [05 Agents](05-AGENTS-TASKS-AND-WORKFLOWS.md) (mission kernel), [06 Vela](06-VELA-INTELLIGENCE-AND-ADAPTATION.md) (cognition), [08 CIE](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md) (retrieval/provenance), [09 Observability](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md), [10 AEP](10-AI-EXECUTION-PROFILER.md), [13 Platform](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md) (ARIE/Performance Governor), [14 Trust](14-TRUST-PRIVACY-AND-AUTONOMY.md), [15 Quality](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md), [16 Delivery](16-ENGINEERING-AND-DELIVERY.md).
+
+**Constitutional proof obligation:** Demonstrate an ambiguous, novel request with AI-guided source-backed context discovery, valid planning, independent parallel work and replanning, foreground-safe resource scheduling, evidence-based optimization *including a rejected harmful optimization*, and a truthful inspectable result. Separate design ratification from verified implementation.

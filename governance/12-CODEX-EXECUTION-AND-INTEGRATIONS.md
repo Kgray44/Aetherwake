@@ -681,3 +681,34 @@ The following summarize requirements already defined above; they do not create c
 
 **Qualification suites:** unsupported model/effort and tool invocation; beta multi-agent event parsing; stale tool-search capability; permission revocation after discovery; voice session reconnect; API credits versus Codex quota; managed session crash and webhook replay. See [provider contracts](../docs/specifications/VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md) and [dated evidence](../docs/research/OPENAI-PLATFORM-CAPABILITY-EVIDENCE-2026-11-05.md).
 
+---
+
+## Owner-directed supporting amendment FI-2026-11-10: advanced API capability and concurrent execution contracts
+
+> **Design obligations; feature availability must be probed at implementation time.** No model name, API processing tier, preview endpoint or advertised feature is presumed live, entitled, equivalent across providers or safe for a specific account/environment. The canonical capability/runtime architecture and existing authorization rules prevail.
+
+**AW-CEX-145 — Capability-negotiated API use.** AIR MUST be able to select appropriate reasoning, multimodal, voice, image, web/file search, code, computer use and agent capabilities through a dated, runtime-qualified model/tool registry. Selection MUST account for concrete model/tool compatibility, privacy, context support, output schema and execution location.
+
+**AW-CEX-146 — Strategies beyond model choice.** Execution plans SHOULD carry typed requests for model, reasoning effort, tools, provider transport, streaming, caching, background processing, concurrency, fallback and verification. The adapter MUST compile these proposals into supported provider parameters and return errors for unsupported combinations.
+
+**AW-CEX-147 — Early AI-assisted context and planning.** The API layer MUST permit lightweight model calls for input interpretation and iterative evidence-need refinement before full mission planning, without allowing model-produced scope, credentials, permissions or source facts to become authoritative.
+
+**AW-CEX-148 — Concurrent and asynchronous tool operations.** Supported adapters SHOULD execute independent requests and tool operations concurrently, using asynchronous execution or provider-supported persistent connections when empirically beneficial. Tool-call IDs, ordering, cancellation, result correlation, backpressure, retries and eventual effects MUST be tracked accurately.
+
+**AW-CEX-149 — Programmatic bounded tool coordination.** Where actual provider features allow a model to orchestrate grouped tool operations, adapters MAY use bounded programmatic execution to reduce round trips. Every effect still requires per-tool authorization, sandbox enforcement, full argument provenance and actual outcome verification.
+
+**AW-CEX-150 — Transport and processing-tier evaluation.** Persistent WebSocket, streaming, latency-prioritized processing, prompt caching, background or batch approaches MAY be adopted where confirmed available, beneficial and compatible. Claims of fixed speedup MUST be supported by AEP measurements; transport changes MUST NOT fragment canonical conversation/task IDs.
+
+**AW-CEX-151 — Separation of local and remote work.** Model inference concurrency, network capacity, CPU worker pools, GPU jobs, disk operations, local shell/Codex execution and provider sandboxes MUST be accounted for separately. ARIE/Performance Governor controls local resource limits; the Mission Scheduler controls task dependencies and work isolation.
+
+**AW-CEX-152 — No silent capability downgrade.** Under latency, rate-limit, model-withdrawal, billing or resource pressure, adapters MUST surface available routes and apply only authorized fallbacks; a lower-effort or tool-less route MUST NOT be presented as equivalent when it cannot meet the accepted outcome.
+
+**AW-CEX-153 — Effect-safe recovery.** Reconnects, provider timeouts, async tool completions, WebSocket resumptions and mission replans MUST reuse canonical correlation and idempotency policy. Unknown external writes MUST not be repeated automatically, and speculative operations SHOULD be read-only or explicitly authorized and reversible.
+
+**AW-CEX-154 — Usage and critical-path measurements.** Adapters MUST report measured per-request timing, tool waits, throughput, token/usage data when provided, cache effects and error classes to AEP with capability/provenance labels. Missing provider measurements MUST remain unknown, not estimated as exact.
+
+**AW-CEX-155 — Qualified cross-model review.** Independent model evaluation MAY critique task plans, implementation results, document/image quality and research evidence, but the reviewer MUST be provided grounded artifacts and cannot replace deterministic tests, actual file inspection or external effect receipts.
+
+**AW-CEX-156 — Provider feature drift qualification.** Each API feature rollout MUST have dated supporting documentation, runtime compatibility probes, privacy/retention and billing analysis, fallback plan and independent negative tests. New features MUST enhance the existing adapter architecture rather than create a second ungoverned execution backend.
+
+**Acceptance:** Test unsupported reasoning/transport/feature combinations; concurrently execute independent authorized read-only tools; reconnect after a lost response without duplicate writes; compare sequential versus parallel performance at equivalent verified quality; simulate model withdrawal and foreground gaming resource contention. See [provider contracts](../docs/specifications/VELA-PROVIDER-TOOL-AND-AGENT-CONTRACTS.md), [08 CIE](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md), [10 AEP](10-AI-EXECUTION-PROFILER.md), [13 Platform](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md), [14 Trust](14-TRUST-PRIVACY-AND-AUTONOMY.md).
