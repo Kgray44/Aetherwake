@@ -133,11 +133,6 @@ test('canonical backend runs a native mission without inference, restores eviden
       await delay(25); mission = await read();
     }
     assert.equal(mission.outcome, 'verified', JSON.stringify(mission.tasks.map(t => [t.id, t.state, t.detail])));
-    const backendAttempt = mission.tasks.find(t => t.id === 'backend')!.attempts[0];
-    const cpu = mission.tasks.find(t => t.id === 'cpu')!.attempts[0];
-    assert.ok(Date.parse(cpu.admittedAt) < Date.parse(backendAttempt.finishedAt!));
-    assert.ok(Date.parse(backendAttempt.admittedAt) < Date.parse(cpu.finishedAt!));
-    assert.ok((mission.tasks.find(t => t.id === 'report')?.attempts[0].context?.dependencies.length ?? 0) >= 4);
     assert.equal(mission.tasks.find(t => t.id === 'code')?.attempts[0].evidence?.source, 'aerynth.shipped-backend-source');
     assert.equal(mission.tasks.find(t => t.id === 'code')?.attempts[0].resourceLease?.kind, 'cpu');
     assert.equal(mission.tasks.find(t => t.id === 'code')?.attempts[0].resourceLease?.reservedRamBytes, 64 * 2 ** 20);
@@ -153,6 +148,34 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
     assert.deepEqual(profile.attempts.map(attempt => attempt.id).sort(),
       mission.tasks.flatMap(task => task.attempts.map(attempt => attempt.id)).sort());
+    const reportTask = mission.tasks.find(task => task.id === 'report')!;
+    const requiredTasks = ['backend', 'cpu', 'ram', 'code'];
+    const repeat = mission.tasks.find(task => task.id === 'backend-repeat');
+    assert.deepEqual([...reportTask.dependencies].sort(), [...requiredTasks, ...(repeat ? [repeat.id] : [])].sort());
+    const expectedSources = new Map([['backend', 'aerynth.backend.node'], ['cpu', 'node:os.cpus'],
+      ['ram', 'node:os.totalmem+freemem'], ['code', 'aerynth.shipped-backend-source'], ['backend-repeat', 'aerynth.backend.node']]);
+    const join = profile.attempts.find(attempt => attempt.taskId === reportTask.id)!;
+    assert.equal(join.state, 'verified');
+    const sources = reportTask.dependencies.map(taskId => {
+      const task = mission.tasks.find(item => item.id === taskId)!;
+      assert.deepEqual(task.dependencies, taskId === repeat?.id ? ['backend'] : []);
+      const attempt = task.attempts[0];
+      const span = profile.attempts.find(item => item.id === attempt.id)!;
+      assert.equal(span.state, 'verified');
+      assert.equal(attempt.evidence?.source, expectedSources.get(taskId));
+      assert.ok(span.interval && join.interval && span.interval.clock === join.interval.clock);
+      assert.ok(span.interval.end <= join.interval.start && span.end!.eventSeq < join.start.eventSeq);
+      assert.deepEqual(span.verifiedEvidenceIds, [attempt.evidence!.id]);
+      return { taskId, attemptId: attempt.id, evidenceId: attempt.evidence!.id };
+    });
+    assert.deepEqual(join.predecessors?.toSorted(), sources.map(source => source.attemptId).sort());
+    const boundSources = reportTask.attempts[0].context?.dependencies.map(({ taskId, attemptId, evidenceId }) =>
+      ({ taskId, attemptId, evidenceId }));
+    const byTaskId = (a: { taskId: string }, b: { taskId: string }) => a.taskId.localeCompare(b.taskId);
+    assert.deepEqual(boundSources?.sort(byTaskId), sources.toSorted(byTaskId));
+    const backendSpan = profile.attempts.find(attempt => attempt.taskId === 'backend')!.interval!;
+    const cpuSpan = profile.attempts.find(attempt => attempt.taskId === 'cpu')!.interval!;
+    assert.ok(Math.min(backendSpan.end, cpuSpan.end) > Math.max(backendSpan.start, cpuSpan.start));
     assert.equal(profile.resourcePolicy.admittedAttemptsWithSample, profile.attempts.length);
     assert.equal(profile.resourcePolicy.currentAdmission, null);
     for (const task of mission.tasks) for (const attempt of task.attempts) {
@@ -311,6 +334,24 @@ test('canonical backend runs a native mission without inference, restores eviden
       return result;
     };
     const measured = await measure(), measuredAgain = await measure(), single = await measure('Run a mission to measure CPU');
+    const ref = (mission: MissionProjection) => ({ id: mission.id, expectedRevision: mission.revision });
+    const compare = (candidate: MissionProjection) => backend.call('missions', { name: 'compare-native-samples',
+      input: { baseline: ref(measured), candidate: ref(candidate) } });
+    const comparison = await compare(measuredAgain);
+    assert.ok(comparison && 'kind' in comparison && comparison.kind === 'native-sample-comparison');
+    assert.equal(comparison.status, 'observed-pair');
+    assert.equal(comparison.deltas?.elapsedMs, comparison.candidate.elapsedMs! - comparison.baseline.elapsedMs!);
+    assert.deepEqual(comparison.baseline.attemptIds, measured.tasks.flatMap(task => task.attempts.map(attempt => attempt.id)));
+    assert.equal(comparison.independentEvaluation, null);
+    const mismatch = await compare(single);
+    assert.ok(mismatch && 'kind' in mismatch && mismatch.kind === 'native-sample-comparison');
+    assert.equal(mismatch.status, 'different-workload');
+    assert.equal(mismatch.deltas, null);
+    assert.equal(await compare({ ...measuredAgain, revision: measuredAgain.revision + 1 }), null);
+    await assert.rejects(compare(measured), /invalid_mission_command/);
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: other.workspaces.find(w => w.id !== workspaceId)!.id } });
+    await assert.rejects(compare(measuredAgain), /mission_not_found/);
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
     assert.deepEqual(single.tasks.map(task => task.id), ['cpu']);
     assert.match(measured.answer?.[0] ?? '', /^CPU [\d.]+% \(\d+ ms sample\)\.$/u);
     assert.match(measured.answer?.[1] ?? '', /^RAM [\d.]+% \([\d.]+\/[\d.]+ GiB used, [\d.]+ GiB (available|free)\)\.$/u);

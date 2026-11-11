@@ -246,6 +246,13 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.deepEqual(hypothesis.evidence.eventSeqs, [join.start.eventSeq, join.end!.eventSeq]);
     assert.deepEqual(hypothesis.evidence.blockers, blockers);
     assert.deepEqual(hypothesis.evidence.verifiedEvidenceIds, join.verifiedEvidenceIds);
+    assert.deepEqual(hypothesis.applicability, { taskId: 'join', executor: 'fixture', predecessorAttemptIds: [left.id, right.id] });
+    assert.deepEqual(hypothesis.baseline, { missionRevision: constrained.revision, dependencyPathMs: 14,
+      occupiedCriticalPathMs: 11, workerMs: 16, overlapMs: 4, admittedWorkerLimit: 1 });
+    assert.deepEqual(hypothesis.uncertainty.otherObservedBlockers, ['resource-conflict']);
+    assert.equal(hypothesis.uncertainty.causalAttribution, 'unverified');
+    assert.equal(hypothesis.comparison.restoreOriginalWorkerLimit, true);
+    assert.ok(hypothesis.comparison.qualityDimensions.includes('criterion-evidence'));
     assert.ok(experiment.blockers.includes('no-independent-quality-evaluation'));
     assert.deepEqual(resolveMissionHypothesis(constrained, hypothesis.id, constrained.revision), {
       kind: 'experiment-hypothesis', missionRevision: constrained.revision, hypothesis,
@@ -414,6 +421,22 @@ test('simulated provider usage stays out of the reported token total', async () 
     assert.deepEqual(economics.usageBySource.reported.inputTokens, { observedTokens: 12, receipts: 1 });
     assert.deepEqual(economics.usageBySource.reported.cachedInputTokens, { observedTokens: null, receipts: 0 });
     assert.deepEqual(economics.usageBySource.simulated.outputTokens, { observedTokens: 4, receipts: 1 });
+    const invalid = structuredClone(retained);
+    const invalidTelemetry = invalid.tasks[0].attempts[0].telemetry!;
+    invalidTelemetry.usage = { ...invalidTelemetry.usage!, cachedInputTokens: 13,
+      cacheWriteInputTokens: 13, reasoningOutputTokens: 9 };
+    const constrained = projectMissionExecution(invalid).economics;
+    assert.equal(constrained.reportedTotalTokens, 20);
+    const unavailable = { observedTokens: null, receipts: 0 };
+    assert.deepEqual(constrained.usageBySource.reported.cachedInputTokens, unavailable);
+    assert.deepEqual(constrained.usageBySource.reported.cacheWriteInputTokens, unavailable);
+    assert.deepEqual(constrained.usageBySource.reported.reasoningOutputTokens, unavailable);
+    invalidTelemetry.usage = { ...invalidTelemetry.usage, cachedInputTokens: 12,
+      cacheWriteInputTokens: 0, reasoningOutputTokens: 8 };
+    const bounded = projectMissionExecution(invalid).economics.usageBySource.reported;
+    assert.deepEqual(bounded.cachedInputTokens, { observedTokens: 12, receipts: 1 });
+    assert.deepEqual(bounded.cacheWriteInputTokens, { observedTokens: 0, receipts: 1 });
+    assert.deepEqual(bounded.reasoningOutputTokens, { observedTokens: 8, receipts: 1 });
     const inconsistentCount = projectMissionExecution({ ...retained, profile: { ...retained.profile, providerCalls: 1 } }).economics;
     assert.deepEqual(inconsistentCount.usageGaps, ['usage-exceeds-provider-call-count']);
     assert.equal(inconsistentCount.usageReceipts.missing, null);
@@ -779,6 +802,69 @@ test('verification failure, paused admission, evidence-bound amendment, and repl
     assert.equal(separated?.retryRequestToDispatchMs, null);
     assert.ok(retry.phases!.readyQueue!.firstObservedMs >= first.end!.monotonicMs!);
     assert.ok(dependent.phases!.readyQueue!.firstObservedMs >= retry.end!.monotonicMs!);
+  } finally { await service.close(); f.db.close(); }
+});
+
+test('a parallel retry preserves attempt timing and separates mixed usage receipts', async () => {
+  const f = fixture();
+  const executor = f.host.executors.fixture;
+  const service = new MissionService({ ...f.host, executors: { fixture: {
+    ...executor,
+    async run(context) {
+      const result = await executor.run(context);
+      if (context.task.id === 'join') return { ...result, telemetry: { durationMs: 0, providerCalls: 0 } };
+      const simulated = context.task.id === 'right';
+      const usage = result.value === false ? undefined : { source: 'provider-reported' as const,
+        inputTokens: 12, outputTokens: 8, totalTokens: 20, cachedInputTokens: simulated ? 0 : 4 };
+      return { ...result, telemetry: { durationMs: 2, providerCalls: 1, usage,
+        providerEvidence: simulated ? 'simulated' : 'reported', providerExecutionId: context.attemptId } };
+    },
+  } } });
+  try {
+    const { id } = service.create('parallel-retry-economics', plan(task('left'), task('right'), task('join', ['left', 'right'])));
+    const read = () => service.read(id, scope);
+    await flush();
+    assert.ok(f.active.has('left') && f.active.has('right'));
+    f.active.get('left')!.release(false);
+    await flush();
+    service.control(id, scope, read().revision, { type: 'retry', taskId: 'left' });
+    await flush();
+    assert.ok(f.active.has('left') && f.active.has('right'));
+    f.active.get('right')!.release();
+    await flush();
+    assert.equal(f.active.has('join'), false);
+    f.active.get('left')!.release();
+    await flush();
+    f.active.get('join')!.release();
+    await flush();
+
+    const settled = read();
+    const profile = projectMissionExecution(settled);
+    assert.equal(profile.outcome, 'verified');
+    const [failed, parallel, retry, join] = profile.attempts;
+    assert.equal(failed.state, 'failed');
+    assert.deepEqual(retry.predecessors, [failed.id]);
+    assert.deepEqual(join.predecessors, [retry.id, parallel.id]);
+    assert.equal(profile.work.retries[0]?.previousAttemptId, failed.id);
+    assert.equal(profile.work.retries[0]?.attemptId, retry.id);
+    const duration = (attempt: typeof failed) => attempt.interval!.end - attempt.interval!.start;
+    const expectedPathMs = Math.max(duration(failed) + duration(retry), duration(parallel)) + duration(join);
+    assert.ok(Math.abs(profile.work.criticalPath!.durationMs - expectedPathMs) < 1e-6);
+    assert.ok(Math.abs(profile.work.workerMs! - profile.attempts.reduce((sum, attempt) => sum + duration(attempt), 0)) < 1e-6);
+    assert.equal(profile.work.peakWorkers, 2);
+    assert.ok(profile.work.overlapMs! > 0);
+    assert.ok(profile.admissionToLastSettlementMs! >= expectedPathMs);
+    const { economics } = profile;
+    assert.equal(economics.providerCalls, 3);
+    assert.deepEqual(economics.usageReceipts, { reported: 1, simulated: 1, missing: 1, unattributed: 0 });
+    assert.equal(economics.reportedTotalTokens, 20);
+    assert.equal(economics.simulatedTotalTokens, 20);
+    assert.equal(settled.profile.reportedTotalTokens, economics.reportedTotalTokens);
+    assert.equal(settled.profile.verifiedObjectivesPerReportedToken, null);
+    assert.deepEqual(economics.usageBySource.reported.cachedInputTokens, { observedTokens: 4, receipts: 1 });
+    assert.deepEqual(economics.usageBySource.simulated.cachedInputTokens, { observedTokens: 0, receipts: 1 });
+    assert.equal(economics.cost, null);
+    assert.equal(economics.costCoverage, 'billing-receipt-unavailable');
   } finally { await service.close(); f.db.close(); }
 });
 

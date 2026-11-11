@@ -20,7 +20,19 @@ const RECORD = SURFACE + " .vela-mission-record";
 const missionControl = name => SURFACE + ' [data-mission-focus=' + JSON.stringify(name) + ']';
 const LIMIT_MS = 45000;
 const MiB = 1024 * 1024;
+const FRAME_WINDOW_MS = 2500;
+const FRAME_SAMPLE_LIMIT = 720;
 const quote = JSON.stringify;
+
+function summarizeFrames({ intervals, windowMs, hidden, discarded }) {
+  assert.equal(hidden, false, "mission_profiler_renderer_was_hidden");
+  assert.equal(discarded, 0, "mission_profiler_frame_sample_limit");
+  assert.ok(windowMs >= FRAME_WINDOW_MS && intervals.length > 1 &&
+    intervals.every(interval => Number.isFinite(interval) && interval > 0), "mission_profiler_incomplete_frame_window");
+  const sorted = intervals.toSorted((a, b) => a - b);
+  return { windowMs, samples: intervals.length, discarded, p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1],
+    p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1], maxMs: sorted.at(-1) };
+}
 
 async function bounded(promise, ms, code) {
   assert(ms > 0, code);
@@ -98,7 +110,7 @@ function verifyJournal(mission, scope, shippedCoreHash) {
   return { tasks: [...attempt].map(([id, entry]) => ({ id, ...entry })), overlapMs, events: mission.events };
 }
 
-exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs,systemFactsAudit }) {
+exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, systemFactsAudit, benchmarkMode }) {
   const argv = process.argv;
   const receipt = {
     contract: "aerynth.vela-missions-integration@1", objective: OBJECTIVE, passed: false,
@@ -710,6 +722,25 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         })()`));
         assert.deepEqual(await list(), before, "composer_mission_started_before_review");
         assert.equal((await rpc("providerActivity", {})).providerRequests, 0);
+        if (benchmarkMode) await js(`new Promise(resolve => {
+          requestAnimationFrame(startedAt => {
+            const sample = { startedAt, intervals: [], windowMs: null, discarded: 0, hidden: false };
+            window.__missionProfilerBenchmark = sample;
+            let previous = startedAt;
+            sample.finished = new Promise(finish => {
+              const tick = at => {
+                sample.hidden ||= document.visibilityState !== 'visible' || !document.hasFocus();
+                if (sample.intervals.length < ${FRAME_SAMPLE_LIMIT}) sample.intervals.push(at - previous);
+                else sample.discarded++;
+                previous = at;
+                if (at - startedAt < ${FRAME_WINDOW_MS}) requestAnimationFrame(tick);
+                else { sample.windowMs = at - startedAt; finish(); }
+              };
+              requestAnimationFrame(tick);
+            });
+            resolve(true);
+          });
+        })`);
         submitted = performance.now();
         await click(start);
         const existing = new Set(before.map(item => item.id));
@@ -770,6 +801,46 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       const reportLink = SURFACE + ' .vela-manifestation [data-mission-report-link=' + quote(missionId) + ']';
       await wait("The report link is rendered in the current Vela reply", () =>
         js(`document.querySelector(${quote(reportLink)})?.getClientRects().length > 0`));
+      if (benchmarkMode) {
+        const reportObservedInWindowMs = await js("performance.now() - window.__missionProfilerBenchmark.startedAt");
+        const profile = await wait("Benchmark observes canonical renderer delivery", async () => {
+          const current = await rpc("missions", { name: "execution-profile", input: { id: missionId } });
+          return current.userDelivery?.messageId === report.id && current;
+        });
+        const startToReceiptReadbackMs = performance.now() - submitted;
+        const frames = summarizeFrames(await js(`(async () => {
+          const sample = window.__missionProfilerBenchmark;
+          await sample.finished;
+          delete window.__missionProfilerBenchmark;
+          const { intervals, windowMs, hidden, discarded } = sample;
+          return { intervals, windowMs, hidden, discarded };
+        })()`));
+        assert.ok(reportObservedInWindowMs > 0 && reportObservedInWindowMs <= frames.windowMs, "mission_report_outside_frame_window");
+        const verified = await read(missionId);
+        assert.equal(verified.outcome, "verified");
+        assert.deepEqual(verified.tasks.map(task => [task.executor, task.state, task.attempts.length, task.attempts[0]?.evidence?.source]), [
+          ["sample.cpu", "verified", 1, "node:os.cpus"], ["sample.ram", "verified", 1, "node:os.totalmem+freemem"],
+          ["join.samples", "verified", 1, "aerynth.mission.journal"],
+        ]);
+        assert.equal(profile.userDelivery.source, "renderer-visible-frame");
+        const stagingToReceiptMs = profile.userDelivery.stagingToReceiptMs;
+        if (benchmarkMode === "full") assert.ok(Number.isFinite(stagingToReceiptMs) && stagingToReceiptMs >= 0);
+        else assert.equal(stagingToReceiptMs, null);
+        assert.equal(profile.outcome, "verified");
+        assert.equal(profile.attempts.length, verified.tasks.length);
+        const measured = profile.attempts.filter(attempt => attempt.interval).length;
+        const phased = profile.attempts.filter(attempt => attempt.phases?.verification).length;
+        assert.equal(measured, benchmarkMode === "off" ? 0 : verified.tasks.length);
+        assert.equal(phased, benchmarkMode === "full" ? verified.tasks.length : 0);
+        const { providerRequests, codexConnections } = await rpc("providerActivity", {});
+        assert.equal(providerRequests, 0);
+        assert.equal(codexConnections, 0);
+        receipt.profilerBenchmark = { mode: benchmarkMode, frames, reportObservedInWindowMs, startToReceiptReadbackMs,
+          stagingToReceiptMs, measuredAttempts: measured, phasedAttempts: phased,
+          verifiedAttempts: verified.tasks.length, providerRequests, codexConnections };
+        receipt.passed = true;
+        return;
+      }
       const presentation = await wait("Visible mission report has a scoped execution-profile receipt", async () => {
         const profile = await rpc("missions", { name: "execution-profile", input: { id: missionId } });
         return profile.userDelivery?.messageId === report.id && profile;
