@@ -65,6 +65,13 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
     assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.providerResultMs);
     assert.ok(timing.validationMs>=0&&timing.providerResultMs+timing.validationMs<=profile.planning!.durationMs);
     assert.equal(profile.planning?.providerEvidence,'simulated');
+    const leaseReceipts = settled.tasks.map(task => task.attempts[0].resourceLease);
+    for (const lease of leaseReceipts) {
+      assert.ok(lease);
+      assert.equal(lease.schemaVersion, 1);
+      assert.ok(lease.epoch && lease.policyRevision > 0);
+    }
+    assert.equal(new Set(leaseReceipts.map(lease => lease?.leaseId)).size, settled.tasks.length);
     const state=await f.core.command('vela',{name:'state',input:{}}) as VelaBackendState;
     const report=state.conversation!.messages.find(message=>message.missionReport?.missionId===running.id)!;assert.ok(report);assert.equal(report.source,'vela-native');
     assert.match(report.content,/investigation remains incomplete/);assert.match(report.content,/CPU.*RAM/su);assert.match(report.content,/cannot establish the server lag cause/);assert.doesNotMatch(report.content,/server lag (?:is caused|was fixed)/iu);
@@ -73,6 +80,7 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
     const restoredProfile=await readProfile();
     assert.ok(restoredProfile&&'kind' in restoredProfile&&restoredProfile.kind==='execution-profile');
     assert.deepEqual(restoredProfile.planning,profile.planning);
+    assert.deepEqual(restored.tasks.map(task => task.attempts[0].resourceLease), leaseReceipts);
     assert.equal((await f.core.command('providerActivity',{})).codexConnections,0);
   }finally{await f.close();}
 });
