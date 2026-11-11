@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-010 |
-| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Version | 1.2.0 — 2026-11-10 owner-directed Fluid Intelligence amendment (2026-11-05 ratification preserved) |
 | Status | **Owner-accepted and ratified governing charter; implementation evidence separate** |
 | Prepared | 2026-11-01 |
 | Authority | Specialized subsystem charter, subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
@@ -561,3 +561,110 @@ Aerynth's profiler is not a decorative token counter. **It is an accountable ins
 **AW-AEP-137 — Private telemetry.** Shared profiler records MUST be redacted of keys, personal dialogs, private project content and identifying machine paths.
 
 **Acceptance:** Mixed voice+agent+GPU measured run, missing usage value, provider credit exhaustion and before/after capability-preserving routing comparison.
+
+---
+
+## Owner-directed amendment FI-2026-11-10: adaptive execution learning, experiments, and the Intelligence Workspace
+
+> **Scope and authority.** Owner-directed binding design requirements dated 2026-11-10. The canonical name and requirement namespace remain **AI Execution Profiler / AEP**; "Adaptive Execution Profiler" describes its expanded adaptive capability, **not a duplicate product or datastore**. Existing AW-AEP-001–137, prior ratifications, profiler measurement boundaries and constitutional truthfulness rules remain binding. Design requirements are not a claim that the adaptive engine, native telemetry, user workspace or benchmark improvements are implemented. Coordinate with [05 mission execution](05-AGENTS-TASKS-AND-WORKFLOWS.md), [06 Fluid Intelligence](06-VELA-INTELLIGENCE-AND-ADAPTATION.md), [08 CIE](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md), [09 Intelligence Streams](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md), [13 Performance Governor/ARIE](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md), [14 Trust](14-TRUST-PRIVACY-AND-AUTONOMY.md), [15 Acceptance](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md).
+
+### FI-10.1 The profiler becomes an evidence-backed optimizer, not a token counter
+
+**AEP's governing purpose** is to measure real work, discover where time and quality are being lost, compare alternative intelligence/execution strategies, and produce evidence-grounded *recommendations* that may be adopted by the authoritative policy owners. Its observational authority is distinct from permission to alter agent policy, spend limits, system resource control, or application code.
+
+**AW-AEP-138 — Critical-path observability.** AEP MUST measure end-to-end mission wall time and critical-path composition across overlapping perception, CIE retrieval, planning, model inference, tool execution, agent work, queueing, resource waits, verification, artifact preparation and user delivery. Summed child durations MUST NOT be misrepresented as elapsed time under concurrency.
+
+**AW-AEP-139 — Distinct useful-time metrics.** Reports SHOULD distinguish user-input-to-acknowledgment, first meaningful text, first useful *verified* result, last verified deliverable, final response and overall mission completion, including p50/p95 and uncertainty. Merely streaming a token is not proof of useful progress.
+
+**AW-AEP-140 — Real overlap metrics.** Record per-node start/end, dependency wait, active/blocked/suspended state, model/tool/provider, planned versus actual overlap, queue and synchronization time, worker occupancy and critical-path changes. Claims of parallel efficiency require actual event-timestamp evidence, not agent count.
+
+**AW-AEP-141 — Local/remote cost separation.** Separate token/input/output/cache usage, provider latency, tool fees, managed environment billing, signed-in service quotas, local CPU/GPU/RAM/IO/thermal resource burden where available, and instrumentation overhead. Report provider actuals, derived estimates and unavailable values with distinguishable provenance.
+
+**AW-AEP-142 — Quality-adjusted outcome metrics.** Compare verified goal completion, factual fidelity, policy compliance, artifact integrity, independent test results, user correction/rework, retry/failure rates, latency and experience quality jointly. No composite "efficiency" score MAY hide a violation of essential correctness, privacy, accessibility or authorization.
+
+**AW-AEP-143 — Model-call usefulness attribution.** AEP SHOULD assess whether model calls supplied material semantic value, avoided rework, improved evidence sufficiency or served only redundant orchestration. A zero-call exact operation and a many-call complex mission can both be optimal for their respective objectives.
+
+**AW-AEP-144 — Model and API capability provenance.** Every comparison MUST include actual qualified model/version/effort, feature availability, provider/route, tools and compatibility where known. A hardcoded or hypothetical model name MUST NOT appear as a proven measured execution route.
+
+**AW-AEP-145 — Correlated evidence lineage.** Spans, decisions, results and experiments MUST link to canonical mission/task/attempt IDs, plan/policy revisions, capability versions, CIE evidence package IDs and ARIE resource epochs. Duplicate/replayed tool events MUST NOT inflate metrics, and unknown external effects remain unresolved rather than assumed complete.
+
+**AW-AEP-146 — Honest missingness and clock discipline.** Clock skew, partial traces, absent provider usage, asynchronous completion, restart gaps and background executions MUST be reflected as uncertainty or missing data. Never fabricate token, resource, timing or quality measurements and never silently render unknown values as zero.
+
+**AW-AEP-147 — Low-overhead observation.** Instrumentation MUST avoid blocking the renderer, real-time voice or critical mission execution. Sampling, retention and export cadence SHOULD be load-aware and benchmarked for CPU, memory, disk, latency overhead and dropped-event behavior.
+
+### FI-10.2 Closed-loop strategy discovery and validated policy adaptation
+
+The AEP lifecycle is **observe → diagnose → formulate hypothesis → experiment → validate → recommend/promote through owner → monitor → rollback or retain**. Promotion may be automated only where preauthorized by governing policy, with bounded effect and demonstrated safety. AEP MAY use AI to interpret evidence and propose an optimization but MUST NOT silently apply an untested policy.
+
+**AW-AEP-148 — Structured improvement candidate.** Each AI-proposed optimization MUST record target task class, trigger/observed problem, candidate strategy, expected benefits, known tradeoffs, baseline, data sources, test design, risks, confidence, responsible policy owner and rollback trigger. Distinguish proposal from established improvement.
+
+**AW-AEP-149 — Fair experimental comparison.** Before promotion, compare representative work against a capability-equivalent baseline, controlling for task difficulty, model/version drift, caching, network/provider variation, hardware load, tool availability and other material confounders. Use paired, stratified, hold-out or otherwise defensible experiments; a single lucky run is insufficient.
+
+**AW-AEP-150 — Independent evaluation and guardrails.** Experiments MUST include objective verification plus appropriately independent semantic quality assessment, privacy/security checks and user-experience/foreground-interference checks. Optimization MAY be rejected despite better latency if verification, context coverage, accessibility, trust or user control declines.
+
+**AW-AEP-151 — Learned policy is scoped.** A candidate MUST specify where it applies: task/project family, provider/model, context needs, hardware profile, foreground state, modality, permission class and evaluation population. A local finding MUST NOT become a global default without evidence of transfer.
+
+**AW-AEP-152 — Versioned policy promotion.** AEP MUST emit evidence-backed recommendations to AIR (cognitive/model choice), MissionService (execution plans), or ARIE/Performance Governor (resource strategies), but only the corresponding authority owner MAY validate and apply policy revisions. Store approved version, effective scope, authorizer, promotion time and previous policy for rollback.
+
+**AW-AEP-153 — Stop optimizing when appropriate.** The optimizer MUST recognize when additional optimization risks reducing intelligence, evidence, independent review, safety, user experience or reliability. A deliberate choice to keep a slower, more capable strategy SHOULD be recorded as a valid quality-preserving decision, not classified as profiler failure.
+
+**AW-AEP-154 — Experiment resource and spend bounds.** Automated trials MUST respect current Trust scopes, user spend consent, hardware limits, project privacy, network/data retention requirements, concurrency ceilings and cancellation controls. AEP MUST NOT run hidden provider calls, perform external effects, or change code solely to generate a benchmark.
+
+**AW-AEP-155 — Controlled rollout and rollback.** Approved strategies SHOULD support canary/small-scope rollout, health thresholds, drift detection, manual override, instant disable and machine-readable rollback cause. Failed optimization evidence MUST remain available for future reasoning without re-enabling the same defective strategy.
+
+**AW-AEP-156 — Validate longitudinal learning.** Improvement claims MUST use representative future or held-out tasks to detect benchmark overfitting, changed user requirements, provider capability drift, hardware changes, and accumulating rework. A sequence of short-term latency wins MUST NOT conceal worse long-term verified outcomes.
+
+**AW-AEP-157 — CIE experiential records.** AEP MUST supply source-grounded experiment and decision records to CIE through authorized projections so Vela can later retrieve successful strategies, rejected hypotheses, applicable constraints, and counterexamples. CIE remains a retrieval index, not an independent optimizer authority.
+
+**AW-AEP-158 — Explainable impact accounting.** Before/after comparisons MUST show measurement window, sample count, variance/confidence limitations, quality outcomes, p50/p95 latency, total task effort, costs and resource effects. Do not attribute a speedup to a model switch when the run also changed caching, tools or machine load without acknowledging uncertainty.
+
+**AW-AEP-159 — Self-observation is not self-certification.** AEP's own model-based analysis MUST remain auditable against objective event traces and independent tests. No model SHALL mark its own optimization verified solely from a plausible explanation or its generated evaluation.
+
+### FI-10.3 ARIE collaboration and resource-aware performance
+
+**AW-AEP-160 — ARIE boundary.** AEP observes measurements, investigates workload-related patterns and proposes experiments. The canonical Platform Governor/Adaptive Resource Intelligence Engine (13) measures and enforces CPU/GPU/RAM/disk/foreground policies. AEP SHALL NOT create a second hardware governor or run privileged sampling without consent.
+
+**AW-AEP-161 — Foreground workload comparisons.** Profiling MUST correlate task scheduling and responsiveness to foreground application activity, CPU occupancy, GPU/VRAM contention, disk throughput/latency, memory pressure, power state and UI frame-time/jank when available, without collecting identifiable process contents or unauthorized private behavior.
+
+**AW-AEP-162 — Hardware-aware strategy cohorts.** Performance findings MUST retain device/core topology, available worker budget, resource pressure, driver/toolchain version and power profile where those variables affect the conclusion. "More threads" MUST NOT be presumed faster without measured speedup and foreground impact.
+
+**AW-AEP-163 — Remote intelligence under local pressure.** Tests MUST distinguish local compute pressure from remote model inference. AEP SHOULD evaluate whether reduced builds/indexing but continued qualified remote reasoning protects gameplay while maintaining semantic quality, and whether queuing local effects changes first-useful-result time.
+
+**AW-AEP-164 — Sampling and hysteresis evidence.** Track rate of policy oscillation, worker-scale transitions, queue starvation and user-visible stutter. ARIE experiments MUST test recovery from sustained load, avoiding flapping resource limits or learned policies that only work in a single instantaneous sample.
+
+### FI-10.4 Adaptive Intelligence Workspace and inspectable decisions
+
+AEP SHALL be accessible as a **persistent spatial Adaptive Intelligence Workspace** integrated with Aerynth's existing Intelligence Stream, Timelines, Vela Mind and project/task identities. This is not a requirement for an isolated flat dashboard or a second visualization database. The user should be able to see the engines working and examine what they learned, decided, rejected and changed over time.
+
+**AW-AEP-165 — Six inspectable workspace views.** The experience MUST expose linked Decision Observatory, Execution Profiler, Resource Intelligence, Learning Observatory, Experiment Laboratory and Adaptation Timeline perspectives (possibly as fluid spatial regions rather than literal tabs), all backed by canonical records.
+
+**AW-AEP-166 — Decision receipt inspection.** Selecting a model/agent/tool choice, planned branch, ARIE limit or policy change MUST reveal attributable task IDs, observed input evidence, applicable constraints, decision rationale *summary*, uncertainty, selected alternatives when retained, responsible subsystem and actual outcome. Private model chain-of-thought is not a viewable artifact.
+
+**AW-AEP-167 — Learning ledger visibility.** Users MUST be able to distinguish observed pattern, untested suggestion, experiment in progress, validated finding, approved active policy, rejected hypothesis, superseded policy and rollback. Claims about what Vela "learned" MUST map to durable records and currently effective behavior.
+
+**AW-AEP-168 — Experiment comparison instruments.** The workspace SHOULD visualize paired timeline/critical-path comparisons, agent overlap, first-useful-result versus total duration, errors and retries, model/tool quality, API economics, hardware impact and measured uncertainty, with accessible textual equivalents.
+
+**AW-AEP-169 — Actual control surfaces.** Where permitted, the workspace MAY let users pause learning experiments, inspect or revert adaptive policies, choose resource modes, inspect learning scope, adjust retention and pin an approved strategy. Each interactive control MUST update the authoritative owner with permissions and readback, not only a local visual mock.
+
+**AW-AEP-170 — Living spatial visualization.** Graphics and motion MAY depict event flow, evolving plan branches, resource adjustment and policy history, but MUST be generated from genuine event projections. Synthetic demonstrations, interpolated state and estimated metrics MUST be explicitly distinguishable from live measurements.
+
+**AW-AEP-171 — Privacy and accessibility.** Tool prompts, user messages, repo paths, screenshots, process names and model traces MAY contain sensitive information and MUST be redacted according to current scope. An accessible non-animated/low-load mode MUST preserve essential profiler information and controls without degrading mission quality.
+
+**AW-AEP-172 — Conversational profiler inspection.** Vela SHOULD answer questions such as "Why did you choose this model?", "What changed after the last optimization?", and "Why did you lower CPU workers while I was gaming?" using linked evidence and explicit uncertainty, not post-hoc invented narrative.
+
+### FI-10.5 Acceptance evidence and engineering sequencing
+
+**AW-AEP-173 — Trace reconstruction test.** Reconstruct a real parallel mission DAG with queue/wait/active/verify intervals from source events, reconcile overlapping durations and critical path, and demonstrate that replayed/late events do not double-count.
+
+**AW-AEP-174 — Capability-preserving comparison test.** On independent held-out workloads, compare baseline versus optimized strategies using accuracy, verified deliverables, privacy/security checks, context fidelity, p50/p95 latency, cost attribution and retries. A faster strategy with worse mandatory quality MUST fail promotion.
+
+**AW-AEP-175 — Adaptive learning test.** Produce a real measurable proposal, compare controlled runs, promote only when qualified, retrieve its evidence through CIE for a suitable future mission, observe behavioral change, detect a regression and roll back without losing historical lineage.
+
+**AW-AEP-176 — Gaming/idle experiment test.** On supported hardware, measure simultaneous interactive foreground load and Aerynth background missions; prove ARIE worker adjustment, retained API reasoning where eligible, acceptable foreground latency, UI render responsiveness, anti-thrashing and increased throughput on idle recovery.
+
+**AW-AEP-177 — Workspace truth test.** Navigate live and replayed decisions in the Adaptive Intelligence Workspace; verify that visible activity, confidence, comparisons, policy changes, and user controls reconcile with canonical backend state. A synthetic or attractive prototype MUST NOT be counted as accepted functionality.
+
+**AW-AEP-178 — Privacy, failure and performance test.** Inject missing provider usage, clock skew, app restart, deleted personal evidence, forbidden provider transfer, user policy revoke, resource telemetry loss and high event volume. Verify truthful missingness, no private leaks, bounded profiling overhead and a meaningful fallback.
+
+**Engineering sequence and external interfaces:** establish source-linked spans and independent outcome quality first; then extend measurements to critical path and ARIE; implement experiments with promotion/rollback through authoritative owners; finally deliver evidence-driven spatial interactions. Existing trace/event owners, retention/security gates and [quality charter](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md) remain authoritative. A charter merge is **not** an AEP implementation or demonstrated learning result.
+
