@@ -38,7 +38,7 @@ export interface VelaPanelOptions {
   permissions?: { element: HTMLElement; setVisible(visible: boolean): void };
   missions?: {
     element: HTMLElement;
-    preview(intent: string, agentProfileId?: string, noteIds?: string[]): Promise<MissionPreview | MissionPlanningOffer | null>;
+    preview(intent: string, agentProfileId?: string, noteIds?: string[], fileIds?: string[]): Promise<MissionPreview | MissionPlanningOffer | null>;
     review(preview: MissionPreview | MissionPlanningOffer, onStarted: (missionId: string) => void, agentProfileId?: string): void;
     openReport?(id: string): void;
     setVisible(visible: boolean): void;
@@ -263,25 +263,27 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   semanticContext.type = 'checkbox';
   const workspaceState = el('input');
   workspaceState.type = 'checkbox';
-  let preparingNotePlan = false;
-  const planWithNotes: HTMLButtonElement | undefined = options.missions && button('Plan mission with selected notes', async () => {
+  let preparingEvidencePlan = false;
+  const planWithEvidence: HTMLButtonElement | undefined = options.missions && button('Plan mission with selected evidence', async () => {
     const missions = options.missions!;
-    if (busy || !intent.value.trim() || planWithNotes?.disabled) return;
+    if (busy || !intent.value.trim() || planWithEvidence?.disabled) return;
     const objective = intent.value;
-    const noteIds = [...selected.keys()];
-    preparingNotePlan = true;
+    const sources = [...selected.values()];
+    const noteIds = sources.filter(ref => ref.resourceKind === 'note').map(ref => ref.id);
+    const fileIds = sources.filter(ref => ref.resourceKind === 'file').map(ref => ref.id);
+    preparingEvidencePlan = true;
     updateSemanticContext();
     try {
-      const preview = await missions.preview(objective, undefined, noteIds);
+      const preview = await missions.preview(objective, undefined, noteIds.length ? noteIds : undefined, fileIds.length ? fileIds : undefined);
       if (!preview) throw Error('mission_scope_denied');
       reveal('missions');
       missions.review(preview, missionId => missions.openReport?.(missionId));
     } finally {
-      preparingNotePlan = false;
+      preparingEvidencePlan = false;
       updateSemanticContext();
     }
   });
-  if (planWithNotes) sourcePanel.body.append(planWithNotes);
+  if (planWithEvidence) sourcePanel.body.append(planWithEvidence);
   function updateSemanticContext() {
     const sources = [...selected.values()];
     const incompatibleScope = (!!handoffSelection && !handoffSelection.reviewedEvidence) || !!routingAgentSelection;
@@ -293,7 +295,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     if (semanticContext.disabled) semanticContext.checked = false;
     workspaceState.disabled = apiUnavailable || incompatibleSource || sourceCount > 3 || !current?.applicationContext?.currentWorkspaceId;
     if (workspaceState.disabled) workspaceState.checked = false;
-    if (planWithNotes) planWithNotes.disabled = ineligible || !!handoffSelection || sources.some(ref => ref.resourceKind !== 'note') || busy || preparingNotePlan || !intent.value.trim();
+    if (planWithEvidence) planWithEvidence.disabled = ineligible || !!handoffSelection || busy || preparingEvidencePlan || !intent.value.trim();
   }
   updateSemanticContext();
   const modes = [['auto', 'Auto'], ['fast', 'Fast'], ['deep', 'Deep'], ['codex', 'Codex'], ['custom', 'Custom']] as const;
@@ -885,6 +887,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',
         mission_scope_denied: 'The mission workspace changed. Review the current workspace and try again.',
         mission_planning_note_unavailable: 'Select up to four short notes attached to the active workspace.',
+        mission_planning_file_unavailable: 'Select a current, short UTF-8 text file attached to the active workspace.',
         vela_planner_sign_in_required: 'Connect Codex or choose ChatGPT plan. Your draft is still here.',
         vela_chatgpt_sign_in_required: 'Connect your ChatGPT plan in Connections. Your draft is still here.',
         vela_deep_model_unavailable: 'The connected catalog has no verified deep reasoning controls. Choose an available model or reconnect. Your draft is still here.',

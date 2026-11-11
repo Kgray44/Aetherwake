@@ -291,9 +291,10 @@ export interface CommandMap {
   missionExecutiveReview: { input: import('./mission-contracts.mts').MissionExecutiveRequest; output: import('./mission-contracts.mts').MissionExecutiveReview };
   missionExecutiveReviewed: { input: import('./mission-contracts.mts').MissionExecutiveRequest & { fingerprint: string }; output: Extract<MissionResponse, { kind: 'executive-result' }> };
   missionPlanningReview: {
-    input: { objective: string; fingerprint: string; noteIds: string[] };
+    input: { objective: string; fingerprint: string; noteIds?: string[]; fileIds?: string[] };
     output: { offer: import('./mission-contracts.mts').MissionPlanningOffer;
-      notes: (import('./mission-contracts.mts').MissionPlanningNoteRef & { text: string })[] };
+      notes: (import('./mission-contracts.mts').MissionPlanningSourceRef & { text: string })[];
+      files: (import('./mission-contracts.mts').MissionPlanningSourceRef & { text: string })[] };
   };
   missionRevisionReviewed: { input: Extract<MissionRequest, { name: 'revision-apply' }>['input']; output: MissionResponse };
   missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true } |

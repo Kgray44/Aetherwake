@@ -908,27 +908,31 @@ app.whenReady().then(async () => {
             isCurrent: () => trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized(),
             allowWrite: () => storage.allowWrite() });
         } else if (input?.name === "plan") {
-          const { objective, noteIds, fingerprint } = input.input ?? {};
-          const offer = await call("missions", { name: "preview", input: { objective, ...(noteIds === undefined ? {} : { noteIds }) } });
+          const { objective, noteIds, fileIds, fingerprint } = input.input ?? {};
+          const offer = await call("missions", { name: "preview", input: { objective, noteIds, fileIds } });
           if (offer?.kind !== "planning-offer" || offer.fingerprint !== input.input?.fingerprint)
             throw Error("mission_preview_changed");
           if (!offer.planner) throw Error("mission_planner_unavailable");
           const { model, effort, capabilities, provider } = offer.planner;
           let approved;
-          if (offer.notes) {
-            const reviewed = await call("missionPlanningReview", { objective, noteIds, fingerprint });
+          const hasSources = Boolean(offer.notes || offer.files);
+          if (hasSources) {
+            const reviewed = await call("missionPlanningReview", { objective, noteIds, fileIds, fingerprint });
+            const matches = (sources, expected) => Array.isArray(sources) &&
+              JSON.stringify(sources.map(({ text, ...ref }) => ref)) === JSON.stringify(expected ?? []);
             if (!trustedActiveFrame(event) || reviewed?.offer?.fingerprint !== fingerprint ||
-              reviewed.offer.planner?.provider !== "openai-api-vela" || !Array.isArray(reviewed.notes) ||
-              JSON.stringify(reviewed.notes.map(({ text, ...ref }) => ref)) !== JSON.stringify(offer.notes))
+              reviewed.offer.planner?.provider !== "openai-api-vela" ||
+              !matches(reviewed.notes, offer.notes) || !matches(reviewed.files, offer.files))
               throw Error("mission_preview_changed");
             const prompt = JSON.stringify({ objective, capabilities }, null, 2);
             approved = await reviewProvider({ parent: win, intent: objective, expiresAt: new Date(Date.now() + 90_000).toISOString(),
               review: { providerId: provider, semanticContext: true, missionPlanning: true, prompt,
                 promptDigest: createHash("sha256").update(JSON.stringify(prompt)).digest("hex"),
                 route: { kind: "app-planning", model, effort },
-                context: { included: reviewed.notes.map(note => ({
-                  id: note.id, kind: "resource", resourceKind: "note", title: note.title, content: note.text,
-                })) },
+                context: { included: [
+                  ...reviewed.notes.map(note => ({ id: note.id, kind: "resource", resourceKind: "note", title: note.title, content: note.text })),
+                  ...reviewed.files.map(file => ({ id: file.id, kind: "resource", resourceKind: "file", title: file.title, content: file.text })),
+                ] },
               },
             });
           } else {
@@ -943,7 +947,7 @@ app.whenReady().then(async () => {
           if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
             throw Error("unauthorized_sender");
           if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
-          if (offer.notes && !trustedActiveFrame(event)) throw Error("unauthorized_sender");
+          if (hasSources && !trustedActiveFrame(event)) throw Error("unauthorized_sender");
           result = await call("missionPlanReviewed", input.input);
         } else if (input?.name === "revision-apply") {
           const { fingerprint, ...revisionInput } = input.input ?? {};
