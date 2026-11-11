@@ -65,7 +65,9 @@ test('bounded host observations preserve overlap during CPU warmup and obey the 
 
 test('sustained CPU load has its own reason and retains a checkpointed lease until release', () => {
   let time = 0, idle = 0;
-  const governor = createMissionAdmission({ maxWorkers: 3, now: () => time, availableMemory: () => 1024 ** 3,
+  const wallEpoch = Date.parse('2026-01-01T00:00:00Z');
+  const governor = createMissionAdmission({ maxWorkers: 3, now: () => time, wallNow: () => wallEpoch + time,
+    availableMemory: () => 1024 ** 3,
     cpuCounters: () => ({ logicalCpus: 4, total: time * 4, idle }), readWindowsPressure: null });
   const sample = (idleTicks: number) => { time += 500; idle += idleTicks; governor.read(true); };
   try {
@@ -83,12 +85,19 @@ test('sustained CPU load has its own reason and retains a checkpointed lease unt
     assert.equal(restricted.effective.cpu, 1);
     assert.equal(restricted.previous?.cpu, 2);
     assert.equal(restricted.active.cpu, 2);
+    assert.deepEqual(restricted.lastTransition, { revision: restricted.revision,
+      observedAtUtc: new Date(wallEpoch + time).toISOString(), previousReason: 'balanced', reason: 'cpu_contention',
+      signals: ['cpu-load'], checkpointRequests: { cpu: 1 } });
     assert.equal(leases[0].checkpointRequested.aborted, false);
     assert.equal(leases[1].checkpointRequested.reason, 'resource-pressure');
     assert.equal(governor.canLease('remote'), true);
+    sample(0);
+    assert.deepEqual(governor.inspectPolicy().lastTransition, restricted.lastTransition);
     leases.forEach(lease => lease.release());
     sample(1_600);
     assert.equal(governor.inspectPolicy().reason, 'recovery_dwell');
+    assert.equal(governor.inspectPolicy().lastTransition?.previousReason, 'cpu_contention');
+    assert.deepEqual(governor.inspectPolicy().lastTransition?.checkpointRequests, {});
     time += 3000;
     sample(11_200);
     assert.equal(governor.inspectPolicy().reason, 'balanced');

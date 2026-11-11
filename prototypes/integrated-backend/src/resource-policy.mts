@@ -11,6 +11,14 @@ export type ResourcePolicyConfig = {
 };
 type PolicyPreference = { config: ResourcePolicyConfig; origin: 'default' | 'host' | 'user' };
 type SavedPreferences = { schemaVersion: 1; current: PolicyPreference; previous: PolicyPreference | null; appliedAtUtc: string };
+type ResourcePolicyTransition = {
+  revision: number;
+  observedAtUtc: string;
+  previousReason: string;
+  reason: string;
+  signals: MissionAdmission['reasons'];
+  checkpointRequests: Partial<Record<ResourceKind, number>>;
+};
 export interface ResourcePolicyPersistence {
   load(): { version: number; value: unknown } | null;
   save(expectedVersion: number | null, version: number, value: SavedPreferences): void;
@@ -120,6 +128,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
   let latest: MissionAdmission | undefined;
   let effective = { cpu: 0, build: 0, gpu: 0, host_io: 0, remote: preference.config.limits.remote };
   let previous: typeof effective | null = null;
+  let lastTransition: ResourcePolicyTransition | null = null;
   let revision = 1, reason = 'awaiting_native_sample', freeForReservations = 0;
   let localFreshUntil = -Infinity, lastProtection = -Infinity;
   let gpuRecoverAfter = -Infinity;
@@ -197,19 +206,27 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       reasons.includes('disk-io') ? 'disk_contention' : gpuThermalPressure ? 'gpu_thermal_pressure' : gpuPressure ? 'gpu_contention' :
         gpuLoadUnavailable ? 'gpu_load_unavailable' : gpuRecovering ? 'gpu_recovery_dwell' :
           idleHeadroom ? 'throughput_profile' : 'balanced';
+    let transition: ResourcePolicyTransition | undefined;
     if (nextReason !== reason || kinds.some(kind => next[kind] !== effective[kind])) {
+      transition = { revision: revision + 1, observedAtUtc: new Date(wallNow()).toISOString(),
+        previousReason: reason, reason: nextReason, signals: [...reasons], checkpointRequests: {} };
       previous = effective;
       effective = next;
       reason = nextReason;
       revision++;
+      lastTransition = transition;
     }
     // Keep reservations until execution actually exits. A signal requests a safe point.
     for (const kind of ['build', 'cpu', 'gpu', 'host_io'] as const) {
       let excess = used(kind) - effective[kind];
+      if (excess <= 0) continue;
       for (const { request, checkpoint } of [...active.values()].reverse()) {
         if (excess <= 0) break;
         if (request.kind !== kind && !(kind === 'cpu' && request.kind === 'build')) continue;
-        if (!checkpoint.signal.aborted) checkpoint.abort('resource-pressure');
+        if (!checkpoint.signal.aborted) {
+          if (transition) transition.checkpointRequests[request.kind] = (transition.checkpointRequests[request.kind] ?? 0) + 1;
+          checkpoint.abort('resource-pressure');
+        }
         excess--;
       }
     }
@@ -262,6 +279,8 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       const reservedRamBytes = reservedRam();
       return { schemaVersion: 1 as const, epoch, revision, configVersion, mode: config.mode,
         limits: { ...config.limits }, effective: { ...effective }, previous: previous && { ...previous }, reason,
+        lastTransition: lastTransition && { ...lastTransition, signals: [...lastTransition.signals],
+          checkpointRequests: { ...lastTransition.checkpointRequests } },
         active: Object.fromEntries(kinds.map(kind => [kind, used(kind)])), reservedRamBytes,
         remainingRamReservationBytes: remainingRamReservationBytes(reservedRamBytes),
         origin, configurationHealth, maxCpuWorkers: maxWorkers, canRollback: !!previousPreference,
