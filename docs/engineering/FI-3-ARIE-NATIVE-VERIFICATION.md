@@ -94,7 +94,9 @@ ARIE produced 15 lease receipts in 15 measured attempts. An earlier implementati
 
 ## CPU worker isolation
 
-The native shipped-source inspection uses a lazy, bounded Node worker pool under a CPU lease. It retains its native mission lane and verifier. The worker accepts one fixed job with no path, command, or provider input. MissionService owns waiting and retries. The pool backpressures excess calls and holds each cancelled slot until the thread exits. Crash tests exercise real thread exit and explicit submission to a replacement. The Core shuts the pool down after mission settlement.
+The native shipped-source inspection uses a lazy, bounded Node worker pool under a CPU lease with a 64 MiB admission reservation. Its old-generation limit is 32 MiB. The reservation adds room for other V8 and native allocations. Three isolated Windows Node runs observed 18.98–19.29 MiB of incremental process RSS with one thread and 37.98–38.84 MiB with two. This is a planning estimate for the fixed inspection workload. The full process working set has no OS-enforced 64 MiB cap.
+
+The worker accepts one fixed job with no path, command, or provider input. MissionService owns waiting and retries. The pool backpressures excess calls, retires idle threads when CPU or storage admission closes, and holds a retiring slot until thread exit. Tests verify that trimming leaves an active worker alone, a replacement can verify the same evidence, and the actual mission receipt records the reservation. Crash tests exercise real thread exit and explicit submission to a replacement. The Core shuts the pool down after mission settlement.
 
 Run `node prototypes/integrated-backend/src/mission-cpu-benchmark.mts` to compare inline inspection with one and two warm threads. On Windows with Node v24.18.0, each arm ran three measured batches of 24 inspections after one warm-up. Every digest matched. Medians reflect ambient host contention.
 

@@ -1,4 +1,5 @@
 import { strict as assert } from 'node:assert';
+import { once } from 'node:events';
 import { test } from 'node:test';
 import { Worker } from 'node:worker_threads';
 import { createMissionCpuPool } from '../src/mission-cpu-pool.mts';
@@ -45,5 +46,29 @@ test('cancellation holds the slot until its worker exits', async () => {
     await assert.rejects(pool.inspect(new AbortController().signal), /mission_cpu_backpressure/u);
     await assert.rejects(pending, /test-cancelled/u);
     assert.equal(spawns, 1);
+  } finally { await pool.close(); }
+});
+
+test('pressure trimming retires only idle CPU workers and holds their slots until exit', async () => {
+  const workers: Worker[] = [];
+  const pool = createMissionCpuPool(1, () => {
+    const worker = new Worker(new URL('../src/mission-cpu-worker.mts', import.meta.url), { workerData: missionCpuWorkerProtocol });
+    workers.push(worker);
+    return worker;
+  });
+  try {
+    const signal = new AbortController().signal;
+    const running = pool.inspect(signal);
+    void running.catch(() => {});
+    pool.trimIdle();
+    const first = await running;
+    const exited = once(workers[0], 'exit');
+    pool.trimIdle();
+    await assert.rejects(pool.inspect(signal), /mission_cpu_backpressure/u);
+    await exited;
+    const replacement = await pool.inspect(signal);
+    assert.equal(workers.length, 2);
+    assert.notEqual(replacement.threadId, first.threadId);
+    assert.deepEqual(replacement.evidence, first.evidence);
   } finally { await pool.close(); }
 });

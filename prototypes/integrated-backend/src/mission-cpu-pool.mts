@@ -3,9 +3,12 @@ import { missionCpuWorkerProtocol, type inspectBackendSource } from './mission-c
 
 type Inspection = Awaited<ReturnType<typeof inspectBackendSource>>;
 type Slot = { worker: Worker; busy: boolean; retiring: boolean };
+const inspectionOldGenerationMiB = 32;
+// Allow for the rest of V8 and native allocations in addition to the old-generation limit.
+export const missionCpuInspectionRamBytes = (inspectionOldGenerationMiB + 32) * 2 ** 20;
 
 const spawnInspectionWorker = () => new Worker(new URL('./mission-cpu-worker.mts', import.meta.url), {
-  workerData: missionCpuWorkerProtocol, execArgv: [], resourceLimits: { maxOldGenerationSizeMb: 32 },
+  workerData: missionCpuWorkerProtocol, execArgv: [], resourceLimits: { maxOldGenerationSizeMb: inspectionOldGenerationMiB },
 });
 
 /** No queue: MissionService holds work until a resource lease and lane slot are available. */
@@ -22,6 +25,12 @@ export function createMissionCpuPool(limit: number, spawn = spawnInspectionWorke
     worker.on('error', () => { slot.retiring = true; });
     worker.once('exit', () => { slots.delete(slot); });
     return slot;
+  }
+
+  function retire(slot: Slot) {
+    if (slot.retiring) return;
+    slot.retiring = true;
+    void slot.worker.terminate().catch(() => { /* The exit listener owns settlement. */ });
   }
 
   return {
@@ -42,11 +51,7 @@ export function createMissionCpuPool(limit: number, spawn = spawnInspectionWorke
           slot.busy = false;
           worker.unref();
         };
-        const retire = () => {
-          slot.retiring = true;
-          void worker.terminate().catch(() => { /* The exit listener owns settlement. */ });
-        };
-        const cancel = () => { retire(); };
+        const cancel = () => retire(slot);
         const exited = () => {
           cleanup();
           reject(signal.aborted ? signal.reason : Error('mission_cpu_worker_exited'));
@@ -60,10 +65,13 @@ export function createMissionCpuPool(limit: number, spawn = spawnInspectionWorke
         worker.once('message', result);
         worker.once('exit', exited);
         signal.addEventListener('abort', cancel, { once: true });
-        if (signal.aborted) { retire(); return; }
+        if (signal.aborted) { retire(slot); return; }
         try { worker.postMessage('inspect-backend-source'); }
-        catch { retire(); }
+        catch { retire(slot); }
       });
+    },
+    trimIdle() {
+      for (const slot of slots) if (!slot.busy) retire(slot);
     },
     close(): Promise<void> {
       closed = true;
