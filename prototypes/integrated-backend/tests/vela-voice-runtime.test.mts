@@ -18,6 +18,34 @@ import type {VelaPlan} from '../../vela-core/src/contracts.ts';
 import type {MissionPlan,MissionProjection} from '../src/mission-contracts.mts';
 
 const credential = 'SYNTHETIC_ONLY_VELA_VOICE_CREDENTIAL';
+
+test('live voice revalidates the exact messages sent in its bounded canonical context', async () => {
+  const f = fixture();
+  try {
+    const owner = f.core as any;
+    const { conversationId, trimmed, included, excluded } = owner.atomic(() => {
+      const conversationId = owner.ensureVelaConversation();
+      const graphId = owner.gid(conversationId);
+      return {
+        conversationId,
+        trimmed: owner.graph.addMessage(graphId, 'user', 'x'.repeat(8192)),
+        included: owner.graph.addMessage(graphId, 'assistant', 'Synthetic approved history'),
+        excluded: owner.graph.addMessage(graphId, 'system', 'Synthetic excluded history'),
+      };
+    });
+    const context = await owner.voiceContext(conversationId);
+    assert.deepEqual(context.history, [{ role: 'assistant', content: included.content }]);
+    owner.atomic(() => {
+      owner.graph.markUnavailable(trimmed.id);
+      owner.graph.markUnavailable(excluded.id);
+    });
+    owner.validateVoiceContext(context.contextRef, context.contextDigest);
+    owner.atomic(() => owner.graph.markUnavailable(included.id));
+    assert.throws(() => owner.validateVoiceContext(context.contextRef, context.contextDigest), /live_context_changed/);
+  } finally {
+    await f.close();
+  }
+});
 const offer = 'v=0\r\no=SYNTHETIC_PRIVATE_VOICE_OFFER\r\n';
 const answer = 'v=0\r\no=SYNTHETIC_PRIVATE_VOICE_ANSWER\r\n';
 const idleMedia = (): GptLiveMediaState => ({ contract:'aerynth.gpt-live-media@1',connection:'idle',microphoneAccess:'not-requested',localTrackEnabled:false,

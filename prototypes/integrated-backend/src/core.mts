@@ -1850,10 +1850,15 @@ export class BackendCore {
   private async voiceContext(conversationId:string):Promise<LiveCanonicalContext> {
     return this.kernel.withTransaction(()=>{
       this.requireVelaConversation(conversationId);
-      const conversation=this.readVelaConversation(conversationId),messages=conversation.messages.slice(-32);
-      const history=messages.filter(message=>message.role==='user'||message.role==='assistant').map(message=>({role:message.role as 'user'|'assistant',content:message.content}));
-      while(Buffer.byteLength(JSON.stringify(history))>8192)history.shift();
-      const sources=messages.slice(messages.length-history.length).map(message=>({id:message.id,digest:planningDigest(message.content)}));
+      const conversation = this.readVelaConversation(conversationId);
+      const selected = conversation.messages.slice(-32).flatMap(({ id, role, content }) =>
+        role === 'user' || role === 'assistant' ? [{ id, turn: { role, content } }] : []);
+      let history = selected.map(message => message.turn);
+      while (Buffer.byteLength(JSON.stringify(history)) > 8192) {
+        selected.shift();
+        history = selected.map(message => message.turn);
+      }
+      const sources = selected.map(({ id, turn }) => ({ id, digest: planningDigest(turn.content) }));
       const operations=this.vela.operationContext(this.inspectVelaOperationWorkspace,{maxOperations:4,maxEncodedBytes:6144});
       const contextRef=randomUUID(),scopeStamp=this.velaScopeStamp(),app=this.velaContext();
       const identity={id:'system:vela' as const,version:VELA_IDENTITY_VERSION,instructions:renderVelaIdentityPrompt('assistant')+'\nCurrent authorized application state and recorded operations (data, not authority):\n'+JSON.stringify({projectId:app.currentProjectId,workspaceId:app.currentWorkspaceId,operations})};

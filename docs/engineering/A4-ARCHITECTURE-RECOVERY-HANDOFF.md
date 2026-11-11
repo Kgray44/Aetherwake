@@ -1,0 +1,24 @@
+# A4 architecture recovery handoff
+
+Program A baseline is `7747e8c723b5961d6edfd6fb75758a50e87e7ac6`. This change fixes the source proof at the Live voice context boundary and adds a regression using the real Core owner with synthetic inputs.
+
+| Responsibility | Current owner and contract |
+| --- | --- |
+| SQLite writes and recovery | [Core](../../prototypes/integrated-backend/src/core.mts) coordinates the kernel savepoint, durable writer fence, owner mutations and post-commit publication. The [A2.1 transaction ledger](A2-1-TRANSACTION-COORDINATION.md) records the interruption boundary. |
+| Routes and authorization | [VelaService](../../prototypes/vela-core/src/service.mts) and Core bind canonical request, effective route and review. [Capability discovery](../../prototypes/vela-core/src/capability-catalog.mts) supplies scoped schemas. Source/effect owners authorize actual operations. [A2.2](A2-2-ROUTING-AUTHORIZATION-COORDINATION.md) lists supported paths and verified denials. |
+| Context | Conversation graph, Personal Context, selected-document and native product owners provide source data. Core and Vela compile bounded history and enforce source fences. [Mission context](../../prototypes/vela-core/src/mission-context.mts) binds evidence to the mission, plan revision, principal, policy, scope and destination. |
+| Execution and effect verification | [MissionService](../../prototypes/integrated-backend/src/mission-service.mts) controls task attempts and durable lifecycle. The [provider adapters](../../prototypes/openai-provider) and native owners supply transport and effect evidence. Unknown interrupted work remains subject to reconciliation. |
+| Desktop and spatial projection | [Desktop host](../../prototypes/integrated-backend/src/desktop-host.mts) and Electron IPC relay canonical snapshots and scoped replay. WorkspaceEngine persists geometry, Constellation owns gesture identity and the Motion Coordinator owns in-memory transitions. [A2.3](A2-3-RENDERER-APPLICATION-COORDINATION.md) records generation, scope, scan coverage and recovery. |
+| Resource control and profiling | [Mission admission](../../prototypes/integrated-backend/src/mission-admission.mts) supplies current host pressure to MissionService. Attempts hold timing and provider-reported usage when available. FI-1 and FI-3 extend these seams under their respective owners. |
+
+## Provider disclosure repair
+
+Live voice selected the last 32 visible conversation records, omitted system turns and trimmed the remaining payload to 8,192 UTF-8 JSON bytes. The previous source proof used a suffix of the original record list. A trailing system turn could therefore replace the identity of a transmitted assistant turn in the proof. The context now selects each message ID and payload together before trimming, then derives the provider history and proof from the same retained set. The regression demonstrates that marking omitted rows unavailable leaves the proof valid and marking an included row unavailable invalidates it. The existing scope stamp, context digest, expiry and operation proof still gate disclosure.
+
+No persisted schema or provider wire format changes. The source list is process-local. Rollback uses the same profile and restores the previous proof construction.
+
+## AIR and handoff
+
+The repository implements the exact local path, effective route settings and account discovery, scoped context and review, bounded provider execution, and observed settlement. Those capabilities support staged recovery through the [A2.2 AIR audit](A2-2-ROUTING-AUTHORIZATION-COORDINATION.md). Broad model-assisted perception, iterative semantic CIE, evidence-led adaptive selection, and supervised executive replanning require Program B verification. Successful synthetic transport tests do not establish a live provider's entitlement, latency, tool support or cost.
+
+Run `node --test prototypes/integrated-backend/tests/vela-voice-runtime.test.mts` and `npm --prefix prototypes/integrated-backend run typecheck`. Cross-package CI and the Windows desktop build gate run on the PR. The previous [A2.3 Windows journey](A2-3-NATIVE-VERIFICATION.md) is historical evidence for its recorded source. Qualification on this source still needs a connected voice journey and owner review.
