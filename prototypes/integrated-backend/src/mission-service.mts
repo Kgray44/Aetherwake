@@ -18,6 +18,7 @@ export interface MissionServiceHost {
   db: DatabaseSync;
   atomic<T>(work: () => T): T;
   authorized(scope: MissionScope): boolean;
+  planningContextCurrent?(mission: Pick<MissionPlan, 'scope' | 'planning'>): boolean;
   executors: Readonly<Record<string, MissionExecutor>>;
   laneLimit(lane: string): number;
   underPressure?(): boolean;
@@ -281,6 +282,7 @@ export class MissionService {
     check(identifier(requestId), 'invalid_mission_request');
     validateMissionPlan(plan, this.host.executors);
     check(this.host.authorized(plan.scope), 'mission_scope_denied');
+    check(this.host.planningContextCurrent?.(plan) !== false, 'mission_planning_context_changed');
     const fingerprint = digest(plan);
     let created = false;
     const m = this.host.atomic(() => {
@@ -629,6 +631,7 @@ export class MissionService {
     checked.set(attempt.id, false);
     const { context } = attempt;
     try {
+      check(this.host.planningContextCurrent?.(m) !== false, 'mission_planning_context_changed');
       check(context && context.binding.missionId === m.id && context.binding.taskId === task.id &&
         sameScope(context.binding.scope, m.scope), 'mission_context_changed');
       validateMissionContextSources(context, this.host.contextSource?.(m, task));
@@ -682,9 +685,11 @@ export class MissionService {
     const expectedRemote = attempts.filter(attempt => this.host.executors[attempt.executor]?.lane !== 'native');
     const usage = expectedRemote.flatMap(attempt => attempt.telemetry?.usage ? [attempt.telemetry.usage] : []);
     if (m.planning?.usage) usage.push(m.planning.usage);
+    if (m.planning?.context) usage.push(...m.planning.context.usage);
     const reportedTotalTokens = usage.length ? usage.reduce((total, reading) => total + reading.totalTokens, 0) : null;
     const providerCalls = expectedRemote.every(attempt => attempt.telemetry) ?
-      expectedRemote.reduce((total, attempt) => total + attempt.telemetry!.providerCalls, m.planning ? 1 : 0) : null;
+      expectedRemote.reduce((total, attempt) => total + attempt.telemetry!.providerCalls,
+        (m.planning ? 1 : 0) + (m.planning?.context?.providerCalls ?? 0)) : null;
     let peakWorkers = 0, admitted = 0;
     for (const event of m.events) {
       if (event.kind === 'started') peakWorkers = Math.max(peakWorkers, ++admitted);
@@ -695,7 +700,8 @@ export class MissionService {
     const answer = missionMeasurementAnswer(m.tasks);
     return { ...m, outcome, ...(answer.length ? { answer } : {}), waits,
       ...(admission ? { admission: structuredClone(admission) } : {}), profile: {
-      elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0), peakWorkers, attempts: attempts.length,
+      elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0) +
+        (m.planning?.context?.elapsedMs ?? 0), peakWorkers, attempts: attempts.length,
       retries: allTasks.reduce((total, task) => total + Math.max(0, task.attempts.length - 1), 0),
       providerCalls, usageReports: usage.length, reportedTotalTokens,
       verifiedObjectivesPerReportedToken: outcome === 'verified' && providerCalls === usage.length &&
@@ -818,7 +824,9 @@ export class MissionService {
       };
       validateDependencies();
       const pkg = compileMissionContext(request, source, this.contextCache);
-      context = { missionId: m.id, task: plan, scope: m.scope, attemptId: id, dependencies, context: pkg, signal: abort.signal };
+      context = { missionId: m.id, task: plan, scope: m.scope, attemptId: id, dependencies, context: pkg, signal: abort.signal,
+        ...(m.planning?.context ? { validatePlanningContext: () =>
+          check(this.host.planningContextCurrent?.(m) !== false, 'mission_planning_context_changed') } : {}) };
     } catch {
       this.update(m.id, current => {
         const value = taskOf(current, task.id)!;
@@ -874,6 +882,7 @@ export class MissionService {
         abort.signal.throwIfAborted();
         check(this.host.authorized(m.scope), 'mission_scope_revoked');
         const validateInputs = () => {
+          context.validatePlanningContext?.();
           validateMissionContext(context.context, request, source);
           const current = this.lookup(m.id), checked = new Map<string, boolean>();
           for (const [i, dep] of task.dependencies.entries()) {
@@ -903,7 +912,7 @@ export class MissionService {
         let verifyingEvidenceAt: number | undefined;
         try {
           try { validateInputs(); }
-          catch (error) { reportedOutcome = executor.replaySafe ? 'blocked' : 'uncertain'; detail = 'mission_context_changed_during_execution'; throw error; }
+          catch (error) { reportedOutcome = executor.replaySafe || telemetry?.providerCalls === 0 ? 'blocked' : 'uncertain'; detail = 'mission_context_changed_during_execution'; throw error; }
           finally { if (phases) phases.postExecutionContextValidation = [verifyingAt, performance.now()]; }
           verifyingEvidenceAt = phases?.postExecutionContextValidation?.[1];
           check(bounded(result.source, 128) && JSON.stringify(result.value) !== undefined &&

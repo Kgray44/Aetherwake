@@ -255,6 +255,10 @@ export function createVelaMissionView(
         "The planner returned an invalid specialist assignment. Review the objective and request a new plan.",
       mission_planning_already_attempted:
         "This planning request was already admitted. Submit the objective again for a fresh review.",
+      mission_planning_context_changed:
+        "A reviewed note changed. Request a new plan before starting the mission.",
+      mission_planning_context_unavailable:
+        "Vela could not assess the selected notes. No mission was started.",
       mission_team_not_found: "This team is no longer available. Refresh the team library.",
       mission_team_scope_denied: "Team templates are unavailable in this workspace.",
       mission_team_version_conflict: "This team changed. Reload its saved version before continuing.",
@@ -896,7 +900,7 @@ export function createVelaMissionView(
     const section = el("section", "vela-core-plan vela-mission-preview");
     section.append(el("h3", undefined, "Plan a mission"), el("p", undefined, offer.objective),
       el("p", "vela-core-meta", offer.planner
-        ? `One planning request to ${offer.planner.model}${offer.planner.provider==='openai-api-vela'?' through Vela’s dedicated API':''}. You’ll review the resulting tasks separately.`
+        ? `${offer.notes ? 'Investigate the selected notes and request a plan' : 'Request a plan'} using ${offer.planner.model}${offer.planner.provider==='openai-api-vela'?' through Vela’s dedicated API':''}. You’ll review the resulting tasks separately.`
         : "A planning model is unavailable for this workspace. Check Connections and request limits."));
     const controls = actions();
     const plan = button("Review planning request", "plan-mission", () => { void preparePlan(offer); });
@@ -917,7 +921,8 @@ export function createVelaMissionView(
     body.setAttribute("aria-busy", "true");
     try {
       const result = await command({ name: "plan",
-        input: { objective: offer.objective, fingerprint: offer.fingerprint, requestId: pending.requestId } });
+        input: { objective: offer.objective, fingerprint: offer.fingerprint, requestId: pending.requestId,
+          ...(offer.notes ? { noteIds: offer.notes.map(note => note.id) } : {}) } });
       if (generation !== epoch || review !== pending) return;
       if (!result || !("plan" in result) || !sameScope(result.plan.scope, scope) || result.proposalId !== pending.requestId)
         throw new Error("mission_preview_changed");
@@ -1506,7 +1511,7 @@ export function createVelaMissionView(
 
   return {
     element,
-    async preview(objective: string, agentProfileId?: string) {
+    async preview(objective: string, agentProfileId?: string, noteIds?: string[]) {
       if (!scope) return null;
       const expected = scope,
         activeEpoch = epoch;
@@ -1514,7 +1519,7 @@ export function createVelaMissionView(
       try {
         response = await command({
           name: "preview",
-          input: { objective, ...(agentProfileId ? { agentProfileId } : {}) },
+          input: { objective, ...(agentProfileId ? { agentProfileId } : {}), ...(noteIds ? { noteIds } : {}) },
         });
       } catch (cause) {
         if (cause instanceof Error && cause.message === "unsupported_command")

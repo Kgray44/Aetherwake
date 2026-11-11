@@ -902,20 +902,42 @@ app.whenReady().then(async () => {
         result = await call("notes", input);
       } else if (command === "missions") {
         if (input?.name === "plan") {
-          const offer = await call("missions", { name: "preview", input: { objective: input.input?.objective } });
+          const { objective, noteIds, fingerprint } = input.input ?? {};
+          const offer = await call("missions", { name: "preview", input: { objective, ...(noteIds === undefined ? {} : { noteIds }) } });
           if (offer?.kind !== "planning-offer" || offer.fingerprint !== input.input?.fingerprint)
             throw Error("mission_preview_changed");
           if (!offer.planner) throw Error("mission_planner_unavailable");
           const { model, effort, capabilities, provider } = offer.planner;
-          const choice = await reviewDialogs.showMessageBox(win, {
+          let approved;
+          if (offer.notes) {
+            const reviewed = await call("missionPlanningReview", { objective, noteIds, fingerprint });
+            if (!trustedActiveFrame(event) || reviewed?.offer?.fingerprint !== fingerprint ||
+              reviewed.offer.planner?.provider !== "openai-api-vela" || !Array.isArray(reviewed.notes) ||
+              JSON.stringify(reviewed.notes.map(({ text, ...ref }) => ref)) !== JSON.stringify(offer.notes))
+              throw Error("mission_preview_changed");
+            const prompt = JSON.stringify({ objective, capabilities }, null, 2);
+            approved = await reviewProvider({ parent: win, intent: objective, expiresAt: new Date(Date.now() + 90_000).toISOString(),
+              review: { providerId: provider, semanticContext: true, missionPlanning: true, prompt,
+                promptDigest: createHash("sha256").update(JSON.stringify(prompt)).digest("hex"),
+                route: { kind: "app-planning", model, effort },
+                context: { included: reviewed.notes.map(note => ({
+                  id: note.id, kind: "resource", resourceKind: "note", title: note.title, content: note.text,
+                })) },
+              },
+            });
+          } else {
+            const choice = await reviewDialogs.showMessageBox(win, {
             type: "question", buttons: ["Cancel", "Request plan"], defaultId: 0, cancelId: 0,
             title: "Review mission planning request", message: `Send one planning request to ${provider==='openai-api-vela'?'Vela’s dedicated API':'ChatGPT plan'}?`,
             detail: `Model: ${model}${effort ? " · " + effort : ""}\n\nObjective:\n${offer.objective}\n\nCapability descriptions:\n${capabilities.join("\n")}\n\nReview the resulting tasks before starting the mission.`,
-          });
-          if (choice.response !== 1) throw Error("mission_review_declined");
+            });
+            approved = choice.response === 1;
+          }
+          if (approved !== true) throw Error("mission_review_declined");
           if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
             throw Error("unauthorized_sender");
           if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
+          if (offer.notes && !trustedActiveFrame(event)) throw Error("unauthorized_sender");
           result = await call("missionPlanReviewed", input.input);
         } else if (input?.name === "revision-apply") {
           const { fingerprint, ...revisionInput } = input.input ?? {};

@@ -285,6 +285,11 @@ export interface CommandMap {
     approvedProjectCheck?: { paths: string[]; digest: string } }; output: MissionResponse };
   missionCheckReview: { input: { paths: string[] }; output: { cwd: string; argv: string[]; head: string; digest: string } };
   missionPlanReviewed: { input: Extract<MissionRequest, { name: 'plan' }>['input']; output: MissionResponse };
+  missionPlanningReview: {
+    input: { objective: string; fingerprint: string; noteIds: string[] };
+    output: { offer: import('./mission-contracts.mts').MissionPlanningOffer;
+      notes: (import('./mission-contracts.mts').MissionPlanningNoteRef & { text: string })[] };
+  };
   missionRevisionReviewed: { input: Extract<MissionRequest, { name: 'revision-apply' }>['input']; output: MissionResponse };
   missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true } |
     import('./resource-signals.mts').ResourceSignal; output: null };
