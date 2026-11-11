@@ -15,7 +15,7 @@ const pollIntervalMs = 25;
 const settledPolls = 6;
 const missionEvents: { missionId: string; eventId: string; seq?: number; receivedMs: number }[] = [];
 const unsubscribe = backend.subscribe(event => {
-  if (!event.mission || (event.type !== 'vela.mission/settled' && event.type !== 'vela.mission/report-posted')) return;
+  if (!event.mission || !['vela.mission/created', 'vela.mission/settled', 'vela.mission/report-posted'].includes(event.type)) return;
   missionEvents.push({ missionId: event.mission.id, eventId: event.eventId,
     seq: event.mission.seq, receivedMs: performance.now() });
 });
@@ -24,10 +24,13 @@ async function sample(index: number) {
   missionEvents.length = 0;
   const sampleStartedMs = performance.now();
   const preview = await backend.call('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+  const requestId = randomUUID();
+  const submittedMs = performance.now() - sampleStartedMs;
   const mission = await backend.call('missions', { name: 'start', input: {
-    objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
+    objective, fingerprint: preview.fingerprint, requestId,
   } });
-  assert.ok(mission && 'id' in mission);
+  const replyReceivedMs = performance.now() - sampleStartedMs;
+  assert.ok(mission && 'id' in mission && 'requestId' in mission && mission.requestId === requestId);
   const id = mission.id;
   const read = async (name: 'read' | 'execution-profile') => {
     const startedMs = performance.now() - sampleStartedMs;
@@ -74,7 +77,14 @@ async function sample(index: number) {
         const publication = missionEvents.find(event => event.missionId === id && event.eventId === publicationEventId);
         assert.ok(settlement && publication && settlement.receivedMs <= publication.receivedMs,
           'worker benchmark missed ordered settlement and report events');
-        return { pairs, eventDelivery: {
+        const acknowledgement = profile.requestAcknowledgement;
+        assert.ok(acknowledgement && acknowledgement.intakeToAcknowledgementMs !== null);
+        const created = missionEvents.find(event => event.missionId === id && event.seq === acknowledgement.event.eventSeq);
+        assert.ok(created && created.receivedMs - sampleStartedMs >= submittedMs);
+        return { pairs, startAcknowledgement: {
+          missionId: id, requestId, submittedMs, replyReceivedMs, replyElapsedMs: replyReceivedMs - submittedMs,
+          createdEventId: created.eventId, createdReceivedMs: created.receivedMs - sampleStartedMs, backend: acknowledgement,
+        }, eventDelivery: {
           settlementEventId: settlement.eventId, settlementSeq, publicationEventId,
           settlementReceivedMs: settlement.receivedMs - sampleStartedMs,
           publicationReceivedMs: publication.receivedMs - sampleStartedMs,

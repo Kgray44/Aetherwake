@@ -181,6 +181,9 @@ test('canonical backend runs a native mission without inference, restores eviden
       readiness.unattributedBetweenAttemptsMs) < 0.001);
     assert.ok(profile.requestIntake && profile.admission && profile.requestIntake.clock === profile.admission.clock);
     assert.ok(profile.intakeToAdmissionMs! >= 0);
+    assert.deepEqual(profile.requestAcknowledgement, {
+      source: 'mission-created', event: profile.admission, intakeToAcknowledgementMs: profile.intakeToAdmissionMs,
+    });
     const { first, last } = profile.verifiedTaskMilestones;
     assert.ok(first && last && first.settlement.eventSeq < last.settlement.eventSeq);
     assert.equal(first.intakeToSettlementMs, first.settlement.monotonicMs! - profile.requestIntake.monotonicMs);
