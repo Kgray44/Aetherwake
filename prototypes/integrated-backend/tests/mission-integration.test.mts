@@ -158,6 +158,8 @@ test('canonical backend runs a native mission without inference, restores eviden
       assert.equal(admission.observedAt.availableMemoryBytes, attempt.admission.readings.availableMemoryBytes.observedAt);
     }
     assert.equal(profile.economics.usageCoverage, 'not-applicable');
+    assert.equal(profile.economics.costCoverage, 'not-applicable');
+    assert.deepEqual(profile.economics.usageGaps, []);
     assert.ok(profile.work.criticalPath);
     const readiness = profile.work.dependencyReadinessPath;
     assert.ok(readiness);
