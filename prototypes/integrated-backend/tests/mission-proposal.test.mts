@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { ServiceError } from '../src/contracts.mts';
 import type { MissionTaskPlan } from '../src/mission-contracts.mts';
 import { nativeMissionExecutors } from '../src/mission-native.mts';
-import { compileMissionProposal } from '../src/mission-proposal.mts';
+import { compileMissionProposal, MISSION_PROPOSAL_CONTRACT, MISSION_PROPOSAL_SCHEMA, type MissionProposal } from '../src/mission-proposal.mts';
 import { missionPlanningSpecialists } from '../src/mission-specialists.mts';
 import { validateMissionPlan } from '../src/mission-service.mts';
 
@@ -23,6 +23,22 @@ const proposal = (tasks: ReturnType<typeof entry>[], unsupported: string[] = [])
 const compile = (text: string) => compileMissionProposal(text, objective, scope, catalog);
 const rejects = (text: string, code: string) => assert.throws(() => compile(text), error =>
   error instanceof ServiceError && error.code === code && error.message === code);
+
+test('versions provider candidates while preserving the host plan produced by legacy inputs', () => {
+  const candidate: MissionProposal = {
+    contract: 'aerynth.vela-mission-proposal@1', tasks: [entry('cpu'), entry('ram', ['cpu'])], unsupported: [],
+  };
+  assert.equal(MISSION_PROPOSAL_CONTRACT, candidate.contract);
+  assert(MISSION_PROPOSAL_SCHEMA.required.includes('contract'));
+  assert.deepEqual(MISSION_PROPOSAL_SCHEMA.properties.contract.enum, [candidate.contract]);
+  const plan = compile(JSON.stringify(candidate));
+  assert.deepEqual(plan, compile(proposal(candidate.tasks)));
+  validateMissionPlan(plan, nativeMissionExecutors);
+  assert(!Object.hasOwn(plan, 'contract'));
+  rejects(JSON.stringify({ ...candidate, contract: 'aerynth.vela-mission-proposal@2' }), 'unsupported_mission_proposal_contract');
+  rejects(JSON.stringify({ ...candidate, contract: 'aerynth.vela-mission@1' }), 'unsupported_mission_proposal_contract');
+  rejects(JSON.stringify({ ...candidate, scope }), 'invalid_mission_proposal');
+});
 
 test('compiles dependencies and joins every verified result using host-owned tasks', () => {
   const original = structuredClone(catalog);
