@@ -53,6 +53,7 @@ const admissionReasonLabel: Record<MissionAdmissionReason, string> = {
   "storage-reserve": "Storage reserve",
   "cpu-load": "High CPU load",
   "gpu-load": "High GPU load",
+  "gpu-thermal-throttling": "GPU driver reports thermal slowdown",
   "disk-io": "High disk I/O load",
   "active-input": "Recent Aerynth activity",
   "external-desktop-activity": "Recent desktop activity during contention",

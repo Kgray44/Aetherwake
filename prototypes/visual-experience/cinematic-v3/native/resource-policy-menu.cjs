@@ -18,6 +18,7 @@ const reasons = {
   cpu_conservative: "Conservative CPU admission",
   disk_contention: "Disk contention",
   gpu_contention: "GPU contention",
+  gpu_thermal_pressure: "GPU driver reports thermal slowdown",
   throughput_profile: "Throughput profile has headroom",
   balanced: "Balanced admission",
 };
@@ -31,6 +32,7 @@ function describe(view) {
   const activity = view.externalDesktopActivity;
   const lowMemory = view.windowsLowMemory;
   const commit = view.windowsCommitHeadroom;
+  const thermals = view.nvidiaGpuThermals;
   const detail = [
     `${source} profile: ${profile}`,
     reasons[view.reason] ?? "Waiting for policy evidence",
@@ -42,6 +44,11 @@ function describe(view) {
     `Windows commit headroom: ${commit ? `${(commit.bytes / 2 ** 30).toFixed(2)} GiB (${Math.ceil(commit.ageMs / 1000)} s old)` : "Unavailable"}`,
     `Other desktop activity protection (system idle time and Aerynth focus): ${view.externalActivityProtection ? "On" : "Off"}`,
   ];
+  if (thermals) {
+    const temperature = thermals.temperatureCelsius === null ? "temperature unavailable" : `${thermals.temperatureCelsius} °C`;
+    const slowdown = thermals.slowdown === null ? "slowdown state unavailable" : thermals.slowdown ? "slowdown active" : "slowdown clear";
+    detail.push(`NVIDIA GPU thermals: ${temperature}, ${slowdown} (${Math.ceil(thermals.ageMs / 1000)} s old)`);
+  } else detail.push("NVIDIA GPU thermals: Unavailable");
   if (view.externalActivityProtection) detail.push(activity ?
     `Desktop activity sample: ${activity.active ? "Recent input with Aerynth unfocused" : "No recent input outside Aerynth"} (${Math.ceil(activity.ageMs / 1000)} s old)` :
     "Desktop activity sample: Unavailable");

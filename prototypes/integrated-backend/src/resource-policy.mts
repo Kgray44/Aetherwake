@@ -28,6 +28,7 @@ export type ResourcePolicyNativeView = ReturnType<ReturnType<typeof createResour
   externalDesktopActivity: { active: boolean; ageMs: number } | null;
   windowsLowMemory: { active: boolean; ageMs: number } | null;
   windowsCommitHeadroom: { bytes: number; ageMs: number } | null;
+  nvidiaGpuThermals: { temperatureCelsius: number | null; slowdown: boolean | null; ageMs: number } | null;
 };
 export type ResourceAdjustment = {
   schemaVersion: 1;
@@ -156,6 +157,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
     freeForReservations = critical ? 0 : Math.min(free, commit ?? Infinity) - memoryFloor;
     const rendererPressure = reasons.includes('renderer-latency');
     const gpuPressure = reasons.includes('gpu-load');
+    const gpuThermalPressure = reasons.includes('gpu-thermal-throttling');
     const externalActivity = config.protectExternalActivity && reasons.includes('external-desktop-activity');
     const protecting = config.mode === 'gaming_focus' || reasons.includes('active-input') || rendererPressure || externalActivity;
     const powerLimited = reasons.includes('battery-power') || reasons.includes('cpu-speed-limit');
@@ -167,7 +169,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       !gpuPressure && !reasons.includes('disk-io');
     const balancedCeiling = Math.max(1, maxWorkers - 1);
     const cpu = critical ? 0 : Math.min(config.limits.cpu, cpuLimited ? 1 : idleHeadroom ? maxWorkers : balancedCeiling);
-    gpuPreparationAllowed = !critical && !contention && !recovering && !gpuPressure && config.limits.gpu > 0;
+    gpuPreparationAllowed = !critical && !contention && !recovering && !gpuPressure && !gpuThermalPressure && config.limits.gpu > 0;
     const next = {
       cpu,
       build: protecting || reasons.includes('disk-io') ? 0 : Math.min(cpu, config.limits.build),
@@ -181,7 +183,7 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       critical ? (free === undefined ? 'memory_unavailable' : 'safety_floor') :
       rendererPressure ? 'renderer_latency' : externalActivity ? 'external_desktop_activity' : protecting ? 'foreground_protection' :
         powerLimited ? 'power_protection' : recovering && !contention ? 'recovery_dwell' : cpuLimited ? 'cpu_conservative' :
-      reasons.includes('disk-io') ? 'disk_contention' : gpuPressure ? 'gpu_contention' :
+      reasons.includes('disk-io') ? 'disk_contention' : gpuThermalPressure ? 'gpu_thermal_pressure' : gpuPressure ? 'gpu_contention' :
         idleHeadroom ? 'throughput_profile' : 'balanced';
     if (nextReason !== reason || kinds.some(kind => next[kind] !== effective[kind])) {
       previous = effective;

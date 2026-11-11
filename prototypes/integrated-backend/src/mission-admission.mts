@@ -7,6 +7,7 @@ import type { MissionAdmission, MissionAdmissionReading } from './mission-contra
 import { createResourcePolicy, type ResourcePolicyConfig, type ResourcePolicyPersistence } from './resource-policy.mts';
 import type { HostPower, ResourceSignal } from './resource-signals.mts';
 import { createWindowsGpuCapacityCache, estimateDedicatedHeadroom } from './windows-gpu-memory.mts';
+import { createWindowsGpuThermalsProbe, type WindowsGpuThermals } from './windows-gpu-thermals.mts';
 
 const memoryFloorBytes = 512 * 1024 * 1024;
 const cpuIntervalMs = 500;
@@ -53,6 +54,7 @@ type AdmissionOptions = {
   availableMemory?(): number;
   cpuCounters?(): CpuCounters;
   readWindowsPressure?: ((signal: AbortSignal, observe: ObserveWindowsPressure) => Promise<WindowsPressure>) | null;
+  readWindowsThermals?: ((signal: AbortSignal) => Promise<WindowsGpuThermals>) | null;
   resourcePolicy?: ResourcePolicyConfig;
   resourcePolicyPersistence?: ResourcePolicyPersistence;
 };
@@ -224,6 +226,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
   const topology = platform() === 'win32' && options.readWindowsPressure === undefined ? createWindowsGpuCapacityCache() : undefined;
   const readWindows = options.readWindowsPressure ?? (topology ?
     (signal: AbortSignal, observe: ObserveWindowsPressure) => sampleWindowsPressure(signal, topology, observe) : undefined);
+  const readThermals = options.readWindowsThermals === undefined && topology ? createWindowsGpuThermalsProbe() : options.readWindowsThermals;
   let memory: TimedReading | undefined;
   let cpu: Pressure = { highSamples: 0, pressured: false };
   let gpu: Pressure = { highSamples: 0, pressured: false };
@@ -241,6 +244,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
   let framePressure: Pressure = { highSamples: 0, pressured: false };
   const samples = new Map<string, MetricSample>();
   const errors = new Set<string>();
+  const unsupportedThermals = new Set<string>();
   let processBaseline: { usage: NodeJS.CpuUsage; time: number } | undefined;
 
   function capture(name: string, value: MetricValue | undefined, time: number, windowMs: number | null = 0,
@@ -309,7 +313,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
   }
 
   function refreshWindows(time: number) {
-    if (!policy.windowsMonitoring() || !readWindows || probe ||
+    if (!policy.windowsMonitoring() || (!readWindows && !readThermals) || probe ||
         time - demandSince < windowsWarmupMs || time - lastProbe < windowsIntervalMs) return;
     const controller = new AbortController();
     const startedAtUtc = new Date(wallNow()).toISOString();
@@ -338,9 +342,9 @@ export function createMissionAdmission(options: AdmissionOptions) {
         notifyWindowsObservation();
       }
     };
-    void Promise.resolve().then(() => {
+    const counters = Promise.resolve().then((): WindowsPressure | Promise<WindowsPressure> => {
       controller.signal.throwIfAborted();
-      return readWindows(controller.signal, observe);
+      return readWindows?.(controller.signal, observe) ?? {};
     }).catch((): WindowsPressure => ({})).then(result => {
       if (!controller.signal.aborted && !disposed) {
         observe(result, 'memory');
@@ -353,7 +357,31 @@ export function createMissionAdmission(options: AdmissionOptions) {
       }
     }).catch(() => {
       // Optional telemetry and a failed observer cannot stall scheduler admission.
-    }).finally(() => { probe = undefined; });
+    });
+    const onBattery = power?.value.battery === true && time - power.time <= powerFreshMs;
+    const thermals = readThermals && !onBattery ? Promise.resolve().then(() => {
+      controller.signal.throwIfAborted();
+      return readThermals(controller.signal);
+    }).catch(() => undefined).then(result => {
+      if (controller.signal.aborted || disposed) return;
+      const receivedAt = now();
+      const previous = samples.get('nvidiaGpuThermalSlowdown');
+      const prior = previous && receivedAt - previous.time <= windowsFreshMs ? previous.value : undefined;
+      for (const [name, value] of [['nvidiaGpuTemperatureCelsius', result?.temperatureCelsius],
+        ['nvidiaGpuThermalSlowdown', result?.slowdown]] as const) {
+        if (value === null) {
+          unsupportedThermals.add(name);
+          samples.delete(name);
+          errors.delete(name);
+        } else {
+          unsupportedThermals.delete(name);
+          capture(name, value, time, 0, startedAtUtc);
+        }
+      }
+      if (result && prior !== samples.get('nvidiaGpuThermalSlowdown')?.value && receivedAt - lastDemand <= demandGapMs)
+        notifyWindowsObservation();
+    }) : undefined;
+    void Promise.allSettled([counters, thermals]).finally(() => { probe = undefined; });
   }
 
   function reconcileWindowsMonitoring() {
@@ -366,6 +394,11 @@ export function createMissionAdmission(options: AdmissionOptions) {
       samples.delete(name);
       errors.delete(name);
     }
+    for (const name of ['nvidiaGpuTemperatureCelsius', 'nvidiaGpuThermalSlowdown']) {
+      samples.delete(name);
+      errors.delete(name);
+    }
+    unsupportedThermals.clear();
   }
 
   function clearRendererTiming() {
@@ -412,6 +445,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
       const availableMemoryBytes = fresh(memory, time, demandGapMs)?.reading;
       const windowsLowMemory = windowsMemoryReading('windowsLowMemory', time);
       const windowsCommitHeadroomBytes = windowsMemoryReading('windowsCommitHeadroomBytes', time);
+      const slowdown = samples.get('nvidiaGpuThermalSlowdown');
       const gpuEnginePercent = fresh(gpu.sample, time, windowsFreshMs)?.reading;
       const diskQueueLength = fresh(disk.sample, time, windowsFreshMs)?.reading;
       const rendererFrameP95Ms = fresh(frame?.timing, time, rendererFreshMs)?.reading;
@@ -420,6 +454,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
       if (availableMemoryBytes && availableMemoryBytes.value < memoryFloorBytes) reasons.push('physical-memory');
       if (windowsLowMemory?.value === 1) reasons.push('os-memory-pressure');
       if (windowsCommitHeadroomBytes && windowsCommitHeadroomBytes.value < memoryFloorBytes) reasons.push('windows-commit-pressure');
+      if (slowdown?.value === 1 && time - slowdown.time <= windowsFreshMs) reasons.push('gpu-thermal-throttling');
       if (cpuPercent && cpu.pressured) reasons.push('cpu-load');
       if (gpuEnginePercent && gpu.pressured) reasons.push('gpu-load');
       if (diskQueueLength && disk.pressured) reasons.push('disk-io');
@@ -433,7 +468,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
       }
       const workerLimit = reasons.includes('physical-memory') || reasons.includes('os-memory-pressure') ||
         reasons.includes('windows-commit-pressure') || reasons.includes('suspended') ?
-        0 : reasons.length ? Math.min(1, options.maxWorkers) : options.maxWorkers;
+        0 : reasons.some(reason => reason !== 'gpu-thermal-throttling') ? Math.min(1, options.maxWorkers) : options.maxWorkers;
       const snapshot = { workerLimit, reasons, readings: {
         ...(cpuPercent ? { cpuPercent: { ...cpuPercent } } : {}),
         ...(availableMemoryBytes ? { availableMemoryBytes: { ...availableMemoryBytes } } : {}),
@@ -484,6 +519,8 @@ export function createMissionAdmission(options: AdmissionOptions) {
       const activity = externalDesktopActivity(time);
       const activitySource = metric('idleSeconds', '0=inactive, 1=recent input outside Aerynth',
         'Electron system idle time and Aerynth window focus', desktopActivityFreshMs, true, true, policy.externalActivityProtection());
+      const thermalMetric = (name: string, unit: string, source: string) =>
+        metric(name, unit, source, windowsFreshMs, true, !!readThermals && !unsupportedThermals.has(name), policy.windowsMonitoring());
       return { schemaVersion: 1 as const, scope: 'local-host' as const, metrics: {
         ...windows,
         logicalProcessors: metric('logicalProcessors', 'logical processors', 'node:os.cpus', demandGapMs),
@@ -496,7 +533,9 @@ export function createMissionAdmission(options: AdmissionOptions) {
         idleSeconds: metric('idleSeconds', 's', 'Electron powerMonitor.getSystemIdleTime', powerFreshMs),
         suspended: metric('suspended', '0=awake, 1=suspended', 'Electron powerMonitor suspend/resume', Infinity),
         cpuSpeedLimitPercent: metric('cpuSpeedLimitPercent', 'percent of rated CPU speed', 'Electron powerMonitor speed-limit-change', powerFreshMs),
-        thermalTemperature: metric('thermalTemperature', 'degrees Celsius', 'No qualified thermal sensor', 0, false, false),
+        thermalTemperature: metric('thermalTemperature', 'degrees Celsius', 'No qualified CPU thermal sensor', 0, false, false),
+        nvidiaGpuTemperatureCelsius: thermalMetric('nvidiaGpuTemperatureCelsius', 'degrees Celsius', 'NVIDIA SMI, highest reported GPU temperature'),
+        nvidiaGpuThermalSlowdown: thermalMetric('nvidiaGpuThermalSlowdown', '0=clear, 1=active', 'NVIDIA SMI, hardware and software thermal slowdown flags'),
         foregroundApp: metric('foregroundApp', 'state', 'No authorized foreground OS source', 0, false, false),
         externalDesktopActivity: { ...activitySource,
           availability: activity === undefined && activitySource.availability === 'derived' ? 'not_sampled' : activitySource.availability,
