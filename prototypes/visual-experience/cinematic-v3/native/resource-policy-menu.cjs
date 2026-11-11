@@ -14,6 +14,7 @@ const reasons = {
   recovery_dwell: "Waiting for resource headroom to stabilize",
   cpu_conservative: "Conservative CPU admission",
   disk_contention: "Disk contention",
+  gpu_contention: "GPU contention",
   throughput_profile: "Throughput profile has headroom",
   balanced: "Balanced admission",
 };
