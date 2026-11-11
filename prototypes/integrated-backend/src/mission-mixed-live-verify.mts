@@ -12,6 +12,9 @@ import { Backend } from './service.mts';
 const credential = process.env.OPENAI_API_KEY;
 if (process.platform !== 'win32' || process.env.AERYNTH_VERIFY_LIVE_MIXED !== '1' || !credential)
   throw Error('Windows, AERYNTH_VERIFY_LIVE_MIXED=1 and OPENAI_API_KEY are required');
+const serial = process.argv.includes('--serial');
+const contention = process.argv.includes('--gpu-contention');
+assert.ok(!serial || !contention, 'Choose one mixed verification mode');
 delete process.env.OPENAI_API_KEY;
 
 const root = mkdtempSync(join(tmpdir(), 'aerynth-arie-live-mixed-'));
@@ -34,7 +37,6 @@ const provider = 'openai-api-vela';
 const model = 'gpt-6.1-sol';
 const effort = 'high';
 const objective = 'Investigate Aerynth backend performance with two independent specialists';
-const serial = process.argv.includes('--serial');
 const path = join(root, 'state.sqlite');
 
 let gpuStarted!: (id: string) => void;
@@ -61,6 +63,7 @@ try {
   });
   const read = (id: string) => backend.call('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
   const settled = (id: string) => until(() => read(id), result => !['queued', 'running', 'cancelling'].includes(result.outcome), 75_000);
+  const inspect = () => backend.call('resourcePolicyNative', { name: 'inspect' });
   const config = await backend.call('velaApiConfigure', { credential: { configurationId: 'vela-primary', apiKey: credential }, expectedVersion: null });
   assert.ok(config.version !== null);
   await backend.call('velaApiUsageAuthorize', { expectedVersion: config.version, enabled: true });
@@ -71,8 +74,10 @@ try {
     defaults: { providerId: provider, model, reasoningEffort: effort } } });
   const desktop = await backend.call('desktop', { type: 'createWorkspace', title: 'Synthetic live resource acceptance', projectId: null });
   await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: desktop.workspaces[0].id } });
-  const policy = await backend.call('resourcePolicyNative', { name: 'inspect' });
-  await backend.call('resourcePolicyNative', { name: 'set-gpu-limit', limit: 1, expectedVersion: policy.configVersion });
+  const policy = await inspect();
+  const gpuEnabled = await backend.call('resourcePolicyNative', { name: 'set-gpu-limit', limit: 1, expectedVersion: policy.configVersion });
+  const ownerHold = contention ? await backend.call('resourcePolicyNative', { name: 'set-mode', mode: 'gaming_focus',
+    expectedVersion: gpuEnabled.configVersion }) : undefined;
   const preview = await backend.call('missions', { name: 'preview', input: { objective } }) as MissionPreview;
   assert.equal(preview.externalReview?.calls, 2);
   assert.ok(preview.executors.every(executor => executor.available));
@@ -85,14 +90,39 @@ try {
   const start = performance.now();
   const gpu = await backend.call('gpuReadbackNative', { name: 'start', reviewId: gpuReview.reviewId });
   assert.ok(gpu.kind === 'started');
-  if (serial) await settled(gpu.missionId);
+  let contentionEntryPercent: number | undefined;
+  if (ownerHold) {
+    // An external hardware workload supplies the actual pressure. The initial owner hold keeps the probe demanded.
+    const queued = await until(() => read(gpu.missionId), result => result.admission?.reasons.includes('gpu-load') === true, 65_000);
+    assert.equal(queued.outcome, 'queued');
+    assert.equal(queued.tasks[0].attempts.length, 0);
+    contentionEntryPercent = queued.admission?.readings.gpuEnginePercent?.value;
+    assert.ok(contentionEntryPercent !== undefined && contentionEntryPercent >= 95);
+    await backend.call('resourcePolicyNative', { name: 'set-mode', mode: 'balanced', expectedVersion: ownerHold.configVersion });
+    const held = await until(inspect, state => state.reason === 'gpu_contention', 8_000);
+    assert.ok(held.effective.remote >= 2);
+    assert.equal(held.active.gpu, 0);
+  } else if (serial) await settled(gpu.missionId);
   else {
     const started = await Promise.race([gpuStart, wait(35_000, null, { ref: false })]);
     assert.equal(started, gpu.missionId, 'GPU task did not enter its authorized lease');
   }
   const mission = await backend.call('missionStartReviewed', { objective, fingerprint: preview.fingerprint,
     requestId: randomUUID() }) as MissionProjection;
-  const [gpuResult, mixed] = await Promise.all([settled(gpu.missionId), settled(mission.id)]);
+  let contentionAtMixedSettlement = false;
+  const mixedSettlement = settled(mission.id).then(async result => {
+    if (contention) {
+      const state = await inspect();
+      const queued = await read(gpu.missionId);
+      assert.equal(state.reason, 'gpu_contention');
+      assert.ok(state.effective.remote >= 2);
+      assert.equal(queued.outcome, 'queued');
+      assert.equal(queued.tasks[0].attempts.length, 0);
+      contentionAtMixedSettlement = true;
+    }
+    return result;
+  });
+  const [gpuResult, mixed] = await Promise.all([settled(gpu.missionId), mixedSettlement]);
   const outcome = (result: MissionProjection) => ({ outcome: result.outcome,
     tasks: result.tasks.map(task => ({ id: task.id, state: task.state, reason: task.detail,
       providerStatus: (task.attempts[0]?.evidence?.value as { errorCode?: string } | undefined)?.errorCode })) });
@@ -132,13 +162,17 @@ try {
   });
   const tripleOverlapMs = Math.max(0, ...remoteIntervals.map(([from, to]) =>
     Math.min(gpuTo, cpuTo, to) - Math.max(gpuFrom, cpuFrom, from)));
+  const cpuRemoteOverlapMs = Math.max(0, ...remoteIntervals.map(([from, to]) => Math.min(cpuTo, to) - Math.max(cpuFrom, from)));
   const summary = (attempt: MissionAttempt) => ({ kind: attempt.resourceLease?.kind, timing: attempt.timing,
     verified: attempt.verification?.passed, usage: attempt.telemetry?.usage });
-  console.log(JSON.stringify({ mode: serial ? 'serial-gpu' : 'overlap', model, effort, verified: true,
-    totalMs: Math.round(performance.now() - start), tripleOverlapMs, gpu: summary(gpuAttempt), cpu: summary(cpu),
-    remote: remote.map(task => summary(task.attempts[0])), totalProviderCalls: dispatchedAt.size }));
-  if (serial) assert.equal(tripleOverlapMs, 0);
+  if (contention) assert.ok(remoteIntervals.every(([, until]) => until <= gpuFrom), 'GPU started before remote work settled');
+  if (serial || contention) assert.equal(tripleOverlapMs, 0);
   else assert.ok(tripleOverlapMs > 0, 'CPU, GPU, and live transport did not overlap');
+  console.log(JSON.stringify({ mode: contention ? 'gpu-contention' : serial ? 'serial-gpu' : 'overlap', model, effort, verified: true,
+    totalMs: Math.round(performance.now() - start), tripleOverlapMs, cpuRemoteOverlapMs, gpu: summary(gpuAttempt), cpu: summary(cpu),
+    ...(contention ? { contentionEntryPercent, contentionAtMixedSettlement, cpuIntervalUtcMs: [cpuFrom, cpuTo],
+      remoteIntervalsUtcMs: remoteIntervals, gpuAdmittedUtcMs: gpuFrom } : {}),
+    remote: remote.map(task => summary(task.attempts[0])), totalProviderCalls: dispatchedAt.size }));
 } finally {
   try { await ownedBackend?.close(); }
   finally {
