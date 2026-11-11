@@ -172,6 +172,27 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.deepEqual(readiness.readyQueueCoverage, { observedEdges: 1, totalEdges: 1 });
     assert.deepEqual(readiness.largestMeasuredSegment, { kind: 'execution', attemptId: right.id, taskId: 'right',
       startedMs: 3, endedMs: 9, durationMs: 6 });
+    const withEntry = structuredClone(replay);
+    const created = withEntry.events.find(event => event.kind === 'created')!;
+    for (const event of withEntry.events) if (event.seq === created.seq) event.timing!.monotonicMs = 0;
+    withEntry.tasks.find(task => task.id === 'right')!.attempts[0].timing!.phases!.readyQueue = {
+      firstObservedMs: 0.25, blockers: {},
+    };
+    const entry = projectMissionExecution(withEntry).work.dependencyReadinessPath?.entry;
+    assert.deepEqual(entry, { taskId: 'right', attemptId: right.id, admissionEventSeq: created.seq,
+      admittedMs: 0, assemblyStartedMs: 1, elapsedMs: 1, observedReadyWaitMs: 0.75, unattributedGapMs: 0.25 });
+    const rootPhases = withEntry.tasks.find(task => task.id === 'right')!.attempts[0].timing!.phases!;
+    rootPhases.contextAssembly = [8, 9];
+    rootPhases.execution = [9, 9.5];
+    for (const event of withEntry.events) if (event.seq === right.start.eventSeq) event.timing!.monotonicMs = 9;
+    assert.deepEqual(projectMissionExecution(withEntry).work.dependencyReadinessPath?.largestMeasuredSegment,
+      { kind: 'observed-ready-wait', attemptId: right.id, taskId: 'right', startedMs: 0.25, endedMs: 8, durationMs: 7.75 });
+    rootPhases.readyQueue!.firstObservedMs = -1;
+    const staleEntry = projectMissionExecution(withEntry).work.dependencyReadinessPath?.entry;
+    assert.equal(staleEntry?.observedReadyWaitMs, null);
+    assert.equal(staleEntry?.unattributedGapMs, 8);
+    for (const event of withEntry.events) if (event.seq === created.seq) event.timing!.domain = 'unrelated-clock-fixture';
+    assert.equal(projectMissionExecution(withEntry).work.dependencyReadinessPath?.entry, null);
     const queued = structuredClone(replay);
     for (const event of queued.events) {
       if (event.seq === join.start.eventSeq) event.timing!.monotonicMs = 20;

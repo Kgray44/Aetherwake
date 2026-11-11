@@ -139,11 +139,17 @@ function criticalPath(attempts: { id: string; predecessors: string[] | null; int
 const attemptPhases = ['contextAssembly', 'dispatchValidation', 'execution', 'postExecutionContextValidation', 'verification'] as const;
 type PhaseDurations = Partial<Record<typeof attemptPhases[number], number>>;
 
+function observedReadyWait(phases: MissionAttemptPhaseTiming, gapStartedMs: number, assemblyStartedMs: number) {
+  const firstObserved = phases.readyQueue?.firstObservedMs;
+  return firstObserved !== undefined && firstObserved >= gapStartedMs && firstObserved <= assemblyStartedMs ?
+    assemblyStartedMs - firstObserved : null;
+}
+
 /** Trace the final settlement back through the last finishing explicit prerequisite at each join. */
 function dependencyReadinessPath(attempts: {
   id: string; taskId: string; interval: Interval | null; predecessors: string[] | null;
   phases: MissionAttemptPhaseTiming | null;
-}[]) {
+}[], admission: AttemptBoundary | null) {
   type Node = { attemptId: string; taskId: string; clock: string; assemblyStartedMs: number; settledMs: number;
     gapBeforeAssemblyMs: number | null; observedReadyWaitMs: number | null; unattributedGapMs: number | null;
     unattributedMs: number; phases: MissionAttemptPhaseTiming; previous: Node | null };
@@ -170,9 +176,7 @@ function dependencyReadinessPath(attempts: {
       if (!previous || node.settledMs > previous.settledMs) previous = node;
     }
     const gapBeforeAssemblyMs = previous ? assemblyStartedMs - previous.settledMs : null;
-    const firstObserved = phases.readyQueue?.firstObservedMs;
-    const observedReadyWaitMs = previous && firstObserved !== undefined &&
-      firstObserved >= previous.settledMs && firstObserved <= assemblyStartedMs ? assemblyStartedMs - firstObserved : null;
+    const observedReadyWaitMs = previous ? observedReadyWait(phases, previous.settledMs, assemblyStartedMs) : null;
     const node: Node = { attemptId: id, taskId, clock: interval.clock, assemblyStartedMs, settledMs: interval.end,
       gapBeforeAssemblyMs, observedReadyWaitMs,
       unattributedGapMs: gapBeforeAssemblyMs === null ? null : gapBeforeAssemblyMs - (observedReadyWaitMs ?? 0),
@@ -184,6 +188,16 @@ function dependencyReadinessPath(attempts: {
   const chain: Node[] = [];
   for (let node: Node | null = tail; node; node = node.previous) chain.push(node);
   chain.reverse();
+  const root = chain[0];
+  const admittedMs = admission?.monotonicMs;
+  let entry = null;
+  if (admission?.clock === root.clock && admittedMs != null && admittedMs <= root.assemblyStartedMs) {
+    const elapsedMs = root.assemblyStartedMs - admittedMs;
+    const observedReadyWaitMs = observedReadyWait(root.phases, admittedMs, root.assemblyStartedMs);
+    entry = { taskId: root.taskId, attemptId: root.attemptId, admissionEventSeq: admission.eventSeq,
+      admittedMs, assemblyStartedMs: root.assemblyStartedMs, elapsedMs, observedReadyWaitMs,
+      unattributedGapMs: elapsedMs - (observedReadyWaitMs ?? 0) };
+  }
   const phaseMs: PhaseDurations = {};
   type SegmentKind = typeof attemptPhases[number] | 'observed-ready-wait';
   type Segment = { kind: SegmentKind; attemptId: string; taskId: string;
@@ -196,7 +210,8 @@ function dependencyReadinessPath(attempts: {
   };
   for (const node of chain) {
     const ready = node.phases.readyQueue;
-    if (ready && node.observedReadyWaitMs !== null)
+    const readyWait = node === root ? entry?.observedReadyWaitMs ?? null : node.observedReadyWaitMs;
+    if (ready && readyWait !== null)
       largestMeasuredSegment = considerSegment(node, 'observed-ready-wait', ready.firstObservedMs, node.assemblyStartedMs);
     for (const phase of attemptPhases) {
       const bounds = node.phases[phase];
@@ -207,7 +222,7 @@ function dependencyReadinessPath(attempts: {
     }
   }
   const observed = chain.flatMap(node => node.observedReadyWaitMs === null ? [] : [node.observedReadyWaitMs]);
-  return { clock: tail.clock, elapsedMs: tail.settledMs - chain[0].assemblyStartedMs, phaseMs, largestMeasuredSegment,
+  return { clock: tail.clock, elapsedMs: tail.settledMs - root.assemblyStartedMs, entry, phaseMs, largestMeasuredSegment,
     betweenAttemptsMs: chain.reduce((sum, node) => sum + (node.gapBeforeAssemblyMs ?? 0), 0),
     observedReadyBetweenAttemptsMs: observed.length ? observed.reduce((sum, duration) => sum + duration, 0) : null,
     unattributedBetweenAttemptsMs: chain.reduce((sum, node) => sum + (node.unattributedGapMs ?? 0), 0),
@@ -360,7 +375,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
         attempts: byAttempt.size },
       // Measures occupied work on explicit dependency/retry edges. Queue gaps are separate.
       criticalPath: path,
-      dependencyReadinessPath: complete && !active ? dependencyReadinessPath(attempts) : null,
+      dependencyReadinessPath: complete && !active ? dependencyReadinessPath(attempts, initial) : null,
       longestOccupiedAttemptOnPath: longestOnPath ? { attemptId: longestOnPath.id, taskId: longestOnPath.taskId,
         durationMs: longestOnPath.interval!.end - longestOnPath.interval!.start,
         eventSeqs: [longestOnPath.start.eventSeq, longestOnPath.end!.eventSeq] } : null,
