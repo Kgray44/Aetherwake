@@ -75,6 +75,8 @@ const sourceByTask = new Map([
   ['code', 'aerynth.shipped-backend-source'], ['report', 'aerynth.mission.journal'],
 ]);
 const joinInputIds = [...sourceByTask.keys()].filter(id => id !== 'report');
+const screening = { protocol: 'native-worker-pair-screen@1', pairs: 6, minimumConcordantPairs: 5,
+  minimumMedianRelativeEffect: 0.05 };
 async function samplePaired(iteration: number, workers: number) {
   const cpuStart = process.cpuUsage();
   const report = await runMission(iteration, workers);
@@ -104,13 +106,15 @@ async function samplePaired(iteration: number, workers: number) {
 }
 
 async function runPaired() {
+  const startedAt = new Date().toISOString();
   let iteration = 0;
   const warmups = [];
   for (const workers of [1, 2, 3]) warmups.push(await samplePaired(iteration++, workers));
   const comparisons = [];
+  const hypotheses = [];
   for (const [baselineWorkers, candidateWorkers] of [[1, 2], [2, 3]]) {
     const pairs = [];
-    for (let pair = 0; pair < 6; pair++) {
+    for (let pair = 0; pair < screening.pairs; pair++) {
       const baselineFirst = pair % 2 === 0;
       const first = await samplePaired(iteration++, baselineFirst ? baselineWorkers : candidateWorkers);
       const second = await samplePaired(iteration++, baselineFirst ? candidateWorkers : baselineWorkers);
@@ -120,13 +124,48 @@ async function runPaired() {
       pairs.push({ order: [first.workers, second.workers], baseline, candidate, deltaMs });
     }
     const deltas = pairs.flatMap(pair => pair.deltaMs === null ? [] : [pair.deltaMs]).sort((a, b) => a - b);
+    const slowerPairs = deltas.filter(delta => delta > 0).length;
+    const fasterPairs = deltas.filter(delta => delta < 0).length;
+    const relativeDeltas = pairs.flatMap(({ baseline, deltaMs }) =>
+      deltaMs !== null && baseline.elapsedMs !== null && baseline.elapsedMs > 0 ? [deltaMs / baseline.elapsedMs] : [])
+      .sort((a, b) => a - b);
+    const medianRelativeDelta = relativeDeltas.length === screening.pairs ? (relativeDeltas[2] + relativeDeltas[3]) / 2 : null;
     comparisons.push({ baselineWorkers, candidateWorkers, pairs, validPairs: deltas.length,
       medianDeltaMs: deltas.length === pairs.length ? (deltas[2] + deltas[3]) / 2 : null,
-      slowerPairs: deltas.filter(delta => delta > 0).length, fasterPairs: deltas.filter(delta => delta < 0).length });
+      medianRelativeDelta, slowerPairs, fasterPairs });
+    if (warmups.every(row => row.qualityPassed) && medianRelativeDelta !== null &&
+      Math.abs(medianRelativeDelta) >= screening.minimumMedianRelativeEffect &&
+      Math.max(slowerPairs, fasterPairs) >= screening.minimumConcordantPairs) {
+      const lowerWorkerArmWasFaster = medianRelativeDelta > 0;
+      const testedBaseline = lowerWorkerArmWasFaster ? candidateWorkers : baselineWorkers;
+      const testedTreatment = lowerWorkerArmWasFaster ? baselineWorkers : candidateWorkers;
+      hypotheses.push({
+        id: pairs[0].baseline.missionId + ':worker-limit', status: 'hypothesis', owner: 'MissionService',
+        protocol: screening.protocol, applicability: { workload: 'native CPU, RAM and shipped source observations with a verified join',
+          laneLimit: concurrentLaneLimit, providerCalls: 0, storage: 'in-memory SQLite' },
+        observedProblem: 'The slower worker limit increased admission-to-final-settlement time for matched verified missions.',
+        hypothesis: 'Using the faster worker limit may shorten verified completion on comparable native observation missions.',
+        baseline: { workers: testedBaseline }, treatment: { workers: testedTreatment },
+        expectedBenefit: 'Lower elapsed time from admission to final settlement with equivalent verified evidence.',
+        qualityGuards: ['same required task set', 'canonical evidence source and exact proof ID for each task',
+          'verified join over the same prerequisite evidence', 'no provider dispatches'],
+        evidence: pairs.map(({ baseline, candidate }) => ({
+          baselineMissionId: (lowerWorkerArmWasFaster ? candidate : baseline).missionId,
+          treatmentMissionId: (lowerWorkerArmWasFaster ? baseline : candidate).missionId,
+        })),
+        tradeoff: 'Changing concurrency can alter CPU contention, worker overlap, and foreground responsiveness.',
+        confounders: ['ambient host load', 'one host', 'one task graph', 'in-memory journal'],
+        evaluation: 'Counterbalance on unseen local read-only missions. Independently compare evidence coverage, verified outputs and foreground responsiveness alongside latency.',
+        constraints: 'Preserve resource limits, permissions, task coverage, and verification. Use local read-only workloads.',
+        stopCondition: 'Stop if any verification, evidence coverage, permission, or foreground responsiveness guard fails.',
+        rollback: { workers: testedBaseline },
+      });
+    }
   }
-  console.log(JSON.stringify({ contract: 'aerynth.mission-worker-comparison@1', node: process.version, platform: process.platform,
-    logicalParallelism: availableParallelism(), warmups, comparisons, providerCalls: 0,
-    boundary: 'Counterbalanced local read-only native workload with in-memory SQLite. Six pairs per comparison; no tail-latency or confidence estimate. Host interference is uncontrolled.' }));
+  console.log(JSON.stringify({ contract: 'aerynth.mission-worker-comparison@1', startedAt, node: process.version,
+    platform: process.platform, arch: process.arch, osRelease: release(), logicalParallelism: availableParallelism(),
+    warmups, comparisons, screening, hypotheses, providerCalls: 0,
+    boundary: 'Counterbalanced local read-only native workload with in-memory SQLite. Six pairs per comparison; no tail-latency or confidence estimate. Host interference is uncontrolled. The screen emits hypotheses for independent review.' }));
   if (warmups.some(row => !row.qualityPassed) || comparisons.some(item => item.validPairs !== item.pairs.length)) process.exitCode = 1;
 }
 async function runBatch(holdMs: number) {
