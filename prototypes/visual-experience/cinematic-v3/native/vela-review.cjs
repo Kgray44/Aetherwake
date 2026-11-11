@@ -244,7 +244,7 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
   const agentInstructions = review.agentInstructions
     ? `<details open><summary>Additional agent instructions</summary><section><pre>${escape(review.agentInstructions)}</pre></section></details>` : "";
   const semanticDetails = review.missionPlanning
-    ? "<p>Vela will investigate these selected notes and send checked passages to the mission planner. This uses up to six API calls, including synthetic compatibility checks. You’ll review the proposed tasks before they can start.</p>"
+    ? "<p>Vela will investigate these selected sources and send checked passages to the mission planner. This uses up to six API calls, including synthetic compatibility checks. You’ll review the proposed tasks before they can start.</p>"
     : review.semanticContext
       ? `<p>Vela will interpret your question and check the selected evidence using this model. The answer uses checked passages. ${review.handoff ? "Only the selected exchange is included from the conversation." : "Conversation history is excluded."} Tools are disabled. This can use up to six API calls, including synthetic compatibility checks.</p>` : "";
   const checkpointDetails = review.missionCheckpoint

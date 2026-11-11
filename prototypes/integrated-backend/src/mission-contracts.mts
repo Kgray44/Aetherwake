@@ -63,9 +63,9 @@ export interface MissionPlanningReceipt {
   startedAt: string;
   durationMs: number;
   usage?: ReportedUsage;
-  context?: { notes: MissionPlanningNoteRef[]; evidenceDigest: string; elapsedMs: number; providerCalls: number; usage: ReportedUsage[] };
+  context?: { notes: MissionPlanningSourceRef[]; files?: MissionPlanningSourceRef[]; evidenceDigest: string; elapsedMs: number; providerCalls: number; usage: ReportedUsage[] };
 }
-export interface MissionPlanningNoteRef { id: string; title: string; version: number; proofDigest: string }
+export interface MissionPlanningSourceRef { id: string; title: string; version: number; proofDigest: string }
 export interface MissionEvidence {
   id: string;
   attemptId: string;
@@ -206,8 +206,8 @@ export interface MissionExecutiveReview {
 }
 export type MissionRequest =
   | { name: 'executive-review'; input: MissionExecutiveRequest }
-  | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string; teamId?: string; noteIds?: string[] } }
-  | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string; noteIds?: string[] } }
+  | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string; teamId?: string; noteIds?: string[]; fileIds?: string[] } }
+  | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string; noteIds?: string[]; fileIds?: string[] } }
   | { name: 'start'; input: { objective: string; fingerprint: string; requestId: string; agentProfileId?: string; proposalId?: string; teamId?: string } }
   | { name: 'team-library'; input: Record<string, never> }
   | { name: 'team-save'; input: MissionTeamSave }
@@ -234,7 +234,8 @@ export interface MissionPlanningOffer {
   scope: MissionScope;
   objective: string;
   fingerprint: string;
-  notes?: MissionPlanningNoteRef[];
+  notes?: MissionPlanningSourceRef[];
+  files?: MissionPlanningSourceRef[];
   planner?: { provider?: 'chatgpt-plan-responses' | 'openai-api-vela'; model: string; effort?: ReasoningEffort; capabilities: string[] };
 }
 export interface MissionWorkroom {

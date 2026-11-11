@@ -646,6 +646,59 @@ test('reviewed workspace inventory uses active placements and fences changed res
   }
 });
 
+test('mission planning investigates a placed file correction and fences the plan against physical replacement', async () => {
+  const f = fixture(true, true);
+  try {
+    await f.ready();
+    const filePath = join(f.directory, 'Corrected host inspection.txt');
+    const correction = 'Correction: measure RAM and check backend responsiveness. The earlier CPU check was withdrawn.';
+    writeFileSync(filePath, 'Earlier checklist: CPU and RAM.\n' + correction);
+    const workspace = await f.core.command('desktop', { type: 'snapshot' });
+    const objective = 'Run the checks specified in the latest handoff.';
+    const selection = { kind: 'file' as const, path: filePath };
+    const { resource: unplaced } = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file', selection });
+    const preview = (fileIds: string[]) => f.core.command('missions', { name: 'preview', input: { objective, fileIds } }) as Promise<MissionPlanningOffer>;
+    await assert.rejects(preview([unplaced.id]), /mission_planning_file_unavailable/);
+    const { resource } = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file', selection,
+      workspaceId: workspace.activeWorkspaceId!, expectedLayoutVersion: workspace.layoutVersion });
+    const fileIds = [resource.id];
+    const offer = await preview(fileIds);
+    assert.deepEqual(offer.files?.map(source => source.id), fileIds);
+    assert.doesNotMatch(JSON.stringify(offer), /withdrawn/);
+    const reviewed = await f.core.command('missionPlanningReview', { objective, fileIds, fingerprint: offer.fingerprint });
+    assert.match(reviewed.files[0].text, /measure RAM and check backend/);
+    const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    const perception = { kind: 'plan', explicitGoals: ['Run the latest checks'], inferredGoals: [], constraints: [],
+      capabilityHints: [], deliverables: ['text'], verification: [] };
+    const perceive = (key: string, question: string) => ({ version: 2, objective, clarification: '', perception,
+      needs: [{ key, question, query: 'inspection correction' }] });
+    const assess = (key: string, quote: string) => ({ version: 3, clarification: '', assessment: [
+      { key, status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
+    ] });
+    f.replies.push(reply(perceive('probe', 'Which weekday is the inspection?')), reply(assess('day', 'The pump inspection is on Tuesday.')),
+      reply(perceive('current', 'Which host checks are still required?')), reply(assess('current', correction)),
+      body => {
+        const payload = JSON.parse(body.input[0].content);
+        assert.equal(payload.evidence.coverage[0].passages[0].sourceId, resource.id);
+        assert.equal(payload.evidence.coverage[0].passages[0].quote, correction);
+        assert.ok(!payload.capabilities.some((task: { id: string }) => task.id === 'notes'));
+        return reply({ tasks: [{ capability: 'ram', after: [] }, { capability: 'backend', after: ['ram'] }], unsupported: [] })(body);
+      });
+    const requestId = randomUUID();
+    const planned = await f.core.command('missionPlanReviewed', { objective, fileIds, fingerprint: offer.fingerprint, requestId }) as MissionPreview;
+    assert.deepEqual(planned.plan.tasks.map(task => task.executor), ['sample.ram', 'sample.backend', 'join.samples']);
+    assert.deepEqual(planned.plan.planning?.context?.files, offer.files);
+    assert.doesNotMatch(JSON.stringify(planned), /withdrawn/);
+    assert.ok(!JSON.stringify(planned).includes(JSON.stringify(filePath)));
+    writeFileSync(filePath, 'New correction: no checks should run.');
+    await assert.rejects(f.core.command('missions', { name: 'start', input: {
+      objective, proposalId: requestId, requestId, fingerprint: planned.fingerprint,
+    } }), /mission_planning_context_changed/);
+    assert.equal(f.requests.length, 5);
+    assert.deepEqual(await f.core.command('missions', { name: 'list', input: {} }), []);
+  } finally { await f.close(); }
+});
+
 test('reviewed CIE cites a selected local file and fences physical replacement before composition', async () => {
   const f = fixture(true, true);
   try {
