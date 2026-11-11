@@ -61,3 +61,23 @@ test('bounded host observations preserve overlap during CPU warmup and obey the 
     assert.equal(second.checkpointRequested.reason, 'resource-pressure');
   } finally { governor.dispose(); }
 });
+
+test('AEP adjustment preview validates current evidence and cannot change admission', () => {
+  const governor = createMissionAdmission({ maxWorkers: 3, wallNow: () => 1000,
+    availableMemory: () => 1024 ** 3, readWindowsPressure: null });
+  try {
+    governor.read(true);
+    const before = governor.inspectPolicy();
+    const input = { schemaVersion: 1 as const, baseRevision: before.revision, evidenceRefs: ['experiment-1'],
+      expiresAtMs: 2000, changes: { cpu: -1, gpu: 1 } };
+    const preview = governor.previewAdjustment(input);
+    assert.equal(preview.status, 'preview');
+    if (preview.status !== 'preview') throw Error('missing resource prediction');
+    assert.equal(preview.prediction.cpu, 0);
+    assert.equal(preview.prediction.gpu, 0);
+    assert.equal(governor.previewAdjustment({ ...input, baseRevision: before.revision - 1 }).status, 'stale_policy');
+    assert.equal(governor.previewAdjustment({ ...input, expiresAtMs: 1000 }).status, 'invalid_proposal');
+    assert.deepEqual(governor.inspectPolicy(), before);
+    assert.equal(governor.canLease('cpu'), true);
+  } finally { governor.dispose(); }
+});
