@@ -683,22 +683,49 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     if (argv.includes('--missions-aep-presentation-only')) {
       const retryNotes = argv.includes("--missions-aep-retry");
       const observeStart = argv.includes("--missions-aep-start-ui");
+      const composerStart = argv.includes("--missions-aep-composer");
       assert(!retryNotes || !argv.includes("--bootstrap-vela-api"), "native_retry_requires_offline_profile");
       assert(!observeStart || !argv.includes("--bootstrap-vela-api"), "native_start_ack_requires_offline_profile");
+      assert(!composerStart || !argv.includes("--bootstrap-vela-api"), "native_composer_start_requires_offline_profile");
       // The panel preserves active edits instead of refreshing their controls from events.
       key("Tab");
       assert.equal(await js('document.activeElement?.matches("input,textarea,select")'), false);
-      const objective = retryNotes ? OBJECTIVE + " using workspace notes" : OBJECTIVE;
+      const baseObjective = retryNotes ? OBJECTIVE + " using workspace notes" :
+        composerStart ? "measure CPU and RAM" : OBJECTIVE;
+      const objective = composerStart ? "Run a mission to " + baseObjective : baseObjective;
       const preview = await rpc("missions", { name: "preview", input: { objective } });
       assert.equal(preview.externalReview, undefined);
       const missionsControl = SURFACE + ' button[aria-label="Missions"]';
-      if (observeStart) await click(missionsControl);
-      const submitted = performance.now();
-      const mission = await rpc("missions", { name: "start", input: {
-        objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
-      } });
+      if (observeStart && !composerStart) await click(missionsControl);
+      let submitted, mission;
+      if (composerStart) {
+        const before = await list();
+        await fillNative({ click, key, js, wait, insertText: text => operation(() => win.webContents.insertText(text), "mission_text_input_deadline") }, composer, objective);
+        await click(SURFACE + ' button[aria-label="Send to Vela"]');
+        const start = PREVIEW + ' [data-mission-focus="start-mission"]';
+        await wait("Explicit composer command opens local mission review", () => js(`(() => {
+          const preview = document.querySelector(${quote(PREVIEW)});
+          return preview?.textContent.includes(${quote(objective)}) && preview.textContent.includes('Local read-only tasks') &&
+            document.querySelector(${quote(start)})?.getClientRects().length > 0;
+        })()`));
+        assert.deepEqual(await list(), before, "composer_mission_started_before_review");
+        assert.equal((await rpc("providerActivity", {})).providerRequests, 0);
+        submitted = performance.now();
+        await click(start);
+        const existing = new Set(before.map(item => item.id));
+        mission = await wait("Reviewed Start creates the explicit composer mission", async () =>
+          (await list()).find(item => item.objective === objective && !existing.has(item.id)));
+        await wait("Accepted Start clears the unchanged mission draft", () =>
+          js(`document.querySelector(${quote(composer)})?.value === ''`));
+        receipt.composerStart = { missionId: mission.id, reviewBeforeStart: true };
+      } else {
+        submitted = performance.now();
+        mission = await rpc("missions", { name: "start", input: {
+          objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
+        } });
+        receipt.actions.push({ method: "application-capability-fixture", type: "startLocalMission" });
+      }
       const missionId = mission.id;
-      receipt.actions.push({ method: "application-capability-fixture", type: "startLocalMission" });
       if (observeStart) {
         const selector = SURFACE + " .vela-missions-list [data-mission-focus=" + quote(missionId) + "]";
         const label = await wait("Visible canonical mission status acknowledges Start", () => js(`(() => {
@@ -753,6 +780,11 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       assert.ok(Number.isFinite(presentation.intakeToReportStagedMs) && presentation.intakeToReportStagedMs >= 0);
       assert.equal(presentation.intakeToUserDeliveryMs,
         presentation.intakeToReportStagedMs + presentation.userDelivery.stagingToReceiptMs);
+      if (composerStart) {
+        assert.equal(presentation.wallTime?.from, "mission-start-command");
+        assert.equal(presentation.wallTime?.through, "renderer-receipt");
+        assert.equal(presentation.wallTime?.elapsedMs, presentation.intakeToUserDeliveryMs);
+      }
       assert.deepEqual(presentation.firstMeaningfulOutput, {
         kind: "mission-report", source: "renderer-visible-frame", messageId: report.id,
         publicationEventId: presentation.reportPublication.eventId,
