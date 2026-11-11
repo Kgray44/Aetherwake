@@ -485,28 +485,31 @@ export class VelaService {
         throw error;
       }
     };
-    return investigateSemanticHistory<VelaSemanticHistorySource>(intent, {
-      search: query => {
-        if (historyDigest(this.read(() => this.historyOrigin())) !== historyDigest(origin)) return { sources: [], scan: 'unavailable' };
-        const preview = this.previewProviderContext([], { includeHistory: true, historyQuery: query,
-          historyQueryMode: 'semantic-query', fits: () => true });
-        const { history } = preview.context;
-        const scan: SemanticHistoryScan = preview.historyOmissions.some(item => item.reason === 'message-unavailable' || item.reason === 'unknown-origin')
-          ? 'unavailable' : history?.retrieval?.partial || preview.historyOmissions.some(item => item.reason !== 'no-history' && item.reason !== 'no-conversation')
-            ? 'partial' : 'bounded';
-        if (!preview.historyFence || !history?.retrieval || history.retrieval.resolution === 'no-match') return { sources: [], scan };
-        const fence = preview.historyFence;
-        const sources = history.retrieval.selectedRequestIds.map(sourceId => {
-          const source = Object.freeze({
-            sourceId, revision: String(fence.baseRevision), proofDigest: fence.digest,
-            text: JSON.stringify(history.messages.filter(message => message.requestId === sourceId)
-              .map(({ role, content }) => ({ role, content }))),
-          });
-          previews.set(source, preview);
-          return source;
+    const findHistory = (query?: string) => {
+      if (historyDigest(this.read(() => this.historyOrigin())) !== historyDigest(origin)) return { sources: [], scan: 'unavailable' as const };
+      const preview = this.previewProviderContext([], { includeHistory: true,
+        ...(query ? { historyQuery: query, historyQueryMode: 'semantic-query' as const } : {}), fits: () => true });
+      const { history } = preview.context;
+      const scan: SemanticHistoryScan = preview.historyOmissions.some(item => item.reason === 'message-unavailable' || item.reason === 'unknown-origin')
+        ? 'unavailable' : (!query && !!history) || history?.retrieval?.partial || preview.historyOmissions.some(item => item.reason !== 'no-history' && item.reason !== 'no-conversation')
+          ? 'partial' : 'bounded';
+      if (!preview.historyFence || !history || (query && (!history.retrieval || history.retrieval.resolution === 'no-match'))) return { sources: [], scan };
+      const fence = preview.historyFence;
+      const requestIds = history.retrieval?.selectedRequestIds ?? [...new Set(history.messages.map(message => message.requestId))];
+      const sources = requestIds.map(sourceId => {
+        const source = Object.freeze({
+          sourceId, revision: String(fence.baseRevision), proofDigest: fence.digest,
+          text: JSON.stringify(history.messages.filter(message => message.requestId === sourceId)
+            .map(({ role, content }) => ({ role, content }))),
         });
-        return { sources, scan };
-      },
+        previews.set(source, preview);
+        return source;
+      });
+      return { sources, scan };
+    };
+    return investigateSemanticHistory<VelaSemanticHistorySource>(intent, {
+      search: findHistory,
+      recent: () => findHistory(),
       isCurrent,
       disclose: (call, sources, abort) => {
         const revalidate = () => historyDigest(this.read(() => this.historyOrigin())) === historyDigest(origin) && sources.every(isCurrent);

@@ -137,7 +137,7 @@ test('native semantic shadow dispatch uses strict output and denies revoked admi
     f.replies.push(body => {
       assert.match(JSON.stringify(body.input), /excerpts/);
       assert.match(JSON.stringify(body.input), /duplicate batch/);
-      return response(JSON.stringify({ version: 1, assessment: [{ key: 'safeguard', status: 'missing', sources: [], query: '' }] }), body.model);
+      return response(JSON.stringify({ version: 2, clarification: '', assessment: [{ key: 'safeguard', status: 'missing', sources: [], query: '' }] }), body.model);
     });
     const found = await f.core.investigateVelaHistory(intent, admission);
     assert.equal(found.state, 'assessed');
