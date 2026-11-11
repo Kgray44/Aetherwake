@@ -292,6 +292,16 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     };
   });
   const traceByAttempt = new Map(attempts.map(attempt => [attempt.id, attempt]));
+  const tasksById = new Map(mission.tasks.map(task => [task.id, task]));
+  const dependencyWaits = mission.tasks.filter(task => mission.waits[task.id] === 'dependencies').map(task => ({
+    taskId: task.id,
+    planRevision: mission.planRevision,
+    prerequisites: task.dependencies.flatMap(taskId => {
+      const prerequisite = tasksById.get(taskId);
+      if (prerequisite?.state === 'verified') return [];
+      return [{ taskId, state: prerequisite?.state ?? null, attemptId: prerequisite?.attempts.at(-1)?.id ?? null }];
+    }),
+  }));
   const openAttempts = attempts.filter(attempt => attempt.state === 'running' && !attempt.end);
   const liveAttempts = openAttempts.flatMap(({ id, taskId, start }) => {
     const task = byAttempt.get(id)?.task;
@@ -485,6 +495,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       causalBoundary: 'attempt-dependencies-and-retries' as const,
       openAttempts: openAttempts.map(attempt => attempt.id),
       live: liveAttempts.length ? { observation: observation ? { ...observation } : null, attempts: liveAttempts } : null,
+      dependencyWaits,
       retries,
       cancellations,
       clockSegments, workerMs: total?.workerMs ?? null, activeMs: total?.activeMs ?? null,

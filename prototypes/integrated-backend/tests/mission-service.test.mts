@@ -64,6 +64,12 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.equal(live.work.criticalPath, null);
     const snapshot = service.read(mission.id, scope);
     const [firstOpen, secondOpen] = live.attempts;
+    assert.deepEqual(live.work.dependencyWaits, [{
+      taskId: 'join', planRevision: 1, prerequisites: [
+        { taskId: 'left', state: 'running', attemptId: firstOpen.id },
+        { taskId: 'right', state: 'running', attemptId: secondOpen.id },
+      ],
+    }]);
     const observation = { clock: firstOpen.start.clock!, monotonicMs: secondOpen.start.monotonicMs! + 5 };
     const liveWork = projectMissionExecution(snapshot, null, null, observation).work;
     assert.deepEqual(liveWork.live?.observation, observation);
@@ -74,8 +80,14 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.equal(liveWork.workerMs, null);
     await new Promise(resolve => setTimeout(resolve, 10));
     f.active.get('left')!.release();
+    await flush();
+    assert.deepEqual(readProfile().work.dependencyWaits, [{
+      taskId: 'join', planRevision: 1,
+      prerequisites: [{ taskId: 'right', state: 'running', attemptId: secondOpen.id }],
+    }]);
     f.active.get('right')!.release();
     await flush();
+    assert.deepEqual(readProfile().work.dependencyWaits, []);
     f.active.get('join')!.release();
     await flush();
     const profile = readProfile();
