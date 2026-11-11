@@ -4,6 +4,7 @@ export type HostPower = {
   battery: boolean | null;
   idleSeconds: number | null;
   speedLimitPercent: number | null;
+  aerynthFocused?: boolean;
 };
 export type ResourceSignal = { rendererTiming: RendererTiming } | { hostPower: HostPower } | { aerynthFocused: boolean };
 
@@ -22,7 +23,9 @@ export function isResourceSignal(input: unknown): input is ResourceSignal {
       inRange(sample.windowMs, 1000, 5000);
   }
   const power = input.hostPower;
-  return Object.hasOwn(input, 'hostPower') && record(power) && Object.keys(power).length === 4 &&
+  return Object.hasOwn(input, 'hostPower') && record(power) &&
+    (Object.hasOwn(power, 'aerynthFocused') ? Object.keys(power).length === 5 && typeof power.aerynthFocused === 'boolean' :
+      Object.keys(power).length === 4) &&
     typeof power.suspended === 'boolean' && (power.battery === null || typeof power.battery === 'boolean') &&
     (power.idleSeconds === null || Number.isSafeInteger(power.idleSeconds) && inRange(power.idleSeconds, 0, 2 ** 31 - 1)) &&
     (power.speedLimitPercent === null || inRange(power.speedLimitPercent, 0, 100));

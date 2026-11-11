@@ -496,11 +496,11 @@ app.whenReady().then(async () => {
   win.on("move", refreshDisplayBudget);
   const displayEvents = ["display-metrics-changed", "display-added", "display-removed"];
   for (const event of displayEvents) screen.on(event, refreshDisplayBudget);
-  const stopResourcePower = require("./resource-power.cjs").observeResourcePower(powerMonitor, sendMissionHostSignal);
-  const publishResourceFocus = () => sendMissionHostSignal({ aerynthFocused:
-    win.isVisible() && !win.isMinimized() && win.isFocused() && owner.getURL() === localURL });
-  owner.on("did-finish-load", publishResourceFocus);
-  for (const event of ["focus", "blur", "show", "hide", "minimize", "restore"]) win.on(event, publishResourceFocus);
+  const resourcePower = require("./resource-power.cjs").observeResourcePower(powerMonitor, sendMissionHostSignal, () =>
+    !win.isDestroyed() && !owner.isDestroyed() && win.isVisible() && !win.isMinimized() &&
+    win.isFocused() && owner.getURL() === localURL);
+  owner.on("did-finish-load", resourcePower.refreshFocus);
+  for (const event of ["focus", "blur", "show", "hide", "minimize", "restore"]) win.on(event, resourcePower.refreshFocus);
   let lastResourceTiming = -Infinity;
   const observeResourceTiming = (event, sample) => {
     if (closing || win.isDestroyed() || !win.isVisible() || win.isMinimized() || !win.isFocused() ||
@@ -518,7 +518,7 @@ app.whenReady().then(async () => {
   };
   ipcMain.on("application-resource-timing", observeResourceTiming);
   win.once("closed", () => {
-    stopResourcePower();
+    resourcePower.close();
     for (const event of displayEvents) screen.off(event, refreshDisplayBudget);
     ipcMain.off("application-resource-timing", observeResourceTiming);
   });
