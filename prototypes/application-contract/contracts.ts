@@ -95,7 +95,9 @@ export type ConversationOutputTiming = {
   compositionStartedMs: number;
   readyMs: number;
   stagedMs: number;
+  presentation?: { source: "renderer-visible-frame"; receivedAt: string; stagingToReceiptMs: number | null };
 };
+export type VelaOutputObservation = { executionId: string; requestId: string; messageId: string };
 export type PublicConversationExecution = {
   id: string;
   resourceId: string;

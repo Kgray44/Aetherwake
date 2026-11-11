@@ -672,6 +672,7 @@ app.whenReady().then(async () => {
       if (
         ![
           "rendererEventPage",
+          "rendererVelaOutput",
           "replay",
           "executionStatus",
           "conversationActivity",
@@ -750,6 +751,8 @@ app.whenReady().then(async () => {
         result = await call("capabilities", {});
       else if (command === "rendererEventPage")
         result = await call("rendererEventPage", input);
+      else if (command === "rendererVelaOutput")
+        result = trustedActiveFrame(event) ? await call("rendererVelaOutput", input) : { accepted: false };
       else if (command === "replay") {
         // Legacy review callers receive the old bounded tail shape, still
         // projected by Core under the current renderer authorization.

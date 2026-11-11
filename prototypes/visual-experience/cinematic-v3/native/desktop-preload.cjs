@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld(
           "desktop",
           "capabilities",
           "rendererEventPage",
+          "rendererVelaOutput",
           "replay",
           "executionStatus",
           "conversationActivity",

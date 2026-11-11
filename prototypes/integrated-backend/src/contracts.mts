@@ -106,6 +106,7 @@ export interface Execution extends PublicConversationExecution {
   /** Actual Responses facts, never a fabricated Codex thread/turn binding. */
   responseId?:string;responseOutcome?:TurnOutcome;usage?:ReportedUsage;reportedModel?:string;
   velaFirstOutputMs?: number;
+  outputStagingClock?: { domain: string; monotonicMs: number };
   incompleteReason?: import('../../openai-provider/contracts.mts').TurnResult['incompleteReason'];
   /** Canonical admission counted once per AIR provider stage, including unknown outcomes. */
   velaAdmission?: { projectId: string | null; utcDay: string };
@@ -359,6 +360,10 @@ export interface CommandMap {
   rendererEventPage: {
     input: { after?: number; limit?: number; recent?: boolean };
     output: { events: StreamEvent[]; earliest: number | null; latest: number; scannedThrough: number; truncated: boolean; scope: string };
+  };
+  rendererVelaOutput: {
+    input: import('../../application-contract/contracts.ts').VelaOutputObservation;
+    output: { accepted: boolean };
   };
   replay: { input: { after?: number; limit?: number }; output: { events: StreamEvent[]; earliest: number | null; latest: number; truncated: boolean } };
   close: { input: Record<string, never>; output: null };

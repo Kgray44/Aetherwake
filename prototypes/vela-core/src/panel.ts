@@ -46,6 +46,7 @@ export interface VelaPanelOptions {
 }
 export interface VelaPanelManifestation {
   projection: Readonly<VelaManifestationState>; view: 'current' | 'history'; baseline: boolean;
+  output?: import('../../application-contract/contracts.ts').VelaOutputObservation;
   elements: { shell: HTMLElement; reading: HTMLElement; manifestation: HTMLElement; composer: HTMLFormElement };
 }
 const providerName = (id: string | null | undefined) => id === 'codex-app-server' ? 'Codex' : id === 'chatgpt-plan-responses' ? 'ChatGPT plan' : id === 'openai-api-vela' ? 'Vela API' : id || 'Provider';
@@ -586,7 +587,11 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const projection = project(), signature = JSON.stringify({ projection, view: view(), context: shell.dataset.context }); if (signature === manifestationSignature) return;
     manifestationSignature = signature;
     const baseline = manifestationBaseline; manifestationBaseline = false;
-    const value: VelaPanelManifestation = { projection: Object.freeze({ ...projection, requiredPlanIds: Object.freeze([...projection.requiredPlanIds]) }), view: view(), baseline, elements: { shell, reading: flow, manifestation, composer: form } };
+    const message = current?.conversation?.messages.find(item => item.id === projection.currentMessageId);
+    const executionId = message?.providerId === 'openai-api-vela' ? message.providerContribution?.executionId : undefined;
+    const output = executionId && message && projection.currentRequestId && projection.kind !== 'action' ?
+      { executionId, messageId: message.id, requestId: projection.currentRequestId } : undefined;
+    const value: VelaPanelManifestation = { projection: Object.freeze({ ...projection, requiredPlanIds: Object.freeze([...projection.requiredPlanIds]) }), view: view(), baseline, output, elements: { shell, reading: flow, manifestation, composer: form } };
     try { options.onManifestation?.(value); } catch { /* Geometry cannot block useful content or grant an action. */ }
   }
   function renderReading() {

@@ -86,6 +86,7 @@ lines.on("line", async (line) => {
         "capabilities",
         "replay",
         "rendererEventPage",
+        "rendererVelaOutput",
         "close",
         "viewState",
         "branch",

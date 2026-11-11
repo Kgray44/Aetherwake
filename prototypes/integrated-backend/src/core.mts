@@ -1976,10 +1976,39 @@ export class BackendCore {
     if (apiExecution && prepared?.timing) {
       const { elapsed, ...timing } = prepared.timing;
       apiExecution.outputTiming = { ...timing, messageId: entry.id, stagedMs: elapsed() };
+      const domain = this.missions.fullProfilingClock();
+      if (domain) apiExecution.outputStagingClock = { domain, monotonicMs: performance.now() };
     }
     const observe=observeSpeech&&message.role==='assistant'?this.velaVoiceRuntime?.captureReplyObserver():undefined;
     if(observe)setImmediate(()=>{if(!this.closed)void observe(entry.id).catch(()=>{});});
     return {...message,id:entry.id};
+  }
+  private observeVelaOutput(input: CommandMap['rendererVelaOutput']['input']) {
+    const received = performance.now();
+    const declined = { accepted: false };
+    if (!input || Object.keys(input).length !== 3 ||
+      !identifier(input.executionId) || !identifier(input.requestId) || !identifier(input.messageId)) return declined;
+    const execution = this.state.executions[input.executionId], timing = execution?.outputTiming;
+    if (!execution || !timing || timing.messageId !== input.messageId || timing.parentRequestId !== input.requestId ||
+      execution.outputMessageId !== input.messageId || !this.conversationReadAccess(execution.resourceId, input.messageId))
+      return declined;
+    const state = this.vela.state();
+    if (state.presentation?.view !== 'current' || state.conversation?.resourceId !== execution.resourceId ||
+      !this.velaHost.resolve({ id: execution.resourceId, kind: 'resource' }, this.velaHost.scope())) return declined;
+    const projection = projectVelaManifestation(state, state.presentation);
+    const request = state.requests.find(value => value.id === input.requestId);
+    if (projection.kind === 'none' || projection.kind === 'action' || projection.currentRequestId !== input.requestId ||
+      projection.currentMessageId !== input.messageId || request?.state !== 'responded' ||
+      request.response?.messageId !== input.messageId) return declined;
+    if (!timing.presentation) {
+      const clock = execution.outputStagingClock;
+      this.atomic(() => {
+        timing.presentation = { source: 'renderer-visible-frame', receivedAt: now(),
+          stagingToReceiptMs: clock && clock.domain === this.missions.fullProfilingClock() && received >= clock.monotonicMs ?
+            received - clock.monotonicMs : null };
+      });
+    }
+    return { accepted: true };
   }
   private readVoicePrimaryReply(messageId:string,contentDigest?:string){
     ensure(!this.closed&&identifier(messageId),'voice_reply_unavailable');const scope=this.velaHost.scope(),state=this.vela.state(),conversationId=state.conversation?.resourceId;ensure(conversationId&&state.presentation?.view==='current'&&this.velaHost.resolve({id:conversationId,kind:'resource'},scope),'voice_reply_unavailable');
@@ -4959,7 +4988,7 @@ export class BackendCore {
     const allowed=new Set(resources.filter(item=>item.available).map(item=>item.resourceId));
     const publicExecution=(execution:Execution):PublicConversationExecution=>({id:execution.id,resourceId:execution.resourceId,providerId:execution.providerId,commandId:execution.commandId,state:execution.state,startedAt:execution.startedAt,endedAt:execution.endedAt,taskVerified:false,...(this.recoverableCodexTurn(execution)?{recoveryAvailable:true as const}:{}),...(execution.errorCode?{errorCode:execution.errorCode}:{}),...(execution.httpDiagnostic?{httpDiagnostic:projectTurnHttpDiagnostic(execution.httpDiagnostic)}:{}),
       ...(execution.outputTiming && this.conversationReadAccess(execution.resourceId, execution.outputTiming.messageId) ?
-        { outputTiming: { ...execution.outputTiming } } : {})});
+        { outputTiming: structuredClone(execution.outputTiming) } : {})});
     const current=this.active?this.state.executions[this.active.id]:null;
     const latest=new Map<string,Execution>();for(const execution of Object.values(this.state.executions))if(allowed.has(execution.resourceId))latest.set(execution.resourceId,execution);
     if(current&&allowed.has(current.resourceId))latest.set(current.resourceId,current);
@@ -5892,6 +5921,7 @@ export class BackendCore {
     // Targeted observed facts can respond during unrelated agent execution.
     // Their own strict schema cannot dispatch an action or a provider.
     if(name==='vela'&&a?.name==='presentation')return this.vela.presentation(a.input) as any;
+    if(name==='rendererVelaOutput')return this.observeVelaOutput(a) as CommandMap[K]['output'];
     // Reads, interruption and durable draft recovery remain available during
     // execution. Canonical mutations retain source/approval fences.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft','readViewState'];
