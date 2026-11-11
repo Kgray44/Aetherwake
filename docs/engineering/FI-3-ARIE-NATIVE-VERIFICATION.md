@@ -143,6 +143,16 @@ Run `node prototypes/integrated-backend/src/mission-cpu-benchmark.mts` to compar
 
 The two-thread arm demonstrated concurrent execution and higher median throughput for this batch. Inline elapsed times ranged from 163 to 1,408 ms. These results leave the responsiveness effect and the optimal admission budget unqualified.
 
+## Windows read-only build lane
+
+With `AERYNTH_VERIFY_WINDOWS_BUILD=1`, `node prototypes/integrated-backend/src/mission-build-pressure-verify.mts` uses the installed App Server, the reviewed Node test planner, and MissionService with a disposable tracked test. A resource checkpoint during readiness blocked dispatch with zero native commands. Pressure after dispatch closed build admission and left the active build reservation held until the bounded sandbox command returned verified evidence. The remote budget remained available throughout. A separate sandbox probe rejected a write with `EPERM`, and the target file stayed absent.
+
+The installed Windows App Server rejected `command/exec/terminate` with RPC error `-32600` for a sandboxed process. The bounded probe then returned its natural exit result. The product therefore applies resource checkpoints through the last pre-dispatch check and holds an active build lease through terminal settlement. Active Windows sandbox process termination remains unsupported by this runner.
+
+Moving the same storage reserve probe off the backend event loop reduced the maximum event-loop delay in the read-only fixture from 1,228 ms in the synchronous run to 274 and 306 ms in two asynchronous repeats. Total executor times were 4,312 ms before and 3,980 and 4,063 ms after. Sandbox command times were 2,770 ms before and 2,765 and 2,784 ms after. The async path uses the existing C and D reserve calculation and rechecks the reviewed target after awaiting the probe. This is a bounded synthetic Node test executed by the actual sandbox. Foreground frame and input latency with a representative build remain unqualified.
+
+The wider local regression reported five file-edit and inspection fixture failures. Those fixtures explicitly create repositories under the worktree `.runtime` directory, which is beneath `.codex` on this machine. Changing `TEMP` does not move them. The combined draft has separate fixture-root changes for these five cases. [Combined integration draft](https://github.com/Kgray44/Aetherwake/pull/53)
+
 ## Acceptance status
 
 - The focused Windows run passed 29 tests across admission, telemetry, resource policy, MissionService, and canonical backend integration. It covers telemetry freshness, timed and cancelled sampling, local versus remote admission, retained reservations, versioned rollback, fairness and claims, native overlap, dispatch and settlement, and restart uncertainty. A wider run on the pre-change worktree recorded timeouts and Windows fixture cleanup failures.
