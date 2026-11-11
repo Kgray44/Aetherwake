@@ -24,7 +24,15 @@ A Windows smoke run used Electron 45.2.1's actual menu, a scripted dialog respon
 
 On Windows with Node v24.18.0, the sampler observed 16 logical processors, 16 per-processor readings, and 33,413,779,456 bytes of physical RAM. A direct diagnostic measured 10.4 seconds for the bundled CIM query, exceeding the previous four-second timeout. The final run with a bounded 15-second window recorded 99.82% aggregate CPU, 5,160,497,152 available RAM bytes, 8 physical cores, 59% busiest GPU engine utilization, a busiest-device disk queue length of 0, 21,248,940 disk bytes/s, 62,612 bytes/s on the busiest network interface, and 1,329 pages/s. The CIM readings were 9.0 seconds old measured conservatively from the query start. The earlier comparison below captured CPU and RAM readings.
 
-The sampler preserves explicit stale, failed, unsupported, and unsampled states. GPU admission stays closed pending qualified VRAM headroom. External foreground app identity and temperature remain unavailable. Native input activity supplies a separate short-lived signal.
+The sampler preserves explicit stale, failed, unsupported, and unsampled states. GPU admission requires an eligible execution process and its own live GPU budget. External foreground app identity and temperature remain unavailable. Native input activity supplies a separate short-lived signal.
+
+## Dedicated GPU memory
+
+The supplemental Windows probe matches DXGI dedicated capacity to WDDM dedicated usage by adapter LUID. It publishes the capacity, usage, and estimated headroom of a single matched adapter. Selection excludes linked, ambiguous, unmatched, and inconsistent readings. The user-visible result contains only memory quantities and age. The Performance menu shows the estimate and its age when fresh. Static capacity discovery is cached for five minutes and invalidated on suspend or monitoring opt-out.
+
+On this Windows host the demand-gated governor reported 8,274,313,216 bytes of dedicated capacity, 6,057,734,144 bytes in use, and 2,216,579,072 bytes of estimated headroom on the same adapter. The readings were 14.5 seconds old, measured conservatively from query start. Busiest GPU engine utilization was 55%. The standalone DXGI capacity discovery took 5.36 seconds in one run. The end-to-end governor observation took 16.64 seconds including its warm-up. These timings describe collection under ambient host load.
+
+A separate Windows Direct3D 11 fixture queried the OS budget from the process that owned the device. In one run the OS reported a 1,772,175,360-byte budget. In the readback run it reported 7,469,006,848 bytes. The fixture uploaded eight 16 MiB buffers in 171 ms, copied them to staging, and verified all eight SHA-256 digests in 457 ms including readback and hashing. Current local usage reported by DXGI was 7,417,856 bytes before the allocation and 7,430,144 bytes while the buffers were held after readback. These are process-scoped observations under the driver and OS residency policy. ARIE keeps GPU admission closed because the shipped executor set has no GPU worker with a verified process budget. The native fixture exercised bounded uploads and readback. Sustained compute, gameplay impact, and end-to-end GPU lease enforcement remain unqualified.
 
 ## Renderer, foreground and power signals
 

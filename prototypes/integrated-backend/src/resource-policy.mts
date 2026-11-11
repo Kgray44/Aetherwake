@@ -21,6 +21,7 @@ export type ResourcePolicyNativeRequest = { name: 'inspect' } |
   { name: 'restore-defaults' | 'rollback'; expectedVersion: number };
 export type ResourcePolicyNativeView = ReturnType<ReturnType<typeof createResourcePolicy>['inspect']> & {
   windowsCountersSupported: boolean;
+  dedicatedVramEstimate: { bytes: number; ageMs: number } | null;
 };
 export type ResourceAdjustment = {
   schemaVersion: 1;
