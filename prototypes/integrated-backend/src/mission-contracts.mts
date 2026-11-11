@@ -102,7 +102,8 @@ export interface MissionAttempt {
   admission?: MissionAdmission;
   timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number };
   telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string;
-    providerEvidence?: MissionPlanningReceipt['providerEvidence'] };
+    providerEvidence?: MissionPlanningReceipt['providerEvidence'];
+    providerStream?: { responseCreatedMs: number | null; firstTextDeltaMs: number | null } };
 }
 export type MissionTaskState = 'queued' | 'running' | 'cancelling' | 'verified' | 'failed' | 'blocked' | 'cancelled' | 'uncertain';
 export interface MissionTask extends MissionTaskPlan {

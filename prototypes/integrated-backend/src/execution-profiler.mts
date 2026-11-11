@@ -110,6 +110,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       providerCalls: attempt.telemetry?.providerCalls ?? null,
       providerEvidence: attempt.telemetry?.providerEvidence ?? null,
       providerAdapterMs: attempt.telemetry?.providerCalls ? attempt.telemetry.durationMs : null,
+      providerStream: attempt.telemetry?.providerStream ? { ...attempt.telemetry.providerStream } : null,
       reportedModel: attempt.telemetry?.reportedModel ?? null,
       usage: reportedUsage(attempt.telemetry?.usage),
       verifiedEvidenceIds: attempt.verification?.passed && attempt.outcome === 'verified' ?

@@ -1,4 +1,4 @@
-import type { TurnResult } from '../../openai-provider/contracts.mts';
+import type { TurnEvent, TurnResult } from '../../openai-provider/contracts.mts';
 import { supportsOrdinaryWebSearch } from '../../openai-provider/model-controls.ts';
 import type { MissionExecutionContext, MissionExecutor, MissionPlan, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import { nativeMissionPlan } from './mission-native.mts';
@@ -155,7 +155,7 @@ export function specialistMissionPlan(intent: string, scope: MissionScope, defau
 export interface SpecialistPort {
   providerEvidence?: 'reported' | 'simulated';
   available(scope: MissionScope, task: MissionTaskPlan): boolean;
-  turn(context: MissionExecutionContext): Promise<TurnResult>;
+  turn(context: MissionExecutionContext, observe: (type: TurnEvent['type']) => void): Promise<TurnResult>;
 }
 function recommendations(value: unknown): value is { observations: string[] } {
   if (!value || typeof value !== 'object' || Object.keys(value).length !== 1 || !Object.hasOwn(value, 'observations')) return false;
@@ -192,9 +192,14 @@ export function createSpecialistExecutor(port: SpecialistPort, provider: NonNull
     available: (scope, task) => task.specialist?.provider === provider && task.executor === specialistExecutorId(provider) && port.available(scope, task),
     async run(context) {
       const start = performance.now();
-      const result = await port.turn(context);
+      let responseCreatedMs: number | null = null, firstTextDeltaMs: number | null = null;
+      const result = await port.turn(context, type => {
+        if (type === 'provider/response-created') responseCreatedMs ??= performance.now() - start;
+        if (type === 'provider/text-delta') firstTextDeltaMs ??= performance.now() - start;
+      });
       const telemetry = { durationMs: performance.now() - start, providerCalls: Number(result.dispatched),
         ...(port.providerEvidence ? { providerEvidence: port.providerEvidence } : {}),
+        ...(responseCreatedMs !== null || firstTextDeltaMs !== null ? { providerStream: { responseCreatedMs, firstTextDeltaMs } } : {}),
         ...(result.usage ? { usage: result.usage } : {}), ...(result.responseId ? { responseId: result.responseId } : {}),
         ...(result.reportedModel ? { reportedModel: result.reportedModel } : {}) };
       const source = provider + ':reported';

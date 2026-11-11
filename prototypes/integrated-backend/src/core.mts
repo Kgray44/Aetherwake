@@ -481,11 +481,11 @@ export class BackendCore {
       }), 'chatgpt.specialist': createSpecialistExecutor({
         providerEvidence: this.ordinaryTest ? 'simulated' : 'reported',
         available: (scope, task) => this.missionSpecialistAvailable(scope, task),
-        turn: input => this.runMissionSpecialist(input),
+        turn: (input, observe) => this.runMissionSpecialist(input, observe),
       }), 'api.specialist': createSpecialistExecutor({
         providerEvidence: this.velaApiTest ? 'simulated' : 'reported',
         available: (scope, task) => this.missionSpecialistAvailable(scope, task),
-        turn: input => this.runMissionSpecialist(input),
+        turn: (input, observe) => this.runMissionSpecialist(input, observe),
       }, VELA_API_PROVIDER),
       };
       this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
@@ -770,7 +770,7 @@ export class BackendCore {
       (!checkAdmission || !this.velaQuotaExhausted(assigned.provider, now().slice(0, 10), this.velaRoutingProfiles(scope)) &&
       (assigned.provider !== VELA_API_PROVIDER || this.velaApiRuntime.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay)));
   }
-  private async runMissionSpecialist(context: MissionExecutionContext): Promise<TurnResult> {
+  private async runMissionSpecialist(context: MissionExecutionContext, observe: (type: TurnEvent['type']) => void): Promise<TurnResult> {
     const assigned = context.task.specialist;
     ensure(assigned, 'mission_specialist_unavailable');
     if (assigned.provider === VELA_API_PROVIDER) {
@@ -800,7 +800,7 @@ export class BackendCore {
             detached: true, correlationId: context.missionId, payload: { redacted: true, taskId: context.task.id,
               api: { executionId, bodyDigest: review.bodyDigest, contextDigest: review.contextDigest } } });
         },
-        event: event => { fence(); if (event.type === 'provider/usage') this.record(event.type, this.velaApiTest ? 'simulated' : 'reported',
+        event: event => { fence(); observe(event.type); if (event.type === 'provider/usage') this.record(event.type, this.velaApiTest ? 'simulated' : 'reported',
           undefined, context.attemptId + ':usage', { providerId: VELA_API_PROVIDER, detached: true, correlationId: context.missionId,
             payload: { redacted: true, taskId: context.task.id, usage: event.usage } }); },
         // MissionService owns task results; do not publish worker output as a Vela conversation turn.
@@ -815,10 +815,11 @@ export class BackendCore {
       ...(assigned.effort ? { reasoningEffort: assigned.effort } : {}),
       ...(assigned.webSearch ? { webSearch: true } : {}),
     };
-    return this.runMissionProvider(context.scope, context.task, turn, context.signal, context.missionId);
+    return this.runMissionProvider(context.scope, context.task, turn, context.signal, context.missionId, false, observe);
   }
   private async runMissionProvider(scope: MissionScope, task: Pick<MissionTaskPlan, 'id' | 'specialist'>, turn: TurnInput,
-    signal: AbortSignal, correlationId: string, requireActiveWorkspace = false): Promise<TurnResult> {
+    signal: AbortSignal, correlationId: string, requireActiveWorkspace = false,
+    observe?: (type: TurnEvent['type']) => void): Promise<TurnResult> {
     const assigned = task.specialist;
     ensure(assigned && this.missionSpecialistAvailable(scope, task), 'mission_specialist_unavailable');
     ensure(this.missionSpecialistsInFlight + Number(this.active?.providerId === CHATGPT_PLAN_PROVIDER) < 2, 'mission_planner_busy');
@@ -840,6 +841,7 @@ export class BackendCore {
         limits: { requestBytes: 8192, outputBytes: 2048, timeoutMs: 40_000, streamBytes: 262144 },
         onEvent: event => {
           fence();
+          observe?.(event.type);
           if (event.type === 'provider/usage') this.record(event.type, this.ordinaryTest ? 'simulated' : 'reported',
             undefined, turn.executionId + ':usage', { providerId: CHATGPT_PLAN_PROVIDER, detached: true,
               correlationId, payload: { redacted: true, taskId: task.id, usage: event.usage } });
