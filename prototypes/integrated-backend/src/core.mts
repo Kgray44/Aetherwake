@@ -979,6 +979,7 @@ export class BackendCore {
     const catalog = Object.fromEntries(tasks.filter(task => this.missionExecutors[task.executor].available(scope, task))
       .map(task => [task.id, task]));
     const capabilities = Object.values(catalog).map(task => ({ id: task.id, description: task.objective +
+      (task.executor === 'codex.project-check' ? ' The user selects the tracked files and approves the exact command in native Start review. This covers tests explicitly delegated to that selection. A required specific test that cannot be identified remains unsupported.' : '') +
       (task.specialist ? task.specialist.provider === VELA_API_PROVIDER ? ' Receives scoped compiled task context and declared verified prerequisites; may depend on selected capabilities. Reports are not independently verified facts. No tools.' : ' Receives only the reviewed objective and must run independently. Provider web search is available only when explicitly listed.' : '') }));
     const available = !reviewed && selection && !this.velaQuotaExhausted(CHATGPT_PLAN_PROVIDER, now().slice(0, 10), this.velaRoutingProfiles(scope));
     const offer: MissionPlanningOffer = { kind: 'planning-offer', scope, objective,

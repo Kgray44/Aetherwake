@@ -388,7 +388,13 @@ test('native Start review binds the complete objective to current host proofs ac
     const tasks = [{ capability: 'cpu', after: [] }, { capability: 'ram', after: [] }];
     f.replies.push(reply(perceive('day')), reply(assess('day', 'The pump inspection is on Tuesday.')));
     const plan = async (unsupported: string[]) => {
-      f.replies.push(reply(perceive('meters')), reply(assess('meters', quote)), reply({ tasks, unsupported }));
+      f.replies.push(body => {
+        assert.equal(JSON.parse(body.input[0].content).missionPlanning, true);
+        return reply(perceive('meters'))(body);
+      }, body => {
+        assert.equal(JSON.parse(body.input[0].content).missionPlanning, true);
+        return reply(assess('meters', quote))(body);
+      }, reply({ tasks, unsupported }));
       const requestId = randomUUID();
       const preview = await f.core.command('missionPlanReviewed', { ...selection, requestId, fingerprint: offer.fingerprint }) as MissionPreview;
       return { preview, input: { objective, requestId, proposalId: requestId, fingerprint: preview.fingerprint } };
