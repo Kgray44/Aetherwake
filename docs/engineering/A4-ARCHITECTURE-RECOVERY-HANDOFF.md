@@ -15,7 +15,9 @@ Program A baseline is `7747e8c723b5961d6edfd6fb75758a50e87e7ac6`. This change fi
 
 Live voice selected the last 32 visible conversation records, omitted system turns and trimmed the remaining payload to 8,192 UTF-8 JSON bytes. The previous source proof used a suffix of the original record list. A trailing system turn could therefore replace the identity of a transmitted assistant turn in the proof. The context now selects each message ID and payload together before trimming, then derives the provider history and proof from the same retained set. Before disclosure it rechecks each retained message through the canonical conversation access owner and verifies the body digest. The regression demonstrates that marking omitted rows unavailable leaves the proof valid, and that either source-owner denial or loss of the included row invalidates it. The existing scope stamp, context digest, expiry and operation proof still gate disclosure.
 
-No persisted schema or provider wire format changes. The source list is process-local. Rollback uses the same profile and restores the previous proof construction.
+Core now uses the voice request's purpose when constructing context. Auditions and canonical reply readback omit unrelated conversation turns, application operation summaries, workspace identifiers, and backend capabilities. An audition sends its supplied sample and voice settings. Readback sends the exact digest-bound reply. The controller omits the interactive delegation configuration for both output-only purposes and retains the existing denial of delegated work. Interactive voice continues to receive authorized conversation and operation context. The regression records the provider payload with an existing unrelated workspace operation and checks all three routes.
+
+The changes use the same persisted schema and provider API schema. The source list is process-local. Earlier builds can open the same profile, but they restore the earlier voice disclosure behavior.
 
 ## AIR and handoff
 
