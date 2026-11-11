@@ -391,7 +391,9 @@ test('Vela API deferred terminal commit failure keeps receipt, execution and rep
       BEGIN INSERT INTO api_child VALUES(1); END;
     `);
     const input = { requestId: 'synthetic-api-terminal', version: 1, model: 'gpt-6-luna',
-      prompt: 'Synthetic terminal transaction', contextDigest: 'a'.repeat(64), oneUse: true as const, validate() {} };
+      prompt: 'Synthetic terminal transaction', contextDigest: 'a'.repeat(64), oneUse: true as const, validate() {},
+      outputSchema: { type: 'object' as const, properties: {}, required: [], additionalProperties: false },
+      missionCognition: { owner: { kind: 'planning' as const, requestId: 'synthetic-planning-owner' }, stage: 'planning' as const } };
     f.replies.push(() => response('Uncommitted answer', 'resp-api-terminal-fault'));
     const run = await runtime.run(input, new AbortController().signal);
     assert.equal(run.result.outcome, 'unknown');
@@ -403,6 +405,10 @@ test('Vela API deferred terminal commit failure keeps receipt, execution and rep
     assert.equal(execution.state, 'unknown');
     assert.equal(execution.responseId, 'resp-api-terminal-fault');
     assert.equal(receipt.responseId, execution.responseId);
+    const observed = runtime.missionCognitiveReceipts('synthetic-planning-owner', 'unrelated-mission')!;
+    assert.equal(observed.runs[0].transportOutcome, 'unknown');
+    assert.equal(observed.runs[0].dispatched, true);
+    assert.doesNotMatch(JSON.stringify(observed), /Uncommitted answer|Synthetic terminal transaction/);
     assert.deepEqual(early, []);
     const replay = (await f.core.command('replay', {})).events.filter(event => event.correlationId === input.requestId);
     assert.deepEqual(replay.filter(event => event.type.startsWith('vela.api/')).map(event => event.type),
@@ -414,6 +420,8 @@ test('Vela API deferred terminal commit failure keeps receipt, execution and rep
     assert.deepEqual((await f.core.command('snapshot', {})).executions[receipt.executionId], execution);
     const reopened = (f.core as any).velaApiRuntime as VelaApiRuntime;
     assert.deepEqual(reopened.receiptsForRequest(input.requestId), [receipt]);
+    assert.deepEqual(reopened.missionCognitiveReceipts('synthetic-planning-owner', 'unrelated-mission'), observed);
+    assert.equal(reopened.missionCognitiveReceipts(null, 'unrelated-mission'), undefined);
     f.replies.push(() => response('Synthetic subsequent answer', 'resp-api-after-fault'));
     assert.equal((await reopened.run({ ...input, requestId: 'synthetic-api-fresh' }, new AbortController().signal)).result.outcome, 'completed');
     assert.equal(f.requests.length, 2);

@@ -264,6 +264,9 @@ test('Executive reviews a real native mission checkpoint through the synthetic R
     const after = await f.core.command('missions', { name: 'read', input: { id: started.id } }) as MissionProjection;
     assert.equal(after.revision, settled.revision);
     assert.deepEqual(after.tasks, settled.tasks);
+    assert.deepEqual(after.cognitiveReceipts?.runs.map(run => run.attribution.stage), ['executive']);
+    assert.deepEqual(after.cognitiveReceipts?.runs[0].attribution.owner,
+      { kind: 'checkpoint', missionId: started.id, revision: settled.revision, planRevision: settled.planRevision, triggerSeq: trigger.seq });
   } finally { await f.close(); }
 });
 
@@ -334,6 +337,14 @@ test('reviewed mission planning binds checked note evidence to the executable pl
     assert.ok(settled.planning?.context?.evidenceDigest);
     assert.equal(settled.profile.providerCalls, 5);
     assert.equal(settled.profile.usageReports, 5);
+    const cognition = settled.cognitiveReceipts;
+    assert.deepEqual(cognition?.runs.map(run => run.attribution.stage),
+      ['qualify-perception', 'qualify-assessment', 'perception', 'evidence-assessment', 'planning']);
+    assert.equal(cognition?.truncated, false);
+    assert.equal(new Set(cognition?.runs.map(run => run.executionId)).size, 5);
+    assert.ok(cognition?.runs.every(run => run.providerEvidence === 'simulated' && run.dispatched === true &&
+      run.reportedModel === 'gpt-6-luna' && run.settledMs !== null && run.settledMs >= run.startedMs && run.usage?.totalTokens === 140));
+    assert.doesNotMatch(JSON.stringify(cognition), /BOX-447|Verify both CPU and RAM pressure/);
     const nextId = randomUUID();
     f.replies.push(reply(proposal('What measurements are required?')), reply(assess('Verify both CPU and RAM pressure.')),
       reply({ tasks: [
@@ -366,6 +377,7 @@ test('reviewed mission planning binds checked note evidence to the executable pl
     const stale = await f.core.command('missions', { name: 'read', input: { id: mission.id } }) as MissionProjection;
     assert.equal(stale.outcome, 'blocked');
     assert.equal(stale.planning?.context?.evidenceDigest, settled.planning?.context?.evidenceDigest);
+    assert.deepEqual(stale.cognitiveReceipts, cognition);
     assert.ok(stale.tasks.every(task => task.state === 'blocked' && !task.attempts.some(attempt => attempt.verification)));
     assert.equal(f.requests.length, 8);
   } finally { await f.close(); }
