@@ -5415,7 +5415,10 @@ export class BackendCore {
       const stored = {...e,...(override?.externalEvidence?{externalEvidence:override.externalEvidence}:{}),...(override?.externalCoverage?{externalCoverage:override.externalCoverage}:{})};
       this.db.prepare('UPDATE intelligence_events SET json=? WHERE cursor=?').run(JSON.stringify(stored), e.cursor);
       this.db.prepare('UPDATE integration_meta SET latest=? WHERE id=1').run(e.cursor);
-      this.db.prepare('DELETE FROM intelligence_events WHERE cursor NOT IN (SELECT cursor FROM intelligence_events ORDER BY cursor DESC LIMIT ?)').run(this.maxEvents);
+      // Select the oldest row to retain by rank: ignored inserts can leave gaps in the cursor sequence.
+      this.db.prepare(`DELETE FROM intelligence_events WHERE cursor < (
+        SELECT cursor FROM intelligence_events ORDER BY cursor DESC LIMIT 1 OFFSET ? - 1
+      )`).run(this.maxEvents);
       acknowledge?.();
     });
     if (inserted) {
