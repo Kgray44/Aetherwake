@@ -479,6 +479,7 @@ test('overlaps independent branches and missions, serializes exclusive claims, a
     f.active.get('analysis')!.release();
     await flush();
     assert.ok(f.active.has('conflict'));
+    assert.ok(service.read(b.id, scope).tasks[0].attempts[0].timing?.phases?.readyQueue?.blockers['resource-conflict']);
     assert.equal(f.active.has('join'), false);
     f.active.get('profile')!.release();
     await flush();
@@ -532,6 +533,9 @@ test('verification failure, paused admission, evidence-bound amendment, and repl
     await flush();
     assert.equal(read(m.id).outcome, 'verified');
     assert.equal(read(m.id).tasks[0].attempts.length, 2);
+    const [first, retry, dependent] = projectMissionExecution(read(m.id)).attempts;
+    assert.ok(retry.phases!.readyQueue!.firstObservedMs >= first.end!.monotonicMs!);
+    assert.ok(dependent.phases!.readyQueue!.firstObservedMs >= retry.end!.monotonicMs!);
   } finally { await service.close(); f.db.close(); }
 });
 
@@ -646,10 +650,18 @@ test('host admission holds queued work, preserves running workers and records on
     assert.deepEqual([...f.active.keys()], ['third']);
     const started = read().tasks[2].attempts[0];
     assert.deepEqual(started.admission, cpu);
+    const phases = started.timing?.phases;
+    assert.ok(phases?.readyQueue);
+    assert.ok(phases.readyQueue.firstObservedMs <= phases.contextAssembly[0]);
+    assert.ok(phases.readyQueue.blockers['worker-budget']!.samples >= 1);
+    assert.ok(phases.readyQueue.blockers['worker-budget']!.lastObservedMs < phases.contextAssembly[0]);
     assert.equal(demand.at(-1), false);
     f.active.get('third')!.release();
     await flush();
     assert.equal(read().outcome, 'verified');
+    const profile = projectMissionExecution(read());
+    const third = profile.attempts.find(attempt => attempt.taskId === 'third')!;
+    assert.equal(third.readyQueueMs, phases.contextAssembly[0] - phases.readyQueue.firstObservedMs);
     assert.equal(read().admission, undefined);
     assert.deepEqual(read().tasks[2].attempts[0].admission, cpu);
   } finally { await service.close(); f.db.close(); }

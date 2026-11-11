@@ -94,10 +94,17 @@ export interface MissionAdmission {
   };
 }
 type MissionPhaseInterval = [startedMs: number, endedMs: number];
+export type MissionReadyBlocker = 'worker-budget' | 'capacity' | 'resource-conflict';
+export interface MissionReadyQueueEvidence {
+  firstObservedMs: number;
+  /** Scheduler observations. The samples do not establish a continuous blocked duration. */
+  blockers: Partial<Record<MissionReadyBlocker, { samples: number; lastObservedMs: number }>>;
+}
 /** Local monotonic intervals in the attempt's capture domain. */
 export interface MissionAttemptPhaseTiming {
   clock: string;
   contextAssembly: MissionPhaseInterval;
+  readyQueue?: MissionReadyQueueEvidence;
   dispatchValidation?: MissionPhaseInterval;
   execution?: MissionPhaseInterval;
   postExecutionContextValidation?: MissionPhaseInterval;
