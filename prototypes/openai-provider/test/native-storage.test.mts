@@ -181,7 +181,8 @@ test('offline real process: simultaneous same-version CAS permits exactly one du
     const results = await Promise.all([a.result, b.result]);
     await Promise.all([a.exited, b.exited]);
     assert.equal(results.filter(result => result.ok).length, 1);
-    assert.ok(results.some(result => ['registration_changed', 'auth_lock_busy', 'auth_storage_busy'].includes(result.code ?? '')));
+    assert.ok(results.some(result => ['registration_changed', 'auth_lock_busy', 'auth_storage_busy'].includes(result.code ?? '')),
+        JSON.stringify(results.map(result => ({ ok: result.ok, code: result.code ?? null }))));
     assert.equal((await f.vault.read('profile'))?.version, 2);
 }
 finally {
@@ -195,6 +196,25 @@ finally {
     }
     f.close();
 } });
+test('offline real process: contention during vault construction reports the storage refusal', async () => {
+    const f = fixture();
+    try {
+        await seed(f);
+        f.db.exec('PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE');
+        try {
+            const contender = child(f.path, 'fixed');
+            const result = await contender.result;
+            await contender.exited;
+            assert.equal(result.ok, false);
+            assert.equal(result.code, 'auth_storage_busy');
+        } finally {
+            f.db.exec('ROLLBACK');
+        }
+        assert.equal((await f.vault.read('profile'))?.version, 1);
+    } finally {
+        f.close();
+    }
+});
 test('offline: guarded native fetch allows only public discovery outside lease and denies late grants', async () => { const f = fixture(); try {
     await seed(f);
     let calls = 0;

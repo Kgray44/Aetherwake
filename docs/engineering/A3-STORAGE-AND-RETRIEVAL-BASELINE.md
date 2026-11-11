@@ -50,6 +50,8 @@ The [Personal Context suite](../../prototypes/personal-context/tests/service.tes
 
 The [native protected backup probe](../../prototypes/visual-experience/cinematic-v3/native/protected-backup-verify.cjs) also exercises the existing Vela API credential owner, native-host protocol, and Electron protected-storage broker. On Windows with Electron 45.2.1, one process sealed a synthetic credential, backed up the database, and disconnected the source. A second Electron process under the same OS account recovered the original version and authorization boundary from the 159,744-byte backup. The synthetic bearer was absent from the raw backup bytes and the public connection view. Opening the same backup with native custody unavailable denied credential resolution. The probe uses no provider network calls.
 
+The [protected registration fixture](../../prototypes/openai-provider/test/native-storage.test.mts) verifies exactly one durable winner when two processes try the same expected version. An [Ubuntu FI-2 run](https://github.com/Kgray44/Aetherwake/actions/runs/42968016630/job/130349661414) retained one winner but lost the other process's refusal code. A forced SQLite exclusive lock reproduced the missing diagnostic on Windows: fixture vault construction exited before its error handler. The fixture now closes the failed connection and reports `auth_storage_busy`. All 12 protected registration tests passed on Windows, including unchanged registration state after a refused open. Production credential and lease code is unchanged.
+
 From the repository root, run the following with the installed Electron executable and a fresh scratch directory.
 
 ```powershell
