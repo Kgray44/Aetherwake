@@ -16,6 +16,7 @@ const source = 'windows:d3d11-verified-readback';
 const serialMixed = process.argv.includes('--serial-mixed');
 const mixed = serialMixed || process.argv.includes('--mixed');
 const cancelAfterDispatch = process.argv.includes('--cancel-after-dispatch');
+const workerLossAfterDispatch = process.argv.includes('--worker-loss-after-dispatch');
 const cpuPool = createMissionCpuPool(1);
 const cpuExecutor = createPooledBackendSourceExecutor(cpuPool);
 const apiSource = 'fixture:local-http-resource-response';
@@ -98,9 +99,29 @@ const scheduler = new MissionService({
   },
 });
 
+async function prepareWorker() {
+  worker = openWindowsGpuReadback();
+  const observedBudget = await worker.budget;
+  assert.ok(observedBudget.budgetBytes - observedBudget.usedBytes >= gpuReadbackReservationBytes, 'fixture_vram_budget_unavailable');
+  assert.ok(governor.noteGpuBudget(observedBudget));
+  budget = observedBudget;
+  dispatchReady = true;
+  scheduler.capacityChanged();
+}
+
+async function awaitSettlement(id: string, deadline: number) {
+  let mission = scheduler.read(id, scope);
+  while (['queued', 'running', 'cancelling'].includes(mission.outcome)) {
+    if (performance.now() > deadline) throw Error('gpu_mission_verification_timeout');
+    await wait(20);
+    mission = scheduler.read(id, scope);
+  }
+  return mission;
+}
+
 try {
   if (process.platform !== 'win32') throw Error('windows_gpu_worker_unavailable');
-  if (mixed && cancelAfterDispatch) throw Error('choose_one_gpu_fixture_mode');
+  if ([mixed, cancelAfterDispatch, workerLossAfterDispatch].filter(Boolean).length > 1) throw Error('choose_one_gpu_fixture_mode');
   if (mixed) {
     await new Promise<void>((resolve, reject) => {
       loopback.once('error', reject);
@@ -120,46 +141,55 @@ try {
     { id: 'remote-response', objective: 'Read the local HTTP fixture', criterion: 'loopback-response',
       executor: 'fixture.resource-api', dependencies: [], claims: [], timeoutMs: 10_000, maxAttempts: 1 });
   }
-  const { id, revision } = scheduler.create('gpu-readback-native', {
+  const plan = {
     objective: 'Verify bounded Windows GPU buffer copies', scope, criteria: tasks.map(task => task.criterion), tasks,
-  });
+  };
+  const { id, revision } = scheduler.create('gpu-readback-native', plan);
   if (mixed) scheduler.control(id, scope, revision, { type: 'concurrency', concurrency: serialMixed ? 1 : maxWorkers });
   await wait(0);
   const queued = scheduler.read(id, scope);
   assert.equal(queued.outcome, 'queued');
   assert.ok(queued.tasks.every(task => task.attempts.length === 0));
-  worker = openWindowsGpuReadback();
-  const observedBudget = await worker.budget;
-  budget = observedBudget;
-  assert.ok(observedBudget.budgetBytes - observedBudget.usedBytes >= gpuReadbackReservationBytes, 'fixture_vram_budget_unavailable');
+  await prepareWorker();
   const setupMs = Math.round(performance.now() - started);
-  assert.ok(governor.noteGpuBudget(observedBudget));
-  dispatchReady = true;
-  scheduler.capacityChanged();
-  if (cancelAfterDispatch) {
+  if (cancelAfterDispatch || workerLossAfterDispatch) {
     while (!dispatched && performance.now() - started < 35_000) await wait(1);
     assert.ok(dispatched, 'gpu_worker_never_dispatched');
-    const active = scheduler.read(id, scope);
-    scheduler.control(id, scope, active.revision, { type: 'cancel' });
-    assert.equal(governor.inspectPolicy().active.gpu, 1, 'Cancellation cannot release before process exit');
+    if (cancelAfterDispatch) {
+      const active = scheduler.read(id, scope);
+      scheduler.control(id, scope, active.revision, { type: 'cancel' });
+    } else {
+      assert.ok(worker);
+      void worker.close();
+    }
+    assert.equal(governor.inspectPolicy().active.gpu, 1, 'The reservation must outlive the termination request');
   }
-  let mission = scheduler.read(id, scope);
-  while (['queued', 'running', 'cancelling'].includes(mission.outcome)) {
-    if (performance.now() - started > 35_000) throw Error('gpu_mission_verification_timeout');
-    await wait(20);
-    mission = scheduler.read(id, scope);
-  }
-  assert.equal(mission.outcome, cancelAfterDispatch ? 'cancelled' : 'verified');
+  const mission = await awaitSettlement(id, started + 35_000);
+  assert.equal(mission.outcome, cancelAfterDispatch ? 'cancelled' : workerLossAfterDispatch ? 'failed' : 'verified');
   const attempt = mission.tasks.find(task => task.id === 'gpu-readback')?.attempts[0];
   assert.equal(attempt?.resourceLease?.kind, 'gpu');
   assert.equal(attempt.resourceLease.reservedVramBytes, gpuReadbackReservationBytes);
   const value = attempt.evidence?.value;
-  if (cancelAfterDispatch) assert.equal(attempt.verification?.passed, undefined);
+  if (cancelAfterDispatch || workerLossAfterDispatch) assert.equal(attempt.verification?.passed, undefined);
   else assert.ok(verifiedGpuReadback(value));
   assert.equal(governor.inspectPolicy().active.gpu, 0);
   if (mixed) {
     assert.equal(mission.profile.peakWorkers, serialMixed ? 1 : 3);
     assert.deepEqual(mission.tasks.map(task => task.attempts[0]?.resourceLease?.kind).sort(), ['cpu', 'gpu', 'remote']);
+  }
+  if (workerLossAfterDispatch) {
+    const restartedAt = performance.now();
+    const replacement = scheduler.create('gpu-readback-after-worker-loss', plan);
+    assert.equal(replacement.tasks[0].attempts.length, 0);
+    await prepareWorker();
+    const recovered = await awaitSettlement(replacement.id, restartedAt + 35_000);
+    const recoveredAttempt = recovered.tasks[0].attempts[0];
+    assert.equal(recovered.outcome, 'verified');
+    assert.notEqual(recoveredAttempt.resourceLease?.gpuContextId, attempt.resourceLease.gpuContextId);
+    assert.equal(scheduler.read(id, scope).tasks[0].attempts.length, 1);
+    assert.equal(governor.inspectPolicy().active.gpu, 0);
+    console.log(JSON.stringify({ replacementVerified: true, replacedProcessContext: true, failedAttemptCount: 1,
+      recoveryMs: Math.round(performance.now() - restartedAt), recoveryExecutionMs: recoveredAttempt.timing?.executionMs }));
   }
   console.log(JSON.stringify({ contract: 'aerynth.gpu-readback-native@1', queuedUntilBudget: true, setupMs,
     queueMs: attempt.timing?.queueMs, executionMs: attempt.timing?.executionMs,
