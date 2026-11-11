@@ -153,6 +153,12 @@ export interface VelaRouteTiming {
   previewMs: number;
   previewClock?: { domain: string; startedMs: number; readyMs: number };
 }
+export interface VelaRequestAdmissionTiming {
+  source: 'canonical-user-message-staged';
+  requestToInputStagingMs: number;
+  requestToProviderContextCheckMs: number;
+  previewToInputStagingMs: number | null;
+}
 /** Local monotonic offsets within one provider execution. */
 export interface ConversationProviderTiming {
   source: 'observed' | 'simulated';
@@ -197,7 +203,7 @@ export interface StreamEvent {
   correlationId: string | null; causationId: string | null;
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
-  status: string | null; payload: { redacted: true; taskId?: string; previewId?: string; timing?: VelaRouteTiming; providerTiming?: ConversationProviderTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'>;
+  status: string | null; payload: { redacted: true; taskId?: string; previewId?: string; timing?: VelaRouteTiming; requestAdmission?: VelaRequestAdmissionTiming; providerTiming?: ConversationProviderTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'>;
     workspaceRecovery?: {workspaceId:string;action:'undo-creation'|'restore';creationEventId:string;workspaceVersion:number};
     clockTimer?: Pick<TimerDomainEvent, 'resourceVersion' | 'commandId' | 'timerIds' | 'expiryIds' | 'operations'>;
     api?: { maxOutputTokens?: number; callId?: string; elapsedMs?: number; enabled?: boolean; executionId?: string; bodyDigest?: string; contextDigest?: string };

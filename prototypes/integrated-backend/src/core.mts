@@ -183,6 +183,7 @@ interface PrivateVelaPreview extends VelaRequestPreview {
   catalog:CapabilityCatalogSnapshot;prompt:string;nativeReviewed:boolean;reviewDigest?:string;acceptedAppend?:AcceptedHistoryAppend;
   inputAnchor:{conversationId:string|null;revision:number|null};inputDigest:string;
   acceptedInputBase?:{conversationId:string;revision:number};
+  inputStaging?: { domain: string; requestStartedMs: number; stagedMs: number };
   nativeStage?: { observedAt: string; text: string };
   timing?: VelaRouteTiming;
   routingSettingsStamp?: string;
@@ -4287,7 +4288,7 @@ export class BackendCore {
     const grantId=randomUUID(),expiresAt=new Date(Math.min(Date.now()+60000,Date.parse(preview.expiresAt))).toISOString();this.velaGrants.set(grantId,{previewId:preview.id,expiresAt,consumed:false,...(preview.nativeReviewed?{reviewDigest:preview.reviewDigest}:{})});return {grantId,expiresAt};
   }
   private validateVelaGrant(id:string) {const g=this.velaGrants.get(id);ensure(g&&!g.consumed,'native_vela_grant_required');ensure(Date.parse(g.expiresAt)>Date.now()&&this.velaPreviews.has(g.previewId),'native_vela_grant_expired');if(g.reviewDigest)ensure(this.velaPreviews.get(g.previewId)!.reviewDigest===g.reviewDigest,'native_vela_review_mismatch');return g;}
-  private frozenVelaProviderContext(grantId:string):PrivateFrozenProviderContext {
+  private frozenVelaProviderContext(grantId:string, requestStartedMs: number):PrivateFrozenProviderContext {
     const grant=this.validateVelaGrant(grantId),preview=this.velaPreviews.get(grant.previewId)!;
     ensure(preview.nativeReviewed&&typeof preview.reviewDigest==='string'&&preview.reviewDigest.length>0&&grant.reviewDigest===preview.reviewDigest,'vela_native_review_required');
     return {context:preview.frozenContext,...(preview.historyFence?{historyFence:preview.historyFence}:{}),
@@ -4312,6 +4313,8 @@ export class BackendCore {
         else {const gid=this.gid(id),root=this.state.graph.conversations.find(value=>value.id===gid);ensure(root?.ownMessageIds.length===1&&root.ownMessageIds[0]===value.messageId&&!this.state.graph.edges.some(edge=>edge.childId===gid),'invalid_history_append');}
         preview.acceptedInputBase=Object.freeze(structuredClone(base));
         preview.acceptedAppend=Object.freeze(structuredClone(value));
+        const domain = this.missions.fullProfilingClock();
+        if (domain) preview.inputStaging = { domain, requestStartedMs, stagedMs: performance.now() };
       }};
   }
   private authorizeVelaPolicy(request:AuthorizationRequest):AuthorizationDecision {
@@ -4331,10 +4334,20 @@ export class BackendCore {
     if(request.phase==='provider-context') {
       ensure(this.pendingVelaGrant,'native_vela_grant_required');const grant=this.validateVelaGrant(this.pendingVelaGrant),preview=this.velaPreviews.get(grant.previewId)!;
       this.validateFrozenVelaPreview(preview);ensure(!grant.requestId&&request.contextManifest&&this.velaEgress(request.intent,request.contextManifest,preview.discovery,preview)===preview.signature&&(!preview.acceptedAppend||preview.acceptedAppend.requestId===request.requestId),'stale_vela_preview');grant.requestId=request.requestId;
-      if (preview.route) this.recordVelaRoute('stage_started', request.requestId, preview.providerId, {
-        previewId: preview.id, route: preview.route, includedSources: preview.context.included.length, historyMessages: preview.history?.messageCount ?? 0,
-        ...(preview.timing ? { timing: preview.timing } : {}),
-      });
+      if (preview.route) {
+        const staged = preview.inputStaging, clock = preview.timing?.previewClock;
+        const requestAdmission: StreamEvent['payload']['requestAdmission'] = staged && {
+          source: 'canonical-user-message-staged',
+          requestToInputStagingMs: staged.stagedMs - staged.requestStartedMs,
+          requestToProviderContextCheckMs: performance.now() - staged.requestStartedMs,
+          previewToInputStagingMs: clock?.domain === staged.domain && clock.readyMs <= staged.requestStartedMs ?
+            staged.stagedMs - clock.startedMs : null,
+        };
+        this.recordVelaRoute('stage_started', request.requestId, preview.providerId, {
+          previewId: preview.id, route: preview.route, includedSources: preview.context.included.length, historyMessages: preview.history?.messageCount ?? 0,
+          ...(preview.timing ? { timing: preview.timing } : {}), ...(requestAdmission ? { requestAdmission } : {}),
+        });
+      }
       if (preview.handoff) this.recordVelaRoute('handoff_authorized', request.requestId, preview.providerId, { ...preview.handoff });
       if (preview.nativeStage && preview.route)
         this.recordVelaRoute('native_stage_observed', request.requestId, 'aerynth-native', {
@@ -4477,9 +4490,10 @@ export class BackendCore {
       case 'preferences':return this.vela.preferences(input);case 'reviewAttention':return this.vela.reviewAttention(input);case 'adaptationPolicy':return this.vela.adaptationPolicy(input);
       case 'explicitPreference':return this.vela.explicitPreference(input);case 'reviewPreference':return this.vela.reviewPreference(input);case 'resetPreferences':return this.vela.resetPreferences(input);
       case 'request': {
+        const requestStartedMs = performance.now();
         ensure(input&&typeof input.intent==='string'&&Array.isArray(input.resourceIds)&&typeof input.authorizeProvider==='boolean','invalid_vela_request');
         if(input?.authorizeProvider===true){ensure(input.grantId&&input.previewId,'native_vela_grant_required');const grant=this.validateVelaGrant(input.grantId),preview=this.velaPreviews.get(grant.previewId)!;ensure(!grant.requestId,'native_vela_grant_consumed');ensure(grant.previewId===input.previewId&&input.intent===preview.intent&&planningDigest(input.resourceIds)===planningDigest(preview.resourceIds)&&input.handoffSourceRequestId===preview.handoff?.sourceRequestId&&input.routingAgentId===preview.routingAgent?.resourceId,'native_vela_grant_mismatch');}
-        const frozen=input?.authorizeProvider===true&&this.velaGrants.get(input.grantId)?.reviewDigest!==undefined?this.frozenVelaProviderContext(input.grantId):undefined;
+        const frozen=input?.authorizeProvider===true&&this.velaGrants.get(input.grantId)?.reviewDigest!==undefined?this.frozenVelaProviderContext(input.grantId,requestStartedMs):undefined;
         const preview = this.velaPreviews.get(input.previewId);
         const planner = preview?.route?.kind === 'agentic' || preview?.route?.kind === 'composite' || preview?.route?.kind === 'file-edit' ? {
           providerId: this.port.id, availability: () => this.velaPlanner.availability(),

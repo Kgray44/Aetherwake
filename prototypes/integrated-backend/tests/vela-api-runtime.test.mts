@@ -202,6 +202,15 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
       timing.firstNonblankOutput.elapsedMs <= timing.resultObservedMs);
     const routing = f.events.find(event => event.correlationId === first.id && event.type === 'vela.routing.stage_started');
     assert.ok(routing?.payload.timing?.previewClock && timing.fromPreview);
+    const admission = routing.payload.requestAdmission;
+    assert.ok(admission && first.inputMessageId);
+    assert.equal(execution.inputMessageId, first.inputMessageId);
+    assert.equal(admission.source, 'canonical-user-message-staged');
+    assert.ok(admission.requestToInputStagingMs >= 0 &&
+      admission.requestToInputStagingMs <= admission.requestToProviderContextCheckMs);
+    assert.ok(admission.previewToInputStagingMs !== null &&
+      admission.previewToInputStagingMs >= routing.payload.timing.previewMs &&
+      admission.previewToInputStagingMs <= timing.fromPreview.toAdapterMs);
     assert.equal(timing.fromPreview.id, routing.payload.previewId);
     assert.ok(timing.fromPreview.toAdapterMs >= routing.payload.timing.previewMs);
     assert.equal(timing.fromPreview.toFirstNonblankOutputMs,
@@ -235,6 +244,10 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     const replayedTiming = (await f.core.command('replay', { limit: 1000 })).events
       .find(event => event.executionId === execution.id && event.type === 'execution/provider_completed')?.payload.providerTiming;
     assert.deepEqual(replayedTiming?.fromPreview, timing.fromPreview);
+    const replayedAdmission = (await f.core.command('replay', { limit: 1000 })).events
+      .filter(event => event.correlationId === first.id && event.type === 'vela.routing.stage_started');
+    assert.equal(replayedAdmission.length, 1);
+    assert.deepEqual(replayedAdmission[0].payload.requestAdmission, admission);
     assert.deepEqual(await readOutputTiming(),{...outputTiming,presentation:observed});
     f.replies.push(()=>response('Weight changes with gravity; mass stays the same.','resp-next'));
     const next=await f.send('And on the Moon?'); assert.equal(next.state,'responded'); assert.ok(next.history?.messages.some(message=>message.messageId===output.id));
