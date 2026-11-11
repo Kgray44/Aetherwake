@@ -95,9 +95,11 @@ export type ConversationOutputTiming = {
   compositionStartedMs: number;
   readyMs: number;
   stagedMs: number;
+  /** Elapsed from the reviewed backend request entry to canonical answer staging. */
+  requestToStagingMs?: number;
   /** Elapsed from the originating backend request preview. */
   fromPreview?: { id: string; toStagingMs: number };
-  presentation?: RendererOutputPresentation & { previewToReceiptMs?: number | null };
+  presentation?: RendererOutputPresentation & { previewToReceiptMs?: number | null; requestToReceiptMs?: number | null };
 };
 export type RendererOutputPresentation = { source: "renderer-visible-frame"; receivedAt: string; stagingToReceiptMs: number | null };
 export type VelaOutputObservation =
