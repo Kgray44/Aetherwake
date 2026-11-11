@@ -129,7 +129,11 @@ test('a reviewed planning request compiles one graph and runs native dependencie
     assert.ok(mission.events.find(event => event.kind === 'settled' && event.taskId === 'cpu')!.seq <
       mission.events.find(event => event.kind === 'started' && event.taskId === 'ram')!.seq);
     assert.equal(mission.profile.providerCalls, 2);
-    assert.equal(mission.profile.reportedTotalTokens, 142);
+    assert.equal(mission.profile.reportedTotalTokens, null);
+    assert.equal(mission.profile.verifiedObjectivesPerReportedToken, null);
+    const profile = await f.core.command('missions', { name: 'execution-profile', input: { id } });
+    assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+    assert.equal(profile.economics.simulatedTotalTokens, 142);
     assert.equal(f.requests.length, 2);
     assert.deepEqual(f.requests[1].input, [{ role: 'user', content: objective }]);
     assert(f.requests[1].instructions.includes(role.responsibility));

@@ -831,7 +831,8 @@ test('a parallel retry preserves attempt timing and separates mixed usage receip
     f.active.get('join')!.release();
     await flush();
 
-    const profile = projectMissionExecution(read());
+    const settled = read();
+    const profile = projectMissionExecution(settled);
     assert.equal(profile.outcome, 'verified');
     const [failed, parallel, retry, join] = profile.attempts;
     assert.equal(failed.state, 'failed');
@@ -851,6 +852,8 @@ test('a parallel retry preserves attempt timing and separates mixed usage receip
     assert.deepEqual(economics.usageReceipts, { reported: 1, simulated: 1, missing: 1, unattributed: 0 });
     assert.equal(economics.reportedTotalTokens, 20);
     assert.equal(economics.simulatedTotalTokens, 20);
+    assert.equal(settled.profile.reportedTotalTokens, economics.reportedTotalTokens);
+    assert.equal(settled.profile.verifiedObjectivesPerReportedToken, null);
     assert.deepEqual(economics.usageBySource.reported.cachedInputTokens, { observedTokens: 4, receipts: 1 });
     assert.deepEqual(economics.usageBySource.simulated.cachedInputTokens, { observedTokens: 0, receipts: 1 });
     assert.equal(economics.cost, null);

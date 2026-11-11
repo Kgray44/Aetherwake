@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import type { MissionAdmission, MissionAdmissionReason, MissionAttempt, MissionAttemptPhaseTiming, MissionEvent, MissionProjection } from './mission-contracts.mts';
+import type { Mission, MissionAdmission, MissionAdmissionReason, MissionAttempt, MissionAttemptPhaseTiming, MissionEvent, MissionProjection } from './mission-contracts.mts';
 import type { ConversationProviderTiming, MissionReportTiming, ProviderStreamTiming, StreamEvent, VelaRouteTiming } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
 import type { TurnEvent, TurnTransportTiming } from '../../openai-provider/contracts.mts';
@@ -110,6 +110,64 @@ type TokenObservation = { observedTokens: number | null; receipts: number };
 
 function emptyTokenObservations() {
   return Object.fromEntries(tokenFields.map(field => [field, { observedTokens: null, receipts: 0 }])) as Record<TokenField, TokenObservation>;
+}
+
+type UsageClaim = { executionId?: string; receipt: ReportedUsage | null; source: 'reported' | 'simulated' | null };
+
+function reconcileMissionUsage(attempts: Iterable<MissionAttempt>, plan: Mission['planning'], additional: UsageClaim[] = []) {
+  const claims: UsageClaim[] = [];
+  for (const { telemetry } of attempts) {
+    if (!telemetry) continue;
+    const executionId = telemetry.providerCalls === 1 ? telemetry.providerExecutionId : undefined;
+    const receipt = reportedUsage(telemetry.usage);
+    if (executionId || receipt) claims.push({ executionId, receipt, source: telemetry.providerEvidence ?? null });
+  }
+  if (plan) claims.push({ executionId: plan.executionId, receipt: reportedUsage(plan.usage), source: plan.providerEvidence ?? null });
+  for (const receipt of plan?.context?.usage ?? [])
+    claims.push({ receipt: reportedUsage(receipt), source: plan?.providerEvidence ?? null });
+  claims.push(...additional);
+  const usage: { receipt: ReportedUsage; source: UsageClaim['source'] }[] = [];
+  const executionClaims = new Map<string, UsageClaim[]>();
+  for (const claim of claims) {
+    if (claim.executionId) {
+      const group = executionClaims.get(claim.executionId) ?? [];
+      group.push(claim);
+      executionClaims.set(claim.executionId, group);
+    } else if (claim.receipt) usage.push({ receipt: claim.receipt, source: claim.source });
+  }
+  const conflictingUsageExecutionIds: string[] = [];
+  let duplicateCalls = 0;
+  for (const [id, group] of executionClaims) {
+    duplicateCalls += group.length - 1;
+    const sources = new Set(group.flatMap(claim => claim.source ? [claim.source] : []));
+    let receipt: ReportedUsage | null = null;
+    let conflict = sources.size > 1;
+    for (const claim of group) {
+      if (!claim.receipt) continue;
+      const observed = claim.receipt;
+      if (tokenFields.some(field => receipt?.[field] !== undefined && observed[field] !== undefined && receipt[field] !== observed[field])) {
+        conflict = true;
+        break;
+      }
+      receipt = Object.assign({}, receipt, observed);
+    }
+    if (conflict) conflictingUsageExecutionIds.push(id);
+    else if (receipt) usage.push({ receipt, source: sources.values().next().value ?? null });
+  }
+  return { usage, conflictingUsageExecutionIds, duplicateCalls };
+}
+
+/** Compact planning and attempt summary. The execution profile also includes linked cognitive receipts. */
+export function summarizeMissionUsage(attempts: readonly MissionAttempt[], plan: Mission['planning'], providerCalls: number | null) {
+  const { usage, conflictingUsageExecutionIds, duplicateCalls } = reconcileMissionUsage(attempts, plan);
+  const reported = usage.filter(claim => claim.source === 'reported');
+  const total = reported.reduce((sum, claim) => sum + claim.receipt.totalTokens, 0);
+  return {
+    usageReports: usage.length,
+    reportedTotalTokens: reported.length && Number.isSafeInteger(total) ? total : null,
+    completeReportedUsage: providerCalls !== null && conflictingUsageExecutionIds.length === 0 &&
+      reported.length === usage.length && reported.length === providerCalls - duplicateCalls,
+  };
 }
 
 function interval(id: string, start: AttemptBoundary, end: AttemptBoundary | null): Interval | null {
@@ -466,46 +524,13 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   } : null;
   const executiveRuns = cognition?.runs.filter(run => run.attribution.owner.kind === 'checkpoint') ?? [];
   // Attempt receipts can outlive their lifecycle events in the bounded journal.
-  const claims = Array.from(byAttempt.values()).flatMap(({ attempt }) => {
-    const telemetry = attempt.telemetry;
-    return telemetry ? [{ executionId: telemetry.providerCalls === 1 ? telemetry.providerExecutionId : undefined,
-      receipt: reportedUsage(telemetry.usage), source: telemetry.providerEvidence ?? null }] : [];
-  });
-  if (plan) claims.push({ executionId: plan.executionId, receipt: planningUsage, source: plan.providerEvidence ?? null });
-  for (const receipt of plan?.context?.usage ?? [])
-    claims.push({ executionId: undefined, receipt: reportedUsage(receipt), source: plan?.providerEvidence ?? null });
-  for (const run of executiveRuns) if (run.dispatched === true)
-    claims.push({ executionId: run.executionId, receipt: run.usage, source: run.providerEvidence });
-  const usage: { receipt: ReportedUsage; source: 'reported' | 'simulated' | null }[] = [];
-  const executionClaims = new Map<string, typeof claims>();
-  for (const claim of claims) {
-    if (claim.executionId) {
-      const group = executionClaims.get(claim.executionId) ?? [];
-      group.push(claim);
-      executionClaims.set(claim.executionId, group);
-    } else if (claim.receipt) usage.push({ receipt: claim.receipt, source: claim.source });
-  }
-  const conflictingUsageExecutionIds: string[] = [];
-  let duplicateCalls = 0;
-  for (const [id, group] of executionClaims) {
-    duplicateCalls += group.length - 1;
-    const sources = new Set(group.flatMap(claim => claim.source ? [claim.source] : []));
-    let receipt: ReportedUsage | null = null;
-    let conflict = sources.size > 1;
-    for (const claim of group) {
-      if (!claim.receipt) continue;
-      const observed = claim.receipt;
-      if (tokenFields.some(field => receipt?.[field] !== undefined && observed[field] !== undefined && receipt[field] !== observed[field])) {
-        conflict = true;
-        break;
-      }
-      receipt = Object.assign({}, receipt, observed);
-    }
-    if (conflict) conflictingUsageExecutionIds.push(id);
-    else if (receipt) usage.push({ receipt, source: sources.values().next().value ?? null });
-  }
+  const dispatchedExecutiveRuns = executiveRuns.filter(run => run.dispatched === true);
+  const { usage, duplicateCalls, conflictingUsageExecutionIds } = reconcileMissionUsage(
+    Array.from(byAttempt.values(), ({ attempt }) => attempt), plan, dispatchedExecutiveRuns.map(run => ({
+      executionId: run.executionId, receipt: run.usage, source: run.providerEvidence,
+    })));
   const knownProviderCalls = profile.providerCalls === null ? null :
-    profile.providerCalls + executiveRuns.filter(run => run.dispatched === true).length;
+    profile.providerCalls + dispatchedExecutiveRuns.length;
   const providerCalls = knownProviderCalls !== null && knownProviderCalls >= duplicateCalls &&
     !cognition?.truncated && !executiveRuns.some(run => run.dispatched === null) ? knownProviderCalls - duplicateCalls : null;
   const usageReceipts = { reported: 0, simulated: 0, unattributed: 0,

@@ -4,6 +4,7 @@ import { compileMissionContext, createMissionContextCache, validateMissionContex
   type MissionContextSource } from '../../vela-core/src/mission-context.mts';
 import { historyDigest } from '../../vela-core/src/bounded-history.mts';
 import { ServiceError } from './contracts.mts';
+import { summarizeMissionUsage } from './execution-profiler.mts';
 import { missionMeasurementAnswer } from './mission-native.mts';
 import { buildMissionRevision } from './mission-revision.mts';
 import type { ResourceLease, ResourceLeaseRequest } from './resource-policy.mts';
@@ -684,13 +685,10 @@ export class MissionService {
     const allTasks = [...m.tasks, ...(m.retiredTasks ?? [])];
     const attempts = allTasks.flatMap(task => task.attempts);
     const expectedRemote = attempts.filter(attempt => this.host.executors[attempt.executor]?.lane !== 'native');
-    const usage = expectedRemote.flatMap(attempt => attempt.telemetry?.usage ? [attempt.telemetry.usage] : []);
-    if (m.planning?.usage) usage.push(m.planning.usage);
-    if (m.planning?.context) usage.push(...m.planning.context.usage);
-    const reportedTotalTokens = usage.length ? usage.reduce((total, reading) => total + reading.totalTokens, 0) : null;
     const providerCalls = expectedRemote.every(attempt => attempt.telemetry) ?
       expectedRemote.reduce((total, attempt) => total + attempt.telemetry!.providerCalls,
         (m.planning ? 1 : 0) + (m.planning?.context?.providerCalls ?? 0)) : null;
+    const { usageReports, reportedTotalTokens, completeReportedUsage } = summarizeMissionUsage(attempts, m.planning, providerCalls);
     let peakWorkers = 0, admitted = 0;
     for (const event of m.events) {
       if (event.kind === 'started') peakWorkers = Math.max(peakWorkers, ++admitted);
@@ -706,8 +704,8 @@ export class MissionService {
       elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0) +
         (m.planning?.context?.elapsedMs ?? 0), peakWorkers, attempts: attempts.length,
       retries: allTasks.reduce((total, task) => total + Math.max(0, task.attempts.length - 1), 0),
-      providerCalls, usageReports: usage.length, reportedTotalTokens,
-      verifiedObjectivesPerReportedToken: outcome === 'verified' && providerCalls === usage.length &&
+      providerCalls, usageReports, reportedTotalTokens,
+      verifiedObjectivesPerReportedToken: outcome === 'verified' && completeReportedUsage &&
         reportedTotalTokens && reportedTotalTokens > 0 ? 1 / reportedTotalTokens : null,
     } };
   }
