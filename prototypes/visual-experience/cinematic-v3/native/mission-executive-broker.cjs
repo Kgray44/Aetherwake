@@ -14,9 +14,9 @@ async function reviewMissionExecutive({ request, parent, call, reviewProvider, i
   const prompt = JSON.stringify(review.packet, null, 2);
   const approved = await reviewProvider({
     parent, intent: review.packet.objective, expiresAt: new Date(Date.now() + 90_000).toISOString(),
-    review: { providerId: "openai-api-vela", missionExecutive: true, prompt,
+    review: { providerId: "openai-api-vela", missionExecutive: true, missionObjectiveAssessment: Boolean(review.packet.completion), prompt,
       promptDigest: createHash("sha256").update(JSON.stringify(prompt)).digest("hex"),
-      route: { kind: "conversational", depth: "checkpoint review", model: review.model, effort: review.effort }, context: { included: [] },
+      route: { kind: "conversational", depth: review.packet.completion ? "objective assessment" : "checkpoint review", model: review.model, effort: review.effort }, context: { included: [] },
     },
   });
   if (approved !== true) throw Error("mission_review_declined");

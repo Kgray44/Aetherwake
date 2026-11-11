@@ -45,6 +45,7 @@ const eventLabel = {
   settled: "Attempt settled",
   recovered: "Recovered from journal",
   workroom: "Workroom created",
+  "objective-assessed": "Objective assessed",
 } as const;
 export { eventLabel as missionEventLabel, stateLabel as missionStateLabel };
 
@@ -123,6 +124,8 @@ const unattempted = (task: RevisionTask) => task.state === "queued" && !task.att
 const canRevise = (mission: MissionProjection, scope: MissionScope | null) => sameScope(mission.scope, scope) &&
   mission.disposition === "paused" && !mission.tasks.some((task) => task.state === "running" || task.state === "cancelling") &&
   mission.events.filter((event) => event.kind === "revised").length < MISSION_LIMITS.revisions;
+const canAssessObjective = (mission: MissionProjection, scope: MissionScope | null) => sameScope(mission.scope, scope) &&
+  mission.outcome === "blocked" && !!mission.coverage && mission.tasks.every(task => task.state === "verified");
 
 export function missionTaskControls(
   mission: MissionProjection,
@@ -994,11 +997,18 @@ export function createVelaMissionView(
     refresh();
   }
   async function requestExecutiveReview(current: MissionProjection, triggerSeq: number) {
-    if (!currentRevision(current) || commandPending) return;
+    const assessing = canAssessObjective(current, scope);
+    if (commandPending || (assessing ? mission?.id !== current.id || mission.revision !== current.revision : !currentRevision(current))) return;
     await scopedCommand({ name: "executive-review", input: { id: current.id, revision: current.revision, triggerSeq } }, value => {
-      if (!currentRevision(current) || JSON.stringify(current.tasks) !== JSON.stringify(mission?.tasks)) return;
       if (!value || !("kind" in value) || value.kind !== "executive-result") throw Error("mission_executive_unavailable");
       const { result } = value;
+      if (assessing) {
+        if (result.state === "completion-assessed") refresh();
+        else if (result.state === "stale") throw Error("mission_executive_review_changed");
+        else throw Error("mission_executive_unavailable");
+        return;
+      }
+      if (!currentRevision(current) || JSON.stringify(current.tasks) !== JSON.stringify(mission?.tasks)) return;
       if (result.state === "advisory") {
         executiveAdvisory = result.reason;
       } else if (result.state === "reviewable" && result.preview.missionId === current.id && result.preview.revision === current.revision) {
@@ -1227,6 +1237,19 @@ export function createVelaMissionView(
       }
     }
     if(current.coverage)section.append(el("p","vela-core-meta","Investigation incomplete: "+current.coverage.limitations.join(' ')));
+    if (current.objectiveAssessment) {
+      section.append(el("h4", undefined, "Objective assessment"),
+        el("p", "vela-core-meta", `Reviewed by ${current.objectiveAssessment.model}`));
+      for (const finding of current.objectiveAssessment.findings) {
+        section.append(el("p", undefined, `${finding.status === "supported" ? "Supported by checked evidence" : "Still unverified"} — ${finding.statement}`));
+        if (finding.evidence.length) section.append(el("p", "vela-core-meta", finding.evidence.map(ref =>
+          current.tasks.find(task => task.id === ref.taskId)?.objective ?? ref.taskId).join(" · ")));
+      }
+    } else if (checkpoint && canAssessObjective(current, scope)) {
+      const assess = button("Review objective against results", "assess-objective", () => { void requestExecutiveReview(current, checkpoint.seq); });
+      assess.disabled = commandPending;
+      section.append(assess);
+    }
     if (sameScope(current.scope, scope) && (current.outcome === "verified" || current.outcome==='blocked'&&current.coverage&&current.tasks.every(task=>task.state==='verified'))) {
       const post = button("Post evidence link to Vela chat", "post-report", () => { postReport(current.id); });
       post.disabled = commandPending || postedReport === current.id;

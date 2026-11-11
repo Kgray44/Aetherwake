@@ -49,6 +49,13 @@ export interface MissionPlan {
   coverage?: MissionCoverage;
 }
 export interface MissionCoverage { status: 'partial'; limitations: string[] }
+export interface MissionObjectiveAssessment {
+  model: string;
+  requestId: string;
+  planRevision: number;
+  triggerSeq: number;
+  findings: { status: 'supported' | 'unverified'; statement: string; evidence: { taskId: string; evidenceId: string }[] }[];
+}
 export type MissionTeamBinding = Pick<MissionTeam, 'id' | 'title' | 'version'>;
 export interface MissionTeamLibrary {
   kind: 'team-library';
@@ -117,7 +124,7 @@ export interface MissionTask extends MissionTaskPlan {
 export interface MissionEvent {
   seq: number;
   time: string;
-  kind: 'created' | 'revised' | 'control' | 'started' | 'settled' | 'recovered' | 'workroom';
+  kind: 'created' | 'revised' | 'control' | 'started' | 'settled' | 'recovered' | 'workroom' | 'objective-assessed';
   taskId?: string;
   attemptId?: string;
   detail?: string;
@@ -140,6 +147,7 @@ export interface Mission {
   team?: MissionTeamBinding;
   originConversationId?: string;
   coverage?: MissionCoverage;
+  objectiveAssessment?: MissionObjectiveAssessment;
   workroom?: MissionWorkroom;
   tasks: MissionTask[];
   retiredTasks?: MissionTask[];
