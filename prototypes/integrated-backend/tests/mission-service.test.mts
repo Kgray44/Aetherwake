@@ -302,6 +302,9 @@ test('simulated provider usage stays out of the reported token total', async () 
     assert.equal(economics.simulatedTotalTokens, 10);
     assert.equal(economics.usageCoverage, 'partial');
     assert.deepEqual(economics.usageReceipts, { reported: 1, simulated: 1, unattributed: 0, missing: 1 });
+    assert.deepEqual(economics.usageBySource.reported.inputTokens, { observedTokens: 12, receipts: 1 });
+    assert.deepEqual(economics.usageBySource.reported.cachedInputTokens, { observedTokens: null, receipts: 0 });
+    assert.deepEqual(economics.usageBySource.simulated.outputTokens, { observedTokens: 4, receipts: 1 });
     delete retained.tasks[0].attempts[0].telemetry.providerEvidence;
     retained.profile.providerCalls = null;
     assert.deepEqual(projectMissionExecution(retained).economics.usageReceipts,
@@ -314,6 +317,10 @@ test('simulated provider usage stays out of the reported token total', async () 
     assert.equal(deduplicated.providerCalls, 1);
     assert.equal(deduplicated.simulatedTotalTokens, 10);
     assert.equal(deduplicated.usageCoverage, 'complete');
+    retained.tasks[0].attempts[0].telemetry.usage = { ...retained.planning!.usage!, cachedInputTokens: 0 };
+    const enriched = projectMissionExecution(retained).economics;
+    assert.deepEqual(enriched.usageBySource.simulated.cachedInputTokens, { observedTokens: 0, receipts: 1 });
+    assert.deepEqual(enriched.conflictingUsageExecutionIds, []);
     retained.tasks[0].attempts[0].telemetry.providerEvidence = 'reported';
     const conflicted = projectMissionExecution(retained).economics;
     assert.equal(conflicted.reportedTotalTokens, null);
