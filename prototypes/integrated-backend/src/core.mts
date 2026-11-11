@@ -5880,7 +5880,11 @@ export class BackendCore {
       const governor = this.missionAdmission;
       const policyView = () => {
         const { vramAvailableBytes: estimate, externalDesktopActivity: activity, windowsLowMemory: memory,
-          windowsCommitHeadroomBytes: commit } = governor.telemetry().metrics;
+          windowsCommitHeadroomBytes: commit, nvidiaGpuTemperatureCelsius: temperature,
+          nvidiaGpuThermalSlowdown: slowdown } = governor.telemetry().metrics;
+        const temperatureCelsius = typeof temperature.value === 'number' ? temperature.value : null;
+        const thermalSlowdown = typeof slowdown.value === 'number' ? slowdown.value === 1 : null;
+        const thermalAge = temperatureCelsius !== null ? temperature.ageMs : thermalSlowdown !== null ? slowdown.ageMs : null;
         return { ...governor.inspectPolicy(), dedicatedVramEstimate:
           estimate.availability === 'estimated' && typeof estimate.value === 'number' && estimate.ageMs !== null ?
             { bytes: estimate.value, ageMs: estimate.ageMs } : null,
@@ -5889,7 +5893,8 @@ export class BackendCore {
         windowsLowMemory: memory.availability === 'observed' && memory.ageMs !== null ?
           { active: memory.value === 1, ageMs: memory.ageMs } : null,
         windowsCommitHeadroom: commit.availability === 'derived' && typeof commit.value === 'number' && commit.ageMs !== null ?
-          { bytes: commit.value, ageMs: commit.ageMs } : null };
+          { bytes: commit.value, ageMs: commit.ageMs } : null,
+        nvidiaGpuThermals: thermalAge === null ? null : { temperatureCelsius, slowdown: thermalSlowdown, ageMs: thermalAge } };
       };
       const current = governor.inspectPolicy();
       if (a.name === 'inspect' && fields.length === 1) return policyView() as CommandMap[K]['output'];

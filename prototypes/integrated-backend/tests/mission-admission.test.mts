@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { setImmediate as yieldToProbe } from 'node:timers/promises';
 import { createMissionAdmission } from '../src/mission-admission.mts';
+import { parseNvidiaGpuThermals } from '../src/windows-gpu-thermals.mts';
 
 const mib = 1024 * 1024;
 const epoch = Date.parse('2026-01-01T00:00:00Z');
@@ -236,5 +237,67 @@ test('Windows commit headroom caps RAM reservations and can hold local admission
     time = 52_001;
     assert.equal(admission.read(true).readings.windowsCommitHeadroomBytes, undefined);
     assert.equal(admission.canLease('host_io'), true);
+  } finally { admission.dispose(); }
+});
+
+test('a fresh driver thermal slowdown checkpoints GPU work and leaves the CPU and remote lanes available', async () => {
+  let time = 0;
+  const admission = createMissionAdmission({ maxWorkers: 3, now: () => time,
+    availableMemory: () => 2048 * mib, cpuCounters: () => ({ total: time * 4, idle: time * 3, logicalCpus: 4 }),
+    readWindowsPressure: async () => ({}), readWindowsThermals: async () => ({ temperatureCelsius: 72.5, slowdown: 1 }),
+    resourcePolicy: { mode: 'balanced', limits: { cpu: 3, build: 1, gpu: 1, host_io: 3, remote: 3 } } });
+  try {
+    admission.read(true);
+    time = 4000;
+    admission.read(true);
+    assert.ok(admission.noteGpuBudget({ contextId: 'thermal-gpu', budgetBytes: 2048 * mib, usedBytes: 0 }));
+    const active = admission.tryLease({ missionId: 'thermal', taskId: 'gpu', attemptId: 'attempt', kind: 'gpu',
+      gpuContextId: 'thermal-gpu', estimatedVramBytes: 256 * mib, timeoutMs: 4000 });
+    assert.ok(active);
+    await yieldToProbe();
+    const snapshot = admission.read(true);
+    assert.deepEqual(snapshot.reasons, ['gpu-thermal-throttling']);
+    assert.equal(snapshot.workerLimit, 3);
+    assert.equal(admission.telemetry().metrics.nvidiaGpuTemperatureCelsius.value, 72.5);
+    assert.equal(admission.inspectPolicy().reason, 'gpu_thermal_pressure');
+    assert.equal(admission.canLease('cpu'), true);
+    assert.equal(admission.canLease('remote'), true);
+    assert.equal(admission.mayPrepareGpu(), false);
+    assert.equal(active.checkpointRequested.aborted, true);
+    assert.equal(active.active, true);
+    active.release();
+    time += 30_001;
+    admission.read(true);
+    assert.equal(admission.telemetry().metrics.nvidiaGpuThermalSlowdown.availability, 'stale');
+    assert.equal(admission.mayPrepareGpu(), true);
+  } finally { admission.dispose(); }
+});
+
+test('thermal parsing preserves unsupported values and requires all reported devices to be clear', () => {
+  assert.deepEqual(parseNvidiaGpuThermals('59.06, Not Active, Not Active'), { temperatureCelsius: 59.06, slowdown: 0 });
+  assert.deepEqual(parseNvidiaGpuThermals('59.06, Not Active, N/A\nN/A, N/A, N/A'), { temperatureCelsius: 59.06, slowdown: null });
+  assert.deepEqual(parseNvidiaGpuThermals('59.06, Not Active, Not Active\n77, Active, N/A'), { temperatureCelsius: 77, slowdown: 1 });
+  assert.throws(() => parseNvidiaGpuThermals('unexpected output'), /nvidia_thermal_output_invalid/u);
+});
+
+test('the supplemental thermal probe does not start on known battery power', async () => {
+  let time = 0, calls = 0;
+  const admission = createMissionAdmission({ maxWorkers: 3, now: () => time,
+    availableMemory: () => 2048 * mib, readWindowsPressure: null, readWindowsThermals: async () => {
+      calls++;
+      return { temperatureCelsius: null, slowdown: null };
+    } });
+  try {
+    admission.noteResourceSignal({ hostPower: { battery: true, suspended: false, idleSeconds: 10, speedLimitPercent: null } });
+    admission.read(true);
+    time = 2000;
+    admission.read(true);
+    await yieldToProbe();
+    assert.equal(calls, 0);
+    admission.noteResourceSignal({ hostPower: { battery: false, suspended: false, idleSeconds: 10, speedLimitPercent: null } });
+    for (time = 6000; time <= 22_000; time += 4000) admission.read(true);
+    await yieldToProbe();
+    assert.equal(calls, 1);
+    assert.equal(admission.telemetry().metrics.nvidiaGpuThermalSlowdown.availability, 'unsupported');
   } finally { admission.dispose(); }
 });

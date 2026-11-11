@@ -24,7 +24,13 @@ A Windows smoke run used Electron 45.2.1's actual menu, a scripted dialog respon
 
 On Windows with Node v24.18.0, the sampler observed 16 logical processors, 16 per-processor readings, and 33,413,779,456 bytes of physical RAM. A direct diagnostic measured 10.4 seconds for the bundled CIM query, exceeding the previous four-second timeout. The final run with a bounded 15-second window recorded 99.82% aggregate CPU, 5,160,497,152 available RAM bytes, 8 physical cores, 59% busiest GPU engine utilization, a busiest-device disk queue length of 0, 21,248,940 disk bytes/s, 62,612 bytes/s on the busiest network interface, and 1,329 pages/s. The CIM readings were 9.0 seconds old measured conservatively from the query start. The earlier comparison below captured CPU and RAM readings.
 
-The sampler preserves explicit stale, failed, unsupported, and unsampled states. GPU admission requires an eligible execution process and its own live GPU budget. External foreground app identity and temperature remain unavailable. Native input activity supplies a separate short-lived signal. The optional desktop-activity setting below uses a coarse OS-backed observation without identifying the foreground application.
+The sampler preserves explicit stale, failed, unsupported, and unsampled states. GPU admission requires an eligible execution process and its own live GPU budget. External foreground app identity and CPU temperature remain unavailable. Native input activity supplies a separate short-lived signal. The optional desktop-activity setting below uses a coarse OS-backed observation without identifying the foreground application.
+
+### Windows NVIDIA thermal telemetry
+
+When the NVIDIA driver utility is available in Windows System32, the existing demand-gated supplemental probe reads the highest reported GPU temperature and the hardware and software thermal slowdown flags. It collects only the selected numeric and state fields, runs with a 1.5-second deadline, and skips collection on known battery power. The native Performance menu shows the source readings and age. A fresh active driver flag closes GPU preparation and requests a checkpoint from an active GPU lease. Temperature is observational and does not select a threshold. Unavailable vendor fields are reported explicitly, and the GPU still requires its own process budget. [NVIDIA System Management Interface](https://docs.nvidia.com/deploy/nvidia-smi/index.html)
+
+On the Windows RTX 5070 host the real governor read 60.81 °C and clear hardware/software slowdown flags. The sample arrived about 280 ms after probe launch, and disabling the supplemental counters removed the derived readings. Controlled tests verified GPU-only checkpointing on an active flag, retained reservation until release, expiry, unavailable fields, and the battery guard. Native thermal slowdown during a representative workload remains unverified.
 
 ### Windows low-memory notification
 
