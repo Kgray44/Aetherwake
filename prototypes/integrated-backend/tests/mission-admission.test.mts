@@ -87,7 +87,7 @@ test('Windows probes wait for sustained demand, enforce a cooldown and expire in
   } finally { admission.dispose(); }
 });
 
-test('missing GPU samples hold observed contention until fresh headroom starts recovery', async () => {
+test('confirmed GPU contention checkpoints active work and missing samples hold the admission block', async () => {
   let time = 0, probes = 0;
   const loads = [97, 99, undefined, 90, 20];
   const admission = createMissionAdmission({ maxWorkers: 3, now: () => time, availableMemory: () => 1024 * mib,
@@ -104,8 +104,24 @@ test('missing GPU samples hold observed contention until fresh headroom starts r
     readAt(0);
     readAt(2_000);
     await yieldToProbe();
-    assert.deepEqual((await advanceProbe()).reasons, ['gpu-load']);
+    readAt(5_000);
+    assert.equal(admission.mayPrepareGpu(), true);
+    assert.ok(admission.noteGpuBudget({ contextId: 'sampled-gpu', budgetBytes: 1024 * mib, usedBytes: 0 }));
+    const active = admission.tryLease({ missionId: 'contention', taskId: 'gpu', attemptId: 'first', kind: 'gpu',
+      timeoutMs: 30_000, gpuContextId: 'sampled-gpu', estimatedVramBytes: 256 * mib });
+    assert.ok(active);
+    assert.equal(active.checkpointRequested.aborted, false);
+    readAt(8_000);
+    assert.equal(active.checkpointRequested.aborted, false);
+    await yieldToProbe();
+    assert.deepEqual(admission.read(false).reasons, ['gpu-load']);
     assert.equal(admission.mayPrepareGpu(), false);
+    assert.equal(active.checkpointRequested.aborted, true);
+    assert.equal(admission.inspectPolicy().active.gpu, 1);
+    assert.equal(admission.inspectPolicy().lastTransition?.checkpointRequests.gpu, 1);
+    assert.equal(admission.canLease('remote'), true);
+    active.release();
+    assert.equal(admission.inspectPolicy().active.gpu, 0);
     const missing = await advanceProbe();
     assert.deepEqual(missing.reasons, ['gpu-load-unavailable']);
     assert.equal(missing.readings.gpuEnginePercent, undefined);
