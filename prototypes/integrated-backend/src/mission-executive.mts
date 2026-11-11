@@ -7,9 +7,11 @@ export const missionExecutiveSchema = {
   type: 'object', additionalProperties: false, required: ['version', 'action', 'target', 'related', 'reason'],
   properties: {
     version: { type: 'integer', enum: [1] },
-    action: { type: 'string', enum: actions },
-    target: { type: 'string' },
-    related: { type: 'array', items: { type: 'string' } },
+    action: { type: 'string', enum: actions,
+      description: 'Replace can propose retry of a known failed task in a paused mission. Unknown effects require reconciliation. Use advice when no safe change is supported.' },
+    target: { type: 'string', description: 'Exact supplied task handle, such as t2. Empty for advice.' },
+    related: { type: 'array', items: { type: 'string' },
+      description: 'Empty for advice and replace. For dependencies, list prerequisite handles. For retire, supply one equivalent successor handle.' },
     reason: { type: 'string' },
   },
 } as const;
@@ -38,7 +40,9 @@ interface ExecutiveCheckpoint {
   digest: string;
 }
 type ExecutiveResult =
-  | { state: 'unavailable' | 'rejected' | 'stale' }
+  | { state: 'unavailable' | 'stale' }
+  | { state: 'rejected'; reasonCode: 'invalid-proposal' | 'invalid-arguments' | 'uneditable-checkpoint' | 'canonical-revision-rejected';
+    action?: Action; canonicalCode?: string }
   | { state: 'advisory'; checkpoint: ExecutiveCheckpoint; action: 'continue' | 'request-context' | 'request-completion-review'; reason: string }
   | { state: 'reviewable'; checkpoint: ExecutiveCheckpoint; change: MissionRevisionChange; preview: MissionRevisionPreview; reason: string };
 
@@ -100,26 +104,28 @@ export async function proposeMissionExecutiveRevision(triggerSeq: number, owner:
     if (!isCurrent()) return { state: 'stale' };
     if (raw == null) return { state: 'unavailable' };
     const proposal = parse(raw);
-    if (!proposal) return { state: 'rejected' };
+    if (!proposal) return { state: 'rejected', reasonCode: 'invalid-proposal' };
     const { action, target, related, reason } = proposal;
     if (action === 'continue' || action === 'request-context' || action === 'request-completion-review') {
-      return !target && !related.length ? { state: 'advisory', checkpoint, action, reason } : { state: 'rejected' };
+      return !target && !related.length ? { state: 'advisory', checkpoint, action, reason } : { state: 'rejected', reasonCode: 'invalid-arguments', action };
     }
     const task = mission.tasks.find(item => handles.get(item.id) === target);
     if (mission.disposition !== 'paused' || !task || task.state === 'verified' ||
-      packet.tasks.some(item => item.unknown || item.state === 'running' || item.state === 'cancelling')) return { state: 'rejected' };
+      packet.tasks.some(item => item.unknown || item.state === 'running' || item.state === 'cancelling')) return { state: 'rejected', reasonCode: 'uneditable-checkpoint', action };
     const refs = related.map(handle => mission.tasks.find(item => handles.get(item.id) === handle)?.id);
-    if (refs.some(id => id === undefined || id === task.id)) return { state: 'rejected' };
+    if (refs.some(id => id === undefined || id === task.id)) return { state: 'rejected', reasonCode: 'invalid-arguments', action };
     let change: MissionRevisionChange;
     if (action === 'replace' && refs.length === 0) change = { type: action, taskId: task.id };
     else if (action === 'dependencies') change = { type: action, taskId: task.id, dependencies: refs as string[] };
     else if (action === 'retire' && refs.length === 1) change = { type: action, taskId: task.id, successorId: refs[0]! };
-    else return { state: 'rejected' };
+    else return { state: 'rejected', reasonCode: 'invalid-arguments', action };
     try {
       const preview = owner.preview(mission.revision, change);
       return { state: 'reviewable', checkpoint, change, preview, reason };
-    } catch {
-      return { state: 'rejected' };
+    } catch (error) {
+      const code = (error as { code?: unknown })?.code;
+      const canonicalCode = typeof code === 'string' && /^mission_[a-z_]{1,80}$/.test(code) ? code : undefined;
+      return { state: 'rejected', reasonCode: 'canonical-revision-rejected', action, ...(canonicalCode ? { canonicalCode } : {}) };
     }
   } catch {
     return { state: 'unavailable' };

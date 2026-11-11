@@ -78,3 +78,36 @@ test('separates inferred intent, constraints and verification from the search pr
   assert.deepEqual(result.proposal.perception.deliverables, ['document']);
   assert.equal(result.rounds, 0);
 });
+
+test('assesses bounded canonical anchors when proposed queries miss a paraphrase', async () => {
+  let anchorReads = 0;
+  const result = await investigateSemanticHistory(request, {
+    search: () => ({ sources: [], scan: 'bounded' }),
+    recent: () => { anchorReads++; return { sources: [candidate], scan: 'partial' }; },
+    isCurrent: source => source === candidate,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      assert.deepEqual(call.excerpts, [{ handle: 'e1', text: candidate.text }]);
+      return answer;
+    },
+  });
+  assert.equal(anchorReads, 1);
+  assert.equal(result.rounds, 1);
+  assert.equal(result.searchCoverage, 'partial');
+  assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
+test('keeps a clarification proposed after current evidence leaves the referent unresolved', async () => {
+  const alternative = { sourceId: 'conversation:other', revision: '4', text: 'The scheduler retries once after a read timeout.' };
+  const result = await investigateSemanticHistory('Which one did we decide to repeat?', {
+    search: () => ({ sources: [candidate, alternative], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : {
+      version: 2, clarification: 'Do you mean the batch operation or the scheduler read?',
+      assessment: [{ key: 's1', status: 'uncertain', sources: ['e1', 'e2'], query: '' }],
+    },
+  });
+  assert.equal(result.state, 'assessed');
+  assert.equal(result.clarification, 'Do you mean the batch operation or the scheduler read?');
+  assert.deepEqual(result.coverage[0].sources, [candidate, alternative]);
+});
