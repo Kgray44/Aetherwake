@@ -155,6 +155,12 @@ async function run([name, messages, bytes, resources, events]) {
     const liveBefore = delivered;
     await repeat('eventAppend', i => assert(record(events + i)));
     assert.equal(delivered - liveBefore, warmups + samples);
+    await repeat('journalReplay', async () => {
+      const page = await call('rendererEventPage', { recent: true, limit: 250 });
+      assert(page.events.some(event => event.type === 'vela.synthetic.benchmark'));
+      assert.equal(page.scannedThrough, page.latest);
+    });
+    await repeat('indexedResourceRead', () => assert.equal(core.kernel.getResource(resourceId).resource.id, resourceId));
     await repeat('snapshotRead', async () => assert.equal((await call('snapshot', {})).graph.messages.length, revision - 1));
     const rollback = Error('synthetic transaction rollback');
     const beforeRollback = { ...sizes(), delivered };
@@ -228,4 +234,7 @@ async function run([name, messages, bytes, resources, events]) {
 console.log(JSON.stringify({ node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0]?.model,
   logicalCpuCount: availableParallelism(), warmups, samples,
   note: 'Disk-backed synthetic BackendCore. RSS is cumulative process peak. Logical SQL changes include rolled-back work. Stage timings are inclusive and can overlap.' }));
-for (const profile of profiles) console.log(JSON.stringify(await run(profile)));
+const [profileName, ...extraArguments] = process.argv.slice(2);
+const selected = profileName ? profiles.filter(([name]) => name === profileName) : profiles;
+assert(selected.length && !extraArguments.length, 'Pass one listed profile name or omit it to run all profiles.');
+for (const profile of selected) console.log(JSON.stringify(await run(profile)));
