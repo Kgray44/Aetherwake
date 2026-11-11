@@ -275,22 +275,25 @@ export function createResourcePolicy(maxWorkers: number, memoryFloor: number, no
       if (proposal.schemaVersion !== 1 || !Number.isSafeInteger(proposal.expiresAtMs) || proposal.expiresAtMs <= wallNow() ||
           !identifier(proposal.policyEpoch) || !finiteCount(proposal.baseRevision, Number.MAX_SAFE_INTEGER) ||
           !Array.isArray(proposal.evidenceRefs) || proposal.evidenceRefs.length === 0 || proposal.evidenceRefs.length > 16 ||
-          !Array.from(proposal.evidenceRefs).every(identifier) ||
+          !Array.from(proposal.evidenceRefs).every(identifier) || new Set(proposal.evidenceRefs).size !== proposal.evidenceRefs.length ||
           !proposal.changes || typeof proposal.changes !== 'object' || Array.isArray(proposal.changes))
         return { status: 'invalid_proposal' as const };
       if (disposed || proposal.policyEpoch !== epoch || proposal.baseRevision !== revision)
         return { status: 'stale_policy' as const };
       const changes = Object.entries(proposal.changes);
       if (!changes.length || !changes.every(([kind, delta]) => kinds.includes(kind as ResourceKind) &&
-          Number.isSafeInteger(delta) && Math.abs(delta) <= maxWorkers)) return { status: 'invalid_proposal' as const };
+          Number.isSafeInteger(delta) && delta !== 0 && Math.abs(delta) <= maxWorkers)) return { status: 'invalid_proposal' as const };
       if (changes.some(([, delta]) => delta > 0)) return { status: 'increase_requires_review' as const };
+      if (changes.some(([kind]) => kind === 'remote')) return { status: 'remote_budget_requires_separate_review' as const };
       const prediction = { ...effective };
       for (const [name, delta] of changes) {
         const kind = name as ResourceKind;
         prediction[kind] = Math.max(0, effective[kind] + delta);
       }
       prediction.build = Math.min(prediction.cpu, prediction.build);
-      return { status: 'preview' as const, policyEpoch: epoch, baseRevision: revision, current: { ...effective },
+      if (kinds.every(kind => prediction[kind] === effective[kind])) return { status: 'no_effective_change' as const };
+      return { status: 'preview' as const, policyEpoch: epoch, baseRevision: revision, expiresAtMs: proposal.expiresAtMs,
+        current: { ...effective }, currentReason: reason, previous: previous && { ...previous },
         prediction, evidenceRefs: [...proposal.evidenceRefs] };
     },
     configure(expectedVersion: number, next: ResourcePolicyConfig) {
