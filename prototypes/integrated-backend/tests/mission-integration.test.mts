@@ -354,6 +354,7 @@ test('canonical backend runs a native mission without inference, restores eviden
     const beforeReopen = await readPublication();
     assert.ok(beforeReopen && 'kind' in beforeReopen && beforeReopen.kind === 'execution-profile');
     assert.equal(beforeReopen.userDelivery?.messageId, latestReport.id);
+    assert.equal(beforeReopen.userDelivery?.publicationEventId, beforeReopen.reportPublication?.eventId);
     assert.equal(beforeReopen.userDelivery?.source, 'renderer-visible-frame');
     assert.ok(beforeReopen.userDelivery?.stagingToReceiptMs != null && beforeReopen.userDelivery.stagingToReceiptMs >= 0);
     assert.equal(beforeReopen.intakeToUserDeliveryMs,
@@ -370,6 +371,24 @@ test('canonical backend runs a native mission without inference, restores eviden
     backend = new Backend(options);
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
     assert.deepEqual(await readPublication(), beforeReopen);
+    await backend.close();
+    backend = new Backend({ ...options, retention: { maxEvents: 4 } });
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
+    for (let i = 0; i < 4; i++) await backend.call('desktop', {
+      type: 'createResource', kind: 'note', title: `Synthetic retention ${i}`, workspaceId: room.workspaceId,
+    });
+    const pruned = await readPublication();
+    assert.ok(pruned && 'kind' in pruned && pruned.kind === 'execution-profile');
+    assert.equal(pruned.reportPublication, null);
+    assert.equal(pruned.intakeToUserDeliveryMs, null);
+    assert.deepEqual(pruned.userDelivery, beforeReopen.userDelivery);
+    assert.deepEqual(pruned.firstMeaningfulOutput, { ...beforeReopen.firstMeaningfulOutput, intakeToReceiptMs: null });
+    assert.deepEqual(pruned.verifiedTaskMilestones, beforeReopen.verifiedTaskMilestones);
+    await backend.close();
+    backend = new Backend(options);
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
+    assert.deepEqual(await backend.call('rendererVelaOutput', receipt), { accepted: true });
+    assert.deepEqual(await readPublication(), pruned);
   } finally {
     await backend.close();
     const target = resolve(directory);
