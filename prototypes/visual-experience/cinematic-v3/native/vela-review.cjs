@@ -70,7 +70,8 @@ function projectEvidenceMatches(preview, review) {
   if (!preview || !review) return preview === review;
   const { sources, ...reference } = review;
   return JSON.stringify(reference) === JSON.stringify(preview) && Array.isArray(sources) &&
-    sources.length > 0 && sources.length <= 12 && sources.length === reference.sourceCount &&
+    sources.length > 0 && sources.length <= 12 &&
+    JSON.stringify(sources.map(source => source?.id)) === JSON.stringify(reference.sourceIds) &&
     Buffer.byteLength(JSON.stringify(sources)) <= 16000 &&
     new Set(sources.map(source => source?.id)).size === sources.length &&
     sources.every(source => source && source.projectId === reference.projectId &&
@@ -258,7 +259,7 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
   const agentInstructions = review.agentInstructions
     ? `<details open><summary>Additional agent instructions</summary><section><pre>${escape(review.agentInstructions)}</pre></section></details>` : "";
   const semanticDetails = review.missionPlanning
-    ? "<p>Vela will investigate these selected sources and send checked passages to the mission planner. This uses up to six API calls, including synthetic compatibility checks. You’ll review the proposed tasks before they can start.</p>"
+    ? "<p>Vela will investigate these reviewed sources and send checked passages to the mission planner. This uses up to six API calls, including synthetic compatibility checks. You’ll review the proposed tasks before they can start.</p>"
     : review.semanticContext
       ? `<p>Vela will interpret your question and check the selected evidence using this model. The answer uses checked passages. ${review.handoff ? "Only the selected exchange is included from the conversation." : "Conversation history is excluded."} Tools are disabled. This can use up to six API calls, including synthetic compatibility checks.</p>` : "";
   const checkpointDetails = review.missionCheckpoint
@@ -266,7 +267,7 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
   const workspaceDetails = review.workspaceState
     ? `<details open><summary>Workspace state</summary><section><p>Placed resource titles and types.</p><pre>${escape(review.workspaceState.text)}</pre></section></details>` : "";
   const projectDetails = review.projectEvidence
-    ? `<details open><summary>Project evidence (${review.projectEvidence.sourceCount})</summary><section><p>Vela can search these reviewed sources and send matching source text for evidence checking. ${review.projectEvidence.partial ? "Some project sources are outside this review." : ""}</p>${review.projectEvidence.sources.map(source => `<article><h2>${escape(source.title)}</h2><pre>${escape(source.content)}</pre></article>`).join("")}</section></details>` : "";
+    ? `<details open><summary>Project evidence (${review.projectEvidence.sources.length})</summary><section><p>Vela can search these reviewed sources and send matching source text for evidence checking. ${review.projectEvidence.partial ? "Some project sources are outside this review." : ""}</p>${review.projectEvidence.sources.map(source => `<article><h2>${escape(source.title)}</h2><pre>${escape(source.content)}</pre></article>`).join("")}</section></details>` : "";
   const executiveDetails = review.missionExecutive
     ? "<p>Vela will send one request with the mission objective, task states and verification summaries shown below. A suggested revision needs a separate decision before it can take effect.</p>" : "";
   const styleHash = createHash("sha256").update(css).digest("base64");
@@ -431,6 +432,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
   });
 }
 exports.validateReview = validateReview;
+exports.projectEvidenceMatches = projectEvidenceMatches;
 exports.validateFileEditReview = validateFileEditReview;
 exports.reviewPage = reviewPage;
 exports.showVelaReview = showVelaReview;

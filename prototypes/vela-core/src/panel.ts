@@ -6,7 +6,7 @@ import { confirmedVelaPlan, projectVelaManifestation, type VelaManifestationStat
 import { summarizeSystemMemory } from './system-information.ts';
 import { createVelaProposalView, type VelaProposalChoice } from './proposal-view.ts';
 import { githubRepository } from '../../application-contract/github-timeline.ts';
-import type { MissionPlanningOffer, MissionPreview } from '../../integrated-backend/src/mission-contracts.mts';
+import type { MissionPlanningEvidenceSelection, MissionPlanningOffer, MissionPreview } from '../../integrated-backend/src/mission-contracts.mts';
 
 function conciseObservedAnswer(content:string|undefined,facts:VelaLocalFacts|undefined){
   if(!content)return '';
@@ -38,7 +38,7 @@ export interface VelaPanelOptions {
   permissions?: { element: HTMLElement; setVisible(visible: boolean): void };
   missions?: {
     element: HTMLElement;
-    preview(intent: string, agentProfileId?: string, noteIds?: string[], fileIds?: string[]): Promise<MissionPreview | MissionPlanningOffer | null>;
+    preview(intent: string, agentProfileId?: string, evidence?: MissionPlanningEvidenceSelection): Promise<MissionPreview | MissionPlanningOffer | null>;
     review(preview: MissionPreview | MissionPlanningOffer, onStarted: (missionId: string) => void, agentProfileId?: string): void;
     openReport?(id: string): void;
     setVisible(visible: boolean): void;
@@ -267,7 +267,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   workspaceState.addEventListener('change', updateSemanticContext);
   projectEvidence.addEventListener('change', updateSemanticContext);
   let preparingEvidencePlan = false;
-  const planWithEvidence: HTMLButtonElement | undefined = options.missions && button('Plan mission with selected evidence', async () => {
+  const planWithEvidence: HTMLButtonElement | undefined = options.missions && button('Plan mission with reviewed evidence', async () => {
     const missions = options.missions!;
     if (busy || !intent.value.trim() || planWithEvidence?.disabled) return;
     const objective = intent.value;
@@ -277,7 +277,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     preparingEvidencePlan = true;
     updateSemanticContext();
     try {
-      const preview = await missions.preview(objective, undefined, noteIds.length ? noteIds : undefined, fileIds.length ? fileIds : undefined);
+      const preview = await missions.preview(objective, undefined, {
+        ...(noteIds.length ? { noteIds } : {}), ...(fileIds.length ? { fileIds } : {}),
+        ...(projectEvidence.checked ? { projectEvidence: true } : {}),
+      });
       if (!preview) throw Error('mission_scope_denied');
       reveal('missions');
       missions.review(preview, missionId => missions.openReport?.(missionId));
@@ -286,6 +289,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       updateSemanticContext();
     }
   });
+  sourcePanel.body.append(label('Find evidence in this project', projectEvidence));
   if (planWithEvidence) sourcePanel.body.append(planWithEvidence);
   function updateSemanticContext() {
     const sources = [...selected.values()];
@@ -300,7 +304,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     if (workspaceState.disabled) workspaceState.checked = false;
     projectEvidence.disabled = apiUnavailable || incompatibleSource || sourceCount + Number(workspaceState.checked) > 3 || !current?.applicationContext?.currentProjectId;
     if (projectEvidence.disabled) projectEvidence.checked = false;
-    if (planWithEvidence) planWithEvidence.disabled = ineligible || !!handoffSelection || busy || preparingEvidencePlan || !intent.value.trim();
+    if (planWithEvidence) planWithEvidence.disabled = (ineligible && !projectEvidence.checked) ||
+      !!handoffSelection || workspaceState.checked || busy || preparingEvidencePlan || !intent.value.trim();
   }
   updateSemanticContext();
   const modes = [['auto', 'Auto'], ['fast', 'Fast'], ['deep', 'Deep'], ['codex', 'Codex'], ['custom', 'Custom']] as const;
@@ -364,7 +369,6 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   providerRoutes.append(label('Start fresh for this send', routeHistory));
   providerRoutes.append(label('Investigate selected notes or files', semanticContext));
   providerRoutes.append(label('Review current workspace state', workspaceState));
-  providerRoutes.append(label('Find evidence in this project', projectEvidence));
   const savedRoutes = disclosure('Saved routing defaults', 'vela-core-routing-defaults');
   const scopeChoice = el('select', 'vela-core-input');
   const effectiveRoute = el('p', 'vela-core-meta');
