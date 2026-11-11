@@ -48,6 +48,8 @@ The broker denied prepare before authorization and after the single-use attempt 
 
 The first loopback completed with default graphics initialization. Subsequent attempts on the same host timed out during output-only startup. The instrumented failure had zero page-load completions, preload errors, ready signals, and replies at the deadline. With `--software-rendering`, the transport-only probe disables hardware acceleration in its own Electron process. Three software runs passed, with offers prepared in 2.5, 3.2, and 7.7 seconds. These observations establish a native transport path and a startup variability risk. Production startup reliability, live provider negotiation, physical playback and human audibility remain open. All 13 broker unit tests also passed.
 
+Add `--core` to exercise BackendCore, the native credential broker, the production WebRTC transport, and SQLite reopen in one process. The probe uses a fresh synthetic profile, intercepts the provider requests in Core, and verifies one audition initialization, commentary acknowledgment, and confirmed stop. It refuses an invalid grant before dispatch, rejects input-device selection, and refuses reuse of the consumed grant before and after reopening the same database. It also checks that the raw database lacks the synthetic credential and that the private media window is disposed. On Electron 45.2.1, audition through reopen took 806 ms with software rendering and 2,184 ms with default graphics on two final local observations. The local synthetic peer is muted and human audibility remains unverified.
+
 With desktop dependencies installed, run from the repository root.
 
 ```powershell
