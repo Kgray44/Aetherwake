@@ -85,11 +85,13 @@ test('Windows probes wait for sustained demand, enforce a cooldown and expire in
 
 test('a closing admission policy aborts a pending Windows probe and ignores late results', async () => {
   let time = 0, signal: AbortSignal | undefined, notify = 0;
+  let observe!: (value: { gpuEnginePercent: number }, stage: 'utilization') => void;
   let resolveProbe!: (result: { gpuEnginePercent: number }) => void;
   const pending = new Promise<{ gpuEnginePercent: number }>(resolve => { resolveProbe = resolve; });
   const admission = createMissionAdmission({ maxWorkers: 3, now: () => time,
     availableMemory: () => 1024 * mib, cpuCounters: () => ({ idle: 0, total: 0, logicalCpus: 0 }),
-    readWindowsPressure: async probeSignal => { signal = probeSignal; return pending; }, onChange: () => { notify++; } });
+    readWindowsPressure: async (probeSignal, publish) => { signal = probeSignal; observe = publish; return pending; },
+    onChange: () => { notify++; } });
   admission.read(true);
   time = 2_000;
   admission.read(true);
@@ -97,6 +99,7 @@ test('a closing admission policy aborts a pending Windows probe and ignores late
   assert.equal(signal?.aborted, false);
   admission.dispose();
   assert.equal(signal?.aborted, true);
+  observe({ gpuEnginePercent: 100 }, 'utilization');
   resolveProbe({ gpuEnginePercent: 100 });
   await yieldToProbe();
   assert.equal(notify, 0);
@@ -126,7 +129,8 @@ test('separate short missions do not combine their Windows sampler warmup', asyn
 
 test('an early Windows low-memory notification checkpoints local work before the other counters finish', async () => {
   let time = 0, changes = 0, probes = 0;
-  let observe!: (value: { windowsLowMemory: number }) => void, finish!: (result: { windowsLowMemory: number }) => void;
+  let observe!: (value: { windowsLowMemory: number }, phase: 'memory') => void;
+  let finish!: (result: { windowsLowMemory: number }) => void;
   const pending = new Promise<{ windowsLowMemory: number }>(resolve => { finish = resolve; });
   const admission = createMissionAdmission({ maxWorkers: 3, now: () => time, wallNow: () => epoch + time,
     availableMemory: () => 1024 * mib, readWindowsPressure: async (_signal, onMemory) => {
@@ -141,7 +145,7 @@ test('an early Windows low-memory notification checkpoints local work before the
     await yieldToProbe();
     const active = admission.tryLease({ missionId: 'memory', taskId: 'observe', attemptId: 'first', kind: 'host_io', timeoutMs: 4000 });
     assert.ok(active);
-    observe({ windowsLowMemory: 1 });
+    observe({ windowsLowMemory: 1 }, 'memory');
     assert.equal(changes, 1);
     const held = admission.read(true);
     assert.equal(held.workerLimit, 0);
@@ -168,6 +172,36 @@ test('an early Windows low-memory notification checkpoints local work before the
     assert.equal(admission.read(true).readings.windowsLowMemory?.value, 0);
     assert.equal(admission.telemetry().metrics.windowsLowMemory.availability, 'observed');
   } finally { finish({ windowsLowMemory: 1 }); admission.dispose(); }
+});
+
+test('GPU and disk counters are usable before optional Windows probes finish without counting a duplicate pressure sample', async () => {
+  let time = 0;
+  type Counters = { gpuEnginePercent: number; diskQueueLength: number };
+  let publish!: (value: Counters, phase: 'utilization') => void;
+  let finish!: (value: Counters) => void;
+  const admission = createMissionAdmission({ maxWorkers: 3, now: () => time,
+    availableMemory: () => 1024 * mib, readWindowsPressure: async (_signal, observe) => {
+      publish = observe;
+      return new Promise<Counters>(resolve => { finish = resolve; });
+    } });
+  const counters = { gpuEnginePercent: 99, diskQueueLength: 10 };
+  try {
+    admission.read(true);
+    time = 2000;
+    admission.read(true);
+    await yieldToProbe();
+    publish(counters, 'utilization');
+    assert.equal(admission.read(true).readings.gpuEnginePercent?.value, 99);
+    assert.equal(admission.read(true).readings.diskQueueLength?.value, 10);
+    assert.deepEqual(admission.read(true).reasons, []);
+    finish(counters);
+    await yieldToProbe();
+    assert.deepEqual(admission.read(true).reasons, []);
+    for (time = 6000; time <= 22_000; time += 4000) admission.read(true);
+    await yieldToProbe();
+    publish(counters, 'utilization');
+    assert.deepEqual(admission.read(true).reasons, ['gpu-load', 'disk-io']);
+  } finally { finish(counters); admission.dispose(); }
 });
 
 test('Windows commit headroom caps RAM reservations and can hold local admission independently of physical RAM', async () => {
