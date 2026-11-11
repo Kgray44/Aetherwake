@@ -146,14 +146,13 @@ function dependencyReadinessPath(attempts: {
 }[]) {
   type Node = { attemptId: string; taskId: string; clock: string; assemblyStartedMs: number; settledMs: number;
     gapBeforeAssemblyMs: number | null; observedReadyWaitMs: number | null; unattributedGapMs: number | null;
-    unattributedMs: number; phaseMs: PhaseDurations; previous: Node | null };
+    unattributedMs: number; phases: MissionAttemptPhaseTiming; previous: Node | null };
   const nodes = new Map<string, Node>();
   let tail: Node | null = null;
   for (const { id, taskId, interval, predecessors, phases } of attempts) {
     if (!interval || !predecessors || !phases || phases.clock !== interval.clock) return null;
     const [assemblyStartedMs, assemblyEndedMs] = phases.contextAssembly;
     if (assemblyEndedMs > interval.start) return null;
-    const phaseMs: PhaseDurations = {};
     let elapsedPhases = 0, lastEnd = interval.start;
     for (const phase of attemptPhases) {
       const bounds = phases[phase];
@@ -161,7 +160,6 @@ function dependencyReadinessPath(attempts: {
       const [start, end] = bounds;
       if (!Number.isFinite(start) || !Number.isFinite(end) || end < start ||
         (phase !== 'contextAssembly' && (start < lastEnd || end > interval.end))) return null;
-      phaseMs[phase] = end - start;
       elapsedPhases += end - start;
       lastEnd = Math.max(lastEnd, end);
     }
@@ -178,7 +176,7 @@ function dependencyReadinessPath(attempts: {
     const node: Node = { attemptId: id, taskId, clock: interval.clock, assemblyStartedMs, settledMs: interval.end,
       gapBeforeAssemblyMs, observedReadyWaitMs,
       unattributedGapMs: gapBeforeAssemblyMs === null ? null : gapBeforeAssemblyMs - (observedReadyWaitMs ?? 0),
-      unattributedMs: Math.max(0, interval.end - assemblyStartedMs - elapsedPhases), phaseMs, previous };
+      unattributedMs: Math.max(0, interval.end - assemblyStartedMs - elapsedPhases), phases, previous };
     nodes.set(id, node);
     if (!tail || node.settledMs >= tail.settledMs) tail = node;
   }
@@ -187,12 +185,29 @@ function dependencyReadinessPath(attempts: {
   for (let node: Node | null = tail; node; node = node.previous) chain.push(node);
   chain.reverse();
   const phaseMs: PhaseDurations = {};
-  for (const node of chain) for (const phase of attemptPhases) {
-    const duration = node.phaseMs[phase];
-    if (duration !== undefined) phaseMs[phase] = (phaseMs[phase] ?? 0) + duration;
+  type SegmentKind = typeof attemptPhases[number] | 'observed-ready-wait';
+  type Segment = { kind: SegmentKind; attemptId: string; taskId: string;
+    startedMs: number; endedMs: number; durationMs: number };
+  let largestMeasuredSegment: Segment | null = null;
+  const considerSegment = ({ attemptId, taskId }: Node, kind: SegmentKind, startedMs: number, endedMs: number): Segment => {
+    const durationMs = endedMs - startedMs;
+    return largestMeasuredSegment && largestMeasuredSegment.durationMs >= durationMs ? largestMeasuredSegment :
+      { kind, attemptId, taskId, startedMs, endedMs, durationMs };
+  };
+  for (const node of chain) {
+    const ready = node.phases.readyQueue;
+    if (ready && node.observedReadyWaitMs !== null)
+      largestMeasuredSegment = considerSegment(node, 'observed-ready-wait', ready.firstObservedMs, node.assemblyStartedMs);
+    for (const phase of attemptPhases) {
+      const bounds = node.phases[phase];
+      if (!bounds) continue;
+      const [startedMs, endedMs] = bounds;
+      phaseMs[phase] = (phaseMs[phase] ?? 0) + (endedMs - startedMs);
+      largestMeasuredSegment = considerSegment(node, phase, startedMs, endedMs);
+    }
   }
   const observed = chain.flatMap(node => node.observedReadyWaitMs === null ? [] : [node.observedReadyWaitMs]);
-  return { clock: tail.clock, elapsedMs: tail.settledMs - chain[0].assemblyStartedMs, phaseMs,
+  return { clock: tail.clock, elapsedMs: tail.settledMs - chain[0].assemblyStartedMs, phaseMs, largestMeasuredSegment,
     betweenAttemptsMs: chain.reduce((sum, node) => sum + (node.gapBeforeAssemblyMs ?? 0), 0),
     observedReadyBetweenAttemptsMs: observed.length ? observed.reduce((sum, duration) => sum + duration, 0) : null,
     unattributedBetweenAttemptsMs: chain.reduce((sum, node) => sum + (node.unattributedGapMs ?? 0), 0),
