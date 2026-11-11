@@ -138,6 +138,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
         provider: task.specialist.provider, model: task.specialist.model, effort: task.specialist.effort ?? null,
       } : null,
       interval: measured, contextPreparationMs: attempt.timing?.contextPreparationMs ?? null,
+      phases: attempt.timing?.phases ? structuredClone(attempt.timing.phases) : null,
       executionMs: attempt.timing?.executionMs ?? null, verificationMs: attempt.timing?.verificationMs ?? null,
       queueWallClockMs: attempt.timing?.queueMs ?? null,
       resourceAdmission: attempt.admission && readings ? {
