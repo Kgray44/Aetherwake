@@ -372,6 +372,23 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const clockSegments = Array.from(segments, ([clock, intervals]) => ({
     clock, attemptIds: intervals.map(item => item.id), ...occupancy(intervals),
   }));
+  type AttemptOutcome = NonNullable<MissionAttempt['outcome']> | 'running';
+  type OutcomeOccupancy = { attempts: number; measuredAttempts: number;
+    clocks: Map<string, { attemptIds: string[]; workerMs: number }> };
+  const occupancyByOutcome = new Map<AttemptOutcome, OutcomeOccupancy>();
+  for (const { attempt } of byAttempt.values()) {
+    const outcome = attempt.outcome ?? 'running';
+    const group = occupancyByOutcome.get(outcome) ?? { attempts: 0, measuredAttempts: 0, clocks: new Map() };
+    occupancyByOutcome.set(outcome, group);
+    group.attempts++;
+    const measured = traceByAttempt.get(attempt.id)?.interval;
+    if (!measured) continue;
+    group.measuredAttempts++;
+    const segment = group.clocks.get(measured.clock) ?? { attemptIds: [], workerMs: 0 };
+    segment.attemptIds.push(attempt.id);
+    segment.workerMs += measured.end - measured.start;
+    group.clocks.set(measured.clock, segment);
+  }
   const complete = attempts.length > 0 && attempts.length === byAttempt.size &&
     attempts.every(attempt => attempt.interval !== null) && clockSegments.length === 1;
   const total = complete ? clockSegments[0] : null;
@@ -592,6 +609,9 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       overlapMs: total?.overlapMs ?? null, peakWorkers: total?.peakWorkers ?? null,
       intervalCoverage: { measured: clockSegments.reduce((count, segment) => count + segment.attemptIds.length, 0),
         attempts: byAttempt.size },
+      occupancyByOutcome: Array.from(occupancyByOutcome, ([outcome, { attempts, measuredAttempts, clocks }]) => ({
+        outcome, attempts, measuredAttempts, clockSegments: Array.from(clocks, ([clock, segment]) => ({ clock, ...segment })),
+      })),
       // Measures occupied work on explicit dependency/retry edges. Queue gaps are separate.
       criticalPath: path,
       dependencyReadinessPath: complete && !active ? dependencyReadinessPath(attempts, initial) : null,
