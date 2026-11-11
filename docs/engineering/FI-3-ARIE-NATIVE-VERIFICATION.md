@@ -92,6 +92,18 @@ Run `node prototypes/integrated-backend/src/mission-admission-benchmark.mts --qu
 
 ARIE produced 15 lease receipts in 15 measured attempts. An earlier implementation placed these observations in the CPU-heavy class, reduced peak workers to one, and failed the native overlap assertion. The host-I/O class restored observed two-worker overlap in all three ARIE runs and passed the native overlap test. Median completion and event-loop delay were worse than the existing measured admission in this comparison. Ambient load and event-loop variance prevent isolating the cause or qualifying a performance gain. The default-size comparison hit its 20-second deadline during the memory-only baseline, with three of four missions verified at the cutoff. This run provides no frame-time, gaming, induced saturation, or live provider result.
 
+### Current timing attribution
+
+The original ARIE median of 6,925 ms was 41.6% slower than the existing measured-admission arm at 4,892 ms. The follow-up used the same verified quick workload, independent governor instances per trial, one first-run observation per arm, and three rotated measured trials per arm. It separates wall completion, dependency-ready queue time, synchronous admission and lease calls, context preparation, execution, and verification. Raw samples and per-attempt phase timings are emitted by `node prototypes/integrated-backend/src/mission-admission-benchmark.mts --quick`. `--cold-only` collects first-run traces and `--without-supplemental-windows` isolates the core paths for comparison.
+
+| Shared Windows host series | Memory only median | Measured admission median | ARIE median | ARIE difference vs measured |
+| --- | ---: | ---: | ---: | ---: |
+| Supplemental enabled, first series | 4,241.34 ms | 4,267.44 ms | 4,293.86 ms | +0.62% |
+| Supplemental disabled | 559.04 ms | 563.20 ms | 562.10 ms | −0.20% |
+| Supplemental enabled, repeat | 561.18 ms | 561.30 ms | 560.29 ms | −0.18% |
+
+All 36 missions verified, with five attempts each. In the first series, the ready-queue p95 was about 4.2 seconds across all arms, including the memory-only path. CPU execution p95 was 265–267 ms. In the supplemental-enabled repeat, ARIE completion ranged from 560.08 to 562.85 ms and measured admission from 560.58 to 566.21 ms. ARIE sampling took 1.23–1.29 ms total per repeat trial and lease acquisition took 0.13–0.29 ms total for five attempts. The first series measured 1.33–1.49 ms total for lease acquisition. No quick-series attempt used supplemental GPU counters. A separate first-run trace showed two native CPU observation waves of approximately 250–266 ms, followed by report verification in under 1 ms. The quick workload contains no CPU-thread or GPU-worker launch. These measurements did not reproduce the historical relative slowdown. The cause of the shared 4.2-second delay, the full mixed workload, and renderer responsiveness remain unverified.
+
 ## CPU worker isolation
 
 The native shipped-source inspection uses a lazy, bounded Node worker pool under a CPU lease with a 64 MiB admission reservation. Its old-generation limit is 32 MiB. The reservation adds room for other V8 and native allocations. Three isolated Windows Node runs observed 18.98–19.29 MiB of incremental process RSS with one thread and 37.98–38.84 MiB with two. This is a planning estimate for the fixed inspection workload. The full process working set has no OS-enforced 64 MiB cap.
