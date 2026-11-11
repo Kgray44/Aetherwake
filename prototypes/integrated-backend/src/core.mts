@@ -28,7 +28,7 @@ import { VelaWorkspaceRepair } from './vela-workspace-repair.mts';
 import { VelaWorkspaceAdjustment, matchWorkspaceAdjustment } from './vela-workspace-adjustment.mts';
 import type { WorkspaceRecoverySnapshot } from '../../application-contract/workspace-recovery.ts';
 import type { DatabaseSync } from 'node:sqlite';
-import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
+import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, ConversationOutputTiming, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
 import { compositeTimelineDomain,isTimelineRead,type TimelineRequest } from './timeline-domain.mts';
 import { createTimerDomain, type TimerDomain, type ClockTimerRequest } from './timer-domain.mts';
@@ -244,7 +244,8 @@ export class BackendCore {
   private pendingVoiceInput?: {messageId:string;intent:string;sessionId:string};
   private velaApiPlanner!:VelaPlanningPort;
   private velaApiTask?: Promise<unknown>;
-  private velaApiMessageDigests = new Map<string,string>();
+  private velaApiMessages = new Map<string, { digest: string;
+    timing?: Omit<ConversationOutputTiming, 'messageId' | 'stagedMs'> & { elapsed(): number } }>();
   private readonly velaApiTest?: VelaApiRuntimeTestServices;
   private ordinaryTest?:OrdinaryResponsesTestServices;
   private ordinaryAuth=new Map<string,Promise<void>>();
@@ -1991,18 +1992,23 @@ export class BackendCore {
     }
     const apiExecution = message.providerId === VELA_API_PROVIDER && message.providerContribution?.executionId
       ? this.state.executions[message.providerContribution.executionId] : undefined;
+    const prepared = apiExecution ? this.velaApiMessages.get(apiExecution.id) : undefined;
     if (message.providerId === VELA_API_PROVIDER) ensure(apiExecution?.providerId === VELA_API_PROVIDER && apiExecution.state === 'provider_completed' &&
-      apiExecution.resourceId === id && this.velaApiMessageDigests.get(apiExecution.id) === planningDigest(message.content), 'planning_output_provenance_mismatch');
+      apiExecution.resourceId === id && prepared?.digest === planningDigest(message.content), 'planning_output_provenance_mismatch');
     const entry=this.graph.addMessage(this.gid(id),message.role,message.content,{provenance:message.source==='user'?'user':'application',sensitivity:this.privateMode?'internal':'public'});
     if (apiExecution) {
       apiExecution.outputMessageId = entry.id;
       message = { ...message, providerContribution: { ...message.providerContribution!, sourceMessageId: entry.id } };
       this.state.messageEvidence[entry.id] = { classification: 'reported', executionId: apiExecution.id, providerId: VELA_API_PROVIDER,
         responseId: apiExecution.responseId, outputState: 'complete' };
-      this.velaApiMessageDigests.delete(apiExecution.id);
+      this.velaApiMessages.delete(apiExecution.id);
     }
     const {role:_role,content:_content,...metadata}=message;
     this.state.vela!.messages[entry.id]=metadata;this.state.revisions[id]++;
+    if (apiExecution && prepared?.timing) {
+      const { elapsed, ...timing } = prepared.timing;
+      apiExecution.outputTiming = { ...timing, messageId: entry.id, stagedMs: elapsed() };
+    }
     const observe=observeSpeech&&message.role==='assistant'?this.velaVoiceRuntime?.captureReplyObserver():undefined;
     if(observe)setImmediate(()=>{if(!this.closed)void observe(entry.id).catch(()=>{});});
     return {...message,id:entry.id};
@@ -2415,6 +2421,8 @@ export class BackendCore {
       validate();
       if (result.outcome !== 'completed') throw new VelaError(result.errorCode ?? 'vela_api_' + result.outcome, result.outcome === 'unknown' ? 'unknown' : undefined);
       ensure(result.responseId && this.state.executions[executionId]?.state === 'provider_completed', 'planning_output_provenance_mismatch');
+      const elapsed = trace?.executionId === executionId ? trace.timing.elapsed : undefined;
+      const compositionStartedMs = elapsed?.();
       const contribution = { providerId: VELA_API_PROVIDER, classification: 'reported' as const, executionId,
         planningConversationId: input.conversationId, ...(result.reportedModel ? { model: result.reportedModel } : {}) };
       const parsed = planning ? parseCodexPlanningOutput(result.partialText,contribution)
@@ -2422,8 +2430,14 @@ export class BackendCore {
       if (parsed.kind === 'plan') ensure(parsed.steps.every(step => fetchedIds.includes(step.action.type)), 'planning_capability_schema_not_discovered');
       const content = parsed.kind === 'plan' ? 'Proposed plan from ' + VELA_API_PROVIDER + ': ' + parsed.summary + '\nReview the typed actions before applying them.' : parsed.content;
       this.velaApiRuntime.bindCanonicalResult(executionId,result.partialText,content);
-      while (this.velaApiMessageDigests.size >= 64) this.velaApiMessageDigests.delete(this.velaApiMessageDigests.keys().next().value!);
-      this.velaApiMessageDigests.set(executionId,planningDigest(content)); return parsed;
+      const digest = planningDigest(content);
+      while (this.velaApiMessages.size >= 64) this.velaApiMessages.delete(this.velaApiMessages.keys().next().value!);
+      this.velaApiMessages.set(executionId, { digest,
+        ...(elapsed && compositionStartedMs !== undefined ? { timing: {
+          elapsed, compositionStartedMs, readyMs: elapsed(), parentRequestId: input.requestId,
+          source: this.velaApiTest ? 'simulated' : 'observed',
+        } } : {}) });
+      return parsed;
     } finally {
       signal.removeEventListener('abort', cancel);
       if (this.velaApiTask === task) this.velaApiTask = undefined;
@@ -5021,7 +5035,9 @@ export class BackendCore {
     ensure(input&&Array.isArray(input.resourceIds)&&input.resourceIds.length<=64&&input.resourceIds.every(id=>typeof id==='string'&&id.length>0&&id.length<=256)&&new Set(input.resourceIds).size===input.resourceIds.length,'invalid_conversation_activity');
     const resources=input.resourceIds.map(resourceId=>({resourceId,available:!!this.state.resources[resourceId]&&this.conversationAccess.access(resourceId)}));
     const allowed=new Set(resources.filter(item=>item.available).map(item=>item.resourceId));
-    const publicExecution=(execution:Execution):PublicConversationExecution=>({id:execution.id,resourceId:execution.resourceId,providerId:execution.providerId,commandId:execution.commandId,state:execution.state,startedAt:execution.startedAt,endedAt:execution.endedAt,taskVerified:false,...(this.recoverableCodexTurn(execution)?{recoveryAvailable:true as const}:{}),...(execution.errorCode?{errorCode:execution.errorCode}:{}),...(execution.httpDiagnostic?{httpDiagnostic:projectTurnHttpDiagnostic(execution.httpDiagnostic)}:{})});
+    const publicExecution=(execution:Execution):PublicConversationExecution=>({id:execution.id,resourceId:execution.resourceId,providerId:execution.providerId,commandId:execution.commandId,state:execution.state,startedAt:execution.startedAt,endedAt:execution.endedAt,taskVerified:false,...(this.recoverableCodexTurn(execution)?{recoveryAvailable:true as const}:{}),...(execution.errorCode?{errorCode:execution.errorCode}:{}),...(execution.httpDiagnostic?{httpDiagnostic:projectTurnHttpDiagnostic(execution.httpDiagnostic)}:{}),
+      ...(execution.outputTiming && this.conversationReadAccess(execution.resourceId, execution.outputTiming.messageId) ?
+        { outputTiming: { ...execution.outputTiming } } : {})});
     const current=this.active?this.state.executions[this.active.id]:null;
     const latest=new Map<string,Execution>();for(const execution of Object.values(this.state.executions))if(allowed.has(execution.resourceId))latest.set(execution.resourceId,execution);
     if(current&&allowed.has(current.resourceId))latest.set(current.resourceId,current);
