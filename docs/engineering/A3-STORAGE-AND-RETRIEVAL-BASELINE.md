@@ -34,6 +34,16 @@ Run `node prototypes/integrated-backend/src/transaction-benchmark.mjs` for the e
 
 Run `node prototypes/integrated-backend/src/transaction-benchmark.mjs event-heavy` to repeat the indexed canonical resource read and authorized 250-row renderer replay probes. In a second event-heavy run, the resource read measured median 3.00 ms and p95 17.63 ms. Renderer replay measured median 11.46 ms and p95 32.67 ms. Reopen and snapshot p95 was 1,678 ms, compared with 393 ms on the earlier run. The difference illustrates the run-to-run variance under ambient load. These probes use the existing owner APIs and do not measure native IPC or GPU rendering.
 
+Pass `--sample-allocations` to add eight V8 sampling runs per phase at a 32 KiB sampling interval. The default timing pass now splits in-process Core hydration from the first snapshot. Timing is collected before profiling starts. The separate allocation pass sums the byte sizes returned by the V8 sampler, including samples from objects collected during each phase. Those numbers cover JavaScript heap allocation samples. SQLite and other native allocations, retained heap size, cold process startup, and desktop presentation are outside this measurement.
+
+| Windows disk-backed profile | Hydration p95 | First snapshot p95 | Indexed read p95 | Replay p95 | Median sampled bytes, hydration / snapshot / replay |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Event heavy, repeat 1 | 811.75 ms | 18.71 ms | 17.44 ms | 59.28 ms | 33,202,800 / 1,344,720 / 560,584 |
+| Event heavy, repeat 2 | 571.23 ms | 16.18 ms | 14.03 ms | 15.56 ms | 32,611,932 / 1,394,120 / 559,648 |
+| Conversation heavy | 987.12 ms | 35.11 ms | 7.45 ms | 7.38 ms | 94,001,524 / 3,287,752 / 395,160 |
+
+Both event-heavy runs used fresh fixtures. The database grew from 1,183,744 to 3,330,048 bytes and the journal from 525 to 637 rows before the reopen cycles. Replay latency varied under ambient host load despite matching fixture sizes and similar sampled allocation medians. The conversation-heavy fixture grew from 5,259,264 to 7,405,568 bytes and from 25 to 137 journal rows. Its larger conversation graph had higher sampled hydration and snapshot allocations than the event-heavy fixtures.
+
 The backup regression uses the existing SQLite online backup and opens the copy through Core. It checks the exact conversation, message, event ID and cursor, and verifies that a source appended after backup is absent from the restored copy.
 
 The [Personal Context suite](../../prototypes/personal-context/tests/service.test.mts) also restores an online backup with the existing in-memory AES-GCM test key. The restored original, corrected fact and supersession link keep their exact identities and provenance. The original content, fact bodies and key are absent from the backup bytes. A different provider requires a fresh preview and disclosure check. A changed project revision, a denied disclosure or a wrong key each fails closed. Deleting the source and its dependent facts in the live database leaves a previously created backup recoverable, so recovery operators must account for deletion and retention before reusing an old copy. All 25 suite tests passed on Windows.
@@ -54,6 +64,21 @@ if ($LASTEXITCODE -ne 0) { throw 'Native backup restore failed' }
 
 Run `node prototypes/vela-core/tests/mission-context-evaluation.mts` for the frozen starter corpus. The current lexical compiler found five of six expected source IDs, including both conflicting records, and missed the paraphrase about the night shift. The fixture denied a superseded source and a restricted source at their owner boundary. It also verified rejection of an old policy-stamped package, reconstruction with the same source identities under a new stamp and denial after revocation. Two 150-sample runs measured p50 0.20–0.33 ms and p95 1.53–16.46 ms under concurrent host load. The fixture adapter supplies its own authorization and policy stamps. These results establish a regression baseline for the compiler and proof checks. Live provider continuity and independently labeled semantic quality require separate evidence.
 
+### Held-out retrieval comparison
+
+A separate authoring agent received the case categories and schema without access to retrieval code, the starter corpus, or the evaluator. Its [seven synthetic cases](../../prototypes/vela-core/tests/fixtures/cie-retrieval-holdout.json) cover nine phases and ten expected citations. The corpus is held out from this ranker's development. Labels assess citation relevance and scope under the fixture, with no claim about model training exposure or production representativeness.
+
+Run the lexical arm from the repository root:
+
+```powershell
+node prototypes/vela-core/tests/cie-retrieval-holdout.mts
+node --test prototypes/vela-core/tests/cie-retrieval-holdout.test.mts
+```
+
+On Windows the canonical lexical ranker recovered 8 of 10 expected citations, including both conflicting records. It missed both low-overlap paraphrases and retrieved seven irrelevant but authorized citations. The revoked citation and provider-restricted citation were absent from the respective after-phase results. The shared Harbor record remained available under a fresh fixture-provider binding. The benchmark calls the ranker directly, so it measures candidate retrieval independently of the UI's history-intent activation rule.
+
+For a comparative arm, pass `--adapter ./path/to/adapter.mts` to the same command. The adapter exports `retrieve(query, owner)` and returns the original source objects cited by the candidate. Mission 04's `investigateSemanticHistory` can use the supplied `search`, bounded `recent`, and `isCurrent` ports. Its `disclose` port needs the independently authorized transport under test. The runner keeps expected labels and denied text outside the adapter interface, scores invalid citations separately, and rejects old source bindings across phases even if an ID is still in scope. These are synthetic owner projections. Native grant handling and provider disclosure require their own evidence.
+
 ## Remaining acceptance evidence
 
-The current lexical baseline uses [bounded history retrieval](../../prototypes/vela-core/src/history-retrieval.mts) and scoped [mission context](../../prototypes/vela-core/src/mission-context.mts). The [semantic CIE specification](../specifications/CIE-SEMANTIC-INTERPRETATION-AND-EVIDENCE-RETRIEVAL.md) requires an independently labeled split for paraphrase, conflict, correction, permissions, revocation and provider continuity. A3 still needs that comparative evaluation, repeated disk-backed retrieval and replay baselines, and a qualified native profile. The native backup probe covers the integrated Vela API credential schema and same-account Windows custody. Personal Context recovery uses its synthetic host and crypto adapter. Production Personal Context host custody, full-profile protection and portability across OS accounts require separate evidence. No independent CIE database or transcript copy is introduced.
+The current lexical baseline uses [bounded history retrieval](../../prototypes/vela-core/src/history-retrieval.mts) and scoped [mission context](../../prototypes/vela-core/src/mission-context.mts). The [semantic CIE specification](../specifications/CIE-SEMANTIC-INTERPRETATION-AND-EVIDENCE-RETRIEVAL.md) calls for comparative evaluation on independently labeled cases. A qualified semantic comparison against the same labels remains pending. The repeated disk-backed baselines characterize the synthetic profiles under ambient load. The native backup probe covers the integrated Vela API credential schema and same-account Windows custody. Personal Context recovery uses its synthetic host and crypto adapter. Production Personal Context host custody, full-profile protection and portability across OS accounts require separate evidence.

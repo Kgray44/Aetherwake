@@ -1,0 +1,235 @@
+{
+  "contract": "aerynth.cie-holdout@1",
+  "cases": [
+    {
+      "id": "paraphrase-room-reentry",
+      "category": "paraphrase",
+      "query": "What has to happen before staff can go back inside?",
+      "sources": [
+        {
+          "id": "atrium-reoccupancy",
+          "text": "Facilities directive for the evacuated atrium: reoccupancy requires a clearance reading from the hygienist.",
+          "version": 1
+        },
+        {
+          "id": "atrium-staging",
+          "text": "Evacuated atrium personnel will assemble at the south loading bay for a headcount.",
+          "version": 1
+        }
+      ],
+      "before": {
+        "provider": "fixture-a",
+        "allowed": [
+          "atrium-reoccupancy",
+          "atrium-staging"
+        ],
+        "expected": [
+          "atrium-reoccupancy"
+        ]
+      }
+    },
+    {
+      "id": "paraphrase-stored-value",
+      "category": "paraphrase",
+      "query": "If I stop paying for my membership, do I lose the money I've already put aside?",
+      "sources": [
+        {
+          "id": "meridian-wallet-terms",
+          "text": "Meridian wallet terms: ending a subscription leaves the accumulated prepaid balance intact.",
+          "version": 1
+        },
+        {
+          "id": "meridian-renewal-notice",
+          "text": "Meridian subscribers receive a renewal notice seven days before their next billing date.",
+          "version": 1
+        }
+      ],
+      "before": {
+        "provider": "fixture-a",
+        "allowed": [
+          "meridian-wallet-terms",
+          "meridian-renewal-notice"
+        ],
+        "expected": [
+          "meridian-wallet-terms"
+        ]
+      }
+    },
+    {
+      "id": "conflict-bench-release",
+      "category": "conflict",
+      "query": "What do the independent inspection records say about whether test bench N7 was cleared for use on Tuesday?",
+      "sources": [
+        {
+          "id": "bench-safety-log",
+          "text": "Tuesday safety inspector's signed log: bench N7 passed its interlock check and was cleared for use at 14:00.",
+          "version": 1
+        },
+        {
+          "id": "bench-quality-log",
+          "text": "Tuesday quality auditor's independent signed log: bench N7 failed its interlock check and remained out of service through close.",
+          "version": 1
+        },
+        {
+          "id": "bench-calibration-calendar",
+          "text": "Bench N7 has a calibration appointment next month.",
+          "version": 1
+        }
+      ],
+      "before": {
+        "provider": "fixture-a",
+        "allowed": [
+          "bench-safety-log",
+          "bench-quality-log",
+          "bench-calibration-calendar"
+        ],
+        "expected": [
+          "bench-safety-log",
+          "bench-quality-log"
+        ]
+      }
+    },
+    {
+      "id": "correction-ferry-return",
+      "category": "correction",
+      "query": "Which pier should the field team use for the Saturday ride back from Birch Island?",
+      "sources": [
+        {
+          "id": "birch-return-draft",
+          "text": "Archived dispatch draft: Saturday field-team return pickup at Birch Island's West Pier. Dispatch marked this issue superseded and removed it from the active packet.",
+          "version": 1
+        },
+        {
+          "id": "birch-return-issued",
+          "text": "Dispatch's issued correction: Saturday's field-team return pickup is at Birch Island's East Pier. This replaces the earlier West Pier instruction.",
+          "version": 2
+        },
+        {
+          "id": "birch-morning-landing",
+          "text": "The Saturday morning supply run lands at Birch Island's West Pier.",
+          "version": 1
+        }
+      ],
+      "before": {
+        "provider": "fixture-a",
+        "allowed": [
+          "birch-return-issued",
+          "birch-morning-landing"
+        ],
+        "expected": [
+          "birch-return-issued"
+        ]
+      }
+    },
+    {
+      "id": "permissions-award-rationale",
+      "category": "permissions",
+      "query": "Why did the committee select the Riverside proposal?",
+      "sources": [
+        {
+          "id": "riverside-public-summary",
+          "text": "Committee-approved public award notice: Riverside offered the earliest installation date and included two years of maintenance.",
+          "version": 1
+        },
+        {
+          "id": "riverside-closed-minutes",
+          "text": "Committee chair's restricted minutes, available only to voting members: a confidential reference raised concerns about the runner-up and influenced deliberations.",
+          "version": 1
+        },
+        {
+          "id": "riverside-public-opening",
+          "text": "The public bid opening for Riverside was held on May 12. Four proposals were received.",
+          "version": 1
+        }
+      ],
+      "before": {
+        "provider": "fixture-a",
+        "allowed": [
+          "riverside-public-summary",
+          "riverside-public-opening"
+        ],
+        "expected": [
+          "riverside-public-summary"
+        ]
+      }
+    },
+    {
+      "id": "revocation-loaner-handoff",
+      "category": "revocation",
+      "query": "Where should the evening crew pick up the loaner scanner?",
+      "sources": [
+        {
+          "id": "scanner-handoff-grant",
+          "text": "Equipment custodian's handoff note, shared with the evening crew for this shift: collect the loaner scanner from the dispatch desk.",
+          "version": 1
+        },
+        {
+          "id": "scanner-return-log",
+          "text": "When the evening shift ends, return the loaner scanner to the charging cabinet.",
+          "version": 1
+        }
+      ],
+      "before": {
+        "provider": "fixture-a",
+        "allowed": [
+          "scanner-handoff-grant",
+          "scanner-return-log"
+        ],
+        "expected": [
+          "scanner-handoff-grant"
+        ]
+      },
+      "after": {
+        "provider": "fixture-a",
+        "allowed": [
+          "scanner-return-log"
+        ],
+        "expected": []
+      }
+    },
+    {
+      "id": "cross-provider-release-evidence",
+      "category": "cross-provider",
+      "query": "What kept the Harbor release on hold?",
+      "sources": [
+        {
+          "id": "harbor-release-register",
+          "text": "Release owner's canonical register, approved for both providers: Harbor was held pending a signed rollback rehearsal.",
+          "version": 2
+        },
+        {
+          "id": "harbor-rehearsal-incident",
+          "text": "Operations incident note, shared by its owner with fixture-a only: the Harbor rollback rehearsal stalled when the standby node refused promotion, leaving the release hold in effect.",
+          "version": 1
+        },
+        {
+          "id": "harbor-release-digest",
+          "text": "Harbor's release digest lists the packages included in the candidate build and their checksums.",
+          "version": 1
+        }
+      ],
+      "before": {
+        "provider": "fixture-a",
+        "allowed": [
+          "harbor-release-register",
+          "harbor-rehearsal-incident",
+          "harbor-release-digest"
+        ],
+        "expected": [
+          "harbor-release-register",
+          "harbor-rehearsal-incident"
+        ]
+      },
+      "after": {
+        "provider": "fixture-b",
+        "allowed": [
+          "harbor-release-register",
+          "harbor-release-digest"
+        ],
+        "expected": [
+          "harbor-release-register"
+        ]
+      }
+    }
+  ]
+}
