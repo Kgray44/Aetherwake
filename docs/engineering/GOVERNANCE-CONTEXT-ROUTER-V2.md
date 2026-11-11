@@ -116,3 +116,13 @@ This measures **selection volume, domain coverage, defined fixture recall, local
 Expose \`buildGovernanceIndex(config,registry)\` and \`buildContext({...})\` through an authenticated, policy-enforced context assembly service. The future CIE should add section/requirement graph dependencies, task intent classification, retrieval confidence, semantic evaluation, cache accounting, and context-inspector UI, while retaining a source manifest and full-document fallback. The indexing algorithm should remain deterministic, small, and dependency-free at this stage.
 
 **Status boundary:** This engineering component does not create additional governing requirements or alter any numbered charter. Implementation details may evolve through measured tests and architecture decisions.
+
+## Fluid Intelligence documentation-routing reconciliation (2026-11-10)
+
+The source charters now contain FI-2026-11-10 requirements across AIR, CIE, AEP, ARIE, the AI Mission Executive and the Adaptive Intelligence Workspace. The governance router is an **engineering documentation retrieval tool**, not the application's semantic interpreter and not a substitute for AI-assisted CIE.
+
+When preparing these implementation tasks, use explicit task/domain signals or requirement IDs and inspect the routed owners before trusting a focused section package. In particular, ARIE tasks require Charter 13 resource policy with relevant Charter 05 scheduling, Charter 10 measurement and Charter 15 acceptance; AEP experimentation requires 10/08/13/15; cognitive planning requires 05/06/08/14/15. Always include additional source charters needed for the actual changed paths and trust boundary.
+
+**Character comparison definition:** `fullRoutedCharacters` includes all full selected charter sources **plus any one-hop normative reference lines outside them**. The same lines are included in `selectedCharacters`; therefore `--full` has zero reported reduction. Neither figure is a tokenizer measurement or a quality metric. Historical benchmark numbers in this document refer to the November 1 source snapshot and must not be reused as current results after the FI amendments.
+
+Required verification for routing edits: run `node scripts/governance-router.mjs --validate`, `node --test tests/governance-router.test.mjs tests/governance-context.test.mjs`, `node scripts/benchmark-governance-context.mjs`, and `node scripts/evaluate-governance-engineering.mjs --strict`. Add new FI evaluation scenarios rather than assuming task-vocabulary additions prove full semantic coverage.

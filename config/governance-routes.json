@@ -35,7 +35,14 @@
         "token budget",
         "tokens",
         "token counts",
-        "execution profiler"
+        "execution profiler",
+        "aep",
+        "adaptive execution profiler",
+        "learning experiment",
+        "optimization experiment",
+        "critical path",
+        "policy promotion",
+        "quality adjusted efficiency"
       ],
       "path_prefixes": [
         "src/profiler/",
@@ -75,7 +82,11 @@
         "integrations",
         "plugins",
         "tools",
-        "providers"
+        "providers",
+        "responses api",
+        "async tool calling",
+        "prompt caching",
+        "capability registry"
       ],
       "path_prefixes": [
         "src/integrations/",
@@ -100,7 +111,14 @@
         "displays",
         "monitors",
         "frames",
-        "graphics"
+        "graphics",
+        "arie",
+        "adaptive resource intelligence",
+        "resource scheduler",
+        "foreground contention",
+        "cpu worker",
+        "gaming mode",
+        "hardware headroom"
       ],
       "path_prefixes": [
         "src/rendering/",
@@ -152,7 +170,11 @@
         "tests",
         "testing",
         "verification",
-        "quality"
+        "quality",
+        "holdout evaluation",
+        "quality regression",
+        "optimization validation",
+        "learning acceptance"
       ],
       "path_prefixes": [
         "src/",
@@ -222,7 +244,8 @@
         "animations",
         "particles",
         "motions",
-        "shaders"
+        "shaders",
+        "adaptive intelligence workspace"
       ],
       "path_prefixes": [
         "src/motion/",
@@ -252,7 +275,8 @@
         "collections",
         "folders",
         "layouts",
-        "dashboards"
+        "dashboards",
+        "adaptive intelligence workspace"
       ],
       "path_prefixes": [
         "src/workspaces/",
@@ -297,7 +321,12 @@
         "tasks",
         "workflows",
         "delegated tasks",
-        "agent groups"
+        "agent groups",
+        "mission executive",
+        "task dag",
+        "parallel mission",
+        "plan compiler",
+        "dynamic agent allocation"
       ],
       "path_prefixes": [
         "src/agents/",
@@ -320,7 +349,13 @@
         "assistants",
         "notifications",
         "preferences",
-        "habits"
+        "habits",
+        "fluid intelligence",
+        "ai native",
+        "cognitive intelligence",
+        "mission executive",
+        "experiential adaptation",
+        "adaptive strategy"
       ],
       "path_prefixes": [
         "src/assistant/",
@@ -361,7 +396,12 @@
         "memories",
         "retrieval",
         "compress context",
-        "compacting"
+        "compacting",
+        "experiential memory",
+        "evidence sufficiency",
+        "iterative retrieval",
+        "experience retrieval",
+        "learning memory"
       ],
       "path_prefixes": [
         "src/context/",
@@ -381,7 +421,12 @@
         "streams",
         "events",
         "traces",
-        "agent logs"
+        "agent logs",
+        "decision observatory",
+        "adaptive intelligence workspace",
+        "learning observatory",
+        "adaptation timeline",
+        "policy decision"
       ],
       "path_prefixes": [
         "src/observability/",

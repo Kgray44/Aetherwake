@@ -145,6 +145,27 @@ test("explicit full option includes every routed charter in full",()=>{
  const r=context({task:"Optimize GPU particle rendering",paths:["src/rendering/particles.ts"],forceFull:true});
  assert.ok(r.selected.every(s=>s.mode==="full"));
  assert.equal(r.metrics.characterReductionPercent,0);
+ assert.equal(r.metrics.selectedCharacters,r.metrics.fullRoutedCharacters);
+});
+test("full-size baseline accounts for all one-hop normative references",()=>{
+ const options={task:"Optimize GPU particle rendering",paths:["src/rendering/particles.ts"]};
+ const scoped=context({...options,maxSections:2});
+ const full=context({...options,forceFull:true});
+ assert.equal(scoped.metrics.fullRoutedCharacters,full.metrics.selectedCharacters);
+ assert.equal(full.metrics.characterReductionPercent,0);
+ assert.ok(full.dependencies.every(d=>d.text.length>0));
+});
+test("Fluid Intelligence engine work includes the source-owned charters, not only Constitution 00",()=>{
+ for(const [task,required] of [
+  ["Implement ARIE resource governor and adaptive worker scheduling",["05","10","13","15"]],
+  ["Analyze AEP optimizer experiments and learning policy promotion",["08","10","13","15"]],
+  ["Build AI-native Fluid Intelligence mission executive",["05","06","08","14","15"]],
+  ["Create Adaptive Intelligence Workspace decision observatory",["03","09","14","15"]]
+ ]){
+  const r=context({task});
+  for(const id of required) assert.ok(ids(r).includes(id),task+" should include charter "+id);
+  assert.equal(r.coverage.missingRequired.length,0);
+ }
 });
 test("sensitive actions include the ratified binding Trust charter",()=>{
  const r=context({task:"Overwrite server configuration",paths:["src/workspaces/file-browser.ts"]});

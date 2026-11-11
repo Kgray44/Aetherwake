@@ -99,3 +99,18 @@ test("plural everyday task descriptions route to the intended domains",()=>{
   assert.ok(ids(routeGovernance(config,registry,task,[],exists)).includes(id),task);
  }
 });
+
+test("Fluid Intelligence terms route to their canonical engine charters",()=>{
+ const cases=[
+  ["ARIE adaptive resource intelligence",["13"]],
+  ["AEP critical path and strategy experiments",["10"]],
+  ["AI-native fluid intelligence mission executive",["05","06"]],
+  ["Adaptive Intelligence Workspace decision observatory",["03","09"]],
+  ["Iterative retrieval with experiential memory",["08"]],
+  ["Responses API prompt caching",["12"]]
+ ];
+ for(const [task,expected] of cases){
+  const selected=ids(routeGovernance(config,registry,task,[],exists));
+  for(const id of expected)assert.ok(selected.includes(id),task+" missing "+id);
+ }
+});
