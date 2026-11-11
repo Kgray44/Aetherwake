@@ -36,6 +36,7 @@ function describe(view) {
   const lowMemory = view.windowsLowMemory;
   const commit = view.windowsCommitHeadroom;
   const thermals = view.nvidiaGpuThermals;
+  const transition = view.lastTransition;
   const detail = [
     `${source} profile: ${profile}`,
     reasons[view.reason] ?? "Waiting for policy evidence",
@@ -49,6 +50,11 @@ function describe(view) {
       `${(view.remainingRamReservationBytes / 2 ** 30).toFixed(2)} GiB` : "Unavailable"}`,
     `Other desktop activity protection (system idle time and Aerynth focus): ${view.externalActivityProtection ? "On" : "Off"}`,
   ];
+  if (transition) {
+    const requests = Object.values(transition.checkpointRequests).reduce((sum, count) => sum + count, 0);
+    detail.push(`Last effective change: ${reasons[transition.previousReason] ?? "Previous policy"} → ${reasons[transition.reason] ?? "Current policy"} (${transition.observedAtUtc})`);
+    if (requests > 0) detail.push(`Checkpoint requests at that change: ${requests}`);
+  }
   if (thermals) {
     const temperature = thermals.temperatureCelsius === null ? "temperature unavailable" : `${thermals.temperatureCelsius} °C`;
     const slowdown = thermals.slowdown === null ? "slowdown state unavailable" : thermals.slowdown ? "slowdown active" : "slowdown clear";
