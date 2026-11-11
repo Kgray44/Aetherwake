@@ -313,3 +313,40 @@ test('renderer event pages expose retention gaps and recover the bounded recent 
   assert.equal(recent.events.at(-1)?.cursor, recent.latest);
   await assert.rejects(core.command('rendererEventPage', {recent: true, after: 0}), /invalid_cursor/);
 });
+
+test('journal retention uses a cursor range and preserves the newest rows across gaps and restart', async t => {
+  const {core, close, open} = fixture(t, {rendererEventTransport: true, retention: {maxEvents: 4}});
+  const owner = core as any;
+  const prepare = owner.db.prepare.bind(owner.db);
+  const retentionStatements = new Set<string>();
+  owner.db.prepare = (sql: string) => {
+    if (sql.startsWith('DELETE FROM intelligence_events')) retentionStatements.add(sql);
+    return prepare(sql);
+  };
+  const record = (key: string) => owner.record('synthetic/retention', 'observed', undefined, key);
+  const first = record('retention-first');
+  assert.equal(record('retention-first'), null);
+  const retained = ['a', 'b', 'c', 'd'].map(key => record('retention-' + key).cursor);
+  assert(retained[0] > first.cursor + 1, 'duplicate insert must leave a cursor gap in this fixture');
+  const replay = () => core.command('rendererEventPage', {recent: true, limit: 4});
+  const page = await replay();
+  assert.deepEqual(page.events.map(event => event.cursor), retained);
+  assert.equal(page.earliest, retained[0]);
+  assert.equal(page.latest, retained.at(-1));
+  assert.equal(page.truncated, true);
+
+  await close();
+  const reopened = open();
+  const restored = await reopened.command('rendererEventPage', {recent: true, limit: 4});
+  assert.deepEqual(restored.events.slice(0, -1), page.events.slice(1));
+  assert.equal(restored.earliest, retained[1]);
+  assert.equal(restored.events.at(-1)?.type, 'stream/reopened');
+  assert.equal(restored.latest, restored.events.at(-1)?.cursor);
+  assert.equal(restored.truncated, true);
+
+  const db = (reopened as any).db;
+  assert.equal(retentionStatements.size, 1);
+  const [sql] = retentionStatements;
+  const queryPlan = db.prepare('EXPLAIN QUERY PLAN ' + sql).all(4);
+  assert.match(queryPlan[0].detail, /SEARCH intelligence_events USING INTEGER PRIMARY KEY/i);
+});
