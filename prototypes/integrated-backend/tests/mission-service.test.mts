@@ -163,6 +163,19 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     assert.equal(work.activeMs, 12);
     assert.equal(work.workerMs, 16);
     assert.equal(work.overlapMs, 4);
+    assert.deepEqual(work.occupancyByOutcome, [{
+      outcome: 'verified', attempts: 3, measuredAttempts: 3,
+      clockSegments: [{ clock: left.start.clock, attemptIds: [left.id, right.id, join.id], workerMs: 16 }],
+    }]);
+    const splitOccupancy = structuredClone(replay);
+    for (const event of splitOccupancy.events) if (event.attemptId === right.id)
+      event.timing!.domain = 'separate-clock';
+    const splitWork = projectMissionExecution(splitOccupancy).work;
+    assert.equal(splitWork.workerMs, null);
+    assert.deepEqual(splitWork.occupancyByOutcome[0].clockSegments, [
+      { clock: left.start.clock, attemptIds: [left.id, join.id], workerMs: 8 },
+      { clock: 'separate-clock', attemptIds: [right.id], workerMs: 8 },
+    ]);
     assert.deepEqual(work.criticalPath, { durationMs: 11, attemptIds: [right.id, join.id] });
     const readiness = work.dependencyReadinessPath;
     assert.ok(readiness);
@@ -662,6 +675,11 @@ test('verification failure, paused admission, evidence-bound amendment, and repl
       settlementToRetryRequestMs: retryRequest.monotonicMs - first.end!.monotonicMs!,
       retryRequestToDispatchMs: retry.start.monotonicMs! - retryRequest.monotonicMs,
       settlementToDispatchMs: retry.start.monotonicMs! - first.end!.monotonicMs! }]);
+    assert.deepEqual(profile.work.occupancyByOutcome.find(item => item.outcome === 'failed'), {
+      outcome: 'failed', attempts: 1, measuredAttempts: 1,
+      clockSegments: [{ clock: first.interval!.clock, attemptIds: [first.id],
+        workerMs: first.interval!.end - first.interval!.start }],
+    });
     const withoutRequest = projectMissionExecution({ ...final, events: final.events.filter(event => event.seq !== requestEvent.seq) });
     assert.equal(withoutRequest.work.retries[0]?.retryRequest, null);
     assert.equal(withoutRequest.work.retries[0]?.settlementToRetryRequestMs, null);
@@ -671,6 +689,9 @@ test('verification failure, paused admission, evidence-bound amendment, and repl
     assert.equal(withoutPriorEvents.work.retries[0]?.previousAttemptId, first.id);
     assert.equal(withoutPriorEvents.work.retries[0]?.previousOccupiedMs, null);
     assert.equal(withoutPriorEvents.work.retries[0]?.settlementToDispatchMs, null);
+    assert.deepEqual(withoutPriorEvents.work.occupancyByOutcome.find(item => item.outcome === 'failed'), {
+      outcome: 'failed', attempts: 1, measuredAttempts: 0, clockSegments: [],
+    });
     const crossClock = structuredClone(final);
     crossClock.events.find(event => event.seq === retry.start.eventSeq)!.timing!.domain = 'after-restart';
     const separated = projectMissionExecution(crossClock).work.retries[0];
@@ -805,6 +826,10 @@ test('pressure defers admission and cancelling a branch preserves an independent
     const afterRestart = structuredClone(outcome);
     afterRestart.events.find(event => event.seq === branch.end!.eventSeq)!.timing!.domain = 'after-restart';
     assert.equal(projectMissionExecution(afterRestart).work.cancellations[0].attempts?.[0].requestToSettlementMs, null);
+    const cancelled = profile.work.occupancyByOutcome.find(item => item.outcome === 'cancelled');
+    assert.equal(cancelled?.attempts, 1);
+    assert.equal(cancelled?.measuredAttempts, 1);
+    assert.deepEqual(cancelled?.clockSegments[0].attemptIds, [branch.id]);
     f.pressure(true);
     const queued = service.create('cancel-before-dispatch', plan(task('queued')));
     const stopped = service.control(queued.id, scope, queued.revision, { type: 'cancel' });
