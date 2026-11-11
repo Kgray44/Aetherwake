@@ -4,12 +4,14 @@ import { availableParallelism, release, totalmem } from 'node:os';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { MissionService } from './mission-service.mts';
 import { nativeMissionExecutors, nativeMissionPlan } from './mission-native.mts';
+import { projectMissionExecution } from './execution-profiler.mts';
 import type { MissionProjection } from './mission-contracts.mts';
 
 const db = new DatabaseSync(':memory:');
 const scope = { workspaceId: 'benchmark-workspace', projectId: null };
 const plan = nativeMissionPlan('Investigate Aerynth backend performance', scope)!;
 const concurrent = process.argv.includes('--concurrent');
+const paired = process.argv.includes('--paired');
 const concurrentLaneLimit = 3;
 let underPressure = false;
 let workload: { running: Map<string, string>; peakWorkers: number; peakMissions: number; firstStartMs?: number } | undefined;
@@ -20,7 +22,7 @@ const service = new MissionService({
     catch (error) { db.exec('ROLLBACK'); throw error; }
   },
   authorized: () => true, executors: nativeMissionExecutors,
-  laneLimit: () => concurrent ? concurrentLaneLimit : 2, underPressure: () => underPressure,
+  laneLimit: () => concurrent || paired ? concurrentLaneLimit : 2, underPressure: () => underPressure,
   ...(concurrent ? { observe: (mission, event) => {
     if (!workload || !event.attemptId) return;
     if (event.kind === 'started') {
@@ -32,7 +34,7 @@ const service = new MissionService({
   } } : {}),
 });
 const rows: { workers: number; elapsedMs: number; peakWorkers: number }[] = [];
-async function run(iteration: number, workers: number) {
+async function runMission(iteration: number, workers: number) {
   const mission = service.create('benchmark-' + iteration, plan);
   if (workers !== mission.concurrency)
     service.control(mission.id, scope, mission.revision, { type: 'concurrency', concurrency: workers });
@@ -40,11 +42,15 @@ async function run(iteration: number, workers: number) {
   let report: MissionProjection;
   do {
     report = service.read(mission.id, scope);
-    if (report.outcome === 'verified') return { workers, elapsedMs: report.profile.elapsedMs, peakWorkers: report.profile.peakWorkers };
-    if (report.outcome !== 'running' && report.outcome !== 'queued') throw Error('benchmark_mission_not_verified');
+    if (report.outcome !== 'running' && report.outcome !== 'queued') return report;
     await delay(20);
   } while (performance.now() < end);
   throw Error('benchmark_mission_deadline');
+}
+async function run(iteration: number, workers: number) {
+  const report = await runMission(iteration, workers);
+  if (report.outcome !== 'verified') throw Error('benchmark_mission_not_verified');
+  return { workers, elapsedMs: report.profile.elapsedMs, peakWorkers: report.profile.peakWorkers };
 }
 async function runBaseline() {
   await run(0, 1);
@@ -64,6 +70,65 @@ async function runBaseline() {
 
 const batchSize = 4;
 const round = (n: number) => Math.round(n * 100) / 100;
+const sourceByTask = new Map([
+  ['backend', 'aerynth.backend.node'], ['cpu', 'node:os.cpus'], ['ram', 'node:os.totalmem+freemem'],
+  ['code', 'aerynth.shipped-backend-source'], ['report', 'aerynth.mission.journal'],
+]);
+const joinInputIds = [...sourceByTask.keys()].filter(id => id !== 'report');
+async function samplePaired(iteration: number, workers: number) {
+  const cpuStart = process.cpuUsage();
+  const report = await runMission(iteration, workers);
+  const cpu = process.cpuUsage(cpuStart);
+  const trace = projectMissionExecution(report);
+  const joined = report.tasks.find(task => task.id === 'report');
+  const inputs = joinInputIds.map(id => report.tasks.find(task => task.id === id)?.attempts.at(-1)?.evidence);
+  const joinedAttempt = joined?.attempts.at(-1);
+  const qualityPassed = report.outcome === 'verified' && report.tasks.length === sourceByTask.size &&
+    [...sourceByTask].every(([id, source]) => {
+      const task = report.tasks.find(item => item.id === id), attempt = task?.attempts.at(-1), evidence = attempt?.evidence;
+      return task?.state === 'verified' && evidence?.source === source && attempt?.verification?.passed === true &&
+        attempt.verification.evidenceIds.includes(evidence.id);
+    }) && joined?.dependencies.length === joinInputIds.length && joinInputIds.every(id => joined.dependencies.includes(id)) &&
+    inputs.every(item => item !== undefined) &&
+    JSON.stringify(joinedAttempt?.evidence?.value) === JSON.stringify(joined.dependencies.map(id => {
+      const item = inputs[joinInputIds.indexOf(id)];
+      return { id: item.id, source: item.source, attemptId: item.attemptId };
+    })) &&
+    report.profile.providerCalls === 0;
+  return { workers, missionId: report.id, outcome: report.outcome, qualityPassed, elapsedMs: trace.admissionToLastSettlementMs,
+    workerMs: trace.work.workerMs, criticalPathMs: trace.work.criticalPath?.durationMs ?? null,
+    overlapMs: trace.work.overlapMs, peakWorkers: trace.work.peakWorkers, processCpuMs: round((cpu.user + cpu.system) / 1000),
+    verifiedTasks: trace.attempts.filter(attempt => attempt.verifiedEvidenceIds.length).map(attempt => ({
+      taskId: attempt.taskId, attemptId: attempt.id, evidenceIds: attempt.verifiedEvidenceIds, settlementSeq: attempt.end?.eventSeq ?? null,
+    })) };
+}
+
+async function runPaired() {
+  let iteration = 0;
+  const warmups = [];
+  for (const workers of [1, 2, 3]) warmups.push(await samplePaired(iteration++, workers));
+  const comparisons = [];
+  for (const [baselineWorkers, candidateWorkers] of [[1, 2], [2, 3]]) {
+    const pairs = [];
+    for (let pair = 0; pair < 6; pair++) {
+      const baselineFirst = pair % 2 === 0;
+      const first = await samplePaired(iteration++, baselineFirst ? baselineWorkers : candidateWorkers);
+      const second = await samplePaired(iteration++, baselineFirst ? candidateWorkers : baselineWorkers);
+      const [baseline, candidate] = baselineFirst ? [first, second] : [second, first];
+      const deltaMs = baseline.qualityPassed && candidate.qualityPassed && baseline.elapsedMs !== null && candidate.elapsedMs !== null
+        ? candidate.elapsedMs - baseline.elapsedMs : null;
+      pairs.push({ order: [first.workers, second.workers], baseline, candidate, deltaMs });
+    }
+    const deltas = pairs.flatMap(pair => pair.deltaMs === null ? [] : [pair.deltaMs]).sort((a, b) => a - b);
+    comparisons.push({ baselineWorkers, candidateWorkers, pairs, validPairs: deltas.length,
+      medianDeltaMs: deltas.length === pairs.length ? (deltas[2] + deltas[3]) / 2 : null,
+      slowerPairs: deltas.filter(delta => delta > 0).length, fasterPairs: deltas.filter(delta => delta < 0).length });
+  }
+  console.log(JSON.stringify({ contract: 'aerynth.mission-worker-comparison@1', node: process.version, platform: process.platform,
+    logicalParallelism: availableParallelism(), warmups, comparisons, providerCalls: 0,
+    boundary: 'Counterbalanced local read-only native workload with in-memory SQLite. Six pairs per comparison; no tail-latency or confidence estimate. Host interference is uncontrolled.' }));
+  if (warmups.some(row => !row.qualityPassed) || comparisons.some(item => item.validPairs !== item.pairs.length)) process.exitCode = 1;
+}
 async function runBatch(holdMs: number) {
   const events = { running: new Map<string, string>(), peakWorkers: 0, peakMissions: 0, firstStartMs: undefined as number | undefined };
   workload = events;
@@ -131,5 +196,6 @@ async function runConcurrent() {
 
 try {
   if (concurrent) await runConcurrent();
+  else if (paired) await runPaired();
   else await runBaseline();
 } finally { await service.close(); db.close(); }
