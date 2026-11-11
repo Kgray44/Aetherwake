@@ -2338,6 +2338,9 @@ export class BackendCore {
       instruction:[...(weatherTool?['Interpret current-location weather questions using get_weather_forecast, including informal phrasing, humidity, weekdays and averages. Answer concisely from its returned forecast and coverage; never invent missing data or a complete mean for a partial period. Do not propose a readWeather plan. General weather explanations need no location lookup.']:[]),
         ...(planning?['Contribute a typed Aerynth action plan to Vela. The reviewed tools retrieve data or schemas; no app mutation has run. Fetch each action schema before proposing it. Return exactly the JSON envelope specified in the user payload. Do not invent IDs or capabilities.']:[])].join(' '),
       ...(planning?{catalog:preview.catalog}:{}),
+      ...(this.missions.fullProfilingClock() ? { observeTransport: (executionId, timing) => {
+        if (trace?.executionId === executionId) trace.timing.observeTransport(timing);
+      } } : {}),
       stage: (executionId, review) => {
         validate(); ensure(!this.active || this.active.state !== 'running' && this.active.state !== 'dispatching', 'execution_busy');
         const timing = observeConversationProvider('reviewed-api-dispatch-staging', !!this.velaApiTest, input.requestId,
@@ -5597,7 +5600,8 @@ export class BackendCore {
     try{
       authority?.signal.addEventListener('abort', cancel, {once:true});
       if (authority?.signal.aborted) cancel();
-      const transport=new ResponsesTransport({...(this.ordinaryTest?{fetch:this.ordinaryTest.fetch}:{}),limits:{outputBytes:65536},onEvent,native:{
+      const transport=new ResponsesTransport({...(this.ordinaryTest?{fetch:this.ordinaryTest.fetch}:{}),limits:{outputBytes:65536},onEvent,
+        ...(this.missions.fullProfilingClock() ? { observeTiming: timing.observeTransport } : {}),native:{
         authorize:async review=>{ensure(review.executionId===e.id&&review.bodyDigest===p.bodyDigest&&review.contextDigest===p.contextDigest,'approval_scope_mismatch');await fence();},
         resolveCredential:async(configurationId,providerId)=>{ensure(configurationId===CHATGPT_PLAN_REGISTRATION&&providerId===CHATGPT_PLAN_PROVIDER,'credential_boundary_mismatch');return this.ordinaryConnections.resolveCredential(p.connectionVersion);},
         resolveCatalog:async()=>({boundaryDigest:catalog.boundaryDigest,expiresAt:catalog.expiresAt,models:catalog.models.map(m=>m.id)}),

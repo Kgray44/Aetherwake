@@ -195,6 +195,10 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     assert.ok(timing&&timing.firstTextDeltaMs!==null&&timing.responseCreatedMs!==null&&timing.resultObservedMs!==null);
     assert.equal(timing.source,'simulated');
     assert.equal(timing.parentRequestId,first.id);
+    const transport = timing.transport;
+    assert.ok(transport && transport.postAttemptMs !== null && transport.headersMs !== null && transport.firstSseBytesMs !== null);
+    assert.ok(transport.postAttemptMs <= transport.headersMs && transport.headersMs <= transport.firstSseBytesMs &&
+      transport.firstSseBytesMs <= transport.finishedMs);
     assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.resultObservedMs&&
       timing.resultObservedMs<=timing.settlementStagedMs);
     assert.ok(timing.firstNonblankOutput?.kind === 'text' &&
@@ -244,6 +248,7 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     const replayedTiming = (await f.core.command('replay', { limit: 1000 })).events
       .find(event => event.executionId === execution.id && event.type === 'execution/provider_completed')?.payload.providerTiming;
     assert.deepEqual(replayedTiming?.fromPreview, timing.fromPreview);
+    assert.deepEqual(replayedTiming?.transport, transport);
     const replayedAdmission = (await f.core.command('replay', { limit: 1000 })).events
       .filter(event => event.correlationId === first.id && event.type === 'vela.routing.stage_started');
     assert.equal(replayedAdmission.length, 1);

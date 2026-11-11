@@ -1789,6 +1789,8 @@ test('ordinary Responses uses canonical identity, exact grant and stateless loca
     timing.resultObservedMs!==null&&timing.outputStagedMs!==null);
   assert.equal(timing.source,'simulated');
   assert.equal(timing.parentRequestId,null);
+  assert.ok(timing.transport?.firstSseBytesMs != null && timing.transport.headersMs != null &&
+    timing.transport.headersMs <= timing.transport.firstSseBytesMs);
   assert.ok(timing.responseCreatedMs<=timing.firstTextDeltaMs&&timing.firstTextDeltaMs<=timing.resultObservedMs&&
     timing.resultObservedMs<=timing.outputStagedMs&&timing.outputStagedMs<=timing.settlementStagedMs);
   assert.ok(timing.firstNonblankOutput?.kind === 'text' &&

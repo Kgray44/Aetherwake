@@ -4,7 +4,7 @@ import type { Resource } from '../../workspace-kernel/kernel.mts';
 import type { DesktopCommand, DesktopSnapshot, PublicConversationExecution, ConversationActivitySnapshot, WorkspacePresentationContext, WorkspacePanelRequest } from '../../application-contract/contracts.ts';
 import type { ResourceOpeningInput, ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import type { ProviderConnectionRequest, ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
-import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnResult,TurnOutcome,TurnHttpDiagnostic } from '../../openai-provider/contracts.mts';
+import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnResult,TurnOutcome,TurnHttpDiagnostic,TurnTransportTiming } from '../../openai-provider/contracts.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import type { AttachedContext } from '../../conversation-product/src/service.mts';
 import type { VelaLocalCapabilityId, VelaClient, VelaState, ContextManifest, VelaActiveCard, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
@@ -168,6 +168,7 @@ export interface ConversationProviderTiming {
   firstTextDeltaMs: number | null;
   /** Backend receipt of nonblank provider output. Historical observations may omit this field. */
   firstNonblankOutput?: { kind: 'text' | 'refusal'; elapsedMs: number } | null;
+  transport?: TurnTransportTiming;
   /** Elapsed time from the original backend preview, including any intervening review or wait. */
   fromPreview?: { id: string; toAdapterMs: number; toFirstNonblankOutputMs: number | null };
   resultObservedMs: number | null;

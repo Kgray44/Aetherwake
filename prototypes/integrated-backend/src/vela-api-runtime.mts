@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { prepareResponsesTurn, ResponsesTransport } from '../../openai-provider/responses.mts';
-import type { ApiContinuation, ApiContextTransition, ApiFunctionCall, ApiJsonSchema, ApiResponseItem, ApiToolOutput, DispatchReview, ReviewedApiFunction, TurnEvent, TurnResult } from '../../openai-provider/contracts.mts';
+import type { ApiContinuation, ApiContextTransition, ApiFunctionCall, ApiJsonSchema, ApiResponseItem, ApiToolOutput, DispatchReview, ReviewedApiFunction, TurnEvent, TurnResult, TurnTransportTiming } from '../../openai-provider/contracts.mts';
 import { VELA_API_PROVIDER } from '../../openai-provider/api-connection-contracts.mts';
 import { VELA_IDENTITY_VERSION, renderVelaIdentityPrompt } from '../../vela-core/src/vela-identity.mts';
 import { capabilitySchemaTool, CAPABILITY_SCHEMA_TOOL, type CapabilityCatalogSnapshot } from '../../vela-core/src/capability-catalog.mts';
@@ -61,6 +61,7 @@ export interface VelaApiRun {
   stage?(executionId: string, review: DispatchReview): void | (() => void);
   event?(event: TurnEvent): void;
   observeEventType?(type: TurnEvent['type']): void;
+  observeTransport?(executionId: string, timing: TurnTransportTiming): void;
   completed?(executionId: string, result: TurnResult): void;
 }
 export interface VelaApiToolContinuationRef {id:string;digest:string}
@@ -250,6 +251,7 @@ export class VelaApiRuntime {
           }
         };
         const transport = new ResponsesTransport({ ...(this.options.test ? { fetch: this.options.test.fetch } : {}), limits: { outputBytes: 65536, timeoutMs: 45000 },
+          ...(input.observeTransport ? { observeTiming: (timing: TurnTransportTiming) => input.observeTransport?.(executionId, timing) } : {}),
           onEvent: event => {
             fence();
             input.observeEventType?.(event.type);
