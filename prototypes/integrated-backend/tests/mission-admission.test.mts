@@ -84,6 +84,43 @@ test('Windows probes wait for sustained demand, enforce a cooldown and expire in
   } finally { admission.dispose(); }
 });
 
+test('missing GPU samples hold observed contention until fresh headroom starts recovery', async () => {
+  let time = 0, probes = 0;
+  const loads = [97, 99, undefined, 90, 20];
+  const admission = createMissionAdmission({ maxWorkers: 3, now: () => time, availableMemory: () => 1024 * mib,
+    cpuCounters: () => ({ logicalCpus: 4, total: time * 4, idle: time * 3 }),
+    resourcePolicy: { mode: 'balanced', limits: { cpu: 3, build: 1, gpu: 1, host_io: 3, remote: 3 } },
+    readWindowsPressure: async () => ({ gpuEnginePercent: loads[probes++] }) });
+  const readAt = (at: number) => { time = at; return admission.read(true); };
+  async function advanceProbe() {
+    for (let step = 0; step < 5; step++) readAt(time + 4_000);
+    await yieldToProbe();
+    return admission.read(false);
+  }
+  try {
+    readAt(0);
+    readAt(2_000);
+    await yieldToProbe();
+    assert.deepEqual((await advanceProbe()).reasons, ['gpu-load']);
+    assert.equal(admission.mayPrepareGpu(), false);
+    const missing = await advanceProbe();
+    assert.deepEqual(missing.reasons, ['gpu-load-unavailable']);
+    assert.equal(missing.readings.gpuEnginePercent, undefined);
+    assert.equal(admission.telemetry().metrics.gpuEnginePercent.availability, 'error');
+    assert.equal(admission.inspectPolicy().reason, 'gpu_load_unavailable');
+    assert.equal(admission.inspectPolicy().effective.cpu, 2);
+    assert.equal(admission.canLease('remote'), true);
+    assert.equal(admission.mayPrepareGpu(), false);
+    assert.deepEqual((await advanceProbe()).reasons, ['gpu-load']);
+    assert.equal(admission.mayPrepareGpu(), false);
+    assert.deepEqual((await advanceProbe()).reasons, []);
+    assert.equal(admission.inspectPolicy().reason, 'gpu_recovery_dwell');
+    assert.equal(admission.mayPrepareGpu(), false);
+    readAt(time + 3_000);
+    assert.equal(admission.mayPrepareGpu(), true);
+  } finally { admission.dispose(); }
+});
+
 test('a closing admission policy aborts a pending Windows probe and ignores late results', async () => {
   let time = 0, signal: AbortSignal | undefined, notify = 0;
   let observe!: (value: { gpuEnginePercent: number }, stage: 'utilization') => void;

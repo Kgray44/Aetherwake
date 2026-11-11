@@ -303,7 +303,9 @@ export function createMissionAdmission(options: AdmissionOptions) {
       capture(name, numeric(value, name === 'gpuEnginePercent' ? 100 : Number.MAX_SAFE_INTEGER) ? value : undefined,
         startedAt, null, startedAtUtc);
     }
-    gpu = observePressure(previousGpu ? gpu : { highSamples: 0, pressured: false }, gpuReading, 95, 85);
+    // A missing sample breaks the entry streak. Only a fresh lower reading clears observed contention.
+    gpu = gpuReading ? observePressure({ ...gpu, highSamples: previousGpu ? gpu.highSamples : 0 }, gpuReading, 95, 85) :
+      { highSamples: 0, pressured: gpu.pressured };
     disk = observePressure(previousDisk ? disk : { highSamples: 0, pressured: false }, diskReading, 8, 4);
     if (recentDemand && (gpuReading || diskReading || previousGpu || previousDisk)) notifyWindowsObservation();
   }
@@ -456,7 +458,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
       if (windowsCommitHeadroomBytes && windowsCommitHeadroomBytes.value < memoryFloorBytes) reasons.push('windows-commit-pressure');
       if (slowdown?.value === 1 && time - slowdown.time <= windowsFreshMs) reasons.push('gpu-thermal-throttling');
       if (cpuPercent && cpu.pressured) reasons.push('cpu-load');
-      if (gpuEnginePercent && gpu.pressured) reasons.push('gpu-load');
+      if (gpu.pressured) reasons.push(gpuEnginePercent ? 'gpu-load' : 'gpu-load-unavailable');
       if (diskQueueLength && disk.pressured) reasons.push('disk-io');
       if (rendererFrameP95Ms && focused && framePressure.pressured) reasons.push('renderer-latency');
       if (nativePower?.battery === true) reasons.push('battery-power');
@@ -468,7 +470,8 @@ export function createMissionAdmission(options: AdmissionOptions) {
       }
       const workerLimit = reasons.includes('physical-memory') || reasons.includes('os-memory-pressure') ||
         reasons.includes('windows-commit-pressure') || reasons.includes('suspended') ?
-        0 : reasons.some(reason => reason !== 'gpu-thermal-throttling') ? Math.min(1, options.maxWorkers) : options.maxWorkers;
+        0 : reasons.some(reason => reason !== 'gpu-thermal-throttling' && reason !== 'gpu-load-unavailable') ?
+          Math.min(1, options.maxWorkers) : options.maxWorkers;
       const snapshot = { workerLimit, reasons, readings: {
         ...(cpuPercent ? { cpuPercent: { ...cpuPercent } } : {}),
         ...(availableMemoryBytes ? { availableMemoryBytes: { ...availableMemoryBytes } } : {}),
