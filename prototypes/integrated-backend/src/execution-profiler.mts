@@ -386,6 +386,11 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const intakeMs = created?.timing?.intakeMonotonicMs;
   const intake = initial?.clock && intakeMs !== undefined ?
     { source: 'mission-start-command' as const, eventSeq: initial.eventSeq, clock: initial.clock, monotonicMs: intakeMs } : null;
+  const intakeToAdmissionMs = intake && initial?.monotonicMs != null && intake.monotonicMs <= initial.monotonicMs ?
+    initial.monotonicMs - intake.monotonicMs : null;
+  const requestAcknowledgement = initial ? {
+    source: 'mission-created' as const, event: initial, intakeToAcknowledgementMs: intakeToAdmissionMs,
+  } : null;
   const verifiedAttempts = attempts.filter(attempt => attempt.verifiedEvidenceIds.length && attempt.end)
     .sort((a, b) => a.end!.eventSeq - b.end!.eventSeq);
   const firstVerified = verifiedAttempts[0]?.end ?? null;
@@ -547,8 +552,8 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       admittedAttemptsWithoutSample: byAttempt.size - admittedAttemptsWithSample, admittedAttemptsWithReasons, attemptsByReason },
     settlementToReportStagedMs, reportLatency,
     intakeToReportStagedMs,
-    requestIntake: intake, firstMeaningfulOutput, userDelivery, intakeToUserDeliveryMs,
-    intakeToAdmissionMs: intake && initial?.monotonicMs != null ? initial.monotonicMs - intake.monotonicMs : null,
+    requestIntake: intake, requestAcknowledgement, firstMeaningfulOutput, userDelivery, intakeToUserDeliveryMs,
+    intakeToAdmissionMs,
     admissionToFirstVerifiedTaskMs: timeToVerified ? timeToVerified.end - timeToVerified.start : null,
     admissionToLastSettlementMs: timeToSettlement ? timeToSettlement.end - timeToSettlement.start : null,
     planning: plan ? { durationMs: plan.durationMs, provider: plan.provider, model: plan.model,
