@@ -525,6 +525,7 @@ export class BackendCore {
       for(const row of this.db.prepare('SELECT mission_id FROM vela_mission_report_outbox').all())this.missionSpeechBacklog.add(String(row.mission_id));
       this.missions = new MissionService({
         db: this.db, atomic: work => this.kernel.withTransaction(work),
+        profilerMode: options.missionProfilerMode,
         authorized: scope => this.missionScopeAllowed(scope),
         planningContextCurrent: mission => this.missionPlanningContextCurrent(mission),
         executors: this.missionExecutors, laneLimit: lane => lane === 'codex-local-check' ? 1 :

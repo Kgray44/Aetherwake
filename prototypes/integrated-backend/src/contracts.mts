@@ -247,6 +247,8 @@ export interface Options {
   nativeMedia?: boolean;
   /** Trusted desktop transport applies current visibility before forwarding journal events. */
   rendererEventTransport?: boolean;
+  /** Native benchmark host option. The ordinary desktop always uses full profiling. */
+  missionProfilerMode?: 'off' | 'minimal' | 'full';
   /** Trusted native-reviewed bounded context; disabled until native consent integration is qualified. */
   velaHistoryContext?:boolean;
   instanceId?: string; accountScope?: string;
