@@ -117,6 +117,35 @@ test('source-observed read jobs repaint for the current request without promotin
  }finally{panel.dispose();}
 });
 
+test('an existing mission reply shows assessment gaps until its source evidence is stale', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const scope = { missionId: 'mission:assessed', workspaceId: 'workspace:1', projectId: null };
+  const message: NonNullable<VelaState['conversation']>['messages'][number] = {
+    id: 'message:mission-report', role: 'assistant', content: 'Read-only check passed.',
+    source: 'vela-native', classification: 'observed', responseKind: 'answer', missionReport: { ...scope, jobsDone: 1 },
+  };
+  canonical.conversation!.messages = [message];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical), {
+    voice: { element: doc.createElement('section') as unknown as HTMLElement, setVisible() {}, start: async () => {}, speak: async () => {} },
+  });
+  try {
+    await settles(() => !!named(root, 'Speak response'));
+    assert.equal(root.find(node => node.className === 'vela-mission-assessment'), undefined);
+    message.missionReport!.assessment = { model: 'gpt-6-luna', planRevision: 2, gaps: ['External sign-off is unverified.'] };
+    await panel.refresh();
+    assert.ok(root.find(node => node.className === 'vela-mission-assessment')?.find(node => node.textContent === 'External sign-off is unverified.'));
+    canonical.presentation = { ...canonical.presentation!, version: 2, view: 'history' };
+    await panel.refresh();
+    assert.ok(root.find(node => node.className === 'vela-mission-assessment'));
+    message.missionReport = { ...scope, stale: true };
+    message.content = 'Mission evidence became unavailable.';
+    canonical.presentation = { ...canonical.presentation!, version: 3, view: 'current' };
+    await panel.refresh();
+    assert.equal(root.find(node => node.className === 'vela-mission-assessment'), undefined);
+    assert.equal(named(root, 'Speak response'), undefined);
+  } finally { panel.dispose(); }
+});
+
 test('completed typed replies expose one speak icon and stop only the same speech attempt without resending text',async()=>{
  const doc=new Document(),root=doc.createElement('main'),canonical=state(),spoken:unknown[]=[],stopped:string[]=[];let turns=0;
  const message={id:'message:reply',role:'assistant' as const,requestId:'request:synthetic',content:'Here is your answer.',source:'provider' as const,providerId:'openai-api-vela',classification:'reported' as const,responseKind:'answer' as const,providerContribution:{providerId:'openai-api-vela',classification:'reported' as const,executionId:'execution:synthetic'}};

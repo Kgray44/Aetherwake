@@ -666,7 +666,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const readJobs=selectedRequest?.toolWorkflow?.completedReadJobs;
     const completedReadJobs=Number.isSafeInteger(readJobs)&&readJobs!>=0&&readJobs!<=16?readJobs!:0;
     const completedPlan = selectedRequest && current?.plans.find(plan => plan.id === projection.currentPlanId && confirmedVelaPlan(current!, selectedRequest, plan));
-    const speakable=message&&view()==='current'&&projection.kind!=='action'&&(missionReport||completedPlan||selectedRequest?.state==='responded'&&selectedRequest.response?.messageId===message.id)?message:undefined;
+    const speakable=message&&view()==='current'&&projection.kind!=='action'&&!missionReport?.stale&&(missionReport||completedPlan||selectedRequest?.state==='responded'&&selectedRequest.response?.messageId===message.id)?message:undefined;
     const actionPlan = current?.plans.find(plan => plan.id === projection.currentPlanId);
     const reviewPlan = actionPlan?.state === 'prepared' && !actionPlan.steps.some(step=>step.action.type==='delegateTask') ? actionPlan : null;
     const fileProposal = current?.fileProposals?.find(item => item.requestId === selectedRequest?.id && item.state === 'proposed' && item.count === item.files.length && item.count > 0);
@@ -698,7 +698,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       else if (reviewPlan) manifestationBody.append(planProposalView.element,responseFooter(undefined,[],completedReadJobs));
       else if (actionMessage) manifestationBody.append(el('p', undefined, actionMessage), responseFooter(undefined,[],completedReadJobs));
       else if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content));
-      if (missionReport) manifestationBody.append(missionReplyFooter(missionReport,speakable));
+      if (missionReport) appendMissionReportDetails(manifestationBody, missionReport, speakable);
       else if (message && projection.kind !== 'action') {
         const footer=responseFooter(completedPlan || undefined,hostOperations,(completedFiles&&!completedPlan?1:0)+completedReadJobs,speakable);
         manifestationBody.append(footer);
@@ -984,6 +984,16 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     developmentTimeline.disabled = activityTimeline.disabled || !githubRepository(repositoryInput.value);
   }
   function renderStatus(state: Pick<VelaState, 'requests' | 'plans' | 'receipts'>) { const recorded = velaPanelStatus(state); status.dataset.requestState = recorded.requestState; if (recorded.requestId) status.dataset.requestId = recorded.requestId; else delete status.dataset.requestId; if (recorded.planState) status.dataset.planState = recorded.planState; else delete status.dataset.planState; delete status.dataset.actionState; delete status.dataset.refreshState; status.textContent = recorded.message; status.hidden = recorded.requestState === 'idle'; }
+  function appendMissionReportDetails(container: HTMLElement, link: NonNullable<VelaMessage['missionReport']>, message?: VelaMessage) {
+    if (link.assessment?.gaps.length) {
+      const gaps = el('ul');
+      for (const gap of link.assessment.gaps) gaps.append(el('li', undefined, gap));
+      const assessment = el('section', 'vela-mission-assessment');
+      assessment.append(el('strong', undefined, 'Still unverified'), gaps);
+      container.append(assessment);
+    }
+    container.append(missionReplyFooter(link, message));
+  }
   function missionReplyFooter(link: NonNullable<VelaMessage['missionReport']>,message?:VelaMessage) {
     const footer = el('div', 'vela-mission-reply-footer');
     if (link.jobsDone !== undefined) footer.append(el('span', 'vela-mission-jobs-done', `${link.jobsDone} ${link.jobsDone === 1 ? 'job' : 'jobs'} done`));
@@ -1038,7 +1048,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       const entry = el('article', 'vela-core-message'); entry.dataset.messageId = message.id; entry.dataset.source = message.source;
       if (message.missionReport) {
         entry.setAttribute('aria-label', 'Vela');
-        entry.append(el('p', undefined, message.content), missionReplyFooter(message.missionReport));
+        entry.append(el('p', undefined, message.content));
+        appendMissionReportDetails(entry, message.missionReport);
       } else entry.append(el('strong', 'vela-core-message-author', message.role === 'user' ? 'You' : 'Vela'), el('p', undefined, message.content));
       messages.set(message.id, { node: entry, signature }); target.push(entry);
     }
