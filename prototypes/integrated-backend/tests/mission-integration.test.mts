@@ -333,6 +333,7 @@ test('canonical backend runs a native mission without inference, restores eviden
         stagingToRendererReceiptMs: null,
       });
       assert.equal(profile.userDelivery, null);
+      assert.equal(profile.firstMeaningfulOutput, null);
     }
     assert.deepEqual(await backend.call('providerActivity', {}), providerActivity);
     const readPublication = () => backend.call('missions', { name: 'execution-profile', input: { id: single.id } });
@@ -348,6 +349,11 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.equal(beforeReopen.intakeToUserDeliveryMs,
       beforeReopen.intakeToReportStagedMs! + beforeReopen.userDelivery.stagingToReceiptMs);
     assert.equal(beforeReopen.reportLatency?.stagingToRendererReceiptMs, beforeReopen.userDelivery.stagingToReceiptMs);
+    assert.deepEqual(beforeReopen.firstMeaningfulOutput, {
+      kind: 'mission-report', source: 'renderer-visible-frame', messageId: latestReport.id,
+      publicationEventId: beforeReopen.reportPublication!.eventId, receivedAt: beforeReopen.userDelivery.receivedAt,
+      intakeToReceiptMs: beforeReopen.intakeToUserDeliveryMs,
+    });
     assert.deepEqual(await backend.call('rendererVelaOutput', receipt), { accepted: true });
     assert.deepEqual(await readPublication(), beforeReopen);
     await backend.close();
