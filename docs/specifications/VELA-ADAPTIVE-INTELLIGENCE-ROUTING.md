@@ -1,6 +1,8 @@
 # Vela Adaptive Intelligence Routing (AIR)
 ## Provider, Model, Reasoning, Tool, and Execution Strategy Specification
 
+> **Fluid Intelligence integration notice (2026-11-10):** This v0.1.0 specification records AIR's earlier route classes and implementation baseline. Read it **together with** [AIR Dynamic Execution Strategy](AIR-DYNAMIC-EXECUTION-STRATEGY.md), [Vela Cognitive Intelligence Runtime](../architecture/VELA-COGNITIVE-INTELLIGENCE-RUNTIME.md), [ADR-003](../decisions/ADR-003-AI-NATIVE-FLUID-INTELLIGENCE.md), and Charters 05/06/08 FI amendments. Older deterministic-first or optional-classifier language must not be interpreted as limiting Vela to a keyword resolver plus one isolated AI planner. Production semantic intake, evidence retrieval, dynamic planning and an AI Mission Executive are target requirements under the newer amendments. Direct exact native operations remain model-free when appropriate. Documentation approval is not runtime implementation evidence.
+
 > **Owner-approved specification (2026-11-05).** Adaptive routing, model selection and Vela capability-first behavior are accepted product requirements. Available provider/model entitlements must still be discovered at runtime, and implementation must pass the recorded acceptance matrix. The companion [Unified Memory Runtime](../architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md) defines durable context participation.
 
 | Field | Value |
