@@ -73,10 +73,17 @@ test('MissionService admits remote work under local pressure and releases attemp
     await flush();
     assert.equal(f.active.has('local'), false);
     assert.ok(f.active.has('remote'));
-    assert.equal(service.read(id, scope).tasks.find(t => t.id === 'remote')?.attempts[0]?.resourceLease?.kind, 'remote');
+    const running = service.read(id, scope);
+    const remote = running.tasks.find(t => t.id === 'remote')!.attempts[0];
+    assert.equal(remote.resourceLease?.kind, 'remote');
+    const liveProfile = projectMissionExecution(running);
+    assert.equal(liveProfile.attempts[0].resourceLease?.leaseId, remote.resourceLease.leaseId);
+    assert.deepEqual(liveProfile.resourcePolicy.leaseCoverage, { withReceipt: 1, withoutReceipt: 0, attemptsByKind: { remote: 1 } });
     f.active.get('remote')!.release();
     await flush();
     assert.equal(governor.inspectPolicy().active.remote, 0);
+    assert.deepEqual(projectMissionExecution(service.read(id, scope)).attempts[0].resourceLease,
+      liveProfile.attempts[0].resourceLease);
     available = 1024 ** 3;
     service.capacityChanged();
     await flush();
@@ -963,7 +970,8 @@ test('host admission holds queued work, preserves running workers and records on
     assert.equal(third.resourceAdmission?.observedAt.cpuPercent, observedAt);
     assert.equal(third.resourceAdmission?.observedAt.gpuEnginePercent, null);
     assert.deepEqual(profile.resourcePolicy, { currentAdmission: null, admittedAttemptsWithSample: 3,
-      admittedAttemptsWithoutSample: 0, admittedAttemptsWithReasons: 1, attemptsByReason: { 'cpu-load': 1 } });
+      admittedAttemptsWithoutSample: 0, admittedAttemptsWithReasons: 1, attemptsByReason: { 'cpu-load': 1 },
+      leaseCoverage: { withReceipt: 0, withoutReceipt: 3, attemptsByKind: {} } });
     assert.equal(third.readyQueueMs, phases.contextAssembly[0] - phases.readyQueue.firstObservedMs);
     assert.equal(read().admission, undefined);
     assert.deepEqual(read().tasks[2].attempts[0].admission, cpu);

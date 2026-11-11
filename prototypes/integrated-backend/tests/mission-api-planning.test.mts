@@ -6,7 +6,7 @@ import { mkdtempSync,rmSync,writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
-import { projectMissionExecution } from '../src/execution-profiler.mts';
+import { projectMissionExecution, type MissionExecutionProfile } from '../src/execution-profiler.mts';
 import { nativeMissionExecutors, missionResultAvailable } from '../src/mission-native.mts';
 import type { MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
@@ -113,6 +113,15 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
     const restoredProfile=await readProfile();
     assert.ok(restoredProfile&&'kind' in restoredProfile&&restoredProfile.kind==='execution-profile');
     assert.deepEqual(restored.tasks.map(task => task.attempts[0].resourceLease), leaseReceipts);
+    assert.deepEqual(restoredProfile.attempts.map(attempt => attempt.resourceLease),
+      delivered.attempts.map(attempt => attempt.resourceLease));
+    for (const receipt of leaseReceipts) {
+      const projected: MissionExecutionProfile['attempts'][number]['resourceLease'] | undefined =
+        restoredProfile.attempts.find(attempt => attempt.resourceLease?.leaseId === receipt?.leaseId)?.resourceLease;
+      assert.equal(projected?.epoch, receipt?.epoch);
+      assert.equal(projected?.configVersion, receipt?.configVersion);
+      assert.equal(projected?.policyRevision, receipt?.policyRevision);
+    }
     assert.deepEqual(restoredProfile.planning,delivered.planning);
     const publication = delivered.reportPublication!;
     const unrelatedPublication = { ...publication, timing: { ...publication.timing!, clock: 'unrelated-report-clock' } };
