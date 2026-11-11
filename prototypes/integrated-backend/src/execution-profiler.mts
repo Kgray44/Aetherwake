@@ -470,6 +470,14 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     stagingToRendererReceiptMs: userDelivery?.stagingToReceiptMs ?? null,
   } : null;
   const intakeToReportStagedMs = timeToReportStaging(timedReport, intake);
+  const intakeToUserDeliveryMs = intakeToReportStagedMs !== null && userDelivery?.stagingToReceiptMs != null ?
+    intakeToReportStagedMs + userDelivery.stagingToReceiptMs : null;
+  // A report receipt marks the first measured substantive output for the mission Start command.
+  const firstMeaningfulOutput = reportPublication && userDelivery ? {
+    kind: 'mission-report' as const, source: userDelivery.source, messageId: userDelivery.messageId,
+    publicationEventId: reportPublication.eventId, receivedAt: userDelivery.receivedAt,
+    intakeToReceiptMs: intakeToUserDeliveryMs,
+  } : null;
   const planningClock = plan?.timing?.lifecycleClock;
   let planningLifecycle = null;
   if (planningClock && intake && initial?.monotonicMs != null && planningClock.domain === intake.clock &&
@@ -505,9 +513,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       admittedAttemptsWithoutSample: byAttempt.size - admittedAttemptsWithSample, admittedAttemptsWithReasons, attemptsByReason },
     settlementToReportStagedMs, reportLatency,
     intakeToReportStagedMs,
-    requestIntake: intake, firstMeaningfulOutput: null, userDelivery,
-    intakeToUserDeliveryMs: intakeToReportStagedMs !== null && userDelivery?.stagingToReceiptMs != null ?
-      intakeToReportStagedMs + userDelivery.stagingToReceiptMs : null,
+    requestIntake: intake, firstMeaningfulOutput, userDelivery, intakeToUserDeliveryMs,
     intakeToAdmissionMs: intake && initial?.monotonicMs != null ? initial.monotonicMs - intake.monotonicMs : null,
     admissionToFirstVerifiedTaskMs: timeToVerified ? timeToVerified.end - timeToVerified.start : null,
     admissionToLastSettlementMs: timeToSettlement ? timeToSettlement.end - timeToSettlement.start : null,
