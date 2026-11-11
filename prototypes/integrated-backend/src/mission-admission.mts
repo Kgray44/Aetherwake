@@ -327,6 +327,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
     previewAdjustment: policy.previewAdjustment,
     canLease: policy.canLease,
     tryLease: policy.tryLease,
+    noteGpuBudget: policy.noteGpuBudget,
     telemetry() {
       const time = now();
       function metric(name: string, unit: string, source: string, maxAge: number, derived = false, supported = true, enabled = true) {
@@ -376,6 +377,7 @@ export function createMissionAdmission(options: AdmissionOptions) {
         if (next.suspended !== (power?.value.suspended ?? false)) {
           probe?.abort();
           topology?.reset();
+          policy.noteGpuBudget(null);
           memory = undefined;
           cpuBaseline = processBaseline = undefined;
           cpu = gpu = disk = { highSamples: 0, pressured: false };
