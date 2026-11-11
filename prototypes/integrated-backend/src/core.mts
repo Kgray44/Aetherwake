@@ -5,7 +5,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
-import { observeProviderStream, projectMissionExecution, type ReportPublication } from './execution-profiler.mts';
+import { observeConversationProvider, observeProviderStream, projectMissionExecution, type ReportPublication } from './execution-profiler.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
@@ -2260,6 +2260,7 @@ export class BackendCore {
     const transition=resume&&snapshot&&sourceContinuation?.continuation.contextDigest!==preview.signature?snapshot.certificate:undefined;
     signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) cancel();
     this.ordinaryController = controller;
+    let trace: { executionId: string; timing: ReturnType<typeof observeConversationProvider> } | undefined;
     const request: VelaApiRun = { requestId: input.requestId, version: preview.connectionVersion, model: preview.route.model,
       ...(preview.route.effort ? { reasoningEffort: preview.route.effort } : {}),
       prompt: preview.prompt, contextDigest: preview.signature, validate,tools,...(resume?{resume:resume.ref,resumeReceipt:resume.receipt}:{}),...(transition?{resumeContext:transition}:{}),advanceContext:receipts=>this.advanceToolContext(input.requestId,receipts),validateResumeContext:(certificate,binding)=>this.validateToolContextAdvance(input.requestId,certificate,binding),...(weatherTool?{weatherTool}:{}),
@@ -2268,6 +2269,7 @@ export class BackendCore {
       ...(planning?{catalog:preview.catalog}:{}),
       stage: (executionId, review) => {
         validate(); ensure(!this.active || this.active.state !== 'running' && this.active.state !== 'dispatching', 'execution_busy');
+        const timing = observeConversationProvider('reviewed-api-dispatch-staging', !!this.velaApiTest, input.requestId);
         const execution: Execution = { id: executionId, resourceId: input.conversationId, providerId: VELA_API_PROVIDER,
           commandId: 'vela-api:' + input.requestId, state: 'dispatching', binding: null, turnId: null, startedAt: now(), endedAt: null,
           taskVerified: false, connectionVersion: preview.connectionVersion, requestedModel: preview.route!.model,
@@ -2278,6 +2280,7 @@ export class BackendCore {
         this.record('execution/dispatching', 'observed', undefined, randomUUID(), { providerId: VELA_API_PROVIDER,
           execution, payload: { redacted: true, api: { maxOutputTokens: 2048 } } });
         return () => {
+          trace = { executionId, timing };
           grant.consumed = true;
           this.active = execution;
           this.activeSourceFence = () => {
@@ -2292,6 +2295,7 @@ export class BackendCore {
       },
       event: event => {
         const execution = this.state.executions[event.executionId]; ensure(execution && this.active === execution, 'invalid_provider_response');
+        if (trace?.executionId === event.executionId) trace.timing.observe(event.type);
         if (event.type === 'provider/response-created') this.atomic(() => { execution.responseId = event.responseId; execution.state = 'running'; });
         else if (event.type === 'provider/usage') {
           this.atomic(() => { execution.usage = event.usage; });
@@ -2305,6 +2309,8 @@ export class BackendCore {
       },
       completed: (executionId, result) => {
         const execution = this.state.executions[executionId]; ensure(execution, 'invalid_provider_response');
+        const timing = trace?.executionId === executionId ? trace.timing : undefined;
+        timing?.observeResult();
         this.atomic(() => {
           execution.state = result.outcome === 'completed' ? 'provider_completed' : result.outcome === 'unknown' ? 'unknown' : result.outcome === 'cancelled-before-dispatch' ? 'interrupted' : 'failed';
           execution.responseOutcome = result.outcome; execution.endedAt = now(); execution.cancellation = result.cancellation;
@@ -2314,7 +2320,8 @@ export class BackendCore {
           if (result.httpDiagnostic) execution.httpDiagnostic = projectTurnHttpDiagnostic(result.httpDiagnostic);
         });
         this.record('execution/'+execution.state,this.velaApiTest?'simulated':'reported',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,
-          payload:{redacted:true,api:{elapsedMs:Math.max(0,Date.now()-Date.parse(execution.startedAt))},...(execution.usage?{usage:execution.usage}:{})}});
+          execution, payload:{redacted:true,api:{elapsedMs:Math.max(0,Date.now()-Date.parse(execution.startedAt))},
+            ...(timing ? { providerTiming: timing.settlement() } : {}),...(execution.usage?{usage:execution.usage}:{})}});
       },
     };
     // Reserve the foreground slot before the transport can synchronously publish admission.
@@ -2393,7 +2400,7 @@ export class BackendCore {
       const measure = preview.calibrationProjectId !== undefined && preview.route?.kind === 'conversational' && !!preview.route.effort && !prepared.responses?.webSearch;
       const started = performance.now();
       const liveVelaAnswer = preview.route?.kind === 'conversational' ? { requestId: input.requestId, scopeStamp: preview.scopeStamp } : undefined;
-      const task = this.runOrdinary(send, prepared, {signal, validate: () => this.validateFrozenVelaPreview(preview), countVelaAttempt: !!preview.route, measure, liveVelaAnswer});
+      const task = this.runOrdinary(send, prepared, {signal, validate: () => this.validateFrozenVelaPreview(preview), countVelaAttempt: !!preview.route, measure, liveVelaAnswer, requestId: input.requestId});
       this.ordinaryTask = task;
       try {
         const result = await task;
@@ -5439,13 +5446,15 @@ export class BackendCore {
     }
     this.conversations.nativeAuthorizeContextSources(input.resourceId,sources);
   }
-  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer']}):Promise<Execution> {
-    const measuredStart = authority?.measure ? performance.now() : undefined;
+  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer'];requestId?:string}):Promise<Execution> {
+    const started = performance.now();
+    const measuredStart = authority?.measure ? started : undefined;
     const p=preview.responses;ensure(p&&preview.providerId===CHATGPT_PLAN_PROVIDER&&!this.active&&!this.velaApiTask&&this.missionSpecialistsInFlight<2,'ordinary_execution_unavailable');
     ensure(this.conv(input.resourceId).providerId===CHATGPT_PLAN_PROVIDER&&!this.state.bindings[input.resourceId]?.length,'invalid_cross_provider_reference');
     ensure(this.state.revisions[input.resourceId]===input.expectedRevision,'stale_resource_version');
     const fingerprint=hash({type:'ordinary-responses',...input}),prior=this.state.receipts[input.commandId];
     if(prior){ensure(prior.fingerprint===fingerprint,'idempotency_conflict');return structuredClone(this.state.executions[prior.result]);}
+    const timing = observeConversationProvider('ordinary-adapter-entry', !!this.ordinaryTest, authority?.requestId ?? null, started);
     const e:Execution={id:p.executionId,resourceId:input.resourceId,providerId:CHATGPT_PLAN_PROVIDER,commandId:input.commandId,state:'dispatching',binding:null,turnId:null,startedAt:now(),endedAt:null,taskVerified:false,connectionVersion:p.connectionVersion,requestedModel:p.model,requestBodyDigest:p.bodyDigest,contextDigest:p.contextDigest,instructionVersion:p.instructionVersion};
     if (p.reasoningEffort !== undefined) e.requestedReasoningEffort = p.reasoningEffort;
     const handoff=preview.handoff&&!preview.handoff.continued?this.package(preview.handoff.id):null,controller=new AbortController();
@@ -5465,6 +5474,7 @@ export class BackendCore {
       ensure(event.executionId===e.id&&event.providerId===CHATGPT_PLAN_PROVIDER,'invalid_provider_response');
       if (!ownsTurn() || controller.signal.aborted) return;
       if(!this.conversationAccess.resource(e.resourceId)){controller.abort();throw new ServiceError('source_unavailable');}
+      timing.observe(event.type);
       if (event.type === 'provider/response-created') {
         await supply(event.responseId);
         // A cancelled transport can stop waiting for this callback.
@@ -5495,6 +5505,7 @@ export class BackendCore {
       }});
       this.providerActivity.providerRequests=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.providerRequests+1);
       result=await transport.turn({executionId:e.id,requestId:input.commandId,configurationId:p.configurationId,providerId:CHATGPT_PLAN_PROVIDER,assistant:'ordinary',model:p.model,instructions:p.instructions,messages:p.messages,contextDigest:p.contextDigest,...(p.reasoningEffort === undefined ? {} : { reasoningEffort: p.reasoningEffort }),...(p.webSearch?{webSearch:true}:{})},controller.signal);
+      timing.observeResult();
       let valid=true;try{await fence();}catch{valid=false;}
       if (result.responseId && !e.responseId && valid) {
         await supply(result.responseId);
@@ -5505,13 +5516,16 @@ export class BackendCore {
         e.state=!valid?(result!.dispatched?'unknown':'failed'):result!.outcome==='completed'?'provider_completed':result!.outcome==='unknown'?'unknown':result!.outcome==='cancelled-before-dispatch'?'interrupted':'failed';
         if(!valid)e.errorCode='ordinary_context_changed';else if(result!.errorCode)e.errorCode=result!.errorCode;
         e.endedAt=now();
+        let outputStagedMs: number | null = null;
         if(valid&&this.assistantText.trim()){
           const complete=e.state==='provider_completed',message=this.graph.addMessage(this.gid(e.resourceId),'assistant',this.assistantText,{provenance:'application',referenceIds:preview.handoff?[preview.handoff.id]:[]});e.outputMessageId=message.id;
           this.state.messageEvidence[message.id]={classification,executionId:e.id,providerId:CHATGPT_PLAN_PROVIDER,...(e.responseId?{responseId:e.responseId}:{}),outputState:complete?'complete':'partial',...(complete&&result!.webSearch?{webSearch:result!.webSearch}:{})};
+          outputStagedMs = timing.elapsed();
         }
         this.state.revisions[e.resourceId]++;if(handoff)handoff.state=e.state==='provider_completed'?'applied':e.state==='unknown'?'unknown':e.state==='interrupted'?'interrupted':'failed';
         this.record('execution/' + e.state, e.state === 'provider_completed' ? classification : 'inferred',
-          undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER });
+          undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER, execution: e,
+            payload: { redacted: true, providerTiming: timing.settlement(outputStagedMs) } });
       });
     } catch (error) {
       try {
@@ -5522,7 +5536,8 @@ export class BackendCore {
           if (result?.responseId) e.responseId = result.responseId;
           if (result) e.cancellation = result.cancellation;
           if (handoff) handoff.state = e.state === 'unknown' ? 'unknown' : 'failed';
-          this.record('execution/' + e.state, 'inferred', undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER });
+          this.record('execution/' + e.state, 'inferred', undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER, execution: e,
+            payload: { redacted: true, providerTiming: timing.settlement() } });
         });
       } catch {
         // The durable admission still prevents replay and restart reconciles it as unknown.

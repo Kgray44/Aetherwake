@@ -1,5 +1,5 @@
 import type { MissionEvent, MissionProjection } from './mission-contracts.mts';
-import type { MissionReportTiming, StreamEvent } from './contracts.mts';
+import type { ConversationProviderTiming, MissionReportTiming, StreamEvent } from './contracts.mts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
 import type { TurnEvent } from '../../openai-provider/contracts.mts';
 
@@ -12,6 +12,22 @@ export function observeProviderStream(started: number) {
       if (type === 'provider/text-delta') firstTextDeltaMs ??= performance.now() - started;
     },
     read: () => ({ responseCreatedMs, firstTextDeltaMs }),
+  };
+}
+
+export function observeConversationProvider(origin: ConversationProviderTiming['origin'], simulated: boolean,
+  parentRequestId: string | null, started = performance.now()) {
+  const stream = observeProviderStream(started);
+  const elapsed = () => performance.now() - started;
+  let resultObservedMs: number | null = null;
+  return {
+    observe: stream.observe,
+    elapsed,
+    observeResult() { resultObservedMs ??= elapsed(); },
+    settlement(outputStagedMs: number | null = null): ConversationProviderTiming {
+      return { ...stream.read(), source: simulated ? 'simulated' : 'observed', origin, parentRequestId,
+        resultObservedMs, outputStagedMs, settlementStagedMs: elapsed() };
+    },
   };
 }
 

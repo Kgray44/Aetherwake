@@ -151,6 +151,17 @@ export interface VelaRouteTiming {
   contextMs: number;
   previewMs: number;
 }
+/** Local monotonic offsets within one provider execution. */
+export interface ConversationProviderTiming {
+  source: 'observed' | 'simulated';
+  origin: 'ordinary-adapter-entry' | 'reviewed-api-dispatch-staging';
+  parentRequestId: string | null;
+  responseCreatedMs: number | null;
+  firstTextDeltaMs: number | null;
+  resultObservedMs: number | null;
+  outputStagedMs: number | null;
+  settlementStagedMs: number;
+}
 export interface MissionReportTiming {
   clock: string;
   compositionStartedMs: number;
@@ -180,7 +191,7 @@ export interface StreamEvent {
   correlationId: string | null; causationId: string | null;
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
-  status: string | null; payload: { redacted: true; taskId?: string; timing?: VelaRouteTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'>;
+  status: string | null; payload: { redacted: true; taskId?: string; timing?: VelaRouteTiming; providerTiming?: ConversationProviderTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'>;
     workspaceRecovery?: {workspaceId:string;action:'undo-creation'|'restore';creationEventId:string;workspaceVersion:number};
     clockTimer?: Pick<TimerDomainEvent, 'resourceVersion' | 'commandId' | 'timerIds' | 'expiryIds' | 'operations'>;
     api?: { maxOutputTokens?: number; callId?: string; elapsedMs?: number; enabled?: boolean; executionId?: string; bodyDigest?: string; contextDigest?: string };
