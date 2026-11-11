@@ -593,3 +593,31 @@ Changes MUST preserve requirement IDs where meaning is unchanged; changed semant
 **AW-PWR-111 — Permissioned mutation.** Vela MAY reorganize resources only with authorized scope, versioned changes, history/undo and truthful partial-result reporting.
 
 **Acceptance:** Build a functional engineering workspace with agent, checklist, timeline and resources; confirm actual interactivity, persistence/undo, collision-free layout and seamless return from constellation.
+
+---
+
+## Owner-directed supporting amendment FI-2026-11-10: persistent Adaptive Intelligence Workspace
+
+> **Design obligations.** This charter owns workspace and block representation, not AEP metric authority, ARIE scheduling, CIE memory truth or agent execution state.
+
+**AW-PWR-112 — First-class intelligence workspace.** Aerynth MUST support a persistent Adaptive Intelligence Workspace containing linked AEP, ARIE, mission-decision, experiential-learning, experiment and adaptation-history instruments. It MUST use ordinary canonical project/workspace/block identities and fit the shared spatial universe.
+
+**AW-PWR-113 — Source-backed instruments.** Decision Observatory, Resource Intelligence, Execution Profiler, Learning Observatory, Experiment Laboratory and Adaptation Timeline blocks MUST read typed canonical projections with provenance, freshness, authority and permission scope. A static chart with invented numbers cannot satisfy a functioning instrument.
+
+**AW-PWR-114 — Durable layout customization.** Users MUST be able to resize, move, group, filter and arrange these instruments, saving their geometry and content configuration across restarts and transitions with accessible keyboard alternatives.
+
+**AW-PWR-115 — Work-item and evidence linking.** A user MUST be able to navigate from a learned policy to its supporting experiment, affected missions, task graph, selected model/tool, resource constraints and historical timeline, preserving relevant identities and scope boundaries.
+
+**AW-PWR-116 — Feedback and control are actions.** Pause/resume experiments, adjust resource preferences, correct a finding, request policy comparison, or roll back an adaptive policy only through the appropriate authorized service. Optimistic UI state MUST reconcile to actual operation receipts or show explicit partial/failure state.
+
+**AW-PWR-117 — Cross-device and performance-aware presentation.** Layout and instruments MUST adapt to display size, GPU budget, foreground gaming/resource contention, reduced-motion settings and accessibility requirements without dropping important learning evidence.
+
+**AW-PWR-118 — Workspace and model independence.** A learning record, profiler observation, plan revision or task artifact MUST retain a canonical source identifier independent of the current renderer, model session, workspace tile, provider or temporary agent ID.
+
+**AW-PWR-119 — Least-authority data exposure.** Shared workspaces, public exports and user-visible dashboards MUST respect private-data classification and task permissions. Exposing a link to a restricted evidence source MUST NOT disclose its content or confer access.
+
+**AW-PWR-120 — No duplicate state owner.** Workspace layout storage MAY persist view preferences but MUST NOT become a second profiler, adaptive policy repository, resource monitor, mission scheduler or memory database.
+
+**AW-PWR-121 — Inspectable outcome collections.** Multi-artifact mission results MUST support durable grouped presentation of text, visual assets, documents, file links, test results and action receipts; all members MUST preserve actual completion status and verification source.
+
+**Acceptance:** Create and customize the full Adaptive Intelligence Workspace; restart and navigate away/back without layout or identity loss; trace a learning proposal to its experiment and mission evidence; change a permitted resource setting and verify real state; demonstrate denied and revoked data remaining inaccessible. Collaborate with [07 Knowledge](07-NOTES-KNOWLEDGE-AND-THOUGHT-STREAM.md), [10 AEP](10-AI-EXECUTION-PROFILER.md), [13 Platform](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md) and [14 Trust](14-TRUST-PRIVACY-AND-AUTONOMY.md).
