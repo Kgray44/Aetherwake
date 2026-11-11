@@ -75,6 +75,26 @@ async function workroom(core: BackendCore, id: string) {
   assert.ok(room.missionConversationResourceId, 'The reviewed workroom must retain its canonical conversation identity');
   return room;
 }
+
+function seedScopeFixtureMeasurements(core: BackendCore) {
+  const { executors } = (core as unknown as {
+    missions: { host: { executors: Record<string, import('../src/mission-contracts.mts').MissionExecutor> } };
+  }).missions.host;
+  // The real scheduler, join, publication and disclosure still run.
+  for (const executor of ['sample.cpu', 'sample.ram']) {
+    const source = 'synthetic:scope-fixture:' + executor;
+    executors[executor] = {
+      ...executors[executor],
+      async run({ signal }) {
+        signal.throwIfAborted();
+        return { source, value: { fixture: true } };
+      },
+      verify(evidence) {
+        return { passed: evidence.source === source, detail: 'Synthetic scope fixture' };
+      },
+    };
+  }
+}
 async function receipt(core: BackendCore, room: MissionWorkroom) {
   const deadline = performance.now() + 3000;
   do {
@@ -180,6 +200,7 @@ for (const revoke of ['origin', 'workroom', 'chat', 'placement', 'project'] as c
   test(`mission receipt reads and prepared branch reviews recheck ${revoke} scope`, async () => {
     const f = fixture();
     try {
+      seedScopeFixtureMeasurements(f.core);
       const workspaceId = await origin(f.core, true);
       // This fixture tests source scope. Keep worker admission independent of host pressure.
       const admission: MissionAdmission = { workerLimit: 2, reasons: [], readings: {} };
