@@ -180,12 +180,27 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
       .executions.find(item=>item.id===execution.id)?.outputTiming;
     assert.deepEqual(await readOutputTiming(),outputTiming);
     assert.deepEqual((await f.core.command('conversationActivity',{resourceIds:['unavailable-conversation']})).executions,[]);
+    const presented={executionId:execution.id,requestId:first.id,messageId:output.id};
+    assert.equal((await f.core.command('rendererVelaOutput',{...presented,messageId:'different-message'})).accepted,false);
+    assert.equal((await f.core.command('rendererVelaOutput',presented)).accepted,true);
+    const observed=(await readOutputTiming())?.presentation;
+    assert.ok(observed && observed.stagingToReceiptMs!==null && observed.stagingToReceiptMs>=0);
+    assert.equal((await f.core.command('rendererVelaOutput',presented)).accepted,true);
+    assert.deepEqual((await readOutputTiming())?.presentation,observed);
     assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,1); assert.ok(!JSON.stringify({snapshot,events:f.events}).includes(marker));
     await f.reopen(); assert.equal((await f.core.command('velaApiUsageStatus',{})).enabled,true);
-    assert.deepEqual(await readOutputTiming(),outputTiming);
+    assert.deepEqual(await readOutputTiming(),{...outputTiming,presentation:observed});
     f.replies.push(()=>response('Weight changes with gravity; mass stays the same.','resp-next'));
     const next=await f.send('And on the Moon?'); assert.equal(next.state,'responded'); assert.ok(next.history?.messages.some(message=>message.messageId===output.id));
     assert.ok(f.requests[1].input[0].content.includes('Mass measures inertia'));
+    const nextExecution=Object.values((await f.core.command('snapshot',{})).executions)
+      .find(item=>item.outputTiming?.parentRequestId===next.id)!;
+    await f.reopen();
+    assert.equal((await f.core.command('rendererVelaOutput',presented)).accepted,false);
+    const newObservation={executionId:nextExecution.id,requestId:next.id,messageId:nextExecution.outputMessageId!};
+    assert.equal((await f.core.command('rendererVelaOutput',newObservation)).accepted,true);
+    const restored=(await f.core.command('snapshot',{})).executions[nextExecution.id];
+    assert.equal(restored.outputTiming?.presentation?.stagingToReceiptMs,null);
   } finally { await f.close(); }
 });
 
