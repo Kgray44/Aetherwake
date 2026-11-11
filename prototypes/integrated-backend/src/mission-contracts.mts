@@ -232,6 +232,7 @@ export interface MissionExecutiveReview {
   fingerprint: string;
   configurationVersion: number;
   model: string;
+  effort?: ReasoningEffort;
   packet: import('./mission-executive.mts').ExecutivePacket;
 }
 export type MissionRequest =

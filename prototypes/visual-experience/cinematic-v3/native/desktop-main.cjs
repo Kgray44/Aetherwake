@@ -903,8 +903,10 @@ app.whenReady().then(async () => {
         result = await call("notes", input);
       } else if (command === "missions") {
         if (input?.name === "executive-review") {
+          if (!trustedActiveFrame(event)) throw Error("unauthorized_sender");
           result = await reviewMissionExecutive({ request: input.input, parent: win, call, reviewProvider,
-            isCurrent: () => trustedActiveFrame(event), allowWrite: () => storage.allowWrite() });
+            isCurrent: () => trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized(),
+            allowWrite: () => storage.allowWrite() });
         } else if (input?.name === "plan") {
           const { objective, noteIds, fingerprint } = input.input ?? {};
           const offer = await call("missions", { name: "preview", input: { objective, ...(noteIds === undefined ? {} : { noteIds }) } });

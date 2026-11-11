@@ -255,6 +255,11 @@ test('Executive reviews a real native mission checkpoint through the synthetic R
     } }) as Awaited<ReturnType<typeof f.core.command<'missionExecutiveReviewed'>>>;
     assert.equal(result.result.state, 'advisory');
     await assert.rejects(f.core.command('missionExecutiveReviewed', approved), /mission_executive_already_attempted/);
+    await f.pin({ providerId: 'openai-api-vela', model: 'gpt-6.1-sol', reasoningEffort: 'high' });
+    const differentRoute = await f.core.command('missionExecutiveReview', request);
+    assert.equal(differentRoute.model, 'gpt-6.1-sol');
+    assert.notEqual(differentRoute.fingerprint, review.fingerprint);
+    await assert.rejects(f.core.command('missionExecutiveReviewed', { ...request, fingerprint: differentRoute.fingerprint }), /mission_executive_already_attempted/);
     assert.equal(f.requests.length, 1);
     const after = await f.core.command('missions', { name: 'read', input: { id: started.id } }) as MissionProjection;
     assert.equal(after.revision, settled.revision);

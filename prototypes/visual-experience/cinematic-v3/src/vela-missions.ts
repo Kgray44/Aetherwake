@@ -249,7 +249,7 @@ export function createVelaMissionView(
       mission_executive_review_changed:
         "The mission checkpoint changed. Review the latest task results.",
       mission_executive_already_attempted:
-        "Vela already sent a request for this checkpoint.",
+        "Vela already attempted a review for this checkpoint.",
       mission_executive_unavailable:
         "Vela could not review this checkpoint. Check the dedicated API connection and the mission’s current state.",
       mission_project_check_unavailable:
@@ -603,7 +603,7 @@ export function createVelaMissionView(
   }
   function setMission(next: MissionProjection | null) {
     if (!next || mission?.id !== next.id || mission.revision !== next.revision || !canRevise(next, scope) ||
-      (revisionReview && JSON.stringify(mission.tasks) !== JSON.stringify(next.tasks))) clearRevision();
+      ((revisionReview || executiveAdvisory) && JSON.stringify(mission.tasks) !== JSON.stringify(next.tasks))) clearRevision();
     mission = next;
     syncAdmissionRefresh();
   }
@@ -999,7 +999,7 @@ export function createVelaMissionView(
   async function requestExecutiveReview(current: MissionProjection, triggerSeq: number) {
     if (!currentRevision(current) || commandPending) return;
     await scopedCommand({ name: "executive-review", input: { id: current.id, revision: current.revision, triggerSeq } }, value => {
-      if (!currentRevision(current)) return;
+      if (!currentRevision(current) || JSON.stringify(current.tasks) !== JSON.stringify(mission?.tasks)) return;
       if (!value || !("kind" in value) || value.kind !== "executive-result") throw Error("mission_executive_unavailable");
       const { result } = value;
       if (result.state === "advisory") {
