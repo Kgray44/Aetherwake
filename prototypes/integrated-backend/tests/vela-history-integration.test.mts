@@ -18,7 +18,7 @@ import type { VelaRequest } from "../../vela-core/src/contracts.ts";
 import { planningDigest } from "../../vela-core/src/codex-planning-adapter.mts";
 import { parseVelaFileEdit, upgradeVelaFileEdit } from "../src/vela-file-edit.mts";
 
-import { fixtureFileEditHost } from './fixture-file-edit-admission.mts';
+import { fixtureFileEditHost, fixtureFileEditScratchRoot } from './fixture-file-edit-admission.mts';
 
 // These protocol fixtures deliberately exercise the Codex owner; ordinary user
 // questions use the primary API unless the user selects this destination.
@@ -27,8 +27,7 @@ const explicitCodex = { mode: "codex" as const, providerId: "codex-app-server" a
 test("Check my logs, fix the code, and keep the original file until I approve", {
   skip: process.platform !== "win32",
 }, async () => {
-  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-  mkdirSync(runtime, { recursive: true });
+  const runtime = fixtureFileEditScratchRoot();
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const file = join(dir, "sample.json"), alias = join(dir, "linked.json");
   const f = fixture(false, "air-file-edit", false,[dir]);
@@ -130,9 +129,7 @@ test("AIR batch parser permits an exact selected subset and rejects duplicates o
 test("Edit this file, create the other one, and run the tests", {
   skip: process.platform !== "win32",
 }, async () => {
-  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-
-  mkdirSync(runtime, { recursive: true });
+  const runtime = fixtureFileEditScratchRoot();
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const original = join(dir, "sample.json"), created = join(dir, "created.json");
   const f = fixture(false, "air-file-edit", false,[dir]);
@@ -260,9 +257,7 @@ console.log(JSON.stringify({ samples: times.length, medianMs: times[5], p95Ms: t
 test("AIR file batch detects a stale later file and reports an actual partial write across restart", {
   skip: process.platform !== "win32",
 }, async () => {
-  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-
-  mkdirSync(runtime, { recursive: true });
+  const runtime = fixtureFileEditScratchRoot();
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const names = ["sample.json", "second.json", "third.json"], paths = names.map(name => join(dir, name));
   const f = fixture(false, "air-file-edit", false,[dir]);
@@ -333,9 +328,7 @@ test("AIR file batch detects a stale later file and reports an actual partial wr
 test("Run the tests and build a file I can review before saving", {
   skip: process.platform !== "win32",
 }, async () => {
-  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-
-  mkdirSync(runtime, { recursive: true });
+  const runtime = fixtureFileEditScratchRoot();
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const path = join(dir, "standalone.test.mjs");
   const build = join(dir, "sample.build.mjs"), artifact = join(dir, "generated.json");
@@ -493,9 +486,7 @@ test("AIR sends authorized inspection through native Codex protocol with discove
 });
 
 test("Inspect the repository I picked and ask again if its revision changed", { skip: process.platform !== "win32" }, async () => {
-  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-
-  mkdirSync(runtime, { recursive: true });
+  const runtime = fixtureFileEditScratchRoot();
   const root = realpathSync.native(mkdtempSync(join(runtime, "vela-air-inspection-")));
   const git = (...args: string[]) => execFileSync("git.exe", ["-C", root, "-c", "core.hooksPath=NUL", ...args],
     { windowsHide: true, timeout: 6000, stdio: "pipe" });
