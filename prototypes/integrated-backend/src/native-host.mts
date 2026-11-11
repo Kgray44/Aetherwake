@@ -5,6 +5,8 @@ import type { FileEditAdmission } from './vela-file-edit.mts';
 
 /** Private native-process injection. Never renderer RPC or serialized workerData. */
 export interface NativeHostServices {
+  /** Profile chosen by trusted host composition. Renderer and providers cannot set limits. */
+  resourcePolicy?: import('./resource-policy.mts').ResourcePolicyConfig;
   /** Trusted constructor-only admission; omission retains the native host reserve policy. */
   fileEditAdmission?: FileEditAdmission;
   maintenance?:import('./windows-maintenance-host.mts').NativeHostMaintenanceServices;

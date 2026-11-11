@@ -99,6 +99,7 @@ export interface MissionAttempt {
   verification?: MissionVerification;
   context?: MissionContextPackage['manifest'];
   admission?: MissionAdmission;
+  resourceLease?: import('./resource-policy.mts').ResourceLease['receipt'];
   timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number };
   telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string };
 }
@@ -318,6 +319,8 @@ export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSum
   { kind: 'mission-report'; missionId: string; messageId: string } | null;
 
 export interface MissionExecutionContext {
+  /** Cooperative checkpoint request. Task cancellation remains a separate signal. */
+  resourceCheckpoint?: AbortSignal;
   missionId: string;
   scope: MissionScope;
   task: MissionTaskPlan;

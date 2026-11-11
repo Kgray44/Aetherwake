@@ -7,7 +7,8 @@ import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
-import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
+import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission, createPooledBackendSourceExecutor } from './mission-native.mts';
+import { createMissionCpuPool } from './mission-cpu-pool.mts';
 import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS, MISSION_PROPOSAL_SCHEMA, naturalMissionInvestigation } from './mission-proposal.mts';
 import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, reassignMissionSpecialist, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
 import { MissionTeams } from './mission-teams.mts';
@@ -271,6 +272,7 @@ export class BackendCore {
   private velaWorkflowClaims = new Set<string>();
   private missions: MissionService;
   private missionAdmission: ReturnType<typeof createMissionAdmission>;
+  private readonly missionCpuPool = createMissionCpuPool(MISSION_LIMITS.workers);
   private missionStorageAdmitted = true;
   private missionPublication: MissionPublication;
   private missionPublicationTimer?: NodeJS.Timeout;
@@ -470,7 +472,9 @@ export class BackendCore {
         authorized: scope => this.missionScopeAllowed(scope),
         profileAvailable: (scope, id) => this.missionAgentProfile(scope, id) !== undefined,
       });
-      this.missionExecutors = { ...nativeMissionExecutors, 'join.team': missionTeamJoin, 'codex.project-check': createMissionProjectCheck({
+      this.missionExecutors = { ...nativeMissionExecutors,
+        'inspect.backend-source': createPooledBackendSourceExecutor(this.missionCpuPool),
+        'join.team': missionTeamJoin, 'codex.project-check': createMissionProjectCheck({
         runner: this.port.projectChecks, privateRoot: this.privateRoot, digest: planningDigest,
         lease: () => {
           if (this.closed || this.active || this.velaProjectCheckTask || this.velaMemoryFallback || this.missionProjectCheckRunning) return null;
@@ -486,7 +490,12 @@ export class BackendCore {
       }, VELA_API_PROVIDER),
       };
       this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
+        resourcePolicy: nativeHostServices?.resourcePolicy,
         onChange: () => this.missions?.capacityChanged() });
+      const resourceKind = (lane: string, executorId: string) => executorId === 'inspect.backend-source' ? 'cpu' as const :
+        lane === 'codex-local-check' ? 'build' as const :
+        lane === CHATGPT_PLAN_PROVIDER || lane === VELA_API_PROVIDER ? 'remote' as const :
+        lane === 'native' ? 'host_io' as const : 'cpu' as const;
       this.missionPublication = new MissionPublication(this.db);
       // Persisted publication is recovery, even when its first message is appended later.
       for(const row of this.db.prepare('SELECT mission_id FROM vela_mission_report_outbox').all())this.missionSpeechBacklog.add(String(row.mission_id));
@@ -496,6 +505,12 @@ export class BackendCore {
         executors: this.missionExecutors, laneLimit: lane => lane === 'codex-local-check' ? 1 :
           lane === CHATGPT_PLAN_PROVIDER ? 2 - Number(this.active?.providerId === lane) - Number(!!this.missionPlanningRun) :
           lane === VELA_API_PROVIDER ? VELA_API_RUNTIME_LIMITS.concurrent - this.velaApiRuntime.nonMissionInFlight() : 2,
+        underPressure: () => !this.missionStorageAdmitted,
+        resources: {
+          canAcquire: (lane, executorId) => this.missionStorageAdmitted && this.missionAdmission.canLease(resourceKind(lane, executorId)),
+          acquire: (lane, identity, executorId) => this.missionStorageAdmitted ?
+            this.missionAdmission.tryLease({ ...identity, kind: resourceKind(lane, executorId) }) : undefined,
+        },
         admission: demand => {
           if (!demand || !this.missionStorageAdmitted) this.missionAdmission.stopDemand();
           const snapshot = this.missionAdmission.read(demand && this.missionStorageAdmitted);
@@ -6100,6 +6115,7 @@ export class BackendCore {
         await cleanup(() => this.weatherRequest?.abort());
         await cleanup(() => this.weatherPermissions?.close());
         await cleanup(() => this.missions.close());
+        await cleanup(() => this.missionCpuPool.close());
         await cleanup(() => this.flushMissionPublication());
         await planning?.settled.catch(() => {});
         if(this.ordinaryTask)await this.ordinaryTask.catch(()=>{});

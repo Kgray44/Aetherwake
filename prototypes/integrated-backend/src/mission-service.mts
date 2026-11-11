@@ -6,6 +6,7 @@ import { historyDigest } from '../../vela-core/src/bounded-history.mts';
 import { ServiceError } from './contracts.mts';
 import { missionMeasurementAnswer } from './mission-native.mts';
 import { buildMissionRevision } from './mission-revision.mts';
+import type { ResourceLease, ResourceLeaseRequest } from './resource-policy.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
   type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
   type MissionAdmission, type MissionAttempt, type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
@@ -20,6 +21,10 @@ export interface MissionServiceHost {
   laneLimit(lane: string): number;
   underPressure?(): boolean;
   admission?(demand: boolean): MissionAdmission;
+  resources?: {
+    canAcquire(lane: string, executorId: string): boolean;
+    acquire(lane: string, identity: Omit<ResourceLeaseRequest, 'kind' | 'estimatedRamBytes'>, executorId: string): ResourceLease | undefined;
+  };
   contextSource?(mission: Mission, task: MissionTaskPlan): MissionContextSource | undefined;
   reassign?(mission: Mission, task: MissionTask, agentProfileId: string): MissionTaskPlan['specialist'];
   replan?(mission: Mission, task: MissionTask): { additions: MissionTaskPlan[]; dependents: Record<string, string[]>; reason: string } | undefined;
@@ -633,7 +638,9 @@ export class MissionService {
       if (!task.dependencies.every(id => taskOf(m, id)?.state === 'verified')) waits[task.id] = 'dependencies';
       else if (this.conflict(task)) waits[task.id] = 'resource-conflict';
       else if (executor && !this.capacityFor(m, executor.lane)) waits[task.id] = 'capacity';
-      else if (pressure) waits[task.id] = 'resource-pressure';
+      else if (this.host.resources ?
+        this.host.underPressure?.() || executor && !this.host.resources.canAcquire(executor.lane, task.executor) : pressure)
+        waits[task.id] = 'resource-pressure';
     }
     const allTasks = [...m.tasks, ...(m.retiredTasks ?? [])];
     const attempts = allTasks.flatMap(task => task.attempts);
@@ -676,11 +683,13 @@ export class MissionService {
     const rows = this.host.db.prepare('SELECT json FROM vela_missions WHERE pending=1 ORDER BY rowid LIMIT ?').all(L.active);
     const ready = rows.map(row => this.decode(row.json)).map(mission => ({ mission, tasks: readyTasks(mission) }))
       .filter(entry => entry.tasks.length);
-    if (!ready.length) { this.clearAdmissionDemand(); return; }
-    const demand = ready.some(({ mission }) => this.host.authorized(mission.scope));
+    const monitorRunning = !!this.host.resources && this.running.size > 0;
+    if (!ready.length && !monitorRunning) { this.clearAdmissionDemand(); return; }
+    const demand = monitorRunning || ready.some(({ mission }) => this.host.authorized(mission.scope));
     const admission = this.sampleAdmission(demand);
     this.admissionSnapshot = demand ? admission : undefined;
-    const workerLimit = this.host.underPressure?.() ? 0 : admission?.workerLimit ?? L.workers;
+    const workerLimit = this.host.underPressure?.() ? 0 :
+      this.host.resources ? L.workers : admission?.workerLimit ?? L.workers;
     if (workerLimit === 0 || demand && this.host.admission)
       this.wakeTimer ??= setTimeout(() => { this.wakeTimer = undefined; this.wake(); }, 1500).unref();
     if (workerLimit === 0) return;
@@ -698,8 +707,9 @@ export class MissionService {
           });
           continue;
         }
-        if (!this.capacityFor(m, executor.lane) || this.conflict(task)) continue;
-        this.start(m, task, executor, admission);
+        if (!this.capacityFor(m, executor.lane) || this.conflict(task) ||
+            this.host.resources && !this.host.resources.canAcquire(executor.lane, task.executor)) continue;
+        if (!this.start(m, task, executor, admission)) continue;
         this.lastAdmitted.set(m.id, ++this.turn);
         this.wake();
         break;
@@ -737,23 +747,37 @@ export class MissionService {
         this.event(current, { kind: 'settled', taskId: task.id, detail: value.detail });
       });
       this.wake();
-      return;
+      return false;
     }
     const timing: NonNullable<MissionAttempt['timing']> = {
       queueMs: Math.max(0, Date.now() - Date.parse(task.queuedAt)),
       contextPreparationMs: performance.now() - compilingAt,
     };
-    this.update(m.id, current => {
-      const value = taskOf(current, task.id)!;
-      check(value.state === 'queued' && value.attempts.length < value.maxAttempts, 'mission_dispatch_denied');
-      const attempt: MissionAttempt = { id, executor: task.executor, admittedAt: stamp(), context: context.context.manifest, timing };
-      value.state = 'running'; value.attempts.push(attempt);
-      this.event(current, { kind: 'started', taskId: task.id, attemptId: id });
-      if (admission) {
-        attempt.admission = admission;
-        if (Buffer.byteLength(JSON.stringify(current)) > recordLimitBytes) delete attempt.admission;
-      }
-    });
+    const resources = this.host.resources;
+    const lease = resources?.acquire(executor.lane,
+      { missionId: m.id, taskId: task.id, attemptId: id, timeoutMs: task.timeoutMs }, task.executor);
+    if (resources && !lease) return false;
+    if (lease) context.resourceCheckpoint = lease.checkpointRequested;
+    try {
+      this.update(m.id, current => {
+        const value = taskOf(current, task.id)!;
+        check(value.state === 'queued' && value.attempts.length < value.maxAttempts, 'mission_dispatch_denied');
+        const attempt: MissionAttempt = { id, executor: task.executor, admittedAt: stamp(), context: context.context.manifest, timing };
+        value.state = 'running'; value.attempts.push(attempt);
+        this.event(current, { kind: 'started', taskId: task.id, attemptId: id });
+        if (lease) {
+          attempt.resourceLease = lease.receipt;
+          if (Buffer.byteLength(JSON.stringify(current)) > recordLimitBytes) delete attempt.resourceLease;
+        }
+        if (admission) {
+          attempt.admission = admission;
+          if (Buffer.byteLength(JSON.stringify(current)) > recordLimitBytes) delete attempt.admission;
+        }
+      });
+    } catch (error) {
+      lease?.release();
+      throw error;
+    }
     const timer = setTimeout(() => this.abort(id, 'timeout'), task.timeoutMs).unref();
     const started = performance.now();
     const settled = Promise.resolve().then(async () => {
@@ -817,9 +841,10 @@ export class MissionService {
         }
       });
     }).catch(() => { this.healthy = false; }).finally(() => {
-      clearTimeout(timer); this.running.delete(id); this.wake();
+      clearTimeout(timer); lease?.release(); this.running.delete(id); this.wake();
     });
     this.running.set(id, { missionId: m.id, task: plan, lane: executor.lane, abort, settled });
+    return true;
   }
   private abort(id: string, reason: NonNullable<Running['cancellation']>) {
     const current = this.running.get(id);

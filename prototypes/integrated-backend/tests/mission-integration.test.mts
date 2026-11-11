@@ -138,6 +138,7 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.ok(Date.parse(backendAttempt.admittedAt) < Date.parse(cpu.finishedAt!));
     assert.ok((mission.tasks.find(t => t.id === 'report')?.attempts[0].context?.dependencies.length ?? 0) >= 4);
     assert.equal(mission.tasks.find(t => t.id === 'code')?.attempts[0].evidence?.source, 'aerynth.shipped-backend-source');
+    assert.equal(mission.tasks.find(t => t.id === 'code')?.attempts[0].resourceLease?.kind, 'cpu');
     assert.deepEqual(await backend.call('providerActivity', {}), providerActivity);
     assert.equal(mission.profile.providerCalls, 0);
     assert.ok(mission.profile.peakWorkers >= 2);

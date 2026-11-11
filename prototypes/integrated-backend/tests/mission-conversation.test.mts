@@ -10,19 +10,23 @@ import type { ProductCommandMap } from '../../conversation-product/src/contracts
 import type { NoteDocument } from '../../block-library/note-contracts.ts';
 import { BackendCore } from '../src/core.mts';
 import type { ConversationProductRequest, StreamEvent } from '../src/contracts.mts';
-import type { MissionAdmission, MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview } from '../src/mission-contracts.mts';
+import type { MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview } from '../src/mission-contracts.mts';
+import { fixtureMissionMemory } from './fixture-mission-memory.mts';
 import type { VelaState } from '../../vela-core/src/contracts.ts';
 
 function fixture(emit?: (event: StreamEvent) => void) {
   const directory = mkdtempSync(join(tmpdir(), 'aerynth-mission-conversation-'));
   const options = { path: join(directory, 'state.sqlite'), provider: 'fixture' as const, contentPolicy: 'synthetic-only' as const };
   let core = new BackendCore(options, emit);
+  let setAvailableMemory = fixtureMissionMemory(core);
   return {
     get core() { return core; },
+    setAvailableMemory(bytes: number) { setAvailableMemory(bytes); },
     async reopen(afterClose?: (path: string) => void) {
       await core.command('close', {});
       afterClose?.(options.path);
       core = new BackendCore(options, emit);
+      setAvailableMemory = fixtureMissionMemory(core);
     },
     async close() {
       await core.command('close', {});
@@ -180,15 +184,11 @@ test('a workroom created while work is held receives exactly one receipt after a
   const f = fixture();
   try {
     await origin(f.core);
-    const missions = (f.core as any).missions;
-    // Control admission for both phases so host pressure cannot undo the fixture's release.
-    let admission: MissionAdmission = { workerLimit: 0, reasons: ['physical-memory'], readings: {} };
-    missions.host.admission = () => admission;
+    f.setAvailableMemory(0);
     const mission = await start(f.core);
     const room = await workroom(f.core, mission.id);
     assert.equal((await product(f.core, 'detail', { resourceId: room.missionConversationResourceId! })).messages.total, 0);
-    admission = { workerLimit: 1, reasons: [], readings: {} };
-    missions.capacityChanged();
+    f.setAvailableMemory(1024 ** 3);
     await verified(f.core, mission.id);
     const delivered = await receipt(f.core, room);
     await f.reopen();
@@ -202,9 +202,6 @@ for (const revoke of ['origin', 'workroom', 'chat', 'placement', 'project'] as c
     try {
       seedScopeFixtureMeasurements(f.core);
       const workspaceId = await origin(f.core, true);
-      // This fixture tests source scope. Keep worker admission independent of host pressure.
-      const admission: MissionAdmission = { workerLimit: 2, reasons: [], readings: {} };
-      (f.core as any).missions.host.admission = () => admission;
       const mission = await verified(f.core, (await start(f.core)).id);
       const room = await workroom(f.core, mission.id);
       const detail = await receipt(f.core, room), message = detail.messages.items[0];
@@ -278,15 +275,13 @@ test('failed conversation acknowledgement rolls back its message and live event 
   const f = fixture(event => live.push(event));
   try {
     const workspaceId = await origin(f.core);
-    const host = (f.core as any).missions.host, admission = host.admission;
-    host.admission = () => ({ workerLimit: 0, reasons: ['physical-memory'], readings: {} });
+    f.setAvailableMemory(0);
     const started = await start(f.core);
     const room = await workroom(f.core, started.id);
     const db: DatabaseSync = (f.core as any).db;
     db.exec(`CREATE TRIGGER test_conversation_ack_failure BEFORE DELETE ON vela_mission_conversation_outbox
       WHEN OLD.mission_id='${started.id}' BEGIN SELECT RAISE(ABORT,'synthetic conversation acknowledgement fault'); END;`);
-    host.admission = admission;
-    (f.core as any).missions.capacityChanged();
+    f.setAvailableMemory(1024 ** 3);
     const mission = await verified(f.core, started.id);
     await navigate(f.core, workspaceId);
     const reportDeadline = performance.now() + 3000;
