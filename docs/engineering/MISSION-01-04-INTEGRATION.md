@@ -11,7 +11,7 @@ This draft assembles Architecture Recovery A3 and A4 and Fluid Intelligence FI-0
 | 01, common contracts | [#40](https://github.com/Kgray44/Aetherwake/pull/40) | `5a72594b2259d850da70810183234797d2e34ab1` |
 | 02, profiling | [#41](https://github.com/Kgray44/Aetherwake/pull/41) | `5028aaefcbc0e56398eb49c5af7b88c1147c854f` |
 | 03, resources | [#37](https://github.com/Kgray44/Aetherwake/pull/37), [#39](https://github.com/Kgray44/Aetherwake/pull/39), [#42](https://github.com/Kgray44/Aetherwake/pull/42) | `8dd54d1347349ba199b4af5dae28e3caaf4804d9` |
-| 04, cognition | [#43–52 stack tip](https://github.com/Kgray44/Aetherwake/pull/52) | `0c8c2a88ffca343db3a1231057a4497de0b78f9f` |
+| 04, cognition | [#43–52 stack tip](https://github.com/Kgray44/Aetherwake/pull/52) | `8363758f87d1ded17a64acdf96425f973df6cbda` |
 
 The integration branch replays and reconciles the source changes. Its commit IDs differ from the individual branch IDs. The combined planner retains exact reviewed note and configuration binding, one-use provider admission, and the AEP transport observations on the same request. Timing starts at the planner stage after CIE retrieval. MissionService preserves separate AEP ready-queue timing, ARIE preparation and release, evidence verification, and blocked versus uncertain settlement. The focused integration test joins the planning execution ID, bodyless cognition receipt, transport timing, and versioned resource leases for one reviewed-note mission.
 
@@ -43,7 +43,11 @@ The current draft adds FI-2 reviewed mission checkpoints, workspace placement, s
 
 The next cumulative FI-2 pin adds explicit reviewed project search, project-grounded plans, and reviewed objective assessment against verified mission observations. It carries source IDs and digests through the existing plan and Executive boundaries. Source-stale assessments suppress their prior projection. Reviewed-source plans use bounded canonical coverage limitations and omit free-form provider limitation text that echoed an unrelated marker in a live producer regression. The integration retains AEP timing fields and the ARIE lease interface while accepting the additive objective-assessed event.
 
+Vela projects reviewed Executive findings into the existing mission report with its original message identity. The combined contract retains both the source-scoped findings and the AEP renderer presentation receipt.
+
 The Vela reply's Speak response control now supplies the speaker mask used by the existing icon component. During that reply's playback, the control selects the existing stop mask and stops only the matching speech attempt.
+
+The exact `b8b0acdd` Windows portable package included the icon fix. In an isolated Electron 45.2.1 renderer using manifest-verified production CSS, the previous package painted 100% of each icon box. The fixed package resolved both masks and painted 20.3% for the speaker and 9.2% for stop. The fixture used synthetic markup and zero provider calls.
 
 ## Performance investigations
 
