@@ -682,18 +682,34 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const composer = SURFACE + ' textarea[aria-label="Message Vela"]';
     if (argv.includes('--missions-aep-presentation-only')) {
       const retryNotes = argv.includes("--missions-aep-retry");
+      const observeStart = argv.includes("--missions-aep-start-ui");
       assert(!retryNotes || !argv.includes("--bootstrap-vela-api"), "native_retry_requires_offline_profile");
+      assert(!observeStart || !argv.includes("--bootstrap-vela-api"), "native_start_ack_requires_offline_profile");
       // The panel preserves active edits instead of refreshing their controls from events.
       key("Tab");
       assert.equal(await js('document.activeElement?.matches("input,textarea,select")'), false);
       const objective = retryNotes ? OBJECTIVE + " using workspace notes" : OBJECTIVE;
       const preview = await rpc("missions", { name: "preview", input: { objective } });
       assert.equal(preview.externalReview, undefined);
+      const missionsControl = SURFACE + ' button[aria-label="Missions"]';
+      if (observeStart) await click(missionsControl);
+      const submitted = performance.now();
       const mission = await rpc("missions", { name: "start", input: {
         objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
       } });
-      receipt.actions.push({ method: "application-capability-fixture", type: "startLocalMission" });
       const missionId = mission.id;
+      receipt.actions.push({ method: "application-capability-fixture", type: "startLocalMission" });
+      if (observeStart) {
+        const selector = SURFACE + " .vela-missions-list [data-mission-focus=" + quote(missionId) + "]";
+        const label = await wait("Visible canonical mission status acknowledges Start", () => js(`(() => {
+          const node = document.querySelector(${quote(selector)}), rect = node?.getBoundingClientRect();
+          return document.visibilityState === "visible" && document.hasFocus() && rect?.height > 0 &&
+            rect.bottom > 0 && rect.top < innerHeight && !node.closest("[hidden],[inert]") && node.textContent;
+        })()`));
+        assert.match(label, / · (Queued|Running)$/u, "mission_start_status_was_not_observed_before_completion");
+        receipt.visibleStartAcknowledgement = { missionId, label, commandToVisibleObservationMs: performance.now() - submitted };
+        await click(missionsControl);
+      }
       let failedAttemptId = null;
       if (retryNotes) {
         const failed = await wait("Native note verification fails without an authorized note", async () => {
@@ -722,7 +738,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       }
       const report = await wait("Canonical mission report is available", async () => {
         const state = await rpc("vela", { name: "state", input: {} });
-        return state.conversation?.messages.find(message => message.missionReport?.missionId === mission.id);
+        return state.conversation?.messages.find(message => message.missionReport?.missionId === missionId);
       });
       const reportLink = SURFACE + ' .vela-manifestation [data-mission-report-link=' + quote(missionId) + ']';
       await wait("The report link is rendered in the current Vela reply", () =>
