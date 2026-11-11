@@ -9,7 +9,7 @@ import { buildMissionRevision } from './mission-revision.mts';
 import type { ResourceLease, ResourceLeaseRequest } from './resource-policy.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
   type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
-  type MissionAdmission, type MissionAttempt, type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
+  type MissionAdmission, type MissionAttempt, type MissionAttemptPhaseTiming, type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
   type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomCard, type MissionWorkroomDashboard,
   type MissionWorkroomResource, type MissionAgentAttempt, type MissionAgentDashboard } from './mission-contracts.mts';
 
@@ -215,6 +215,16 @@ export class MissionService {
 
   private encode(m: Mission) {
     let json = JSON.stringify(m);
+    if (Buffer.byteLength(json) > recordLimitBytes) {
+      let trimmed = false;
+      for (const task of [...m.tasks, ...(m.retiredTasks ?? [])]) {
+        for (const attempt of task.attempts) if (attempt.timing?.phases) {
+          delete attempt.timing.phases;
+          trimmed = true;
+        }
+      }
+      if (trimmed) json = JSON.stringify(m);
+    }
     if (Buffer.byteLength(json) > recordLimitBytes && m.events.some(event => event.timing)) {
       // Mission evidence takes priority at the existing storage limit.
       m.events = m.events.map(({ timing: _timing, ...event }) => event);
@@ -769,9 +779,12 @@ export class MissionService {
       this.wake();
       return false;
     }
+    const assembledAt = performance.now(), clock = this.fullProfilingClock();
+    const phases: MissionAttemptPhaseTiming | undefined =
+      clock ? { clock, contextAssembly: [compilingAt, assembledAt] } : undefined;
     const timing: NonNullable<MissionAttempt['timing']> = {
       queueMs: Math.max(0, Date.now() - Date.parse(task.queuedAt)),
-      contextPreparationMs: performance.now() - compilingAt,
+      contextPreparationMs: assembledAt - compilingAt,
     };
     const resources = this.host.resources;
     const lease = resources?.acquire(executor.lane,
@@ -793,6 +806,7 @@ export class MissionService {
           attempt.admission = admission;
           if (Buffer.byteLength(JSON.stringify(current)) > recordLimitBytes) delete attempt.admission;
         }
+        if (phases) timing.phases = phases;
       });
     } catch (error) {
       lease?.release();
@@ -821,22 +835,40 @@ export class MissionService {
         const recheckingAt = performance.now();
         try { validateInputs(); }
         catch (error) { reportedOutcome = 'blocked'; detail = 'mission_context_unavailable'; throw error; }
-        finally { timing.contextPreparationMs += performance.now() - recheckingAt; }
+        finally {
+          const validatedAt = performance.now();
+          timing.contextPreparationMs += validatedAt - recheckingAt;
+          if (phases) phases.dispatchValidation = [recheckingAt, validatedAt];
+        }
         const executingAt = performance.now();
-        const result = await executor.run(context).finally(() => { timing.executionMs = performance.now() - executingAt; });
+        let result: Awaited<ReturnType<MissionExecutor['run']>>;
+        try { result = await executor.run(context); }
+        finally {
+          const executedAt = performance.now();
+          timing.executionMs = executedAt - executingAt;
+          if (phases) phases.execution = [executingAt, executedAt];
+        }
         telemetry = result.telemetry;
         const verifyingAt = performance.now();
-        try { validateInputs(); }
-        catch (error) { reportedOutcome = executor.replaySafe ? 'blocked' : 'uncertain'; detail = 'mission_context_changed_during_execution'; throw error; }
-        check(bounded(result.source, 128) && JSON.stringify(result.value) !== undefined &&
-          Buffer.byteLength(JSON.stringify(result.value)) <= 2048, 'invalid_mission_evidence');
-        evidence = { source: result.source, value: result.value, id: randomUUID(), attemptId: id, observedAt: stamp() };
-        reportedOutcome = result.outcome;
-        const verdict = executor.verify(structuredClone(evidence), context);
-        check(typeof verdict.passed === 'boolean' && bounded(verdict.detail, 160), 'invalid_mission_verification');
-        verification = { ...verdict, criterion: task.criterion, evidenceIds: [evidence.id] };
-        timing.verificationMs = performance.now() - verifyingAt;
-        detail = verdict.detail;
+        let verifyingEvidenceAt: number | undefined;
+        try {
+          try { validateInputs(); }
+          catch (error) { reportedOutcome = executor.replaySafe ? 'blocked' : 'uncertain'; detail = 'mission_context_changed_during_execution'; throw error; }
+          finally { if (phases) phases.postExecutionContextValidation = [verifyingAt, performance.now()]; }
+          verifyingEvidenceAt = phases?.postExecutionContextValidation?.[1];
+          check(bounded(result.source, 128) && JSON.stringify(result.value) !== undefined &&
+            Buffer.byteLength(JSON.stringify(result.value)) <= 2048, 'invalid_mission_evidence');
+          evidence = { source: result.source, value: result.value, id: randomUUID(), attemptId: id, observedAt: stamp() };
+          reportedOutcome = result.outcome;
+          const verdict = executor.verify(structuredClone(evidence), context);
+          check(typeof verdict.passed === 'boolean' && bounded(verdict.detail, 160), 'invalid_mission_verification');
+          verification = { ...verdict, criterion: task.criterion, evidenceIds: [evidence.id] };
+          detail = verdict.detail;
+        } finally {
+          const verifiedAt = performance.now();
+          timing.verificationMs = verifiedAt - verifyingAt;
+          if (phases && verifyingEvidenceAt !== undefined) phases.verification = [verifyingEvidenceAt, verifiedAt];
+        }
       } catch { detail ??= 'executor_failed_or_evidence_invalid'; }
       const cancellation = this.running.get(id)?.cancellation;
       const authorized = this.host.authorized(m.scope);

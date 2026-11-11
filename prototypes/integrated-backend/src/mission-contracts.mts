@@ -93,6 +93,16 @@ export interface MissionAdmission {
     diskQueueLength?: MissionAdmissionReading;
   };
 }
+type MissionPhaseInterval = [startedMs: number, endedMs: number];
+/** Local monotonic intervals in the attempt's capture domain. */
+export interface MissionAttemptPhaseTiming {
+  clock: string;
+  contextAssembly: MissionPhaseInterval;
+  dispatchValidation?: MissionPhaseInterval;
+  execution?: MissionPhaseInterval;
+  postExecutionContextValidation?: MissionPhaseInterval;
+  verification?: MissionPhaseInterval;
+}
 export interface MissionAttempt {
   id: string;
   executor: string;
@@ -104,7 +114,7 @@ export interface MissionAttempt {
   context?: MissionContextPackage['manifest'];
   admission?: MissionAdmission;
   resourceLease?: import('./resource-policy.mts').ResourceLease['receipt'];
-  timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number };
+  timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number; phases?: MissionAttemptPhaseTiming };
   telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string;
     providerEvidence?: MissionPlanningReceipt['providerEvidence'];
     providerStream?: { responseCreatedMs: number | null; firstTextDeltaMs: number | null } };

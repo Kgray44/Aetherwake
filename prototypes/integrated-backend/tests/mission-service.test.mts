@@ -102,6 +102,17 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
     await flush();
     const profile = readProfile();
     const [left, right, join] = profile.attempts;
+    const phases = join.phases;
+    assert.ok(phases);
+    assert.equal(phases.clock, join.start.clock);
+    const intervals = [phases.contextAssembly, phases.dispatchValidation, phases.execution,
+      phases.postExecutionContextValidation, phases.verification];
+    let last = -Infinity;
+    for (const interval of intervals) {
+      assert.ok(interval && interval[0] >= last && interval[1] >= interval[0]);
+      last = interval[1];
+    }
+    assert.ok(last <= join.end!.monotonicMs!);
     assert.deepEqual(join.predecessors, [left.id, right.id]);
     assert.equal(join.planRevision, 1);
     assert.equal(profile.work.peakWorkers, 2);
@@ -137,6 +148,33 @@ test('the scoped execution profile reconstructs admitted parallel work and its v
   } finally {
     await service.close();
     f.db.close();
+  }
+});
+
+test('a thrown executor or verifier retains the elapsed phases that actually ran', async () => {
+  for (const failure of ['execution', 'verification'] as const) {
+    const f = fixture(), base = f.host.executors.fixture;
+    const executor: MissionExecutor = {
+      ...base,
+      run: failure === 'execution' ? () => { throw Error('synthetic executor failure'); } : base.run,
+      verify: () => { throw Error('synthetic verifier failure'); },
+    };
+    const service = new MissionService({ ...f.host, executors: { fixture: executor } });
+    try {
+      const mission = service.create('profile-failure-' + failure, plan(task('inspect')));
+      await flush();
+      f.active.get('inspect')?.release();
+      await flush();
+      const [attempt] = projectMissionExecution(service.read(mission.id, scope)).attempts;
+      assert.equal(attempt.state, 'failed');
+      const interval = attempt.phases?.[failure];
+      assert.ok(interval && interval[1] >= interval[0]);
+      if (failure === 'execution') assert.equal(attempt.phases?.verification, undefined);
+      else assert.ok(attempt.verificationMs !== null && attempt.verificationMs >= 0);
+    } finally {
+      await service.close();
+      f.db.close();
+    }
   }
 });
 

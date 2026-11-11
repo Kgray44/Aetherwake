@@ -55,7 +55,8 @@ async function sample(mode: typeof modes[number]) {
     const projectionMs = performance.now() - projectingAt;
     const { bytes } = db.prepare('SELECT sum(length(CAST(json AS BLOB))) AS bytes FROM vela_missions').get()!;
     return { mode, executionMs, cpuMs: (cpu.user + cpu.system) / 1000, projectionMs, journalJsonBytes: bytes,
-      measuredAttempts: profiles.reduce((count, profile) => count + profile.attempts.filter(attempt => attempt.interval).length, 0) };
+      measuredAttempts: profiles.reduce((count, profile) => count + profile.attempts.filter(attempt => attempt.interval).length, 0),
+      phasedAttempts: profiles.reduce((count, profile) => count + profile.attempts.filter(attempt => attempt.phases?.verification).length, 0) };
   } finally {
     await service.close();
     db.close();
@@ -72,7 +73,8 @@ const medians = modes.map(mode => {
   const median = (key: 'executionMs' | 'cpuMs' | 'projectionMs') =>
     group.map(row => row[key]).sort((a, b) => a - b)[Math.floor(group.length / 2)];
   return { mode, batches: group.length, executionMs: median('executionMs'), cpuMs: median('cpuMs'),
-    projectionMs: median('projectionMs'), measuredAttemptsPerBatch: group[0].measuredAttempts };
+    projectionMs: median('projectionMs'), measuredAttemptsPerBatch: group[0].measuredAttempts,
+    phasedAttemptsPerBatch: group[0].phasedAttempts };
 });
 console.log(JSON.stringify({ node: process.version, platform: process.platform, missionsPerBatch, samples, medians,
   boundary: 'Synthetic verified three-task DAG on the real scheduler and in-memory SQLite. Off disables added lifecycle clock samples; existing receipts remain enabled. Projection time includes scoped readback.' }));
