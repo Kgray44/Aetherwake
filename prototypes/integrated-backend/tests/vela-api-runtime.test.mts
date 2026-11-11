@@ -214,6 +214,8 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     assert.equal(outputTiming.source,'simulated');
     assert.ok(timing.settlementStagedMs<=outputTiming.compositionStartedMs&&
       outputTiming.compositionStartedMs<=outputTiming.readyMs&&outputTiming.readyMs<=outputTiming.stagedMs);
+    assert.deepEqual(outputTiming.fromPreview, { id: timing.fromPreview.id,
+      toStagingMs: timing.fromPreview.toAdapterMs + outputTiming.stagedMs });
     assert.doesNotMatch(JSON.stringify(outputTiming),/Mass measures inertia/u);
     const readOutputTiming=async()=> (await f.core.command('conversationActivity',{resourceIds:[execution.resourceId]}))
       .executions.find(item=>item.id===execution.id)?.outputTiming;
@@ -224,6 +226,8 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     assert.equal((await f.core.command('rendererVelaOutput',presented)).accepted,true);
     const observed=(await readOutputTiming())?.presentation;
     assert.ok(observed && observed.stagingToReceiptMs!==null && observed.stagingToReceiptMs>=0);
+    assert.equal(observed.previewToReceiptMs,
+      outputTiming.fromPreview!.toStagingMs + observed.stagingToReceiptMs);
     assert.equal((await f.core.command('rendererVelaOutput',presented)).accepted,true);
     assert.deepEqual((await readOutputTiming())?.presentation,observed);
     assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,1); assert.ok(!JSON.stringify({snapshot,events:f.events}).includes(marker));
@@ -242,7 +246,9 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
     const newObservation={executionId:nextExecution.id,requestId:next.id,messageId:nextExecution.outputMessageId!};
     assert.equal((await f.core.command('rendererVelaOutput',newObservation)).accepted,true);
     const restored=(await f.core.command('snapshot',{})).executions[nextExecution.id];
+    assert.ok(restored.outputTiming?.fromPreview);
     assert.equal(restored.outputTiming?.presentation?.stagingToReceiptMs,null);
+    assert.equal(restored.outputTiming?.presentation?.previewToReceiptMs,null);
   } finally { await f.close(); }
 });
 

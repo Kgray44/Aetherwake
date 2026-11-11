@@ -240,7 +240,10 @@ export class BackendCore {
   private velaApiPlanner!:VelaPlanningPort;
   private velaApiTask?: Promise<unknown>;
   private velaApiMessages = new Map<string, { digest: string;
-    timing?: Omit<ConversationOutputTiming, 'messageId' | 'stagedMs'> & { elapsed(): number } }>();
+    timing?: Omit<ConversationOutputTiming, 'messageId' | 'stagedMs' | 'fromPreview'> & {
+      elapsed(observedAt?: number): number;
+      previewOrigin?: ReturnType<typeof observeConversationProvider>['previewOrigin'];
+    } }>();
   private readonly velaApiTest?: VelaApiRuntimeTestServices;
   private ordinaryTest?:OrdinaryResponsesTestServices;
   private ordinaryAuth=new Map<string,Promise<void>>();
@@ -1976,10 +1979,12 @@ export class BackendCore {
     const {role:_role,content:_content,...metadata}=message;
     this.state.vela!.messages[entry.id]=metadata;this.state.revisions[id]++;
     if (apiExecution && prepared?.timing) {
-      const { elapsed, ...timing } = prepared.timing;
-      apiExecution.outputTiming = { ...timing, messageId: entry.id, stagedMs: elapsed() };
+      const { elapsed, previewOrigin, ...timing } = prepared.timing;
+      const stagedAt = performance.now(), stagedMs = elapsed(stagedAt);
+      apiExecution.outputTiming = { ...timing, messageId: entry.id, stagedMs,
+        ...(previewOrigin ? { fromPreview: { id: previewOrigin.id, toStagingMs: previewOrigin.toAdapterMs + stagedMs } } : {}) };
       const domain = this.missions.fullProfilingClock();
-      if (domain) apiExecution.outputStagingClock = { domain, monotonicMs: performance.now() };
+      if (domain) apiExecution.outputStagingClock = { domain, monotonicMs: stagedAt };
     }
     const observe=observeSpeech&&message.role==='assistant'?this.velaVoiceRuntime?.captureReplyObserver():undefined;
     if(observe)setImmediate(()=>{if(!this.closed)void observe(entry.id).catch(()=>{});});
@@ -2031,7 +2036,11 @@ export class BackendCore {
     if (!timing.presentation) {
       const clock = execution.outputStagingClock;
       this.atomic(() => {
-        timing.presentation = this.rendererOutputPresentation(received, clock?.domain, clock?.monotonicMs);
+        const presentation = this.rendererOutputPresentation(received, clock?.domain, clock?.monotonicMs);
+        timing.presentation = { ...presentation, ...(timing.fromPreview ? {
+          previewToReceiptMs: presentation.stagingToReceiptMs === null ? null :
+            timing.fromPreview.toStagingMs + presentation.stagingToReceiptMs,
+        } : {}) };
       });
     }
     return { accepted: true };
@@ -2400,7 +2409,8 @@ export class BackendCore {
       validate();
       if (result.outcome !== 'completed') throw new VelaError(result.errorCode ?? 'vela_api_' + result.outcome, result.outcome === 'unknown' ? 'unknown' : undefined);
       ensure(result.responseId && this.state.executions[executionId]?.state === 'provider_completed', 'planning_output_provenance_mismatch');
-      const elapsed = trace?.executionId === executionId ? trace.timing.elapsed : undefined;
+      const providerTiming = trace?.executionId === executionId ? trace.timing : undefined;
+      const elapsed = providerTiming?.elapsed;
       const compositionStartedMs = elapsed?.();
       const contribution = { providerId: VELA_API_PROVIDER, classification: 'reported' as const, executionId,
         planningConversationId: input.conversationId, ...(result.reportedModel ? { model: result.reportedModel } : {}) };
@@ -2414,6 +2424,7 @@ export class BackendCore {
       this.velaApiMessages.set(executionId, { digest,
         ...(elapsed && compositionStartedMs !== undefined ? { timing: {
           elapsed, compositionStartedMs, readyMs: elapsed(), parentRequestId: input.requestId,
+          previewOrigin: providerTiming?.previewOrigin,
           source: this.velaApiTest ? 'simulated' : 'observed',
         } } : {}) });
       return parsed;

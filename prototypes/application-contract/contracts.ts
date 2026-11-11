@@ -95,7 +95,9 @@ export type ConversationOutputTiming = {
   compositionStartedMs: number;
   readyMs: number;
   stagedMs: number;
-  presentation?: RendererOutputPresentation;
+  /** Elapsed from the originating backend request preview. */
+  fromPreview?: { id: string; toStagingMs: number };
+  presentation?: RendererOutputPresentation & { previewToReceiptMs?: number | null };
 };
 export type RendererOutputPresentation = { source: "renderer-visible-frame"; receivedAt: string; stagingToReceiptMs: number | null };
 export type VelaOutputObservation =

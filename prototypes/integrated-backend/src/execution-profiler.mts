@@ -19,7 +19,7 @@ export function observeConversationProvider(origin: ConversationProviderTiming['
   parentRequestId: string | null, started = performance.now(),
   correlation?: { domain: string | null; preview: { id: string; clock?: VelaRouteTiming['previewClock'] } }) {
   const stream = observeProviderStream(started);
-  const elapsed = () => performance.now() - started;
+  const elapsed = (observedAt = performance.now()) => observedAt - started;
   const clock = correlation?.preview.clock;
   const previewOrigin = correlation && clock && correlation.domain === clock.domain &&
     clock.startedMs <= clock.readyMs && clock.readyMs <= started
@@ -36,6 +36,7 @@ export function observeConversationProvider(origin: ConversationProviderTiming['
       }
     },
     elapsed,
+    previewOrigin,
     observeResult() { resultObservedMs ??= elapsed(); },
     settlement(outputStagedMs: number | null = null): ConversationProviderTiming {
       return { ...stream.read(), source: simulated ? 'simulated' : 'observed', origin, parentRequestId,
