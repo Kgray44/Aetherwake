@@ -22,8 +22,8 @@ export interface MissionServiceHost {
   underPressure?(): boolean;
   admission?(demand: boolean): MissionAdmission;
   resources?: {
-    canAcquire(lane: string): boolean;
-    acquire(lane: string, identity: Omit<ResourceLeaseRequest, 'kind' | 'estimatedRamBytes'>): ResourceLease | undefined;
+    canAcquire(lane: string, executorId: string): boolean;
+    acquire(lane: string, identity: Omit<ResourceLeaseRequest, 'kind' | 'estimatedRamBytes'>, executorId: string): ResourceLease | undefined;
   };
   contextSource?(mission: Mission, task: MissionTaskPlan): MissionContextSource | undefined;
   reassign?(mission: Mission, task: MissionTask, agentProfileId: string): MissionTaskPlan['specialist'];
@@ -639,7 +639,7 @@ export class MissionService {
       else if (this.conflict(task)) waits[task.id] = 'resource-conflict';
       else if (executor && !this.capacityFor(m, executor.lane)) waits[task.id] = 'capacity';
       else if (this.host.resources ?
-        this.host.underPressure?.() || executor && !this.host.resources.canAcquire(executor.lane) : pressure)
+        this.host.underPressure?.() || executor && !this.host.resources.canAcquire(executor.lane, task.executor) : pressure)
         waits[task.id] = 'resource-pressure';
     }
     const allTasks = [...m.tasks, ...(m.retiredTasks ?? [])];
@@ -708,7 +708,7 @@ export class MissionService {
           continue;
         }
         if (!this.capacityFor(m, executor.lane) || this.conflict(task) ||
-            this.host.resources && !this.host.resources.canAcquire(executor.lane)) continue;
+            this.host.resources && !this.host.resources.canAcquire(executor.lane, task.executor)) continue;
         if (!this.start(m, task, executor, admission)) continue;
         this.lastAdmitted.set(m.id, ++this.turn);
         this.wake();
@@ -754,7 +754,8 @@ export class MissionService {
       contextPreparationMs: performance.now() - compilingAt,
     };
     const resources = this.host.resources;
-    const lease = resources?.acquire(executor.lane, { missionId: m.id, taskId: task.id, attemptId: id, timeoutMs: task.timeoutMs });
+    const lease = resources?.acquire(executor.lane,
+      { missionId: m.id, taskId: task.id, attemptId: id, timeoutMs: task.timeoutMs }, task.executor);
     if (resources && !lease) return false;
     if (lease) context.resourceCheckpoint = lease.checkpointRequested;
     try {

@@ -1,6 +1,6 @@
 import { platform } from 'node:os';
-import { open } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { inspectBackendSource } from './mission-cpu-worker.mts';
+import type { createMissionCpuPool } from './mission-cpu-pool.mts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { readCpuUtilization, readGpuUtilization } from '../../vela-core/src/system-utilization.mts';
 import { readSystemMemory } from '../../vela-core/src/system-memory.mts';
@@ -121,32 +121,7 @@ export const nativeMissionExecutors: Readonly<Record<string, MissionExecutor>> =
   },
   'inspect.backend-source': {
     lane: 'native', replaySafe: true, available: () => true,
-    async run({ signal }) {
-      signal.throwIfAborted();
-      // This is the application's own shipped module. The objective cannot select a path or command.
-      const file = await open(new URL('./core.mts', import.meta.url), 'r');
-      try {
-        const before = await file.stat();
-        if (!before.isFile() || before.size < 1 || before.size > 768 * 1024) throw Error('backend_source_unavailable');
-        const bytes = Buffer.alloc(before.size + 1);
-        let read = 0;
-        while (read < bytes.length) {
-          signal.throwIfAborted();
-          const { bytesRead } = await file.read(bytes, read, bytes.length - read, read);
-          if (!bytesRead) break;
-          read += bytesRead;
-        }
-        const after = await file.stat();
-        if (after.mtimeMs !== before.mtimeMs || after.size !== read || read !== before.size) throw Error('backend_source_changed');
-        const source = bytes.subarray(0, read).toString('utf8');
-        return { source: 'aerynth.shipped-backend-source', value: {
-          module: 'core.mts', sha256: createHash('sha256').update(bytes.subarray(0, read)).digest('hex'), bytes: read,
-          sqlitePrepareSites: [...source.matchAll(/\bthis\.db\.prepare\(/gu)].length,
-          transactionSites: [...source.matchAll(/\bthis\.kernel\.withTransaction\(/gu)].length,
-          note: 'Counts are static inspection clues. They do not measure runtime cost or establish a bottleneck.',
-        } };
-      } finally { await file.close(); }
-    },
+    run: ({ signal }) => inspectBackendSource(signal),
     verify({ value, source }) {
       const v = object(value);
       const passed = source === 'aerynth.shipped-backend-source' && v.module === 'core.mts' &&
@@ -181,6 +156,21 @@ export const nativeMissionExecutors: Readonly<Record<string, MissionExecutor>> =
     },
   },
 });
+
+export function createPooledBackendSourceExecutor(pool: ReturnType<typeof createMissionCpuPool>): MissionExecutor {
+  return {
+    ...nativeMissionExecutors['inspect.backend-source']!,
+    async run({ signal, resourceCheckpoint }) {
+      try {
+        const stop = resourceCheckpoint ? AbortSignal.any([signal, resourceCheckpoint]) : signal;
+        return (await pool.inspect(stop)).evidence;
+      } catch (error) {
+        if (signal.aborted || !resourceCheckpoint?.aborted) throw error;
+        return { source: 'aerynth.shipped-backend-source', outcome: 'blocked', value: { status: 'resource_checkpoint' } };
+      }
+    },
+  };
+}
 
 const probes: Record<string, { executor: string; objective: string; resource: string }> = {
   cpu: { executor: 'sample.cpu', objective: 'Sample host CPU utilization', resource: 'host.cpu-counter' },
