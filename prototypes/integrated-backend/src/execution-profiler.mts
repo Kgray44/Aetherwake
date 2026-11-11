@@ -283,6 +283,13 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const lastSettlement = attempts.flatMap(attempt => attempt.interval && attempt.end ? [attempt.end] : [])
     .sort((a, b) => b.eventSeq - a.eventSeq)[0] ?? null;
   const plan = mission.planning;
+  const planningClock = plan?.timing?.lifecycleClock;
+  const planningLifecycle = planningClock && intake && initial?.monotonicMs != null && planningClock.domain === intake.clock &&
+    planningClock.commandStartedMs <= planningClock.validatedMs && planningClock.validatedMs <= intake.monotonicMs &&
+    intake.monotonicMs <= initial.monotonicMs ? {
+      validatedToStartCommandMs: intake.monotonicMs - planningClock.validatedMs,
+      planningCommandToAdmissionMs: initial.monotonicMs - planningClock.commandStartedMs,
+    } : null;
   const active = ['queued', 'running', 'cancelling', 'paused'].includes(mission.outcome);
   const profile = mission.profile;
   const planningUsage = reportedUsage(plan?.usage);
@@ -312,10 +319,9 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     intakeToAdmissionMs: intake && initial?.monotonicMs != null ? initial.monotonicMs - intake.monotonicMs : null,
     admissionToFirstVerifiedTaskMs: timeToVerified ? timeToVerified.end - timeToVerified.start : null,
     admissionToLastSettlementMs: timeToSettlement ? timeToSettlement.end - timeToSettlement.start : null,
-    // Planning starts before mission admission. Its independent receipt has no monotonic linkage.
     planning: plan ? { durationMs: plan.durationMs, provider: plan.provider, model: plan.model,
       executionId: plan.executionId ?? null, timing: plan.timing ? structuredClone(plan.timing) : null,
-      providerEvidence: plan.providerEvidence ?? null, usage: planningUsage } : null,
+      lifecycle: planningLifecycle, providerEvidence: plan.providerEvidence ?? null, usage: planningUsage } : null,
     attempts, waits: mission.waits,
     work: {
       causalBoundary: 'attempt-dependencies-and-retries' as const,

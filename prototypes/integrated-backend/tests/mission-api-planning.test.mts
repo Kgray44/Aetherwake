@@ -5,6 +5,7 @@ import { mkdtempSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
+import { projectMissionExecution } from '../src/execution-profiler.mts';
 import { nativeMissionExecutors, missionResultAvailable } from '../src/mission-native.mts';
 import type { MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
@@ -59,6 +60,14 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
     assert.ok(profile&&'kind' in profile&&profile.kind==='execution-profile');
     const timing=profile.planning?.timing;
     assert.ok(timing&&timing.firstTextDeltaMs!==null&&timing.responseCreatedMs!==null);
+    const clock = timing.lifecycleClock;
+    assert.ok(clock && profile.requestIntake && profile.admission?.monotonicMs != null);
+    assert.equal(clock.domain, profile.requestIntake.clock);
+    assert.deepEqual(profile.planning?.lifecycle, {
+      validatedToStartCommandMs: profile.requestIntake.monotonicMs - clock.validatedMs,
+      planningCommandToAdmissionMs: profile.admission.monotonicMs - clock.commandStartedMs,
+    });
+    assert.ok(profile.planning!.lifecycle!.validatedToStartCommandMs >= 0);
     const transport = timing.transport;
     assert.ok(transport && transport.postAttemptMs !== null && transport.headersMs !== null && transport.firstSseBytesMs !== null);
     assert.ok(transport.postAttemptMs <= transport.headersMs && transport.headersMs <= transport.firstSseBytesMs &&
@@ -74,6 +83,13 @@ test('actual Core natural Minecraft investigation makes one authorized API graph
     const restoredProfile=await readProfile();
     assert.ok(restoredProfile&&'kind' in restoredProfile&&restoredProfile.kind==='execution-profile');
     assert.deepEqual(restoredProfile.planning,profile.planning);
+    const unlinked = structuredClone(restored);
+    const unlinkedClock = unlinked.planning!.timing!.lifecycleClock!;
+    unlinkedClock.domain = 'unrelated-clock-fixture';
+    assert.equal(projectMissionExecution(unlinked).planning?.lifecycle, null);
+    unlinkedClock.domain = clock.domain;
+    unlinkedClock.validatedMs = profile.requestIntake.monotonicMs + 1;
+    assert.equal(projectMissionExecution(unlinked).planning?.lifecycle, null);
     assert.equal((await f.core.command('providerActivity',{})).codexConnections,0);
   }finally{await f.close();}
 });
