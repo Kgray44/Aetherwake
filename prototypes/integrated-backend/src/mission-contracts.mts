@@ -62,6 +62,7 @@ export interface MissionPlanningReceipt {
   responseId: string;
   startedAt: string;
   durationMs: number;
+  providerEvidence?: 'reported' | 'simulated';
   usage?: ReportedUsage;
 }
 export interface MissionEvidence {
@@ -100,7 +101,8 @@ export interface MissionAttempt {
   context?: MissionContextPackage['manifest'];
   admission?: MissionAdmission;
   timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number };
-  telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string };
+  telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string;
+    providerEvidence?: MissionPlanningReceipt['providerEvidence'] };
 }
 export type MissionTaskState = 'queued' | 'running' | 'cancelling' | 'verified' | 'failed' | 'blocked' | 'cancelled' | 'uncertain';
 export interface MissionTask extends MissionTaskPlan {
@@ -113,6 +115,7 @@ export interface MissionTask extends MissionTaskPlan {
 export interface MissionEvent {
   seq: number;
   time: string;
+  timing?: { domain: string; monotonicMs: number; planRevision: number; intakeMonotonicMs?: number };
   kind: 'created' | 'revised' | 'control' | 'started' | 'settled' | 'recovered' | 'workroom';
   taskId?: string;
   attemptId?: string;
@@ -203,6 +206,7 @@ export type MissionRequest =
   | { name: 'workroom-resource'; input: { resourceId: string } }
   | { name: 'list'; input: Record<string, never> }
   | { name: 'read'; input: { id: string } }
+  | { name: 'execution-profile'; input: { id: string } }
   | { name: 'revision-preview'; input: MissionRevisionInput }
   | { name: 'revision-apply'; input: MissionRevisionInput & { fingerprint: string } }
   | { name: 'workroom-preview'; input: { id: string } }
@@ -314,6 +318,7 @@ export type MissionWorkroomResource = {
 );
 
 export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomResource |
+  import('./execution-profiler.mts').MissionExecutionProfile |
   MissionWorkroomPreview | MissionRevisionPreview | MissionTeam | MissionTeamLibrary |
   { kind: 'mission-report'; missionId: string; messageId: string } | null;
 

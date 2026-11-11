@@ -153,6 +153,7 @@ export function specialistMissionPlan(intent: string, scope: MissionScope, defau
 }
 
 export interface SpecialistPort {
+  providerEvidence?: 'reported' | 'simulated';
   available(scope: MissionScope, task: MissionTaskPlan): boolean;
   turn(context: MissionExecutionContext): Promise<TurnResult>;
 }
@@ -193,6 +194,7 @@ export function createSpecialistExecutor(port: SpecialistPort, provider: NonNull
       const start = performance.now();
       const result = await port.turn(context);
       const telemetry = { durationMs: performance.now() - start, providerCalls: Number(result.dispatched),
+        ...(port.providerEvidence ? { providerEvidence: port.providerEvidence } : {}),
         ...(result.usage ? { usage: result.usage } : {}), ...(result.responseId ? { responseId: result.responseId } : {}),
         ...(result.reportedModel ? { reportedModel: result.reportedModel } : {}) };
       const source = provider + ':reported';

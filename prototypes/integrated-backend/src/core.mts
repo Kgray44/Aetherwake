@@ -5,6 +5,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
+import { projectMissionExecution } from './execution-profiler.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionCompletion, missionJobsDone, missionResultAvailable, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
@@ -478,9 +479,11 @@ export class BackendCore {
           return () => { this.missionProjectCheckRunning = false; };
         },
       }), 'chatgpt.specialist': createSpecialistExecutor({
+        providerEvidence: this.ordinaryTest ? 'simulated' : 'reported',
         available: (scope, task) => this.missionSpecialistAvailable(scope, task),
         turn: input => this.runMissionSpecialist(input),
       }), 'api.specialist': createSpecialistExecutor({
+        providerEvidence: this.velaApiTest ? 'simulated' : 'reported',
         available: (scope, task) => this.missionSpecialistAvailable(scope, task),
         turn: input => this.runMissionSpecialist(input),
       }, VELA_API_PROVIDER),
@@ -937,6 +940,7 @@ export class BackendCore {
       ensure(!plan.tasks.some(step => step.specialist?.provider === CHATGPT_PLAN_PROVIDER && step.dependencies.length), 'mission_proposal_unsupported_objective');
       validateMissionPlan(plan, this.missionExecutors);
       plan.planning = { provider: apiPlanner?VELA_API_PROVIDER:CHATGPT_PLAN_PROVIDER, model: planner.model, effort: planner.effort,
+        providerEvidence: (apiPlanner ? this.velaApiTest : this.ordinaryTest) ? 'simulated' : 'reported',
         responseId: result.responseId, startedAt, durationMs: performance.now() - started, ...(result.usage ? { usage: result.usage } : {}) };
       this.missionProposals.set(requestId, { plan, expires: Date.now() + 5 * 60_000 });
       return this.missionCommand({ name: 'preview', input: { objective, proposalId: requestId } });
@@ -957,6 +961,7 @@ export class BackendCore {
   }
   private missionCommand(request: MissionRequest, reviewed = false,
     approvedProjectCheck?: CommandMap['missionStartReviewed']['input']['approvedProjectCheck']): MissionResponse | Promise<MissionResponse> {
+    const intakeMonotonicMs = request?.name === 'start' ? performance.now() : undefined;
     ensure(request && Object.keys(request).length === 2 && request.input &&
       typeof request.input === 'object' && !Array.isArray(request.input), 'invalid_mission_command');
     const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
@@ -1013,7 +1018,7 @@ export class BackendCore {
         }
         const requestId = request.input.requestId;
         const toolOwner=this.toolWorkflows.ownerOperations('specialist-mission').find(op=>op.binding.ownerRef.id===requestId);if(toolOwner)this.toolWorkflows.assertOwnerDispatch(toolOwner.binding.requestId,{id:requestId,digest:toolOwner.binding.ownerRef.digest});
-        const created=this.missions.create(requestId, { ...plan, originConversationId: this.vela.ensureMissionConversation() });if(toolOwner)this.toolWorkflows.witnessOwnerResult(toolOwner.binding,{fence:this.toolFence(toolOwner.binding.requestId,true),sourceDigest:this.toolPlanDigest(toolOwner.binding.ownerRef),receiptRefs:[created.id]});return created;
+        const created=this.missions.create(requestId, { ...plan, originConversationId: this.vela.ensureMissionConversation() }, intakeMonotonicMs);if(toolOwner)this.toolWorkflows.witnessOwnerResult(toolOwner.binding,{fence:this.toolFence(toolOwner.binding.requestId,true),sourceDigest:this.toolPlanDigest(toolOwner.binding.ownerRef),receiptRefs:[created.id]});return created;
       }
       case 'team-library':
         ensure(!Object.keys(request.input).length, 'invalid_mission_command');
@@ -1041,6 +1046,19 @@ export class BackendCore {
       case 'list':
         ensure(!Object.keys(request.input).length, 'invalid_mission_command');
         return this.missions.list(scope);
+      case 'execution-profile': {
+        ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
+        const mission = this.missions.read(request.input.id, scope);
+        let publication: Pick<StreamEvent, 'eventId' | 'cursor' | 'receivedAt'> | null = null;
+        if (this.streamScopeMatches(scope, mission.scope)) {
+          const row = this.db.prepare('SELECT json FROM intelligence_events WHERE dedupe=?').get('mission:report:' + mission.id);
+          if (row) {
+            const { eventId, cursor, receivedAt } = JSON.parse(String(row.json)) as StreamEvent;
+            publication = { eventId, cursor, receivedAt };
+          }
+        }
+        return projectMissionExecution(mission, publication);
+      }
       case 'read': {
         ensure(Object.keys(request.input).length === 1, 'invalid_mission_command');
         const mission = this.missions.read(request.input.id, scope);

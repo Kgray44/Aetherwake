@@ -142,13 +142,25 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.equal(mission.profile.providerCalls, 0);
     assert.ok(mission.profile.peakWorkers >= 2);
     assert.equal(mission.profile.reportedTotalTokens, null);
+    const readProfile = () => backend.call('missions', { name: 'execution-profile', input: { id } });
+    const profile = await readProfile();
+    assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+    assert.deepEqual(profile.attempts.map(attempt => attempt.id).sort(),
+      mission.tasks.flatMap(task => task.attempts.map(attempt => attempt.id)).sort());
+    assert.equal(profile.economics.usageCoverage, 'not-applicable');
+    assert.ok(profile.work.criticalPath);
+    assert.ok(profile.requestIntake && profile.admission && profile.requestIntake.clock === profile.admission.clock);
+    assert.ok(profile.intakeToAdmissionMs! >= 0);
+    assert.equal(profile.userDelivery, null);
     const other = await backend.call('desktop', { type: 'createWorkspace', title: 'Other synthetic workspace', projectId: null });
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: other.workspaces.find(w => w.id !== workspaceId)!.id } });
     await assert.rejects(read(), /mission_not_found/);
+    await assert.rejects(readProfile(), /mission_not_found/);
     await backend.close();
     backend = new Backend(options);
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
     assert.deepEqual(await read(), mission);
+    assert.deepEqual(await readProfile(), profile);
     const prior = await backend.call('desktop', { type: 'snapshot' });
     const draft = await backend.call('missions', { name: 'workroom-preview', input: { id } }) as MissionWorkroomPreview;
     assert.deepEqual(draft.cards[0], { title: 'Mission graph', kind: 'note', mode: 'new' });
@@ -266,6 +278,13 @@ test('canonical backend runs a native mission without inference, restores eviden
       assert.deepEqual(messages[0].missionReport, { missionId: result.id, workspaceId: room.workspaceId, projectId: null, jobsDone });
       assert.deepEqual(await backend.call('missions', { name: 'post-report', input: { id: result.id } }),
         { kind: 'mission-report', missionId: result.id, messageId: messages[0].id });
+      const profile = await backend.call('missions', { name: 'execution-profile', input: { id: result.id } });
+      assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+      const posted = (await backend.call('replay', { limit: 1000 })).events
+        .find(event => event.mission?.id === result.id && event.type === 'vela.mission/report-posted');
+      assert.ok(posted);
+      assert.deepEqual(profile.reportPublication, { eventId: posted.eventId, cursor: posted.cursor, receivedAt: posted.receivedAt });
+      assert.equal(profile.userDelivery, null);
     }
     assert.deepEqual(await backend.call('providerActivity', {}), providerActivity);
   } finally {
