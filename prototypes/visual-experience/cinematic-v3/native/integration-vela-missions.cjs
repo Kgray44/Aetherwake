@@ -769,10 +769,24 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         assert.ok(failed?.clockSegments.some(segment => segment.attemptIds.includes(failedAttemptId)));
         receipt.nativeRetry = { retry, failed, joinAttemptId: join.id, overlapMs: presentation.work.overlapMs };
       }
+      const verifiedMission = await rpc("missions", { name: "read", input: { id: missionId } });
+      const canonicalLeases = new Map(verifiedMission.tasks.flatMap(task =>
+        task.attempts.map(attempt => [attempt.id, attempt.resourceLease])));
+      const leases = presentation.attempts.map(({ id, taskId, resourceLease }) => {
+        assert.ok(resourceLease?.leaseId && resourceLease.epoch, "native_mission_attempt_lease_missing");
+        assert.equal(resourceLease.leaseId, canonicalLeases.get(id)?.leaseId);
+        assert.equal(resourceLease.epoch, canonicalLeases.get(id)?.epoch);
+        assert.equal(Object.hasOwn(resourceLease, "gpuContextId"), false);
+        return { attemptId: id, taskId, leaseId: resourceLease.leaseId, epoch: resourceLease.epoch, kind: resourceLease.kind };
+      });
+      assert.equal(leases.length, canonicalLeases.size);
+      assert.equal(new Set(leases.map(lease => lease.leaseId)).size, leases.length);
+      assert.equal(presentation.resourcePolicy.leaseCoverage.withReceipt, leases.length);
+      assert.equal(presentation.resourcePolicy.leaseCoverage.withoutReceipt, 0);
       receipt.executionPresentation = { missionId, messageId: report.id,
         stagingToReceiptMs: presentation.userDelivery.stagingToReceiptMs,
         intakeToReceiptMs: presentation.intakeToUserDeliveryMs,
-        reportEventId: reportPublication.eventId, reportLatency, firstMeaningfulOutput: presentation.firstMeaningfulOutput };
+        reportEventId: reportPublication.eventId, reportLatency, firstMeaningfulOutput: presentation.firstMeaningfulOutput, leases };
       await capture("01-native-mission-report");
       receipt.providerActivity = { before: providerBefore, after: await rpc("providerActivity", {}) };
       assert.equal(receipt.providerActivity.after.providerRequests, 0);
