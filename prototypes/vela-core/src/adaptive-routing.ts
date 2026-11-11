@@ -13,6 +13,8 @@ export interface VelaTurnRouting {
   allowEscalation?: true;
   /** Omitted uses the runtime default; false starts this send without the recent canonical tail. */
   includeRecentHistory?: boolean;
+  /** This send explicitly reviews selected notes for semantic analysis. */
+  semanticContext?: true;
   handoffSourceRequestId?: string;
   routingAgentId?: string;
   overrideDefaults?: true;

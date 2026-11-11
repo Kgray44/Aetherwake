@@ -218,6 +218,7 @@ exports.velaCommand = async ({
       (value.mode !== undefined && !["auto", "fast", "deep", "codex", "custom"].includes(value.mode)) ||
       (value.allowEscalation !== undefined && value.allowEscalation !== true) ||
       (value.includeRecentHistory !== undefined && typeof value.includeRecentHistory !== "boolean") ||
+      (value.semanticContext !== undefined && (!directMessageSend || value.semanticContext !== true || !value.authorizeProvider)) ||
       (value.handoffSourceRequestId !== undefined && (!directMessageSend ||
         typeof value.handoffSourceRequestId !== "string" || !/^[a-f0-9-]{36}$/.test(value.handoffSourceRequestId))) ||
       (value.routingAgentId !== undefined && (!directMessageSend ||
@@ -242,7 +243,7 @@ exports.velaCommand = async ({
     const localDocuments=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you|I want(?: you)? to|I(?: would|'d) like(?: you)? to)\s+)*(?:add|attach|import|bring|put|load)\b[\s\S]*\b(?:docs?|documents?|files?|folders?|sources?|resources?|results?|these|those|them)\b[\s\S]*\b(?:(?:this|current|the)\s+)?workspace\b/iu.test(request.intent);
     const localFolderList=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you)\s+)*(?:(?:what(?:'s| is)\s+in\s+(?:this|the selected)\s+folder)|(?:what\s+(?:files|folders|items)\s+(?:are\s+)?(?:in|inside)\s+(?:this|the selected)\s+folder)|(?:(?:list|show)\s+(?:(?:the\s+)?(?:files|folders|items|contents)\s+(?:in|of|inside)\s+)?(?:this|the selected)\s+folder(?:['’]s\s+contents)?))[.!?]*\s*$/iu.test(request.intent);
     const selectedFileEdit=/\b(?:fix|edit|change|update|correct|modify|repair|refactor|replace)\b/iu.test(request.intent)&&/\b(?:file|code|function|selected|attached)\b/iu.test(request.intent);
-    if (routeNative && !request.handoffSourceRequestId && !request.routingAgentId && (!request.resourceIds.length||localDocuments||localFolderList||selectedFileEdit) && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
+    if (routeNative && !value.semanticContext && !request.handoffSourceRequestId && !request.routingAgentId && (!request.resourceIds.length||localDocuments||localFolderList||selectedFileEdit) && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
       const settings = directMessageSend
         ? Object.fromEntries(Object.entries({ providerId, mode, model, reasoningEffort, overrideDefaults, budgetLimit }).filter(([, option]) => option !== undefined))
         : {};
@@ -302,6 +303,7 @@ exports.velaCommand = async ({
         resourceIds: request.resourceIds,
         ...(providerId === undefined ? {} : { providerId }),
         ...(directMessageSend ? { adaptive: true, model, reasoningEffort, mode, budgetLimit, allowEscalation, includeRecentHistory, overrideDefaults } : {}),
+        ...(value.semanticContext ? { semanticContext: true } : {}),
         ...(directMessageSend && requireInspectionDirectory ? { requireInspectionDirectory: true } : {}),
         ...(request.handoffSourceRequestId ? { handoffSourceRequestId: request.handoffSourceRequestId } : {}),
         ...(request.routingAgentId ? { routingAgentId: request.routingAgentId } : {}),
@@ -331,6 +333,7 @@ exports.velaCommand = async ({
     });
     if (preview.handoff?.sourceRequestId !== request.handoffSourceRequestId) throw Error("invalid_native_vela_review");
     if (preview.routingAgent?.resourceId !== request.routingAgentId) throw Error("invalid_native_vela_review");
+    if (preview.semanticContext !== value.semanticContext) throw Error("invalid_native_vela_review");
     if (directMessageSend && preview.workflowScope) {
       const paths = await pickEditPaths(win, dialog, preview.workflowScope.selection);
       const checkPaths = await pickCheckPaths(win, dialog, preview.workflowScope.check);
