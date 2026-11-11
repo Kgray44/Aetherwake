@@ -102,6 +102,14 @@ test('a private desktop host restart preserves an interrupted GPU attempt withou
     assert.equal(attempt.id, attemptId);
     assert.equal(attempt.resourceLease?.epoch, enabled.epoch);
     assert.equal(attempt.resourceLease.kind, 'gpu');
+    const profile = await host.call('missions', { name: 'execution-profile', input: { id: launched.missionId } });
+    assert.ok(profile && 'kind' in profile && profile.kind === 'execution-profile');
+    const interrupted = profile.attempts.find(candidate => candidate.id === attemptId);
+    assert.ok(interrupted?.interrupted && interrupted.resourceLease);
+    assert.equal(interrupted.resourceLease.epoch, enabled.epoch);
+    assert.equal(interrupted.resourceLease.leaseId, attempt.resourceLease.leaseId);
+    assert.equal(interrupted.resourceLease.reservedVramBytes, attempt.resourceLease.reservedVramBytes);
+    assert.equal(Object.hasOwn(interrupted.resourceLease, 'gpuContextId'), false);
     assert.equal(attempt.evidence, undefined);
     assert.equal(attempt.verification, undefined);
     assert.ok(mission.events.some(event => event.kind === 'recovered' && event.attemptId === attemptId));
@@ -120,6 +128,12 @@ test('a private desktop host restart preserves an interrupted GPU attempt withou
     assert.equal(result.outcome, 'verified');
     assert.equal(result.tasks[0].attempts[0].resourceLease?.epoch, restored.epoch);
     assert.equal(result.tasks[0].attempts[0].verification?.passed, true);
+    const replacementProfile = await host.call('missions', { name: 'execution-profile', input: { id: replacement.missionId } });
+    assert.ok(replacementProfile && 'kind' in replacementProfile && replacementProfile.kind === 'execution-profile');
+    const replacementLease = replacementProfile.attempts[0].resourceLease;
+    assert.equal(replacementLease?.epoch, restored.epoch);
+    assert.notEqual(replacementLease?.leaseId, interrupted.resourceLease.leaseId);
+    assert.deepEqual(replacementProfile.resourcePolicy.leaseCoverage, { withReceipt: 1, withoutReceipt: 0, attemptsByKind: { gpu: 1 } });
     const original = await host.call('missions', { name: 'read', input: { id: launched.missionId } }) as MissionProjection;
     assert.equal(original.outcome, 'failed');
     assert.equal(original.tasks[0].attempts.length, 1);
