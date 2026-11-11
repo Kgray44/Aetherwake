@@ -68,6 +68,14 @@ function projectResourceAdmission(admission: MissionAdmission | undefined) {
       gpuEnginePercent: gpuEnginePercent?.observedAt ?? null, diskQueueLength: diskQueueLength?.observedAt ?? null } };
 }
 
+function projectResourceLease(receipt: MissionAttempt['resourceLease']) {
+  if (receipt?.schemaVersion !== 1) return null;
+  const { schemaVersion, leaseId, epoch, policyRevision, configVersion, kind, expiresAt, reservedRamBytes,
+    reservedVramBytes, gpuBudgetBytes } = receipt;
+  return { schemaVersion, leaseId, epoch, policyRevision, configVersion, kind, expiresAt, reservedRamBytes,
+    reservedVramBytes: reservedVramBytes ?? null, gpuBudgetBytes: gpuBudgetBytes ?? null };
+}
+
 type AttemptBoundary = ReturnType<typeof boundary>;
 type Interval = { id: string; clock: string; start: number; end: number };
 type Path = { durationMs: number; attemptIds: string[] };
@@ -281,6 +289,7 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       executionMs: attempt.timing?.executionMs ?? null, verificationMs: attempt.timing?.verificationMs ?? null,
       queueWallClockMs: attempt.timing?.queueMs ?? null,
       resourceAdmission: projectResourceAdmission(attempt.admission),
+      resourceLease: projectResourceLease(attempt.resourceLease),
       providerCalls: attempt.telemetry?.providerCalls ?? null,
       providerEvidence: attempt.telemetry?.providerEvidence ?? null,
       providerExecutionId: attempt.telemetry?.providerExecutionId ?? null,
@@ -572,8 +581,15 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     };
   }
   const attemptsByReason: Partial<Record<MissionAdmissionReason, number>> = {};
+  const attemptsByKind: Partial<Record<NonNullable<MissionAttempt['resourceLease']>['kind'], number>> = {};
+  let withReceipt = 0;
   let admittedAttemptsWithSample = 0, admittedAttemptsWithReasons = 0;
   for (const { attempt } of byAttempt.values()) {
+    if (attempt.resourceLease?.schemaVersion === 1) {
+      withReceipt++;
+      const kind = attempt.resourceLease.kind;
+      attemptsByKind[kind] = (attemptsByKind[kind] ?? 0) + 1;
+    }
     if (!attempt.admission) continue;
     admittedAttemptsWithSample++;
     if (attempt.admission.reasons.length) admittedAttemptsWithReasons++;
@@ -585,7 +601,8 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
     admission: initial, firstVerifiedTask: firstVerified, lastSettlement, reportPublication,
     verifiedTaskMilestones: { first: verifiedMilestones[0] ?? null, last: verifiedMilestones.at(-1) ?? null },
     resourcePolicy: { currentAdmission: projectResourceAdmission(mission.admission), admittedAttemptsWithSample,
-      admittedAttemptsWithoutSample: byAttempt.size - admittedAttemptsWithSample, admittedAttemptsWithReasons, attemptsByReason },
+      admittedAttemptsWithoutSample: byAttempt.size - admittedAttemptsWithSample, admittedAttemptsWithReasons, attemptsByReason,
+      leaseCoverage: { withReceipt, withoutReceipt: byAttempt.size - withReceipt, attemptsByKind } },
     settlementToReportStagedMs, reportLatency,
     intakeToReportStagedMs,
     requestIntake: intake, requestAcknowledgement, firstMeaningfulOutput, userDelivery, intakeToUserDeliveryMs,
