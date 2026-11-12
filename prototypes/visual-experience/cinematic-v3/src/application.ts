@@ -22,6 +22,7 @@ import {
   previewBlock as desktopPreviewBlock,
 } from "./organization-preview";
 import "./application.css";
+import { mountApplicationShell } from "./application-shell.ts";
 import "./workspace-grid.css";
 import { createWorkspaceGrid } from "./workspace-grid.ts";
 import {
@@ -1063,44 +1064,9 @@ export function installApplication(hooks: Hooks) {
           target.id === "app" || target.closest("#stage"))) return null;
     return point;
   }
-  const dialog = document.createElement("dialog");
-  dialog.id = "command-surface";
-  dialog.className = "command-surface";
-  dialog.setAttribute("aria-label", "Aerynth commands");
-  document.body.append(dialog);
-  const universe = document.createElement("section");
-  universe.id = "constellation-view";
-  universe.className = "constellation-host";
-  universe.hidden = true;
-  universe.setAttribute("aria-label", "Constellation navigation");
-  // Share the existing isolated application stack with scene controls and Vela.
-  el("#app").append(universe);
-  el(".brand small").textContent = "LIQUID INTELLIGENCE / WORKING REVIEW";
-  el(".brand img").setAttribute("alt", "Aerynth");
-  el("#settings-button").setAttribute("aria-label", "Scene controls");
-  el("#settings-button").setAttribute("title", "Scene controls");
-  el(".provenance").textContent = "LOCAL DATA · Codex connects only on request";
-  el(".study-caption small").textContent = "Your resources. Your space.";
-  el("#vela-state").textContent = "Idle · no background execution";
-  el("#vela-dialog").setAttribute("aria-hidden", "true");
-  el("#vela-expression")
-    .closest("section")!
-    .querySelector('label[for="vela-expression"]')!.textContent =
-    "Visual expression preview (synthetic)";
-  el("#demo").hidden = true;
-  el("#status").textContent = "Ready.";
-  el(".place").innerHTML =
-    '<button id="workspace-manager" title="Projects and workspaces (Ctrl+K)">Workspaces ↗</button><button id="application-new-chat">＋ Chat</button><button id="application-agents" data-aerynth-motion-control="true">Agents</button><button id="application-resources" data-aerynth-motion-control="true">Resources</button><button id="application-stream" data-aerynth-motion-control="true" aria-label="Intelligence Stream" aria-expanded="false" title="Intelligence Stream"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"><path d="M3 12h4l3-6 4 12 3-6h4"/></svg></button><button id="application-connections" aria-label="Connections" title="Connections">⌁</button>';
-  const dock = el(".dock");
-  dock.insertAdjacentHTML(
-    "afterbegin",
-    '<button id="add-block">＋ <span>Add</span></button><button id="resource-picker">◌ <span>Resources</span></button><button id="layout-manager">▣ <span>Layout</span></button><button id="zoom-out">⤢ <span>Constellation</span></button><button id="nav-back">↶ <span>Back</span></button>',
-  );
-  dock.insertAdjacentHTML(
-    "beforeend",
-    '<button id="connections">⌁ <span>Connections</span></button>',
-  );
-  const layoutControls = mountWorkspaceLayoutControls(el(".place"), {
+  const shell = mountApplicationShell(document);
+  const { dialog, universe } = shell;
+  const layoutControls = mountWorkspaceLayoutControls(shell.place, {
     mode: () => state?.organization?.mode ?? "fluid",
     change: async (mode) => {
       if (!state?.activeWorkspaceId || !state.organization) return;
@@ -1397,18 +1363,8 @@ export function installApplication(hooks: Hooks) {
         hooks.motion.target(presenceId, presence, "saved Vela placement");
     }
     hooks.replace(next);
-    el("#workspace-manager").textContent =
-      `${next.workspaces.find((w) => w.id === next.activeWorkspaceId)?.title ?? "Workspaces"} ↗`;
-    el<HTMLButtonElement>("#undo").disabled = !next.canUndo;
-    el("#undo span").textContent = "Undo layout";
-    el("#layout-manager").innerHTML =
-      `▣ <span>${next.organization?.mode ? next.organization.mode[0].toUpperCase() + next.organization.mode.slice(1) : "Layout"}</span>`;
-    el("#layout-manager").title =
-      "Organization mode, layout history and block access";
-    universe.hidden = false;
+    shell.refresh(next);
     const overview = next.navigation.kind === "constellation";
-    document.body.classList.toggle("constellation-overview", overview);
-    universe.classList.toggle("overview", overview);
     workspaceStage.reconcile({
       overview,
       leaving: leavingWorkspace,
