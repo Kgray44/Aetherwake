@@ -295,16 +295,26 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         addCandidates({ sources, scan: searchCoverage ?? 'bounded' }, limit);
         if (evidence.size >= limit && matches.some(group => group.length > rank + 1)) { partial(); break; }
       }
-      // Preserve capacity for model-proposed refinements before widening original queries.
-      if (owner.widen) {
-        for (const query of widen) {
-          if (evidence.size >= limit) { partial(); break; }
-          addCandidates(owner.widen(query), limit);
-        }
-      }
       if (owner.recent && !anchorsRead && ((rounds === 1 && evidence.size === priorCount) || investigateAnchors)) {
         anchorsRead = true;
         addCandidates(owner.recent(), limit);
+      }
+      // Keep the existing refinement and recent-evidence priorities.
+      if (owner.widen && widen.length) {
+        if (evidence.size >= limit) partial();
+        else {
+          const pages = widen.map(query => owner.widen!(query));
+          for (const page of pages) {
+            recordScan(page.scan);
+            if (page.sources.length > 2 * maxCandidates) partial();
+          }
+          const ranks = Math.min(2 * maxCandidates, Math.max(...pages.map(page => page.sources.length)));
+          for (let rank = 0; rank < ranks; rank++) {
+            addCandidates({ sources: pages.flatMap(page => page.sources[rank] ? [page.sources[rank]] : []),
+              scan: searchCoverage ?? 'bounded' }, limit);
+            if (evidence.size >= limit && rank + 1 < ranks) { partial(); break; }
+          }
+        }
       }
       if (priorAssessment && evidence.size === priorCount) {
         if (![...evidence.values()].every(owner.isCurrent)) return empty('stale', 'source-changed');
