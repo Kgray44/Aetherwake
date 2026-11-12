@@ -95,3 +95,43 @@ warning. No screenshot or real-native claim. Fixture removed and server stopped.
   and commits. Coordinate future renderer changes with Program A.
 - No merge, publication, deployment, permission change, policy mutation or model
   API call. Only private Library preservation is requested for recovery.
+
+## Bounded visual-verification follow-up
+
+No product code changes and no repeated unit/type checks. Reused the 15 passing
+focused tests and affected TypeScript check recorded above.
+
+Confirmed original server had been stopped after the previous attempt. Started a
+new synthetic, explicitly labeled fixture (no live backend or GPU claim) with:
+
+```sh
+./node_modules/.bin/vite --host 127.0.0.1 --port 5173 --strictPort
+```
+
+Vite reported ready in 220 ms and kept its execution session running. A separate
+executor command, in both default and authorized server execution contexts,
+received `ECONNREFUSED` from `127.0.0.1:5173`. To distinguish local runtime
+reachability from server lifetime, stopped that server and started it through
+Vite's supported programmatic interface, requesting the fixture inside that same
+process before leaving the server running:
+
+```sh
+node --input-type=module -e 'import {createServer} from "vite";const server=await createServer({server:{host:"127.0.0.1",port:5173,strictPort:true}});await server.listen();const url="http://127.0.0.1:5173/.fi6-verify.html";const r=await fetch(url);console.log(JSON.stringify({address:server.httpServer.address(),url,status:r.status,fixture:(await r.text()).includes("Synthetic FI-6 fixture")}));const m=await fetch("http://127.0.0.1:5173/src/adaptive-workspace-view.ts");console.log("module_status",m.status);'
+```
+
+Observed actual bind: `127.0.0.1`, IPv4, port `5173`; fixture HTTP **200** with
+synthetic label present; inspection module HTTP **200**. While the server session
+was still running, supported `cua.createBrowserTab("cdp",
+"http://127.0.0.1:5173/.fi6-verify.html")` returned
+`net::ERR_CONNECTION_REFUSED`. Thus a working server in its own runtime is not
+reachable through the available browser loopback surface. This is a reachability
+boundary, not evidence of a UI defect. No tunnel, deployment, security/network
+permission change or access-restriction workaround was attempted.
+
+Stopped the server and removed the temporary fixture. No browser interaction or
+screenshot was obtained. Browser open/close, keyboard/Escape focus, scope changes,
+unavailable sources and reduced-motion visual behavior remain **unverified in a
+real browser**, despite their passing component-level checks. Native-only and
+owner acceptance gaps listed above remain unchanged. Final source implementation
+head remains `c8b9ff8877e5e8b5cc386f72f3ec63ccbe4abf17`; the successor commit only
+records this diagnostic evidence.
