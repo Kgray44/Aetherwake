@@ -7,6 +7,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
   const doc = root.ownerDocument, details = doc.createElement('details'), summary = doc.createElement('summary');
   details.className = 'aw-mission-workroom-controls aw-intelligence-inspection';
   details.dataset.noCardDrag = 'true';
+  details.hidden = true;
   summary.textContent = 'Inspect intelligence · read only';
   const status = doc.createElement('p'), tabs = doc.createElement('div'), panel = doc.createElement('section');
   status.setAttribute('role', 'status');
@@ -59,7 +60,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
     if (close) {
       const ownsFocus = details.contains(doc.activeElement);
       details.open = false; binding = null; selected = 0;
-      if (ownsFocus) summary.focus({ preventScroll: true });
+      if (ownsFocus && !details.hidden) summary.focus({ preventScroll: true });
     }
     render();
   }
@@ -73,6 +74,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
       const same = binding && binding.missionId === expected.missionId && binding.workspaceId === expected.workspaceId && binding.projectId === expected.projectId;
       if (binding && !same) invalidate('Scope changed.', true);
       binding = { ...expected }; regions = projected;
+      details.hidden = false;
       status.textContent = `Recorded mission ${mission.id} · Workspace ${expected.workspaceId} · Project ${expected.projectId ?? 'none'} · Plan v${mission.planRevision} · Journal v${mission.revision}. Snapshot, not live telemetry.`;
       render();
       if (!readProfile) return;
@@ -85,6 +87,11 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
           const profile = await readProfile(mission.id);
           if (disposed || epoch !== profileEpoch || !details.open) return;
           requestProfile = undefined;
+          if (!profile || profile.contract !== 'aerynth.mission-execution-profile@1' ||
+            profile.missionId !== mission.id || profile.revision !== mission.revision) {
+            status.textContent = 'Execution profile unavailable for this mission revision. Showing mission summary.';
+            return;
+          }
           regions = projectIntelligence(mission, expected, profile) ?? [];
           render();
         } catch {
