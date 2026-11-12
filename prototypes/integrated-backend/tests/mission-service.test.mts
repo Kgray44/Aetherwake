@@ -978,6 +978,32 @@ test('missions waiting for failed prerequisites free active slots and retry must
   } finally { await service.close(); f.db.close(); }
 });
 
+test('a failed branch does not report terminal failure while independent work is queued', async () => {
+  const f = fixture(), service = f.create();
+  try {
+    const mission = service.create('pending-independent', plan(task('failure'), task('independent'), task('join', ['failure', 'independent'])));
+    service.control(mission.id, scope, mission.revision, { type: 'concurrency', concurrency: 1 });
+    await flush();
+    assert.deepEqual([...f.active.keys()], ['failure']);
+    f.pressure(true);
+    f.active.get('failure')!.release(false);
+    await flush();
+    const waiting = service.read(mission.id, scope);
+    assert.equal(waiting.outcome, 'queued');
+    assert.equal(waiting.tasks[0].state, 'failed');
+    assert.equal(waiting.waits.independent, 'resource-pressure');
+    f.pressure(false);
+    service.capacityChanged();
+    await flush();
+    f.active.get('independent')!.release();
+    await flush();
+    const settled = service.read(mission.id, scope);
+    assert.equal(settled.outcome, 'failed');
+    assert.equal(settled.tasks[1].state, 'verified');
+    assert.equal(settled.tasks[2].attempts.length, 0);
+  } finally { await service.close(); f.db.close(); }
+});
+
 test('a saturated worker budget is observed by every ready mission deferred in that scheduler pass', async () => {
   const f = fixture();
   const service = new MissionService({ ...f.host, admission: () => ({ workerLimit: 1, reasons: [], readings: {} }) });

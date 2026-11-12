@@ -727,14 +727,16 @@ export class MissionService {
       m.disposition === 'cancelled' || m.tasks.some(task => task.state !== 'verified'))) delete m.objectiveAssessment;
     if (m.objectiveReview && m.tasks.every(task => task.state === 'verified') &&
       this.host.planningContextCurrent?.(m) === true && reviewedMissionObjectiveVerified(m)) delete m.coverage;
+    const ready = scheduled(m);
     const outcome = m.tasks.some(t => t.state === 'cancelling') ? 'cancelling' :
       busy(m) ? 'running' : m.tasks.some(t => t.state === 'uncertain') ? 'uncertain' :
       m.disposition === 'cancelled' ? 'cancelled' : m.tasks.every(t => t.state === 'verified') ? m.coverage?'blocked':'verified' :
       m.disposition === 'paused' ? 'paused' :
+      ready ? 'queued' :
       m.tasks.some(t => t.state === 'failed') ? 'failed' :
       m.tasks.some(t => t.state === 'blocked' || t.state === 'cancelled') ? 'blocked' : 'queued';
     const waits: MissionProjection['waits'] = {};
-    const admission = m.disposition === 'active' && readyTasks(m).length ? this.admissionSnapshot : undefined;
+    const admission = ready ? this.admissionSnapshot : undefined;
     const pressure = this.host.underPressure?.() || (admission && this.running.size >= admission.workerLimit && admission.workerLimit < L.workers);
     for (const task of m.tasks) if (task.state === 'queued') {
       const executor = own(this.host.executors, task.executor) ? this.host.executors[task.executor] : undefined;
