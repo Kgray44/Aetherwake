@@ -831,10 +831,16 @@ export class MissionService {
       expectedRemote.reduce((total, attempt) => total + attempt.telemetry!.providerCalls,
         (m.planning ? 1 : 0) + (m.planning?.context?.providerCalls ?? 0)) : null;
     const { usageReports, reportedTotalTokens, completeReportedUsage } = summarizeMissionUsage(attempts, m.planning, providerCalls);
-    let peakWorkers = 0, admitted = 0;
+    let peakWorkers = 0;
+    const activeAttempts = new Set<string>(), startedAttempts = new Set<string>();
     for (const event of m.events) {
-      if (event.kind === 'started') peakWorkers = Math.max(peakWorkers, ++admitted);
-      if (event.attemptId && (event.kind === 'settled' || event.kind === 'recovered')) admitted--;
+      if (event.kind === 'started' && event.attemptId && !startedAttempts.has(event.attemptId)) {
+        startedAttempts.add(event.attemptId); activeAttempts.add(event.attemptId);
+        peakWorkers = Math.max(peakWorkers, activeAttempts.size);
+      }
+      // Verification of a retained result is not another worker termination.
+      if (event.attemptId && (event.kind === 'settled' || event.kind === 'recovered') &&
+        event.detail !== 'original_source_inspection_reconciled') activeAttempts.delete(event.attemptId);
     }
     const ended = ['queued', 'running', 'cancelling'].includes(outcome) ? Date.now() :
       Date.parse(m.events.findLast(event => event.kind !== 'workroom')!.time);

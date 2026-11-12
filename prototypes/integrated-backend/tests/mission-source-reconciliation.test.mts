@@ -15,7 +15,7 @@ const plan: MissionPlan = { scope, objective: 'Inspect actual shipped source wit
   id: 'source', executor: 'inspect.backend-source', objective: 'Read the fixed shipped backend module', criterion: 'source',
   claims: [{ resource: 'aerynth.backend-source', mode: 'exclusive' }], dependencies: [], timeoutMs: 5000, maxAttempts: 1,
 }] };
-async function fixture(forgeExit = false, takeover = false, holdResult = false) {
+async function fixture(forgeExit = false, takeover = false, holdResult = false, withSuccessors = false) {
   const db = new DatabaseSync(':memory:'), pool = createMissionCpuPool(1), real = createPooledBackendSourceExecutor(pool);
   let deniedScope: string | undefined;
   let access = true, failPublication = false, entries = 0, done!: () => void;
@@ -23,6 +23,17 @@ async function fixture(forgeExit = false, takeover = false, holdResult = false) 
   const abandoned: MissionService[] = [];
   let releaseResult!: () => void;
   const resultGate = new Promise<void>(resolve => { releaseResult = resolve; });
+  let releaseSuccessors!: () => void, readySuccessors!: () => void, finishedSuccessors!: () => void;
+  let enteredSuccessors = 0, settledSuccessors = 0;
+  const successorGate = new Promise<void>(resolve => { releaseSuccessors = resolve; });
+  const successorsReady = new Promise<void>(resolve => { readySuccessors = resolve; });
+  const successorsFinished = new Promise<void>(resolve => { finishedSuccessors = resolve; });
+  const bounded = (promise: Promise<void>) => {
+    let timer: NodeJS.Timeout;
+    return Promise.race([promise, new Promise<void>((_resolve, reject) => {
+      timer = setTimeout(() => reject(Error('synthetic_successor_timeout')), 5000);
+    })]).finally(() => clearTimeout(timer));
+  };
   const terminal = new Promise<void>(resolve => { done = resolve; });
   const executor: MissionExecutor = { ...real, async run(context) {
     entries++;
@@ -35,15 +46,24 @@ async function fixture(forgeExit = false, takeover = false, holdResult = false) 
     if (holdResult) await resultGate;
     return { ...result, outcome: 'uncertain' };
   } };
-  const host: MissionServiceHost = { db, executors: { 'inspect.backend-source': executor }, laneLimit: () => 1,
+  const successor: MissionExecutor = { lane: 'synthetic-successor', replaySafe: true, available: () => true,
+    async run() { if (++enteredSuccessors === 2) readySuccessors(); await successorGate; return { source: 'synthetic-successor', value: true }; },
+    verify: evidence => ({ passed: evidence.value === true, detail: 'Synthetic successor gate completed' }) };
+  const host: MissionServiceHost = { db, executors: { 'inspect.backend-source': executor, successor }, laneLimit: lane => lane === 'synthetic-successor' ? 2 : 1,
     authorized: value => access && value.workspaceId !== deniedScope,
     atomic<T>(work: () => T): T { db.exec('BEGIN'); try { const value = work(); db.exec('COMMIT'); return value; }
       catch (error) { db.exec('ROLLBACK'); throw error; } },
     stagePublication() { if (failPublication) throw Error('synthetic-publication-failure'); },
-    observe: (_mission, event) => { if (event.kind === 'settled') done(); },
+    observe: (_mission, event) => { if (event.kind === 'settled') {
+      done();
+      if ((event.taskId === 'left' || event.taskId === 'right') && ++settledSuccessors === 2) finishedSuccessors();
+    } },
   };
   service = new MissionService(host);
-  const created = service.create('original-inspection', plan);
+  const child = (id: string): MissionPlan['tasks'][number] => ({ id, executor: 'successor', objective: 'Synthetic gated successor', criterion: id,
+    dependencies: ['source'], claims: [], timeoutMs: 5000, maxAttempts: 1 });
+  const requested = withSuccessors ? { ...plan, criteria: ['source', 'left', 'right'], tasks: [...plan.tasks, child('left'), child('right')] } : plan;
+  const created = service.create('original-inspection', requested);
   const timer = setTimeout(() => done(), 7000);
   await terminal; clearTimeout(timer);
   const read = () => service.read(created.id, scope);
@@ -52,7 +72,8 @@ async function fixture(forgeExit = false, takeover = false, holdResult = false) 
   return { db, pool, read, raw, write, serviceHostAtomic: host.atomic, entries: () => entries, service: () => service,
     revoke: () => { access = false; }, denyWorkspace: (id?: string) => { deniedScope = id; }, fail: (value: boolean) => { failPublication = value; },
     async reopen() { await service.close(); service = new MissionService(host); },
-    async close() { releaseResult(); for (const old of abandoned) await old.close(); await service.close(); await pool.close(); db.close(); } };
+    waitSuccessors: () => bounded(successorsReady), waitSuccessorSettlement: () => bounded(successorsFinished), releaseSuccessors,
+    async close() { releaseSuccessors(); releaseResult(); for (const old of abandoned) await old.close(); await service.close(); await pool.close(); db.close(); } };
 }
 
 test('original entered fixed-worker receipt survives restart and reconciles without running the effect again', async () => {
@@ -264,5 +285,25 @@ test('an authorized linked workroom can request Retry while the receipt remains 
     assert.equal(verified.tasks[0].attempts[0].backendInspection?.terminal.bindingDigest,
       attempt.backendInspection?.terminal.bindingDigest);
     assert.equal(f.entries(), 1);
+  } finally { await f.close(); }
+});
+
+
+test('verification-only recovery cannot reduce the measured peak of two actually running successors', async () => {
+  const f = await fixture(false, false, false, true);
+  try {
+    const before = f.read();
+    assert.equal(before.tasks[0].state, 'uncertain');
+    assert.equal(before.tasks.filter(task => task.state === 'queued').length, 2);
+    f.service().control(before.id, scope, before.revision, { type: 'retry', taskId: 'source' });
+    await f.waitSuccessors();
+    const overlapping = f.read();
+    assert.equal(overlapping.tasks.filter(task => task.state === 'running').length, 2);
+    assert.equal(overlapping.profile.peakWorkers, 2);
+    assert.equal(f.entries(), 1);
+    f.releaseSuccessors(); await f.waitSuccessorSettlement();
+    const completed = f.read();
+    assert.equal(completed.outcome, 'verified');
+    assert.equal(completed.profile.peakWorkers, 2);
   } finally { await f.close(); }
 });
