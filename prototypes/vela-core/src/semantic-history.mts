@@ -330,6 +330,18 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       let rejection: AssessmentRejection = 'assessment-shape';
       const assessment = parseSemanticHistoryAssessment(reviewed, needs, evidence, reason => { rejection = reason; });
       if (!assessment) return empty('invalid', rejection);
+      if (priorAssessment) {
+        const disputed = new Map(priorAssessment.rows.filter(row => row.status === 'contradicted').map(row => [row.key, row]));
+        assessment.rows = assessment.rows.map(row => {
+          const prior = disputed.get(row.key);
+          if (!prior || row.status === 'contradicted') return row;
+          // A new citation can support a model-proposed resolution. Picking one
+          // side of the already cited conflict cannot establish a resolution.
+          if (row.status === 'supported' && row.passages?.some(passage =>
+            Number(passage.source.slice(1)) > priorCount)) return row;
+          return prior;
+        });
+      }
       priorAssessment = assessment;
       const gaps = assessment.rows.filter(row => row.status !== 'supported');
       next = gaps.filter(row => row.query && !queries.has(canonicalRetrievalQuery(row.query)!.digest)).map(row => row.query);

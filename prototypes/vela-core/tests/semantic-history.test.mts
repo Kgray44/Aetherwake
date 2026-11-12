@@ -344,6 +344,35 @@ test('overlapping passages from one source cannot establish a cross-source contr
   assert.equal(result.failure, 'assessment-support');
 });
 
+test('a later assessment cannot erase an earlier sourced conflict by dropping a citation', async () => {
+  const monday = { ...candidate, sourceId: 'monday', text: 'Inspection is Monday.' };
+  const tuesday = { ...candidate, sourceId: 'tuesday', text: 'Inspection is Tuesday.' };
+  const additional = { ...candidate, sourceId: 'additional', text: 'The inspection takes one hour.' };
+  const corrected = { ...additional, text: 'Correction: the inspection is Tuesday. Monday was cancelled.' };
+  for (const scenario of ['dropped-citation', 'previously-seen-source', 'new-correction'] as const) {
+    const resolvingSource = scenario === 'new-correction' ? corrected : undefined;
+    const result = await investigateSemanticHistory(request, {
+      search: query => ({ sources: query === evidence.query
+        ? [monday, tuesday, ...(scenario === 'previously-seen-source' ? [additional] : [])]
+        : [resolvingSource ?? { ...additional, sourceId: 'later' }], scan: 'bounded' }),
+      isCurrent: () => true,
+      disclose: async call => {
+        if (call.stage === 'interpret') return proposal;
+        const first = call.round === 1;
+        return { version: 3, clarification: '', assessment: [{
+          key: 's1', status: first ? 'contradicted' : 'supported', query: first ? 'inspection correction' : '',
+          passages: first ? [{ source: 'e1', quote: monday.text }, { source: 'e2', quote: tuesday.text }]
+            : resolvingSource ? [{ source: 'e3', quote: resolvingSource.text }]
+            : scenario === 'previously-seen-source' ? [{ source: 'e3', quote: additional.text }] : [{ source: 'e2', quote: tuesday.text }],
+        }] };
+      },
+    });
+    assert.equal(result.rounds, 2);
+    assert.equal(result.coverage[0].status, resolvingSource ? 'supported' : 'contradicted');
+    assert.deepEqual(result.coverage[0].sources, resolvingSource ? [corrected] : [monday, tuesday]);
+  }
+});
+
 test('distinguishes cancelling a reviewed assessment from an invalid model response', async () => {
   const controller = new AbortController();
   const result = await investigateSemanticHistory(request, {
