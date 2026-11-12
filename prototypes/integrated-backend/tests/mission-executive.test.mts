@@ -68,6 +68,28 @@ test('same-revision evidence invalidation prevents stale Executive proposals', a
   assert.equal(result.state, 'stale');
 });
 
+test('a reviewed checkpoint update can revise a pending dependency without changing verified work', async () => {
+  const mission = snapshot();
+  mission.tasks[1].state = 'queued';
+  mission.tasks[1].attempts = [];
+  const update = 'The inspection is independent of the completed reading and can proceed on its own.';
+  const result = await proposeMissionExecutiveRevision(7, {
+    update,
+    read: () => structuredClone(mission),
+    disclose: async packet => {
+      assert.equal(packet.reviewedUpdate, update);
+      assert.equal(packet.objective, mission.objective);
+      return { version: 1, action: 'dependencies', target: 't2', related: [], reason: 'The revised instructions remove the dependency.' };
+    },
+    preview: (revision, change) => {
+      assert.deepEqual(change, { type: 'dependencies', taskId: 'failed', dependencies: [] });
+      return { missionId: mission.id, kind: 'revision-preview', revision, fingerprint: 'fixture', summary: 'Review fixture change' };
+    },
+  });
+  assert.equal(result.state, 'reviewable');
+  assert.equal(mission.tasks[0].state, 'verified');
+});
+
 test('Executive specialist advice is scoped to an unresolved task and never requests a revision', async () => {
   const advice = {
     ...model,

@@ -31,11 +31,11 @@ async function startReviewedMission({win,event,localURL,storage,call,dialog,inpu
           };
           if (preview.artifactReview) {
             if (preview.executors.some(executor => !executor.available)) throw Error("mission_artifact_unavailable");
-            const { prompt, digest, model, width, height, files } = preview.artifactReview;
+            const { prompt, digest, model, quality, width, height, files, rates } = preview.artifactReview;
             const choice = await checkedDialog.showMessageBox(win, {
               type: "question", buttons: ["Cancel", "Generate and save"], defaultId: 0, cancelId: 0,
               title: "Review illustration mission", message: `Send this prompt to ${model} through the dedicated Vela API?`,
-              detail: `Prompt sent to OpenAI:\n${prompt}\n\nSave a ${width} × ${height} PNG and text notes to this workspace's managed files:\n${files.join("\n")}\n\nThis uses one image generation request on your configured API account.`,
+              detail: `Prompt sent to OpenAI:\n${prompt}\n\nSave a ${width} × ${height} PNG at ${quality} quality and text notes to this workspace's managed files:\n${files.join("\n")}\n\nOne billable image request. Published standard rates per million tokens: $${rates.textInput} text input, $${rates.imageInput} image input, $${rates.imageOutput} image output. Total depends on usage.`,
             });
             if (choice.response !== 1) throw Error("mission_review_declined");
             approvedArtifactDigest = digest;

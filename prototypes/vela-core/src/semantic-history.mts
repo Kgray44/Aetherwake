@@ -219,17 +219,20 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       };
     };
     const partial = () => { if (searchCoverage === 'bounded') searchCoverage = 'partial'; };
-    const addCandidates = ({ sources, scan }: SemanticHistoryCandidates<T>) => {
+    const recordScan = (scan: SemanticHistoryScan) => {
       if (searchCoverage === null || searchCoverage === 'bounded' || scan === 'unavailable') searchCoverage = scan;
+    };
+    const addCandidates = ({ sources, scan }: SemanticHistoryCandidates<T>, limit = maxCandidates) => {
+      recordScan(scan);
       if (sources.length > 2 * maxCandidates) partial();
       for (const source of sources.slice(0, 2 * maxCandidates)) {
         if (observed.has(source.sourceId)) continue;
         const textLimit = source.sourceKind === 'file' ? maxReviewedFileBytes :
           source.sourceKind === 'mission-checkpoint' || source.sourceKind === 'workspace-state' || source.sourceKind === 'conversation-exchange'
             ? maxReviewedStateBytes : maxExcerptBytes;
-        if (evidence.size === maxCandidates || !bounded(source.text, textLimit) || !owner.isCurrent(source)) {
+        if (evidence.size >= limit || !bounded(source.text, textLimit) || !owner.isCurrent(source)) {
           partial();
-          if (evidence.size === maxCandidates) break;
+          if (evidence.size >= limit) break;
           continue;
         }
         observed.add(source.sourceId);
@@ -242,16 +245,28 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     while (rounds < maxRounds) {
       rounds++;
       const priorCount = evidence.size;
+      // Preserve selected evidence and leave discovery slots for refined queries.
+      const limit = rounds < maxRounds ? Math.max(priorCount, maxCandidates - 2) : maxCandidates;
+      const matches: T[][] = [];
       for (const query of next) {
         const digest = canonicalRetrievalQuery(query)!.digest;
         if (queries.has(digest)) continue;
-        if (evidence.size === maxCandidates) { partial(); break; }
+        if (evidence.size >= limit) { partial(); break; }
         queries.add(digest);
-        addCandidates(owner.search(query));
+        const { sources, scan } = owner.search(query);
+        recordScan(scan);
+        if (sources.length > 2 * maxCandidates) partial();
+        matches.push(sources.slice(0, 2 * maxCandidates));
+      }
+      // Admit the top result from each query before lower-ranked results.
+      for (let rank = 0; rank < Math.max(0, ...matches.map(sources => sources.length)); rank++) {
+        const sources = matches.flatMap(group => group[rank] ? [group[rank]] : []);
+        addCandidates({ sources, scan: searchCoverage ?? 'bounded' }, limit);
+        if (evidence.size >= limit && matches.some(group => group.length > rank + 1)) { partial(); break; }
       }
       if (owner.recent && !anchorsRead && ((rounds === 1 && evidence.size === priorCount) || investigateAnchors)) {
         anchorsRead = true;
-        addCandidates(owner.recent());
+        addCandidates(owner.recent(), limit);
       }
       if (priorAssessment && evidence.size === priorCount) {
         if (![...evidence.values()].every(owner.isCurrent)) return empty('stale', 'source-changed');

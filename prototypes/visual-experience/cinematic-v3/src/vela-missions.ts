@@ -795,7 +795,7 @@ export function createVelaMissionView(
     if (!review) return null;
     const { preview, requestId, agentProfileId } = review;
     if ("kind" in preview) return renderPlanningOffer(preview);
-    const { plan, executors, externalReview, localReview, objectiveReview } = preview;
+    const { plan, executors, externalReview, localReview, objectiveReview, artifactReview } = preview;
     const section = el("section", "vela-core-plan vela-mission-preview");
     const heading = el("h3", undefined, "Review mission");
     if (plan.team) {
@@ -812,7 +812,13 @@ export function createVelaMissionView(
     if (plan.planning) section.append(el("p", "vela-core-meta",
       `Proposed by ${plan.planning.model}. Review the tasks and dependencies before starting.`));
     section.append(
-      externalReview
+      artifactReview
+        ? el(
+            "p",
+            "vela-core-meta",
+            `Start opens native review for one billable image request to OpenAI using ${artifactReview.model} at ${artifactReview.quality} quality. Approval saves a ${artifactReview.width} × ${artifactReview.height} PNG and text notes as managed workspace files ${artifactReview.files.join(" and ")}.`,
+          )
+        : externalReview
         ? el(
             "p",
             "vela-core-meta",
@@ -1026,10 +1032,11 @@ export function createVelaMissionView(
       body.querySelector<HTMLElement>('[data-mission-focus="revision-review-heading"]')?.focus();
     refresh();
   }
-  async function requestExecutiveReview(current: MissionProjection, triggerSeq: number) {
+  async function requestExecutiveReview(current: MissionProjection, triggerSeq: number, update?: string) {
     const assessing = canAssessObjective(current, scope);
     if (commandPending || (assessing ? mission?.id !== current.id || mission.revision !== current.revision : !currentRevision(current))) return;
-    await scopedCommand({ name: "executive-review", input: { id: current.id, revision: current.revision, triggerSeq } }, value => {
+    await scopedCommand({ name: "executive-review", input: { id: current.id, revision: current.revision, triggerSeq,
+      ...(update ? { update } : {}) } }, value => {
       if (!value || !("kind" in value) || value.kind !== "executive-result") throw Error("mission_executive_unavailable");
       const { result } = value;
       if (assessing) {
@@ -1264,12 +1271,19 @@ export function createVelaMissionView(
       });
       section.append(form);
     }
-    if (checkpoint && canRevise(current, scope) && current.tasks.some(task => ["failed", "blocked", "uncertain"].includes(task.state))) {
+    if (checkpoint && canRevise(current, scope) && current.tasks.some(task => ["queued", "failed", "blocked", "uncertain"].includes(task.state))) {
       if (executiveAdvisory) section.append(el("p", "vela-core-meta", executiveAdvisory));
-      if (!revision && !executiveAdvisory) {
-        const ask = button("Ask Vela to review this checkpoint", "executive-review", () => { void requestExecutiveReview(current, checkpoint.seq); });
-        ask.disabled = commandPending;
-        section.append(ask);
+      if (!revision) {
+        const label = el("label", undefined, "New information for this checkpoint (optional)");
+        const update = el("input");
+        update.maxLength = 500;
+        label.append(update);
+        const ask = button("Ask Vela to review this checkpoint", "executive-review",
+          () => { void requestExecutiveReview(current, checkpoint.seq, update.value.trim()); });
+        const setAvailability = () => { ask.disabled = commandPending || (!!executiveAdvisory && !update.value.trim()); };
+        update.addEventListener("input", setAvailability);
+        setAvailability();
+        section.append(label, ask);
       }
     }
     if(current.coverage)section.append(el("p","vela-core-meta","Investigation incomplete: "+current.coverage.limitations.join(' ')));

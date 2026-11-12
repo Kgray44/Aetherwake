@@ -80,12 +80,12 @@ async function workroom(core: BackendCore, id: string) {
   return room;
 }
 
-function seedScopeFixtureMeasurements(core: BackendCore) {
+function seedScopeFixtureMeasurements(core: BackendCore, measurements = ['sample.cpu', 'sample.ram']) {
   const { executors } = (core as unknown as {
     missions: { host: { executors: Record<string, import('../src/mission-contracts.mts').MissionExecutor> } };
   }).missions.host;
   // The real scheduler, join, publication and disclosure still run.
-  for (const executor of ['sample.cpu', 'sample.ram']) {
+  for (const executor of measurements) {
     const source = 'synthetic:scope-fixture:' + executor;
     executors[executor] = {
       ...executors[executor],
@@ -242,6 +242,8 @@ for (const revoke of ['origin', 'workroom', 'chat', 'placement', 'project'] as c
 test('editing mission source evidence withdraws its receipt from detail, search and prepared branch review', async () => {
   const f = fixture();
   try {
+    // Note invalidation depends on source versions, while CPU sampling has its own host timing test.
+    seedScopeFixtureMeasurements(f.core, ['sample.cpu']);
     const workspaceId = await origin(f.core, true);
     const desktop = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Backend performance notes', workspaceId });
     const noteId = desktop.blocks.find(item => item.workspace_id === workspaceId && item.resource_id)!.resource_id!;

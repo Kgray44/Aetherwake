@@ -2,6 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { prepareImageGeneration, sendReviewedImageGeneration } from '../images.mts';
 
+test('only reviewed Image 2.6 models and supported quality settings form requests', () => {
+  const final = prepareImageGeneration('A geometric illustration');
+  const draft = prepareImageGeneration('A geometric illustration', { model: 'gpt-image-2.6-flare', quality: 'xhigh' });
+  assert.deepEqual(JSON.parse(final.body), {
+    model: 'gpt-image-2.6-sunburst', prompt: 'A geometric illustration', n: 1,
+    size: '1024x1024', output_format: 'png', quality: 'medium',
+  });
+  assert.equal(JSON.parse(draft.body).model, 'gpt-image-2.6-flare');
+  assert.equal(JSON.parse(draft.body).quality, 'xhigh');
+  assert.notEqual(final.digest, draft.digest);
+  assert.throws(() => prepareImageGeneration('A geometric illustration', {
+    model: 'gpt-image-1.5', quality: 'low',
+  } as never), /invalid_image_settings/);
+});
+
 test('image generation dispatches exactly one reviewed request and accepts only inline bytes', async () => {
   const review = prepareImageGeneration('A geometric illustration');
   const signal = new AbortController().signal;

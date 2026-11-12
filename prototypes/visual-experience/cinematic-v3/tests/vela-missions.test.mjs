@@ -148,6 +148,37 @@ test("partial investigation preview discloses missing server evidence before Sta
   }finally{f.view.setVisible(false);}
 });
 
+test("illustration preview discloses a billable image request and managed workspace writes before Start", async () => {
+  const f = await fixture(() => assert.fail("preview must not dispatch"));
+  try {
+    const illustration = task("illustration", "artifact.illustration", "Generate and verify workspace illustration files");
+    f.view.review({
+      fingerprint: "artifact-plan",
+      plan: { ...initial(), objective: "Generate an illustration", tasks: [illustration] },
+      executors: [{ id: illustration.id, available: true }],
+      artifactReview: {
+        prompt: "Illustrate a sailboat",
+        digest: "artifact-digest",
+        model: "gpt-image-2.6-sunburst",
+        quality: "medium",
+        rates: { textInput: 5, imageInput: 8, imageOutput: 30 },
+        width: 1024,
+        height: 1024,
+        files: ["illustration.png", "illustration-notes.txt"],
+      },
+    }, () => {});
+    const preview = f.dom.root.textContent;
+    assert.match(preview, /native review for one billable image request to OpenAI using gpt-image-2\.6-sunburst at medium quality/);
+    assert.match(preview, /1024 × 1024 PNG/);
+    assert.match(preview, /managed workspace files illustration\.png and illustration-notes\.txt/);
+    assert.doesNotMatch(preview, /Local read-only tasks/);
+    assert.equal(f.requests.some(request => request.name === "start"), false);
+
+    f.view.review({ fingerprint: "local-plan", plan: initial(), executors: [] }, () => {});
+    assert.match(f.dom.root.textContent, /Local read-only tasks/);
+  } finally { f.view.setVisible(false); }
+});
+
 test("completed host evidence keeps the investigation blocked and offers an attributable partial report", async () => {
   const f=await fixture(async request=>{assert.equal(request.name,'post-report');return {kind:'mission-report',missionId:'mission-a',messageId:'partial-report'};});
   try{
