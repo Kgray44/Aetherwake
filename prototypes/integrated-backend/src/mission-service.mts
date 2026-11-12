@@ -699,7 +699,7 @@ export class MissionService {
       const task = taskOf(current, taskId), attempt = task?.attempts.at(-1), receipt = attempt?.backendInspection;
       check(task && attempt?.id === attemptId && task.executor === 'inspect.backend-source' &&
         receipt?.contract === 'aerynth.backend-inspection-terminal@1' && receipt.missionId === id &&
-        receipt.taskId === taskId && receipt.attemptId === attemptId && receipt.scopeDigest === digest({ workspaceId: scope.workspaceId, projectId: scope.projectId }) &&
+        receipt.taskId === taskId && receipt.attemptId === attemptId && receipt.scopeDigest === digest({ workspaceId: current.scope.workspaceId, projectId: current.scope.projectId }) &&
         receipt.claimsDigest === digest(task.claims) && receipt.contextDigest === digest(attempt.context) && receipt.terminal && typeof receipt.terminal === 'object' &&
         receipt.terminalDigest === digest(receipt.terminal) &&
         receipt.effectId === receipt.terminal.exit?.effectId &&
@@ -707,7 +707,7 @@ export class MissionService {
         attempt.dispatch?.contract === 'aerynth.mission-dispatch@1' && attempt.dispatch?.state === 'entered' && attempt.dispatch.attemptId === attemptId &&
         receipt.reservedRevision === attempt.dispatch.reservedRevision && current.events.some(event =>
           event.kind === 'started' && event.seq === receipt.reservedRevision && event.taskId === taskId && event.attemptId === attemptId) &&
-        receipt.terminal.bindingDigest === backendInspectionBinding({ missionId: id, task, attemptId, scope }) &&
+        receipt.terminal.bindingDigest === backendInspectionBinding({ missionId: id, task, attemptId, scope: current.scope }) &&
         backendInspectionCurrent(receipt.terminal) && this.contextIsCurrent(current, task, attempt, new Map()),
         'mission_reconciliation_denied');
       if (task.state === 'verified') {

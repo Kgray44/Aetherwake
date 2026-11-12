@@ -17,6 +17,7 @@ const plan: MissionPlan = { scope, objective: 'Inspect actual shipped source wit
 }] };
 async function fixture(forgeExit = false, takeover = false, holdResult = false) {
   const db = new DatabaseSync(':memory:'), pool = createMissionCpuPool(1), real = createPooledBackendSourceExecutor(pool);
+  let deniedScope: string | undefined;
   let access = true, failPublication = false, entries = 0, done!: () => void;
   let service: MissionService;
   const abandoned: MissionService[] = [];
@@ -35,7 +36,7 @@ async function fixture(forgeExit = false, takeover = false, holdResult = false) 
     return { ...result, outcome: 'uncertain' };
   } };
   const host: MissionServiceHost = { db, executors: { 'inspect.backend-source': executor }, laneLimit: () => 1,
-    authorized: () => access,
+    authorized: value => access && value.workspaceId !== deniedScope,
     atomic<T>(work: () => T): T { db.exec('BEGIN'); try { const value = work(); db.exec('COMMIT'); return value; }
       catch (error) { db.exec('ROLLBACK'); throw error; } },
     stagePublication() { if (failPublication) throw Error('synthetic-publication-failure'); },
@@ -49,7 +50,7 @@ async function fixture(forgeExit = false, takeover = false, holdResult = false) 
   const raw = (): Mission => JSON.parse(String(db.prepare('SELECT json FROM vela_missions WHERE id=?').get(created.id)!.json));
   const write = (m: Mission) => db.prepare('UPDATE vela_missions SET json=? WHERE id=?').run(JSON.stringify(m), m.id);
   return { db, pool, read, raw, write, serviceHostAtomic: host.atomic, entries: () => entries, service: () => service,
-    revoke: () => { access = false; }, fail: (value: boolean) => { failPublication = value; },
+    revoke: () => { access = false; }, denyWorkspace: (id?: string) => { deniedScope = id; }, fail: (value: boolean) => { failPublication = value; },
     async reopen() { await service.close(); service = new MissionService(host); },
     async close() { releaseResult(); for (const old of abandoned) await old.close(); await service.close(); await pool.close(); db.close(); } };
 }
@@ -237,5 +238,31 @@ test('existing Retry reuses the original receipt and canonical reporting publish
     assert.equal(lastMissionVerificationEvent(unsupported), undefined);
     unsupported.tasks[0].attempts = [];
     assert.equal(lastMissionVerificationEvent(unsupported), undefined);
+  } finally { await f.close(); }
+});
+
+test('an authorized linked workroom can request Retry while the receipt remains bound to its originating scope', async () => {
+  const f = await fixture();
+  try {
+    const before = f.raw(), attempt = before.tasks[0].attempts[0];
+    before.workroom = { kind: 'workroom', workspaceId: 'synthetic-linked-workroom', title: 'Linked source workroom', templateId: 'synthetic' };
+    f.write(before);
+    const linkedScope = { ...scope, workspaceId: before.workroom.workspaceId };
+    assert.throws(() => f.service().control(before.id, { ...scope, workspaceId: 'unlinked-workspace' }, before.revision,
+      { type: 'retry', taskId: 'source' }), /mission_not_found/);
+    assert.throws(() => f.service().control(before.id, { ...linkedScope, projectId: 'another-project' }, before.revision,
+      { type: 'retry', taskId: 'source' }), /mission_not_found/);
+    f.denyWorkspace(scope.workspaceId);
+    assert.throws(() => f.service().control(before.id, linkedScope, before.revision,
+      { type: 'retry', taskId: 'source' }), /mission_not_found/);
+    assert.deepEqual(f.raw(), before);
+    f.denyWorkspace();
+    const verified = f.service().control(before.id, linkedScope, before.revision, { type: 'retry', taskId: 'source' });
+    assert.equal(verified.tasks[0].state, 'verified');
+    assert.deepEqual(verified.scope, scope);
+    assert.equal(verified.tasks[0].attempts[0].id, attempt.id);
+    assert.equal(verified.tasks[0].attempts[0].backendInspection?.terminal.bindingDigest,
+      attempt.backendInspection?.terminal.bindingDigest);
+    assert.equal(f.entries(), 1);
   } finally { await f.close(); }
 });
