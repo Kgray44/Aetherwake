@@ -662,8 +662,19 @@ export class MissionService {
   }
 
   private conflict(task: MissionTaskPlan) {
-    return [...this.running.values()].some(other => task.claims.some(claim => other.task.claims.some(activeClaim =>
-      activeClaim.resource === claim.resource && (claim.mode === 'exclusive' || activeClaim.mode === 'exclusive'))));
+    if (!task.claims.length) return false;
+    const conflicts = (other: MissionTaskPlan) => task.claims.some(claim => other.claims.some(activeClaim =>
+      activeClaim.resource === claim.resource && (claim.mode === 'exclusive' || activeClaim.mode === 'exclusive')));
+    if ([...this.running.values()].some(other => conflicts(other.task))) return true;
+    // Restored from the earlier FI-4 increment: worker/lease release is not effect quiescence.
+    const unresolved = this.host.db.prepare(`
+      SELECT task.value AS json FROM vela_missions, json_each(vela_missions.json, '$.tasks') AS task
+        WHERE json_extract(task.value, '$.state') = 'uncertain'
+      UNION ALL
+      SELECT task.value AS json FROM vela_missions, json_each(vela_missions.json, '$.retiredTasks') AS task
+        WHERE json_extract(task.value, '$.state') = 'uncertain'
+    `).all();
+    return unresolved.some(row => conflicts(JSON.parse(row.json as string) as MissionTaskPlan));
   }
   private capacityFor(m: Mission, lane: string) {
     const running = [...this.running.values()];
@@ -959,6 +970,9 @@ export class MissionService {
       let verification: MissionTask['attempts'][number]['verification'];
       let telemetry: MissionTask['attempts'][number]['telemetry'];
       let reportedOutcome: 'blocked' | 'failed' | 'uncertain' | undefined;
+      // Only this host continuation knows whether the effectful executor was entered.
+      // After entry, an abort or lost authority cannot prove that its effects stopped.
+      let executorEntered = false;
       let detail: string | undefined;
       try {
         abort.signal.throwIfAborted();
@@ -983,7 +997,7 @@ export class MissionService {
         }
         const executingAt = performance.now();
         let result: Awaited<ReturnType<MissionExecutor['run']>>;
-        try { result = await executor.run(context); }
+        try { executorEntered = true; result = await executor.run(context); }
         finally {
           const executedAt = performance.now();
           timing.executionMs = executedAt - executingAt;
@@ -1013,7 +1027,7 @@ export class MissionService {
       } catch { detail ??= 'executor_failed_or_evidence_invalid'; }
       const cancellation = this.running.get(id)?.cancellation;
       const authorized = this.host.authorized(m.scope);
-      const outcome = cancellation || !authorized ? (!executor.replaySafe ? 'uncertain' :
+      const outcome = cancellation || !authorized ? (executorEntered && !executor.replaySafe ? 'uncertain' :
         !authorized ? 'blocked' : cancellation === 'user' ? 'cancelled' : 'failed') :
         reportedOutcome ?? (verification?.passed ? 'verified' : executor.replaySafe || evidence ? 'failed' : 'uncertain');
       this.update(m.id, current => {
