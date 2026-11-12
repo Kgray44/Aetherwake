@@ -30,6 +30,43 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('Stop follows the observed turn through acknowledgment, settlement and a subsequent turn',async()=>{
+  for(const settleBeforeAck of [true,false]){
+    const f=fixture('chatgpt-plan-responses');
+    let chat, observe:(value:ConversationExecutionObservation)=>void;
+    let acknowledge!:()=>void, requests=0;
+    const pending=new Promise<void>(resolve=>{acknowledge=resolve;});
+    const turn={id:'execution:first',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:'command:first',state:'running' as const,startedAt:'2026-11-02T00:00:02Z',endedAt:null,taskVerified:false};
+    try{
+      chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+        observe(_id,listener){observe=listener;return()=>{};},
+        cancel(id){assert.equal(id,turn.id);requests++;return pending;},
+      }});
+      await chat.ready;
+      const stop=named(f.view.root,'Stop'),status=f.view.root.querySelector('.cp-chat-status');
+      observe!({execution:turn});
+      stop.fire('click');
+      assert.equal(stop.disabled,true);
+      const settle=()=>observe!({execution:{...turn,state:'interrupted',endedAt:'2026-11-02T00:00:03Z'}});
+      if(settleBeforeAck)settle();
+      acknowledge();
+      await new Promise<void>(resolve=>setImmediate(resolve));
+      if(!settleBeforeAck){
+        observe!({execution:turn});
+        assert.equal(stop.disabled,true,'Acknowledgment and later activity must not re-enable Stop');
+        assert.match(status.textContent,/Stop requested/);
+        stop.fire('click');
+        settle();
+      }
+      assert.equal(requests,1);
+      assert.match(status.textContent,/confirmed the turn stopped/);
+      observe!({execution:{...turn,id:'execution:second',startedAt:'2026-11-02T00:00:04Z'}});
+      assert.equal(stop.disabled,false);
+      assert.match(status.textContent,/is running/);
+    }finally{acknowledge();await chat?.dispose();f.restore();}
+  }
+});
+
 function viewPort(f:ReturnType<typeof fixture>){
  const time='2026-11-03T00:00:00Z',resourceId=f.draft.resourceId,trace:{name:string;input:any}[]=[];let selected:ConversationViewSelected={version:2,resourceId,updatedAt:time},view:ConversationView={resourceId,version:4,position:{conversationRevision:2,anchor:{messageId:'message:user',offsetY:-20}},selection:{draftVersion:f.draft.version,start:2,end:6,direction:'backward'},positionStatus:'current',selectionStatus:'current',updatedAt:time};
  let before:((name:string,input:any)=>void|Promise<void>)|undefined;

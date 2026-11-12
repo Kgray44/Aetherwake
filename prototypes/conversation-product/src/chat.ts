@@ -138,7 +138,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   feedbackToggle.type='button';feedbackToggle.dataset.aerynthMotionControl='true';feedbackToggle.setAttribute('aria-expanded','false');feedbackToggle.setAttribute('aria-label','Conversation status, context and draft details');feedbackBody.id='cp-chat-inspection-'+ ++chatSerial;feedbackToggle.setAttribute('aria-controls',feedbackBody.id);feedbackBody.hidden=true;feedbackBody.inert=true;feedbackContents.append(statusDetail,capabilityNote,contextNote,draftStatus,recovery);feedbackBody.append(feedbackContents);feedbackLine.append(status,feedbackToggle);feedback.append(feedbackLine);
   root.append(top,messages,paging,feedback,composer);messages.append(stream,feedbackBody);container.append(root);
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
-  let sendTask: Promise<void>|null = null, cancelPending = false, streamLimited = false, accessRevoked = false;
+  let sendTask: Promise<void>|null = null, stopRequestedFor: string|null = null, streamLimited = false, accessRevoked = false;
   let pendingFollow:{messageId?:string}|null=null;
   let followingLatest=false;
   let pendingAnchor:NonNullable<ConversationViewPosition['anchor']>|null=null,viewIntent=0,viewWanted=false,userScroll=false,preferredViewAnchor:string|undefined,persistenceIntent:number|undefined;
@@ -284,6 +284,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   if(layoutHost)resizeObserver?.observe(layoutHost);
   function revokeView() {
     followingLatest=false;
+    stopRequestedFor=null;
     const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=pendingAnchor=presentationAnchor=null;viewWanted=userScroll=false;inspectionFollow=liveFollow=false;inspectionReturn=null;root.dataset.resourceAvailable='false';current=null;thinking=undefined;cache.clear();days.clear();messages.replaceChildren(stream,feedbackBody);
     streamText.textContent='';stream.hidden=true;paging.hidden=true;capabilityNote.textContent=contextNote.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;
     renderDraft();if(notify)options.onUnavailable?.();report('This conversation is no longer available. Its draft is retained.');
@@ -342,8 +343,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     send.disabled = sending || !!active() || codexOutcomeUnknown || uncertain || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
     web.hidden = !plan?.execute || !webSearchModel();
     web.disabled = send.disabled || web.hidden || !plan?.available;
-    send.dataset.state=uncertain?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=cancelPending?'requested':active()?'available':'inactive';
-    stop.hidden = !active() || !options.execution; stop.disabled = cancelPending || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
+    send.dataset.state=uncertain?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=stopRequestedFor?'requested':active()?'available':'inactive';
+    stop.hidden = !active() || !options.execution; stop.disabled = !!stopRequestedFor || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
   }
   const unsubscribeDraft = session.subscribe(renderDraft);
   async function recover(work: ()=>Promise<void>) { if (recovering) return; recovering = true; renderDraft(); try { await work(); } catch (error) { report(errorText(error)); } finally { recovering = false; renderDraft(); } }
@@ -580,7 +581,20 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       else { uncertain=true;report('Send could not be confirmed: '+code); }
     }).finally(()=>{sending=false;sendTask=null;renderDraft();});
   });
-  stop.addEventListener('click',()=>{if(!execution||!options.execution||!active()||cancelPending||connection==='unavailable')return;cancelPending=true;renderDraft();const id=execution.id;void options.execution.cancel(id).then(()=>report('Stop requested. Waiting for the provider to confirm.'),error=>report('Stop could not be requested: '+errorText(error))).finally(()=>{cancelPending=false;renderDraft();});});
+  const stopStatus = 'Stop requested. Waiting for the provider to confirm.';
+  stop.addEventListener('click',()=>{
+    if(disposed||accessRevoked||!execution||!options.execution||!active()||stop.disabled)return;
+    const id=execution.id;
+    stopRequestedFor=id;
+    report(stopStatus);
+    renderDraft();
+    void options.execution.cancel(id).catch(error=>{
+      if(disposed||stopRequestedFor!==id)return;
+      stopRequestedFor=null;
+      if(connection!=='unavailable')report('Stop could not be requested: '+errorText(error));
+      renderDraft();
+    });
+  });
   if(options.execution)unsubscribeExecution=options.execution.observe(resourceId,observation=>{
     const previousPreview=streamText.textContent,wasFollowing=messages.scrollHeight-messages.scrollTop-messages.clientHeight<80;
     if(disposed)return;
@@ -597,6 +611,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(execution&&next.id!==execution.id&&next.startedAt<execution.startedAt)return;
     if(execution?.id===next.id&&!['dispatching','running'].includes(execution.state)&&['dispatching','running'].includes(next.state))return;
     execution=next;
+    if(stopRequestedFor!==next.id||!active())stopRequestedFor=null;
     if(streamExecution!==next.id){streamExecution=next.id;streamText.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;liveFollow=false;}
     const preview=observation.preview;
     if(preview===null){streamText.textContent='';lastCursor=-1;seenEvents.clear();streamLimited=false;liveFollow=false;}
@@ -612,7 +627,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(!active())liveFollow=false;
     if(streamText.textContent!==previousPreview&&wasFollowing&&!feedbackOpen&&!stream.hidden){presentationAnchor=null;liveFollow=true;options.motion?.wake();}
     const label=current?.providers.find(p=>p.id===next.providerId)?.label??next.providerId;
-    report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
+    report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':stopRequestedFor?stopStatus:next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
     if(!active())void refresh({latest:true}).catch(error=>report(errorText(error)));
   });
