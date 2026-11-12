@@ -36,18 +36,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Review new dependency risks
-        if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          fail-on-severity: high
-      - name: Review queued dependency risks
-        if: github.event_name == 'merge_group'
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
-        with:
-          base-ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          head-ref: ${{ github.sha }}
-          fail-on-severity: high
+          node-version: '24.18.0'
+      - name: Audit all tracked npm lockfiles
+        run: node scripts/aerynth-dependency-audit.mjs "$RUNNER_TEMP/aerynth-dependency-audit.json"
       - name: Check workflows and scan introduced commits for secrets
         if: '!cancelled()'
         shell: bash
@@ -76,6 +69,13 @@ jobs:
           fi
           "$RUNNER_TEMP/gitleaks" "${scan[@]}" --config "$RUNNER_TEMP/aerynth-gitleaks.toml" \
             --gitleaks-ignore-path "$RUNNER_TEMP/aerynth-gitleaks.ignore" --ignore-gitleaks-allow --redact=100 --no-banner
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: aerynth-dependency-audit-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aerynth-dependency-audit.json
+          if-no-files-found: warn
+          retention-days: 14
   required:
     name: Aerynth required checks
     needs: [linux, windows, security]

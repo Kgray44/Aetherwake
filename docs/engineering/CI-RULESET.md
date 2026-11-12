@@ -11,4 +11,4 @@ The integration gate depends on Linux, Windows and security. It rejects missing,
 
 Use required up-to-date branches for direct PR merge, or require the merge queue if the repository elects to use one. Both required workflows listen for `merge_group` with `checks_requested`. Verify the rule on a real PR and, if enabled, a real queue entry. Confirm a docs-only PR still reports both checks, a failing dependency prevents merge, and a new passing revision can proceed. The post-merge `main` push also runs both workflows.
 
-The security job adds GitHub dependency review for PR and merge-group revisions, a redacted Gitleaks scan and actionlint. Review covers new high and critical advisories. GitHub's dependency graph must be enabled and able to compare the relevant refs. Secret scanning and push protection remain repository-level settings.
+The security job audits all tracked npm lockfiles for high and critical advisories and runs redacted Gitleaks and actionlint. It uses npm audit directly because GitHub's dependency graph is disabled for this repository. Secret scanning and push protection remain repository-level settings.

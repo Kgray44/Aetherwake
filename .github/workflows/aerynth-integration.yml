@@ -34,7 +34,7 @@ jobs:
             prototypes/visual-experience/cinematic-v3/package-lock.json
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: prototypes/integrated-backend
-      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm ci --ignore-scripts --no-audit --no-fund --cache .runtime/npm-cache
         working-directory: prototypes/openai-provider
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: prototypes/block-library
