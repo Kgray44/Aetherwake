@@ -279,6 +279,7 @@ export type MissionRequest =
   | { name: 'workroom-resource'; input: { resourceId: string } }
   | { name: 'list'; input: Record<string, never> }
   | { name: 'read'; input: { id: string } }
+  | { name: 'evaluation-reference'; input: import('./aep-evaluation-reference.mts').AepEvaluationReference }
   | { name: 'execution-profile'; input: { id: string } }
   | { name: 'experiment-hypothesis'; input: { id: string; hypothesisId: string; expectedRevision: number } }
   | { name: 'compare-native-samples'; input: {
@@ -400,6 +401,7 @@ export type MissionWorkroomResource = {
 );
 
 export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomResource |
+  ReturnType<typeof import('./aep-evaluation-reference.mts').resolveAepEvaluationReference> |
   import('./execution-profiler.mts').MissionExecutionProfile |
   ReturnType<typeof import('./execution-profiler.mts').resolveMissionHypothesis> |
   ReturnType<typeof import('./execution-profiler.mts').compareNativeSamples> |

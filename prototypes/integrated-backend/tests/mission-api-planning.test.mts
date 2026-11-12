@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createCipheriv,createDecipheriv,createHash,randomBytes,randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { existsSync,mkdirSync,mkdtempSync,realpathSync,renameSync,rmSync,symlinkSync,writeFileSync } from 'node:fs';
+import { existsSync,readFileSync,mkdirSync,mkdtempSync,realpathSync,renameSync,rmSync,symlinkSync,writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { crc32, deflateSync } from 'node:zlib';
@@ -22,6 +22,7 @@ import type { NativeDocumentTextServices } from '../src/document-text-host.mts';
 import { docxFixture } from '../../block-library/tests/media-fixtures.mts';
 import { missionImageModel } from '../../openai-provider/images.mts';
 import { writeMissionArtifacts } from '../src/mission-artifacts.mts';
+import { preflightArtifactEvidence, retainArtifactEvidence, verifyArtifactEvidence } from './helpers/artifact-evidence.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
 const marker='SYNTHETIC_ONLY_MISSION_API_KEY';
 const graph={tasks:[{capability:'cpu',after:[]},{capability:'ram',after:[]},{capability:'backend',after:['cpu','ram']}],unsupported:['Server tick timings and logs are unavailable.']};
@@ -76,7 +77,8 @@ function illustrationFixture() {
     chunk('IDAT', deflateSync(Buffer.alloc(1024 * (1024 * 3 + 1)))), chunk('IEND', Buffer.alloc(0))]);
 }
 
-async function verifyIllustrationMission(liveCredential?: string, alternateRootCase = false) {
+async function verifyIllustrationMission(liveCredential?: string, alternateRootCase = false, evidenceDestination?: string) {
+  if (evidenceDestination) preflightArtifactEvidence(evidenceDestination);
   const f = fixture(false, true, undefined, liveCredential, true, alternateRootCase);
   try {
     if (alternateRootCase) assert.notEqual(realpathSync(f.directory.toUpperCase()), realpathSync.native(f.directory));
@@ -126,7 +128,14 @@ async function verifyIllustrationMission(liveCredential?: string, alternateRootC
     const report = (await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState).conversation?.messages
       .find(message => message.missionReport?.missionId === id);
     assert.match(report?.content ?? '', /Generated and verified illustration\.png/);
+    assert.ok(report);
+    const retained = { png: readFileSync(join(f.directory, 'mission-artifacts', id, 'illustration.png')),
+      notes: readFileSync(join(f.directory, 'mission-artifacts', id, 'illustration-notes.txt')), report: report.content };
     await f.reopen();
+    const restoredReport = (await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState).conversation?.messages
+      .find(message => message.missionReport?.missionId === id);
+    assert.equal(restoredReport?.id, report.id);
+    assert.equal(restoredReport?.content, report.content);
     assert.equal((await read()).outcome, 'verified');
     assert.equal((await f.core.command('missionStartReviewed', approved) as MissionProjection).id, id);
     assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday - usageBefore.usedToday, 1);
@@ -137,11 +146,36 @@ async function verifyIllustrationMission(liveCredential?: string, alternateRootC
       .find(message => message.missionReport?.missionId === id);
     assert.equal(stale?.id, report?.id);
     assert.equal(stale?.missionReport?.stale, true);
+    if (evidenceDestination) retainArtifactEvidence(evidenceDestination, { ...retained,
+      provider: liveCredential ? 'real-openai-api' : 'simulated', objective, missionId: id, reportId: report.id });
   } finally { await f.close(); }
 }
 
 test('a native-reviewed illustration mission publishes two readable workspace artifacts and one report', async () => {
-  await verifyIllustrationMission();
+  await verifyIllustrationMission(undefined, false, process.env.AERYNTH_SYNTHETIC_ARTIFACT_EVIDENCE_DIR);
+});
+
+test('artifact evidence retains only allowlisted outputs and detects later tampering', async t => {
+  const parent = realpathSync.native(mkdtempSync(join(tmpdir(), 'aerynth-evidence-test-')));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const destination = join(parent, 'bundle');
+  await verifyIllustrationMission(undefined, false, destination);
+  const manifest = verifyArtifactEvidence(destination);
+  assert.equal(manifest.evidence.provider, 'simulated');
+  assert.equal(manifest.evidence.independentQuality, 'pending');
+  assert.equal(manifest.evidence.packagedUI, 'not-tested');
+  assert.throws(() => preflightArtifactEvidence(destination), /must be new/);
+  assert.throws(() => preflightArtifactEvidence('relative-output'), /absolute/);
+  assert.throws(() => preflightArtifactEvidence(resolve('untracked-public-evidence')), /outside/);
+  const report = readFileSync(join(destination, 'report.txt'), 'utf8');
+  assert.match(report, /Generated and verified illustration\.png/);
+  assert.ok(!JSON.stringify(manifest).includes(marker));
+  writeFileSync(join(destination, 'unexpected-private-profile.txt'), 'synthetic sentinel');
+  assert.throws(() => verifyArtifactEvidence(destination));
+  rmSync(join(destination, 'unexpected-private-profile.txt'));
+  verifyArtifactEvidence(destination);
+  writeFileSync(join(destination, 'illustration-notes.txt'), 'tampered');
+  assert.throws(() => verifyArtifactEvidence(destination));
 });
 
 test('an illustration root with alternate Windows spelling retains native readback and restart proof', {
@@ -214,7 +248,7 @@ test('one qualified live illustration mission delivers a verified file, image an
   const credential = process.env.OPENAI_API_KEY;
   assert.ok(credential, 'Existing ephemeral API credential is required');
   delete process.env.OPENAI_API_KEY;
-  await verifyIllustrationMission(credential);
+  await verifyIllustrationMission(credential, false, process.env.AERYNTH_ARTIFACT_EVIDENCE_DIR);
 });
 
 async function verifyReviewedPlanningRetry(live?: { credential: string; model: string }) {
