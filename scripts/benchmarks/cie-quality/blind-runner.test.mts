@@ -30,3 +30,21 @@ test('a host failure is not retried or replaced with a guessed prediction', asyn
   assert.equal(result.results.length, 0);
   assert.equal(calls, 1);
 });
+
+test('bounded batches resume the sealed prefix without replaying an evaluated case', async () => {
+  const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const signal = new AbortController().signal;
+  const seen: string[] = [];
+  const host = async ({ id }: { id: string }) => { seen.push(id); return { status: 'synthetic' }; };
+  const first = await runBlindCie(bytes, identity, host, signal, { maxCases: 2 });
+  assert.equal(first.complete, false);
+  assert.equal(first.stopped, null);
+  const next = await runBlindCie(bytes, identity, host, signal, { maxCases: 1, resume: first });
+  assert.deepEqual(seen, ['blind-001', 'blind-002', 'blind-003']);
+  assert.deepEqual(next.results.slice(0, 2), first.results);
+  await assert.rejects(runBlindCie(bytes, identity, host, signal, { resume: { ...next, results: [] } }), /checkpoint/);
+  await assert.rejects(runBlindCie(bytes, { ...identity, tree: 'c'.repeat(40) }, host, signal, { resume: first }), /checkpoint/);
+  const failed = await runBlindCie(bytes, identity, async () => { throw new Error('unknown outcome'); }, signal, { maxCases: 1 });
+  await assert.rejects(runBlindCie(bytes, identity, host, signal, { resume: failed }), /checkpoint/);
+  assert.equal(seen.length, 3);
+});
