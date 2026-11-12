@@ -22,8 +22,7 @@ async function verify() {
   const { WorkspaceKernel } = await import('../../../workspace-kernel/kernel.mts');
   const { createNativeHostClient } = await import('../../../integrated-backend/src/native-host.mts');
   const { VelaApiConnection } = await import('../../../integrated-backend/src/vela-api-connection.mts');
-  const { PersonalContextService } = await import('../../../personal-context/src/service.mts');
-  const { openPersonalContextCrypto } = await import('../../../personal-context/src/protected-key.mts');
+  const { NativePersonalMemory } = await import('../../../integrated-backend/src/personal-memory.mts');
   const sourcePath = join(scratch, 'source.sqlite');
   const copyPath = join(scratch, 'restored.sqlite');
   const proofPath = join(scratch, 'synthetic-proof.json');
@@ -41,22 +40,18 @@ async function verify() {
         db, nativeHost: client.services, transaction: work => kernel.withTransaction(work),
       });
     });
-    let crypto;
+    const memory = new NativePersonalMemory({
+      kernel, secrets: client.services.secrets,
+      host: {
+        identity: () => ({ userId: 'synthetic-backup-owner', policyVersion: '1' }),
+        resolveScope: scope => ({ scope, version: '1' }),
+        authorize: () => ({ decision: 'allow', policyVersion: '1', authorizationRef: 'synthetic-backup-review' }),
+      },
+    });
     return {
       kernel, connection,
-      async openMemory() {
-        const transaction = kernel.withTransaction.bind(kernel);
-        crypto = await openPersonalContextCrypto({ transaction, protector: client.services.secrets });
-        return new PersonalContextService({
-          db: transaction(db => db), transaction, crypto,
-          host: {
-            identity: () => ({ userId: 'synthetic-backup-owner', policyVersion: '1' }),
-            resolveScope: scope => ({ scope, version: '1' }),
-            authorize: () => ({ decision: 'allow', policyVersion: '1', authorizationRef: 'synthetic-backup-review' }),
-          },
-        });
-      },
-      close() { crypto?.close(); connection.close(); client.close(); broker.close(); kernel.close(); },
+      openMemory: () => memory.open(),
+      close() { memory.close(); connection.close(); client.close(); broker.close(); kernel.close(); },
     };
   }
   try {
