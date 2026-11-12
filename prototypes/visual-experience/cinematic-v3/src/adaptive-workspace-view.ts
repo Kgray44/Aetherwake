@@ -1,8 +1,9 @@
+import type { MissionExecutionProfile } from '../../../integrated-backend/src/execution-profiler.mts';
 import { intelligenceZones, projectIntelligence, type IntelligenceBinding, type IntelligenceRegion } from './adaptive-workspace.ts';
 import type { MissionProjection } from '../../../integrated-backend/src/mission-contracts.mts';
 
 /** Accessible read-only inspection inside the existing spatial workroom. No camera or task ownership. */
-export function mountIntelligenceInspection(root: HTMLElement, viewId: string) {
+export function mountIntelligenceInspection(root: HTMLElement, viewId: string, readProfile?: (id: string) => Promise<MissionExecutionProfile | null>) {
   const doc = root.ownerDocument, details = doc.createElement('details'), summary = doc.createElement('summary');
   details.className = 'aw-mission-workroom-controls aw-intelligence-inspection';
   details.dataset.noCardDrag = 'true';
@@ -14,6 +15,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string) {
   const heading = doc.createElement('h4'), limitation = doc.createElement('p'), readings = doc.createElement('dl');
   panel.append(heading, limitation, readings); details.append(summary, status, tabs, panel); root.append(details);
   let regions: IntelligenceRegion[] = [], selected = 0, binding: IntelligenceBinding | null = null, disposed = false;
+  let profileEpoch = 0, requestProfile: (() => Promise<void>) | undefined;
   const buttons = intelligenceZones.map(([id, label], index) => {
     const button = doc.createElement('button'); button.type = 'button'; button.textContent = label;
     button.dataset.intelligenceZone = id; button.id = `${viewId}:intelligence:${id}`;
@@ -41,7 +43,10 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string) {
     for (const reading of region?.readings ?? []) {
       const term = doc.createElement('dt'), value = doc.createElement('dd');
       term.textContent = reading.field;
-      value.textContent = `${reading.value === null ? 'Unavailable' : reading.value}${reading.unit ? ` ${reading.unit}` : ''} · ${reading.classification} · Source ${reading.sourceId} · ${reading.observedAt ?? 'Timestamp unavailable'}`;
+      const provenance = doc.createElement('small');
+      value.textContent = `${reading.value === null ? 'Unavailable' : reading.value}${reading.unit ? ` ${reading.unit}` : ''}`;
+      provenance.textContent = `${reading.classification} · Source ${reading.sourceId} · ${reading.observedAt ?? 'Timestamp unavailable'}`;
+      value.append(provenance);
       readings.append(term, value);
     }
   }
@@ -50,7 +55,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string) {
     event.preventDefault(); event.stopPropagation(); details.open = false; summary.focus({ preventScroll: true });
   };
   function invalidate(message: string, close = false) {
-    regions = []; status.textContent = message;
+    profileEpoch++; requestProfile = undefined; regions = []; status.textContent = message;
     if (close) {
       const ownsFocus = details.contains(doc.activeElement);
       details.open = false; binding = null; selected = 0;
@@ -58,6 +63,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string) {
     }
     render();
   }
+  details.ontoggle = () => { if (details.open) void requestProfile?.(); };
   invalidate('Mission evidence unavailable.');
   return {
     update(mission: MissionProjection, expected: IntelligenceBinding) {
@@ -69,6 +75,25 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string) {
       binding = { ...expected }; regions = projected;
       status.textContent = `Recorded mission ${mission.id} · Workspace ${expected.workspaceId} · Project ${expected.projectId ?? 'none'} · Plan v${mission.planRevision} · Journal v${mission.revision}. Snapshot, not live telemetry.`;
       render();
+      if (!readProfile) return;
+      const epoch = ++profileEpoch;
+      let readingProfile = false;
+      requestProfile = async () => {
+        if (readingProfile) return;
+        readingProfile = true;
+        try {
+          const profile = await readProfile(mission.id);
+          if (disposed || epoch !== profileEpoch || !details.open) return;
+          requestProfile = undefined;
+          regions = projectIntelligence(mission, expected, profile) ?? [];
+          render();
+        } catch {
+          if (epoch === profileEpoch && details.open) status.textContent = 'Full execution profile unavailable. Showing mission summary.';
+        } finally {
+          readingProfile = false;
+        }
+      };
+      if (details.open) void requestProfile();
     },
     invalidate,
     dispose() { disposed = true; regions = []; binding = null; details.remove(); },

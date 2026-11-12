@@ -286,3 +286,27 @@ test('mounted inspection erases revoked and interrupted scope data before pendin
   view.setScope(null); assert.doesNotMatch(details.textContent, /synthetic-model/);
   release(mission); await pending; assert.doesNotMatch(details.textContent, /synthetic-model/); assert.equal(port.poses.size, 0);
 });
+
+test('inspection reads AEP on demand and discards its reply after access changes', async t => {
+  const dom = blockDocument(), restore = dom.install(), port = flowPort();
+  const mission = fullMission();
+  let calls = 0, resolve;
+  const reply = new Promise(done => { resolve = done; });
+  const view = mountMissionWorkroomView(dom.root, 'stream', 'workroom', async () => binding({ kind: 'stream', events: [] }),
+    undefined, () => {}, undefined, { motion: port.motion, viewId: 'synthetic:aep',
+      readMission: async () => mission, readProfile: async id => { calls++; assert.equal(id, mission.id); return reply; } });
+  t.after(() => { view.dispose(); restore(); });
+  await view.refresh();
+  assert.equal(calls, 0);
+  const inspection = dom.root.querySelector('.aw-intelligence-inspection');
+  inspection.open = true;
+  inspection.ontoggle();
+  inspection.ontoggle();
+  assert.equal(calls, 1);
+  view.setScope(null);
+  resolve({ contract: 'aerynth.mission-execution-profile@1', missionId: mission.id, revision: mission.revision,
+    work: { criticalPath: { attemptIds: ['synthetic:private-attempt'] } } });
+  await view.refresh();
+  assert.equal(inspection.open, false);
+  assert.doesNotMatch(inspection.textContent, /synthetic:private-attempt|Full execution profile unavailable/);
+});

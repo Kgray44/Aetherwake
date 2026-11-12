@@ -906,7 +906,40 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         stagingToReceiptMs: presentation.userDelivery.stagingToReceiptMs,
         intakeToReceiptMs: presentation.intakeToUserDeliveryMs,
         reportEventId: reportPublication.eventId, reportLatency, firstMeaningfulOutput: presentation.firstMeaningfulOutput, leases };
-      await capture("01-native-mission-report");
+      if (argv.includes("--missions-aiw-inspection")) {
+        await click(reportLink);
+        await click(RECORD + ' [data-mission-focus="preview-workroom"]');
+        await click(RECORD + ' [data-mission-focus="apply-workroom"]');
+        const selector = '[data-mission-workroom-card="stream"] .aw-intelligence-inspection';
+        const workroom = await wait("Canonical workroom and stream placement", async () => {
+          const projection = await read(missionId);
+          const state = await desktop();
+          if (projection.workroom?.workspaceId !== state.activeWorkspaceId) return false;
+          const placement = state.blocks.find(item => item.workspace_id === state.activeWorkspaceId &&
+            item.resource_id === projection.workroom.missionCards.stream);
+          return placement && { workspaceId: state.activeWorkspaceId, x: placement.x, y: placement.y };
+        });
+        await js(`window.__aerynth.execute(${quote({ type: "setViewport", workspaceId: workroom.workspaceId,
+          viewport: { x: workroom.x - 60, y: workroom.y - 180, zoom: 1 } })})`);
+        await click(selector + ' > summary');
+        await click(selector + ' [data-intelligence-zone="profiler"]');
+        const profile = await rpc("missions", { name: "execution-profile", input: { id: missionId } });
+        const measuredAttempts = await wait("AIW renders the same scoped execution profile", () => js(`(() => {
+          const panel = document.querySelector(${quote(selector + ' [role="tabpanel"]')});
+          const metric = [...panel?.querySelectorAll('dt') ?? []].find(row => row.textContent === 'Measured attempts');
+          return metric?.nextElementSibling.firstChild.textContent;
+        })()`));
+        assert.equal(measuredAttempts, [profile.work.intervalCoverage.measured, profile.work.intervalCoverage.attempts].join(" / "));
+        receipt.workroomInspection = { missionId: profile.missionId, revision: profile.revision, measuredAttempts };
+        await capture("01-adaptive-intelligence-profiler");
+        await click(selector + ' [data-intelligence-zone="resource"]');
+        const resource = await js(`document.querySelector(${quote(selector + ' [role="tabpanel"]')}).textContent`);
+        assert(profile.attempts.some(attempt => attempt.resourceLease && resource.includes(attempt.resourceLease.leaseId)));
+        await capture("02-adaptive-intelligence-resource");
+        await click(selector + ' > summary');
+      } else {
+        await capture("01-native-mission-report");
+      }
       receipt.providerActivity = { before: providerBefore, after: await rpc("providerActivity", {}) };
       assert.equal(receipt.providerActivity.after.providerRequests, 0);
       assert.equal(receipt.providerActivity.after.codexConnections, 0);

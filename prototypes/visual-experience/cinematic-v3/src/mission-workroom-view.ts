@@ -1,3 +1,4 @@
+import type { MissionExecutionProfile } from '../../../integrated-backend/src/execution-profiler.mts';
 import type { TimelineExperience } from "../../../block-library/timeline-view.ts";
 import type { MissionProjection, MissionTaskState, MissionWorkroomDashboard, MissionWorkroomResource } from "../../../integrated-backend/src/mission-contracts.mts";
 import { missionAdmissionDetails, missionAdmissionRefreshMs, missionEventLabel, missionStateLabel } from "./vela-missions.ts";
@@ -40,7 +41,7 @@ export function mountMissionWorkroomView(
   mountManual: ((container: HTMLElement) => TimelineExperience) | undefined,
   openMission: (id: string) => void,
   openResource?: (id: string) => void,
-  options?: { motion: ExperienceMotionPort; viewId: string; readMission(id: string): Promise<MissionProjection | null> },
+  options?: { motion: ExperienceMotionPort; viewId: string; readMission(id: string): Promise<MissionProjection | null>; readProfile?(id: string): Promise<MissionExecutionProfile | null> },
 ): MissionWorkroomView {
   const doc = root.ownerDocument;
   const section = doc.createElement("section");
@@ -96,7 +97,7 @@ export function mountMissionWorkroomView(
   let admissionRefresh: ReturnType<typeof setTimeout> | undefined;
   let primaryTimeline = false, flowMode = 'flow', flowEpoch = 0;
   let flow: ReturnType<typeof mountMissionFlow> | undefined, fullMission: MissionProjection | null = null;
-  const intelligence = options ? mountIntelligenceInspection(section, options.viewId) : undefined;
+  const intelligence = options ? mountIntelligenceInspection(section, options.viewId, options.readProfile) : undefined;
   const modeButtons = new Map<string, HTMLButtonElement>();
   const eligibleFlow = (value: MissionWorkroomResource | null) => value?.dashboard?.kind === 'graph' || value?.dashboard?.kind === 'stream';
   const syncFlowPresentation = () => {
