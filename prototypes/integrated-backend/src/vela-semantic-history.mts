@@ -182,6 +182,18 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
     investigateHistory(request, disclose, cancel) {
       const isApproved = (source: VelaSemanticHistorySource) => approved.has(source as ReviewedEvidenceSource);
       let rank: ReturnType<typeof createCanonicalRetrievalRanker> | undefined;
+      const rankedQueries = new Map<string, string[]>();
+      const matchesFor = (query: string) => {
+        validate();
+        cancel?.throwIfAborted();
+        const parsed = canonicalRetrievalQuery(query);
+        if (!parsed) return [];
+        const existing = rankedQueries.get(parsed.digest);
+        if (existing) return existing;
+        const matches = (rank ??= createCanonicalRetrievalRanker(searchable))(parsed).ids;
+        rankedQueries.set(parsed.digest, matches);
+        return matches;
+      };
       const reviewMetadata = {
         ...(observations ? { missionPlanning: true as const } : {}),
         ...(observations?.reviewedMissionCapabilities ? { reviewedMissionCapabilities: observations.reviewedMissionCapabilities } : {}),
@@ -194,10 +206,14 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
         adaptiveDiscovery: !!discovery,
         selected: () => ({ sources, scan: sources.some(source => source.partial) ? 'partial' : 'bounded' }),
         search: query => {
-          const parsed = canonicalRetrievalQuery(query);
-          const matches = parsed ? (rank ??= createCanonicalRetrievalRanker(searchable))(parsed).ids : [];
-          return { sources: matches.slice(0, 3).map(id => candidates.get(id)!), scan: matches.length > 3 ? 'partial' : scan };
+          const matches = matchesFor(query);
+          const moreMatches = matches.length > 3;
+          return { sources: matches.slice(0, 3).map(id => candidates.get(id)!), scan: moreMatches ? 'partial' : scan, moreMatches };
         },
+        ...(discovery ? { widen: (query: string) => {
+          const matches = matchesFor(query);
+          return { sources: matches.slice(3, 6).map(id => candidates.get(id)!), scan: matches.length > 6 ? 'partial' as const : scan };
+        } } : {}),
         ...(discovery ? { recent: () => ({ sources: discovery.sources.slice(0, 2), scan }) } : {}),
         isCurrent: source => isApproved(source) && authorize(),
         disclose: (call, sources, abort) => {

@@ -63,3 +63,35 @@ for (const cached of [[], ['interpret'], ['assess'], ['interpret', 'assess']] as
     assert.deepEqual(probes, ['interpret', 'assess'].filter(stage => !(cached as readonly string[]).includes(stage)));
   });
 }
+
+test('reviewed project assessment finds fourth-ranked evidence without inventing another query', async () => {
+  const receipt = { model: 'synthetic-model' };
+  const rounds: number[] = [];
+  const request = 'Who signs the harbor inspection?';
+  const decisive = 'The duty engineer signs.';
+  const sources = ['a', 'b', 'c', 'd'].map(id => ({
+    sourceId: id, revision: '1', proofDigest: id, sourceKind: 'note' as const,
+    title: 'Harbor inspection', text: id === 'd' ? decisive : 'Discussed schedule only.',
+  }));
+  const api = {
+    qualifiedStructuredRoute: () => receipt,
+    resolveQualifiedStructuredRoute: async () => receipt,
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal(input: any) {
+      input.validate();
+      if (input.payload.stage === 'interpret') return {
+        version: 2, objective: request, clarification: '',
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+        needs: [{ key: 'signer', question: request, query: 'harbor inspection' }],
+      };
+      rounds.push(input.payload.round);
+      const match = input.payload.excerpts.find((excerpt: { text: string }) => excerpt.text === decisive);
+      return { version: 3, clarification: '', assessment: [{ key: 'signer', status: match ? 'supported' : 'missing',
+        passages: match ? [{ source: match.handle, quote: decisive }] : [], query: '' }] };
+    },
+  } as unknown as VelaApiRuntime;
+  const result = await investigateReviewedVelaEvidence(api, request, [], 1, 'synthetic-model', () => {},
+    new AbortController().signal, undefined, { sources, partial: false });
+  assert.deepEqual(rounds, [1, 2]);
+  assert.deepEqual(result.coverage[0].passages, [{ sourceId: 'd', title: 'Harbor inspection', quote: decisive }]);
+});

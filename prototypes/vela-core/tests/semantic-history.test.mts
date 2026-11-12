@@ -54,6 +54,44 @@ test('widens bounded candidate admission for six distinct needs and reserves gap
   assert.deepEqual(result.coverage[0].sources, [gap]);
 });
 
+test('revisits a truncated discovery query when an incomplete need has no better query', async () => {
+  const distractor = { ...candidate, sourceId: 'distractor', text: 'The duplicate operation alarm was reset.' };
+  let widened = 0;
+  const result = await investigateSemanticHistory(request, {
+    search: () => ({ sources: [distractor], scan: 'partial', moreMatches: true }),
+    widen: query => {
+      assert.equal(query, evidence.query);
+      widened++;
+      return { sources: [candidate], scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      return call.round === 1
+        ? { version: 1, assessment: [{ key: 's1', status: 'missing', sources: [], query: '' }] }
+        : { version: 1, assessment: [{ key: 's1', status: 'supported', sources: ['e2'], query: '' }] };
+    },
+  });
+  assert.equal(widened, 1);
+  assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
+test('a novel model refinement takes precedence over another page of the original query', async () => {
+  const initial = { ...candidate, sourceId: 'initial' };
+  const result = await investigateSemanticHistory(request, {
+    search: query => query === evidence.query
+      ? { sources: [initial], scan: 'partial', moreMatches: true }
+      : { sources: [candidate], scan: 'bounded' },
+    widen: () => assert.fail('the original query is not widened when a refinement is available'),
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : { version: 1, assessment: [{
+      key: 's1', status: call.round === 1 ? 'missing' : 'supported',
+      sources: call.round === 1 ? [] : ['e2'], query: call.round === 1 ? 'idempotency key' : '',
+    }] },
+  });
+  assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
 test('reserves serialized bytes for gap recovery when first-pass excerpts are large', async () => {
   const needs = Array.from({ length: 4 }, (_, index) => ({ key: 'topic' + index, question: 'Find topic ' + index, query: 'topic' + index }));
   const source = (id: string) => ({ sourceId: id, revision: '1', sourceKind: 'conversation-exchange' as const, text: id.padEnd(3800, 'x') });

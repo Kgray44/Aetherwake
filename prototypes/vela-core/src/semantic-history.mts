@@ -73,7 +73,7 @@ export type SemanticHistoryCall = (
     excerpts: readonly { handle: string; text: string; title?: string; partial?: true; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number }
 ) & { missionPlanning?: true; reviewedProjectCheck?: ReviewedProjectCheckContext; reviewedMissionCapabilities?: readonly string[] };
 
-interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan }
+interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan; moreMatches?: boolean }
 interface SemanticHistoryOwner<T extends SemanticHistorySource> {
   /** Longer reviewed investigations can retain the same call and evidence limits. */
   timeBudgetMs?: number;
@@ -83,6 +83,8 @@ interface SemanticHistoryOwner<T extends SemanticHistorySource> {
   adaptiveDiscovery?: boolean;
   // The owner authorizes the current scope on every search and resolves canonical revisions.
   search(query: string): SemanticHistoryCandidates<T>;
+  /** Return a bounded next page for a previously truncated query in the same review. */
+  widen?(query: string): SemanticHistoryCandidates<T>;
   selected?(): SemanticHistoryCandidates<T>;
   recent?(): SemanticHistoryCandidates<T>;
   isCurrent(source: T): boolean;
@@ -219,7 +221,9 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     let assessmentBytes = Buffer.byteLength(JSON.stringify({ ...assessmentInput, excerpts: [] }));
     const assessmentLimit = maxSemanticAssessmentBytes - (owner.assessmentMetadataBytes ?? 0);
     const queries = new Set<string>();
+    const truncatedQueries = new Set<string>();
     let next = needs.map(need => need.query).filter(Boolean);
+    let widen: string[] = [];
     let anchorsRead = false;
     let priorAssessment: EvidenceReview | undefined;
     let investigateAnchors = false;
@@ -279,7 +283,8 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         if (queries.has(digest)) continue;
         if (evidence.size >= limit) { partial(); break; }
         queries.add(digest);
-        const { sources, scan } = owner.search(query);
+        const { sources, scan, moreMatches } = owner.search(query);
+        if (moreMatches) truncatedQueries.add(digest);
         recordScan(scan);
         if (sources.length > 2 * maxCandidates) partial();
         matches.push(sources.slice(0, 2 * maxCandidates));
@@ -289,6 +294,13 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         const sources = matches.flatMap(group => group[rank] ? [group[rank]] : []);
         addCandidates({ sources, scan: searchCoverage ?? 'bounded' }, limit);
         if (evidence.size >= limit && matches.some(group => group.length > rank + 1)) { partial(); break; }
+      }
+      // Preserve capacity for model-proposed refinements before widening original queries.
+      if (owner.widen) {
+        for (const query of widen) {
+          if (evidence.size >= limit) { partial(); break; }
+          addCandidates(owner.widen(query), limit);
+        }
       }
       if (owner.recent && !anchorsRead && ((rounds === 1 && evidence.size === priorCount) || investigateAnchors)) {
         anchorsRead = true;
@@ -311,10 +323,16 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       priorAssessment = assessment;
       const gaps = assessment.rows.filter(row => row.status !== 'supported');
       next = gaps.filter(row => row.query && !queries.has(canonicalRetrievalQuery(row.query)!.digest)).map(row => row.query);
+      const gapKeys = new Set(gaps.filter(row => !row.query || queries.has(canonicalRetrievalQuery(row.query)!.digest))
+        .map(row => row.key));
+      widen = owner.widen ? needs.flatMap(need => {
+        const digest = canonicalRetrievalQuery(need.query)?.digest;
+        return gapKeys.has(need.key) && digest && truncatedQueries.delete(digest) ? [need.query] : [];
+      }) : [];
       investigateAnchors = !!owner.recent && !anchorsRead && gaps.length > 0;
       const budgetExhausted = rounds === maxRounds || evidence.size === candidateLimit;
-      if ((next.length || investigateAnchors) && budgetExhausted) partial();
-      if ((!next.length && !investigateAnchors) || budgetExhausted) return assessed(assessment);
+      if ((next.length || widen.length || investigateAnchors) && budgetExhausted) partial();
+      if ((!next.length && !widen.length && !investigateAnchors) || budgetExhausted) return assessed(assessment);
     }
     return empty('invalid', 'assessment-shape');
   } catch {
