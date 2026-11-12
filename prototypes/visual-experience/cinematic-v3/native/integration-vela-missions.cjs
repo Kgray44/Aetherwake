@@ -7,6 +7,7 @@ const { randomUUID } = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { performance } = require("node:perf_hooks");
+const { startWindowRecording } = require("./application-recording.cjs");
 const { fillNative } = require("./integration-agents.cjs");
 const { assertOwnedApplicationProfile } = require("./integration-checklists.cjs");
 const { createSlot, sourceIdentity, targetScript, waitForCondition } = require("./integration-resource-opening.cjs");
@@ -153,9 +154,10 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     win.on("blur", blur); win.on("hide", blur); win.on("minimize", blur);
     win.webContents.on("before-input-event", escape); win.webContents.on("console-message", consoleError);
     listening = true;
+    const recordAiw = argv.includes("--missions-aiw-inspection") && argv.includes("--missions-aep-presentation-only");
     const guardFile = path.join(app.getPath("home"), "AppData", "Local", "AeroStorageWatch", "ReserveGuard.ps1");
     receipt.reserve = JSON.parse(execFileSync("powershell.exe", [
-      "-NoProfile", "-NonInteractive", "-File", guardFile, "-EstimatedCBytes", String((argv.includes('--missions-folders-only')?64:32) * MiB), "-EstimatedDBytes", "0",
+      "-NoProfile", "-NonInteractive", "-File", guardFile, "-EstimatedCBytes", String((recordAiw ? 128 : argv.includes('--missions-folders-only') ? 64 : 32) * MiB), "-EstimatedDBytes", "0",
     ], { windowsHide: true, timeout: 4000, maxBuffer: 8192, encoding: "utf8" }));
     assert.equal(receipt.reserve.allowed, true, "storage_reserve_denied");
     await fs.mkdir(out);
@@ -906,7 +908,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         stagingToReceiptMs: presentation.userDelivery.stagingToReceiptMs,
         intakeToReceiptMs: presentation.intakeToUserDeliveryMs,
         reportEventId: reportPublication.eventId, reportLatency, firstMeaningfulOutput: presentation.firstMeaningfulOutput, leases };
-      if (argv.includes("--missions-aiw-inspection")) {
+      if (recordAiw) {
         await click(reportLink);
         await click(RECORD + ' [data-mission-focus="preview-workroom"]');
         await click(RECORD + ' [data-mission-focus="apply-workroom"]');
@@ -932,11 +934,36 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         assert.equal(measuredAttempts, [profile.work.intervalCoverage.measured, profile.work.intervalCoverage.attempts].join(" / "));
         receipt.workroomInspection = { missionId: profile.missionId, revision: profile.revision, measuredAttempts };
         await capture("01-adaptive-intelligence-profiler");
-        await click(selector + ' [data-intelligence-zone="resource"]');
-        const resource = await js(`document.querySelector(${quote(selector + ' [role="tabpanel"]')}).textContent`);
-        assert(profile.attempts.some(attempt => attempt.resourceLease && resource.includes(attempt.resourceLease.leaseId)));
-        await capture("02-adaptive-intelligence-resource");
-        await click(selector + ' > summary');
+        receipt.workroomInspection.renderer = await js(`new Promise(resolve => {
+          requestAnimationFrame(start => {
+            let previous = start;
+            const intervals = [];
+            const tick = at => {
+              intervals.push(at - previous);
+              previous = at;
+              if (at - start < ${FRAME_WINDOW_MS} && intervals.length < ${FRAME_SAMPLE_LIMIT}) requestAnimationFrame(tick);
+              else resolve({ intervals, windowMs: at - start, hidden: document.hidden || !document.hasFocus(), discarded: 0 });
+            };
+            requestAnimationFrame(tick);
+          });
+        })`).then(summarizeFrames);
+        receipt.workroomInspection.graphicsBackend = await js("window.__aerynth.snapshot().gpu.backend");
+        const recorder = await operation(
+          () => startWindowRecording(win, win.webContents.session, win.webContents.getURL()),
+          "aiw_video_start_deadline",
+        );
+        try {
+          await click(selector + ' [data-intelligence-zone="resource"]');
+          const resource = await js(`document.querySelector(${quote(selector + ' [role="tabpanel"]')}).textContent`);
+          assert(profile.attempts.some(attempt => attempt.resourceLease && resource.includes(attempt.resourceLease.leaseId)));
+          await capture("02-adaptive-intelligence-resource");
+          await click(selector + ' > summary');
+        } finally {
+          receipt.workroomInspection.video = await operation(
+            () => recorder.stop(path.join(out, "adaptive-intelligence-inspection.webm")),
+            "aiw_video_stop_deadline",
+          );
+        }
       } else {
         await capture("01-native-mission-report");
       }
