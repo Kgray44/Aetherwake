@@ -155,6 +155,20 @@ export function validateMissionPlan(plan: MissionPlan, executors: MissionService
   tasks.forEach(task => visit(task.id));
 }
 
+/** A reservation is proof only when bound to its original canonical admission event. */
+function reservedDispatch(mission: Mission, task: MissionTask, attempt: MissionAttempt): boolean {
+  const gate = attempt.dispatch;
+  return !!gate && Object.keys(gate).length === 4 && gate.contract === 'aerynth.mission-dispatch@1' &&
+    gate.state === 'reserved' && gate.attemptId === attempt.id && Number.isSafeInteger(gate.reservedRevision) &&
+    gate.reservedRevision > 0 && mission.events.some(event => event.kind === 'started' &&
+      event.seq === gate.reservedRevision && event.taskId === task.id && event.attemptId === attempt.id);
+}
+function noDispatchReceipt(mission: Mission, attempt: MissionAttempt): NonNullable<MissionAttempt['reconciliation']> {
+  return { contract: 'aerynth.mission-no-dispatch@1', attemptId: attempt.id,
+    reservedRevision: attempt.dispatch!.reservedRevision, observedRevision: mission.revision,
+    observedAt: stamp(), authority: 'mission-service:dispatch-gate', outcome: 'not-dispatched' };
+}
+
 interface Running {
   missionId: string;
   task: MissionTaskPlan;
@@ -195,9 +209,12 @@ export class MissionService {
         const before = m.events.length;
         for (const task of m.tasks) if (task.state === 'running' || task.state === 'cancelling') {
           const executor = own(host.executors, task.executor) ? host.executors[task.executor] : undefined;
-          task.state = executor?.replaySafe ? 'failed' : 'uncertain';
-          task.detail = 'interrupted_by_restart';
           const attempt = task.attempts.at(-1)!;
+          const notDispatched = reservedDispatch(m, task, attempt);
+          task.state = notDispatched && (task.state === 'cancelling' || m.disposition === 'cancelled') ? 'cancelled' :
+            notDispatched || executor?.replaySafe ? 'failed' : 'uncertain';
+          task.detail = notDispatched ? 'interrupted_before_dispatch' : 'interrupted_by_restart';
+          if (notDispatched) attempt.reconciliation = noDispatchReceipt(m, attempt);
           attempt.finishedAt = stamp(); attempt.outcome = task.state;
           this.event(m, { kind: 'recovered', taskId: task.id, attemptId: attempt.id, detail: task.state });
         }
@@ -949,6 +966,7 @@ export class MissionService {
         const attempt: MissionAttempt = { id, executor: task.executor, admittedAt: stamp(), context: context.context.manifest, timing };
         value.state = 'running'; value.attempts.push(attempt);
         this.event(current, { kind: 'started', taskId: task.id, attemptId: id });
+        attempt.dispatch = { contract: 'aerynth.mission-dispatch@1', attemptId: id, state: 'reserved', reservedRevision: current.revision };
         if (lease) {
           attempt.resourceLease = lease.receipt;
           if (Buffer.byteLength(JSON.stringify(current)) > recordLimitBytes) delete attempt.resourceLease;
@@ -997,7 +1015,17 @@ export class MissionService {
         }
         const executingAt = performance.now();
         let result: Awaited<ReturnType<MissionExecutor['run']>>;
-        try { executorEntered = true; result = await executor.run(context); }
+        try {
+          this.update(m.id, current => {
+            const value = taskOf(current, task.id), attempt = value?.attempts.at(-1);
+            check(value?.state === 'running' && attempt?.id === id && reservedDispatch(current, value, attempt), 'mission_dispatch_denied');
+            check(this.host.authorized(current.scope), 'mission_scope_revoked');
+            attempt.dispatch!.state = 'entered';
+          });
+          // No asynchronous boundary between committing entry and invoking the executor.
+          executorEntered = true;
+          result = await executor.run(context);
+        }
         finally {
           const executedAt = performance.now();
           timing.executionMs = executedAt - executingAt;
@@ -1029,11 +1057,13 @@ export class MissionService {
       const authorized = this.host.authorized(m.scope);
       const outcome = cancellation || !authorized ? (executorEntered && !executor.replaySafe ? 'uncertain' :
         !authorized ? 'blocked' : cancellation === 'user' ? 'cancelled' : 'failed') :
-        reportedOutcome ?? (verification?.passed ? 'verified' : executor.replaySafe || evidence ? 'failed' : 'uncertain');
+        reportedOutcome ?? (verification?.passed ? 'verified' : !executorEntered || executor.replaySafe || evidence ? 'failed' : 'uncertain');
       this.update(m.id, current => {
         const value = taskOf(current, task.id)!;
         const attempt = value.attempts.at(-1)!;
-        check(attempt.id === id, 'mission_attempt_changed');
+        check(attempt.id === id && (value.state === 'running' || value.state === 'cancelling'), 'mission_attempt_changed');
+        if (!executorEntered && reservedDispatch(current, value, attempt))
+          attempt.reconciliation = noDispatchReceipt(current, attempt);
         value.state = outcome; value.detail = cancellation ?? (!authorized ? 'mission_scope_revoked' : detail);
         attempt.outcome = outcome; attempt.finishedAt = stamp();
         attempt.timing = timing;
