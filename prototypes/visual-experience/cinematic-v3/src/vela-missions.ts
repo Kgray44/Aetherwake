@@ -816,7 +816,7 @@ export function createVelaMissionView(
         ? el(
             "p",
             "vela-core-meta",
-            `Start opens native review for one billable image request to OpenAI using ${artifactReview.model}. Approval saves a ${artifactReview.width} × ${artifactReview.height} PNG and text notes as managed workspace files ${artifactReview.files.join(" and ")}.`,
+            `Start opens native review for one billable image request to OpenAI using ${artifactReview.model} at ${artifactReview.quality} quality. Approval saves a ${artifactReview.width} × ${artifactReview.height} PNG and text notes as managed workspace files ${artifactReview.files.join(" and ")}.`,
           )
         : externalReview
         ? el(

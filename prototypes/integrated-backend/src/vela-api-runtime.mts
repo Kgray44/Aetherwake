@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { prepareResponsesTurn, ResponsesTransport } from '../../openai-provider/responses.mts';
-import { missionImageModel, prepareImageGeneration, sendReviewedImageGeneration } from '../../openai-provider/images.mts';
+import { prepareImageGeneration, sendReviewedImageGeneration, type MissionImageSettings } from '../../openai-provider/images.mts';
 import type { ApiContinuation, ApiContextTransition, ApiFunctionCall, ApiJsonSchema, ApiResponseItem, ApiToolOutput, DispatchReview, ReviewedApiFunction, TurnEvent, TurnResult, TurnTransportTiming } from '../../openai-provider/contracts.mts';
 import { VELA_API_PROVIDER } from '../../openai-provider/api-connection-contracts.mts';
 import { VELA_IDENTITY_VERSION, renderVelaIdentityPrompt } from '../../vela-core/src/vela-identity.mts';
@@ -195,9 +195,11 @@ export class VelaApiRuntime {
   knownModels() { return this.knownCatalog && this.authorized(this.knownCatalog.version) && this.knownCatalog.expiresAt > Date.now() ? [...this.knownCatalog.models] : []; }
 
   async generateMissionImage(input: { attemptId: string; version: number; prompt: string; approvedDigest: string;
+    settings: MissionImageSettings;
     validate(): void }, signal: AbortSignal) {
     const combined = AbortSignal.any([signal, this.lifetime.signal]);
-    const review = prepareImageGeneration(input.prompt);
+    check(input.settings, 'image_review_changed');
+    const review = prepareImageGeneration(input.prompt, input.settings);
     const fence = () => {
       check(!combined.aborted, 'vela_execution_cancelled');
       this.validate(input.version);
@@ -208,7 +210,7 @@ export class VelaApiRuntime {
     check(!this.running.has(input.attemptId) && this.running.size < VELA_API_RUNTIME_LIMITS.concurrent, 'vela_api_busy');
     this.running.set(input.attemptId, 'mission-specialist');
     try {
-      check((await abortable(this.models(input.version), combined)).includes(missionImageModel), 'mission_image_model_unavailable');
+      check((await abortable(this.models(input.version), combined)).includes(input.settings.model), 'mission_image_model_unavailable');
       const credential = await abortable(this.options.connection.resolveNativeCredential(input.version), combined);
       fence();
       const started = performance.now();

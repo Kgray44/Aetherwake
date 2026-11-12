@@ -20,7 +20,7 @@ import type { VelaRequest } from '../../vela-core/src/contracts.ts';
 import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
 import type { NativeDocumentTextServices } from '../src/document-text-host.mts';
 import { docxFixture } from '../../block-library/tests/media-fixtures.mts';
-import { missionImageModel } from '../../openai-provider/images.mts';
+import { missionDraftImageModel, missionImageModel } from '../../openai-provider/images.mts';
 import { writeMissionArtifacts } from '../src/mission-artifacts.mts';
 import { preflightArtifactEvidence, retainArtifactEvidence, verifyArtifactEvidence } from './helpers/artifact-evidence.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
@@ -82,12 +82,17 @@ async function verifyIllustrationMission(liveCredential?: string, alternateRootC
   const f = fixture(false, true, undefined, liveCredential, true, alternateRootCase);
   try {
     if (alternateRootCase) assert.notEqual(realpathSync(f.directory.toUpperCase()), realpathSync.native(f.directory));
-    f.setCatalogModels([missionImageModel]);
+    const model = alternateRootCase ? missionDraftImageModel : missionImageModel;
+    const quality = alternateRootCase ? 'high' : 'medium';
+    f.setCatalogModels([model]);
     await f.ready();
     const prompt = liveCredential ? 'A simple abstract geometric illustration. Any colors.' : 'A synthetic black square';
-    const objective = `Run a mission to generate an illustration: ${prompt}`;
+    const options = alternateRootCase ? ' [draft, high]' : '';
+    const objective = `Run a mission to generate an illustration${options}: ${prompt}`;
     const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
     assert.equal(preview.artifactReview?.prompt, prompt);
+    assert.equal(preview.artifactReview?.model, model);
+    assert.equal(preview.artifactReview?.quality, quality);
     assert.equal(preview.executors[0].available, true);
     const input = { objective, fingerprint: preview.fingerprint, requestId: randomUUID() };
     await assert.rejects(f.core.command('missions', { name: 'start', input }), /mission_artifact_review_required/);
@@ -95,6 +100,8 @@ async function verifyIllustrationMission(liveCredential?: string, alternateRootC
     assert.equal(f.requests.length, 0);
     if (!liveCredential) f.replies.push(body => {
       assert.equal(body.prompt, preview.artifactReview?.prompt);
+      assert.equal(body.model, model);
+      assert.equal(body.quality, quality);
       return Response.json({ data: [{ b64_json: illustrationFixture().toString('base64') }] });
     });
     const approved = { ...input, approvedArtifactDigest: preview.artifactReview!.digest };
@@ -106,9 +113,12 @@ async function verifyIllustrationMission(liveCredential?: string, alternateRootC
     const usageBefore = await f.core.command('velaApiUsageStatus', {});
     const { id } = await startReviewedMission({ win, localURL, event: { sender: webContents, senderFrame: mainFrame },
       storage: { allowWrite: async () => true }, input: { name: 'start', input },
-      dialog: { showMessageBox: async (_window: unknown, options: { detail: string; defaultId: number }) => {
+      dialog: { showMessageBox: async (_window: unknown, options: { message: string; detail: string; defaultId: number }) => {
         assert.equal(options.defaultId, 0);
         assert.ok(options.detail.includes(prompt));
+        assert.ok(options.message.includes(model));
+        assert.ok(options.detail.includes(`at ${quality} quality`));
+        assert.match(options.detail, /\$30 image output/);
         assert.match(options.detail, /illustration-notes\.txt/);
         return { response: 1 };
       } }, call: f.core.command.bind(f.core) }) as MissionProjection;
@@ -131,6 +141,7 @@ async function verifyIllustrationMission(liveCredential?: string, alternateRootC
     assert.ok(report);
     const retained = { png: readFileSync(join(f.directory, 'mission-artifacts', id, 'illustration.png')),
       notes: readFileSync(join(f.directory, 'mission-artifacts', id, 'illustration-notes.txt')), report: report.content };
+    assert.ok(retained.notes.toString().includes(`OpenAI model requested: ${model}\nQuality: ${quality}\nRequest digest: ${preview.artifactReview?.digest}`));
     await f.reopen();
     const restoredReport = (await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState).conversation?.messages
       .find(message => message.missionReport?.missionId === id);
@@ -213,6 +224,30 @@ test('artifact writing rejects a replaced directory before publishing its first 
   assert.equal(validations, 2);
   assert.equal(existsSync(join(target, 'illustration.png')), false);
   assert.equal(existsSync(join(target, 'illustration-notes.txt')), false);
+});
+
+test('an unavailable draft model blocks the reviewed request without falling back', async () => {
+  const f = fixture(false, true, undefined, undefined, true);
+  try {
+    f.setCatalogModels([missionImageModel, 'gpt-image-1.5']);
+    await f.ready();
+    const objective = 'Run a mission to generate an illustration [draft]: A synthetic shape';
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    assert.equal(preview.artifactReview?.model, missionDraftImageModel);
+    assert.equal(preview.artifactReview?.quality, 'low');
+    const { id } = await f.core.command('missionStartReviewed', {
+      objective, fingerprint: preview.fingerprint, requestId: randomUUID(), approvedArtifactDigest: preview.artifactReview!.digest,
+    }) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
+    let mission = await read();
+    for (let i = 0; i < 100 && ['queued', 'running'].includes(mission.outcome); i++) {
+      await delay(25);
+      mission = await read();
+    }
+    assert.equal(mission.outcome, 'blocked');
+    assert.equal(f.requests.length, 0);
+    assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 0);
+  } finally { await f.close(); }
 });
 
 test('an illustration with an unconfirmed provider result never publishes or retries', async () => {

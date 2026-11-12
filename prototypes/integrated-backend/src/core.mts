@@ -22,7 +22,7 @@ import { MissionTeams } from './mission-teams.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
 import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningEvidenceSelection, MissionPlanningOffer, MissionPlanningSourceRef, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import { ARTIFACT_MISSION_PREFIX, EXPLICIT_MISSION_PREFIX, MISSION_LIMITS } from './mission-contracts.mts';
-import { missionImageModel, missionImageSize, prepareImageGeneration } from '../../openai-provider/images.mts';
+import { missionImageRates, missionImageSettings, missionImageSize, prepareImageGeneration } from '../../openai-provider/images.mts';
 import { missionArtifactFiles, missionArtifactPath, missionArtifactSource, readMissionArtifact, writeMissionArtifacts } from './mission-artifacts.mts';
 import { createMissionAdmission } from './mission-admission.mts';
 import { createResourcePolicyStore } from './resource-policy-store.mts';
@@ -1259,12 +1259,13 @@ export class BackendCore {
       scope.projectId === current.currentProjectId && this.velaApiRuntime.authorized(version);
   }
 
-  private missionArtifactPlan(objective: string, scope: MissionScope, prompt: string): MissionPlan {
-    const review = prepareImageGeneration(prompt);
+  private missionArtifactPlan(objective: string, scope: MissionScope, prompt: string, options?: string): MissionPlan {
+    const settings = missionImageSettings(options);
+    const review = prepareImageGeneration(prompt, settings);
     return { objective, scope, criteria: ['verified-illustration-files'], tasks: [{
       id: 'illustration', objective: 'Generate a PNG and verify it alongside its text notes in this workspace.',
       executor: 'artifact.illustration', dependencies: [], claims: [], criterion: 'verified-illustration-files',
-      timeoutMs: 120_000, maxAttempts: 1, artifactImage: { prompt, digest: review.digest,
+      timeoutMs: 120_000, maxAttempts: 1, artifactImage: { prompt, digest: review.digest, settings,
         configurationVersion: this.velaApiRuntime.configurationVersion() ?? 0 },
     }] };
   }
@@ -1287,7 +1288,7 @@ export class BackendCore {
           validate();
           admit();
           result = await this.velaApiRuntime.generateMissionImage({ attemptId, version: image.configurationVersion,
-            prompt: image.prompt, approvedDigest: image.digest, validate }, signal);
+            prompt: image.prompt, settings: image.settings, approvedDigest: image.digest, validate }, signal);
         } catch (error) {
           if (error instanceof VelaError && error.outcome === 'unknown') throw error;
           return { source: missionArtifactSource, value: { artifacts: [] }, outcome: 'blocked',
@@ -1297,7 +1298,9 @@ export class BackendCore {
         validate();
         admit();
         const notes = `Generated illustration\n\nRequested prompt: ${image.prompt}\n\n` +
-          `Image: ${missionArtifactFiles[0]} (${missionImageSize} × ${missionImageSize} PNG).\n`;
+          `Image: ${missionArtifactFiles[0]} (${missionImageSize} × ${missionImageSize} PNG).\n` +
+          `OpenAI model requested: ${image.settings.model}\nQuality: ${image.settings.quality}\nRequest digest: ${image.digest}\n` +
+          `Provider request ID: ${result.requestId ?? 'Unavailable'}\n`;
         const files = writeMissionArtifacts(root, missionId, result.bytes, notes, validate);
         const artifacts = [];
         for (const file of files) {
@@ -1307,7 +1310,8 @@ export class BackendCore {
             commandId: `${attemptId}:${file.name}`, workspaceId: scope.workspaceId, expectedLayoutVersion: layout.revision });
           artifacts.push({ name: file.name, sha256: file.sha256, bytes: file.bytes, resourceId: imported.resource.id });
         }
-        return { source: missionArtifactSource, value: { artifacts, requestId: result.requestId },
+        return { source: missionArtifactSource, value: { artifacts, requestId: result.requestId,
+          model: image.settings.model, quality: image.settings.quality, requestDigest: image.digest },
           telemetry: { providerCalls: 1, durationMs, providerExecutionId: attemptId,
             providerEvidence: this.velaApiTest ? 'simulated' : 'reported' } };
       },
@@ -1360,7 +1364,7 @@ export class BackendCore {
         ensure(Object.keys(request.input).every(key => keys.includes(key)) &&
           (agentProfileId === undefined || identifier(agentProfileId)) &&
           (teamId === undefined || identifier(teamId) && agentProfileId === undefined && proposalId === undefined), 'invalid_mission_command');
-        const artifactRequest = typeof objective === 'string' && ARTIFACT_MISSION_PREFIX.test(objective.trim());
+        const artifactRequest = typeof objective === 'string' ? ARTIFACT_MISSION_PREFIX.exec(objective.trim()) : null;
         if (artifactRequest) ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
           noteIds === undefined && fileIds === undefined && projectEvidence === undefined, 'mission_artifact_context_unsupported');
         if (noteIds !== undefined || fileIds !== undefined || projectEvidence !== undefined) {
@@ -1374,8 +1378,8 @@ export class BackendCore {
           stored.expires > Date.now() && objective === stored.plan.objective &&
           scope.workspaceId === stored.plan.scope.workspaceId && scope.projectId === stored.plan.scope.projectId, 'mission_preview_changed');
         if (stored) ensure(this.missionPlanningContextCurrent(stored.plan), 'mission_planning_context_changed');
-        const artifactPrompt = artifactRequest ? objective.trim().replace(ARTIFACT_MISSION_PREFIX, '') : undefined;
-        const artifactPlan = artifactPrompt === undefined ? undefined : this.missionArtifactPlan(objective, scope, artifactPrompt);
+        const artifactPlan = artifactRequest ? this.missionArtifactPlan(objective, scope,
+          objective.trim().slice(artifactRequest[0].length), artifactRequest[1]?.trim()) : undefined;
         const plan = teamId !== undefined ? teamMissionPlan(objective, scope, this.missionTeams.read(teamId, scope), id => {
           const profile = this.missionAgentProfile(scope, id);
           return profile ? { title: profile.resource.title, selection: this.missionSpecialistSelection(scope, id) } : undefined;
@@ -1406,7 +1410,8 @@ export class BackendCore {
             ...(stored?.projectCheck ? { preselected: true } : {}) } as const } : {}),
           ...(objectiveReview ? { objectiveReview: describeMissionObjectiveReview(objectiveReview) } : {}),
           ...(artifactImage ? { artifactReview: { prompt: artifactImage.prompt, digest: artifactImage.digest,
-            model: missionImageModel, width: missionImageSize, height: missionImageSize, files: missionArtifactFiles } } : {}),
+            ...artifactImage.settings, width: missionImageSize, height: missionImageSize,
+            rates: missionImageRates, files: missionArtifactFiles } } : {}),
           ...(remote.length ? { externalReview: { provider: [...new Set(remote.map(task => task.specialist?.provider === VELA_API_PROVIDER ? 'Vela dedicated API' : 'ChatGPT plan'))].join(' + '), model: selected?.model ?? 'Unavailable',
             effort: selected?.effort, calls: remote.length } } : {}) };
         ensure(request.input.fingerprint === fingerprint, 'mission_preview_changed');

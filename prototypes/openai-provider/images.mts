@@ -1,14 +1,31 @@
 import { abortable, boundedJSON, digest, ProviderError, record, requireValue, text } from './common.mts';
 
-export const missionImageModel = 'gpt-image-1.5';
+export const missionImageModel = 'gpt-image-2.6-sunburst';
+export const missionDraftImageModel = 'gpt-image-2.6-flare';
+const imageQualities = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type MissionImageSettings = {
+  model: typeof missionImageModel | typeof missionDraftImageModel;
+  quality: (typeof imageQualities)[number];
+};
+export const missionImageRates = { textInput: 5, imageInput: 8, imageOutput: 30 };
 export const missionImageSize = 1024;
 export const missionImageMaxBytes = 8 * 1024 * 1024;
 
-export function prepareImageGeneration(prompt: string) {
+export function missionImageSettings(options = ''): MissionImageSettings {
+  const [mode = 'final', requestedQuality, extra] = options ? options.toLowerCase().split(/\s*,\s*/u) : [];
+  const quality = imageQualities.find(value => value === (requestedQuality ?? (mode === 'draft' ? 'low' : 'medium')));
+  requireValue((mode === 'final' || mode === 'draft') && extra === undefined && quality, 'invalid_image_settings');
+  return { model: mode === 'draft' ? missionDraftImageModel : missionImageModel, quality };
+}
+
+export function prepareImageGeneration(prompt: string, settings = missionImageSettings()) {
   requireValue(typeof prompt === 'string' && prompt.trim() && Buffer.byteLength(prompt) <= 4096 &&
     !prompt.includes('\0'), 'invalid_image_prompt');
-  const body = JSON.stringify({ model: missionImageModel, prompt, n: 1,
-    size: `${missionImageSize}x${missionImageSize}`, output_format: 'png', quality: 'low' });
+  const { model, quality } = settings;
+  requireValue((model === missionImageModel || model === missionDraftImageModel) && imageQualities.includes(quality),
+    'invalid_image_settings');
+  const body = JSON.stringify({ model, prompt, n: 1,
+    size: `${missionImageSize}x${missionImageSize}`, output_format: 'png', quality });
   return { body, digest: digest(body) };
 }
 

@@ -159,14 +159,16 @@ test("illustration preview discloses a billable image request and managed worksp
       artifactReview: {
         prompt: "Illustrate a sailboat",
         digest: "artifact-digest",
-        model: "gpt-image-1.5",
+        model: "gpt-image-2.6-sunburst",
+        quality: "medium",
+        rates: { textInput: 5, imageInput: 8, imageOutput: 30 },
         width: 1024,
         height: 1024,
         files: ["illustration.png", "illustration-notes.txt"],
       },
     }, () => {});
     const preview = f.dom.root.textContent;
-    assert.match(preview, /native review for one billable image request to OpenAI using gpt-image-1\.5/);
+    assert.match(preview, /native review for one billable image request to OpenAI using gpt-image-2\.6-sunburst at medium quality/);
     assert.match(preview, /1024 × 1024 PNG/);
     assert.match(preview, /managed workspace files illustration\.png and illustration-notes\.txt/);
     assert.doesNotMatch(preview, /Local read-only tasks/);
