@@ -32,6 +32,31 @@ test('disclosure denial preserves the native fallback and skips model-proposed r
   assert.deepEqual(result.coverage, []);
 });
 
+test('a high-volume search leaves room for other evidence needs and a follow-up', async () => {
+  const second = { ...candidate, sourceId: 'second', text: 'The supervisor approved the release.' };
+  const followup = { ...candidate, sourceId: 'followup', text: 'The release takes effect at noon.' };
+  const first = Array.from({ length: 8 }, (_, index) => ({ ...candidate, sourceId: 'first-' + index }));
+  const needs = [evidence, { key: 's2', question: 'Who approved the release and when does it take effect?', query: 'release approval' }];
+  const result = await investigateSemanticHistory(request, {
+    search: query => ({ sources: query === 'duplicate operation' ? first : query === 'release approval' ? [second] : [followup], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return { ...proposal, needs };
+      const approval = call.excerpts.find(item => item.text === second.text);
+      assert.ok(approval, 'The second need must get an evidence slot');
+      const timing = call.excerpts.find(item => item.text === followup.text);
+      return { version: 1, assessment: [
+        { key: 's1', status: 'supported', sources: ['e1'], query: '' },
+        { key: 's2', status: timing ? 'supported' : 'partial',
+          sources: timing ? [approval.handle, timing.handle] : [approval.handle], query: timing ? '' : 'release effective time' },
+      ] };
+    },
+  });
+  assert.equal(result.state, 'assessed');
+  assert.equal(result.rounds, 2);
+  assert.deepEqual(result.coverage[1].sources, [second, followup]);
+});
+
 test('rejects an invented source reference and fences out in-flight corrections', async () => {
   for (const revoked of [false, true]) {
     let current = true;
