@@ -123,5 +123,20 @@ async function run({argv,profile,documents,receipt,rpc,js,click,fill,wait,captur
  assert.ok(!JSON.stringify(final).includes(fixture.root));assert.doesNotMatch(JSON.stringify(final),/sourceGrantId|selected_path/);
  assert.equal(activity.providerRequests,0);assert.equal(activity.codexConnections,0);await capture('02-folder-metadata-browse');
  receipt.folders.canonical={folderId,folders:1,independentFiles:1,placements:2,implicitChildResources:0};receipt.providerActivity={after:activity};
+ const vela='#vela-assistant-surface[data-surface-id="vela"]';
+ const composer=vela+' textarea[aria-label="Message Vela"]',draft='Synthetic draft awaiting its source.';
+ if(!await js(`document.querySelector(${q(composer)})?.getClientRects().length>0`))await click('#vela');
+ await fill(composer,draft);
+ await withNativeSourceDialog(async()=>{
+  const selected=selectOwnedSource({pid:process.pid,ownerHwnd,documents:fixture.documents,fixtureRoot:fixture.root,target:fixture.file,kind:'files',diagnosticDirectory:path.join(profile,'mission-evidence')});selected.catch(()=>{});
+  await click(vela+' button[aria-label="Attach files"]');
+  receipt.folders.composerDialog=await selected;
+ });
+ await wait('Composer keeps the draft and adds the exact local source chip',()=>js(`(()=>{const composer=document.querySelector(${q(composer)});return composer?.value===${q(draft)}&&document.activeElement===composer&&!!document.querySelector(${q(vela+' button[aria-label="Remove source Independent.txt"]')});})()`));
+ const afterPick=await rpc('desktop',{type:'snapshot'}),afterActivity=await rpc('providerActivity',{});
+ assert.equal(afterPick.blocks.length,final.blocks.length,'composer_pick_does_not_place_blocks');
+ assert.equal(afterActivity.providerRequests,0);assert.equal(afterActivity.codexConnections,0);
+ receipt.folders.composerSource={title:'Independent.txt',draftPreserved:true,providerRequests:0};
+ receipt.providerActivity.after=afterActivity;
 }
 module.exports={assertFoldersJourney,assertFixtureTarget,prepareFixture,sourceDialogScript,safeDialogFailure,selectOwnedSource,run};
