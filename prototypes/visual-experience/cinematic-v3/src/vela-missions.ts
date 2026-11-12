@@ -795,7 +795,7 @@ export function createVelaMissionView(
     if (!review) return null;
     const { preview, requestId, agentProfileId } = review;
     if ("kind" in preview) return renderPlanningOffer(preview);
-    const { plan, executors, externalReview, localReview, objectiveReview } = preview;
+    const { plan, executors, externalReview, localReview, objectiveReview, artifactReview } = preview;
     const section = el("section", "vela-core-plan vela-mission-preview");
     const heading = el("h3", undefined, "Review mission");
     if (plan.team) {
@@ -812,7 +812,13 @@ export function createVelaMissionView(
     if (plan.planning) section.append(el("p", "vela-core-meta",
       `Proposed by ${plan.planning.model}. Review the tasks and dependencies before starting.`));
     section.append(
-      externalReview
+      artifactReview
+        ? el(
+            "p",
+            "vela-core-meta",
+            `Start opens native review for one billable image request to OpenAI using ${artifactReview.model}. Approval saves a ${artifactReview.width} × ${artifactReview.height} PNG and text notes as managed workspace files ${artifactReview.files.join(" and ")}.`,
+          )
+        : externalReview
         ? el(
             "p",
             "vela-core-meta",
