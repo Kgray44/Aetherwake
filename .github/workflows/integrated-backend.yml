@@ -1,99 +1,113 @@
 name: Integrated Aerynth application
 on:
   pull_request:
-    paths:
-      - 'Aerynth.cmd'
-      - 'prototypes/integrated-backend/**'
-      - 'prototypes/openai-provider/**'
-      - 'prototypes/application-contract/**'
-      - 'prototypes/agent-product/**'
-      - 'prototypes/block-library/**'
-      - 'prototypes/checklist-product/**'
-      - 'prototypes/constellation/**'
-      - 'prototypes/conversation-product/**'
-      - 'prototypes/personal-context/**'
-      - 'prototypes/task-product/**'
-      - 'prototypes/timeline-product/**'
-      - 'prototypes/timer-product/**'
-      - 'prototypes/vela-core/**'
-      - 'prototypes/visual-experience/cinematic-v3/**'
-      - 'prototypes/workspace-engine/**'
-      - 'prototypes/workspace-kernel/**'
-      - 'prototypes/connected-conversations/**'
-      - 'prototypes/codex-bridge/**'
-      - 'scripts/run-aerynth-acceptance.mts'
-      - 'scripts/review-*.mjs'
-      - 'scripts/verify-living-instruments-native.mjs'
-      - 'scripts/living-instruments-*-fixture.mts'
-      - '.github/workflows/integrated-backend.yml'
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
+
 permissions:
   contents: read
+
+concurrency:
+  group: aerynth-integration-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  synthetic-integration:
-    # Windows compiles and exercises the native helpers before the cross-package suite.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 20 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  linux:
+    name: Aerynth Linux integration
+    uses: ./.github/workflows/aerynth-integration.yml
+    with:
+      runner: ubuntu-latest
+      timeout: 20
+  windows:
+    name: Aerynth Windows integration
+    uses: ./.github/workflows/aerynth-integration.yml
+    with:
+      runner: windows-latest
+      timeout: 45
+  security:
+    name: Aerynth security and workflow checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Review new dependency risks
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+      - name: Review queued dependency risks
+        if: github.event_name == 'merge_group'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          base-ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          head-ref: ${{ github.sha }}
+          fail-on-severity: high
+      - name: Check workflows and scan introduced commits for secrets
+        if: '!cancelled()'
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --retry 2 -o actionlint.tgz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tgz' | sha256sum --check
+          tar -xzf actionlint.tgz actionlint
+          curl --fail --silent --show-error --location --retry 2 -o gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tgz' | sha256sum --check
+          tar -xzf gitleaks.tgz gitleaks
+          cd "$GITHUB_WORKSPACE"
+          "$RUNNER_TEMP/actionlint" -color
+          # Use the scanner's built-in rules and no repository-owned suppressions.
+          printf '[extend]\nuseDefault = true\n' > "$RUNNER_TEMP/aerynth-gitleaks.toml"
+          touch "$RUNNER_TEMP/aerynth-gitleaks.ignore"
+          if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]]; then
+            scan=(dir .)
+          else
+            [[ "$BASE" =~ ^[0-9a-f]{40}$ ]]
+            git cat-file -e "$BASE^{commit}"
+            scan=(git "--log-opts=--diff-merges=first-parent $BASE..$GITHUB_SHA" .)
+          fi
+          "$RUNNER_TEMP/gitleaks" "${scan[@]}" --config "$RUNNER_TEMP/aerynth-gitleaks.toml" \
+            --gitleaks-ignore-path "$RUNNER_TEMP/aerynth-gitleaks.ignore" --ignore-gitleaks-allow --redact=100 --no-banner
+  required:
+    name: Aerynth required checks
+    needs: [linux, windows, security]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - name: Record job and step timings
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" --slurp > "$RUNNER_TEMP/aerynth-jobs.json"
+          node scripts/aerynth-ci-timings.mjs "$RUNNER_TEMP/aerynth-jobs.json" "$RUNNER_TEMP/aerynth-timings.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Require all verification jobs to succeed
+        env:
+          AERYNTH_LINUX: ${{ needs.linux.result }}
+          AERYNTH_WINDOWS: ${{ needs.windows.result }}
+          AERYNTH_SECURITY: ${{ needs.security.result }}
+        run: node scripts/aerynth-ci-gate.mjs "$RUNNER_TEMP/aerynth-gate.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
         with:
-          node-version: '24.18.0'
-          cache: npm
-          cache-dependency-path: |
-            prototypes/integrated-backend/package-lock.json
-            prototypes/openai-provider/package-lock.json
-            prototypes/block-library/package-lock.json
-            prototypes/constellation/package-lock.json
-            prototypes/visual-experience/cinematic-v3/package-lock.json
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-        working-directory: prototypes/integrated-backend
-      - run: npm ci --ignore-scripts --no-audit --no-fund --cache .runtime/npm-cache
-        working-directory: prototypes/openai-provider
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-        working-directory: prototypes/block-library
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-        working-directory: prototypes/constellation
-      - name: Install desktop test dependencies on Linux
-        if: runner.os == 'Linux'
-        run: npm ci --ignore-scripts --no-audit --no-fund
-        working-directory: prototypes/visual-experience/cinematic-v3
-      - name: Install desktop dependencies for Windows native contract tests
-        if: runner.os == 'Windows'
-        run: npm ci --no-audit --no-fund
-        working-directory: prototypes/visual-experience/cinematic-v3
-      - name: Typecheck the backend
-        run: npm run typecheck
-        working-directory: prototypes/integrated-backend
-      - name: Typecheck Vela Core
-        run: node prototypes/integrated-backend/node_modules/typescript/bin/tsc --project prototypes/vela-core/tsconfig.json --typeRoots prototypes/integrated-backend/node_modules/@types
-      - name: Typecheck the desktop application
-        if: runner.os != 'Windows'
-        run: npm run typecheck
-        working-directory: prototypes/visual-experience/cinematic-v3
-      - name: Build the desktop application and Windows native helpers
-        if: runner.os == 'Windows'
-        run: npm run build
-        working-directory: prototypes/visual-experience/cinematic-v3
-      - name: Verify the Windows addon boundary before the full suite
-        if: runner.os == 'Windows'
-        timeout-minutes: 4
-        run: node --test prototypes/visual-experience/cinematic-v3/tests/windows-system-build.test.mjs
-      - name: Verify worker-loss recovery on Windows before the full suite
-        if: runner.os == 'Windows'
-        timeout-minutes: 2
-        run: node --test --test-name-pattern "a lost worker never" prototypes/integrated-backend/tests/mission-integration.test.mts
-      - name: Test the review build and runtime source contracts
-        run: node --test "scripts/review-*.test.mjs"
-      - name: Check native journey script syntax
-        run: node --check scripts/verify-living-instruments-native.mjs
-      - name: Exercise the cross-package acceptance fixtures
-        run: node scripts/run-aerynth-acceptance.mts
-      - name: Record the native verification boundary
-        run: echo "Interactive Windows verification requires a qualified desktop and the host ReserveGuard. This job runs build and synthetic checks."
+          name: aerynth-gate-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/aerynth-gate.json
+            ${{ runner.temp }}/aerynth-timings.json
+          if-no-files-found: error
+          retention-days: 14
