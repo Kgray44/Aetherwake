@@ -1,0 +1,162 @@
+{
+  "contract": "aerynth.arie-host-occupancy@1",
+  "status": "observed",
+  "platform": "linux",
+  "node": "v24.22.1",
+  "availableParallelism": 9,
+  "workload": "instrumented shipped-source inspection; operation intervals include file I/O",
+  "cpuAtAdmissionPercent": 0.2,
+  "minimumAvailableBytes": 9488257024,
+  "dispatched": 18,
+  "verified": 18,
+  "warmupOperations": 2,
+  "rows": [
+    {
+      "cap": 1,
+      "operations": 8,
+      "elapsedMs": 85.505,
+      "distinctWorkers": 1,
+      "peak": 1,
+      "overlappingOperationMs": 0,
+      "intervals": [
+        {
+          "startNs": "0",
+          "endNs": "4329045",
+          "threadId": 1
+        },
+        {
+          "startNs": "4798790",
+          "endNs": "9813840",
+          "threadId": 1
+        },
+        {
+          "startNs": "10301890",
+          "endNs": "34650996",
+          "threadId": 1
+        },
+        {
+          "startNs": "35307144",
+          "endNs": "39001969",
+          "threadId": 1
+        },
+        {
+          "startNs": "39681158",
+          "endNs": "43224750",
+          "threadId": 1
+        },
+        {
+          "startNs": "43736305",
+          "endNs": "60561609",
+          "threadId": 1
+        },
+        {
+          "startNs": "61018512",
+          "endNs": "70257407",
+          "threadId": 1
+        },
+        {
+          "startNs": "70963206",
+          "endNs": "84847036",
+          "threadId": 1
+        }
+      ]
+    },
+    {
+      "cap": 2,
+      "operations": 8,
+      "elapsedMs": 26.734,
+      "distinctWorkers": 2,
+      "peak": 2,
+      "overlappingOperationMs": 20.861937,
+      "intervals": [
+        {
+          "startNs": "85896858",
+          "endNs": "90821818",
+          "threadId": 1
+        },
+        {
+          "startNs": "86075943",
+          "endNs": "91868165",
+          "threadId": 2
+        },
+        {
+          "startNs": "92829915",
+          "endNs": "98108679",
+          "threadId": 1
+        },
+        {
+          "startNs": "92861609",
+          "endNs": "98646347",
+          "threadId": 2
+        },
+        {
+          "startNs": "99032660",
+          "endNs": "105400862",
+          "threadId": 1
+        },
+        {
+          "startNs": "99136737",
+          "endNs": "106090537",
+          "threadId": 2
+        },
+        {
+          "startNs": "106409074",
+          "endNs": "111115625",
+          "threadId": 1
+        },
+        {
+          "startNs": "106510758",
+          "endNs": "112311011",
+          "threadId": 2
+        }
+      ]
+    }
+  ],
+  "sourceSha256": "861b7fd1b70e814a9045aaa834ec7c828c3bbdfa521c1c111537fb6a58b480e6",
+  "checks": {
+    "remoteAdmissionPreserved": true,
+    "modeCheckpointRetainsReservations": true,
+    "expiryCheckpointRetainsReservation": true,
+    "exactReadback": true,
+    "finalReservedRamBytes": 0
+  },
+  "limitations": [
+    "No MissionService dispatch or restart exercised",
+    "No causal speedup claim from one ordered pair",
+    "No CPU core residency, multiprocess build, physical input, GPU or audio qualification",
+    "Windows supplemental counters disabled; native OS CPU/RAM sampling remains active"
+  ],
+  "provenance": {
+    "baseCommit": "52b75ef0e1e6c1f1b2ea65c5dc7d85c22b933ec6",
+    "baseTree": "9f60f95d0dfa75bb582f7417dacb27e3205c190c",
+    "observationDateUtc": "2026-11-12",
+    "intervalClock": "process.hrtime.bigint; common measured origin subtracted for public export",
+    "repeats": 1,
+    "subsequentReadOnlyContainerProbe": {
+      "constrainedMemoryBytes": null,
+      "constrainedMemorySource": "process.constrainedMemory; zero means unknown or unconstrained",
+      "cpuQuotaV2": {
+        "status": "unavailable",
+        "reason": "ENOENT"
+      },
+      "cpuQuotaV1": {
+        "status": "unavailable",
+        "reason": "ENOENT"
+      },
+      "cpuPeriodV1": {
+        "status": "unavailable",
+        "reason": "ENOENT"
+      },
+      "memoryLimitV2": {
+        "status": "unavailable",
+        "reason": "ENOENT"
+      },
+      "memoryLimitV1": {
+        "status": "unavailable",
+        "reason": "ENOENT"
+      },
+      "note": "Root controller visibility does not establish nested effective limits. Unknown limits do not mean unlimited capacity."
+    },
+    "harnessRevisionNote": "Container metadata capture, interval validation and cleanup were hardened after this single workload observation. No repeated performance run was performed."
+  }
+}

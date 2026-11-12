@@ -1,0 +1,348 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "533d3a2a3fc46d6a434e26b1d8ac21c650a89209",
+  "purpose": "Machine-readable companion to the FI0 handoff and existing requirement matrices; source documents remain authoritative. Grouped files are related witnesses, not proof each ID passes. This inventory changes no completed workstream disposition.",
+  "requirementSources": {
+    "FI-ACC": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md",
+    "FI-QA": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md",
+    "OBS-FI": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md",
+    "PLT-ARIE": "governance/13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md",
+    "AEP-T": "governance/10-AI-EXECUTION-PROFILER.md"
+  },
+  "layerPolicy": "Layers identify the evidence kinds needed for the scenario family, following acceptance specification section 2. Exact per-feature applicability remains with review; unknown rows use null rather than invented coverage.",
+  "evidenceSets": {
+    "cognition": {
+      "owner": "AIR/CIE",
+      "phase": "FI-2",
+      "implementation": "partial",
+      "testFiles": [
+        "prototypes/integrated-backend/tests/mission-api-planning.test.mts"
+      ],
+      "requiredLayers": [
+        "D1",
+        "D3"
+      ],
+      "nativeDevice": "Qualified Windows desktop where D2 is applicable; exact device is in each source receipt, not inferred here.",
+      "evidenceKinds": [
+        "synthetic",
+        "published-live-provider"
+      ],
+      "evidenceArtifacts": [
+        "docs/engineering/FI-0-MISSION-CONTRACT-HANDOFF.md"
+      ],
+      "latestResult": {
+        "status": "documented-scoped-evidence",
+        "scope": "Related witnesses only; no scenario acceptance inferred and no workstream status changed."
+      },
+      "deferredScope": "Broader independent semantic/multimodal quality and native continuity remain per source handoff."
+    },
+    "planning": {
+      "owner": "AIR/MissionService",
+      "phase": "FI-2",
+      "implementation": "partial",
+      "testFiles": [
+        "prototypes/integrated-backend/tests/mission-proposal.test.mts",
+        "prototypes/integrated-backend/tests/mission-executive.test.mts",
+        "prototypes/integrated-backend/tests/mission-api-planning.test.mts"
+      ],
+      "requiredLayers": [
+        "D0",
+        "D1",
+        "D3"
+      ],
+      "nativeDevice": "Qualified Windows desktop where D2 is applicable; exact device is in each source receipt, not inferred here.",
+      "evidenceKinds": [
+        "synthetic",
+        "published-live-provider"
+      ],
+      "evidenceArtifacts": [
+        "docs/engineering/MISSION-01-04-INTEGRATION.md"
+      ],
+      "latestResult": {
+        "status": "documented-scoped-evidence",
+        "scope": "Related witnesses only; no scenario acceptance inferred and no workstream status changed."
+      },
+      "deferredScope": "Representative independent plan/output quality beyond scoped receipts."
+    },
+    "mission": {
+      "owner": "MissionService",
+      "phase": "FI-4",
+      "implementation": "partial",
+      "testFiles": [
+        "prototypes/integrated-backend/tests/mission-service.test.mts",
+        "prototypes/integrated-backend/tests/mission-integration.test.mts"
+      ],
+      "requiredLayers": [
+        "D1",
+        "D2"
+      ],
+      "nativeDevice": "Qualified Windows desktop where D2 is applicable; exact device is in each source receipt, not inferred here.",
+      "evidenceKinds": [
+        "synthetic",
+        "published-native"
+      ],
+      "evidenceArtifacts": [
+        "docs/engineering/MISSION-01-04-INTEGRATION.md"
+      ],
+      "latestResult": {
+        "status": "documented-scoped-evidence",
+        "scope": "Related witnesses only; no scenario acceptance inferred and no workstream status changed."
+      },
+      "deferredScope": "Whole scenario native concurrency/effect verification beyond bounded fixtures; new FI4 unmerged work is excluded."
+    },
+    "resource": {
+      "owner": "Performance Governor/ARIE",
+      "phase": "FI-3",
+      "implementation": "partial",
+      "testFiles": [
+        "prototypes/integrated-backend/tests/resource-policy.test.mts",
+        "prototypes/integrated-backend/tests/resource-telemetry.test.mts",
+        "prototypes/integrated-backend/tests/mission-admission.test.mts"
+      ],
+      "requiredLayers": [
+        "D0",
+        "D1",
+        "D2"
+      ],
+      "nativeDevice": "Qualified Windows desktop where D2 is applicable; exact device is in each source receipt, not inferred here.",
+      "evidenceKinds": [
+        "synthetic",
+        "published-native"
+      ],
+      "evidenceArtifacts": [
+        "docs/engineering/FI-3-ARIE-NATIVE-VERIFICATION.md"
+      ],
+      "latestResult": {
+        "status": "documented-scoped-evidence",
+        "scope": "Related witnesses only; no scenario acceptance inferred and no workstream status changed."
+      },
+      "deferredScope": "Physical input/foreground and sustained hardware qualification remain per source handoff."
+    },
+    "profiling": {
+      "owner": "AEP",
+      "phase": "FI-1",
+      "implementation": "partial",
+      "testFiles": [
+        "prototypes/integrated-backend/tests/mission-service.test.mts",
+        "prototypes/integrated-backend/tests/mission-integration.test.mts"
+      ],
+      "requiredLayers": [
+        "D1",
+        "D2"
+      ],
+      "nativeDevice": "Qualified Windows desktop where D2 is applicable; exact device is in each source receipt, not inferred here.",
+      "evidenceKinds": [
+        "synthetic",
+        "published-native"
+      ],
+      "evidenceArtifacts": [
+        "docs/engineering/MISSION-01-04-INTEGRATION.md"
+      ],
+      "latestResult": {
+        "status": "documented-scoped-evidence",
+        "scope": "Related witnesses only; no scenario acceptance inferred and no workstream status changed."
+      },
+      "deferredScope": "This inventory does not reopen FI1 or assert each broad governing case independently accepted."
+    },
+    "learning": {
+      "owner": "AEP; AIR/MissionService/ARIE/CIE retain policy ownership",
+      "phase": "FI-5",
+      "implementation": "partial",
+      "testFiles": [
+        "prototypes/integrated-backend/tests/aep-experience-contract.test.mts",
+        "prototypes/integrated-backend/tests/aep-evaluation-reference.test.mts",
+        "prototypes/integrated-backend/tests/aep-evaluation-core.test.mts"
+      ],
+      "requiredLayers": [
+        "D1",
+        "D3"
+      ],
+      "nativeDevice": "Qualified Windows desktop where D2 is applicable; exact device is in each source receipt, not inferred here.",
+      "evidenceKinds": [
+        "synthetic"
+      ],
+      "evidenceArtifacts": [
+        "docs/engineering/FI-0-EVALUATION-REFERENCE-CONTRACT.md"
+      ],
+      "latestResult": {
+        "status": "documented-scoped-evidence",
+        "scope": "Related witnesses only; no scenario acceptance inferred and no workstream status changed."
+      },
+      "deferredScope": "Only decoder and native-task reference slices implemented; controlled experiments, independent experiment quality, promotion and learning retrieval are future-phase."
+    },
+    "workspace": {
+      "owner": "Observability/renderer; canonical source owners",
+      "phase": "FI-6",
+      "implementation": "not-assessed",
+      "testFiles": [],
+      "requiredLayers": [
+        "D2",
+        "D3"
+      ],
+      "nativeDevice": "Qualified Windows desktop where D2 is applicable; exact device is in each source receipt, not inferred here.",
+      "evidenceKinds": [],
+      "evidenceArtifacts": [
+        "docs/design/VELA-ADAPTIVE-INTELLIGENCE-WORKSPACE.md"
+      ],
+      "latestResult": {
+        "status": "not-established",
+        "scope": "Related witnesses only; no scenario acceptance inferred and no workstream status changed."
+      },
+      "deferredScope": "Integrated six-region spatial/quality/native acceptance not established by this registry."
+    },
+    "privacy": {
+      "owner": "Trust and canonical source owners",
+      "phase": "cross-phase",
+      "implementation": "partial",
+      "testFiles": [
+        "prototypes/integrated-backend/tests/mission-integration.test.mts",
+        "prototypes/integrated-backend/tests/mission-stream.test.mts",
+        "prototypes/integrated-backend/tests/aep-evaluation-core.test.mts"
+      ],
+      "requiredLayers": [
+        "D0",
+        "D1",
+        "D2"
+      ],
+      "nativeDevice": "Qualified Windows desktop where D2 is applicable; exact device is in each source receipt, not inferred here.",
+      "evidenceKinds": [
+        "synthetic"
+      ],
+      "evidenceArtifacts": [
+        "docs/engineering/FI-0-MISSION-CONTRACT-HANDOFF.md"
+      ],
+      "latestResult": {
+        "status": "documented-scoped-evidence",
+        "scope": "Related witnesses only; no scenario acceptance inferred and no workstream status changed."
+      },
+      "deferredScope": "These scope/read negatives are not general telemetry-export qualification; unsupported exports remain unsupported."
+    },
+    "unmapped": {
+      "owner": "See governing source",
+      "phase": "cross-phase",
+      "implementation": "not-assessed",
+      "testFiles": [],
+      "requiredLayers": null,
+      "nativeDevice": "Qualified Windows desktop where D2 is applicable; exact device is in each source receipt, not inferred here.",
+      "evidenceKinds": [],
+      "evidenceArtifacts": [
+        "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md"
+      ],
+      "latestResult": {
+        "status": "not-established",
+        "scope": "Related witnesses only; no scenario acceptance inferred and no workstream status changed."
+      },
+      "deferredScope": "Precise fixture, applicable layer, device and latest scenario result have not been established. No capability absence or failure is inferred."
+    }
+  },
+  "requirements": [
+    {"id": "FI-ACC-01", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 87}, "evidenceSet": "cognition", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-02", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 88}, "evidenceSet": "cognition", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-03", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 89}, "evidenceSet": "cognition", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-04", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 90}, "evidenceSet": "cognition", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-05", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 91}, "evidenceSet": "planning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-06", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 92}, "evidenceSet": "planning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-07", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 93}, "evidenceSet": "planning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-08", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 94}, "evidenceSet": "planning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-09", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 95}, "evidenceSet": "planning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-10", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 96}, "evidenceSet": "planning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-11", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 102}, "evidenceSet": "mission", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-12", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 103}, "evidenceSet": "mission", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-13", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 104}, "evidenceSet": "mission", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-14", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 105}, "evidenceSet": "mission", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-15", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 106}, "evidenceSet": "mission", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-16", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 107}, "evidenceSet": "mission", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-17", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 108}, "evidenceSet": "mission", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-18", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 109}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-19", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 115}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-20", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 116}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-21", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 117}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-22", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 118}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-23", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 119}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-24", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 120}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-25", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 121}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-26", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 129}, "evidenceSet": "profiling", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-27", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 130}, "evidenceSet": "profiling", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-28", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 131}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-29", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 132}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-30", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 133}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-31", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 134}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-32", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 135}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-33", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 136}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-34", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 137}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-35", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 138}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-36", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 139}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-37", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 147}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-38", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 148}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-39", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 149}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-40", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 150}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-41", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 151}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-42", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 152}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-43", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 153}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-44", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 154}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-45", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 155}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "FI-ACC-46", "definition": {"path": "docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md", "line": 156}, "evidenceSet": "privacy", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-01", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 764}, "evidenceSet": "cognition", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-02", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 765}, "evidenceSet": "cognition", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-03", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 766}, "evidenceSet": "planning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-04", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 767}, "evidenceSet": "planning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-05", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 768}, "evidenceSet": "planning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-06", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 769}, "evidenceSet": "mission", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-07", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 770}, "evidenceSet": "planning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-08", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 771}, "evidenceSet": "mission", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-09", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 772}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-10", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 773}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-11", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 774}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-12", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 775}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-13", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 776}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-14", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 777}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-15", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 778}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-16", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 779}, "evidenceSet": "privacy", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-17", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 780}, "evidenceSet": "mission", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "FI-QA-18", "definition": {"path": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md", "line": 781}, "evidenceSet": "profiling", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "OBS-FI-01", "definition": {"path": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md", "line": 871}, "evidenceSet": "cognition", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "OBS-FI-02", "definition": {"path": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md", "line": 872}, "evidenceSet": "profiling", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "OBS-FI-03", "definition": {"path": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md", "line": 873}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "OBS-FI-04", "definition": {"path": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md", "line": 874}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "OBS-FI-05", "definition": {"path": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md", "line": 875}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "OBS-FI-06", "definition": {"path": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md", "line": 876}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "OBS-FI-07", "definition": {"path": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md", "line": 877}, "evidenceSet": "privacy", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "OBS-FI-08", "definition": {"path": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md", "line": 878}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "OBS-FI-09", "definition": {"path": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md", "line": 879}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "OBS-FI-10", "definition": {"path": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md", "line": 880}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "PLT-ARIE-01", "definition": {"path": "governance/13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md", "line": 779}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "PLT-ARIE-02", "definition": {"path": "governance/13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md", "line": 780}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "PLT-ARIE-03", "definition": {"path": "governance/13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md", "line": 781}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "PLT-ARIE-04", "definition": {"path": "governance/13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md", "line": 782}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "PLT-ARIE-05", "definition": {"path": "governance/13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md", "line": 783}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "PLT-ARIE-06", "definition": {"path": "governance/13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md", "line": 784}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "PLT-ARIE-07", "definition": {"path": "governance/13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md", "line": 785}, "evidenceSet": "resource", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "PLT-ARIE-08", "definition": {"path": "governance/13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md", "line": 786}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T01", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 444}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T02", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 445}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T03", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 446}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T04", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 447}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T05", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 448}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T06", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 449}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T07", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 450}, "evidenceSet": "profiling", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T08", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 451}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T09", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 452}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T10", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 453}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T11", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 454}, "evidenceSet": "profiling", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T12", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 455}, "evidenceSet": "profiling", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T13", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 456}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T14", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 457}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T15", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 458}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T16", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 459}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T17", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 460}, "evidenceSet": "profiling", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T18", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 461}, "evidenceSet": "profiling", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T19", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 462}, "evidenceSet": "unmapped", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T20", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 463}, "evidenceSet": "privacy", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T21", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 464}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T22", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 465}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T23", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 466}, "evidenceSet": "learning", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T24", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 467}, "evidenceSet": "workspace", "coverage": "not-established", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T25", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 468}, "evidenceSet": "profiling", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"},
+    {"id": "AEP-T26", "definition": {"path": "governance/10-AI-EXECUTION-PROFILER.md", "line": 469}, "evidenceSet": "privacy", "coverage": "related-witnesses-only", "acceptance": "not-adjudicated"}
+  ]
+}

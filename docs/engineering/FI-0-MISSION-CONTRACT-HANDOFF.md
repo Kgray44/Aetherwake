@@ -21,6 +21,10 @@ The change affects the planner prompt and schema fingerprint. A previously issue
 
 Run `node --test prototypes/integrated-backend/tests/aep-experience-contract.test.mts` for round-trip, version, scope, evidence, and quality-gate checks. These decoders are the JSON boundary for the shared contract. Before supplying an experiment to the finding decoder, AEP must resolve its current revision, trace provenance, and independently recorded evaluation through existing owners. CIE must check current scope and source authorization before projecting any finding. An effective policy or authorization grant comes from AIR, MissionService, ARIE or the CIE policy owner through its existing review boundary. No storage migration is needed because this change introduces no persistent experiment table or automatic policy path.
 
+## Current evaluation-reference consumer
+
+The [evaluation reference contract](FI-0-EVALUATION-REFERENCE-CONTRACT.md) adds a closed, versioned Core read for exact native CPU/RAM verification receipts through MissionService. It resolves current mission/plan/task/attempt/evidence identity and source authorization, returns bodyless host-oracle provenance, and rejects unsupported evaluator namespaces. Its coverage is native task evidence only; independent experiment-wide quality remains explicitly not evaluated and no policy promotion is authorized. Existing experiment/finding decoders remain reference-only and require no schema migration. No retention default, export recipient or persistent experiment store changes.
+
 ## Provider capability inventory
 
 | Transport | Source-backed capability | Qualification boundary |
@@ -63,6 +67,8 @@ Mission 04 retained redacted receipts for [#45](https://github.com/Kgray44/Aethe
 - Three synthetic cases compared lexical retrieval with one live observation per model and case. Both `gpt-6-luna` and `gpt-6.1-sol` retrieved the paraphrase source missed by the lexical baseline. The ambiguity case remained uncertain for both models. Sol also left one supersession need missing despite retrieving the expected source. This comparison measures source recall and coverage labels. Whole-answer quality, independent evaluation, tail latency and production promotion remain open.
 
 ## Acceptance evidence map
+
+The [machine-readable registry](FI-ACCEPTANCE-REGISTRY.json) indexes all FI-ACC and governing scenario rows with scoped fixture/evidence mappings. The [technical review disposition](FI-0-TECHNICAL-REVIEW-DISPOSITION.md) records its limits and the current threat analysis. Registration is not acceptance; existing workstream dispositions remain unchanged.
 
 The [FI acceptance specification](../specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md) defines the requirements and gates. These links map the existing evidence and open qualification for all 46 IDs.
 

@@ -1,3 +1,4 @@
+import { resolveAepEvaluationReference } from './aep-evaluation-reference.mts';
 import { randomUUID, createHash } from 'node:crypto';
 import { realpathSync,openSync,closeSync,lstatSync,fstatSync } from 'node:fs';
 import { dirname, relative, resolve, isAbsolute,sep,extname } from 'node:path';
@@ -1478,6 +1479,7 @@ export class BackendCore {
         const observed = resolveMissionHypothesis(this.missions.read(id, scope), hypothesisId, expectedRevision);
         return observed ? this.missionAdmission.previewWorkerBudgetExperiment(observed, cpuSlots) : null;
       }
+      case 'evaluation-reference': return resolveAepEvaluationReference(request.input, this.missions, scope);
       case 'execution-profile': {
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
         const mission = this.missions.read(request.input.id, scope, { includeReadyQueue: true });
