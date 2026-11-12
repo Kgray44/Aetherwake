@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as wait } from 'node:timers/promises';
 import type { MissionAttempt, MissionPreview, MissionProjection } from './mission-contracts.mts';
+import type { MissionExecutionProfile } from './execution-profiler.mts';
 import type { NativeHostServices } from './native-host.mts';
 import { Backend } from './service.mts';
 
@@ -13,8 +14,13 @@ const credential = process.env.OPENAI_API_KEY;
 if (process.platform !== 'win32' || process.env.AERYNTH_VERIFY_LIVE_MIXED !== '1' || !credential)
   throw Error('Windows, AERYNTH_VERIFY_LIVE_MIXED=1 and OPENAI_API_KEY are required');
 const serial = process.argv.includes('--serial');
+const sequential = process.argv.includes('--sequential');
 const contention = process.argv.includes('--gpu-contention');
-assert.ok(!serial || !contention, 'Choose one mixed verification mode');
+const skipGpu = process.argv.includes('--cpu-remote-only');
+const codexTestPath = process.env.AERYNTH_MIXED_CODEX_TEST;
+assert.ok(Number(serial) + Number(sequential) + Number(contention) <= 1, 'Choose one mixed verification mode');
+assert.ok(!skipGpu || !serial && !contention, 'CPU and remote mode cannot test GPU admission');
+assert.ok(!codexTestPath || skipGpu && isAbsolute(codexTestPath), 'Codex mode requires CPU/remote-only and an absolute reviewed test path');
 delete process.env.OPENAI_API_KEY;
 
 const root = mkdtempSync(join(tmpdir(), 'aerynth-arie-live-mixed-'));
@@ -36,7 +42,8 @@ const native: NativeHostServices = { secrets: {
 const provider = 'openai-api-vela';
 const model = 'gpt-6.1-sol';
 const effort = 'high';
-const objective = 'Investigate Aerynth backend performance with two independent specialists';
+const objective = codexTestPath ? 'Run selected Node tests and measure CPU and RAM with two independent specialists' :
+  'Investigate Aerynth backend performance with two independent specialists';
 const path = join(root, 'state.sqlite');
 
 let gpuStarted!: (id: string) => void;
@@ -56,7 +63,8 @@ const interval = (attempt: MissionAttempt) => [Date.parse(attempt.admittedAt), D
 let ownedBackend: Backend | undefined;
 try {
   const backend = ownedBackend = new Backend({ path, privateRoot: root,
-    contentPolicy: 'local-private', provider: 'fixture' }, native);
+    contentPolicy: 'local-private', provider: codexTestPath ? 'codex' : 'fixture',
+    ...(codexTestPath ? { cwd: dirname(codexTestPath) } : {}) }, native);
   backend.subscribe(event => {
     if (event.type === 'vela.mission/started' && event.payload.taskId === 'gpu-readback' && event.mission?.id)
       gpuStarted(event.mission.id);
@@ -85,13 +93,15 @@ try {
   assert.equal(reviewedSpecialists.length, 2);
   assert.ok(reviewedSpecialists.every(task => task.specialist?.provider === provider && task.specialist.model === model &&
     task.specialist.effort === effort && !task.specialist.webSearch && task.dependencies.length === 0));
-  const gpuReview = await backend.call('gpuReadbackNative', { name: 'preview' });
-  assert.ok(gpuReview.kind === 'preview');
+  const codexSelection = codexTestPath ? await backend.call('missionCheckReview', { paths: [codexTestPath] }) : undefined;
+  const gpuReview = skipGpu ? undefined : await backend.call('gpuReadbackNative', { name: 'preview' });
+  assert.ok(!gpuReview || gpuReview.kind === 'preview');
+  const cpuStart = process.cpuUsage();
   const start = performance.now();
-  const gpu = await backend.call('gpuReadbackNative', { name: 'start', reviewId: gpuReview.reviewId });
-  assert.ok(gpu.kind === 'started');
+  const gpu = gpuReview ? await backend.call('gpuReadbackNative', { name: 'start', reviewId: gpuReview.reviewId }) : undefined;
+  assert.ok(!gpu || gpu.kind === 'started');
   let contentionEntryPercent: number | undefined;
-  if (ownerHold) {
+  if (gpu && ownerHold) {
     // An external hardware workload supplies the actual pressure. The initial owner hold keeps the probe demanded.
     const queued = await until(() => read(gpu.missionId), result => result.admission?.reasons.includes('gpu-load') === true, 65_000);
     assert.equal(queued.outcome, 'queued');
@@ -102,16 +112,29 @@ try {
     const held = await until(inspect, state => state.reason === 'gpu_contention', 8_000);
     assert.ok(held.effective.remote >= 2);
     assert.equal(held.active.gpu, 0);
-  } else if (serial) await settled(gpu.missionId);
-  else {
+  } else if (gpu && (serial || sequential)) {
+    const result = await settled(gpu.missionId);
+    assert.equal(result.outcome, 'verified', JSON.stringify({ gpu: result.outcome, detail: result.tasks[0].detail,
+      attempt: result.tasks[0].attempts[0]?.evidence?.value }));
+  } else if (gpu) {
     const started = await Promise.race([gpuStart, wait(35_000, null, { ref: false })]);
     assert.equal(started, gpu.missionId, 'GPU task did not enter its authorized lease');
   }
+  // Establish the sequential limit before any specialist can enter the transport.
+  if (sequential) await backend.call('missionHostSignal', { storageAdmitted: false });
   const mission = await backend.call('missionStartReviewed', { objective, fingerprint: preview.fingerprint,
-    requestId: randomUUID() }) as MissionProjection;
+    requestId: randomUUID(), ...(codexSelection && codexTestPath ? {
+      approvedProjectCheck: { paths: [codexTestPath], digest: codexSelection.digest },
+    } : {}) }) as MissionProjection;
+  if (sequential) {
+    const controlled = await backend.call('missions', { name: 'control', input: { id: mission.id, revision: mission.revision,
+      control: { type: 'concurrency', concurrency: 1 } } }) as MissionProjection;
+    assert.ok(controlled.tasks.every(task => task.attempts.length === 0));
+    await backend.call('missionHostSignal', { storageAdmitted: true });
+  }
   let contentionAtMixedSettlement = false;
   const mixedSettlement = settled(mission.id).then(async result => {
-    if (contention) {
+    if (gpu && contention) {
       const state = await inspect();
       const queued = await read(gpu.missionId);
       assert.equal(state.reason, 'gpu_contention');
@@ -122,17 +145,25 @@ try {
     }
     return result;
   });
-  const [gpuResult, mixed] = await Promise.all([settled(gpu.missionId), mixedSettlement]);
+  const [gpuResult, mixed] = await Promise.all([gpu ? settled(gpu.missionId) : undefined, mixedSettlement]);
+  const totalMs = Math.round(performance.now() - start);
+  const processCpu = process.cpuUsage(cpuStart);
   const outcome = (result: MissionProjection) => ({ outcome: result.outcome,
     tasks: result.tasks.map(task => ({ id: task.id, state: task.state, reason: task.detail,
       providerStatus: (task.attempts[0]?.evidence?.value as { errorCode?: string } | undefined)?.errorCode })) });
-  assert.equal(gpuResult.outcome, 'verified', JSON.stringify(outcome(gpuResult)));
+  if (gpuResult) assert.equal(gpuResult.outcome, 'verified', JSON.stringify(outcome(gpuResult)));
   assert.equal(mixed.outcome, 'verified', JSON.stringify(outcome(mixed)));
-  const gpuAttempt = gpuResult.tasks[0].attempts[0];
-  const cpu = mixed.tasks.find(task => task.executor === 'inspect.backend-source')!.attempts[0];
+  const gpuAttempt = gpuResult?.tasks[0].attempts[0];
+  const cpu = mixed.tasks.find(task => task.executor === (codexTestPath ? 'sample.cpu' : 'inspect.backend-source'))!.attempts[0];
+  const check = mixed.tasks.find(task => task.executor === 'codex.project-check')?.attempts[0];
   const remote = mixed.tasks.filter(task => task.executor === 'api.specialist');
-  assert.equal(gpuAttempt.resourceLease?.kind, 'gpu');
-  assert.equal(cpu.resourceLease?.kind, 'cpu');
+  if (gpuResult) assert.equal(gpuAttempt?.resourceLease?.kind, 'gpu');
+  assert.equal(cpu.resourceLease?.kind, codexTestPath ? 'host_io' : 'cpu');
+  if (codexTestPath) {
+    assert.equal(check?.resourceLease?.kind, 'build');
+    assert.equal(check?.evidence?.source, 'codex-app-server:read-only-command');
+    assert.equal(check?.verification?.passed, true);
+  }
   assert.equal(remote.length, 2);
   assert.ok(remote.every(({ attempts: [attempt] }) => attempt.resourceLease?.kind === 'remote' &&
     attempt.evidence?.source === 'openai-api-vela:reported' && attempt.verification?.passed));
@@ -153,25 +184,49 @@ try {
     }
   } finally { receipts.close(); }
   assert.equal(dispatchedAt.size, 2);
-  const [gpuFrom, gpuTo] = interval(gpuAttempt), [cpuFrom, cpuTo] = interval(cpu);
+  const gpuInterval = gpuAttempt ? interval(gpuAttempt) : null;
+  const [cpuFrom, cpuTo] = interval(cpu);
   const remoteIntervals = remote.map(({ id, attempts: [attempt] }) => {
     const [from, to] = interval(attempt);
     const dispatched = dispatchedAt.get(id);
     assert.ok(dispatched !== undefined && dispatched >= from && dispatched <= to);
     return [dispatched, to] as const;
   });
-  const tripleOverlapMs = Math.max(0, ...remoteIntervals.map(([from, to]) =>
-    Math.min(gpuTo, cpuTo, to) - Math.max(gpuFrom, cpuFrom, from)));
+  const tripleOverlapMs = gpuInterval ? Math.max(0, ...remoteIntervals.map(([from, to]) =>
+    Math.min(gpuInterval[1], cpuTo, to) - Math.max(gpuInterval[0], cpuFrom, from))) : null;
   const cpuRemoteOverlapMs = Math.max(0, ...remoteIntervals.map(([from, to]) => Math.min(cpuTo, to) - Math.max(cpuFrom, from)));
+  const specialistOverlapMs = Math.max(0, Math.min(...remoteIntervals.map(([, end]) => end)) -
+    Math.max(...remoteIntervals.map(([from]) => from)));
+  const profile = await backend.call('missions', { name: 'execution-profile', input: { id: mixed.id } }) as MissionExecutionProfile;
+  assert.equal(profile.work.intervalCoverage.measured, profile.work.intervalCoverage.attempts);
+  assert.ok(profile.work.criticalPath && profile.work.dependencyReadinessPath);
+  const join = mixed.tasks.find(task => task.id === 'report')!;
+  const joined = join.attempts.at(-1)!;
+  assert.equal(joined.verification?.passed, true);
+  assert.deepEqual(joined.evidence?.value, join.dependencies.map(id => {
+    const evidence = mixed.tasks.find(task => task.id === id)!.attempts.at(-1)!.evidence!;
+    return { id: evidence.id, source: evidence.source, attemptId: evidence.attemptId };
+  }));
   const summary = (attempt: MissionAttempt) => ({ kind: attempt.resourceLease?.kind, timing: attempt.timing,
-    verified: attempt.verification?.passed, usage: attempt.telemetry?.usage });
-  if (contention) assert.ok(remoteIntervals.every(([, until]) => until <= gpuFrom), 'GPU started before remote work settled');
-  if (serial || contention) assert.equal(tripleOverlapMs, 0);
-  else assert.ok(tripleOverlapMs > 0, 'CPU, GPU, and live transport did not overlap');
-  console.log(JSON.stringify({ mode: contention ? 'gpu-contention' : serial ? 'serial-gpu' : 'overlap', model, effort, verified: true,
-    totalMs: Math.round(performance.now() - start), tripleOverlapMs, cpuRemoteOverlapMs, gpu: summary(gpuAttempt), cpu: summary(cpu),
+    verified: attempt.verification?.passed, usage: attempt.telemetry?.usage,
+    reservedRamBytes: attempt.resourceLease?.reservedRamBytes, reservedVramBytes: attempt.resourceLease?.reservedVramBytes });
+  if (contention && gpuInterval) assert.ok(remoteIntervals.every(([, until]) => until <= gpuInterval[0]), 'GPU started before remote work settled');
+  if (gpuInterval && (serial || sequential || contention)) assert.equal(tripleOverlapMs, 0);
+  if (sequential) {
+    assert.equal(profile.work.peakWorkers, 1);
+    assert.equal(profile.work.overlapMs, 0);
+    assert.equal(specialistOverlapMs, 0);
+  }
+  if (!serial && !sequential && !contention) assert.ok(specialistOverlapMs > 0, 'Live specialist transports did not overlap');
+  console.log(JSON.stringify({ mode: contention ? 'gpu-contention' : sequential ? 'sequential' : serial ? 'serial-gpu' : 'overlap',
+    model, effort, verified: true, totalMs, processCpu, tripleOverlapMs, cpuRemoteOverlapMs, specialistOverlapMs,
+    gpu: gpuAttempt ? summary(gpuAttempt) : null, cpu: summary(cpu), aep: { criticalPath: profile.work.criticalPath,
+      workerMs: profile.work.workerMs, overlapMs: profile.work.overlapMs, peakWorkers: profile.work.peakWorkers,
+      firstVerifiedMs: profile.admissionToFirstVerifiedTaskMs, cost: profile.economics.cost, costCoverage: profile.economics.costCoverage },
+    verifiedJoin: true, specialistClaimVerification: 'report-structure-and-attribution',
+    ...(check ? { codex: summary(check), codexResult: check.evidence?.value } : {}),
     ...(contention ? { contentionEntryPercent, contentionAtMixedSettlement, cpuIntervalUtcMs: [cpuFrom, cpuTo],
-      remoteIntervalsUtcMs: remoteIntervals, gpuAdmittedUtcMs: gpuFrom } : {}),
+      remoteIntervalsUtcMs: remoteIntervals, gpuAdmittedUtcMs: gpuInterval?.[0] } : {}),
     remote: remote.map(task => summary(task.attempts[0])), totalProviderCalls: dispatchedAt.size }));
 } finally {
   try { await ownedBackend?.close(); }
