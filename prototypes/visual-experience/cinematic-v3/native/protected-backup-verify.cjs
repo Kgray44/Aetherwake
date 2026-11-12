@@ -26,8 +26,15 @@ async function verify() {
   const sourcePath = join(scratch, 'source.sqlite');
   const copyPath = join(scratch, 'restored.sqlite');
   const proofPath = join(scratch, 'synthetic-proof.json');
+  const project = { kind: 'project', id: 'synthetic-backup-project' };
+  const origin = { kind: 'conversation-message', conversationId: 'synthetic-origin', messageId: 'synthetic-message',
+    version: '1', contentDigest: digest('Synthetic source message') };
+  const request = { requestId: 'synthetic-recall', assistant: 'ordinary', providerId: 'synthetic-provider',
+    query: 'What is the synthetic preference?', projectId: project.id, conversationId: 'synthetic-other-chat',
+    sharedFactIds: [], includeBehavior: false, maxBytes: 4096, maxItems: 4 };
   let stage = 'initialization';
   let store;
+  let sourceAvailable = true;
   function open(path, nativeStorage, existing = false) {
     const kernel = existing ? WorkspaceKernel.openExisting(path) : WorkspaceKernel.open(path);
     const client = createNativeHostClient(message => broker.handle(message));
@@ -46,6 +53,11 @@ async function verify() {
         identity: () => ({ userId: 'synthetic-backup-owner', policyVersion: '1' }),
         resolveScope: scope => ({ scope, version: '1' }),
         authorize: () => ({ decision: 'allow', policyVersion: '1', authorizationRef: 'synthetic-backup-review' }),
+        resolveConversationSource: ({ conversationId, messageId }) =>
+          sourceAvailable && conversationId === origin.conversationId && messageId === origin.messageId
+            ? { conversationId, messageId, projectId: project.id, version: origin.version,
+              contentDigest: origin.contentDigest, role: 'user', sensitive: false }
+            : null,
       },
     });
     return {
@@ -64,11 +76,11 @@ async function verify() {
       assert.equal(configured.version, 1);
       assert(!JSON.stringify(configured).includes(syntheticKey));
       const memory = await store.openMemory();
-      memory.setPolicy({ expectedVersion: 0, patch: { storageEnabled: true } });
+      memory.setPolicy({ expectedVersion: 0, patch: { storageEnabled: true, ordinaryEnabled: true } });
       const fact = memory.reviewFact({
-        scope: { kind: 'assistant.ordinary' }, purpose: 'knowledge', category: 'preferences',
+        scope: project, purpose: 'knowledge', category: 'preferences',
         text: 'synthetic-memory-' + randomUUID(), keywords: ['synthetic'], certainty: 'explicit-statement',
-        sensitive: false, expiresAt: null, source: { kind: 'user-statement' },
+        sensitive: false, expiresAt: null, source: origin,
       });
       await store.kernel.backupTo(copyPath);
       const backupBytes = readFileSync(copyPath);
@@ -94,6 +106,16 @@ async function verify() {
     assert.equal((await store.connection.status()).state, 'configured');
     const memory = await store.openMemory();
     assert.equal(digest(memory.readFact(expected.memoryId).text), expected.memoryDigest);
+    const recalled = memory.previewContext(request);
+    assert.deepEqual(recalled.items.map(item => item.factId), [expected.memoryId]);
+    assert.equal(digest(memory.validateContext(recalled, request).context.items[0].text), expected.memoryDigest);
+    assert.equal(memory.previewContext({ ...request, projectId: 'synthetic-foreign-project' }).items.length, 0);
+    sourceAvailable = false;
+    assert.throws(() => memory.validateContext(recalled, request), /stale_personal_context/);
+    assert.equal(memory.previewContext(request).items.length, 0);
+    sourceAvailable = true;
+    memory.revoke({ id: expected.memoryId, expectedVersion: 1 });
+    assert.equal(memory.previewContext(request).items.length, 0);
     store.close();
     store = undefined;
 
@@ -108,6 +130,7 @@ async function verify() {
       result: 'pass', mode, platform: process.platform, electron: process.versions.electron,
       sqliteBackupBytes: statSync(copyPath).size, restoredVersion: 1, unavailableCustodyDenied: true,
       protectedMemoryRestored: true,
+      sameProjectCrossConversationRecall: true, foreignProjectDenied: true, sourceLossDenied: true, revocationDenied: true,
     }));
   } catch (error) {
     // Assertion errors can carry actual values. Report only a stage and error class.
