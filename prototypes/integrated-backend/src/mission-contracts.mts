@@ -259,7 +259,7 @@ export interface MissionRevisionPreview {
     webSearch?: true;
   };
 }
-export interface MissionExecutiveRequest { id: string; revision: number; triggerSeq: number }
+export interface MissionExecutiveRequest { id: string; revision: number; triggerSeq: number; update?: string }
 export interface MissionExecutiveReview {
   request: MissionExecutiveRequest;
   fingerprint: string;

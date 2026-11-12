@@ -35,6 +35,7 @@ export interface ExecutivePacket {
   basedOnRevision: number;
   basedOnPlanRevision: number;
   objective: string;
+  reviewedUpdate?: string;
   disposition: MissionProjection['disposition'];
   outcome: MissionProjection['outcome'];
   trigger: { sequence: number; kind: 'settled' | 'recovered'; task: string | null };
@@ -44,6 +45,7 @@ export interface ExecutivePacket {
   completion?: { limitations: string[]; observations: { handle: string; kind: string; values: Record<string, number> }[] };
 }
 interface ExecutiveOwner {
+  update?: string;
   read(): MissionProjection;
   disclose(packet: ExecutivePacket, signal: AbortSignal, isCurrent: () => boolean): Promise<unknown>;
   preview(revision: number, change: MissionRevisionChange): MissionRevisionPreview;
@@ -126,10 +128,13 @@ function parseObjectiveAssessment(value: unknown, references: ReadonlyMap<string
   return findings.some(row => row.status === 'unverified') ? findings : undefined;
 }
 
-export function projectExecutiveCheckpoint(mission: MissionProjection, triggerSeq: number) {
+export function projectExecutiveCheckpoint(mission: MissionProjection, triggerSeq: number, update?: string) {
   const event = mission.events.findLast(entry => entry.kind === 'settled' || entry.kind === 'recovered');
   if (!event || event.seq !== triggerSeq || (event.kind !== 'settled' && event.kind !== 'recovered') ||
     mission.disposition === 'cancelled' || mission.tasks.length > MISSION_LIMITS.tasks) return;
+  if (update !== undefined && (typeof update !== 'string' || !update.trim() || Buffer.byteLength(update) > 2000 ||
+    update.includes('\0') || mission.disposition !== 'paused' ||
+    !mission.tasks.some(task => ['queued', 'failed', 'blocked'].includes(task.state)))) return;
   const handles = new Map(mission.tasks.map((task, index) => [task.id, 't' + (index + 1)]));
   const tasks = mission.tasks.map(task => ({
     handle: handles.get(task.id)!, objective: task.objective, state: task.state,
@@ -143,6 +148,7 @@ export function projectExecutiveCheckpoint(mission: MissionProjection, triggerSe
   const packet: ExecutivePacket = {
     version: 1, basedOnRevision: mission.revision, basedOnPlanRevision: mission.planRevision,
     objective: mission.objective, disposition: mission.disposition, outcome: mission.outcome,
+    ...(update === undefined ? {} : { reviewedUpdate: update }),
     trigger: { sequence: event.seq, kind: event.kind, task: event.taskId ? handles.get(event.taskId) ?? null : null },
     tasks,
   };
@@ -168,7 +174,7 @@ export async function proposeMissionExecutiveRevision(triggerSeq: number, owner:
   try {
     signal.throwIfAborted();
     const mission = structuredClone(owner.read());
-    const projected = projectExecutiveCheckpoint(mission, triggerSeq);
+    const projected = projectExecutiveCheckpoint(mission, triggerSeq, owner.update);
     if (!projected) return { state: 'unavailable' };
     const { packet, handles, observations } = projected;
     const encoded = JSON.stringify(packet);
@@ -179,7 +185,7 @@ export async function proposeMissionExecutiveRevision(triggerSeq: number, owner:
     if (Buffer.byteLength(encoded) > 12000) return { state: 'unavailable' };
     const isCurrent = () => {
       const current = owner.read();
-      return current.id === mission.id && JSON.stringify(projectExecutiveCheckpoint(current, triggerSeq)?.packet) === encoded;
+      return current.id === mission.id && JSON.stringify(projectExecutiveCheckpoint(current, triggerSeq, owner.update)?.packet) === encoded;
     };
     const raw = await owner.disclose(packet, signal, isCurrent);
     signal.throwIfAborted();

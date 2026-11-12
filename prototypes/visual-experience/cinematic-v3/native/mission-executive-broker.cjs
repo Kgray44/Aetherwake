@@ -9,7 +9,8 @@ async function reviewMissionExecutive({ request, parent, call, reviewProvider, i
   const review = await call("missionExecutiveReview", request);
   guard();
   if (!request || !review?.request || review.request.id !== request.id || review.request.revision !== request.revision ||
-    review.request.triggerSeq !== request.triggerSeq || !/^[a-f0-9]{64}$/.test(review.fingerprint))
+    review.request.triggerSeq !== request.triggerSeq || review.request.update !== request.update ||
+    review.packet?.reviewedUpdate !== request.update || !/^[a-f0-9]{64}$/.test(review.fingerprint))
     throw Error("mission_executive_review_changed");
   const prompt = JSON.stringify(review.packet, null, 2);
   const approved = await reviewProvider({

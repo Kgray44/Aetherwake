@@ -1032,10 +1032,11 @@ export function createVelaMissionView(
       body.querySelector<HTMLElement>('[data-mission-focus="revision-review-heading"]')?.focus();
     refresh();
   }
-  async function requestExecutiveReview(current: MissionProjection, triggerSeq: number) {
+  async function requestExecutiveReview(current: MissionProjection, triggerSeq: number, update?: string) {
     const assessing = canAssessObjective(current, scope);
     if (commandPending || (assessing ? mission?.id !== current.id || mission.revision !== current.revision : !currentRevision(current))) return;
-    await scopedCommand({ name: "executive-review", input: { id: current.id, revision: current.revision, triggerSeq } }, value => {
+    await scopedCommand({ name: "executive-review", input: { id: current.id, revision: current.revision, triggerSeq,
+      ...(update ? { update } : {}) } }, value => {
       if (!value || !("kind" in value) || value.kind !== "executive-result") throw Error("mission_executive_unavailable");
       const { result } = value;
       if (assessing) {
@@ -1270,12 +1271,19 @@ export function createVelaMissionView(
       });
       section.append(form);
     }
-    if (checkpoint && canRevise(current, scope) && current.tasks.some(task => ["failed", "blocked", "uncertain"].includes(task.state))) {
+    if (checkpoint && canRevise(current, scope) && current.tasks.some(task => ["queued", "failed", "blocked", "uncertain"].includes(task.state))) {
       if (executiveAdvisory) section.append(el("p", "vela-core-meta", executiveAdvisory));
-      if (!revision && !executiveAdvisory) {
-        const ask = button("Ask Vela to review this checkpoint", "executive-review", () => { void requestExecutiveReview(current, checkpoint.seq); });
-        ask.disabled = commandPending;
-        section.append(ask);
+      if (!revision) {
+        const label = el("label", undefined, "New information for this checkpoint (optional)");
+        const update = el("input");
+        update.maxLength = 500;
+        label.append(update);
+        const ask = button("Ask Vela to review this checkpoint", "executive-review",
+          () => { void requestExecutiveReview(current, checkpoint.seq, update.value.trim()); });
+        const setAvailability = () => { ask.disabled = commandPending || (!!executiveAdvisory && !update.value.trim()); };
+        update.addEventListener("input", setAvailability);
+        setAvailability();
+        section.append(label, ask);
       }
     }
     if(current.coverage)section.append(el("p","vela-core-meta","Investigation incomplete: "+current.coverage.limitations.join(' ')));
