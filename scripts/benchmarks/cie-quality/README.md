@@ -22,3 +22,9 @@ Fresh evaluation inputs must be independently authored and frozen before impleme
     prototypes/integrated-backend/node_modules/.bin/tsc -p scripts/benchmarks/cie-quality/tsconfig.json
 
 No provider request, secret reader, native qualification, or performance/accuracy improvement is implied by these offline checks.
+
+## Independent blind corpus
+
+`cases.public.json` is the independently authored, frozen input-only 48-case corpus (six examples in each of eight categories). Its exact SHA-256 is pinned in `blind-runner.mts`. Labels and adjudication rationales are deliberately not checked in and have not been consulted by the implementer. The fixture file expands semantic evaluation inputs sixfold over the original eight-case set; **that is corpus expansion, not a claimed measured accuracy gain**.
+
+`runBlindCie` accepts an injected, authorized canonical host executor. It submits no requests itself, cannot read credentials, never retries a case and returns a digest of predictions with the candidate commit/tree. A host failure retains completed predictions and an explicit incomplete stop marker. The native host must preserve its own canonical AEP evidence, exact source/permission checks, call limits, and credential protection. Full-request measurement begins before the host callback, so qualification and preparation belong inside it. Synthetic runner tests test mechanics only; their output is not model accuracy evidence.
