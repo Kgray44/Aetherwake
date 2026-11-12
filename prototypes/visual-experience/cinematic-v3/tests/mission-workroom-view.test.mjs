@@ -242,3 +242,71 @@ test("a visible performance card reports host pressure and refreshes until its m
     assert.equal(reads, before + 1);
   } finally { view.dispose(); }
 });
+
+test('mounted intelligence inspection preserves spatial task identity, keyboard focus and explicit missing sources', async t => {
+  const dom = blockDocument(), restore = dom.install(), port = flowPort(), mission = fullMission();
+  const view = mountMissionWorkroomView(dom.root, 'stream', 'workroom', async () => binding({ kind: 'stream', events: [] }), undefined,
+    () => {}, undefined, { motion: port.motion, viewId: 'synthetic:intelligence', readMission: async () => mission });
+  t.after(() => { view.dispose(); restore(); }); await view.refresh();
+  const details = dom.root.querySelector('.aw-intelligence-inspection'), summary = details.querySelector('summary');
+  const task = dom.root.querySelector('[data-mission-task-id="cpu"]'); task.onclick();
+  const inspector = dom.root.querySelector('.aw-stream-inspector');
+  const tabs = details.querySelectorAll('[role="tab"]');
+  assert.equal(tabs.length, 6); assert.equal(details.querySelectorAll('[role="tabpanel"]').length, 1);
+  for (let i = 0; i < 3; i++) { details.open = true; tabs[3].onclick(); assert.match(details.textContent, /Unavailable: no authorized learning-record projection/);
+    tabs[3].focus(); details.onkeydown({ key: 'Escape', preventDefault() {}, stopPropagation() {} });
+    assert.equal(details.open, false); assert.equal(dom.doc.activeElement, summary); }
+  details.open = true; tabs[0].onkeydown({ key: 'End', preventDefault() {}, stopPropagation() {} });
+  assert.equal(dom.doc.activeElement, tabs[5]); assert.equal(tabs[5].getAttribute('aria-selected'), 'true');
+  assert.equal(tabs.filter(b => b.tabIndex === 0).length, 1);
+  tabs[5].onkeydown({ key: 'ArrowRight', preventDefault() {}, stopPropagation() {} }); assert.equal(dom.doc.activeElement, tabs[0]);
+  tabs[4].onclick(); assert.match(details.textContent, /Unavailable: no authorized experiment projection/);
+  await view.refresh();
+  assert.equal(dom.root.querySelector('[data-mission-task-id="cpu"]'), task);
+  assert.equal(dom.root.querySelector('.aw-stream-inspector'), inspector); assert.equal(port.poses.size, 3);
+  assert.equal(details.querySelector('[data-intelligence-zone="experiment"]'), tabs[4]);
+  assert.equal(tabs[4].getAttribute('aria-selected'), 'true');
+  assert.match(details.textContent, /Recorded mission mission-a.*Snapshot, not live telemetry/);
+});
+
+test('mounted inspection erases revoked and interrupted scope data before pending reads settle', async t => {
+  const dom = blockDocument(), restore = dom.install(), port = flowPort(); let allowed = true, release;
+  const mission = fullMission(); mission.planning = { responseId: 'synthetic:response', model: 'synthetic-model', providerEvidence: 'simulated', startedAt: '2026-11-12T00:00:00Z' };
+  let reader = async () => mission;
+  const view = mountMissionWorkroomView(dom.root, 'stream', 'workroom', async () => {
+    if (!allowed) throw Error('denied'); return binding({ kind: 'stream', events: [] });
+  }, undefined, () => {}, undefined, { motion: port.motion, viewId: 'synthetic:scope-inspection', readMission: () => reader() });
+  t.after(() => { view.dispose(); restore(); }); await view.refresh();
+  const details = dom.root.querySelector('.aw-intelligence-inspection'); assert.match(details.textContent, /synthetic-model.*simulated/);
+  details.open = true; details.querySelector('[role="tab"]').focus();
+  allowed = false; view.observe(true); assert.doesNotMatch(details.textContent, /synthetic-model/); assert.equal(details.open, false);
+  await view.refresh(); assert.doesNotMatch(details.textContent, /synthetic-model/);
+  allowed = true; reader = () => new Promise(resolve => { release = resolve; });
+  const pending = view.refresh(); await Promise.resolve(); await Promise.resolve();
+  view.setScope(null); assert.doesNotMatch(details.textContent, /synthetic-model/);
+  release(mission); await pending; assert.doesNotMatch(details.textContent, /synthetic-model/); assert.equal(port.poses.size, 0);
+});
+
+test('inspection reads AEP on demand and discards its reply after access changes', async t => {
+  const dom = blockDocument(), restore = dom.install(), port = flowPort();
+  const mission = fullMission();
+  let calls = 0, resolve;
+  const reply = new Promise(done => { resolve = done; });
+  const view = mountMissionWorkroomView(dom.root, 'stream', 'workroom', async () => binding({ kind: 'stream', events: [] }),
+    undefined, () => {}, undefined, { motion: port.motion, viewId: 'synthetic:aep',
+      readMission: async () => mission, readProfile: async id => { calls++; assert.equal(id, mission.id); return reply; } });
+  t.after(() => { view.dispose(); restore(); });
+  await view.refresh();
+  assert.equal(calls, 0);
+  const inspection = dom.root.querySelector('.aw-intelligence-inspection');
+  inspection.open = true;
+  inspection.ontoggle();
+  inspection.ontoggle();
+  assert.equal(calls, 1);
+  view.setScope(null);
+  resolve({ contract: 'aerynth.mission-execution-profile@1', missionId: mission.id, revision: mission.revision,
+    work: { criticalPath: { attemptIds: ['synthetic:private-attempt'] } } });
+  await view.refresh();
+  assert.equal(inspection.open, false);
+  assert.doesNotMatch(inspection.textContent, /synthetic:private-attempt|Full execution profile unavailable/);
+});
