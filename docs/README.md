@@ -4,6 +4,7 @@ Start here to find the right source, rather than treating the newest-looking fil
 
 ## Run and understand the application
 
+- [Current State of Aerynth](engineering/CURRENT-STATE-OF-AERYNTH.md) maps the connected implementation, evidence and remaining gaps.
 - [Application guide](../prototypes/visual-experience/cinematic-v3/APPLICATION.md): Windows prerequisites, launch commands, local data/recovery and explicit offline native verification.
 - [Root project overview](../README.md): product identity and the dated engineering checkpoint.
 - [A4 Architecture Recovery handoff](engineering/A4-ARCHITECTURE-RECOVERY-HANDOFF.md): canonical owners, route boundaries and remaining recovery qualification.
