@@ -69,6 +69,7 @@ jobs:
       - name: Check native journey script syntax
         run: node --check scripts/verify-living-instruments-native.mjs
       - name: Exercise the cross-package acceptance fixtures
+        id: acceptance
         env:
           AERYNTH_ACCEPTANCE_OUTPUT: ${{ runner.temp }}/aerynth-acceptance
         run: node scripts/run-aerynth-acceptance.mts
@@ -78,5 +79,5 @@ jobs:
         with:
           name: aerynth-acceptance-${{ inputs.runner }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/aerynth-acceptance/acceptance.json
-          if-no-files-found: ${{ success() && 'error' || 'warn' }}
+          if-no-files-found: ${{ steps.acceptance.outcome == 'success' && 'error' || 'warn' }}
           retention-days: 14
