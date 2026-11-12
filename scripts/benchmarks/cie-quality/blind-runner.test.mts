@@ -14,7 +14,7 @@ test('independently frozen 48-case inputs contain no labels or rationales', () =
 test('blind runner invokes the host once per case, records no manufactured outcomes and hashes predictions', async () => {
   let calls = 0;
   const result = await runBlindCie(bytes, { commit: 'a'.repeat(40), tree: 'b'.repeat(40) }, async input => {
-    calls++; assert.equal('expected' in input, false); return { state: 'synthetic-test-only' };
+    calls++; assert.equal('expected' in input, false); assert.equal('category' in input, false); return { state: 'synthetic-test-only' };
   }, new AbortController().signal);
   assert.equal(calls, 48); assert.equal(result.results.length, 48);
   assert.match(result.predictionSha256, /^[a-f0-9]{64}$/);
