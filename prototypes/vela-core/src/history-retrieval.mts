@@ -13,14 +13,36 @@ export function canonicalRetrievalQuery(value: string | undefined, history = fal
   return { terms: selected, digest: createHash('sha256').update(JSON.stringify(selected)).digest('hex') };
 }
 export interface CanonicalRetrievalCandidate { id: string; text: string; identities?: readonly string[] }
-export function rankCanonicalRetrieval(query: { terms: readonly string[] }, candidates: readonly CanonicalRetrievalCandidate[]): { ids: string[]; ambiguous: boolean } {
-  const index = new Map<string, Set<string>>(), identities = new Map<string, ReadonlySet<string>>();
+export function createCanonicalRetrievalRanker(candidates: readonly CanonicalRetrievalCandidate[]) {
+  const index = new Map<string, Set<string>>();
+  const identities = new Map<string, Set<string>>();
   for (const item of candidates) {
-    identities.set(item.id, new Set((item.identities ?? []).map(id => id.toLowerCase())));
-    for (const term of terms(item.text, 1024)) { const ids = index.get(term) ?? new Set<string>(); ids.add(item.id); index.set(term, ids); }
+    for (const identity of item.identities ?? []) add(identities, identity.toLowerCase(), item.id);
+    for (const term of terms(item.text, 1024)) add(index, term, item.id);
   }
-  const scores = candidates.map(item => ({ id: item.id, score: query.terms.reduce((score, term) => score +
-    (identities.get(item.id)?.has(term) ? 1000 : index.get(term)?.has(item.id) ? 1 + 1 / index.get(term)!.size : 0), 0) }))
-    .filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
-  return { ids: scores.map(item => item.id), ambiguous: scores.length > 1 && Math.abs(scores[0].score - scores[1].score) < 1e-9 };
+  return (query: { terms: readonly string[] }): { ids: string[]; ambiguous: boolean } => {
+    const weights = new Map<string, number>();
+    for (const term of query.terms) {
+      const exact = identities.get(term);
+      const lexical = index.get(term);
+      for (const id of exact ?? []) weights.set(id, (weights.get(id) ?? 0) + 1000);
+      if (!lexical) continue;
+      const weight = 1 + 1 / lexical.size;
+      for (const id of lexical) {
+        if (!exact?.has(id)) weights.set(id, (weights.get(id) ?? 0) + weight);
+      }
+    }
+    const scores = [...weights].sort(([a, aScore], [b, bScore]) => bScore - aScore || a.localeCompare(b));
+    return { ids: scores.map(([id]) => id), ambiguous: scores.length > 1 && Math.abs(scores[0][1] - scores[1][1]) < 1e-9 };
+  };
+}
+
+function add(index: Map<string, Set<string>>, term: string, id: string) {
+  const ids = index.get(term);
+  if (ids) ids.add(id);
+  else index.set(term, new Set([id]));
+}
+
+export function rankCanonicalRetrieval(query: { terms: readonly string[] }, candidates: readonly CanonicalRetrievalCandidate[]) {
+  return createCanonicalRetrievalRanker(candidates)(query);
 }

@@ -4,9 +4,12 @@ const statuses = ['supported', 'partial', 'contradicted', 'missing', 'stale', 'i
 type Status = typeof statuses[number];
 const intentKinds = ['answer', 'recall', 'plan', 'revise', 'clarify', 'unknown'] as const;
 const deliverableKinds = ['text', 'document', 'file', 'code', 'image', 'action', 'interactive'] as const;
-const maxNeeds = 4;
-const maxCandidates = 8;
+export const maxSemanticHistoryNeeds = 6;
+const maxCandidates = 14;
 const maxRounds = 2;
+const maxPassagesPerNeed = 8;
+export const maxSemanticAssessmentBytes = 32 * 1024;
+const gapReserveBytes = 4 * 1024;
 const maxExcerptBytes = 2048;
 export const maxReviewedStateBytes = 4096;
 export const maxReviewedFileBytes = 12000;
@@ -74,6 +77,8 @@ interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHi
 interface SemanticHistoryOwner<T extends SemanticHistorySource> {
   /** Longer reviewed investigations can retain the same call and evidence limits. */
   timeBudgetMs?: number;
+  /** Serialized bytes appended by the owner to the assessment payload. */
+  assessmentMetadataBytes?: number;
   // The owner authorizes the current scope on every search and resolves canonical revisions.
   search(query: string): SemanticHistoryCandidates<T>;
   selected?(): SemanticHistoryCandidates<T>;
@@ -121,7 +126,7 @@ export function parseSemanticHistoryProposal(value: unknown): Proposal | undefin
   const legacy = exact(value, fields) && value.version === 1;
   const current = exact(value, [...fields, 'perception']) && value.version === 2 && validPerception(value.perception);
   if (!(legacy || current) || !bounded(value.objective, 512) || !bounded(value.clarification, 512, true) || !Array.isArray(value.needs) ||
-    value.needs.length > maxNeeds) return;
+    value.needs.length > maxSemanticHistoryNeeds) return;
   const keys = new Set<string>();
   for (const need of value.needs) {
     if (!exact(need, ['key', 'question', 'query']) || !bounded(need.key, 24) || !/^[a-zA-Z0-9_-]+$/.test(need.key) ||
@@ -132,7 +137,7 @@ export function parseSemanticHistoryProposal(value: unknown): Proposal | undefin
   return structuredClone(value) as unknown as Proposal;
 }
 function parsePassages(value: unknown, evidence: ReadonlyMap<string, { text: string }>): Passage[] | undefined {
-  if (!Array.isArray(value) || value.length > maxCandidates) return;
+  if (!Array.isArray(value) || value.length > maxPassagesPerNeed) return;
   const passages: Passage[] = [];
   for (const item of value) {
     if (!exact(item, ['source', 'quote']) || typeof item.source !== 'string' || !bounded(item.quote, 512) ||
@@ -202,7 +207,15 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     const needs = pendingClarification
       ? [{ key: 'clarification', question: pendingClarification, query: canonicalRetrievalQuery(request)?.terms.join(' ') ?? '' }]
       : proposal.needs;
+    const candidateLimit = Math.min(maxCandidates, Math.max(8, 2 * needs.length + 2));
     const evidence = new Map<string, T>(), observed = new Set<string>();
+    const excerpts: Extract<SemanticHistoryCall, { stage: 'assess' }>['excerpts'][number][] = [];
+    const assessmentInput = {
+      stage: 'assess' as const, request, needs: structuredClone(needs), round: 1,
+      ...(pendingClarification ? { proposedClarification: pendingClarification } : {}),
+    };
+    let assessmentBytes = Buffer.byteLength(JSON.stringify({ ...assessmentInput, excerpts: [] }));
+    const assessmentLimit = maxSemanticAssessmentBytes - (owner.assessmentMetadataBytes ?? 0);
     const queries = new Set<string>();
     let next = needs.map(need => need.query).filter(Boolean);
     let anchorsRead = false;
@@ -222,7 +235,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     const recordScan = (scan: SemanticHistoryScan) => {
       if (searchCoverage === null || searchCoverage === 'bounded' || scan === 'unavailable') searchCoverage = scan;
     };
-    const addCandidates = ({ sources, scan }: SemanticHistoryCandidates<T>, limit = maxCandidates) => {
+    const addCandidates = ({ sources, scan }: SemanticHistoryCandidates<T>, limit = candidateLimit) => {
       recordScan(scan);
       if (sources.length > 2 * maxCandidates) partial();
       for (const source of sources.slice(0, 2 * maxCandidates)) {
@@ -235,8 +248,19 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
           if (evidence.size >= limit) break;
           continue;
         }
+        const handle = 'e' + (evidence.size + 1);
+        const excerpt = {
+          handle, text: source.text, ...(source.sourceKind ? { sourceKind: source.sourceKind } : {}),
+          ...(bounded(source.title, 512) ? { title: source.title } : {}),
+          ...(source.partial ? { partial: true as const } : {}),
+        };
+        const bytes = Buffer.byteLength(JSON.stringify(excerpt)) + Number(excerpts.length > 0);
+        const byteLimit = rounds === 1 ? assessmentLimit - gapReserveBytes : assessmentLimit;
+        if (assessmentBytes + bytes > byteLimit) { partial(); continue; }
+        assessmentBytes += bytes;
+        excerpts.push(excerpt);
         observed.add(source.sourceId);
-        evidence.set('e' + (evidence.size + 1), source);
+        evidence.set(handle, source);
       }
     };
 
@@ -246,7 +270,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       rounds++;
       const priorCount = evidence.size;
       // Preserve selected evidence and leave discovery slots for refined queries.
-      const limit = rounds < maxRounds ? Math.max(priorCount, maxCandidates - 2) : maxCandidates;
+      const limit = rounds < maxRounds ? Math.max(priorCount, candidateLimit - 2) : candidateLimit;
       const matches: T[][] = [];
       for (const query of next) {
         const digest = canonicalRetrievalQuery(query)!.digest;
@@ -276,13 +300,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       if (pendingClarification && !evidence.size) return { ...empty('assessed'), proposal, clarification: pendingClarification };
       const sources = [...evidence.values()];
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
-      const reviewed = await disclose({ stage: 'assess', request, needs: structuredClone(needs), round: rounds,
-        ...(pendingClarification ? { proposedClarification: pendingClarification } : {}),
-        excerpts: [...evidence].map(([handle, source]) => ({
-          handle, text: source.text, ...(source.sourceKind ? { sourceKind: source.sourceKind } : {}),
-          ...(bounded(source.title, 512) ? { title: source.title } : {}),
-          ...(source.partial ? { partial: true as const } : {}),
-        })) }, sources);
+      const reviewed = await disclose(structuredClone({ ...assessmentInput, round: rounds, excerpts }), sources);
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
       if (reviewed == null) return empty('unavailable', 'no-provider-result');
       let rejection: AssessmentRejection = 'assessment-shape';
@@ -292,7 +310,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       const gaps = assessment.rows.filter(row => row.status !== 'supported');
       next = gaps.filter(row => row.query && !queries.has(canonicalRetrievalQuery(row.query)!.digest)).map(row => row.query);
       investigateAnchors = !!owner.recent && !anchorsRead && gaps.length > 0;
-      const budgetExhausted = rounds === maxRounds || evidence.size === maxCandidates;
+      const budgetExhausted = rounds === maxRounds || evidence.size === candidateLimit;
       if ((next.length || investigateAnchors) && budgetExhausted) partial();
       if ((!next.length && !investigateAnchors) || budgetExhausted) return assessed(assessment);
     }
