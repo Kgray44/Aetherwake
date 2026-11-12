@@ -191,6 +191,7 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
       return investigateSemanticHistory(request, {
         ...(discovery?.missionGap ? { timeBudgetMs: 75_000 } : {}),
         assessmentMetadataBytes: serializedMetadata === '{}' ? 0 : Buffer.byteLength(serializedMetadata) - 1,
+        adaptiveDiscovery: !!discovery,
         selected: () => ({ sources, scan: sources.some(source => source.partial) ? 'partial' : 'bounded' }),
         search: query => {
           const parsed = canonicalRetrievalQuery(query);

@@ -9,7 +9,7 @@ const maxCandidates = 14;
 const maxRounds = 2;
 const maxPassagesPerNeed = 8;
 export const maxSemanticAssessmentBytes = 32 * 1024;
-const gapReserveBytes = 4 * 1024;
+const gapReserveBytes = 5 * 1024;
 const maxExcerptBytes = 2048;
 export const maxReviewedStateBytes = 4096;
 export const maxReviewedFileBytes = 12000;
@@ -79,6 +79,8 @@ interface SemanticHistoryOwner<T extends SemanticHistorySource> {
   timeBudgetMs?: number;
   /** Serialized bytes appended by the owner to the assessment payload. */
   assessmentMetadataBytes?: number;
+  /** Widen discovery only for reviewed snapshots with short source excerpts. */
+  adaptiveDiscovery?: boolean;
   // The owner authorizes the current scope on every search and resolves canonical revisions.
   search(query: string): SemanticHistoryCandidates<T>;
   selected?(): SemanticHistoryCandidates<T>;
@@ -207,7 +209,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     const needs = pendingClarification
       ? [{ key: 'clarification', question: pendingClarification, query: canonicalRetrievalQuery(request)?.terms.join(' ') ?? '' }]
       : proposal.needs;
-    const candidateLimit = Math.min(maxCandidates, Math.max(8, 2 * needs.length + 2));
+    const candidateLimit = owner.adaptiveDiscovery ? Math.min(maxCandidates, Math.max(8, 2 * needs.length + 2)) : 8;
     const evidence = new Map<string, T>(), observed = new Set<string>();
     const excerpts: Extract<SemanticHistoryCall, { stage: 'assess' }>['excerpts'][number][] = [];
     const assessmentInput = {
@@ -255,7 +257,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
           ...(source.partial ? { partial: true as const } : {}),
         };
         const bytes = Buffer.byteLength(JSON.stringify(excerpt)) + Number(excerpts.length > 0);
-        const byteLimit = rounds === 1 ? assessmentLimit - gapReserveBytes : assessmentLimit;
+        const byteLimit = rounds === 1 && owner.adaptiveDiscovery ? assessmentLimit - gapReserveBytes : assessmentLimit;
         if (assessmentBytes + bytes > byteLimit) { partial(); continue; }
         assessmentBytes += bytes;
         excerpts.push(excerpt);

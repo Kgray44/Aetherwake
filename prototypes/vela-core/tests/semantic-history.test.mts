@@ -37,6 +37,7 @@ test('widens bounded candidate admission for six distinct needs and reserves gap
   const source = (text: string) => ({ sourceId: text, revision: '1', text });
   const gap = source('resolved gap');
   const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
     search: query => ({ sources: query === 'resolved gap' ? [gap] : [source(query + ' alpha'), source(query + ' beta')], scan: 'bounded' }),
     isCurrent: () => true,
     disclose: async call => {
@@ -58,6 +59,7 @@ test('reserves serialized bytes for gap recovery when first-pass excerpts are la
   const source = (id: string) => ({ sourceId: id, revision: '1', sourceKind: 'conversation-exchange' as const, text: id.padEnd(3800, 'x') });
   const gap = source('refined result');
   const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
     search: query => ({ sources: query === 'refined search' ? [gap] : [source(query + 'a'), source(query + 'b')], scan: 'bounded' }),
     isCurrent: () => true,
     disclose: async call => {
