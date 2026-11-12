@@ -144,6 +144,7 @@ export interface MissionAttemptPhaseTiming {
   verification?: MissionPhaseInterval;
 }
 export interface MissionAttempt {
+  backendInspection?: import('./mission-source-receipt.mts').BackendInspectionReceipt;
   id: string;
   executor: string;
   admittedAt: string;
@@ -420,6 +421,8 @@ export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSum
   { kind: 'mission-report'; missionId: string; messageId: string } | null;
 
 export interface MissionExecutionContext {
+  /** Trusted fixed-source producer only; unavailable to renderer/model tools. */
+  recordBackendInspection?(terminal: import('./mission-source-receipt.mts').BackendInspectionTerminal): void;
   /** Cooperative checkpoint request. Task cancellation remains a separate signal. */
   resourceCheckpoint?: AbortSignal;
   missionId: string;

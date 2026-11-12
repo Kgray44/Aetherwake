@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { backendInspectionBinding, backendInspectionCurrent } from './mission-source-receipt.mts';
+import { isExitedBackendInspection } from './mission-cpu-pool.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import { compileMissionContext, createMissionContextCache, validateMissionContext, validateMissionContextSources,
   type MissionContextSource } from '../../vela-core/src/mission-context.mts';
@@ -509,6 +511,15 @@ export class MissionService {
 
   control(id: string, scope: MissionScope, revision: number, control: MissionControl): MissionProjection {
     this.requireOpen();
+    // Retry of this qualified original result means readback, never another worker dispatch.
+    if (control?.type === 'retry') {
+      const current = this.lookup(id);
+      this.requireAccess(current, scope);
+      const task = taskOf(current, control.taskId), attempt = task?.attempts.at(-1);
+      if (task?.executor === 'inspect.backend-source' && attempt?.backendInspection &&
+        (task.state === 'failed' || task.state === 'uncertain'))
+        return this.reconcileBackendInspection(id, scope, revision, task.id, attempt.id);
+    }
     const aborts: string[] = [];
     const m = this.update(id, value => {
       this.requireAccess(value, scope);
@@ -676,6 +687,48 @@ export class MissionService {
         this.event(mission, { kind: 'recovered', taskId: task.id, detail: 'blocked' });
       }
     }
+  }
+
+  /** Host-only, fixed read-only inspection class. Never dispatches an executor. */
+  reconcileBackendInspection(id: string, scope: MissionScope, revision: number, taskId: string, attemptId: string): MissionProjection {
+    this.requireOpen();
+    const mission = this.update(id, current => {
+      this.requireAccess(current, scope);
+      check(current.revision === revision, 'mission_revision_changed');
+      check(current.disposition !== 'cancelled', 'mission_reconciliation_denied');
+      const task = taskOf(current, taskId), attempt = task?.attempts.at(-1), receipt = attempt?.backendInspection;
+      check(task && attempt?.id === attemptId && task.executor === 'inspect.backend-source' &&
+        receipt?.contract === 'aerynth.backend-inspection-terminal@1' && receipt.missionId === id &&
+        receipt.taskId === taskId && receipt.attemptId === attemptId && receipt.scopeDigest === digest({ workspaceId: scope.workspaceId, projectId: scope.projectId }) &&
+        receipt.claimsDigest === digest(task.claims) && receipt.contextDigest === digest(attempt.context) && receipt.terminal && typeof receipt.terminal === 'object' &&
+        receipt.terminalDigest === digest(receipt.terminal) &&
+        receipt.effectId === receipt.terminal.exit?.effectId &&
+        typeof receipt.observedAt === 'string' && Number.isFinite(Date.parse(receipt.observedAt)) &&
+        attempt.dispatch?.contract === 'aerynth.mission-dispatch@1' && attempt.dispatch?.state === 'entered' && attempt.dispatch.attemptId === attemptId &&
+        receipt.reservedRevision === attempt.dispatch.reservedRevision && current.events.some(event =>
+          event.kind === 'started' && event.seq === receipt.reservedRevision && event.taskId === taskId && event.attemptId === attemptId) &&
+        receipt.terminal.bindingDigest === backendInspectionBinding({ missionId: id, task, attemptId, scope }) &&
+        backendInspectionCurrent(receipt.terminal) && this.contextIsCurrent(current, task, attempt, new Map()),
+        'mission_reconciliation_denied');
+      if (task.state === 'verified') {
+        check(attempt.outcome === 'verified' && attempt.evidence?.id === receipt.evidenceId &&
+          attempt.verification?.passed && attempt.verification.evidenceIds.includes(receipt.evidenceId) &&
+          current.events.some(event => event.kind === 'recovered' && event.seq === receipt.reconciledRevision &&
+            event.taskId === taskId && event.attemptId === attemptId && event.detail === 'original_source_inspection_reconciled'),
+          'mission_reconciliation_denied');
+        return;
+      }
+      check(task.state === 'uncertain' || task.state === 'failed', 'mission_reconciliation_denied');
+      const evidence = { ...structuredClone(receipt.terminal.evidence), id: receipt.evidenceId, attemptId,
+        observedAt: receipt.observedAt };
+      attempt.evidence = evidence;
+      attempt.verification = { criterion: task.criterion, passed: true, detail: 'Verified original retired source-inspection worker and current source', evidenceIds: [evidence.id] };
+      task.state = 'verified'; task.detail = 'original_source_inspection_reconciled'; attempt.outcome = 'verified';
+      this.event(current, { kind: 'recovered', taskId, attemptId, detail: 'original_source_inspection_reconciled' });
+      receipt.reconciledRevision = current.revision;
+    });
+    this.wake();
+    return this.project(mission);
   }
 
   private conflict(task: MissionTaskPlan) {
@@ -952,6 +1005,19 @@ export class MissionService {
     const timing: NonNullable<MissionAttempt['timing']> = {
       queueMs: Math.max(0, Date.now() - Date.parse(task.queuedAt)),
       contextPreparationMs: assembledAt - compilingAt,
+    };
+    if (task.executor === 'inspect.backend-source') context.recordBackendInspection = terminal => {
+      check(isExitedBackendInspection(terminal) && terminal.bindingDigest === backendInspectionBinding(context) && backendInspectionCurrent(terminal), 'mission_inspection_receipt_invalid');
+      this.update(m.id, current => {
+        this.requireAccess(current, m.scope);
+        const value = taskOf(current, task.id), attempt = value?.attempts.at(-1);
+        check(value?.state === 'running' && attempt?.id === id && attempt.dispatch?.state === 'entered' &&
+          !attempt.backendInspection && !abort.signal.aborted &&
+          this.contextIsCurrent(current, value, attempt, new Map()), 'mission_inspection_receipt_denied');
+        attempt.backendInspection = { contract: 'aerynth.backend-inspection-terminal@1', missionId: m.id, taskId: task.id,
+          attemptId: id, scopeDigest: digest({ workspaceId: m.scope.workspaceId, projectId: m.scope.projectId }), claimsDigest: digest(task.claims), contextDigest: digest(attempt.context),
+          reservedRevision: attempt.dispatch.reservedRevision, evidenceId: randomUUID(), terminalDigest: digest(terminal), observedAt: stamp(), effectId: terminal.exit!.effectId, terminal: structuredClone(terminal) };
+      });
     };
     const resources = this.host.resources;
     const lease = resources?.acquire(executor.lane,
