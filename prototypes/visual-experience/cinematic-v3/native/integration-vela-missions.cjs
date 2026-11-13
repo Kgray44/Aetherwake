@@ -909,6 +909,28 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         intakeToReceiptMs: presentation.intakeToUserDeliveryMs,
         reportEventId: reportPublication.eventId, reportLatency, firstMeaningfulOutput: presentation.firstMeaningfulOutput, leases };
       if (recordAiw) {
+        const aiw = '[data-surface-id="adaptive-intelligence-workspace"]';
+        const entry = source => source + ' .aw-adaptive-workspace-entry';
+        const witnessEntry = async (source, captureName) => {
+          const before = await desktop();
+          await click(entry(source));
+          await wait("Anchored AIW opens over its source", () => js(`(() => {
+            const aiw = document.querySelector(${quote(aiw)});
+            const source = document.querySelector(${quote(source)});
+            return aiw?.open && source?.open && !!aiw.querySelector('select option[value=' + CSS.escape(${quote(missionId)}) + ']');
+          })()`));
+          await js(`document.querySelector(${quote(aiw + ' select')}).focus()`);
+          key("Down");
+          await wait("AIW opens the canonical mission", () => js(`document.querySelector(${quote(aiw + ' .aw-intelligence-inspection')})?.textContent.includes(${quote(missionId)})`));
+          await capture(captureName);
+          await click(aiw + ' [aria-label="Close panel"]');
+          await wait("AIW restores its source focus", () => js(`!document.querySelector(${quote(aiw)}) &&
+            document.querySelector(${quote(source)})?.open && document.activeElement === document.querySelector(${quote(entry(source))})`));
+          const after = await desktop();
+          assert.equal(after.activeWorkspaceId, before.activeWorkspaceId);
+          assert.deepEqual(after.viewport, before.viewport);
+        };
+        await witnessEntry(SURFACE, "00-aiw-from-vela");
         await click(reportLink);
         await click(RECORD + ' [data-mission-focus="preview-workroom"]');
         await click(RECORD + ' [data-mission-focus="apply-workroom"]');
@@ -923,6 +945,11 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         });
         await js(`window.__aerynth.execute(${quote({ type: "setViewport", workspaceId: workroom.workspaceId,
           viewport: { x: workroom.x - 60, y: workroom.y - 180, zoom: 1 } })})`);
+        const stream = '[data-surface-id="intelligence-stream"]';
+        await click("#application-stream");
+        await witnessEntry(stream, "00-aiw-from-stream");
+        await click(stream + ' [aria-label="Close panel"]');
+        await wait("Stream returns to the workroom", () => js(`!document.querySelector(${quote(stream)})`));
         await click(selector + ' > summary');
         await click(selector + ' [data-intelligence-zone="profiler"]');
         const profile = await rpc("missions", { name: "execution-profile", input: { id: missionId } });
@@ -940,6 +967,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         const detail = await js(`document.querySelector(${quote(trace + ' > dl')}).textContent`);
         assert(detail.includes(attempt.id) && attempt.verifiedEvidenceIds.every(id => detail.includes(id)));
         receipt.workroomInspection.traceAttempt = { id: attempt.id, verifiedEvidenceCount: attempt.verifiedEvidenceIds.length };
+        receipt.workroomInspection.entryPoints = ['vela', 'intelligence-stream'];
         await capture("01-adaptive-intelligence-profiler");
         receipt.workroomInspection.renderer = await js(`new Promise(resolve => {
           requestAnimationFrame(start => {
@@ -961,9 +989,12 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         );
         try {
           await click(selector + ' [data-intelligence-zone="resource"]');
-          const resource = await js(`[...document.querySelectorAll(${quote(selector + ' [data-intelligence-field^="Lease · "]')})]
+          const leaseIds = profile.attempts.flatMap(attempt => attempt.resourceLease ? [attempt.resourceLease.leaseId] : []).sort();
+          await wait("Resource Intelligence displays every canonical lease", async () => {
+            const visible = await js(`[...document.querySelectorAll(${quote(selector + ' [data-intelligence-field^="Lease · "]')})]
             .map(row => row.dataset.intelligenceSource).sort()`);
-          assert.deepEqual(resource, profile.attempts.flatMap(attempt => attempt.resourceLease ? [attempt.resourceLease.leaseId] : []).sort());
+            return JSON.stringify(visible) === JSON.stringify(leaseIds);
+          });
           if (argv.includes("--missions-aiw-inspection")) {
             const policy = await rpc("resourcePolicyNative", { name: "inspect" });
             await wait("AIW reads the authoritative resource policy", () => js(`(() => {
