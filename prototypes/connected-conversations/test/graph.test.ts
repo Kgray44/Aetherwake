@@ -87,9 +87,17 @@ test('unavailable source blocks new inclusion and marks old handoffs stale', () 
   const { graph, root, a, b } = seed();
   const child = graph.branch({ sourceConversationId: root.id, sourceMessageId: b.id,
     targetKind: 'codex', targetProviderId: 'mock-codex', title: 'Build',
-    includeMessageIds: [a.id, b.id] });
+    includeMessageIds: [a.id, b.id], key: 'revoked-source-branch' });
   graph.markUnavailable(a.id);
   assert.deepEqual(graph.inspectHandoff(child.handoff.id).staleMessageIds, [a.id]);
+  assert.deepEqual(graph.inspectHandoff(child.handoff.id).items.map(item => item.sourceMessageId), [b.id]);
+  assert.deepEqual(graph.visibleMessages(child.conversation.id).map(item => item.id), [b.id]);
+  const restored = ConversationGraph.importJson(graph.exportJson(), [mockOrdinaryAdapter(), mockCodexAdapter()]);
+  assert.deepEqual(restored.visibleMessages(child.conversation.id).map(item => item.id), [b.id]);
+  assert.deepEqual(restored.inspectHandoff(child.handoff.id).items.map(item => item.sourceMessageId), [b.id]);
+  assert.throws(() => graph.branch({ sourceConversationId: root.id, sourceMessageId: b.id,
+    targetKind: 'codex', targetProviderId: 'mock-codex', title: 'Build',
+    includeMessageIds: [a.id, b.id], key: 'revoked-source-branch' }), /unavailable/);
   assert.throws(() => graph.branch({ sourceConversationId: root.id, sourceMessageId: b.id,
     targetKind: 'codex', targetProviderId: 'mock-codex', title: 'Again',
     includeMessageIds: [a.id] }), /unavailable/);
