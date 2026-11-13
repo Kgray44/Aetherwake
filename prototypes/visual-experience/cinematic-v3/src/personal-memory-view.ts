@@ -112,12 +112,21 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
       editor.setAttribute('aria-label', 'Corrected memory');
       editor.maxLength = 4096;
       editor.value = fact.text;
+      const searchTerms = document.createElement('input');
+      searchTerms.setAttribute('aria-label', 'Memory search terms');
+      searchTerms.maxLength = 1040;
+      searchTerms.value = fact.keywords.join(', ');
       const correction = button('Review correction', async () => {
         if (!editor.value.trim() || editor.value.length > 4096) throw Error('Enter a corrected memory.');
-        const result = await command({ type: 'manage', action: 'correct', id: record.id, version: record.version, text: editor.value }) as { status: string };
+        const keywords = searchTerms.value === fact.keywords.join(', ') ? undefined
+          : [...new Set(searchTerms.value.split(',').map(term => term.trim()).filter(Boolean))];
+        if (keywords && (!keywords.length || keywords.length > 16 || keywords.some(term => term.length > 64)))
+          throw Error('Enter 1–16 search terms of up to 64 characters each.');
+        const result = await command({ type: 'manage', action: 'correct', id: record.id, version: record.version,
+          text: editor.value, ...(keywords ? { keywords } : {}) }) as { status: string };
         if (result.status === 'applied') { await load(null); status.textContent = 'Memory corrected'; }
       });
-      detail.append(editor, correction);
+      detail.append(editor, searchTerms, correction);
     }
   }
   const more = button('More memories', async () => { if (next !== null) await load(next); });

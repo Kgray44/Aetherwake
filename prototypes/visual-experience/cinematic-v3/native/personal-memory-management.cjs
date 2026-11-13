@@ -29,8 +29,9 @@ async function managePersonalMemory({ input, trustedFrame, observeGesture, allow
     const { erasedFacts } = await call("personalMemoryRevokeSourceNative", binding);
     return { status: "applied", erasedFacts };
   }
-  const { action, id, version, text } = input;
-  const review = await send({ type: "preview", request: { action, id, version, ...(text === undefined ? {} : { text }) } });
+  const { action, id, version, text, keywords } = input;
+  const review = await send({ type: "preview", request: { action, id, version, ...(text === undefined ? {} : { text }),
+    ...(keywords === undefined ? {} : { keywords }) } });
   let committed = false;
   try {
     requireFrame();

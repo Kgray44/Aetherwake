@@ -32,7 +32,7 @@ test('the inspector loads only on request and sends a version-bound correction',
     const view = createPersonalMemoryView(async request => {
       calls.push(request);
       if (request.type === 'list') return { records: [record], next: null, policy: { ordinaryEnabled: false, velaEnabled: false } };
-      if (request.type === 'read') return { ...record, text: 'Synthetic decision', provenance: { kind: 'conversation-message', conversationId: 'chat', messageId: 'message' } };
+      if (request.type === 'read') return { ...record, text: 'Synthetic decision', keywords: ['decision'], provenance: { kind: 'conversation-message', conversationId: 'chat', messageId: 'message' } };
       return { status: 'applied' };
     });
     f.root.append(view);
@@ -43,16 +43,17 @@ test('the inspector loads only on request and sends a version-bound correction',
     await until(() => !!view.querySelector('textarea'));
     assert.match(view.textContent, /Source message message · conversation chat/);
     view.querySelector('textarea').value = 'Corrected decision';
+    view.querySelector('input').value = 'replacement, decision';
     named(view, 'Review correction').fire('click');
     await until(() => calls.length === 4);
-    assert.deepEqual(calls[2], { type: 'manage', action: 'correct', id: 'fact-1', version: 3, text: 'Corrected decision' });
+    assert.deepEqual(calls[2], { type: 'manage', action: 'correct', id: 'fact-1', version: 3, text: 'Corrected decision', keywords: ['replacement', 'decision'] });
   } finally { restore(); }
 });
 
 test('the inspector sends only the selected fact revision and refreshes after confirmed source revocation', async () => {
   const f = componentDocument(), restore = f.install(), calls = [];
   const record = { id: 'fact-1', version: 3, scope: { kind: 'project' }, state: 'active' };
-  const fact = { ...record, text: 'Synthetic decision', provenance: {
+  const fact = { ...record, text: 'Synthetic decision', keywords: ['decision'], provenance: {
     kind: 'conversation-message', conversationId: 'chat', messageId: 'message',
   } };
   let outcome = 'cancelled';
@@ -86,7 +87,7 @@ test('opening a saved memory source rechecks the record and opens its exact mess
   const f = componentDocument(), restore = f.install();
   const opened = [];
   const record = { id: 'fact-1', version: 3, scope: { kind: 'project', id: 'project' }, state: 'active' };
-  const fact = { ...record, text: 'Synthetic decision', provenance: { kind: 'conversation-message', conversationId: 'chat', messageId: 'message' } };
+  const fact = { ...record, text: 'Synthetic decision', keywords: ['decision'], provenance: { kind: 'conversation-message', conversationId: 'chat', messageId: 'message' } };
   let current = fact;
   try {
     const view = createPersonalMemoryView(async request => {

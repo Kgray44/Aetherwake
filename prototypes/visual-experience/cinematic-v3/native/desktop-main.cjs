@@ -808,6 +808,7 @@ app.whenReady().then(async () => {
             const detail = review.action === "revokeSource"
               ? "Hide this message from the app and remove all saved memories that depend on it. The original remains in local history storage. Previous exports, backups, and provider copies may still contain it.\n\nOriginal message\n" + review.sourceText
               : review.action === "correct" ? "Current memory\n" + review.fact.text + "\n\nReplacement\n" + review.text
+                + "\n\nSearch terms\n" + (review.keywords ?? review.fact.keywords).join(", ")
               : review.action === "export" ? "Export this fact and its retained revisions to a JSON file you choose. The file contains readable memory text.\n\n" + review.fact.text
               : (review.action === "delete" ? "Remove this memory and its retained revisions from the profile."
                 : "Keep the record for inspection and exclude it from future recall.")
