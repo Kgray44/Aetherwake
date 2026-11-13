@@ -941,6 +941,12 @@ test('a missing execution after reconnect retires Stop but keeps the draft for o
     assert.equal(f.view.root.querySelector('.cp-stream').hidden,true);
     assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/outcome.*unconfirmed/i);
     assert.ok(named(f.view.root,'I reviewed the send outcome'));
+    const stopped={...execution,state:'interrupted' as const,endedAt:'2026-11-02T00:00:01Z'};
+    observe!({execution:{...stopped,id:'execution:other',commandId:'command:other'}});
+    assert.ok(named(f.view.root,'I reviewed the send outcome'));
+    observe!({execution:stopped});
+    assert.equal(named(f.view.root,'I reviewed the send outcome'),undefined);
+    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/stopped/i);
     assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
     assert.equal(f.calls.some(call=>call.name==='send'),false);
   }finally{await chat?.dispose();f.restore();}
