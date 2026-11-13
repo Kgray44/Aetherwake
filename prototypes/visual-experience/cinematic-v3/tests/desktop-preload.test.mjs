@@ -41,6 +41,29 @@ function bridge(active = false) {
   return { host: exposed, calls, events };
 }
 
+test("policy ports require activation for mutations and keep raw policy commands private", async () => {
+  const passive = bridge();
+  await passive.host.resourcePolicyInspection("inspect");
+  for (const action of ["mode", "rollback"])
+    assert.throws(() => passive.host.resourcePolicyInspection(action), /resource_policy_user_gesture_required/);
+  assert.throws(() => passive.host.experiencePolicyRollback({}), /experience_policy_user_gesture_required/);
+  assert.deepEqual(passive.calls, [["application-resource-policy-inspection", "inspect"]]);
+
+  const active = bridge(true);
+  const review = { workspaceId: "workspace", projectId: null, experimentId: "trial", policyVersion: 2 };
+  for (const command of ["resourcePolicyNative", "aepExperimentNative"])
+    await assert.rejects(active.host.command(command, {}), /unsupported_command/);
+  assert.throws(() => active.host.resourcePolicyInspection("set-mode"), /invalid_resource_inspection_action/);
+  await active.host.resourcePolicyInspection("mode");
+  await active.host.resourcePolicyInspection("rollback");
+  await active.host.experiencePolicyRollback(review);
+  assert.deepEqual(active.calls, [
+    ["application-resource-policy-inspection", "mode"],
+    ["application-resource-policy-inspection", "rollback"],
+    ["application-experience-policy-rollback", review],
+  ]);
+});
+
 test("closing a chat observer removes only its own native IPC listener", () => {
   const { host, events } = bridge();
   const first = [],
