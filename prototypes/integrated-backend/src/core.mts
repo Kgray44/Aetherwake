@@ -5900,7 +5900,7 @@ export class BackendCore {
             graphId && inputId && this.conversationReadAccess(execution.resourceId,inputId)) {
           const message = this.graph.readOwnMessage(graphId,inputId);
           if (message?.role === 'user') this.conversations.clearCompletedDraft({
-            resourceId:execution.resourceId,draftVersion:checkpoint.version,content:message.content,documents:checkpoint.documents,
+            resourceId:execution.resourceId,draftVersion:checkpoint.version,content:message.content,documentsDigest:checkpoint.documentsDigest,
           });
         }
         delete execution.draftCheckpoint;
@@ -6389,7 +6389,7 @@ export class BackendCore {
     const timing = observeConversationProvider('ordinary-adapter-entry', !!this.ordinaryTest, authority?.requestId ?? null, started,
       authority?.preview && { domain: this.missions.fullProfilingClock(), preview: authority.preview });
     const e:Execution={id:p.executionId,resourceId:input.resourceId,providerId:CHATGPT_PLAN_PROVIDER,commandId:input.commandId,state:'dispatching',binding:null,turnId:null,startedAt:now(),endedAt:null,taskVerified:false,connectionVersion:p.connectionVersion,requestedModel:p.model,requestBodyDigest:p.bodyDigest,contextDigest:p.contextDigest,instructionVersion:p.instructionVersion};
-    const draftVersion = !authority && this.conversations.matchesSendDraft(input) ? input.draftVersion : undefined;
+    const draftCheckpoint = authority ? undefined : this.conversations.sendDraftCheckpoint(input);
     if (p.reasoningEffort !== undefined) e.requestedReasoningEffort = p.reasoningEffort;
     const handoff=preview.handoff&&!preview.handoff.continued?this.package(preview.handoff.id):null,controller=new AbortController();
     const cancel = () => controller.abort();
@@ -6458,8 +6458,7 @@ export class BackendCore {
           outputStagedMs = timing.elapsed();
         }
         this.state.revisions[e.resourceId]++;if(handoff)handoff.state=e.state==='provider_completed'?'applied':e.state==='unknown'?'unknown':e.state==='interrupted'?'interrupted':'failed';
-        if(e.state==='provider_completed'&&draftVersion!==undefined)
-          e.draftCheckpoint={version:draftVersion,...(input.documents?{documents:input.documents}:{})};
+        if(e.state==='provider_completed'&&draftCheckpoint)e.draftCheckpoint=draftCheckpoint;
         this.record('execution/' + e.state, e.state === 'provider_completed' ? classification : 'inferred',
           undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER, execution: e,
             payload: { redacted: true, providerTiming: timing.settlement(outputStagedMs) } });

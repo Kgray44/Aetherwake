@@ -116,7 +116,7 @@ export interface Execution extends PublicConversationExecution {
   /** Canonical admission counted once per AIR provider stage, including unknown outcomes. */
   velaAdmission?: { projectId: string | null; utcDay: string };
   connectionVersion?:number;inputMessageId?:string;outputMessageId?:string;
-  draftCheckpoint?: { version: number; documents?: { id: string; version: number }[] };
+  draftCheckpoint?: { version: number; documentsDigest: string };
   requestedModel?:string;requestBodyDigest?:string;contextDigest?:string;instructionVersion?:string;
   requestedReasoningEffort?:TurnInput['reasoningEffort'];
   cancellation?:{requested:boolean;serverConfirmed:false};
