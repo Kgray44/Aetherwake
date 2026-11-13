@@ -1482,7 +1482,7 @@ test('saved document picker reuses an exact current resource without importing o
    chooseDocument: async () => { throw Error('Saved selection must not use the file picker'); },
   });
   await chat.ready;
-  const picker = f.view.root.querySelector('[data-cp-picker-for="Attach saved document"]');
+  const picker = f.view.root.querySelector('[data-cp-picker-for="Attach saved note or document"]');
   picker.fire('click');
   available = [{ ...saved, version: 2 }];
   f.view.root.querySelector('[data-cp-option-value="file:saved:1"]').fire('click');

@@ -19,7 +19,7 @@ exports.isConversationRead = (input) => input && readNames.has(input.name);
 
 function reviewedResources(preview, resources, errorCode) {
   const grouped = new Map();
-  const include = (id, content) => {
+  const include = (id, content, attachment) => {
     if (typeof id !== "string" || typeof content !== "string")
       throw Error(errorCode);
     const entry = grouped.get(id) ?? {
@@ -28,13 +28,17 @@ function reviewedResources(preview, resources, errorCode) {
       title: resources.find((item) => item.id === id)?.title ?? "Selected source",
       content: "",
     };
+    if (attachment) {
+      entry.attachmentType = attachment.kind === "note" ? "note" : "document";
+      entry.version = attachment.version;
+    }
     entry.content += (entry.content ? "\n\n" : "") + content;
     grouped.set(id, entry);
   };
   for (const source of preview.context ?? [])
     include(source.sourceResourceId, source.content);
   for (const source of preview.documents ?? [])
-    include(source.id, source.content);
+    include(source.id, source.content, source);
   for (const source of preview.handoff?.items ?? [])
     include(preview.handoff.sourceResourceId, source.content);
   return [...grouped.values()];

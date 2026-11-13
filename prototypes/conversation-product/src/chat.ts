@@ -263,7 +263,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const key = (item: DraftDocument) => item.id + ':' + item.version;
     documentPicker = mountConversationPicker(slot, {
       motion: options.motion, viewId: options.viewId! + ':saved-document',
-      label: 'Attach saved document', identity: 'source',
+      label: 'Attach saved note or document', identity: 'source',
       itemsOnOpen: () => {
         const attached = session.snapshot().documents;
         return list().map(item => ({
