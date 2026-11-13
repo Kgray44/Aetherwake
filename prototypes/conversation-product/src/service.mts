@@ -54,9 +54,13 @@ function parseViewSelection(value:unknown,code='invalid_conversation_view_select
  if(value===null)return null;const a=fields(value,['draftVersion','start','end','direction'],code),draftVersion=viewVersion(a.draftVersion,code),start=viewVersion(a.start,code),end=viewVersion(a.end,code),direction=a.direction;
  check(start<=end&&end<=CONVERSATION_DRAFT_LIMITS.contentUnits&&(direction==='forward'||direction==='backward'||direction==='none'),code);return {draftVersion,start,end,direction};
 }
-const page = <T,>(items: T[], q: { offset?: number; limit?: number }): Page<T> => {
+const pageWindow = (q: { offset?: number; limit?: number }) => {
  const offset = q.offset ?? 0, limit = q.limit ?? 50;
  check(Number.isInteger(offset) && offset >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 200, 'invalid_page');
+ return {offset,limit};
+};
+const page = <T,>(items: T[], q: { offset?: number; limit?: number }): Page<T> => {
+ const {offset,limit}=pageWindow(q);
  return { items: items.slice(offset, offset + limit), total: items.length, offset, limit, hasMore: offset + limit < items.length };
 };
 export interface ConversationReadView {
@@ -320,8 +324,16 @@ export class ConversationProduct implements ConversationProductPort {
  private readProjection(v:View,name:'list'|'search'|'collections',a:SearchQuery):unknown {
   if(name==='list')return page(this.summaries(v,a),a);
   if(name==='collections')return this.collections(v);
-  const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const hits: SearchHit[] = [],mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','chat-history','resources','all'].includes(mode),'invalid_search_mode');
+  const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','chat-history','resources','all'].includes(mode),'invalid_search_mode');
   const titlesAndMessages = mode === 'all' || mode === 'chat-history';
+  const {offset,limit}=pageWindow(a);
+  const items:SearchHit[]=[];
+  const end=offset+limit;
+  let total=0;
+  const takeHit=()=>{
+   const index=total++;
+   return index>=offset&&index<end;
+  };
   // A conversation-only search can authorize/match first and summarize just
   // the matching IDs. It needs no activity/count scan of every non-match.
   if (needle && (titlesAndMessages || mode === 'messages') && v.searchVisibleMessages) {
@@ -331,14 +343,19 @@ export class ConversationProduct implements ConversationProductPort {
     (titlesAndMessages && v.indices.resources.get(c.resourceId)!.title.toLocaleLowerCase().includes(needle)));
    const summaries = this.sortSummaries(matching.map(c => this.summary(v, c.resourceId, !!a.archived)), a);
    for (const c of summaries) {
-    if (titlesAndMessages && c.title.toLocaleLowerCase().includes(needle)) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
-    for (const message of matches.get(c.conversationId) ?? []) {
-     hits.push({kind:'message',resourceId:c.resourceId,messageId:message.id,title:c.title,excerpt:message.excerpt,sourceTime:message.createdAt,providerId:c.providerId});
+    if (titlesAndMessages && c.title.toLocaleLowerCase().includes(needle) && takeHit()) items.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
+    const messages=matches.get(c.conversationId);
+    if(!messages)continue;
+    const start=Math.max(0,offset-total),stop=Math.min(messages.length,end-total);
+    for(let i=start;i<stop;i++){
+     const message=messages[i];
+     items.push({kind:'message',resourceId:c.resourceId,messageId:message.id,title:c.title,excerpt:message.excerpt,sourceTime:message.createdAt,providerId:c.providerId});
     }
+    total+=messages.length;
    }
   } else if(mode!=='resources')for (const c of this.summaries(v,{...a,text:mode==='conversations'&&needle?needle:undefined})) {
-   if (mode==='conversations'||titlesAndMessages&&(!needle||c.title.toLocaleLowerCase().includes(needle))) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
-   if(needle&&(titlesAndMessages||mode==='messages'))for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (index >= 0) hits.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt,providerId:c.providerId}); }
+   if ((mode==='conversations'||titlesAndMessages&&(!needle||c.title.toLocaleLowerCase().includes(needle))) && takeHit()) items.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
+   if(needle&&(titlesAndMessages||mode==='messages'))for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (index >= 0 && takeHit()) items.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt,providerId:c.providerId}); }
   }
   const resourceCollection=a.collectionId?this.collections(v).find(c=>c.id===a.collectionId):undefined;
   if ((mode==='all'||mode==='resources')&&!a.familyOf && !a.providerId && !a.favorite) for (const r of v.desktop.resources) {
@@ -346,9 +363,9 @@ export class ConversationProduct implements ConversationProductPort {
    const scopes=this.projectIds(v,r.id);if(a.projectId!==undefined&&(a.projectId===null?scopes.length>0:!scopes.includes(a.projectId)))continue;
    if(resourceCollection&&!resourceCollection.memberIds.includes(r.id))continue;
    const created=String(this.db.prepare('SELECT created_at FROM resources WHERE id=?').get(r.id)?.created_at??'');if(a.after&&created<a.after||a.before&&created>a.before)continue;
-   const content=needle?r.title+'\n'+v.resourceContent(r.id):r.title,index=content.toLocaleLowerCase().indexOf(needle);if(index>=0)hits.push({kind:'resource',resourceId:r.id,title:r.title,excerpt:content.slice(Math.max(0,index-60),index+160)});
+   const content=needle?r.title+'\n'+v.resourceContent(r.id):r.title,index=content.toLocaleLowerCase().indexOf(needle);if(index>=0&&takeHit())items.push({kind:'resource',resourceId:r.id,title:r.title,excerpt:content.slice(Math.max(0,index-60),index+160)});
   }
-  return page(hits,a);
+  return {items,total,offset,limit,hasMore:end<total};
  }
  private policy(id: string): BranchPolicy {
   const row = this.db.prepare('SELECT json FROM cp_policy WHERE resource_id=?').get(id);

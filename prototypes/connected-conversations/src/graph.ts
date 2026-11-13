@@ -252,7 +252,7 @@ export class ConversationGraph {
             if (index >= 0) match = Object.freeze({
               id: message.id,
               createdAt: message.createdAt,
-              excerpt: content.slice(Math.max(0, index - 60), index + 160),
+              get excerpt() { return content.slice(Math.max(0, index - 60), index + 160); },
             });
           }
           examined.set(message.id, match);

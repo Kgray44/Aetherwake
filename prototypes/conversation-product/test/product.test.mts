@@ -299,6 +299,23 @@ test('canonical chat search reads an inherited message once per query and rechec
    assert.deepEqual(await f.core.command('conversation',{name:'search',input}),
     await f.product.command('search',input), 'optimized and compatibility queries preserve exact ordering and pages');
   }
+  const matchMessages=graph.searchVisibleMessages.bind(graph);
+  let excerpts=0;
+  graph.searchVisibleMessages=(...args)=>{
+   const matches=matchMessages(...args);
+   for(const [id,items] of matches) matches.set(id,items.map(item=>({
+    id:item.id,createdAt:item.createdAt,get excerpt(){excerpts++;return item.excerpt;}
+   })));
+   return matches;
+  };
+  const input={...query,sort:'title' as const,limit:1,offset:1};
+  assert.deepEqual(await f.core.command('conversation',{name:'search',input}),await f.product.command('search',input));
+  assert.equal(excerpts,1,'only the requested page materializes message excerpts');
+  excerpts=0;
+  assert.deepEqual(await f.core.command('conversation',{name:'search',input:{...input,offset:5}}),
+   await f.product.command('search',{...input,offset:5}));
+  assert.equal(excerpts,0,'an empty page does not materialize any message excerpts');
+  graph.searchVisibleMessages=matchMessages;
   graph.markUnavailable(source.id);
   inheritedReads=0;
   hits=(await search()).items;
