@@ -1996,7 +1996,8 @@ test('reviewed CIE cites a selected local file and fences physical replacement b
   }
 });
 
-for (const evaluation of [false,true]) test('selected DOCX broker analysis preserves partial extraction (evaluation: '+evaluation+')', async () => {
+for (const scenario of ['standing', 'evaluation', 'provider failure', 'interrupt', 'revoke'] as const) test('selected DOCX broker analysis: '+scenario, {timeout:15_000}, async () => {
+  const evaluation = scenario === 'evaluation';
   const bytes = docxFixture();
   let bodyText: string;
   const f = fixture(true, true, { extract: async (input, signal) => {
@@ -2044,18 +2045,57 @@ for (const evaluation of [false,true]) test('selected DOCX broker analysis prese
       { key, status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
     ] });
     const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    let signalFinalDispatch!: () => void;
+    const finalDispatch = new Promise<void>(resolve=>{signalFinalDispatch=resolve;});
+    let releaseProvider!: () => void;
+    const providerReleased = new Promise<void>(resolve=>{releaseProvider=resolve;});
     f.replies.push(reply(proposal('day')), reply(assessment('day', 'The pump inspection is on Tuesday.')), reply(proposal('table')),
       body => {
         assert.deepEqual(JSON.parse(body.input[0].content).excerpts, [
           { handle: 'e1', sourceKind: 'file', title: resource.title, text: bodyText, partial: true },
         ]);
         return reply(assessment('table', 'Table cell'))(body);
-      }, body => {
+      }, async body => {
         assert.equal(JSON.parse(body.input[0].content).evidence.searchCoverage, 'partial');
         assert.doesNotMatch(JSON.stringify(body.input), /Extracted DOCX body text/);
+        signalFinalDispatch();
+        if (scenario === 'provider failure') return new Response(null,{status:400});
+        if (scenario === 'interrupt' || scenario === 'revoke') await providerReleased;
         return response('The extracted body contains “Table cell.”', body.model);
       });
-    const result = await send();
+    const pending = send();
+    if (scenario === 'interrupt' || scenario === 'revoke') {
+      try {
+        await Promise.race([finalDispatch,pending.then(()=>assert.fail('request settled before final dispatch'))]);
+        const running = Object.values((await f.core.command('snapshot',{})).executions).find(execution=>execution.state==='dispatching' && execution.commandId.startsWith('vela-api:'));
+        assert.ok(running);
+        if (scenario === 'interrupt') {
+          assert.deepEqual(await f.core.command('interrupt',{executionId:running.id}),{requested:true,confirmed:false});
+        } else {
+          assert.equal((await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:false})).enabled,false);
+        }
+      } finally {
+        releaseProvider();
+      }
+    }
+    const result = await pending;
+    if (scenario === 'provider failure' || scenario === 'interrupt' || scenario === 'revoke') {
+      const outcome = scenario === 'provider failure' ? 'failed' : 'unknown';
+      assert.equal(result.state,outcome);
+      assert.equal(result.response,undefined);
+      assert.equal(f.requests.length,5);
+      assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,5);
+      await f.reopen();
+      const restoredExecution = Object.values((await f.core.command('snapshot',{})).executions)
+        .find(execution=>execution.commandId==='vela-api:'+result.id);
+      assert.equal(restoredExecution?.state,outcome);
+      const state = await f.core.command('vela',{name:'state',input:{}});
+      const restored = (state as {requests:VelaRequest[]}).requests.find(request=>request.id===result.id);
+      assert.equal(restored?.state,result.state);
+      assert.equal(restored?.response,undefined);
+      assert.equal(f.requests.length,5);
+      return;
+    }
     assert.equal(result.state, 'responded');
     assert.equal(f.requests.length, 5);
     assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 5);
