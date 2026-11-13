@@ -6947,14 +6947,26 @@ export class BackendCore {
       ensure(memory && review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
       const request = input as CommandMap['personalMemoryRevokeSourceNative']['input'];
       ensure(request && identifier(request.conversationId) && identifier(request.messageId) &&
-        Number.isSafeInteger(request.expectedRevision) && request.expectedRevision >= 1, 'invalid_personal_memory_source');
-      const { conversationId, messageId, expectedRevision } = request;
+        Number.isSafeInteger(request.expectedRevision) && request.expectedRevision >= 1 &&
+        (request.reviewedFact === undefined || request.reviewedFact && identifier(request.reviewedFact.id) &&
+          Number.isSafeInteger(request.reviewedFact.version) && request.reviewedFact.version >= 1), 'invalid_personal_memory_source');
+      const { conversationId, messageId, expectedRevision, reviewedFact } = structuredClone(request);
+      const service = reviewedFact ? await memory.open() : undefined;
+      ensure(!this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
       const revoke = () => this.atomic(() => {
         ensure(this.state.revisions[conversationId] === expectedRevision, 'stale_source_revision');
         const graphId = this.gid(conversationId);
         const message = this.graph.readOwnMessage(graphId, messageId);
         ensure(message?.role === 'user' && message.provenance === 'user' &&
           this.productResourceAccess(conversationId, messageId), 'conversation_source_unavailable');
+        if (reviewedFact && service) {
+          const fact = review.activeFactForSourceRevocation(service, reviewedFact.id, reviewedFact.version);
+          const provenance = fact.provenance;
+          ensure(provenance.kind === 'conversation-message' && provenance.conversationId === conversationId &&
+            provenance.messageId === messageId && provenance.version === String(message.sequence) &&
+            provenance.contentDigest === createHash('sha256').update(message.content).digest('hex'),
+          'conversation_source_unavailable');
+        }
         const source = { kind: 'conversation-message' as const, conversationId, messageId };
         const { deleted } = review.withSourceErasure(source, () => memory.eraseConversationSource(source));
         this.graph.markUnavailable(messageId);
@@ -6977,8 +6989,13 @@ export class BackendCore {
         case 'list': return await review.inspect({ after: request.after, limit: 20 }) as CommandMap[K]['output'];
         case 'read': return await review.read(request.id) as CommandMap[K]['output'];
         case 'previewSourceRevocation': {
-          const fact = await review.read(request.id);
-          ensure(fact.version === request.version, 'stale_personal_context_version');
+          const memory = this.personalMemory;
+          ensure(memory && identifier(request.id) && Number.isSafeInteger(request.version) && request.version >= 1,
+            'invalid_personal_memory_source');
+          const { id, version } = request;
+          const service = await memory.open();
+          ensure(!this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+          const fact = this.kernel.withTransaction(() => review.activeFactForSourceRevocation(service, id, version));
           const source = fact.provenance;
           ensure(source.kind === 'conversation-message', 'conversation_source_unavailable');
           const { conversationId, messageId } = source;
@@ -6987,7 +7004,8 @@ export class BackendCore {
             this.productResourceAccess(conversationId, messageId) && String(message.sequence) === source.version &&
             createHash('sha256').update(message.content).digest('hex') === source.contentDigest, 'conversation_source_unavailable');
           return {
-            binding: { conversationId, messageId, expectedRevision: this.state.revisions[conversationId] },
+            binding: { conversationId, messageId, expectedRevision: this.state.revisions[conversationId],
+              reviewedFact: { id, version } },
             sourceText: message.content,
           } as CommandMap[K]['output'];
         }

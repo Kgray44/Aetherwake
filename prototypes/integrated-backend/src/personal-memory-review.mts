@@ -247,6 +247,16 @@ export function createPersonalMemoryReview(options: Options) {
         input.operation === 'record.read' && input.subject?.kind === 'fact' && input.subject.id === id,
       () => service.readFact(id)));
     },
+    /** Called inside the source owner's transaction. */
+    activeFactForSourceRevocation(service: PersonalContextService, id: string, version: number) {
+      requireOpen();
+      const target = withPermission(input => input.operation === 'record.list' && input.subject?.id === id,
+        () => service.describeFact(id));
+      if (target.version !== version || target.state !== 'active')
+        throw new PersonalContextError('stale_personal_context_version');
+      return withPermission(input => input.operation === 'record.read' && input.subject?.id === id,
+        () => service.readFact(id));
+    },
     async previewManagement(input: ManagementRequest): Promise<ManagementReview> {
       requireOpen();
       if (!input || !identifier(input.id) || !Number.isSafeInteger(input.version) || input.version < 1 ||

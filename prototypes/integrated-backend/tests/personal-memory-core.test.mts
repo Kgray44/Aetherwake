@@ -109,10 +109,11 @@ test('Core native capture persists a canonical user message across a private pro
     await assert.rejects(core.command('personalMemoryManagementNative', { ...request, version: fact.version + 1 }),
       /stale_personal_context_version/);
     const reviewed = await core.command('personalMemoryManagementNative', request) as {
-      binding: { conversationId: string; messageId: string; expectedRevision: number }; sourceText: string;
+      binding: import('../src/contracts.mts').CommandMap['personalMemoryRevokeSourceNative']['input']; sourceText: string;
     };
     assert.deepEqual(reviewed, {
-      binding: { conversationId: chat.resourceId, messageId: message.id, expectedRevision: message.revision },
+      binding: { conversationId: chat.resourceId, messageId: message.id, expectedRevision: message.revision,
+        reviewedFact: { id: saved.id, version: fact.version } },
       sourceText: content,
     });
     const revoke = reviewed.binding;
@@ -128,6 +129,14 @@ test('Core native capture persists a canonical user message across a private pro
     const correction = await inspection.previewManagement({ action: 'correct', id: saved.id, version: fact.version,
       text: 'I prefer a corrected synthetic relay.' });
     const corrected = await inspection.commitManagement(correction);
+    await assert.rejects(core.command('personalMemoryRevokeSourceNative', revoke), /stale_personal_context_version/);
+    assert.equal((await core.command('openResource', {
+      resourceId: chat.resourceId, selection: { messageId: message.id },
+    })).status, 'ready');
+    const correctedFact = await inspection.read(corrected.id);
+    const correctedReview = await core.command('personalMemoryManagementNative', {
+      type: 'previewSourceRevocation', id: corrected.id, version: correctedFact.version,
+    }) as typeof reviewed;
     const initial = await core.command('personalMemoryPolicyNative', {});
     const ordinary = await core.command('personalMemoryPolicyNative', { enable: true, expectedVersion: initial.version });
     const both = await core.command('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: ordinary.version });
@@ -153,12 +162,15 @@ test('Core native capture persists a canonical user message across a private pro
     core = open();
     // Revocation is the first memory operation after opening this pre-repair profile.
     custodyAvailable = false;
-    await assert.rejects(core.command('personalMemoryRevokeSourceNative', revoke), /private_key_unavailable/);
+    const sourceOnly = { conversationId: chat.resourceId, messageId: message.id, expectedRevision: message.revision };
+    await assert.rejects(core.command('personalMemoryRevokeSourceNative', sourceOnly), /private_key_unavailable/);
     assert.equal((await core.command('openResource', {
       resourceId: chat.resourceId, selection: { messageId: message.id },
     })).status, 'ready');
     custodyAvailable = true;
-    assert.deepEqual(await core.command('personalMemoryRevokeSourceNative', revoke), { revision: message.revision + 1, erasedFacts: 2 });
+    await assert.rejects(core.command('personalMemoryRevokeSourceNative', revoke), /stale_personal_context_version/);
+    assert.deepEqual(await core.command('personalMemoryRevokeSourceNative', correctedReview.binding),
+      { revision: message.revision + 1, erasedFacts: 2 });
     await core.command('close', {});
     core = open();
     await assert.rejects(core.command('personalMemoryManagementNative', { type: 'read', id: saved.id }), /personal_record_unavailable/);
