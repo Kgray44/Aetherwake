@@ -36,3 +36,14 @@ test('the source witness requires a current, bounded allocation for its phase', 
     assert.throws(() => memoryWitnessDeadline(invalid, 'save', 1000, 25), /native_memory_admission_required/);
   }
 });
+
+test('a foreign focus event latches even if the authenticated dialog regains focus', () => {
+  const parent = {}, review = {}, foreign = {};
+  const guard = createMemoryReviewGuard({ parent, focusedWindow: () => review,
+    isOwned: (target, owner) => target === review && owner === parent, deadline: 20, now: () => 1 });
+  guard.observeFocus(review);
+  guard.checkReview(review);
+  guard.observeFocus(foreign);
+  guard.observeFocus(review);
+  assert.throws(() => guard.checkReview(review), /native_memory_foreground_lost/);
+});

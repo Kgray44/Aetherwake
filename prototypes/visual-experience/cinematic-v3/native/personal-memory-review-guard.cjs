@@ -11,6 +11,9 @@ function createMemoryReviewGuard({ parent, focusedWindow, isOwned, deadline, now
     if (failure) throw failure;
   }
   return {
+    observeFocus(target) {
+      if (target !== parent && !isOwned(target, parent)) failure ??= Error('native_memory_foreground_lost');
+    },
     checkParent: () => check(parent, false),
     checkReview: child => check(child, true),
   };

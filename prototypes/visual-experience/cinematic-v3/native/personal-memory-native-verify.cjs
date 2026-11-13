@@ -66,6 +66,7 @@ async function run() {
   const startBackend = () => new Backend({ path, privateRoot: root, contentPolicy: 'local-private', provider: 'fixture' }, client.services);
   let backend = startBackend();
   let parent;
+  let stopObservingFocus;
   let stage = 'start';
   try {
     if (mode === 'restore') {
@@ -117,6 +118,18 @@ async function run() {
     await waitFor(() => parent.isFocused());
     const guard = createMemoryReviewGuard({ parent, focusedWindow: () => BrowserWindow.getFocusedWindow(),
       isOwned: isOwnedVelaReviewWindow, deadline: deadline - 3000 });
+    const focusChanged = (_event, target) => guard.observeFocus(target);
+    const parentBlurred = () => {
+      // Let Electron finish transferring focus to the authenticated modal.
+      setImmediate(() => { if (stopObservingFocus) guard.observeFocus(BrowserWindow.getFocusedWindow()); });
+    };
+    app.on('browser-window-focus', focusChanged);
+    parent.on('blur', parentBlurred);
+    stopObservingFocus = () => {
+      app.removeListener('browser-window-focus', focusChanged);
+      parent.removeListener('blur', parentBlurred);
+      stopObservingFocus = undefined;
+    };
     guard.checkParent();
     stage = 'review and save';
     let reviewed;
@@ -125,7 +138,10 @@ async function run() {
       observeGesture: () => parent.isFocused(), allowWrite,
       preview: value => backend.call('personalMemoryCapturePreviewNative', value),
       cancel: id => backend.call('personalMemoryCaptureCancelNative', { id }),
-      commit: review => backend.call('personalMemoryCaptureCommitNative', review),
+      commit: review => {
+        guard.checkParent();
+        return backend.call('personalMemoryCaptureCommitNative', review);
+      },
       async showReview(review) {
         guard.checkParent();
         reviewed = review;
@@ -158,6 +174,7 @@ async function run() {
     console.error(JSON.stringify({ result: 'fail', mode, stage, error: code }));
     throw error;
   } finally {
+    stopObservingFocus?.();
     if (parent && !parent.isDestroyed()) parent.destroy();
     try { await backend?.close(); }
     finally { client.close(); broker.close(); }
