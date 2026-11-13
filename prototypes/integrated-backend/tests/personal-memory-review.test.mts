@@ -13,6 +13,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   const message = { conversationId: 'chat', messageId: 'message', projectId: 'project', role: 'user' as const,
     sensitive: false, version: '1', contentDigest: createHash('sha256').update(sourceText).digest('hex') };
   let enabled = true;
+  let activeVelaProject: string | null = 'project';
   let projectReadable = true;
   const resolveScope = (scope: PersonalScope) =>
     scope.kind === 'project' && !projectReadable ? null : { scope, version: '1' };
@@ -20,6 +21,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   const review = createPersonalMemoryReview({
     open: () => nativeOpen(), transaction,
     readSourceText: () => sourceText,
+    resolveVelaRecallTarget: () => ({ conversationId: 'vela-chat', projectId: activeVelaProject }),
     resolveRecallTarget: id => id === 'other-chat' ? { projectId: 'project' } :
       id === 'foreign-chat' ? { projectId: 'foreign-project' } : null,
     resolveConversationSource: () => enabled ? message : null,
@@ -78,7 +80,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.throws(() => recall.approve('0'.repeat(64)), /personal_memory_body_changed/);
     recall.approve(recall.bodyDigest);
     assert.doesNotThrow(() => recall.validate(recall.turn));
-    const velaInput = { conversationId: 'other-chat', projectId: 'project', requestId: 'vela-recall',
+    const velaInput = { conversationId: 'vela-chat', projectId: 'project', requestId: 'vela-recall',
       intent: 'Which relay?', prompt: 'Trusted Vela envelope\n{"intent":"Which relay?"}' };
     assert.equal(await review.prepareVelaRecall(velaInput), null);
     const policy = (await review.inspect({ after: null, limit: 1 })).policy;
@@ -91,6 +93,10 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.doesNotThrow(() => velaRecall.validate(velaRecall.prompt));
     assert.throws(() => velaRecall.validate(velaRecall.prompt + ' altered'), /personal_memory_body_changed/);
     await assert.rejects(review.prepareVelaRecall({ ...velaInput, projectId: 'foreign-project' }), /canonical_scope_unavailable/);
+    activeVelaProject = null;
+    assert.throws(() => velaRecall.validate(velaRecall.prompt), /stale_personal_context/);
+    assert.equal(await review.prepareVelaRecall({ ...velaInput, projectId: null }), null);
+    activeVelaProject = 'project';
     assert.equal(await review.prepareOrdinaryRecall('foreign-chat', turn), null);
     assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...turn, webSearch: true }), null);
     assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...turn, messages: [{ role: 'user', content: 'Weather tomorrow' }] }), null);

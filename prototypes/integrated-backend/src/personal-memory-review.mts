@@ -12,6 +12,7 @@ interface Options extends SourceReader {
   open(): Promise<PersonalContextService>;
   readSourceText(reference: ConversationSourceRef): string | null;
   resolveRecallTarget?(id: string): { projectId: string | null } | null;
+  resolveVelaRecallTarget?(): { conversationId: string; projectId: string | null } | null;
   transaction<T>(work: (db: DatabaseSync) => T): T;
   now?: () => number;
 }
@@ -134,7 +135,10 @@ export function createPersonalMemoryReview(options: Options) {
       const service = await options.open();
       requireOpen();
       return options.transaction(() => {
-        const targetCurrent = () => options.resolveRecallTarget?.(conversationId)?.projectId === projectId;
+        const targetCurrent = () => {
+          const target = options.resolveVelaRecallTarget?.();
+          return target?.conversationId === conversationId && target.projectId === projectId;
+        };
         if (!targetCurrent()) throw new PersonalContextError('canonical_scope_unavailable');
         const request: ContextRequest = {
           requestId, assistant: 'vela', providerId: 'openai-api-vela', query: intent, projectId, conversationId,
