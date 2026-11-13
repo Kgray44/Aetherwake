@@ -229,7 +229,6 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     const queries = new Set<string>();
     const truncatedQueries = new Set<string>();
     let next = needs.map(need => need.query).filter(Boolean);
-    let questionFallbacks: string[] = [];
     let widen: { query: string; digest: string; refinement?: string }[] = [];
     let related: T[] = [];
     let anchorsRead = false;
@@ -358,14 +357,6 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
           }
         }
       }
-      for (const question of questionFallbacks) {
-        if (evidence.size >= limit) { partial(); break; }
-        signal.throwIfAborted();
-        const digest = canonicalRetrievalQuery(question)!.digest;
-        if (queries.has(digest)) continue;
-        queries.add(digest);
-        addCandidates(owner.search(question), limit);
-      }
       signal.throwIfAborted();
       if (priorAssessment && evidence.size === priorCount) {
         if (owner.isSnapshotCurrent?.() === false || ![...evidence.values()].every(owner.isCurrent)) return empty('stale', 'source-changed');
@@ -426,12 +417,13 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         return query && !queries.has(query.digest) ? [[row.key, row.query] as const] : [];
       }));
       next = [...refinements.values()];
-      questionFallbacks = owner.adaptiveDiscovery && rounds < maxRounds
-        ? needs.filter(need => {
-          if (gapsByKey.get(need.key)?.status !== 'missing' || refinements.has(need.key)) return false;
+      if (owner.adaptiveDiscovery && rounds < maxRounds) {
+        for (const need of needs) {
+          if (gapsByKey.get(need.key)?.status !== 'missing' || refinements.has(need.key)) continue;
           const question = canonicalRetrievalQuery(need.question);
-          return question && !queries.has(question.digest);
-        }).map(need => need.question) : [];
+          if (question && !queries.has(question.digest)) next.push(need.question);
+        }
+      }
       widen = owner.widen ? needs.flatMap(need => {
         const gap = gapsByKey.get(need.key);
         const digest = canonicalRetrievalQuery(need.query)?.digest;
@@ -440,7 +432,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       }) : [];
       investigateAnchors = !!owner.recent && !anchorsRead && gaps.length > 0;
       const budgetExhausted = rounds === maxRounds || evidence.size === candidateLimit;
-      const hasFollowup = next.length || widen.length || related.length || questionFallbacks.length || investigateAnchors;
+      const hasFollowup = next.length || widen.length || related.length || investigateAnchors;
       if (hasFollowup && budgetExhausted) partial();
       if (!hasFollowup || budgetExhausted) return assessed(assessment);
     }
