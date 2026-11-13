@@ -190,6 +190,34 @@ test('quick search Enter submits pending text immediately and opens the first ex
  } finally {await manager?.dispose();f.restore();}
 });
 
+test('Switch chat retries a failed query with Enter and keeps the exact text', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId, messageId=f.detail.messages.items[0].id;
+ const searches:string[]=[], opened:string[][]=[];
+ let manager;
+ const port={async command(name:string,input:any){
+  if(name==='search'&&input.searchMode==='chat-history'){
+   searches.push(input.text);
+   if(searches.length===1)throw Error('temporary synthetic transport failure');
+   return {items:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:input.text}],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(id,message)=>opened.push([id,message??''])});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
+  input.value='exact phrase';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await until(()=>switcher.querySelector('.cp-switcher-status').textContent.includes('Press Enter to retry'));
+  assert.deepEqual(opened,[]);
+  assert.equal(input.value,'exact phrase');
+  input.fire('keydown',{key:'Enter'});
+  await until(()=>opened.length===1);
+  assert.deepEqual(searches,['exact phrase','exact phrase']);
+  assert.deepEqual(opened,[[resourceId,messageId]]);
+ } finally {await manager?.dispose();f.restore();}
+});
+
 test('Switch chat waits for composed text and Escape invalidates a pending open', async () => {
  const f=fixture();
  const searches:string[]=[], opened:string[]=[];

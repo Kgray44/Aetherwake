@@ -162,6 +162,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   return ++switchGeneration;
  };
  let switchOpenGeneration:number|undefined;
+ let switchFailedGeneration:number|undefined;
  let switchComposing=false;
  const loadSwitcher=async(openFirst=false)=>{
   const generation=invalidateSwitcher(),text=switchQuery.value.trim(),mode=switchMode.value;
@@ -205,7 +206,12 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    switchResults.replaceChildren(...rows);
    switchStatus.textContent=rows.length?`${rows.length} ${exact?'matches':'conversations'}${page.hasMore?' · more in history':''}`:text?'No matches in this group.':'No conversations in this group.';
    if(switchOpenGeneration===generation)rows[0]?.click();
-  }catch(error){if(stillCurrent())switchStatus.textContent=error instanceof Error?error.message:String(error);}
+  }catch{
+   if(stillCurrent()){
+    switchFailedGeneration=generation;
+    switchStatus.textContent='Couldn’t load conversations. Press Enter to retry.';
+   }
+  }
   finally{if(generation===switchGeneration)switchLoading=false;}
  };
  const openSwitcher=()=>{if(disposed)return Promise.reject(new Error('conversation_manager_closed'));switcher.node.open=true;switchQuery.focus();return loadSwitcher();};
@@ -233,6 +239,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   if(first)first.click();
   else if(switchTimer!==undefined)void loadSwitcher(true);
   else if(switchLoading)switchOpenGeneration=switchGeneration;
+  else if(switchFailedGeneration===switchGeneration)void loadSwitcher(true);
  });
  const renderBranchNavigator=(d:Detail)=>{
   const view=disclosure('Branch lineage','cp-branch-navigator');view.node.dataset.resourceId=d.conversation.resourceId;let generation=0;
