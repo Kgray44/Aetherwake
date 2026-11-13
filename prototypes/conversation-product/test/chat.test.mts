@@ -2534,6 +2534,33 @@ test('removing and reattaching a document retires the pending Ask Vela action', 
  } finally {release();await chat?.dispose();await session.dispose();f.restore();}
 });
 
+test('the saved document picker updates a selected revision without freeing a full draft slot', async () => {
+ const f = fixture('local'), motion = pickerMotion();
+ let chat;
+ try {
+  const attachments = [1, 2, 3, 4].map(index => ({ id: 'file:'+index, version: 1, title: 'Document '+index }));
+  const content = 'Keep my unsent question';
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content,documents:attachments});
+  const updated = { ...attachments[1], version: 2 };
+  const unrelated = { id:'file:other', version:1, title:'Other document' };
+  chat = mountConversationChat(f.view.root, {
+   port:f.port, resourceId:f.draft.resourceId, motion:motion.motion, viewId:'chat:full-document-draft',
+   listDocuments:() => [updated, attachments[0], unrelated],
+  });
+  await chat.ready;
+  const picker = f.view.root.querySelector('[data-cp-picker-for="Attach saved note or document"]');
+  assert.equal(picker.disabled,false);
+  picker.fire('click');
+  assert.equal(f.view.root.querySelector('[data-cp-option-value="file:other:1"]').disabled,true);
+  assert.equal(f.view.root.querySelector('[data-cp-option-value="file:1:1"]').disabled,true);
+  f.view.root.querySelector('[data-cp-option-value="file:2:2"]').fire('click');
+  await chat.flush();
+  assert.deepEqual(f.draft.documents,[attachments[0],updated,...attachments.slice(2)]);
+  assert.equal(f.draft.content,content);
+  assert.equal(f.calls.some(call => call.name === 'send'),false);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
 for (const closeDuringHandoff of [false, true]) test('saved document picker reuses an exact current resource (close during handoff: '+closeDuringHandoff+')', async () => {
  const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
  let chat;
@@ -2598,9 +2625,9 @@ for (const closeDuringHandoff of [false, true]) test('saved document picker reus
    const changed = [{ ...available[0], unavailable: 'changed' as const }];
    await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:changed});
    named(f.view.root,'Saved brief.pdf').fire('click');
-   await until(() => !!named(f.view.root,'Replace'));
+   await until(() => f.view.root.querySelector('[data-cp-control="send"]').disabled);
    assert.equal(f.draft.content,editor.value);
-   assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,true);
+   assert.match(f.view.root.querySelector('[data-cp-control="send"]').title,/unavailable documents/);
    return;
   }
   named(f.view.root,'Ask Vela').fire('click');
