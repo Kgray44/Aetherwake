@@ -95,11 +95,11 @@ try {
     task.specialist.effort === effort && !task.specialist.webSearch && task.dependencies.length === 0));
   const codexSelection = codexTestPath ? await backend.call('missionCheckReview', { paths: [codexTestPath] }) : undefined;
   const gpuReview = skipGpu ? undefined : await backend.call('gpuReadbackNative', { name: 'preview' });
-  assert.ok(!gpuReview || gpuReview.kind === 'preview');
+  if (gpuReview) assert.equal(gpuReview.kind, 'preview');
   const cpuStart = process.cpuUsage();
   const start = performance.now();
   const gpu = gpuReview ? await backend.call('gpuReadbackNative', { name: 'start', reviewId: gpuReview.reviewId }) : undefined;
-  assert.ok(!gpu || gpu.kind === 'started');
+  if (gpu) assert.equal(gpu.kind, 'started');
   let contentionEntryPercent: number | undefined;
   if (gpu && ownerHold) {
     // An external hardware workload supplies the actual pressure. The initial owner hold keeps the probe demanded.
