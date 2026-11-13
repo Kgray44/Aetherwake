@@ -809,6 +809,28 @@ export function installApplication(hooks: Hooks) {
       height: 16,
     }),
     failed: report,
+    placeNote: (resource) => {
+      const workspaceId = state?.activeWorkspaceId;
+      if (!workspaceId || !notePlacementAllowed(resource, workspaceId)) return;
+      return () => enqueueResult(async () => {
+        await flush();
+        const current = state?.resources.find((item) => item.id === resource.id);
+        if (!current || !notePlacementAllowed(current, workspaceId))
+          throw Error("note_placement_context_changed");
+        const attach = libraryClient.attachBlock;
+        if (!attach || !state) throw Error("attachment_unavailable");
+        await attach({
+          commandId: crypto.randomUUID(),
+          workspaceId,
+          expectedLayoutVersion: state.layoutVersion,
+          bounds: viewBounds(),
+          resourceId: current.id,
+          kind: "note",
+          expectedResourceVersion: current.version,
+        });
+        hooks.status("Note added to this workspace.");
+      });
+    },
     mount: (root, resource) =>
       mountDirectResourceExperience(root, resource, {
         notes: notesClient,
@@ -3901,6 +3923,15 @@ export function installApplication(hooks: Hooks) {
       view.dispose();
       throw error;
     }
+  }
+  function notePlacementAllowed(resource: Resource, workspaceId: string): boolean {
+    const workspace = state?.workspaces.find((item) => item.id === workspaceId);
+    return !!workspace && !!libraryClient.attachBlock &&
+      state?.navigation.kind === "workspace" && state.activeWorkspaceId === workspaceId &&
+      resource.kind === "note" && resource.state !== "archived" &&
+      resource.available !== false && resource.visible !== false &&
+      (resource.project_id == null || resource.project_id === workspace.project_id) &&
+      !state.blocks.some((block) => block.workspace_id === workspaceId && block.resource_id === resource.id);
   }
   function openCanonicalResource(resourceId: string, messageId?: string) {
     void resourceOpener

@@ -39,6 +39,18 @@
   box-shadow: none;
   background: transparent;
 }
+.aw-note-placement {
+  margin-block-end: 8px;
+  padding: 6px 10px;
+  border: 1px solid #b9a4e24a;
+  border-radius: 8px;
+  background: #221f32;
+  color: #e6e0f2;
+  font: inherit;
+  cursor: pointer;
+}
+.aw-note-placement:disabled { opacity: .55; cursor: default; }
+.aw-note-placement:focus-visible { outline: 2px solid #c4b5fd; outline-offset: 2px; }
 .application-direct-resource .aw-media-title,
 .working-content.aw-media .aw-media-heading {
   display: none;
