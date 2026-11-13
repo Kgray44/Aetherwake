@@ -590,6 +590,10 @@ export function installApplication(hooks: Hooks) {
   }
   function openAdaptiveWorkspace(anchor: HTMLButtonElement, initialMissionId?: string) {
     if (document.hidden) return;
+    if (eventDisconnected) {
+      hooks.status("Backend disconnected. Restart to inspect mission evidence.");
+      return;
+    }
     closeAdaptiveWorkspace();
     const content = document.createElement("div");
     const workspace = state?.navigation.kind === "workspace"
@@ -617,6 +621,7 @@ export function installApplication(hooks: Hooks) {
         else view.refresh(accessChanged);
       },
       setScope: closeAdaptiveWorkspace,
+      disconnect: closeAdaptiveWorkspace,
       dispose: view.dispose,
     });
     adaptiveWorkspace = lifecycle;
@@ -4974,6 +4979,7 @@ export function installApplication(hooks: Hooks) {
     }
     if (e.type === "backend/disconnected") {
       eventDisconnected = true;
+      missionWorkrooms.disconnect();
       resetEventProjection();
       velaObservation.stop();
       velaPanel?.observeLiveAnswer(undefined);
