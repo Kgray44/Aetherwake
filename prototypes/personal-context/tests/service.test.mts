@@ -200,6 +200,33 @@ test('scope denial skips the original body; shared reviewed knowledge never gran
   const f = fixture(); try { f.enable(); const source = f.service.importOriginal(original()), value = f.service.reviewFact(fact(source, { scope: shared })); const before = f.calls.decrypted; f.denied.add(JSON.stringify(ordinary)); const context = f.service.previewContext(request({ assistant: 'vela', sharedFactIds: [value.id] })); assert.equal(context.items.length, 0); assert(context.omissions.some(item => item.reason === 'unavailable')); assert.equal(f.calls.decrypted - before, 2, 'only privacy policy and selected fact, never denied original body'); } finally { f.close(); }
 });
 
+test('reviewed conversation memory travels within its project and stops recalling a removed source', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const scope = { kind: 'project', id: 'p1' } as const;
+    let present = true;
+    const source = { kind: 'conversation-message', conversationId: 'c1', messageId: 'm1', version: 'message:1', contentDigest: 'a'.repeat(64) } as const;
+    const { kind: _kind, ...reference } = source;
+    const message = { ...reference, projectId: 'p1', role: 'user' as const, sensitive: false };
+    const host: PersonalContextHost = { ...f.host, resolveConversationSource: () => present ? message : null };
+    const memory = new PersonalContextService({ ...f.options, host });
+    const saved = memory.reviewFact(fact(undefined, { scope, source }));
+    assert.equal(saved.provenance.kind, 'conversation-message');
+    const query = request({ projectId: 'p1' });
+    const context = memory.previewContext(query);
+    assert.deepEqual(context.items.map(item => item.factId), [saved.id]);
+    assert.equal(memory.previewContext(request({ projectId: 'p2' })).items.length, 0);
+    assert.throws(() => memory.reviewFact(fact(undefined, { source, scope: { kind: 'project', id: 'p2' } })), /conversation_source_scope_mismatch/);
+    message.contentDigest = 'b'.repeat(64);
+    assert.throws(() => memory.reviewFact(fact(undefined, { source, scope })), /stale_conversation_source/);
+    assert.throws(() => memory.validateContext(context, query), /stale_personal_context/);
+    present = false;
+    assert.throws(() => memory.validateContext(context, query), /stale_personal_context/);
+    assert.equal(memory.previewContext(query).items.length, 0);
+  } finally { f.close(); }
+});
+
 test('deletion requires every dependent host authorization and can remove encrypted data while the key is unavailable', () => {
   const f = fixture(); try { f.enable(); const source = f.service.importOriginal(original()), value = f.service.reviewFact(fact(source, { scope: shared })), before = f.counts(); f.denied.add(JSON.stringify(shared)); assert.throws(() => f.service.hardDelete({ id: source.id, expectedVersion: 1 }), /personal_context_not_authorized/); assert.deepEqual(f.counts(), before); f.denied.clear(); f.lock(); assert.deepEqual(new Set(f.service.hardDelete({ id: source.id, expectedVersion: 1 }).deleted.map(item => item.id)), new Set([source.id, value.id])); assert.equal(f.counts().revisions, 1); } finally { f.close(); }
 });

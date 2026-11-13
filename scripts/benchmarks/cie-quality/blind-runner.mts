@@ -66,8 +66,8 @@ export async function runBlindCie(bytes: Buffer, candidate: Candidate,
     const start = performance.now();
     try {
       const result = await run(structuredClone({ id: input.id, request: input.request, sources: input.sources }), signal);
-      results.push({ id: input.id, result: structuredClone(result), endToEndMs: performance.now() - start });
       if (signal.aborted) { stopped = { caseId: input.id, kind: 'cancelled' }; break; }
+      results.push({ id: input.id, result: structuredClone(result), endToEndMs: performance.now() - start });
     } catch {
       // Preserve completed predictions; never echo possible private host/credential error text.
       stopped = { caseId: input.id, kind: signal.aborted ? 'cancelled' : 'host-error' }; break;
