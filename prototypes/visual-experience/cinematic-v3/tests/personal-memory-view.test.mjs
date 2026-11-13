@@ -183,3 +183,30 @@ test('a listed memory whose source cannot be opened can still be deleted', async
     assert.deepEqual(changes, [{ type: 'manage', action: 'delete', id: 'old', version: 2 }]);
   } finally { restore(); }
 });
+
+test('a failed full reload clears stale memory rows, details, and the page cursor', async () => {
+  const f = componentDocument(), restore = f.install();
+  const record = { id: 'fact-1', version: 1, scope: { kind: 'project', id: 'project' }, state: 'active' };
+  let fail = false;
+  try {
+    const view = createPersonalMemoryView(async request => {
+      if (request.type === 'list') {
+        if (fail) throw Error('Memory unavailable');
+        return { records: [record], next: 'next', policy: { version: 1, velaEnabled: true } };
+      }
+      return { ...record, text: 'Synthetic memory', keywords: ['memory'], provenance: { kind: 'user-statement' } };
+    });
+    const load = named(view, 'Load saved memories');
+    load.fire('click');
+    await until(() => !load.disabled);
+    named(view, 'Memory fact-1 · project · active').fire('click');
+    await until(() => view.textContent.includes('Synthetic memory'));
+    fail = true;
+    load.fire('click');
+    await until(() => !load.disabled);
+    assert.match(view.textContent, /Memory unavailable/);
+    assert.equal(named(view, 'Memory fact-1 · project · active'), undefined);
+    assert.doesNotMatch(view.textContent, /Synthetic memory/);
+    assert.equal(named(view, 'More memories').hidden, true);
+  } finally { restore(); }
+});

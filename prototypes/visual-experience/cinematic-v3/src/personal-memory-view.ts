@@ -58,9 +58,13 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
   async function load(after: string | null) {
     const intent = ++selection;
     detail.replaceChildren();
+    if (after === null) {
+      list.replaceChildren();
+      next = null;
+      more.hidden = true;
+    }
     const page = await command({ type: 'list', after }) as Page;
     if (intent !== selection) return;
-    if (after === null) list.replaceChildren();
     if (!currentPolicy || page.policy.version >= currentPolicy.version) renderPolicy(page.policy);
     for (const record of page.records) {
       const row = document.createElement('li');
