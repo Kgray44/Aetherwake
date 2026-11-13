@@ -30,6 +30,25 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('a matching confirmed interruption keeps the draft and allows an explicit next send',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;
+  const form=f.view.root.querySelector('.cp-composer'),send=named(form,'Send'),editor=form.querySelector('textarea');
+  form.fire('submit');await until(()=>!!f.pending);
+  editor.value='New draft after stopping';editor.fire('input');
+  f.pending!.resolve({id:'execution:stopped',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:f.pending!.input.commandId,state:'interrupted'});
+  await chat.whenSubmissionSettled();await chat.flush();
+  assert.equal(send.disabled,false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Reply stopped/);
+  assert.equal(f.draft.content,'New draft after stopping');
+  assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+  form.fire('submit');await until(()=>!!f.pending);
+  assert.equal(f.pending!.input.content,'New draft after stopping');
+  f.accept(true);await chat.whenSubmissionSettled();
+ }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.dispose();f.restore();}
+});
+
 test('Stop follows the observed turn through acknowledgment, settlement and a subsequent turn',async()=>{
   for(const settleBeforeAck of [true,false]){
     const f=fixture('chatgpt-plan-responses');
