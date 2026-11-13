@@ -101,6 +101,8 @@ export class ConstellationController {
   private resourceOpeningGeneration = 0;
   private listeners = new Set<() => void>();
   private saveChain = Promise.resolve();
+  private restoring: Promise<void> | undefined;
+  private restoreFailed = false;
   private destroyed = false;
   private options: ControllerOptions;
   private navigationChain: Promise<unknown> = Promise.resolve();
@@ -166,15 +168,18 @@ export class ConstellationController {
       ...(this.spatial ? { spatial: this.spatial.bookmark() } : {}),
     };
   }
-  async restore() {
+  restore(): Promise<void> {
+    return (this.restoring ??= this.readSavedView().finally(() => {
+      this.restoring = undefined;
+    }));
+  }
+  private async readSavedView() {
+    this.restoreFailed = false;
     try {
       const raw = await this.options.persistence?.load();
-      if (
-        !raw ||
-        typeof raw !== "object" ||
-        (raw as ViewState).schema !== "aerynth.constellation@1"
-      )
-        return;
+      if (this.destroyed || raw == null) return;
+      if (typeof raw !== "object" || (raw as ViewState).schema !== "aerynth.constellation@1")
+        throw Error("invalid_view_state");
       const s = raw as ViewState;
       const anchors: Record<string, Anchor> = {};
       for (const [key, p] of Object.entries(s.anchors ?? {}).slice(0, 20000))
@@ -238,6 +243,7 @@ export class ConstellationController {
       if (this.spatial) this.motion.snap(this.spatial.id);
       this.changed();
     } catch {
+      this.restoreFailed = true;
       this.error =
         "Saved view could not be restored. Navigation remains available.";
       this.changed();
@@ -284,7 +290,7 @@ export class ConstellationController {
       this.state.bookmarks[key] = this.cleanBookmark(b);
     if (notify) {
       this.changed();
-      void this.persist();
+      if (!this.restoring) void this.persist();
     }
   }
   private remember(location: Location, bookmark: Bookmark, push: boolean) {
@@ -842,7 +848,10 @@ export class ConstellationController {
     });
   }
   async persist() {
-    if (this.destroyed) return;
+    // A startup refresh may update the graph before the saved view arrives.
+    // Capture the write only after the saved view has been applied.
+    if (this.restoring) await this.restoring;
+    if (this.destroyed || this.restoreFailed) return;
     this.state.bookmarks[scopeOf(this.location)] = this.bookmark();
     const copy = structuredClone(this.state);
     this.saveChain = this.saveChain
