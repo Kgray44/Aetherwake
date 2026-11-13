@@ -1,12 +1,13 @@
 const { randomBytes } = require("node:crypto");
 const { join } = require("node:path");
 const { enterMemoryFixture } = require("./memory-fixture-entry.cjs");
+const { resolveMemoryInspectorArtifact } = require("./memory-inspector-artifact.cjs");
 const { applicationFrameTrust, nativeReviewBoundary, createPersonalMemoryDesktopRoute } =
   require("./personal-memory-desktop-route.cjs");
 
 // Acceptance composition only. A package owner must supply an artifact
 // verifier and isolated runtime before this can be used as an executable entry.
-async function startMemoryInspectorFixture({ handoff, verifyArtifact, runtime, allowWrite }) {
+async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMemoryInspectorArtifact, runtime, allowWrite }) {
   const entered = enterMemoryFixture({ ...handoff, allowWrite });
   const { backendDescriptor, check, release } = entered;
   let backend, protector, surface;
@@ -25,7 +26,9 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact, runtime, a
     return cleanup;
   }
   try {
-    const assets = await verifyArtifact({ artifactPath: handoff.artifactPath, profileRoot: backendDescriptor.profileRoot, check });
+    const assets = await verifyArtifact({
+      artifactPath: handoff.artifactPath, artifactSha256: entered.artifactSha256, profileRoot: backendDescriptor.profileRoot, check,
+    });
     if (!assets?.rendererURL?.startsWith("file:") || !assets.preloadPath || !assets.hostPath || !assets.nodePath)
       throw Error("memory_fixture_artifact_unverified");
     check();
@@ -33,6 +36,7 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact, runtime, a
     const policyToken = randomBytes(32).toString("base64url");
     try {
       protector = await runtime.createProtector({
+        modulePath: assets.protectorPath,
         profileRoot: backendDescriptor.profileRoot,
         databasePath: join(backendDescriptor.profileRoot, "aerynth.sqlite"), fixtureKey: key, mode: "create",
       });
@@ -42,7 +46,7 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact, runtime, a
       executable: assets.nodePath,
       args: [assets.hostPath, "--memory-fixture-bootstrap-v1", JSON.stringify(backendDescriptor)],
       env: { AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN: policyToken },
-      protector, check,
+      protector, wirePath: assets.wirePath, check,
     });
     check();
     surface = await runtime.createSurface({

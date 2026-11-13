@@ -91,6 +91,7 @@ function enterMemoryFixture({
     writeFileSync(join(root, consumedName), "", { flag: "wx", mode: 0o600 });
     check();
     return {
+      artifactSha256: descriptor.artifactDigest,
       backendDescriptor: Object.freeze({
         contract: "aerynth.memory-fixture-bootstrap@1",
         profileRoot: root,
