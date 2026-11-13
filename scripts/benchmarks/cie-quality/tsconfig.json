@@ -1,0 +1,5 @@
+{
+  "extends": "../../../prototypes/integrated-backend/tsconfig.json",
+  "compilerOptions": { "typeRoots": ["../../../prototypes/integrated-backend/node_modules/@types"] },
+  "include": ["./*.mts"]
+}

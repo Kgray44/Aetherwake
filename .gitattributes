@@ -1,0 +1,2 @@
+# The CIE input seal hashes exact file bytes.
+/scripts/benchmarks/cie-quality/cases.public.json -text
