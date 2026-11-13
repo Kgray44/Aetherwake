@@ -35,8 +35,34 @@ test("an export bundle stays in the native save flow", async () => {
       return request.type === "preview" ? { ticket: "review" } : { action: "export", bundle };
     },
     confirm: async () => true,
-    saveExport: async value => { assert.equal(value, bundle); return true; },
+    chooseExport: async () => { calls.push("choose"); return "synthetic.json"; },
+    writeExport: (path, value) => { assert.equal(path, "synthetic.json"); assert.equal(value, bundle); calls.push("write"); },
   });
   assert.deepEqual(result, { status: "exported" });
-  assert.deepEqual(calls, ["preview", "commit"]);
+  assert.deepEqual(calls, ["preview", "choose", "commit", "write"]);
+});
+
+test("cancelled and stale export choices never write a file", async () => {
+  for (const choose of [false, true]) {
+    let version = 1;
+    const calls = [];
+    const operation = managePersonalMemory({
+      input: { type: "manage", action: "export", id: "fact", version: 1 },
+      trustedFrame: () => true, observeGesture: async () => true, allowWrite: async () => true,
+      async call(_command, request) {
+        calls.push(request.type);
+        if (request.type === "preview") return { ticket: "private", version };
+        if (request.type === "commit") {
+          assert.notEqual(request.review.version, version);
+          throw Error("stale_personal_context_version");
+        }
+      },
+      confirm: async () => true,
+      chooseExport: async () => { version++; return choose ? "synthetic.json" : null; },
+      writeExport: () => assert.fail("No stale export should be written"),
+    });
+    if (choose) await assert.rejects(operation, /stale_personal_context_version/);
+    else assert.deepEqual(await operation, { status: "cancelled" });
+    assert.deepEqual(calls, choose ? ["preview", "commit", "cancel"] : ["preview", "cancel"]);
+  }
 });
