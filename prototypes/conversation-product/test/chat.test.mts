@@ -753,6 +753,34 @@ test('global manager mounts the same chat component with contextual extras and s
   finally{await manager?.dispose();f.restore();}
 });
 
+test('resize keeps the followed reply visible and respects manual reading scroll',async()=>{
+ const f=fixture();let chat,notify!:ResizeObserverCallback,runFrame!:FrameRequestCallback;
+ const before={ResizeObserver:globalThis.ResizeObserver,requestAnimationFrame:globalThis.requestAnimationFrame};
+ globalThis.ResizeObserver=class {constructor(callback:ResizeObserverCallback){notify=callback;}observe(){}disconnect(){}} as unknown as typeof ResizeObserver;
+ globalThis.requestAnimationFrame=callback=>{runFrame=callback;return 1;};
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,layoutHost:f.view.root});await chat.ready;
+  const list=f.view.root.querySelector('.cp-messages');
+  const last=f.view.root.querySelector('.cp-message-assistant').querySelector('.cp-message-content');
+  list.scrollHeight=1200;list.scrollTop=700;
+  last.getBoundingClientRect=()=>({bottom:1080-list.scrollTop,height:24});
+  const resize=(width:number)=>{notify([{target:f.view.root,contentRect:{height:300,width}} as unknown as ResizeObserverEntry],{} as ResizeObserver);runFrame(0);};
+  resize(400);
+  assert.equal(list.scrollTop,780);
+  list.fire('wheel');list.scrollTop=250;
+  resize(360);
+  assert.equal(list.scrollTop,250);
+  f.detail.messages.offset=50;f.detail.messages.total=52;f.detail.conversation.messageCount=52;
+  await chat.refresh();
+  list.scrollTop=900;
+  named(f.view.root,'Earlier messages').fire('click');
+  await until(()=>f.calls.at(-1)?.input.offset===0);
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  resize(340);
+  assert.equal(list.scrollTop,900,'Paging takes precedence over following the latest message');
+ }finally{await chat?.dispose();Object.assign(globalThis,before);f.restore();}
+});
+
 test('measured short chat hosts compact the stable editor and consolidate feedback before the final composer without mutating its draft',async()=>{
   const f=fixture();let chat,target:Element|null=null,resize:ResizeObserverCallback|undefined,disconnected=false,layoutActive=true,hostMoving=false,id=0;const previous=globalThis.ResizeObserver,priorFrame=globalThis.requestAnimationFrame,priorCancel=globalThis.cancelAnimationFrame,frames=new Map<number,FrameRequestCallback>();f.view.root.clientWidth=400;f.view.root.style.height='600px';
   class MeasuredResizeObserver {constructor(callback:ResizeObserverCallback){resize=callback;}observe(node:Element){target=node;}disconnect(){disconnected=true;}unobserve(){}}
