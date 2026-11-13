@@ -22,6 +22,16 @@ port.on('close',()=>{maintenanceClient?.close();computerClient?.close();document
 try {
   if (fixture && Object.keys(workerData).some(key => !['memoryFixture', 'options'].includes(key))) throw Error('memory_fixture_bootstrap_invalid');
   const options=(hosted || fixture ? workerData.options : workerData) as Options;
+  if (fixture?.contract === 'aerynth.memory-fixture-restart@1') {
+    // Recheck the parent's bound DB identity before Core opens the file for writes.
+    const custodyReply = (request: unknown) => {
+      if (isNativeHostEnvelope(request)) nativeClient!.handle(request);
+    };
+    port.on('message', custodyReply);
+    try {
+      if (!await nativeClient!.services.secrets.available()) throw Error('memory_fixture_restart_failed');
+    } finally { port.off('message', custodyReply); }
+  }
   const core = new BackendCore(options, event => port.postMessage({ event }),hosted && nativeClient?{...nativeClient.services,resourcePolicy:workerData.resourcePolicy,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{}),...(maintenanceClient?{maintenance:maintenanceClient.services}:{}),...(computerClient?{computer:computerClient.services}:{})}:undefined,
     undefined, undefined, fixture ? { descriptor: fixture, protector: nativeClient!.services.secrets } : undefined);
   port.on('message', async request => {

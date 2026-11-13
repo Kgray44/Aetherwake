@@ -17,7 +17,7 @@ const require = createRequire(import.meta.url);
 const { superviseMemoryFixture } = require('../../visual-experience/cinematic-v3/native/memory-fixture-supervisor.cjs');
 const { enterMemoryFixture } = require('../../visual-experience/cinematic-v3/native/memory-fixture-entry.cjs');
 
-test('admitted desktop fixture captures and revokes a canonical source through the worker custody wire', { timeout: 25_000 }, async t => {
+test('admitted desktop fixture preserves canonical source IDs across a guarded restart and revokes the source', { timeout: 25_000 }, async t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'aerynth-joint-memory-')));
   t.after(() => {
     assert.equal(dirname(root), realpathSync(tmpdir()));
@@ -119,52 +119,69 @@ test('admitted desktop fixture captures and revokes a canonical source through t
       }
       syncBuiltinESMExports();
     `;
-    const child = spawn(process.execPath, [
-      '--import', 'data:text/javascript;base64,' + Buffer.from(tripwire).toString('base64'),
-      ...hostArgs(entered.backendDescriptor),
-    ], { ...launchOptions, stdio: ['pipe', 'pipe', 'pipe'] });
-    const done = once(child, 'exit');
-    const stopChild = () => {
-      if (child.exitCode === null && child.signalCode === null) child.kill();
-    };
-    t.signal.addEventListener('abort', stopChild, { once: true });
-    let stderr = '';
-    child.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
-    const custodyOperations: string[] = [];
-    const server = createNativeHostServer({ secrets: protector }, response =>
-      child.stdin.write(JSON.stringify(response) + '\n'));
-    const lines = createInterface({ input: child.stdout });
-    const replies = lines[Symbol.asyncIterator]();
-    let id = 0;
-    const seeds: { contract: string; conversationId: string; messageId: string; factId: string }[] = [];
-    async function call<K extends keyof CommandMap>(command: K, input: CommandMap[K]['input'], fixturePolicyToken?: string,
-      fixtureDetailToken?: string): Promise<CommandMap[K]['output']> {
-      entered.check();
-      const wanted = ++id;
-      child.stdin.write(JSON.stringify({ id: wanted, command, input, fixturePolicyToken, fixtureDetailToken }) + '\n');
-      for (;;) {
-        const line = await replies.next();
-        assert.equal(line.done, false, stderr);
-        const response = JSON.parse(line.value);
-        if (server.handle(response)) {
-          custodyOperations.push(response.nativeHost.operation);
-          continue;
+    type Receipt = { contract: string; conversationId: string; messageId: string; factId: string };
+    function startHost(args: string[], childEnv: NodeJS.ProcessEnv,
+      secrets: Pick<typeof protector, 'available' | 'open' | 'seal'>) {
+      const child = spawn(process.execPath, [
+        '--import', 'data:text/javascript;base64,' + Buffer.from(tripwire).toString('base64'), ...args,
+      ], { ...launchOptions, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+      const done = once(child, 'exit');
+      const stopChild = () => {
+        if (child.exitCode === null && child.signalCode === null) child.kill();
+      };
+      t.signal.addEventListener('abort', stopChild, { once: true });
+      let stderr = '';
+      child.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+      const custodyOperations: string[] = [];
+      const server = createNativeHostServer({ secrets }, response =>
+        child.stdin.write(JSON.stringify(response) + '\n'));
+      const lines = createInterface({ input: child.stdout });
+      const replies = lines[Symbol.asyncIterator]();
+      let id = 0;
+      const seeds: Receipt[] = [];
+      const restarts: Receipt[] = [];
+      async function call<K extends keyof CommandMap>(command: K, input: CommandMap[K]['input'], fixturePolicyToken?: string,
+        fixtureDetailToken?: string): Promise<CommandMap[K]['output']> {
+        entered.check();
+        const wanted = ++id;
+        child.stdin.write(JSON.stringify({ id: wanted, command, input, fixturePolicyToken, fixtureDetailToken }) + '\n');
+        for (;;) {
+          const line = await replies.next();
+          assert.equal(line.done, false, stderr);
+          const response = JSON.parse(line.value);
+          if (server.handle(response)) {
+            custodyOperations.push(response.nativeHost.operation);
+            continue;
+          }
+          if (response.fixtureSeed) { seeds.push(response.fixtureSeed); continue; }
+          if (response.fixtureRestart) { restarts.push(response.fixtureRestart); continue; }
+          if (response.startupError) throw Error(response.startupError);
+          if (response.event) continue;
+          assert.equal(response.id, wanted);
+          if (response.error) throw Error(response.error);
+          return response.result;
         }
-        if (response.fixtureSeed) { seeds.push(response.fixtureSeed); continue; }
-        if (response.event) continue;
-        assert.equal(response.id, wanted);
-        if (response.error) throw Error(response.error);
-        return response.result;
       }
+      return { call, done, child, seeds, restarts, custodyOperations, stderr: () => stderr,
+        async dispose() {
+          lines.close();
+          server.close();
+          t.signal.removeEventListener('abort', stopChild);
+          stopChild();
+          await done;
+        } };
     }
 
+    const fresh = startHost(hostArgs(entered.backendDescriptor), env, protector);
+    let session = fresh;
+    const call: typeof fresh.call = (...args) => session.call(...args);
     try {
       assert.equal((await call('capabilities', {})).providerId, 'fixture-codex');
       for (const command of ['providerAuth', 'velaApiConfigure', 'velaVoiceNative', 'velaWakeNative', 'githubTimeline'] as const)
         await assert.rejects(call(command, {} as never), /memory_fixture_command_denied|native_api_configuration_required|unsupported_command/u);
       await assert.rejects(call('fixtureSeed' as never, {} as never), /unsupported_command/u);
-      assert.equal(seeds.length, 1);
-      const [seed] = seeds;
+      assert.equal(fresh.seeds.length, 1);
+      const [seed] = fresh.seeds;
       assert.equal(seed.contract, 'aerynth.memory-fixture-seed@1');
       const snapshot = await call('snapshot', {});
       const chat = snapshot.conversations.find(item => item.resourceId === seed.conversationId)!;
@@ -238,28 +255,80 @@ test('admitted desktop fixture captures and revokes a canonical source through t
       assert.equal((await call('openResource', { ...target, resourceId: other.resourceId }, undefined, detailToken)).status, 'unavailable');
       await assert.rejects(detail(), /memory_fixture_command_denied/u);
       await call('openResource', target, undefined, detailToken);
-      const revocation = await call('personalMemoryManagementNative', {
-        type: 'previewSourceRevocation', id: receipt.id, version: 1,
-      }) as { binding: CommandMap['personalMemoryRevokeSourceNative']['input'] };
-      assert.equal(revocation.binding.messageId, source.id);
-      assert.deepEqual(await call('personalMemoryRevokeSourceNative', revocation.binding), {
-        revision: chat.revision + 2, erasedFacts: 1,
-      });
-      await assert.rejects(call('personalMemoryManagementNative', { type: 'read', id: receipt.id }), /personal_record_unavailable/u);
-      assert.equal((await call('openResource', target)).status, 'unavailable');
-      await assert.rejects(detail(), /source_unavailable/u);
-      assert.equal((await call('providerActivity', {})).providerRequests, 0);
       await call('close', {});
-      assert.deepEqual(await done, [0, null]);
-      assert.equal(stderr, '');
-      assert.ok(custodyOperations.includes('seal') && custodyOperations.includes('open'));
+      assert.deepEqual(await fresh.done, [0, null]);
+      assert.equal(fresh.stderr(), '');
+      assert.ok(fresh.custodyOperations.includes('seal') && fresh.custodyOperations.includes('open'));
+      const restart = await protector.prepareRestart({
+        check: entered.check,
+        assertWorkerExited: () => assert.equal(fresh.child.exitCode, 0),
+      });
+      const restartArgs = (descriptor: unknown) => [hostPath, '--memory-fixture-restart-v1', JSON.stringify(descriptor)];
+      const reopenEnv = { ...env, AERYNTH_MEMORY_FIXTURE_SEED: undefined };
+      for (const descriptor of [
+        { ...restart.descriptor, expiresAt: Date.now() - 1 },
+        { ...restart.descriptor, expiresAt: restart.descriptor.expiresAt - 1 },
+        { ...restart.descriptor, profileRoot: unrelatedProfile },
+      ]) {
+        const denied = spawnSync(process.execPath, restartArgs(descriptor), {
+          ...launchOptions, env: reopenEnv, timeout: 5000, encoding: 'utf8',
+        });
+        assert.equal(denied.status, 1);
+        assert.match(denied.stderr, /memory_fixture_bootstrap_invalid/u);
+      }
+      const reseed = spawnSync(process.execPath, restartArgs(restart.descriptor), {
+        ...launchOptions, timeout: 5000, encoding: 'utf8',
+      });
+      assert.equal(reseed.status, 1);
+      assert.match(reseed.stderr, /memory_fixture_seed_invalid/u);
+      const withoutCustody = startHost(restartArgs(restart.descriptor), reopenEnv, {
+        available: async () => false,
+        open: async () => { throw Error('unexpected_open'); },
+        seal: async () => { throw Error('unexpected_seal'); },
+      });
+      try {
+        await assert.rejects(withoutCustody.call('capabilities', {}), /memory_fixture_restart_failed/u);
+        assert.deepEqual(await withoutCustody.done, [1, null]);
+        assert.deepEqual(withoutCustody.restarts, []);
+        assert.deepEqual(withoutCustody.custodyOperations, ['available']);
+        assert.equal(existsSync(join(profileRoot, 'synthetic-backend.restart-claimed')), false);
+      } finally { await withoutCustody.dispose(); }
+      const reopened = await restart.claim(restart.descriptor);
+      try {
+        session = startHost(restartArgs(restart.descriptor), reopenEnv, reopened);
+        assert.equal((await call('capabilities', {})).providerId, 'fixture-codex');
+        assert.deepEqual(session.restarts, [{ ...seed, contract: 'aerynth.memory-fixture-restart-ready@1' }]);
+        assert.deepEqual(session.seeds, []);
+        assert.ok(session.custodyOperations.includes('open'));
+        assert.equal(session.custodyOperations.includes('seal'), false);
+        assert.deepEqual(await call('personalMemoryManagementNative', { type: 'read', id: receipt.id }), fact);
+        await assert.rejects(detail(), /memory_fixture_command_denied/u);
+        await call('openResource', target, undefined, detailToken);
+        assert.deepEqual(await detail(), projected);
+        const revocation = await call('personalMemoryManagementNative', {
+          type: 'previewSourceRevocation', id: receipt.id, version: 1,
+        }) as { binding: CommandMap['personalMemoryRevokeSourceNative']['input'] };
+        assert.equal(revocation.binding.messageId, source.id);
+        assert.deepEqual(await call('personalMemoryRevokeSourceNative', revocation.binding), {
+          revision: chat.revision + 2, erasedFacts: 1,
+        });
+        await assert.rejects(call('personalMemoryManagementNative', { type: 'read', id: receipt.id }), /personal_record_unavailable/u);
+        assert.equal((await call('openResource', target)).status, 'unavailable');
+        await assert.rejects(detail(), /source_unavailable/u);
+        assert.equal((await call('providerActivity', {})).providerRequests, 0);
+        await call('close', {});
+        assert.deepEqual(await session.done, [0, null]);
+        assert.equal(session.stderr(), '');
+        const replay = spawnSync(process.execPath, restartArgs(restart.descriptor), {
+          ...launchOptions, env: reopenEnv, timeout: 5000, encoding: 'utf8',
+        });
+        assert.equal(replay.status, 1);
+        assert.match(replay.stderr, /memory_fixture_bootstrap_invalid/u);
+      } finally { reopened.close(); restart.close(); }
     } finally {
-      lines.close();
-      server.close();
+      if (session !== fresh) await session.dispose();
+      await fresh.dispose();
       protector.close();
-      t.signal.removeEventListener('abort', stopChild);
-      stopChild();
-      await done;
     }
     const db = new DatabaseSync(databasePath, { readOnly: true });
     try {
