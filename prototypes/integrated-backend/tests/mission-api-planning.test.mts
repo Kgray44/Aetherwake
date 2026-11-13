@@ -23,6 +23,9 @@ import { docxFixture } from '../../block-library/tests/media-fixtures.mts';
 import { missionDraftImageModel, missionImageModel } from '../../openai-provider/images.mts';
 import { writeMissionArtifacts } from '../src/mission-artifacts.mts';
 import { preflightArtifactEvidence, retainArtifactEvidence, verifyArtifactEvidence } from './helpers/artifact-evidence.mts';
+import { runBlindCie } from '../../../scripts/benchmarks/cie-quality/blind-runner.mts';
+import { openBlindJournal } from '../../../scripts/benchmarks/cie-quality/blind-journal.mts';
+import { canStartReviewedCieCase } from '../../../scripts/benchmarks/cie-quality/native-budget.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
 const marker='SYNTHETIC_ONLY_MISSION_API_KEY';
 const graph={tasks:[{capability:'cpu',after:[]},{capability:'ram',after:[]},{capability:'backend',after:['cpu','ram']}],unsupported:['Server tick timings and logs are unavailable.']};
@@ -1244,6 +1247,75 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
     const unconfirmed = await send(true) as VelaRequest;
     assert.equal(unconfirmed.state, 'failed');
     assert.equal(unconfirmed.errorCode, 'vela_semantic_answer_unconfirmed');
+  } finally { await f.close(); }
+});
+
+test('sealed CIE cases resume through native review and canonical usage accounting', async () => {
+  const f = fixture(true, true);
+  const journalPath = join(f.directory, 'blind-evaluation.sqlite');
+  const bytes = readFileSync(new URL('../../../scripts/benchmarks/cie-quality/cases.public.json', import.meta.url));
+  const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+  const signal = new AbortController().signal;
+  const usage = () => f.core.command('velaApiUsageStatus', {});
+  const interpret = (question: string, query: string) => ({ version: 2, objective: question, clarification: '',
+    perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+    needs: [{ key: 'fact', question, query }] });
+  const assess = (key: string, quote: string) => ({ version: 3, clarification: '',
+    assessment: [{ key, status: 'supported', query: '', passages: [{ source: 'e1', quote }] }] });
+  const reply = (value: unknown) => (body: { model: string }) => response(JSON.stringify(value), body.model);
+  try {
+    await f.ready();
+    for (const expectedCase of ['blind-001', 'blind-002']) {
+      const journal = openBlindJournal(journalPath);
+      try {
+        let hostError: unknown;
+        const checkpoint = await runBlindCie(bytes, identity, async input => {
+          try {
+            assert.equal(input.id, expectedCase);
+            const project = await f.core.command('desktop', { type: 'createProject', title: input.id });
+            const projectId = project.projects.find(item => item.title === input.id)!.id;
+            const workspace = await f.core.command('desktop', { type: 'createWorkspace', title: input.id, projectId });
+            const resourceIds: string[] = [];
+            for (const source of input.sources) {
+              const created = await f.core.command('desktop', { type: 'createResource', kind: 'note',
+                title: source.title, workspaceId: workspace.activeWorkspaceId });
+              const note = created.resources.find(item => item.title === source.title)!;
+              await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: source.text });
+              resourceIds.push(note.id);
+            }
+            const quote = input.sources[0].text;
+            const before = await usage();
+            if (!before.usedToday) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
+              reply(assess('day', 'The pump inspection is on Tuesday.')));
+            f.replies.push(reply(interpret(input.request, input.sources[0].title)), reply(assess('fact', quote)),
+              body => response(quote, body.model));
+            const result = await velaCommand({
+              win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+              directMessageSend: true, routeNative: true, dialog: {}, call: f.core.command.bind(f.core),
+              reviewProvider: async ({ review }: { review: VelaNativeReview }) => {
+                assert.equal(review.semanticContext, true);
+                return true;
+              },
+              input: { name: 'request', input: { intent: input.request, resourceIds, authorizeProvider: true,
+                providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
+            }) as VelaRequest;
+            assert.equal(result.state, 'responded', result.errorCode);
+            const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
+            const answer = state.conversation?.messages.find(message => message.id === result.response?.messageId)?.content;
+            assert.equal(answer, quote);
+            assert.equal(f.replies.length, 0);
+            const simulatedCalls = (await usage()).usedToday - before.usedToday;
+            assert.equal(simulatedCalls, expectedCase === 'blind-001' ? 5 : 3);
+            return { answer, simulatedCalls };
+          } catch (error) { hostError = error; throw error; }
+        }, signal, { journal, maxCases: 1, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
+        if (hostError) throw hostError;
+        assert.equal(checkpoint.stopped, null);
+        assert.equal(checkpoint.results.at(-1)?.id, expectedCase);
+      } finally { journal.close(); }
+    }
+    assert.equal((await usage()).usedToday, 8);
   } finally { await f.close(); }
 });
 
