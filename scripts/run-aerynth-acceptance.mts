@@ -19,7 +19,7 @@ const suites = [
   ['Can I run and follow a Codex task?', 'codex-bridge', 'tests/*.test.ts'],
   ['Can Vela answer or act, and does it ask before doing sensitive work?', 'vela-core', 'tests/*.test.mts', 'tests/*.test.mjs', 'test/*.test.cjs'],
   ['Do the app tools work together and survive a restart?', 'integrated-backend', 'tests/*.test.mts'],
-  ['Do the desktop controls show the right state and reviews?', 'visual-experience/cinematic-v3', 'tests/*.test.mjs', 'tests/*.test.cjs', 'native/run-application-check.test.cjs', 'native/personal-memory-capture.test.cjs'],
+  ['Do the desktop controls show the right state and reviews?', 'visual-experience/cinematic-v3', 'tests/*.test.mjs', 'tests/*.test.cjs', 'native/run-application-check.test.cjs', 'native/personal-memory-capture.test.cjs', 'native/personal-memory-review-guard.test.cjs'],
 ];
 
 const failures: string[] = [];
