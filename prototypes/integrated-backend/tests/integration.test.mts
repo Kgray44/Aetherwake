@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -127,7 +127,15 @@ test('process loss leaves unknown outcome, preserves events, never resubmits', a
     assert.ok((await b.call('replay', {})).events.some(e => e.type === 'turn/started'));
   } finally { await b.close(); }
 });
-test('an explicit capability check recovers a lost App Server without replaying the interrupted turn', { timeout: 12000 }, async t => {
+// Bound readiness, work and cleanup independently so a cold worker cannot
+// consume the time reserved for exercising disconnect and recovery.
+async function recoveryPhase(t: TestContext, name: string, action: () => Promise<unknown>) {
+  let completed = false;
+  await t.test(name, { timeout: 20000 }, async () => { await action(); completed = true; });
+  assert.ok(completed, `${name} did not complete; do not continue the recovery sequence`);
+}
+
+test('an explicit capability check recovers a lost App Server without replaying the interrupted turn', async t => {
   const fake = fileURLToPath(new URL('../../codex-bridge/tests/fake-server.mjs', import.meta.url));
   const path = temp(t), startedAcknowledgment = join(dirname(path), 'observed-turn-started');
   const b = new Backend({
@@ -137,37 +145,46 @@ test('an explicit capability check recovers a lost App Server without replaying 
     codexArgs: [fake, 'crash', startedAcknowledgment],
   });
   try {
-    const initial = await b.call('capabilities', {});
-    assert.equal(initial.authentication, 'available');
-    const { request } = await setup(b, 'codex-app-server-fixture');
-    const executing = b.call('execute', request);
-    void executing.catch(() => {});
-    // Crash only after the real consumer has committed the notification. An
-    // immediate process.exit can discard buffered stdout on Windows.
-    const deadline = Date.now() + 8000;
-    let observed = false;
-    while (Date.now() < deadline) {
-      if ((await b.call('replay', { limit: 250 })).events.some(event => event.type === 'turn/started')) { observed = true; break; }
-      await new Promise(done => setTimeout(done, 10));
-    }
-    assert(observed, 'the real turn/started notification must be durable before the fixture crashes');
-    writeFileSync(startedAcknowledgment, 'canonical turn/started observed', { flag: 'wx' });
-    const lost = await executing;
-    assert.equal(lost.state, 'unknown');
-    assert.equal(lost.errorCode, 'process-exit');
-    assert(lost.binding);
-    assert.deepEqual(await Promise.all([b.call('capabilities', {}), b.call('capabilities', {})]), [initial, initial]);
-    const reconciliation = await b.call('reconcile', { resourceId: request.resourceId });
-    assert.equal(reconciliation.providerThreadAvailable, true);
-    assert.equal(reconciliation.executionOutcome, 'unchanged');
-    assert.deepEqual(await b.call('execute', request), lost);
-    await assert.rejects(b.call('execute', { ...request, commandId: 'retry-after-transport-loss' }), /reconciliation_required/);
-    const snapshot = await b.call('snapshot', {});
-    assert.deepEqual(Object.values(snapshot.executions), [lost]);
-    const events = (await b.call('replay', {})).events;
-    assert.equal(events.filter(e => e.type === 'turn/started').length, 1);
-    assert(events.some(e => e.type === 'bridge/transportFailed'));
-  } finally { await b.close(); }
+    await recoveryPhase(t,'worker readiness',()=>b.call('snapshot',{}));
+    let initial!: Awaited<ReturnType<typeof b.call<'capabilities'>>>;
+    await recoveryPhase(t,'synthetic App Server readiness',async()=>{
+      initial = await b.call('capabilities', {});
+      assert.equal(initial.authentication, 'available');
+    });
+    await recoveryPhase(t,'disconnect and recover without replay',async()=>{
+      const { request } = await setup(b, 'codex-app-server-fixture');
+      const executing = b.call('execute', request);
+      void executing.catch(() => {});
+      // Crash only after the real consumer has committed the notification. An
+      // immediate process.exit can discard buffered stdout on Windows.
+      const deadline = Date.now() + 8000;
+      let observed = false;
+      while (Date.now() < deadline) {
+        if ((await b.call('replay', { limit: 250 })).events.some(event => event.type === 'turn/started')) { observed = true; break; }
+        await new Promise(done => setTimeout(done, 10));
+      }
+      assert(observed, 'the real turn/started notification must be durable before the fixture crashes');
+      writeFileSync(startedAcknowledgment, 'canonical turn/started observed', { flag: 'wx' });
+      const lost = await executing;
+      assert.equal(lost.state, 'unknown');
+      assert.equal(lost.errorCode, 'process-exit');
+      assert(lost.binding);
+      assert.deepEqual(await Promise.all([b.call('capabilities', {}), b.call('capabilities', {})]), [initial, initial]);
+      const reconciliation = await b.call('reconcile', { resourceId: request.resourceId });
+      assert.equal(reconciliation.providerThreadAvailable, true);
+      assert.equal(reconciliation.executionOutcome, 'unchanged');
+      assert.deepEqual(await b.call('execute', request), lost);
+      await assert.rejects(b.call('execute', { ...request, commandId: 'retry-after-transport-loss' }), /reconciliation_required/);
+      const snapshot = await b.call('snapshot', {});
+      assert.deepEqual(Object.values(snapshot.executions), [lost]);
+      const events = (await b.call('replay', {})).events;
+      assert.equal(events.filter(e => e.type === 'turn/started').length, 1);
+      assert(events.some(e => e.type === 'bridge/transportFailed'));
+    });
+  } finally {
+    try { await recoveryPhase(t,'graceful shutdown',()=>b.close()); }
+    finally { await b.terminate(); }
+  }
 });
 
 test('a reviewed direct Codex send recovers its exact native turn after restart without resending', async t => {
@@ -177,13 +194,7 @@ test('a reviewed direct Codex send recovers its exact native turn after restart 
   const backend = (mode: string) => new Backend({
     path, contentPolicy: 'synthetic-only', provider: 'codex', codexExecutable: process.execPath, codexArgs: [server, mode,...(mode==='recoverable-crash'?[startedAcknowledgment]:[])],
   });
-  // Five independent cold workers must not consume one shared recovery clock.
-  // Each phase is still bounded, and a failure names readiness, work or cleanup.
-  const phase = async (name: string, action: () => Promise<unknown>) => {
-    let completed = false;
-    await t.test(name, { timeout: 20000 }, async () => { await action(); completed = true; });
-    assert.ok(completed, `${name} did not complete; do not continue the recovery sequence`);
-  };
+  const phase = recoveryPhase.bind(undefined,t);
   const withBackend = async (mode: string, action: (b: Backend) => Promise<void>, connect = true) => {
     const b = backend(mode);
     try {
