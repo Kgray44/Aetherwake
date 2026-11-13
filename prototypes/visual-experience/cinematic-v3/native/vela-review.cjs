@@ -328,11 +328,15 @@ function ownerCanReview(parent) {
 }
 /** A finite, parent-owned native approval surface. It has no application bridge,
  * scripts, network access, credentials, grant, canonical writes or provider port. */
-async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela", workflow, decisionMode, analysisLimits }) {
+async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela", workflow, decisionMode, analysisLimits, isCurrent }) {
   if(decisionMode!==undefined&&(decisionMode!=='three-way'||experience!=='file-edit'))throw Error('invalid_native_review_decision_mode');
   const cancelled=decisionMode==='three-way'?'cancel':false;
+  const scopedAnalysis = experience === "vela-initiated-analysis";
+  const scopeCurrent = () => {
+    try { return !scopedAnalysis || isCurrent?.() === true; } catch { return false; }
+  };
   const view = presentation(experience);
-  if (!ownerCanReview(parent)) return cancelled;
+  if (!ownerCanReview(parent) || !scopeCurrent()) return cancelled;
   const remaining = Date.parse(expiresAt) - Date.now();
   if (!Number.isFinite(remaining) || remaining <= 0) return cancelled;
   const url =
@@ -392,6 +396,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
       done = true;
       ownedReviews.delete(child);
       clearTimeout(timer);
+      clearInterval(scopeTimer);
       for (const [emitter, name, handler] of listeners)
         emitter.removeListener(name, handler);
       try {
@@ -403,6 +408,8 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
     };
     const timer = setTimeout(() => finish(false), Math.min(remaining, 180000));
     timer.unref?.();
+    const scopeTimer = scopedAnalysis ? setInterval(() => { if (!scopeCurrent()) finish(false); }, 250) : undefined;
+    scopeTimer?.unref?.();
     listen(parent, "closed", () => finish(false));
     listen(child, "closed", () => finish(false));
     listen(child, "blur", () => finish(false));
@@ -421,7 +428,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
     const focusedChild=()=>{try{return ownerAlive(child)&&child.isFocused()===true;}catch{return false;}};
     const showWhenReady = () => {
       if (done || ownership.shown || !painted || !ownership.ready) return;
-      if (!ownerCanReview(parent))
+      if (!ownerCanReview(parent) || !scopeCurrent())
         return finish(false);
       ownership.shown = true;
       try {
@@ -444,15 +451,15 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
         Object.keys(value).sort().join(',')!=='decision,token'
       )
         return;
-      if(decisionMode==='three-way'&&value.decision!=='cancel'){
+      if((decisionMode==='three-way'||scopedAnalysis)&&value.decision!=='cancel'){
         if(decisionChecking)return;decisionChecking=true;
         let active=false;
         try{active=focusedChild()&&await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()',false)===true;}catch{}
         if(!validChildEvent(event,value)||!ownership.ready||!ownership.shown||!ownerAlive(parent)||
-          !active||!focusedChild()||Date.now()>=Date.parse(expiresAt))return finish(false);
+          !active||!focusedChild()||!scopeCurrent()||Date.now()>=Date.parse(expiresAt))return finish(false);
       }
       finish(
-        ownerAlive(parent) && Date.now() < Date.parse(expiresAt)
+        ownerAlive(parent) && scopeCurrent() && Date.now() < Date.parse(expiresAt)
           ? value.decision==='reject'?'no':value.decision==='approve'
           : false,
       );

@@ -372,6 +372,7 @@ exports.velaCommand = async ({
           if (!analysisOwnerCurrent()) return false;
           const reviewed = await reviewProvider({ parent: win, review, intent: preview.intent,
             expiresAt: new Date(expiresAt).toISOString(), experience: "vela-initiated-analysis",
+            isCurrent: analysisOwnerCurrent,
             analysisLimits: { requestsPerDay: usage.requestsPerDay, maxOutputTokens: usage.maxOutputTokens } });
           if (reviewed !== true || !analysisOwnerCurrent()) return false;
           if (await analysisStorageAllowed() !== true) throw Error("storage_reserve_admission_denied");
