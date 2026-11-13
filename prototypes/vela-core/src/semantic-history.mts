@@ -316,6 +316,18 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       // Give each query a turn to contribute one usable source. Rejected and
       // already admitted hits do not consume that query's turn.
       const groups = matches.map(sources => ({ sources, cursor: 0 }));
+      let relatedRead = false;
+      const readRelated = () => {
+        signal.throwIfAborted();
+        relatedRead = true;
+        return owner.related!(related);
+      };
+      if (owner.adaptiveDiscovery && owner.related && related.length && evidence.size < limit) {
+        const { sources, scan } = readRelated();
+        recordScan(scan);
+        if (sources.length > 2 * maxCandidates) partial();
+        groups.push({ sources: [...sources.slice(0, 2 * maxCandidates)], cursor: 0 });
+      }
       for (let pass = 0; groups.some(group => group.cursor < group.sources.length); pass++) {
         for (const group of groups) {
           const before = evidence.size;
@@ -350,9 +362,8 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         anchorsRead = true;
         addCandidates(owner.recent(), limit);
       }
-      if (owner.related && related.length && evidence.size < limit) {
-        signal.throwIfAborted();
-        addCandidates(owner.related(related), limit);
+      if (owner.related && related.length && !relatedRead && evidence.size < limit) {
+        addCandidates(readRelated(), limit);
       }
       // Keep the existing refinement and recent-evidence priorities.
       if (owner.widen && remainingPages.length) {

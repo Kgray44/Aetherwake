@@ -78,19 +78,24 @@ test('revisits a truncated discovery query when an incomplete need has no better
 
 test('retrieves reviewed references from a cited partial match within the follow-up round', async () => {
   const anchor = { ...candidate, sourceId: 'anchor', text: 'See the equipment handoff.' };
+  const refinement = Array.from({ length: 7 }, (_, index) => ({ ...candidate, sourceId: 'keyword-' + index }));
+  let relationshipReads = 0;
   const result = await investigateSemanticHistory(request, {
-    search: () => ({ sources: [anchor], scan: 'bounded' }),
+    adaptiveDiscovery: true,
+    search: query => ({ sources: query === evidence.query ? [anchor] : refinement, scan: 'bounded' }),
     related: sources => {
+      relationshipReads++;
       assert.deepEqual(sources, [anchor]);
       return { sources: [candidate], scan: 'bounded' };
     },
     isCurrent: () => true,
     disclose: async call => call.stage === 'interpret' ? proposal : { version: 1, assessment: [{
       key: 's1', status: call.round === 1 ? 'partial' : 'supported',
-      sources: call.round === 1 ? ['e1'] : ['e1', 'e2'], query: '',
+      sources: call.round === 1 ? ['e1'] : ['e1', 'e3'], query: call.round === 1 ? 'equipment handoff' : '',
     }] },
   });
   assert.equal(result.rounds, 2);
+  assert.equal(relationshipReads, 1);
   assert.deepEqual(result.coverage[0].sources, [anchor, candidate]);
 });
 
