@@ -2,6 +2,41 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { componentDocument, named, until } from '../../../conversation-product/test/component-dom.mts';
 import { createPersonalMemoryView } from '../src/personal-memory-view.ts';
+import { mountSavedMemoriesFixture } from '../src/saved-memories-mount.ts';
+
+test('shared Saved memories fixture mount opens only the exact rechecked canonical message', async () => {
+  const f = componentDocument(), restore = f.install(), requests = [], opened = [];
+  const record = { id: 'fact-1', version: 3, scope: { kind: 'project', id: 'project' }, state: 'active' };
+  const fact = { ...record, text: 'Synthetic decision', keywords: [],
+    provenance: { kind: 'conversation-message', conversationId: 'chat', messageId: 'message' } };
+  try {
+    const view = mountSavedMemoriesFixture(f.root, {
+      async manageMemory(request) {
+        requests.push(request);
+        if (request.type === 'list') return { records: [record], next: null, policy: { version: 1 } };
+        return fact;
+      },
+      async openResource(input) {
+        opened.push(input);
+        return { status: 'superseded' };
+      },
+    });
+    assert.equal(view.parentElement, f.root);
+    assert.deepEqual(requests, []);
+    named(view, 'Load saved memories').fire('click');
+    await until(() => !!named(view, 'Memory fact-1 · project · active'));
+    named(view, 'Memory fact-1 · project · active').fire('click');
+    await until(() => !!named(view, 'Open original message'));
+    named(view, 'Open original message').fire('click');
+    await until(() => /Original message is unavailable/.test(view.textContent));
+    assert.deepEqual(requests, [
+      { type: 'list', after: null }, { type: 'read', id: 'fact-1' }, { type: 'read', id: 'fact-1' },
+    ]);
+    assert.deepEqual(opened, [
+      { resourceId: 'chat', origin: { source: 'application' }, selection: { messageId: 'message' } },
+    ]);
+  } finally { restore(); }
+});
 
 test('the inspector requests separate versioned provider opt-ins and handles declined consent', async () => {
   const f = componentDocument(), restore = f.install(), calls = [];
