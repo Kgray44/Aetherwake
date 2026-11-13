@@ -7,7 +7,7 @@ const { randomUUID } = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { performance } = require("node:perf_hooks");
-const { startWindowRecording } = require("./application-recording.cjs");
+const startWindowRecording = (...args) => require("./application-recording.cjs").startWindowRecording(...args);
 const { fillNative } = require("./integration-agents.cjs");
 const { assertOwnedApplicationProfile } = require("./integration-checklists.cjs");
 const { createSlot, sourceIdentity, targetScript, waitForCondition } = require("./integration-resource-opening.cjs");
@@ -24,6 +24,19 @@ const MiB = 1024 * 1024;
 const FRAME_WINDOW_MS = 2500;
 const FRAME_SAMPLE_LIMIT = 720;
 const quote = JSON.stringify;
+
+function aiwVerificationMode(argv) {
+  const inspection = argv.includes("--missions-aiw-inspection");
+  const experience = argv.includes("--missions-aiw-experience");
+  if (!inspection && !experience) return null;
+  if (!inspection || !argv.includes(FLAG) || !argv.includes("--missions-aep-presentation-only") ||
+    argv.includes("--bootstrap-vela-api") || argv.includes("--verify-restore") ||
+    argv.some(arg => (arg.startsWith("--integration-") && arg !== FLAG) ||
+      (arg.startsWith("--missions-") && !["--missions-aep-presentation-only", "--missions-aiw-inspection", "--missions-aiw-experience"].includes(arg))))
+    throw Error("owned_offline_aiw_verification_required");
+  return experience ? "experience" : "inspection";
+}
+exports.aiwVerificationMode = aiwVerificationMode;
 
 function summarizeFrames({ intervals, windowMs, hidden, discarded }) {
   assert.equal(hidden, false, "mission_profiler_renderer_was_hidden");
@@ -111,7 +124,7 @@ function verifyJournal(mission, scope, shippedCoreHash) {
   return { tasks: [...attempt].map(([id, entry]) => ({ id, ...entry })), overlapMs, events: mission.events };
 }
 
-exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, systemFactsAudit, benchmarkMode }) {
+exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, systemFactsAudit, benchmarkMode, checkDesktopTest }) {
   const argv = process.argv;
   const receipt = {
     contract: "aerynth.vela-missions-integration@1", objective: OBJECTIVE, passed: false,
@@ -138,6 +151,9 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       receipt.errors.push(String(details.message).slice(0, 600));
   };
   const run = async () => {
+    assert.equal(typeof checkDesktopTest, "function", "shared_desktop_admission_required");
+    checkDesktopTest();
+    const aiwMode = aiwVerificationMode(argv);
     assert(argv.includes(FLAG), "explicit_mission_verification_flag_required");
     assert(!argv.includes("--verify-restore"), "fresh_mission_profile_required");
     assert(path.win32.isAbsolute(privateRoot) && path.win32.parse(root).root.toLowerCase() === "c:\\" &&
@@ -148,13 +164,14 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     receipt.source = sourceIdentity(source);
     owned = true;
     slot = createSlot({ win, startedAt: moduleStartedMonotonicMs, limitMs: argv.includes('--missions-voice-live-only')?30000:LIMIT_MS, cleanupMs: 4000 });
-    slot.check();
+    const checkVisibleAction = () => { checkDesktopTest(); slot.check(); };
+    checkVisibleAction();
     hardTimer = setTimeout(() => app.exit(1), slot.remaining());
     workTimer = setTimeout(() => abort("mission_native_work_deadline"), slot.workRemaining());
     win.on("blur", blur); win.on("hide", blur); win.on("minimize", blur);
     win.webContents.on("before-input-event", escape); win.webContents.on("console-message", consoleError);
     listening = true;
-    const recordAiw = argv.includes("--missions-aiw-inspection") && argv.includes("--missions-aep-presentation-only");
+    const recordAiw = aiwMode !== null;
     const guardFile = path.join(app.getPath("home"), "AppData", "Local", "AeroStorageWatch", "ReserveGuard.ps1");
     receipt.reserve = JSON.parse(execFileSync("powershell.exe", [
       "-NoProfile", "-NonInteractive", "-File", guardFile, "-EstimatedCBytes", String((recordAiw ? 128 : argv.includes('--missions-folders-only') ? 64 : 32) * MiB), "-EstimatedDBytes", "0",
@@ -165,9 +182,9 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     assert.deepEqual(startupErrors, [], "mission_native_startup_errors");
 
     const operation = async (run, code) => {
-      slot.check();
+      checkVisibleAction();
       const value = await bounded(run(), slot.workRemaining(), code);
-      slot.check();
+      checkVisibleAction();
       return value;
     };
     const js = code => operation(() => win.webContents.executeJavaScript(code, false), "mission_renderer_deadline");
@@ -189,7 +206,10 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         if (revealByHover) {
           const hover = await js(`(() => {const node=document.querySelector(${quote(selector)}),r=node?.getBoundingClientRect();
             return r?.width>0&&r.height>0&&{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`);
-          if (hover) win.webContents.sendInputEvent({type:"mouseMove",...hover});
+          if (hover) {
+            checkVisibleAction();
+            win.webContents.sendInputEvent({type:"mouseMove",...hover});
+          }
         }
         const hit = await js(targetScript(selector, "inspect"));
         if (!hit.ready) { previous = undefined; await js(scroll); return false; }
@@ -200,13 +220,13 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       });
       receipt.actions.push({ method: "software-native-window-mouse", selector, point });
       for (const type of ["mouseMove", "mouseDown", "mouseUp"]) {
-        slot.check();
+        checkVisibleAction();
         win.webContents.sendInputEvent({ type, ...point, button: "left", clickCount: 1 });
       }
     };
     const key = (keyCode, modifiers = []) => {
       for (const type of ["keyDown", "keyUp"]) {
-        slot.check();
+        checkVisibleAction();
         win.webContents.sendInputEvent({ type, keyCode, modifiers });
       }
     };
@@ -515,6 +535,54 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       return workspace && state.activeWorkspaceId === workspace.id && { workspaceId: workspace.id, projectId: null };
     });
     assert.deepEqual(await list(), []);
+    if (aiwMode === "experience") {
+      const before = await rpc("providerActivity", {});
+      assert.equal(before.providerRequests, 0);
+      assert.equal(before.codexConnections, 0);
+      const proposal = await rpc("aepExperimentNative", { name: "propose", candidate: "omit-backend" });
+      const id = proposal.experiment.id;
+      const result = await rpc("aepExperimentNative", { name: "test", id });
+      assert.equal(result.state, "rejected");
+      const evidence = await rpc("missions", { name: "experience-evidence", input: { id } });
+      assert.equal(evidence.record.experiment.id, id);
+      const aiw = '[data-surface-id="adaptive-intelligence-workspace"]';
+      await click("#vela");
+      await click(SURFACE + " .aw-adaptive-workspace-entry");
+      const content = await wait("Experiment shows the rejected native trial", async () => {
+        const selector = aiw + ' [data-intelligence-zone="experiment"]';
+        if (!await js(`document.querySelector(${quote(selector)})?.getClientRects().length`)) return false;
+        return true;
+      });
+      assert(content);
+      await click(aiw + ' [data-intelligence-zone="experiment"]');
+      const region = aiw + ' .aw-experience-evidence';
+      const shows = (text) => js(`document.querySelector(${quote(region)})?.textContent.includes(${quote(text)})`);
+      await wait("Revalidated experiment shows the original rejected decision", () => shows("Candidate qualityFailed"));
+      assert.equal(await shows(id), true);
+      await capture("01-aiw-native-experiment");
+      const recorder = await operation(() => startWindowRecording(win, win.webContents.session, win.webContents.getURL()), "aiw_experience_video_start");
+      try {
+        await click(aiw + ' [data-intelligence-zone="learning"]');
+        await wait("Learning remains advisory and retains baseline", () => shows("Dispositionretain baseline"));
+        assert.equal(await shows("Effective policyNone"), true);
+        await capture("02-aiw-native-learning");
+        await click(aiw + ' [data-intelligence-zone="timeline"]');
+        await wait("Adaptation history includes the canonical final revision", () => shows("experiment revision " + result.experiment.revision));
+        await capture("03-aiw-native-adaptation");
+      } finally {
+        receipt.experienceVideo = await operation(() => recorder.stop(path.join(out, "adaptive-experience-evidence.webm")), "aiw_experience_video_stop");
+      }
+      const privateRouteDenied = await js(`window.aerynthHost.command("aepExperimentNative", {name:"evidence",id:${quote(id)}}).then(() => false, () => true)`);
+      assert.equal(privateRouteDenied, true);
+      const after = await rpc("providerActivity", {});
+      assert.equal(after.providerRequests, 0);
+      assert.equal(after.codexConnections, 0);
+      receipt.experience = { id, revision: result.experiment.revision, state: result.state,
+        trials: evidence.trials.length, privateRouteDenied, providerActivity: after };
+      checkVisibleAction();
+      receipt.passed = true;
+      return;
+    }
     if(argv.includes('--missions-api-live-only')){
       assert(argv.includes('--bootstrap-vela-api'),'explicit_protected_credential_import_required');
       const diagnostic=await rpc('velaRequestPreview',{intent:'Remember the project codeword amber-pine. Reply only: Noted.',resourceIds:[],adaptive:true});
@@ -909,6 +977,59 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         intakeToReceiptMs: presentation.intakeToUserDeliveryMs,
         reportEventId: reportPublication.eventId, reportLatency, firstMeaningfulOutput: presentation.firstMeaningfulOutput, leases };
       if (recordAiw) {
+        const aiw = '[data-surface-id="adaptive-intelligence-workspace"]';
+        const entry = source => source + ' .aw-adaptive-workspace-entry';
+        const witnessEntry = async (source, captureName) => {
+          const before = await desktop();
+          await click(entry(source));
+          await wait("Anchored AIW opens over its source", () => js(`(() => {
+            const aiw = document.querySelector(${quote(aiw)});
+            const source = document.querySelector(${quote(source)});
+            return aiw?.open && source?.open && !!aiw.querySelector('select option[value=' + CSS.escape(${quote(missionId)}) + ']');
+          })()`));
+          await js(`document.querySelector(${quote(aiw + ' select')}).focus()`);
+          key("Down");
+          await wait("AIW opens the canonical mission", () => js(`document.querySelector(${quote(aiw + ' .aw-intelligence-inspection')})?.textContent.includes(${quote(missionId)})`));
+          await capture(captureName);
+          await click(aiw + ' [aria-label="Close panel"]');
+          await wait("AIW restores its source focus", () => js(`!document.querySelector(${quote(aiw)}) &&
+            document.querySelector(${quote(source)})?.open && document.activeElement === document.querySelector(${quote(entry(source))})`));
+          const after = await desktop();
+          assert.equal(after.activeWorkspaceId, before.activeWorkspaceId);
+          assert.deepEqual(after.viewport, before.viewport);
+        };
+        await witnessEntry(SURFACE, "00-aiw-from-vela");
+        const stream = '[data-surface-id="intelligence-stream"]';
+        await click("#application-stream");
+        await witnessEntry(stream, "00-aiw-from-stream");
+        const page = await rpc("rendererEventPage", { recent: true, limit: 250 });
+        assert.ok(page.events.some(event => event.mission?.id === missionId), "originating_stream_mission_event_required");
+        const eventDetails = stream + ' [data-stream-mission-id=' + quote(missionId) + '] details';
+        const eventAction = eventDetails + ' [data-inspect-mission=' + quote(missionId) + ']';
+        const beforeEventInspection = await desktop();
+        assert.equal(beforeEventInspection.activeWorkspaceId, verifiedMission.scope.workspaceId);
+        await click(stream + ' [aria-label="Stream representation"] button:last-child');
+        await click(eventDetails + ' > summary');
+        await click(eventAction);
+        await wait("Recorded event opens AIW with its mission selected", () => js(`(() => {
+          const panel = document.querySelector(${quote(aiw)});
+          return panel?.open && panel.querySelector('select')?.value === ${quote(missionId)} &&
+            panel.querySelector('.aw-intelligence-inspection')?.textContent.includes(${quote(missionId)});
+        })()`));
+        await capture("00-aiw-from-recorded-event");
+        await click(aiw + ' [aria-label="Close panel"]');
+        await wait("AIW returns focus to the disclosed event action", () => js(`!document.querySelector(${quote(aiw)}) &&
+          document.querySelector(${quote(stream)})?.open && document.activeElement?.matches(${quote(eventAction)})`));
+        const afterEventInspection = await desktop();
+        assert.equal(afterEventInspection.activeWorkspaceId, beforeEventInspection.activeWorkspaceId);
+        assert.deepEqual(afterEventInspection.viewport, beforeEventInspection.viewport);
+        receipt.recordedEventInspection = {
+          missionId, representation: "forensic", focusReturned: true,
+          workspacePreserved: true, viewportPreserved: true,
+        };
+        await click(stream + ' [aria-label="Close panel"]');
+        await wait("Stream closes after event inspection", () => js(`!document.querySelector(${quote(stream)})`));
+        if (!await js(`document.querySelector(${quote(SURFACE)})?.open`)) await click("#vela");
         await click(reportLink);
         await click(RECORD + ' [data-mission-focus="preview-workroom"]');
         await click(RECORD + ' [data-mission-focus="apply-workroom"]');
@@ -933,6 +1054,14 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         })()`));
         assert.equal(measuredAttempts, [profile.work.intervalCoverage.measured, profile.work.intervalCoverage.attempts].join(" / "));
         receipt.workroomInspection = { missionId: profile.missionId, revision: profile.revision, measuredAttempts };
+        const trace = selector + ' .aw-execution-trace';
+        const attempt = profile.attempts.find(value => value.interval && value.verifiedEvidenceIds.length);
+        assert(attempt, "native_trace_attempt_required");
+        await click(trace + ' [data-trace-attempt=' + quote(attempt.id) + ']');
+        const detail = await js(`document.querySelector(${quote(trace + ' > dl')}).textContent`);
+        assert(detail.includes(attempt.id) && attempt.verifiedEvidenceIds.every(id => detail.includes(id)));
+        receipt.workroomInspection.traceAttempt = { id: attempt.id, verifiedEvidenceCount: attempt.verifiedEvidenceIds.length };
+        receipt.workroomInspection.entryPoints = ['vela', 'intelligence-stream', 'recorded-mission-event'];
         await capture("01-adaptive-intelligence-profiler");
         receipt.workroomInspection.renderer = await js(`new Promise(resolve => {
           requestAnimationFrame(start => {
@@ -954,9 +1083,23 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         );
         try {
           await click(selector + ' [data-intelligence-zone="resource"]');
-          const resource = await js(`[...document.querySelectorAll(${quote(selector + ' [data-intelligence-field^="Lease · "]')})]
+          const leaseIds = profile.attempts.flatMap(attempt => attempt.resourceLease ? [attempt.resourceLease.leaseId] : []).sort();
+          await wait("Resource Intelligence displays every canonical lease", async () => {
+            const visible = await js(`[...document.querySelectorAll(${quote(selector + ' [data-intelligence-field^="Lease · "]')})]
             .map(row => row.dataset.intelligenceSource).sort()`);
-          assert.deepEqual(resource, profile.attempts.flatMap(attempt => attempt.resourceLease ? [attempt.resourceLease.leaseId] : []).sort());
+            return JSON.stringify(visible) === JSON.stringify(leaseIds);
+          });
+          if (argv.includes("--missions-aiw-inspection")) {
+            const policy = await rpc("resourcePolicyNative", { name: "inspect" });
+            await wait("AIW reads the authoritative resource policy", () => js(`(() => {
+              const panel = document.querySelector(${quote(selector + ' [aria-label="Current resource policy"]')});
+              return panel && !panel.hidden && panel.textContent.includes(${quote(policy.epoch)}) &&
+                panel.textContent.includes("Configuration version") && panel.textContent.includes("Local CPU");
+            })()`));
+            const privateRouteDenied = await js(`window.aerynthHost.command("resourcePolicyNative", {name:"inspect"}).then(() => false, () => true)`);
+            assert.equal(privateRouteDenied, true);
+            receipt.workroomInspection.resourcePolicy = { epoch: policy.epoch, configVersion: policy.configVersion, privateRouteDenied };
+          }
           await capture("02-adaptive-intelligence-resource");
           await click(selector + ' > summary');
         } finally {
@@ -1569,7 +1712,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
   } catch (error) {
     receipt.error = { message: String(error.message).slice(0, 1000), ...(error.diagnostics ? { diagnostics: error.diagnostics } : {}) };
     if((argv.includes('--missions-weather-product-only')||argv.includes('--missions-folders-only'))&&owned&&admitted&&!win.isDestroyed()&&receipt.captures.length<3){
-      try{const image=await bounded(win.webContents.capturePage(),1000,'weather_owned_failure_capture_deadline'),png=image.toPNG();assert(png.length>0&&png.length<=8*MiB,'weather_failure_capture_bound');await fs.writeFile(path.join(out,'failure-owned-application.png'),png,{flag:'wx'});receipt.captures.push({file:'failure-owned-application.png',bytes:png.length});}catch{receipt.failureCapture='unavailable within owned window/deadline';}
+      try{checkDesktopTest();slot.check();const image=await bounded(win.webContents.capturePage(),1000,'weather_owned_failure_capture_deadline'),png=image.toPNG();assert(png.length>0&&png.length<=8*MiB,'weather_failure_capture_bound');await fs.writeFile(path.join(out,'failure-owned-application.png'),png,{flag:'wx'});receipt.captures.push({file:'failure-owned-application.png',bytes:png.length});}catch{receipt.failureCapture='unavailable within owned window/deadline';}
     }
   } finally {
     clearTimeout(workTimer);
