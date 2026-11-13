@@ -15,7 +15,8 @@ function fixture(initial: Partial<ConversationDraftRecord> = {}) {
     active++; maximumActive = Math.max(maximumActive, active); writes.push({ ...input });
     try {
       if (record.version !== input.expectedVersion) throw new Error('stale_draft_version');
-      record = { resourceId: input.resourceId, version: record.version + 1, content: input.content, updatedAt: '2026-11-02T00:00:00Z' };
+      record = { ...record, version: record.version + 1, content: input.content, updatedAt: '2026-11-02T00:00:00Z',
+        ...(input.documents === undefined ? {} : { documents: input.documents }) };
       const result = { ...record }; await responseGate; if (lostResponse) { lostResponse = false; throw new Error('synthetic_response_lost'); } return result;
     } finally { active--; }
   } };
@@ -29,6 +30,27 @@ test('canonical recovery loads on the same ID and reopening reads durable text w
   const f = fixture({ version: 7, content: 'Synthetic durable unsent text' }), session = f.create(); await session.ready;
   assert.equal(session.snapshot().content, f.record.content); assert.equal(session.snapshot().version, 7); assert.equal(session.snapshot().phase, 'clean'); assert.deepEqual(f.writes, []); await session.dispose();
   const reopened = f.create(); await reopened.ready; assert.equal(reopened.snapshot().content, 'Synthetic durable unsent text'); await reopened.dispose();
+});
+
+test('attachment-only conflicts preserve both selections and an accepted checkpoint clears the selected draft', async () => {
+  const f = fixture({ content: 'Same text in both editors' });
+  const first = f.create(), second = f.create();
+  await Promise.all([first.ready, second.ready]);
+  const saved = { id: 'file:first', version: 2, title: 'First document' };
+  const competing = { id: 'file:second', version: 1, title: 'Second document' };
+  first.updateDocuments([saved]);
+  await first.flush();
+  second.updateDocuments([competing]);
+  await assert.rejects(second.flush(), /stale_draft_version/);
+  assert.deepEqual(second.snapshot().documents, [competing]);
+  assert.deepEqual(second.snapshot().remote?.documents, [saved]);
+  await second.resolve('use-stored', f.record.version);
+  const checkpoint = await second.checkpoint();
+  assert.deepEqual(checkpoint.record.documents, [saved]);
+  assert.equal(await second.acknowledgeSent(checkpoint), true);
+  assert.deepEqual(f.record.documents, []);
+  assert.equal(f.record.content, '');
+  await Promise.all([first.dispose(), second.dispose()]);
 });
 
 test('writes serialize and coalesce later edits while an exact submission checkpoint retains its own version', async () => {

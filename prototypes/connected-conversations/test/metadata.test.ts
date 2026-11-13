@@ -98,8 +98,8 @@ test("denied or unavailable inherited sources cannot reveal headers, ordinals, h
   f.graph.markUnavailable(f.b.id);
   assert.equal(
     f.graph.visibleMessages(f.child.conversation.id).length,
-    3,
-    "Canonical lineage visibility alone does not redefine permission",
+    2,
+    "Revoked bodies are excluded from visible messages while lineage remains intact",
   );
   assert.deepEqual(
     f.graph.visibleMessageMetadata(f.child.conversation.id, {

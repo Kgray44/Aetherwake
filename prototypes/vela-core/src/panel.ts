@@ -1316,6 +1316,17 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   return {
     async open() { observing = true; options.missions?.setVisible(activeContext === 'missions'); options.voice?.setVisible(activeContext === 'voice'); options.permissions?.setVisible(activeContext === 'preferences'); const sequence = ++readSequence, state = await client.open(); if (sequence === readSequence) render(state); return state; },
     showMission(id: string) { reveal('missions'); options.missions?.openReport?.(id); },
+    addDocumentSource(ref: ResourceRef) {
+      if (disposed || busy) throw Error('vela_composer_unavailable');
+      if (!selected.has(ref.id) && selected.size >= 100) throw Error('vela_source_limit');
+      selected.set(ref.id, { ...ref });
+      const control = sourceControls.get(ref.id);
+      if (control) control.checked = true;
+      renderSelection();
+      closeContext(false);
+      intent.focus();
+      present();
+    },
     refresh,
     observeLiveAnswer,
     /** Host visibility notification only; no canonical mutation or inference. */
