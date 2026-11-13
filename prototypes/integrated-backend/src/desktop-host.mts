@@ -63,6 +63,13 @@ lines.on("line", async (line) => {
       return;
     }
     id = request.id;
+    if (['personalMemoryCapturePreviewNative', 'personalMemoryCaptureCommitNative', 'personalMemoryCaptureCancelNative',
+      'personalMemoryManagementNative', 'personalMemoryPolicyNative', 'personalMemoryRevokeSourceNative'].includes(request.command)) {
+      if (!nativeClient || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
+        throw new Error('personal_memory_native_required');
+      write({ id, result: await backend.call(request.command, request.input) });
+      return;
+    }
     if (request.command === 'resourcePolicyNative') {
       if (!nativeClient || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
         throw new Error('native_resource_policy_required');
@@ -128,12 +135,6 @@ lines.on("line", async (line) => {
         "conversationCitation",
         "conversationClock",
         "conversationSendPreview",
-        "personalMemoryCapturePreviewNative",
-        "personalMemoryCaptureCommitNative",
-        "personalMemoryCaptureCancelNative",
-        "personalMemoryRevokeSourceNative",
-        "personalMemoryPolicyNative",
-        "personalMemoryManagementNative",
         "authorizeConversationSend",
         "conversationSend",
         "vela",

@@ -12,9 +12,7 @@ interface CanonicalSources {
 
 /** Read proofs from the workspace kernel and conversation owner within the
  * caller's canonical transaction. No private message body leaves this reader. */
-export function createPersonalMemorySourceReader(sources: CanonicalSources): Required<Pick<PersonalContextHost, 'resolveScope' | 'resolveConversationSource'>> & {
-  resolveRecallTarget(id: string): { projectId: string | null } | null;
-} {
+export function createPersonalMemorySourceReader(sources: CanonicalSources): Required<Pick<PersonalContextHost, 'resolveScope' | 'resolveConversationSource'>> {
   const project = sources.db.prepare("SELECT version FROM projects WHERE id=? AND state='active'");
   const conversation = sources.db.prepare("SELECT version,project_id FROM resources WHERE id=? AND kind='conversation' AND state='active'");
   function currentConversation(id: string) {
@@ -25,7 +23,6 @@ export function createPersonalMemorySourceReader(sources: CanonicalSources): Req
     return { version: String(row.version), projectId };
   }
   return {
-    resolveRecallTarget: currentConversation,
     resolveScope(scope) {
       if (scope.kind === 'project') {
         const row = project.get(scope.id);

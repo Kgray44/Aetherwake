@@ -4,11 +4,11 @@ import { realpathSync,openSync,closeSync,lstatSync,fstatSync } from 'node:fs';
 import { dirname, relative, resolve, isAbsolute,sep,extname } from 'node:path';
 import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, type ApiFileProposalProvenance } from './mission-file-edits.mts';
 import { fileURLToPath } from 'node:url';
+import { DesktopState } from './desktop.mts';
+import { NativePersonalMemory } from './personal-memory.mts';
 import { defaultPersonalMemoryPolicy } from '../../personal-context/src/service.mts';
 import { createPersonalMemoryReview } from './personal-memory-review.mts';
 import { createPersonalMemorySourceReader } from './personal-memory-sources.mts';
-import { DesktopState } from './desktop.mts';
-import { NativePersonalMemory } from './personal-memory.mts';
 import { createIntelligenceJournalProjection, missionStreamFields, streamScopeMatches } from './intelligence-journal-projection.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
 import { compareNativeSamples, observeConversationProvider, observeProviderStream, projectMissionExecution, resolveMissionHypothesis, type ProviderStreamObserver, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
@@ -32,7 +32,7 @@ import { missionArtifactFiles, missionArtifactPath, missionArtifactSource, readM
 import { createMissionAdmission } from './mission-admission.mts';
 import { createResourcePolicyStore } from './resource-policy-store.mts';
 import { isResourceSignal } from './resource-signals.mts';
-import { MissionPublication } from './mission-publication.mts';
+import { MissionPublication, lastMissionVerificationEvent } from './mission-publication.mts';
 import { MissionConversationReceipts } from './mission-conversation.mts';
 import { WorkspaceRecoveryService } from './workspace-recovery.mts';
 import { VelaWorkspaceConstruction, matchWorkspaceConstruction } from './vela-workspace-construction.mts';
@@ -221,8 +221,6 @@ interface PrivateVelaPreview extends VelaRequestPreview {
 }
 
 export class BackendCore {
-  private personalMemory?: NativePersonalMemory;
-  private personalMemoryReview?: ReturnType<typeof createPersonalMemoryReview>;
   private kernel: WorkspaceKernel;
   private db!: DatabaseSync;
   private graph!: ConversationGraph;
@@ -259,6 +257,8 @@ export class BackendCore {
   private readonly privateRoot?: string;
   private conversations!: ConversationProduct;
   private nativeHostServices?:NativeHostServices;
+  private personalMemory?: NativePersonalMemory;
+  private personalMemoryReview?: ReturnType<typeof createPersonalMemoryReview>;
   private weatherPermissions?:WeatherPermissionStore;
   private weatherRequest:AbortController|null=null;
   private ordinaryConnections!:OrdinaryConnectionPort;
@@ -458,11 +458,6 @@ export class BackendCore {
         });
         const review = this.personalMemoryReview = createPersonalMemoryReview({
           ...sources, open: () => this.personalMemory!.open(),
-          resolveVelaRecallTarget: () => {
-            const conversationId = this.state.vela?.conversationId;
-            if (!conversationId || this.closed || !this.missionStorageAdmitted || !sources.resolveRecallTarget(conversationId)) return null;
-            return { conversationId, projectId: this.velaContext().currentProjectId };
-          },
           transaction: work => this.kernel.withTransaction(work),
           readSourceText: ({ conversationId, messageId }) => readOwnMessage(conversationId, messageId)?.content ?? null,
         });
@@ -704,7 +699,13 @@ export class BackendCore {
       if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='timer_documents'").get() &&
           this.db.prepare('SELECT 1 FROM timer_documents LIMIT 1').get())
         void this.ensureTimerDomain().ready.catch(() => {});
-    } catch (error) { this.personalMemoryReview?.close(); this.personalMemory?.close(); this.kernel.close(); throw error; }
+    } catch (error) {
+      // Attempt each cleanup while preserving the original startup error.
+      try { this.personalMemoryReview?.close(); } catch {}
+      try { this.personalMemory?.close(); } catch {}
+      try { this.kernel.close(); } catch {}
+      throw error;
+    }
   }
   private missionScopeAllowed(scope: MissionScope): boolean {
     if (this.closed || !this.libraryAuthorized({ kind: 'workspace', id: scope.workspaceId })) return false;
@@ -813,7 +814,7 @@ export class BackendCore {
   private projectMissionReport(missionId: string, seq: number, acknowledge: () => void): boolean {
     const { mission, event } = this.missions.publicationEvent(missionId, seq);
     const origin = mission.originConversationId;
-    if (!origin || event.kind !== 'settled' || event.detail !== 'verified' || !this.missionScopeAllowed(mission.scope) ||
+    if (!origin || lastMissionVerificationEvent(mission, [event]) !== event || !this.missionScopeAllowed(mission.scope) ||
       mission.disposition === 'cancelled' || !mission.tasks.every(task => task.state === 'verified')) return false;
     const verified = this.missions.read(mission.id, mission.scope);
     if (!missionResultAvailable(verified)) return false;
@@ -6619,19 +6620,39 @@ export class BackendCore {
       ensure(memory && review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
       const request = input as CommandMap['personalMemoryRevokeSourceNative']['input'];
       ensure(request && identifier(request.conversationId) && identifier(request.messageId) &&
-        Number.isSafeInteger(request.expectedRevision) && request.expectedRevision >= 1, 'invalid_personal_memory_source');
-      const { conversationId, messageId, expectedRevision } = request;
-      return this.atomic(() => {
+        Number.isSafeInteger(request.expectedRevision) && request.expectedRevision >= 1 &&
+        (request.reviewedFact === undefined || request.reviewedFact && identifier(request.reviewedFact.id) &&
+          Number.isSafeInteger(request.reviewedFact.version) && request.reviewedFact.version >= 1), 'invalid_personal_memory_source');
+      const { conversationId, messageId, expectedRevision, reviewedFact } = structuredClone(request);
+      const service = reviewedFact ? await memory.open() : undefined;
+      ensure(!this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+      const revoke = () => this.atomic(() => {
         ensure(this.state.revisions[conversationId] === expectedRevision, 'stale_source_revision');
         const graphId = this.gid(conversationId);
         const message = this.graph.readOwnMessage(graphId, messageId);
         ensure(message?.role === 'user' && message.provenance === 'user' &&
           this.productResourceAccess(conversationId, messageId), 'conversation_source_unavailable');
+        if (reviewedFact && service) {
+          const fact = review.activeFactForSourceRevocation(service, reviewedFact.id, reviewedFact.version);
+          const provenance = fact.provenance;
+          ensure(provenance.kind === 'conversation-message' && provenance.conversationId === conversationId &&
+            provenance.messageId === messageId && provenance.version === String(message.sequence) &&
+            provenance.contentDigest === createHash('sha256').update(message.content).digest('hex'),
+          'conversation_source_unavailable');
+        }
         const source = { kind: 'conversation-message' as const, conversationId, messageId };
         const { deleted } = review.withSourceErasure(source, () => memory.eraseConversationSource(source));
         this.graph.markUnavailable(messageId);
         return { revision: ++this.state.revisions[conversationId], erasedFacts: deleted.length };
-      }) as CommandMap[K]['output'];
+      });
+      try { return revoke() as CommandMap[K]['output']; }
+      catch (error) {
+        if (!(error instanceof Error) || error.message !== 'personal_context_lineage_repair_required') throw error;
+        // Upgrade legacy erasure dependencies under protected custody, then retry the same source revision.
+        await memory.open();
+        ensure(!this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+        return revoke() as CommandMap[K]['output'];
+      }
     }
     if (name === 'personalMemoryManagementNative') {
       const review = this.personalMemoryReview;
@@ -6641,8 +6662,13 @@ export class BackendCore {
         case 'list': return await review.inspect({ after: request.after, limit: 20 }) as CommandMap[K]['output'];
         case 'read': return await review.read(request.id) as CommandMap[K]['output'];
         case 'previewSourceRevocation': {
-          const fact = await review.read(request.id);
-          ensure(fact.version === request.version, 'stale_personal_context_version');
+          const memory = this.personalMemory;
+          ensure(memory && identifier(request.id) && Number.isSafeInteger(request.version) && request.version >= 1,
+            'invalid_personal_memory_source');
+          const { id, version } = request;
+          const service = await memory.open();
+          ensure(!this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+          const fact = this.kernel.withTransaction(() => review.activeFactForSourceRevocation(service, id, version));
           const source = fact.provenance;
           ensure(source.kind === 'conversation-message', 'conversation_source_unavailable');
           const { conversationId, messageId } = source;
@@ -6651,7 +6677,8 @@ export class BackendCore {
             this.productResourceAccess(conversationId, messageId) && String(message.sequence) === source.version &&
             createHash('sha256').update(message.content).digest('hex') === source.contentDigest, 'conversation_source_unavailable');
           return {
-            binding: { conversationId, messageId, expectedRevision: this.state.revisions[conversationId] },
+            binding: { conversationId, messageId, expectedRevision: this.state.revisions[conversationId],
+              reviewedFact: { id, version } },
             sourceText: message.content,
           } as CommandMap[K]['output'];
         }
@@ -6665,8 +6692,15 @@ export class BackendCore {
       const review = this.personalMemoryReview;
       ensure(review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
       const policy = input as CommandMap['personalMemoryPolicyNative']['input'];
+      if (policy.pauseStorage !== undefined) {
+        ensure(policy.pauseStorage === true && policy.enable === undefined && policy.assistant === undefined &&
+          Number.isSafeInteger(policy.expectedVersion) && policy.expectedVersion! > 0 && this.personalMemory?.hasStorage(),
+          'invalid_privacy_policy');
+        return await review.pauseStorage(policy.expectedVersion!) as CommandMap[K]['output'];
+      }
       if (policy.enable !== undefined) {
         ensure(typeof policy.enable === 'boolean' && Number.isSafeInteger(policy.expectedVersion), 'invalid_privacy_policy');
+        if (policy.enable) ensure(this.personalMemory?.hasStorage(), 'personal_storage_disabled');
         return await review.setProviderUse(policy.assistant ?? 'ordinary', policy.enable, policy.expectedVersion!) as CommandMap[K]['output'];
       }
       if (!this.personalMemory?.hasStorage()) return defaultPersonalMemoryPolicy() as CommandMap[K]['output'];
@@ -6684,98 +6718,6 @@ export class BackendCore {
         return await review.previewCapture(input as CommandMap['personalMemoryCapturePreviewNative']['input']) as CommandMap[K]['output'];
       const saved = await review.commitCapture(input as CommandMap['personalMemoryCaptureCommitNative']['input']);
       return { id: saved.id } as CommandMap[K]['output'];
-    }
-    if(['missionFileEditPrepareNative','missionFileEditRunNative','missionFileEditReviewNative','missionFileEditChoiceNative','missionFileEditApplyNative','missionFileEditCheckReviewNative','missionFileEditCheckRunNative','missionFileEditRead'].includes(name)){
-      ensure(!this.closed&&this.nativeMedia&&this.nativeHostServices?.secrets&&(this.privateMode||this.velaApiTest)&&input&&typeof input==='object'&&!Array.isArray(input),'mission_edit_native_required');
-      ensure(this.missionStorageAdmitted,'storage_reserve_admission_denied');const p=input as any;
-      const fields:Record<string,string[]>={missionFileEditPrepareNative:['intent','resourceIds','resourceRefs','settings'],missionFileEditRunNative:['requestId','reviewId','reviewDigest'],missionFileEditReviewNative:['operationId'],missionFileEditChoiceNative:['operationId','reviewId','reviewDigest','purpose','decision','nativeChoiceId'],missionFileEditApplyNative:['operationId','authority'],missionFileEditCheckReviewNative:['operationId','selectedTestPath'],missionFileEditCheckRunNative:['operationId','authority'],missionFileEditRead:['operationId']};
-      ensure(Object.keys(p).every(key=>fields[name].includes(key)),'invalid_mission_edit_command');
-      if(name==='missionFileEditPrepareNative')return await this.prepareMissionFileEdit(p) as any;
-      if(name==='missionFileEditRunNative'){const task=this.runMissionFileEdit(p);this.missionFileApiTasks.add(task);try{return await task as any;}finally{this.missionFileApiTasks.delete(task);}}
-      if(name==='missionFileEditRead')return this.missionFileEdits.view(p.operationId) as any;
-      if(name==='missionFileEditReviewNative')return this.missionFileEdits.review(p.operationId) as any;
-      if(name==='missionFileEditChoiceNative'){
-        ensure(['patch','check'].includes(p.purpose)&&['yes','no'].includes(p.decision)&&typeof p.nativeChoiceId==='string'&&/^[a-f0-9-]{36}$/u.test(p.nativeChoiceId)&&typeof p.reviewDigest==='string'&&/^[a-f0-9]{64}$/u.test(p.reviewDigest),'mission_edit_native_choice_required');
-        const before=this.missionFileEdits.view(p.operationId),ref={id:before.id,digest:before.patchDigest,action:p.purpose==='patch'?'apply':'verify'};
-        const authority=this.atomic(()=>{ensure(Number(this.db.prepare('SELECT count(*) AS n FROM mission_file_native_choices').get()!.n)<128,'mission_edit_capacity');this.db.prepare('INSERT INTO mission_file_native_choices VALUES(?,?,?,?,?)').run(p.nativeChoiceId,p.reviewId,p.reviewDigest,p.purpose,p.decision);const value=p.purpose==='patch'?this.missionFileEdits.acceptNativePatchChoice(p.operationId,p.reviewId,p.nativeChoiceId):this.missionFileEdits.acceptNativeCheckChoice(p.operationId,p.reviewId,p.nativeChoiceId);if(p.decision==='no'&&before.owner.kind==='api-selected-file-intent')this.settleToolOwnerNegative(before.owner.requestId,'selected-file-edit',ref,p.purpose==='patch'?'patch-native-no':'check-native-no');return value;});
-        if(p.decision==='no'&&before.owner.kind==='api-selected-file-intent')await this.resumeToolOwnerNegative(before.owner.requestId,'selected-file-edit',ref);
-        return authority as any;
-      }
-      if(name==='missionFileEditCheckReviewNative'){ensure(!this.missionEditQuarantined(),'mission_edit_check_reconciliation_required');return this.missionFileEdits.reviewRequiredCheck(p.operationId,p.selectedTestPath) as any;}
-      const prior=this.missionFileEdits.view(p.operationId),semantic=prior.owner.kind==='api-selected-file-intent'&&!!this.toolWorkflows.stateForRequest(prior.owner.requestId);
-      const ownerBinding=semantic&&prior.owner.kind==='api-selected-file-intent'?this.toolWorkflows.assertOwnerDispatch(prior.owner.requestId,{id:prior.id,digest:prior.patchDigest,action:name==='missionFileEditApplyNative'?'apply':'verify'}):undefined;
-      const view=name==='missionFileEditApplyNative'?this.missionFileEdits.apply(p.operationId,p.authority):await this.missionFileEdits.runRequiredCheck(p.operationId,p.authority);
-      if(ownerBinding&&view.phase==='applied')this.toolWorkflows.witnessOwnerResult(ownerBinding,{fence:this.toolFence(ownerBinding.requestId,true),sourceDigest:this.toolPlanDigest(ownerBinding.ownerRef),receiptRefs:[view.id]});
-      const ownerRequestId=view.owner.kind==='api-selected-file-intent'?view.owner.requestId:undefined;
-      if(ownerRequestId&&this.vela.state().requests.find(r=>r.id===ownerRequestId)?.nativeResponse)this.vela.nativeProposalResult(ownerRequestId,view.phase==='applied'
-        ?view.verification.state==='passed'?'The selected test passed.':view.verification.state==='not-run'?'Updated the selected file. The required test has not run yet.':'The selected file was updated. Its required test remains unverified.'
-        :'The file outcome needs review. I have not confirmed a completed change.','answer');
-      return view as any;
-    }
-    if(name==='folders'){
-      const request=input as CommandMap['folders']['input'];ensure(request&&typeof request==='object'&&!Array.isArray(request)&&['describe','list'].includes(request.type)&&Object.keys(request).every(key=>(request.type==='describe'?['type','resourceId']:['type','resourceId','entryId','cursor']).includes(key)),'invalid_folder_request');
-      const source=this.scopedFolder(request.resourceId,request.type==='describe'),scope=this.velaScopeStamp();
-      const result=request.type==='describe'?await this.folderSources.describe(request.resourceId,source.projectId):await this.folderSources.list({resourceId:request.resourceId,...(request.entryId===undefined?{}:{entryId:request.entryId}),...(request.cursor===undefined?{}:{cursor:request.cursor})},source.projectId);
-      const current=this.scopedFolder(request.resourceId,request.type==='describe');ensure(scope===this.velaScopeStamp()&&source.sourceGrantId===current.sourceGrantId&&source.grantState===current.grantState,'folder_source_unavailable');return result as CommandMap[K]['output'];
-    }
-    if(name==='folderOpenNative'){
-      ensure(!this.closed&&this.nativeMedia&&this.nativeHostServices&&(this.privateMode||this.velaApiTest),'native_folder_open_required');
-      const request=input as CommandMap['folderOpenNative']['input'];ensure(request&&typeof request==='object'&&!Array.isArray(request)&&Object.keys(request).every(key=>['resourceId','entryId'].includes(key))&&(request.entryId===undefined||typeof request.entryId==='string'),'invalid_folder_request');
-      const source=this.scopedFolder(request.resourceId),binding=this.folderBinding(request.resourceId),scope=this.velaScopeStamp();
-      const path=await this.folderSources.externalTarget(request.resourceId,source.projectId,request.entryId);ensure(scope===this.velaScopeStamp()&&binding===this.folderBinding(request.resourceId),'folder_source_unavailable');return {path} as CommandMap[K]['output'];
-    }
-    if(name==='velaSourcesPickNative'){
-      ensure(!this.closed&&this.nativeMedia&&this.nativeHostServices&&(this.privateMode||this.velaApiTest),'native_source_picker_required');
-      ensure(!this.active&&this.missionStorageAdmitted,'file_proposal_unavailable');return await this.pickNativeSources(input as CommandMap['velaSourcesPickNative']['input']) as CommandMap[K]['output'];
-    }
-    if(name==='velaFileProposalPrepareNative'){
-      ensure(!this.closed&&this.nativeMedia&&this.nativeHostServices&&(this.privateMode||this.velaApiTest),'native_file_proposal_required');
-      ensure(!this.active&&this.missionStorageAdmitted,'file_proposal_unavailable');return await this.velaFileProposals.prepare(input as CommandMap['velaFileProposalPrepareNative']['input']) as CommandMap[K]['output'];
-    }
-    if(name==='velaWake'){ensure(!this.closed,'backend_closed');return await this.velaWakeRuntime.request(input as CommandMap['velaWake']['input']) as CommandMap[K]['output'];}
-    if(name==='velaWakeNative'||name==='velaWakeFrame'||name==='velaWakeCaptureState'){
-      ensure(!this.closed&&this.nativeHostServices?.wakeCapture&&(this.privateMode||this.velaApiTest?.wake),'native_wake_authorization_required');
-      if(name==='velaWakeCaptureState')return await this.velaWakeRuntime.captureState(input as CommandMap['velaWakeCaptureState']['input']) as CommandMap[K]['output'];
-      if(name==='velaWakeFrame')return await this.velaWakeRuntime.frame(input as CommandMap['velaWakeFrame']['input']) as CommandMap[K]['output'];
-      ensure(this.missionStorageAdmitted,'storage_reserve_admission_denied');return await this.velaWakeRuntime.native(input as CommandMap['velaWakeNative']['input']) as CommandMap[K]['output'];
-    }
-    if(name==='hostOperationReviewNative'){
-      const a=input as CommandMap['hostOperationReviewNative']['input'];ensure(!this.closed&&this.nativeHostServices?.secrets&&(this.privateMode||this.velaApiTest)&&a&&Object.keys(a).every(key=>['operationId','selection'].includes(key))&&identifier(a.operationId),'host_operation_native_required');
-      if(a.selection!==undefined){ensure(a.selection&&Object.keys(a.selection).sort().join(',')==='directory,kind'&&a.selection.kind==='codex-directory'&&typeof a.selection.directory==='string','invalid_host_operation_selection');const binding=this.toolWorkflows.bindingForOwner(a.operationId);ensure(binding.contract==='aerynth.vela.owner-review@1'&&binding.owner==='codex-inspection'&&!binding.ownerRef.directory,'host_operation_selection_unavailable');const prepared=this.toolCodexPreparations.get(binding.ownerRef.id);ensure(prepared&&prepared.requestId===binding.requestId&&prepared.digest===binding.ownerRef.digest,'host_operation_owner_changed');const target=readVelaInspectionTarget(a.selection.directory,this.privateRoot),prior={...prepared};prepared.target=target;prepared.digest=planningDigest({preparedDigest:binding.ownerRef.digest,target,requestId:binding.requestId});try{this.toolWorkflows.selectCodexOwner(a.operationId,{id:binding.ownerRef.id,digest:prepared.digest,directory:target.root});}catch(error){this.toolCodexPreparations.set(binding.ownerRef.id,prior);throw error;}}
-      return this.toolWorkflows.reviewHostOperation(a.operationId) as CommandMap[K]['output'];
-    }
-    if(name==='hostOperationDispatchNative'){
-      ensure(!this.closed&&this.nativeHostServices?.secrets&&(this.privateMode||this.velaApiTest),'host_operation_native_required');const a=input as CommandMap['hostOperationDispatchNative']['input'];
-      if(a.binding?.contract==='aerynth.vela.owner-review@1')ensure(a.identityDigest===a.binding.ownerRef.digest&&(a.binding.owner!=='codex-inspection'||!!a.binding.ownerRef.directory),'host_operation_identity_changed');
-      const fence=a.binding?.contract==='aerynth.vela.owner-review@1'?this.toolFence(a.binding.requestId):undefined,claim=this.toolWorkflows.dispatchHostOperation(a,fence);
-      if(a.binding?.contract==='aerynth.vela.owner-review@1'&&a.binding.owner==='codex-inspection'){
-        // cwd and readOnly are not an enforced repository read boundary. The installed
-        // App Server has no reviewed restricted-read inspection port; never downgrade.
-        this.toolWorkflows.witnessOwnerResult(a.binding,{fence:fence!,sourceDigest:planningDigest({binding:a.binding,reason:'codex_restricted_read_scope_unavailable'}),receiptRefs:[],blockedReason:'codex_restricted_read_scope_unavailable'});
-      }
-      return claim as CommandMap[K]['output'];
-    }
-    if(name==='hostOperationResultNative'){
-      ensure(!this.closed&&this.nativeHostServices?.secrets&&(this.privateMode||this.velaApiTest),'host_operation_native_required');
-      const result=this.recordToolHostOperation(input as CommandMap['hostOperationResultNative']['input']);
-      this.advanceToolContext(result.view.requestId,[result.receipt]);
-      if(result.receipt.pause==='none')await this.resumeToolReceipt(result.view.requestId,result.receipt);
-      else if(result.receipt.pause==='owner-job'){this.toolWorkflowRuns.get(result.view.requestId)?.port.checkpoint('waiting-job');this.vela.checkpointToolRequest(result.view.requestId,result.view.workflowId,'waiting-job');}
-      return result.view as CommandMap[K]['output'];
-    }
-    if(name==='velaWeatherPermissionNative'){
-      const request=input as CommandMap['velaWeatherPermissionNative']['input'];
-      ensure(!this.closed&&this.nativeHostServices?.systemFacts&&(this.privateMode||this.velaApiTest)&&request&&typeof request==='object'&&!Array.isArray(request),'native_weather_permission_required');
-      if(request.type==='status'){ensure(Object.keys(request).length===1,'invalid_weather_permission');return this.weatherPermissionStore().state() as CommandMap[K]['output'];}
-      ensure(request.type==='set'&&Object.keys(request).length===3&&Number.isSafeInteger(request.expectedVersion)&&['allow','deny'].includes(request.decision),'invalid_weather_permission');
-      ensure(this.missionStorageAdmitted,'storage_reserve_admission_denied');return this.weatherPermissionStore().set(request.expectedVersion,request.decision) as CommandMap[K]['output'];
-    }
-    if(name==='velaVoice'){
-      ensure(!this.closed,'backend_closed');return await this.velaVoiceRuntime.request(input as CommandMap['velaVoice']['input']) as CommandMap[K]['output'];
-    }
-    if(name==='velaVoiceNative'){
-      ensure(!this.closed&&this.nativeHostServices?.liveMedia&&(this.privateMode||this.velaApiTest),'native_voice_authorization_required');
-      const voiceInput=input as CommandMap['velaVoiceNative']['input'];ensure(this.missionStorageAdmitted||voiceInput?.name==='setSpeakReplies'&&voiceInput.input?.enabled===false,'storage_reserve_admission_denied');return await this.velaVoiceRuntime.native(voiceInput) as CommandMap[K]['output'];
     }
     if(['missionFileEditPrepareNative','missionFileEditRunNative','missionFileEditReviewNative','missionFileEditChoiceNative','missionFileEditApplyNative','missionFileEditCheckReviewNative','missionFileEditCheckRunNative','missionFileEditRead'].includes(name)){
       ensure(!this.closed&&this.nativeMedia&&this.nativeHostServices?.secrets&&(this.privateMode||this.velaApiTest)&&input&&typeof input==='object'&&!Array.isArray(input),'mission_edit_native_required');

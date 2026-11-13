@@ -16,7 +16,7 @@ const same = (a: unknown, b: unknown) => encode(a) === encode(b);
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const exact = (v: Record<string, unknown>, keys: string[]) => Object.keys(v).sort().join(',') === keys.sort().join(',');
 const categories: Category[] = ['identity', 'preferences', 'projects', 'people', 'technical', 'decisions', 'temporary', 'conversation'];
-const certainties: Certainty[] = ['explicit-statement', 'user-preference', 'imported-summary', 'historical-observation', 'inference', 'conflicting', 'unknown'];
+const certainties: Certainty[] = ['explicit-statement', 'user-reviewed-summary', 'user-preference', 'imported-summary', 'historical-observation', 'inference', 'conflicting', 'unknown'];
 const LIMITS = Object.freeze({ imports: 64, facts: 4096, revisions: 16384, revisionsPerRecord: 128, cipherBytes: 16 * 1024 * 1024, importBytes: 256 * 1024, factBytes: 16384, contextBytes: 65536, exportBytes: 2 * 1024 * 1024 });
 export const PERSONAL_CONTEXT_LIMITS = LIMITS;
 export const defaultPersonalMemoryPolicy = (): PersonalPolicy => ({ version: 0, storageEnabled: false, ordinaryEnabled: false, velaEnabled: false, sharingEnabled: false, sensitiveEnabled: false });
@@ -57,17 +57,10 @@ function draft(input: unknown): asserts input is FactDraft {
   check(source.kind === 'user-statement' ? exact(source, ['kind']) : source.kind === 'import' && exact(source, ['kind', 'id', 'version', 'start', 'end']) && id(source.id) && Number.isSafeInteger(source.version) && Number(source.version) >= 1 && Number.isSafeInteger(source.start) && Number(source.start) >= 0 && Number.isSafeInteger(source.end) && Number(source.end) > Number(source.start), 'invalid_provenance');
 }
 function request(value: ContextRequest) {
-  check(record(value) && Object.keys(value).every(k => ['requestId', 'assistant', 'providerId', 'query', 'projectId', 'conversationId', 'sharedFactIds', 'includeBehavior', 'maxBytes', 'maxItems', 'maxScan', 'sourceAnchors'].includes(k)) && id(value.requestId) && id(value.providerId) && (value.assistant === 'ordinary' || value.assistant === 'vela') && typeof value.query === 'string' && value.query.length <= 4000 && (value.projectId === null || id(value.projectId)) && (value.conversationId === null || id(value.conversationId)) && Array.isArray(value.sharedFactIds) && value.sharedFactIds.length <= 128 && value.sharedFactIds.every(id) && new Set(value.sharedFactIds).size === value.sharedFactIds.length && typeof value.includeBehavior === 'boolean', 'invalid_context_request');
+  check(record(value) && Object.keys(value).every(k => ['requestId', 'assistant', 'providerId', 'query', 'projectId', 'conversationId', 'sharedFactIds', 'includeBehavior', 'maxBytes', 'maxItems', 'maxScan'].includes(k)) && id(value.requestId) && id(value.providerId) && (value.assistant === 'ordinary' || value.assistant === 'vela') && typeof value.query === 'string' && value.query.length <= 4000 && (value.projectId === null || id(value.projectId)) && (value.conversationId === null || id(value.conversationId)) && Array.isArray(value.sharedFactIds) && value.sharedFactIds.length <= 128 && value.sharedFactIds.every(id) && new Set(value.sharedFactIds).size === value.sharedFactIds.length && typeof value.includeBehavior === 'boolean', 'invalid_context_request');
   check(Number.isSafeInteger(value.maxBytes) && value.maxBytes >= 1024 && value.maxBytes <= LIMITS.contextBytes && Number.isSafeInteger(value.maxItems) && value.maxItems >= 1 && value.maxItems <= 32 && (value.maxScan === undefined || Number.isSafeInteger(value.maxScan) && value.maxScan >= 1 && value.maxScan <= 512), 'invalid_context_budget');
-  if (value.sourceAnchors !== undefined) {
-    check(Array.isArray(value.sourceAnchors) && value.sourceAnchors.length <= 8 && value.sourceAnchors.every(anchor =>
-      record(anchor) && exact(anchor, ['kind', 'conversationId', 'messageId']) && anchor.kind === 'conversation-message' &&
-      id(anchor.conversationId) && id(anchor.messageId)), 'invalid_context_request');
-    check(new Set(value.sourceAnchors.map(anchor => encode(anchor))).size === value.sourceAnchors.length, 'invalid_context_request');
-  }
 }
-const commonWords = new Set('about after also an and are before been but can could did does for from had has have how into its may more most much need now of on one only or our out over said see should some than that the their them then there these they this those through to under use used was were what when where which who why will with would you your'.split(' '));
-const words = (v: string) => new Set(v.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu)?.filter(w => w.length >= 2 && !commonWords.has(w)).slice(0, 128) ?? []);
+const words = (v: string) => new Set(v.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu)?.filter(w => w.length >= 2).slice(0, 128) ?? []);
 
 const existingSchemaOnly = Symbol('existing personal context schema only');
 
@@ -259,17 +252,16 @@ export class PersonalContextService {
       source.role === 'user' && id(source.version) && digest(source.contentDigest) &&
       (source.projectId === null || id(source.projectId)) && typeof source.sensitive === 'boolean' ? source : null;
   }
-  private sourceScopeMatches(scopeValue: PersonalScope, source: ConversationSourceProof, category: Category): boolean {
+  private sourceScopeMatches(scopeValue: PersonalScope, source: ConversationSourceProof): boolean {
     return (scopeValue.kind === 'conversation' && scopeValue.id === source.conversationId) ||
-      (scopeValue.kind === 'project' && scopeValue.id === source.projectId) ||
-      (scopeValue.kind === 'assistant.ordinary' && source.projectId === null && category === 'preferences');
+      (scopeValue.kind === 'project' && scopeValue.id === source.projectId);
   }
   private currentConversationSource(value: ReviewedFact): ConversationSourceProof | null {
     const provenance = value.provenance;
     if (provenance.kind !== 'conversation-message') return null;
     const source = this.conversationSource(provenance);
     return source && source.version === provenance.version && source.contentDigest === provenance.contentDigest &&
-      this.sourceScopeMatches(value.scope, source, value.category) && (!source.sensitive || value.sensitive) ? source : null;
+      this.sourceScopeMatches(value.scope, source) && (!source.sensitive || value.sensitive) ? source : null;
   }
   private requireCurrentConversationSource(value: ReviewedFact): void {
     if (value.provenance.kind === 'conversation-message')
@@ -281,7 +273,7 @@ export class PersonalContextService {
       const source = this.conversationSource(input.source);
       check(source, 'conversation_source_unavailable');
       check(source.version === input.source.version && source.contentDigest === input.source.contentDigest, 'stale_conversation_source');
-      check(input.purpose === 'knowledge' && this.sourceScopeMatches(input.scope, source, input.category), 'conversation_source_scope_mismatch');
+      check(input.purpose === 'knowledge' && this.sourceScopeMatches(input.scope, source), 'conversation_source_scope_mismatch');
       check(!source.sensitive || input.sensitive, 'sensitive_source_requires_sensitive_fact');
       return structuredClone(input.source);
     }
@@ -430,56 +422,30 @@ export class PersonalContextService {
   private requestProofs(input: ContextRequest): ScopeProof[] {
     return [{ kind: 'assistant.' + input.assistant } as PersonalScope, ...(input.projectId ? [{ kind: 'project' as const, id: input.projectId }] : []), ...(input.conversationId ? [{ kind: 'conversation' as const, id: input.conversationId }] : [])].map(value => this.proof(value));
   }
-  private sourceCandidates(input: ContextRequest, ownerId: string): Set<string> {
-    const ids = new Set<string>();
-    if (!input.sourceAnchors?.length) return ids;
-    const lookup = this.opts.db.prepare('SELECT dependent FROM personal_context_conversation_sources WHERE owner=? AND conversation_id=? AND message_id=?');
-    for (const anchor of input.sourceAnchors) {
-      if (!this.conversationSource(anchor)) continue;
-      for (const row of lookup.all(ownerId, anchor.conversationId, anchor.messageId)) ids.add(String(row.dependent));
-    }
-    return ids;
-  }
   previewContext(input: ContextRequest): PersonalContextManifest {
     request(input); return this.read(() => {
       this.authorize('context.preview', null, null, { request: input }); const who = this.identity(), policy = this.policyValue(), scopes = this.requestProofs(input), omissions = new Map<OmissionReason, number>(), items: ContextItem[] = [];
       const omit = (reason: OmissionReason, count = 1) => omissions.set(reason, (omissions.get(reason) ?? 0) + count);
       const base = (reasons = omissions) => this.seal({ contract: PERSONAL_CONTEXT_CONTRACT, id: manifestId, createdAt: created, ownerId: who.userId, hostPolicyVersion: who.policyVersion, policyVersion: policy.version, requestDigest: hash(input), trust: 'untrusted-personalization-data', scopes, items, omissions: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => a.reason.localeCompare(b.reason)) });
       const manifestId = randomUUID(), created = this.now();
-      if (!(input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled)) { omit('disabled'); const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return result; }
-      // Current revision insertion order prioritizes new reviews within the scan budget.
-      const heads = this.opts.db.prepare(`SELECT h.id,h.kind,h.version,h.scope,h.state
-        FROM personal_context_heads h LEFT JOIN personal_context_revisions r
-          ON r.owner=h.owner AND r.id=h.id AND r.version=h.version
-        WHERE h.owner=? AND h.kind='fact' ORDER BY r.rowid DESC,h.id LIMIT ?`).all(who.userId, LIMITS.facts + 1);
-      check(heads.length <= LIMITS.facts, 'personal_context_capacity_reached');
-      const anchors = this.sourceCandidates(input, who.userId);
-      if (anchors.size) heads.sort((a, b) => Number(anchors.has(String(b.id))) - Number(anchors.has(String(a.id))));
-      const query = words(input.query), candidates: { value: ReviewedFact; score: number; anchored: boolean; proofs: ScopeProof[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
+      if (!policy.storageEnabled || !(input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled)) { omit('disabled'); const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return result; }
+      const heads = this.opts.db.prepare("SELECT id FROM personal_context_heads WHERE owner=? AND kind='fact' ORDER BY id LIMIT ?").all(who.userId, LIMITS.facts + 1); check(heads.length <= LIMITS.facts, 'personal_context_capacity_reached');
+      const query = words(input.query), candidates: { value: ReviewedFact; score: number; proofs: ScopeProof[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
       for (const row of heads) {
-        const head = this.decodeHead(row);
-        check(head.kind === 'fact' && head.scope, 'corrupt_personal_context');
+        const head = this.required(String(row.id), 'fact');
         if (!this.inScope(head.scope!, input)) { omit('outside-scope'); continue; }
         if (head.scope!.kind === 'user.shared' && (!policy.sharingEnabled || !input.sharedFactIds.includes(head.id))) { omit('not-shared'); continue; }
         if (head.state !== 'active') { omit('inactive'); continue; }
         if (scanned >= (input.maxScan ?? 128)) { omit('scan-limit'); continue; } scanned++;
         try {
           const proof = this.proof(head.scope!); this.authorize('record.read', head.scope, this.ref(head)); const value = this.decode<ReviewedFact>(head), reason = this.usable(value, head, input, policy, sourceCache); if (reason) { omit(reason); continue; }
-          const keywordTerms = words(value.keywords.join(' '));
-          const keywordMatches = [...keywordTerms].filter(word => query.has(word)).length;
-          const textMatches = [...words(value.text)].filter(word => query.has(word)).length;
-          const score = value.purpose === 'behavior' ? 1000
-            : keywordMatches ? 129 + keywordMatches : textMatches >= 2 ? textMatches : 0;
-          const provenance = value.provenance;
-          const anchored = anchors.has(value.id) && provenance.kind === 'conversation-message' && input.sourceAnchors!.some(anchor =>
-            anchor.conversationId === provenance.conversationId && anchor.messageId === provenance.messageId);
-          if (!score && !anchored) { omit('irrelevant'); continue; }
-          const proofs = [proof]; if (provenance.kind === 'import') proofs.push(this.proof(this.head(provenance.id)!.scope!));
-          candidates.push({ value, score, anchored, proofs });
+          const score = value.purpose === 'behavior' ? 1000 : value.keywords.reduce((sum, key) => sum + [...words(key)].filter(word => query.has(word)).length, 0);
+          if (!score) { omit('irrelevant'); continue; }
+          const proofs = [proof]; if (value.provenance.kind === 'import') proofs.push(this.proof(this.head(value.provenance.id)!.scope!)); candidates.push({ value, score, proofs });
         } catch (error) { if (error instanceof PersonalContextError && ['canonical_scope_unavailable', 'personal_context_not_authorized', 'private_content_unavailable'].includes(error.code)) { omit('unavailable'); continue; } throw error; }
       }
       // Reserve the bounded omission envelope before packing WHOLE reviewed facts; no text truncation.
-      candidates.sort((a, b) => Number(b.anchored) - Number(a.anchored) || b.score - a.score || a.value.id.localeCompare(b.value.id));
+      candidates.sort((a, b) => b.score - a.score || a.value.id.localeCompare(b.value.id));
       for (const candidate of candidates) {
         if (items.length >= input.maxItems) { omit('item-budget'); continue; }
         const oldScopes = scopes.length; for (const proof of candidate.proofs) if (!scopes.some(value => same(value, proof))) scopes.push(proof);
@@ -500,7 +466,7 @@ export class PersonalContextService {
       const expectedScopes = this.requestProofs(input), sourceCache = new Map<string, OriginalImport>();
       const references: RecordRef[] = []; const seen = new Set<string>();
       for (const item of manifest.items) {
-        check(!seen.has(item.factId), 'invalid_context_item'); seen.add(item.factId); check(input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled, 'personal_disclosure_disabled');
+        check(!seen.has(item.factId), 'invalid_context_item'); seen.add(item.factId); check(policy.storageEnabled && (input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled), 'personal_disclosure_disabled');
         const head = this.required(item.factId, 'fact', item.version), itemProof = this.proof(head.scope!); this.authorize('record.read', head.scope, this.ref(head));
         const value = this.decode<ReviewedFact>(head); check(!this.usable(value, head, input, policy, sourceCache) && same(this.item(value), item), 'stale_personal_context'); references.push(this.ref(head));
         const required = [itemProof]; if (value.provenance.kind === 'import') { const source = this.required(value.provenance.id, 'import', value.provenance.version); references.push(this.ref(source)); required.push(this.proof(source.scope!)); }

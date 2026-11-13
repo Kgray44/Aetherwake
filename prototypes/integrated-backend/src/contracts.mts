@@ -263,11 +263,11 @@ export interface Options {
   syntheticTimerClock?: TimerClockReading;
 }
 export interface CommandMap {
-  personalMemoryRevokeSourceNative: { input: { conversationId: string; messageId: string; expectedRevision: number }; output: { revision: number; erasedFacts: number } };
+  personalMemoryRevokeSourceNative: { input: { conversationId: string; messageId: string; expectedRevision: number; reviewedFact?: { id: string; version: number } }; output: { revision: number; erasedFacts: number } };
   personalMemoryCapturePreviewNative: { input: import('./personal-memory-review.mts').CaptureRequest; output: import('./personal-memory-review.mts').CaptureReview };
   personalMemoryCaptureCommitNative: { input: import('./personal-memory-review.mts').CaptureReview; output: { id: string } };
   personalMemoryCaptureCancelNative: { input: { id: string }; output: null };
-  personalMemoryPolicyNative: { input: { assistant?: 'ordinary' | 'vela'; enable?: boolean; expectedVersion?: number }; output: import('../../personal-context/src/contracts.ts').PersonalPolicy };
+  personalMemoryPolicyNative: { input: { assistant?: 'ordinary' | 'vela'; enable?: boolean; pauseStorage?: true; expectedVersion?: number }; output: import('../../personal-context/src/contracts.ts').PersonalPolicy };
   personalMemoryManagementNative: {
     input: { type: 'list'; after: string | null } | { type: 'read'; id: string }
       | { type: 'previewSourceRevocation'; id: string; version: number }

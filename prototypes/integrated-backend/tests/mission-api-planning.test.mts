@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { crc32, deflateSync } from 'node:zlib';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
+import { nativeMissionDiagnostics } from './fixtures/native-mission-diagnostics.mts';
 import { projectMissionExecution, type MissionExecutionProfile } from '../src/execution-profiler.mts';
 import { nativeMissionExecutors, nativeMissionPlan, missionResultAvailable } from '../src/mission-native.mts';
 import { composeReviewedArtifactMission } from '../src/mission-reviewed-composition.mts';
@@ -332,16 +333,23 @@ test('composed artifact mission retains verified files when a native branch fail
     }
     const { id } = await start;
     const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
-    const settle = async () => {
+    const settle = async (phase: 'initial' | 'retry') => {
       const deadline = performance.now() + (live ? 125_000 : 7_000);
+      let mission: MissionProjection;
       do {
-        const mission = await read();
+        mission = await read();
         if (!['running', 'queued'].includes(mission.outcome)) return mission;
         await delay(30);
       } while (performance.now() < deadline);
-      throw Error('composed_artifact_mission_deadline');
+      throw Error(`composed_artifact_mission_deadline ${JSON.stringify({
+        phase,
+        outcome: mission.outcome,
+        waits: mission.waits,
+        admission: mission.admission?.reasons,
+        ...(!live ? { tasks: JSON.parse(nativeMissionDiagnostics(mission)) } : {}),
+      })}`);
     };
-    const first = await settle();
+    const first = await settle('initial');
     assert.equal(first.outcome, 'failed', JSON.stringify(first.tasks.map(task => [task.id, task.state, task.detail])));
     const image = first.tasks.find(task => task.id === 'illustration')!;
     const notes = first.tasks.find(task => task.id === 'notes')!;
@@ -355,7 +363,7 @@ test('composed artifact mission retains verified files when a native branch fail
     await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version,
       content: 'Aerynth backend performance observation: collect repeated native timer and memory samples before attributing a slowdown.' });
     await f.core.command('missions', { name: 'control', input: { id, revision: first.revision, control: { type: 'retry', taskId: notes.id } } });
-    const result = await settle();
+    const result = await settle('retry');
     const elapsedMs = performance.now() - timingStarted, processCpu = process.cpuUsage(cpuStarted);
     assert.equal(result.outcome, 'verified', JSON.stringify(result.tasks.map(task => [task.id, task.state, task.detail])));
     assert.deepEqual(result.tasks.find(task => task.id === image.id)?.attempts, image.attempts);
@@ -741,7 +749,7 @@ test('Executive reviews a real native mission checkpoint through the synthetic R
       await new Promise(done => setTimeout(done, 10));
       settled = await f.core.command('missions', { name: 'read', input: { id: started.id } }) as MissionProjection;
     }
-    assert.equal(settled.outcome, 'verified');
+    assert.equal(settled.outcome, 'verified', nativeMissionDiagnostics(settled));
     const trigger = settled.events.findLast(event => event.kind === 'settled')!;
     const options = { configurationVersion: 1, model: 'gpt-6-luna', authorize: () => false };
     assert.equal((await f.core.proposeVelaMissionRevision(started.id, trigger.seq, options)).state, 'unavailable');
@@ -1136,7 +1144,7 @@ test('native Start review binds the complete objective to current host proofs ac
       await new Promise(done => setTimeout(done, 10));
       settled = await read();
     }
-    assert.equal(settled.outcome, 'verified');
+    assert.equal(settled.outcome, 'verified', nativeMissionDiagnostics(settled));
     assert.equal(settled.coverage, undefined);
     assert.equal(settled.objectiveReview?.digest, approvedObjectiveDigest);
     await f.core.command('missions', { name: 'post-report', input: { id: started.id } });
@@ -1462,7 +1470,11 @@ test('Vela answers from an explicitly reviewed mission checkpoint and rechecks i
       await new Promise(done => setTimeout(done, 10));
       settled = await f.core.command('missions', { name: 'read', input: { id: started.id } }) as MissionProjection;
     }
-    assert.equal(settled.outcome, 'verified');
+    assert.equal(settled.outcome, 'verified', JSON.stringify({
+      waits: settled.waits,
+      admission: settled.admission?.reasons,
+      tasks: JSON.parse(nativeMissionDiagnostics(settled)),
+    }));
     const checkpoint = { id: started.id, revision: settled.revision, triggerSeq: settled.events.findLast(event => event.kind === 'settled')!.seq };
     const intent = 'Did the checks in this checkpoint verify successfully?';
     const input = { intent, resourceIds: [], authorizeProvider: true, providerId: 'openai-api-vela',
@@ -1977,10 +1989,10 @@ test('reviewed CIE cites a selected local file and fences physical replacement b
 });
 
 test('reviewed CIE treats extracted document coverage as partial and keeps extraction notices out of citations', async () => {
+  const { extractDocumentText } = await import('../../visual-experience/cinematic-v3/src/document-text-worker.ts');
   const bytes = docxFixture();
   let bodyText: string;
   const f = fixture(true, true, { extract: async (input, signal) => {
-    const { extractDocumentText } = await import('../../visual-experience/cinematic-v3/src/document-text-worker.ts');
     const extracted = await extractDocumentText(bytes, input.format, input.maxTextBytes, signal);
     assert.equal(extracted.state, 'complete');
     bodyText = extracted.text;
