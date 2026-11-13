@@ -85,6 +85,7 @@ export class PersonalContextService {
         CREATE TABLE IF NOT EXISTS personal_context_conversation_sources(owner TEXT NOT NULL,conversation_id TEXT NOT NULL,message_id TEXT NOT NULL,dependent TEXT NOT NULL,PRIMARY KEY(owner,conversation_id,message_id,dependent));
         CREATE INDEX IF NOT EXISTS personal_context_conversation_sources_by_fact ON personal_context_conversation_sources(owner,dependent);`);
       if (!row) options.db.prepare('INSERT INTO personal_context_schema VALUES(1,1)').run();
+      this.repairCorrectionLineage();
     });
   }
   /** Source-owner cleanup may run before the user has initialized memory. */
@@ -95,6 +96,48 @@ export class PersonalContextService {
   private read<T>(work: () => T): T { return (this.opts.readTransaction ?? this.opts.transaction)(db => { check(db === this.opts.db, 'canonical_database_connection_mismatch'); return work(); }); }
   private now() { const value = this.opts.now?.() ?? new Date().toISOString(); check(typeof value === 'string' && Number.isFinite(Date.parse(value)), 'invalid_host_time'); return value; }
   private identity() { let value; try { value = this.opts.host.identity(); } catch { throw new PersonalContextError('invalid_host_identity'); } check(value && id(value.userId) && id(value.policyVersion), 'invalid_host_identity'); return value; }
+  private correctionLineageReady(owner: string): boolean {
+    const db = this.opts.db;
+    return !!(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='personal_context_lineage_repair'").get() &&
+      db.prepare('SELECT 1 FROM personal_context_lineage_repair WHERE owner=?').get(owner));
+  }
+  private repairCorrectionLineage(): void {
+    const db = this.opts.db, owner = this.identity().userId;
+    if (this.correctionLineageReady(owner)) return;
+    const rows = db.prepare(`SELECT r.id,r.version FROM personal_context_revisions r
+      JOIN personal_context_heads h ON h.owner=r.owner AND h.id=r.id
+      WHERE r.owner=? AND h.kind='fact' AND r.state='superseded' ORDER BY r.rowid LIMIT ?`).all(owner, LIMITS.revisions + 1);
+    check(rows.length <= LIMITS.revisions, 'personal_context_capacity_reached');
+    const edges = new Map<string, Set<string>>();
+    const incoming = new Map<string, number>();
+    for (const row of rows) {
+      const head = this.required(String(row.id), 'fact');
+      const previous = this.decode<ReviewedFact>(head, Number(row.version));
+      check(previous.state === 'superseded' && previous.supersededBy, 'corrupt_personal_context');
+      const target = this.head(previous.supersededBy);
+      if (!target) continue;
+      check(target.kind === 'fact', 'corrupt_personal_context');
+      const children = edges.get(head.id) ?? new Set<string>();
+      if (children.has(target.id)) continue;
+      children.add(target.id);
+      edges.set(head.id, children);
+      incoming.set(target.id, (incoming.get(target.id) ?? 0) + 1);
+    }
+    // Visit parents before descendants so a correction inherits the entire chain.
+    const ready = [...edges.keys()].filter(source => !incoming.has(source));
+    for (let index = 0; index < ready.length; index++) {
+      const source = ready[index];
+      for (const target of edges.get(source) ?? []) {
+        this.inheritErasureDependencies(owner, source, target);
+        const remaining = incoming.get(target)! - 1;
+        if (remaining) incoming.set(target, remaining);
+        else { incoming.delete(target); ready.push(target); }
+      }
+    }
+    check(incoming.size === 0, 'corrupt_personal_context');
+    db.exec('CREATE TABLE IF NOT EXISTS personal_context_lineage_repair(owner TEXT PRIMARY KEY NOT NULL)');
+    db.prepare('INSERT INTO personal_context_lineage_repair VALUES(?)').run(owner);
+  }
   private crypto() { let available = false; try { available = this.opts.crypto.available() === true; } catch {} check(available, 'private_crypto_unavailable'); }
   private authorize(operation: Operation, scopeValue: PersonalScope | null, subject: RecordRef | null = null, extra: Partial<PersonalAuthorization> = {}) {
     const who = this.identity(); let result; try { result = this.opts.host.authorize({ ...structuredClone(extra), operation, ownerId: who.userId, scope: scopeValue, subject }); } catch { throw new PersonalContextError('personal_context_not_authorized'); }
@@ -278,16 +321,22 @@ export class PersonalContextService {
       const previous: ReviewedFact = { ...old, version: old.version + 1, state: 'superseded', supersededBy: replacement.id, updatedAt: this.now() };
       this.put('fact', replacement, replacement.scope, replacement.state, 0);
       this.put('fact', previous, previous.scope, previous.state, old.version);
-      const owner = this.identity().userId;
-      // Keep inherited erasure dependencies even when a correction cites new evidence.
-      this.opts.db.prepare(`INSERT OR IGNORE INTO personal_context_conversation_sources
-        SELECT owner,conversation_id,message_id,? FROM personal_context_conversation_sources WHERE owner=? AND dependent=?`)
-        .run(replacement.id, owner, old.id);
-      this.opts.db.prepare(`INSERT OR IGNORE INTO personal_context_dependencies
-        SELECT owner,?,source,source_version FROM personal_context_dependencies WHERE owner=? AND dependent=?`)
-        .run(replacement.id, owner, old.id);
+      this.inheritErasureDependencies(this.identity().userId, old.id, replacement.id);
       return { previous, replacement };
     });
+  }
+  private inheritErasureDependencies(owner: string, previousId: string, replacementId: string) {
+    const db = this.opts.db;
+    db.prepare(`INSERT OR IGNORE INTO personal_context_conversation_sources
+      SELECT owner,conversation_id,message_id,? FROM personal_context_conversation_sources WHERE owner=? AND dependent=?`)
+      .run(replacementId, owner, previousId);
+    db.prepare(`INSERT OR IGNORE INTO personal_context_dependencies
+      SELECT owner,?,source,source_version FROM personal_context_dependencies WHERE owner=? AND dependent=?`)
+      .run(replacementId, owner, previousId);
+    const count = db.prepare(`SELECT
+      (SELECT count(*) FROM personal_context_conversation_sources WHERE owner=?) +
+      (SELECT count(*) FROM personal_context_dependencies WHERE owner=?) AS total`).get(owner, owner);
+    check(Number(count?.total) <= LIMITS.revisions * 4, 'personal_context_capacity_reached');
   }
   revoke(input: { id: string; expectedVersion: number }): RecordRef {
     return this.tx(() => { const head = this.head(input.id); check(head && head.kind !== 'policy' && head.version === input.expectedVersion, 'stale_personal_context_version'); this.authorize('record.revoke', head.scope, this.ref(head)); const old = this.decode<OriginalImport | ReviewedFact>(head), value = { ...old, version: old.version + 1, state: 'revoked' as const, updatedAt: this.now() }; this.put(head.kind, value, value.scope, value.state, old.version); return { ...this.ref(head), version: value.version }; });
@@ -312,6 +361,8 @@ export class PersonalContextService {
         'unsupported_personal_context_schema');
       const rows = this.opts.db.prepare('SELECT dependent FROM personal_context_conversation_sources WHERE owner=? AND conversation_id=? AND message_id=? ORDER BY dependent')
         .all(owner, source.conversationId, source.messageId);
+      check(this.correctionLineageReady(owner) || !this.opts.db.prepare("SELECT 1 FROM personal_context_revisions WHERE owner=? AND state='superseded' LIMIT 1").get(owner),
+        'personal_context_lineage_repair_required');
       const heads = rows.map(row => this.required(String(row.dependent), 'fact'));
       return this.deleteHeads(owner, heads, source);
     });

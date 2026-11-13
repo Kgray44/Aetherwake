@@ -339,8 +339,17 @@ test('erasing a conversation source removes corrections that inherited its memor
     assert.throws(() => memory.eraseConversationSource(anchor), /personal_context_not_authorized/);
     assert.doesNotThrow(() => memory.validateContext(preview, query));
     f.denied.delete('record.delete');
+    // Recreate the pre-repair on-disk state without rewriting protected revisions.
+    f.db.prepare('DELETE FROM personal_context_conversation_sources WHERE dependent IN (?,?)').run(second.id, third.id);
+    f.db.exec('DROP TABLE IF EXISTS personal_context_lineage_repair');
+    assert.throws(() => PersonalContextService.eraseExistingConversationSource(f.options, anchor), /personal_context_lineage_repair_required/);
+    const lockedCrypto = { ...f.options.crypto, available: () => false };
+    assert.throws(() => new PersonalContextService({ ...f.options, host, crypto: lockedCrypto }), /private_crypto_unavailable/);
+    assert.equal(f.db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name='personal_context_lineage_repair'").get()?.n, 0);
+    const restored = new PersonalContextService({ ...f.options, host });
+    assert.doesNotThrow(() => restored.validateContext(preview, query));
     f.lock();
-    assert.deepEqual(new Set(memory.eraseConversationSource(anchor).deleted.map(row => row.id)), new Set([first.id, second.id, third.id]));
+    assert.deepEqual(new Set(restored.eraseConversationSource(anchor).deleted.map(row => row.id)), new Set([first.id, second.id, third.id]));
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM personal_context_revisions WHERE id=?').get(independent.id)?.n, 1);
   } finally { f.close(); }
 });
