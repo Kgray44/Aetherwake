@@ -370,6 +370,29 @@
   border-radius: 5px;
   padding: 2px 5px;
 }
+.cp-markdown-table {
+  max-width: 100%;
+  margin-block: 0.7em;
+  overflow-x: auto;
+  border: 1px solid #c6b0db38;
+  border-radius: 8px;
+}
+.cp-markdown-table table {
+  min-width: 100%;
+  border-collapse: collapse;
+}
+.cp-markdown-table :is(th, td) {
+  min-width: 6ch;
+  padding: 0.45em 0.7em;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.cp-markdown-table th {
+  background: #c6b0db15;
+}
+.cp-markdown-table tbody tr {
+  border-top: 1px solid #c6b0db38;
+}
 .cp-code {
   border: 1px solid #b4c8de29;
   border-radius: 12px;
@@ -1476,6 +1499,13 @@ details[data-active="true"] > .cp-control .cp-control-glyph {
 }
 .cp-switcher-results button {
   flex-wrap: wrap;
+}
+.cp-switcher-excerpt {
+  flex-basis: 100%;
+  min-width: 0;
+  color: var(--text-muted, #b8afc7);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
 }
 .cp-branch-row {
   padding-block: 8px;
