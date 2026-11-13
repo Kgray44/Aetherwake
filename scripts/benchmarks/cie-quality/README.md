@@ -31,6 +31,17 @@ The index is built lazily from the authorized project snapshot during one reques
 
 The request timer in `blind-runner.mts` includes qualification and evidence preparation when the host callback owns those operations. The native synthetic tests exercise review, source expansion, final composition and revocation fences. Provider variability, actual usage, final answer quality and full-request latency require matched authorized live repetitions. The lexical timings do not establish any of those outcomes.
 
+For a native-path synthetic latency baseline, run the following from the repository root:
+
+```powershell
+$env:AERYNTH_BENCHMARK_SYNTHETIC_CIE = '1'
+node --test --test-name-pattern 'benchmark native reviewed CIE' prototypes/integrated-backend/tests/mission-api-planning.test.mts
+```
+
+The benchmark measures from native broker entry through canonical answer readback. It includes preview, source preparation, immediate synthetic review approval, qualification when cold, assessment and response publication. It excludes profile and fixture setup, human review time and renderer delivery. Each isolated profile runs one cold request followed by one warm request, so profile warmup and qualification reuse are confounded. The fixture asserts five synthetic Responses calls when cold and three when warm, with zero paid calls. The exact-answer assertion checks fixture integrity and does not grade provider reasoning.
+
+On Windows with Node 24.18.0, 12 paired profiles measured 1,437 ms p50 and 2,233 ms p95 cold, and 1,163 ms p50 and 1,736 ms p95 warm. These are synthetic full-request observations. They do not estimate provider latency, cost, or the causal effect of qualification reuse.
+
 ## Independent blind corpus
 
 `cases.public.json` is the independently authored, frozen input-only 48-case corpus (six examples in each of eight categories). Its exact SHA-256 is pinned in `blind-runner.mts`. Labels and adjudication rationales are deliberately not checked in and have not been consulted by the implementer. The fixture file expands semantic evaluation inputs sixfold over the original eight-case set; **that is corpus expansion, not a claimed measured accuracy gain**.

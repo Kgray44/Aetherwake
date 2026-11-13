@@ -1247,6 +1247,69 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
   } finally { await f.close(); }
 });
 
+test('benchmark native reviewed CIE from request through canonical answer readback', {
+  skip: process.env.AERYNTH_BENCHMARK_SYNTHETIC_CIE !== '1', timeout: 180_000,
+}, async () => {
+  const require = createRequire(import.meta.url);
+  const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+  const intent = 'When can the west lift return to service?';
+  const text = 'The west lift returns to service after an inspection.';
+  const model = 'gpt-6-luna';
+  const perception = { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [],
+    capabilityHints: [], deliverables: ['text'], verification: [] };
+  const interpret = (question: string, query: string) => ({
+    version: 2, objective: question, clarification: '', perception, needs: [{ key: 'fact', question, query }],
+  });
+  const assess = (quote: string, key = 'fact') => ({
+    version: 3, clarification: '', assessment: [{ key, status: 'supported',
+      passages: [{ source: 'e1', quote }], query: '' }],
+  });
+  const reply = (value: unknown) => (body: { model: string }) => response(JSON.stringify(value), body.model);
+  const samples: Record<'cold' | 'warm', number[]> = { cold: [], warm: [] };
+  for (let pair = 0; pair < 12; pair++) {
+    const f = fixture(true);
+    try {
+      await f.ready();
+      const workspace = await f.core.command('desktop', { type: 'snapshot' });
+      const created = await f.core.command('desktop', { type: 'createResource', kind: 'note',
+        title: 'Lift inspection', workspaceId: workspace.activeWorkspaceId });
+      const note = created.resources.find(item => item.title === 'Lift inspection')!;
+      await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: text });
+      for (const arm of ['cold', 'warm'] as const) {
+        if (arm === 'cold') f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
+          reply(assess('The pump inspection is on Tuesday.', 'day')));
+        f.replies.push(reply(interpret(intent, 'west lift inspection')), reply(assess(text)), body => response(text, body.model));
+        const priorCalls = f.requests.length;
+        const started = performance.now();
+        const result = await velaCommand({
+          win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+          directMessageSend: true, routeNative: true, dialog: {}, call: f.core.command.bind(f.core),
+          reviewProvider: async ({ review }: { review: VelaNativeReview }) => {
+            assert.equal(review.semanticContext, true);
+            return true;
+          },
+          input: { name: 'request', input: { intent, resourceIds: [note.id], authorizeProvider: true,
+            providerId: 'openai-api-vela', model, semanticContext: true } },
+        }) as VelaRequest;
+        assert.equal(result.state, 'responded', `${arm}: ${result.errorCode}; calls: ${f.requests.length - priorCalls}`);
+        const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
+        assert.equal(state.conversation?.messages.find(message => message.id === result.response?.messageId)?.content, text);
+        samples[arm].push(performance.now() - started);
+        assert.equal(f.requests.length - priorCalls, arm === 'cold' ? 5 : 3);
+        assert.equal(f.replies.length, 0);
+      }
+    } finally { await f.close(); }
+  }
+  const distribution = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return { samples: sorted.length, p50Ms: sorted[Math.ceil(sorted.length * .5) - 1],
+      p95Ms: sorted[Math.ceil(sorted.length * .95) - 1] };
+  };
+  console.log(JSON.stringify({ benchmark: 'native-reviewed-cie', transport: 'synthetic', paidCalls: 0,
+    through: 'canonical answer readback', cold: { ...distribution(samples.cold), simulatedCallsPerRequest: 5 },
+    warm: { ...distribution(samples.warm), simulatedCallsPerRequest: 3 } }));
+});
+
 test('native adaptive CIE requires qualified stages and reviews the resolved model', async t => {
   const f = fixture(true);
   try {
