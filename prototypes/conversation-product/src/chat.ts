@@ -873,9 +873,20 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         report('Your draft is saved. Reconnect, then press Send again.');
         return;
       }
-      if (model && !ordinaryPlan()?.modelOptions?.some(item => item.id === model)) {
-        report('The selected model is no longer available. Choose another model or use Automatic. Your draft is saved.');
-        return;
+      if (model) {
+        const currentModel = ordinaryPlan()?.modelOptions?.find(item => item.id === model);
+        if (!currentModel) {
+          report('The selected model is no longer available. Choose another model or use Automatic. Your draft is saved.');
+          return;
+        }
+        if (webSearch && !currentModel.eligibleTools?.includes('web_search')) {
+          report('Web search is unavailable for the selected model. Your draft is saved.');
+          return;
+        }
+        if (reasoningEffort !== undefined && !currentModel.reasoningEfforts?.includes(reasoningEffort)) {
+          report('That thinking level is unavailable for this model. Choose a model or reset thinking. Your draft is still here.');
+          return;
+        }
       }
       const content = checkpoint.record.content;
       if (checkpoint.record.documents?.some(item => item.unavailable)) {

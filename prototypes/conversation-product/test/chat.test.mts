@@ -954,6 +954,38 @@ for (const duringSave of [false,true]) test('a missing pinned model leaves the d
  } finally {save.resolve();f.pending?.reject(Error('fixture cleanup'));await chat?.dispose();f.restore();}
 });
 
+for (const capability of ['research','thinking']) test('chat retains the draft when '+capability+' support disappears during save', async () => {
+ const f=fixture('chatgpt-plan-responses'), motion=pickerMotion();
+ const save=Promise.withResolvers<void>();
+ let chat, saving=false;
+ const model={id:'gpt-6.1-sol',label:'Synthetic Sol',reasoningEfforts:['low'],eligibleTools:['web_search']};
+ f.detail.providers[0].modelOptions=[model];
+ const port={async command(name:string,input:any){
+  if(name==='saveDraft'){saving=true;await save.promise;}
+  if(name==='send'){f.calls.push({name,input});throw Error('unexpected dispatch');}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,
+   motion:motion.motion,viewId:'capability-change',models:{selections:new Map(),async refresh(){}}});
+  await chat.ready;
+  if(capability==='thinking'){
+   f.view.root.querySelector('[data-cp-picker-for="Thinking for next message"]').fire('click');
+   f.view.root.querySelector('[data-cp-option-value="low"]').fire('click');
+  }
+  const form=f.view.root.querySelector('form');
+  form.fire('submit',capability==='research'?{submitter:named(form,'Search web')}:{});
+  await until(()=>saving);
+  f.detail.providers[0].modelOptions=[{...model,...(capability==='research'?{eligibleTools:[]}:{reasoningEfforts:[]})}];
+  await chat.refresh();
+  save.resolve();
+  await chat.whenSubmissionSettled();
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,capability==='research'?/web search.*unavailable/i:/thinking level is unavailable/i);
+ } finally {save.resolve();await chat?.dispose();f.restore();}
+});
+
 test('an undocumented catalog model offers no tool and a stale thinking choice cannot silently send', async () => {
  const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
  f.detail.providers[0].modelOptions = [{ id: 'gpt-6.1-sol', label: 'Synthetic Sol', reasoningEfforts: ['low'], eligibleTools: ['web_search'] }];
