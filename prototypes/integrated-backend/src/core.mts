@@ -5454,6 +5454,7 @@ export class BackendCore {
     return this.kernel.withTransaction(()=>{
       const row=this.db.prepare('SELECT r.*,d.kind AS desktop_kind,d.metadata_json FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=?').get(resourceId);
       if(!row||row.state!=='active'||!this.libraryAuthorized({kind:'resource',id:resourceId})||!this.conversationReadAccess(resourceId))return unavailable();
+      if(request.expectedVersion!==undefined&&row.version!==request.expectedVersion)return unavailable();
       const actualKind=row.kind==='conversation'?'conversation':row.desktop_kind??(row.kind==='generic'?'reference':row.kind),kinds:CanonicalResourceKind[]=['conversation','note','research','task','task_group','reference','stream','agent','checklist','timeline','task_objective','clock_timer','file','link','folder'];
       if(!kinds.includes(actualKind as BlockKind)||actualKind==='conversation'&&row.kind!=='conversation')return {...base,status:'unsupported',reason:'resource-kind-unsupported',kind:String(actualKind).slice(0,64)};
       const kind=actualKind as CanonicalResourceKind;
