@@ -597,7 +597,13 @@ export function installApplication(hooks: Hooks) {
     anchor.onclick = () => {
       closeAdaptiveWorkspace();
       const content = document.createElement("div");
+      const workspace = state?.navigation.kind === "workspace"
+        ? state.workspaces.find(item => item.id === state?.activeWorkspaceId) : undefined;
       const view = mountAdaptiveWorkspace(content, {
+        experience: workspace ? {
+          scope: { workspaceId: workspace.id, projectId: workspace.project_id },
+          read: (name, input) => host.command!("missions", { name, input }),
+        } : undefined,
         viewId: "adaptive-intelligence-workspace",
         list: async () => {
           const result = await host.command!("missions", { name: "list", input: {} });
@@ -1413,6 +1419,7 @@ export function installApplication(hooks: Hooks) {
         timelineProjections.delete(id);
       }
     if (missionWorkroomScope !== workroomScope) {
+      closeAdaptiveWorkspace();
       missionWorkroomScope = workroomScope;
       for (const view of missionWorkroomViews) view.setScope(workroomScope);
     }

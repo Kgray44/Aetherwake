@@ -168,11 +168,13 @@ if (verifyMissions) {
   if(process.argv.includes('--missions-persistence-reopen-only'))require('./mission-persistence.cjs').assertMissionPersistenceReopen({profile:privateRoot,argv:process.argv,source});
   else if(!/^review-vela-missions-\d+$/u.test(path.basename(privateRoot))||existsSync(privateRoot))throw Error('fresh_offline_mission_profile_required');
 }
+if (process.argv.includes("--missions-aiw-experience") && !process.argv.includes("--missions-aiw-inspection"))
+  throw Error("owned_offline_aiw_verification_required");
 if (process.argv.includes("--missions-aiw-inspection") &&
   (!verifyMissions || !process.argv.includes("--missions-aep-presentation-only") ||
     process.argv.includes("--bootstrap-vela-api") ||
     process.argv.some(arg => arg.startsWith("--integration-") && arg !== "--integration-vela-missions" ||
-      arg.startsWith("--missions-") && !["--missions-aep-presentation-only", "--missions-aiw-inspection"].includes(arg))))
+      arg.startsWith("--missions-") && !["--missions-aep-presentation-only", "--missions-aiw-inspection", "--missions-aiw-experience"].includes(arg))))
   throw Error("owned_offline_aiw_verification_required");
 if (missionProfilerFlags.length && (missionProfilerFlags.length !== 1 || !verifyMissions ||
   !["off", "minimal", "full"].includes(missionProfilerMode) ||

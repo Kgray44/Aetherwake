@@ -515,6 +515,50 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       return workspace && state.activeWorkspaceId === workspace.id && { workspaceId: workspace.id, projectId: null };
     });
     assert.deepEqual(await list(), []);
+    if (recordAiw && argv.includes("--missions-aiw-experience")) {
+      const proposal = await rpc("aepExperimentNative", { name: "propose", candidate: "omit-backend" });
+      const id = proposal.experiment.id;
+      const result = await rpc("aepExperimentNative", { name: "test", id });
+      assert.equal(result.state, "rejected");
+      const evidence = await rpc("missions", { name: "experience-evidence", input: { id } });
+      assert.equal(evidence.record.experiment.id, id);
+      const aiw = '[data-surface-id="adaptive-intelligence-workspace"]';
+      await click("#vela");
+      await click(SURFACE + " .aw-adaptive-workspace-entry");
+      const content = await wait("Experiment shows the rejected native trial", async () => {
+        const selector = aiw + ' [data-intelligence-zone="experiment"]';
+        if (!await js(`document.querySelector(${quote(selector)})?.getClientRects().length`)) return false;
+        return true;
+      });
+      assert(content);
+      await click(aiw + ' [data-intelligence-zone="experiment"]');
+      const region = aiw + ' .aw-experience-evidence';
+      const shows = (text) => js(`document.querySelector(${quote(region)})?.textContent.includes(${quote(text)})`);
+      await wait("Revalidated experiment shows the original rejected decision", () => shows("Candidate qualityFailed"));
+      assert.equal(await shows(id), true);
+      await capture("01-aiw-native-experiment");
+      const recorder = await operation(() => startWindowRecording(win, win.webContents.session, win.webContents.getURL()), "aiw_experience_video_start");
+      try {
+        await click(aiw + ' [data-intelligence-zone="learning"]');
+        await wait("Learning remains advisory and retains baseline", () => shows("Dispositionretain baseline"));
+        assert.equal(await shows("Effective policyNone"), true);
+        await capture("02-aiw-native-learning");
+        await click(aiw + ' [data-intelligence-zone="timeline"]');
+        await wait("Adaptation history includes the canonical final revision", () => shows("experiment revision " + result.experiment.revision));
+        await capture("03-aiw-native-adaptation");
+      } finally {
+        receipt.experienceVideo = await operation(() => recorder.stop(path.join(out, "adaptive-experience-evidence.webm")), "aiw_experience_video_stop");
+      }
+      const privateRouteDenied = await js(`window.aerynthHost.command("aepExperimentNative", {name:"evidence",id:${quote(id)}}).then(() => false, () => true)`);
+      assert.equal(privateRouteDenied, true);
+      const after = await rpc("providerActivity", {});
+      assert.equal(after.providerRequests, 0);
+      assert.equal(after.codexConnections, 0);
+      receipt.experience = { id, revision: result.experiment.revision, state: result.state,
+        trials: evidence.trials.length, privateRouteDenied, providerActivity: after };
+      receipt.passed = true;
+      return;
+    }
     if(argv.includes('--missions-api-live-only')){
       assert(argv.includes('--bootstrap-vela-api'),'explicit_protected_credential_import_required');
       const diagnostic=await rpc('velaRequestPreview',{intent:'Remember the project codeword amber-pine. Reply only: Noted.',resourceIds:[],adaptive:true});

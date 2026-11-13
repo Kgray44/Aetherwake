@@ -1,15 +1,17 @@
 import type { MissionExecutionProfile } from '../../../integrated-backend/src/execution-profiler.mts';
 import { intelligenceZones, projectIntelligence, type IntelligenceBinding, type IntelligenceRegion } from './adaptive-workspace.ts';
+import type { MissionScope } from '../../../integrated-backend/src/mission-contracts.mts';
+import { mountExperienceEvidence, type ExperienceRead } from './experience-evidence-view.ts';
 import { mountExecutionTrace } from './execution-trace-view.ts';
 import { mountResourcePolicy, type ResourcePolicyPort } from './resource-policy-view.ts';
 import type { MissionProjection } from '../../../integrated-backend/src/mission-contracts.mts';
 
 /** Accessible read-only inspection inside the existing spatial workroom. No camera or task ownership. */
-export function mountIntelligenceInspection(root: HTMLElement, viewId: string, readProfile?: (id: string) => Promise<MissionExecutionProfile | null>, resourcePolicy?: ResourcePolicyPort, expanded = false) {
+export function mountIntelligenceInspection(root: HTMLElement, viewId: string, readProfile?: (id: string) => Promise<MissionExecutionProfile | null>, resourcePolicy?: ResourcePolicyPort, expanded = false, experience?: { scope: MissionScope; read: ExperienceRead }) {
   const doc = root.ownerDocument, details = doc.createElement('details'), summary = doc.createElement('summary');
   details.className = 'aw-mission-workroom-controls aw-intelligence-inspection';
   details.dataset.noCardDrag = 'true';
-  details.hidden = true;
+  details.hidden = !experience;
   details.open = expanded;
   summary.hidden = expanded;
   summary.textContent = 'Inspect intelligence · read only';
@@ -25,6 +27,8 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
   const trace = mountExecutionTrace(doc);
   panel.insertBefore(trace.element, readings);
   let executionProfile: MissionExecutionProfile | null = null;
+  const experienceView = experience && mountExperienceEvidence(doc, experience.scope, experience.read);
+  if (experienceView) panel.insertBefore(experienceView.element, readings);
   let profileEpoch = 0, requestProfile: (() => Promise<void>) | undefined;
   const buttons = intelligenceZones.map(([id, label], index) => {
     const button = doc.createElement('button'); button.type = 'button'; button.textContent = label;
@@ -47,12 +51,17 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
       buttons[i].setAttribute('aria-selected', String(i === selected)); buttons[i].tabIndex = i === selected ? 0 : -1;
     }
     panel.setAttribute('aria-labelledby', buttons[selected].id);
-    const region = regions[selected]; heading.textContent = intelligenceZones[selected][1];
-    limitation.textContent = region?.limitation ?? 'Unavailable: authorized mission evidence is not currently bound.';
+    const region = regions[selected], zone = intelligenceZones[selected][0];
+    heading.textContent = intelligenceZones[selected][1];
+    const experienceZone = zone === 'learning' || zone === 'experiment' || zone === 'timeline';
+    experienceView?.show(details.open && experienceZone ? zone : undefined);
+    const workspaceEvidence = !!experienceView && experienceZone;
+    limitation.hidden = workspaceEvidence;
+    limitation.textContent = region?.limitation ?? 'Choose an authorized mission to inspect its evidence.';
     policy?.setVisible(details.open && !!binding && !!region && region.id === 'resource');
     trace.update(details.open && region?.id === 'profiler' ? executionProfile : null);
     readings.replaceChildren();
-    for (const reading of region?.readings ?? []) {
+    for (const reading of workspaceEvidence ? [] : region?.readings ?? []) {
       const term = doc.createElement('dt'), value = doc.createElement('dd');
       term.textContent = reading.field;
       term.dataset.intelligenceField = reading.field;
@@ -74,6 +83,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
     profileEpoch++; requestProfile = undefined; regions = []; status.textContent = message;
     if (close) {
       const ownsFocus = details.contains(doc.activeElement);
+      experienceView?.clear();
       details.open = expanded; binding = null; selected = 0;
       if (!expanded && ownsFocus && !details.hidden) summary.focus({ preventScroll: true });
     }
@@ -119,6 +129,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
       if (details.open) void requestProfile();
     },
     invalidate,
-    dispose() { disposed = true; regions = []; binding = null; executionProfile = null; trace.update(null, true); policy?.setVisible(false); details.remove(); },
+    refreshExperience() { void experienceView?.refresh(); },
+    dispose() { disposed = true; regions = []; binding = null; executionProfile = null; trace.update(null, true); experienceView?.clear(); policy?.setVisible(false); details.remove(); },
   };
 }
