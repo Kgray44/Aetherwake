@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { stripTypeScriptTypes } from 'node:module';
-import { canonicalRetrievalQuery, createCanonicalRetrievalRanker, type CanonicalRetrievalCandidate } from '../../../prototypes/vela-core/src/history-retrieval.mts';
+import { canonicalRetrievalQuery, createCanonicalRetrievalRanker, createIncrementalCanonicalRetrievalIndex, type CanonicalRetrievalCandidate } from '../../../prototypes/vela-core/src/history-retrieval.mts';
 
 const baselineRef = '2e725382b0269c7f3608380cc562b510cf592df4';
 const baselineSource = execFileSync('git', ['show', baselineRef + ':prototypes/vela-core/src/history-retrieval.mts']);
@@ -35,3 +35,26 @@ const distribution = (values: number[]) => {
 console.log(JSON.stringify({ baselineRef, scope: 'local lexical candidate ranking with index construction',
   runtime: process.version, platform: process.platform, sources: candidates.length, queries: topics.length,
   baseline: distribution(samples[0]), candidate: distribution(samples[1]), paidCalls: 0 }, null, 2));
+
+const index = createIncrementalCanonicalRetrievalIndex();
+const queries = topics.map(topic => canonicalRetrievalQuery(topic)!);
+const incrementalSamples: [number[], number[]] = [[], []];
+for (let iteration = -30; iteration < 300; iteration++) {
+  const revision = String(iteration);
+  const snapshot = candidates.map((source, position) => position === 0
+    ? { ...source, revision, text: source.text + ' version' + revision }
+    : { ...source, revision: 'stable' });
+  const operations = [
+    () => queries.map(createCanonicalRetrievalRanker(snapshot)),
+    () => { index.reconcile('synthetic-project-policy', snapshot); return queries.map(index.rank); },
+  ];
+  const rankings = [];
+  for (const arm of iteration % 2 ? [1, 0] : [0, 1]) {
+    const start = performance.now();
+    rankings[arm] = operations[arm]();
+    if (iteration >= 0) incrementalSamples[arm].push(performance.now() - start);
+  }
+  assert.deepEqual(rankings[0], rankings[1]);
+}
+console.log(JSON.stringify({ scope: 'local index update and ranking with one edited source per snapshot',
+  rebuilt: distribution(incrementalSamples[0]), incremental: distribution(incrementalSamples[1]), paidCalls: 0 }, null, 2));
