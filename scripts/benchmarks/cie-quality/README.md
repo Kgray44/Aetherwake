@@ -57,3 +57,17 @@ The AEP report groups reported model executions by exact reported model. Dispatc
 An independent author sealed a second 48-case synthetic suite before inspecting the candidate. Labels remained in separate custody and were applied only after predictions were frozen. Against PR #61 and candidate `a1ab9bb0`, request-only lexical top-three ranking tied on all 48 cases. Both arms found 44 of 52 required sources (84.6% micro recall) and 44 relevant sources among 105 returned (41.9% micro precision). Both retrieved all required evidence in 32 of 39 material cases and returned no candidates in one of six benign cases. The fixture removed disallowed candidates before ranking and neither arm returned a disallowed or unknown ID. This checks candidate parity under fixture filtering. Contradiction adjudication, answer correctness and native disclosure are separate measurements.
 
 Input seal SHA-256 `9b79a3aa96aa1493fd2655f823654b42454419dfb4f92aeb1c4506eceef67832`. Frozen prediction SHA-256 `08aa4d95317f614e9b414cf76efef0a55963aaa1bfbb36398210856b83566544`. The first follow-up quality targets are at least 92% critical-source recall and 55% precision at the same cutoff with zero unauthorized disclosures on an independently graded untouched set. The current test does not meet those targets.
+
+### SQLite FTS shadow comparison
+
+Run `node scripts/benchmarks/cie-quality/fts-candidates.mts <sealed-input> <new-prediction-file> <candidate-commit>` from a clean checkout of the candidate. This uses the same frozen input set with private independent scoring. Each arm gets the same eligible fixture records and request query. The FTS arm builds an in-memory Porter-tokenized SQLite FTS5 index and ranks with title-weighted BM25. The cutoff is three. The run uses no provider or persistent index.
+
+| Candidate metric | Lexical | SQLite FTS |
+| --- | ---: | ---: |
+| Relevant-source recall | 44/52 (84.62%) | 46/52 (88.46%) |
+| Precision | 44/105 (41.90%) | 46/110 (41.82%) |
+| Material cases with complete recall | 32/39 | 33/39 |
+| Benign cases with zero candidates | 1/6 | 0/6 |
+| Candidate-stage p50 / p95, including index build | 0.026 / 0.342 ms | 0.401 / 0.832 ms |
+
+Both arms returned zero denied and unknown fixture IDs after eligibility filtering. FTS improved one material case by relevant-source count and tied the other 38. The candidate commit was `e888f963fdfafcd5776e32f54b541d402cc162ee` and frozen prediction SHA-256 was `4c3c2f316b5e2ab188569eaef4150857e7978bceb9cb11f1c976d9f1676f4f6d`. The one pass over the corpus includes setup and timing noise. FTS remains in shadow pending useful gains on untouched cases and native permission, evidence, and answer verification.
