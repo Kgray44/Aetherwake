@@ -1,4 +1,5 @@
 import { createApplicationNavigation } from "./application-navigation.ts";
+import { createPersonalMemoryView } from "./personal-memory-view.ts";
 import "../../../constellation/style.css";
 import type { Policy } from "../../../constellation/types.ts";
 import type { MotionCoordinator } from "./motion";
@@ -2470,6 +2471,17 @@ export function installApplication(hooks: Hooks) {
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
       ...replyNoteActions,
+      memoryView: createPersonalMemoryView(
+        request => host.command!("personalMemory", request),
+        async source => {
+          const result = await resourceOpener.open({
+            resourceId: source.conversationId,
+            origin: { source: "application" },
+            selection: { messageId: source.messageId },
+          });
+          if (result.status !== "ready") throw Error("Original message is unavailable.");
+        },
+      ),
       onRememberMessage: async (request) => {
         const result = await host.command!("personalMemoryCapture", request) as { status: "saved" | "cancelled" };
         return result.status === "saved";
