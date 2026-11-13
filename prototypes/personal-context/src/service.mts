@@ -57,8 +57,14 @@ function draft(input: unknown): asserts input is FactDraft {
   check(source.kind === 'user-statement' ? exact(source, ['kind']) : source.kind === 'import' && exact(source, ['kind', 'id', 'version', 'start', 'end']) && id(source.id) && Number.isSafeInteger(source.version) && Number(source.version) >= 1 && Number.isSafeInteger(source.start) && Number(source.start) >= 0 && Number.isSafeInteger(source.end) && Number(source.end) > Number(source.start), 'invalid_provenance');
 }
 function request(value: ContextRequest) {
-  check(record(value) && Object.keys(value).every(k => ['requestId', 'assistant', 'providerId', 'query', 'projectId', 'conversationId', 'sharedFactIds', 'includeBehavior', 'maxBytes', 'maxItems', 'maxScan'].includes(k)) && id(value.requestId) && id(value.providerId) && (value.assistant === 'ordinary' || value.assistant === 'vela') && typeof value.query === 'string' && value.query.length <= 4000 && (value.projectId === null || id(value.projectId)) && (value.conversationId === null || id(value.conversationId)) && Array.isArray(value.sharedFactIds) && value.sharedFactIds.length <= 128 && value.sharedFactIds.every(id) && new Set(value.sharedFactIds).size === value.sharedFactIds.length && typeof value.includeBehavior === 'boolean', 'invalid_context_request');
+  check(record(value) && Object.keys(value).every(k => ['requestId', 'assistant', 'providerId', 'query', 'projectId', 'conversationId', 'sharedFactIds', 'includeBehavior', 'maxBytes', 'maxItems', 'maxScan', 'sourceAnchors'].includes(k)) && id(value.requestId) && id(value.providerId) && (value.assistant === 'ordinary' || value.assistant === 'vela') && typeof value.query === 'string' && value.query.length <= 4000 && (value.projectId === null || id(value.projectId)) && (value.conversationId === null || id(value.conversationId)) && Array.isArray(value.sharedFactIds) && value.sharedFactIds.length <= 128 && value.sharedFactIds.every(id) && new Set(value.sharedFactIds).size === value.sharedFactIds.length && typeof value.includeBehavior === 'boolean', 'invalid_context_request');
   check(Number.isSafeInteger(value.maxBytes) && value.maxBytes >= 1024 && value.maxBytes <= LIMITS.contextBytes && Number.isSafeInteger(value.maxItems) && value.maxItems >= 1 && value.maxItems <= 32 && (value.maxScan === undefined || Number.isSafeInteger(value.maxScan) && value.maxScan >= 1 && value.maxScan <= 512), 'invalid_context_budget');
+  if (value.sourceAnchors !== undefined) {
+    check(Array.isArray(value.sourceAnchors) && value.sourceAnchors.length <= 8 && value.sourceAnchors.every(anchor =>
+      record(anchor) && exact(anchor, ['kind', 'conversationId', 'messageId']) && anchor.kind === 'conversation-message' &&
+      id(anchor.conversationId) && id(anchor.messageId)), 'invalid_context_request');
+    check(new Set(value.sourceAnchors.map(anchor => encode(anchor))).size === value.sourceAnchors.length, 'invalid_context_request');
+  }
 }
 const words = (v: string) => new Set(v.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu)?.filter(w => w.length >= 2).slice(0, 128) ?? []);
 
@@ -422,6 +428,16 @@ export class PersonalContextService {
   private requestProofs(input: ContextRequest): ScopeProof[] {
     return [{ kind: 'assistant.' + input.assistant } as PersonalScope, ...(input.projectId ? [{ kind: 'project' as const, id: input.projectId }] : []), ...(input.conversationId ? [{ kind: 'conversation' as const, id: input.conversationId }] : [])].map(value => this.proof(value));
   }
+  private sourceCandidates(input: ContextRequest, ownerId: string): Set<string> {
+    const ids = new Set<string>();
+    if (!input.sourceAnchors?.length) return ids;
+    const lookup = this.opts.db.prepare('SELECT dependent FROM personal_context_conversation_sources WHERE owner=? AND conversation_id=? AND message_id=?');
+    for (const anchor of input.sourceAnchors) {
+      if (!this.conversationSource(anchor)) continue;
+      for (const row of lookup.all(ownerId, anchor.conversationId, anchor.messageId)) ids.add(String(row.dependent));
+    }
+    return ids;
+  }
   previewContext(input: ContextRequest): PersonalContextManifest {
     request(input); return this.read(() => {
       this.authorize('context.preview', null, null, { request: input }); const who = this.identity(), policy = this.policyValue(), scopes = this.requestProofs(input), omissions = new Map<OmissionReason, number>(), items: ContextItem[] = [];
@@ -430,6 +446,8 @@ export class PersonalContextService {
       const manifestId = randomUUID(), created = this.now();
       if (!policy.storageEnabled || !(input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled)) { omit('disabled'); const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return result; }
       const heads = this.opts.db.prepare("SELECT id FROM personal_context_heads WHERE owner=? AND kind='fact' ORDER BY id LIMIT ?").all(who.userId, LIMITS.facts + 1); check(heads.length <= LIMITS.facts, 'personal_context_capacity_reached');
+      const anchors = this.sourceCandidates(input, who.userId);
+      if (anchors.size) heads.sort((a, b) => Number(anchors.has(String(b.id))) - Number(anchors.has(String(a.id))));
       const query = words(input.query), candidates: { value: ReviewedFact; score: number; proofs: ScopeProof[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
       for (const row of heads) {
         const head = this.required(String(row.id), 'fact');
@@ -439,7 +457,11 @@ export class PersonalContextService {
         if (scanned >= (input.maxScan ?? 128)) { omit('scan-limit'); continue; } scanned++;
         try {
           const proof = this.proof(head.scope!); this.authorize('record.read', head.scope, this.ref(head)); const value = this.decode<ReviewedFact>(head), reason = this.usable(value, head, input, policy, sourceCache); if (reason) { omit(reason); continue; }
-          const score = value.purpose === 'behavior' ? 1000 : value.keywords.reduce((sum, key) => sum + [...words(key)].filter(word => query.has(word)).length, 0);
+          const provenance = value.provenance;
+          const anchored = anchors.has(value.id) && provenance.kind === 'conversation-message' &&
+            input.sourceAnchors?.some(anchor => anchor.conversationId === provenance.conversationId && anchor.messageId === provenance.messageId);
+          const score = anchored ? 2000 : value.purpose === 'behavior' ? 1000 :
+            value.keywords.reduce((sum, key) => sum + [...words(key)].filter(word => query.has(word)).length, 0);
           if (!score) { omit('irrelevant'); continue; }
           const proofs = [proof]; if (value.provenance.kind === 'import') proofs.push(this.proof(this.head(value.provenance.id)!.scope!)); candidates.push({ value, score, proofs });
         } catch (error) { if (error instanceof PersonalContextError && ['canonical_scope_unavailable', 'personal_context_not_authorized', 'private_content_unavailable'].includes(error.code)) { omit('unavailable'); continue; } throw error; }

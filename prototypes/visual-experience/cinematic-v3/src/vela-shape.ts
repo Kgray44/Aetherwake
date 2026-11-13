@@ -33,16 +33,19 @@ export const OPERATIONAL_VELA_SHAPES: Readonly<Record<VelaVisualState, Readonly<
 });
 
 /** Identical analytic centerline/derivative in CPU bounds and GPU ribbon. */
-export function velaCenter(t: number, shape: VelaShape): readonly [number, number, number, number, number, number] {
+export function velaCenter(
+  t: number,
+  shape: VelaShape,
+  out: [number, number, number, number, number, number] = [0, 0, 0, 0, 0, 0],
+): readonly [number, number, number, number, number, number] {
   const s = Math.sin(t), c = Math.cos(t), s2 = Math.sin(2 * t), c2 = Math.cos(2 * t);
-  return [
-    shape.x * s + shape.y * s2 * (.88 + .12 * c),
-    shape.w * c + shape.h * c2 + shape.lift * Math.sin(3 * t),
-    shape.yaw * s,
-    shape.x * c + shape.y * (2 * c2 * (.88 + .12 * c) - .12 * s2 * s),
-    -shape.w * s - 2 * shape.h * s2 + 3 * shape.lift * Math.cos(3 * t),
-    shape.yaw * c,
-  ];
+  out[0] = shape.x * s + shape.y * s2 * (.88 + .12 * c);
+  out[1] = shape.w * c + shape.h * c2 + shape.lift * Math.sin(3 * t);
+  out[2] = shape.yaw * s;
+  out[3] = shape.x * c + shape.y * (2 * c2 * (.88 + .12 * c) - .12 * s2 * s);
+  out[4] = -shape.w * s - 2 * shape.h * s2 + 3 * shape.lift * Math.cos(3 * t);
+  out[5] = shape.yaw * c;
+  return out;
 }
 
 export const velaCenterGLSL = /* glsl */ `

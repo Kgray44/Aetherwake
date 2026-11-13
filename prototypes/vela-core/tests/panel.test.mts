@@ -882,3 +882,35 @@ test('SYNTHETIC hidden-DOM prepared long-request/open-evidence fixture preserves
   assert.equal(named(root, 'Approve and apply'), approve); assert.equal(named(root, 'Reject plan'), reject); assert.equal(approve.disabled, false);
   assert.equal(root.find(node => node.tagName === 'textarea'), editor); assert.equal(editor.value, 'Synthetic unsent recovery text'); assert.equal(editor.selectionStart, 4); assert.equal(editor.selectionEnd, 12); assert.equal(writes, 0); panel.dispose();
 });
+
+test('saved memory is a one-turn choice for Vela API with no attached sources', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.reviewedMemoryAvailable = true;
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    search: async () => [{ id: 'note:synthetic', kind: 'resource', resourceKind: 'note', title: 'Brief', version: 3 }],
+    request: async input => { turns.push(input); return request(); },
+  }));
+  try {
+    await panel.open();
+    const form = root.find(node => node.className === 'vela-core-compose')!;
+    const memory = root.find(node => node.tagName === 'label' && node.textContent === 'Review saved memory for this send')!.querySelector('input')!;
+    assert.equal(memory.disabled, false);
+    memory.checked = true;
+    const editor = form.querySelector('textarea')!;
+    editor.value = 'What preference did I save?'; editor.fire('input');
+    form.fire('submit');
+    await settles(() => turns.length === 1);
+    assert.deepEqual(turns[0], { intent: editor.value, resourceIds: [], authorizeProvider: true, providerId: 'openai-api-vela', useMemory: true });
+    assert.equal(memory.checked, false);
+    await settles(() => !named(form, 'Send to Vela').disabled || editor.value === '');
+    root.find(node => node.className === 'vela-core-search')!.fire('submit');
+    const selectedSource = () => root.find(node => node.tagName === 'input' && node.parent?.textContent === 'Brief');
+    await settles(() => !!selectedSource());
+    const include = selectedSource()!;
+    include.checked = true;
+    include.fire('change');
+    assert.equal(memory.disabled, true);
+  } finally { panel.dispose(); }
+});

@@ -1,3 +1,4 @@
+import { createMissionExperiencePolicy } from './mission-experience-policy.mts';
 import { createHash, randomUUID } from 'node:crypto';
 import { backendInspectionBinding, backendInspectionCurrent } from './mission-source-receipt.mts';
 import { isExitedBackendInspection } from './mission-cpu-pool.mts';
@@ -9,6 +10,7 @@ import { ServiceError } from './contracts.mts';
 import { summarizeMissionUsage } from './execution-profiler.mts';
 import { missionCompletion, missionMeasurementAnswer } from './mission-native.mts';
 import { buildMissionRevision } from './mission-revision.mts';
+import { specialistMissionObjective } from './mission-reviewed-composition.mts';
 import type { ResourceLease, ResourceLeaseRequest } from './resource-policy.mts';
 import { projectExecutiveCheckpoint } from './mission-executive.mts';
 import { reviewedMissionObjectiveVerified, reviewableMissionObjective } from './mission-objective-review.mts';
@@ -195,11 +197,13 @@ export class MissionService {
   private lastAdmitted = new Map<string, number>();
   private turn = 0;
   private readonly host: MissionServiceHost;
+  readonly experiencePolicy: ReturnType<typeof createMissionExperiencePolicy>;
   private readonly profilerClock = randomUUID();
   private readyObservations = new Map<string, ReadyObservation>();
 
   constructor(host: MissionServiceHost) {
     this.host = host;
+    this.experiencePolicy = createMissionExperiencePolicy(host.db);
     host.atomic(() => {
       host.db.exec(`CREATE TABLE IF NOT EXISTS vela_missions (
         id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, request_digest TEXT NOT NULL,
@@ -314,9 +318,10 @@ export class MissionService {
       'mission_queue_full');
   }
 
-  create(requestId: string, plan: MissionPlan, intakeMonotonicMs?: number, objectiveReview?: MissionObjectiveReview): MissionProjection {
+  create(requestId: string, plan: MissionPlan, intakeMonotonicMs?: number, objectiveReview?: MissionObjectiveReview, initialConcurrency = 2): MissionProjection {
     this.requireOpen();
     check(identifier(requestId), 'invalid_mission_request');
+    check(Number.isInteger(initialConcurrency) && initialConcurrency >= 1 && initialConcurrency <= L.workers, 'invalid_mission_concurrency');
     validateMissionPlan(plan, this.host.executors);
     check(this.host.authorized(plan.scope), 'mission_scope_denied');
     check(this.host.planningContextCurrent?.(plan) !== false, 'mission_planning_context_changed');
@@ -324,7 +329,8 @@ export class MissionService {
       const expected = reviewableMissionObjective(plan, objectiveReview.planFingerprint);
       check(expected && digest(expected) === digest(objectiveReview), 'mission_objective_review_changed');
     }
-    const fingerprint = digest(objectiveReview ? { ...plan, objectiveReview } : plan);
+    const reviewedPlan = objectiveReview ? { ...plan, objectiveReview } : plan;
+    const fingerprint = digest(initialConcurrency === 2 ? reviewedPlan : { ...reviewedPlan, initialConcurrency });
     let created = false;
     const m = this.host.atomic(() => {
       const existing = this.host.db.prepare('SELECT request_digest,json FROM vela_missions WHERE request_id=?').get(requestId);
@@ -333,13 +339,13 @@ export class MissionService {
         this.requireAccess(value, plan.scope);
         const { originConversationId: _origin, ...legacyPlan } = plan;
         check(existing.request_digest === fingerprint ||
-          !objectiveReview && value.originConversationId === undefined && existing.request_digest === digest(legacyPlan), 'mission_request_conflict');
+          initialConcurrency === 2 && !objectiveReview && value.originConversationId === undefined && existing.request_digest === digest(legacyPlan), 'mission_request_conflict');
         return value;
       }
       this.capacity();
       check(Number(this.host.db.prepare('SELECT count(*) AS n FROM vela_missions').get()!.n) < L.missions, 'mission_store_full');
       const value: Mission = { contract: MISSION_CONTRACT, id: randomUUID(), requestId, objective: plan.objective, scope: plan.scope,
-        criteria: [...plan.criteria], createdAt: stamp(), disposition: 'active', revision: 0, planRevision: 1, concurrency: 2,
+        criteria: [...plan.criteria], createdAt: stamp(), disposition: 'active', revision: 0, planRevision: 1, concurrency: initialConcurrency,
         tasks: plan.tasks.map(makeTask), events: [], ...(plan.planning ? { planning: plan.planning } : {}),
         ...(plan.coverage?{coverage:structuredClone(plan.coverage)}:{}),
         ...(objectiveReview ? { objectiveReview: structuredClone(objectiveReview) } : {}),
@@ -980,7 +986,8 @@ export class MissionService {
     const source = this.host.contextSource?.(m, plan);
     const reviewedNotes = task.executor === 'inspect.workspace-notes' ? m.planning?.context?.notes : undefined;
     const request = { missionId: m.id, revision: m.planRevision, taskId: task.id, scope: m.scope,
-      missionObjective: m.objective, taskObjective: task.objective, criteria: m.criteria, dependencyTaskIds: task.dependencies,
+      missionObjective: task.specialist ? specialistMissionObjective(m) : m.objective,
+      taskObjective: task.objective, criteria: m.criteria, dependencyTaskIds: task.dependencies,
       ...(reviewedNotes ? { requiredSources: reviewedNotes.map(note => ({
         kind: 'resource' as const, id: note.id, expectedVersion: note.version,
       })) } : {}),

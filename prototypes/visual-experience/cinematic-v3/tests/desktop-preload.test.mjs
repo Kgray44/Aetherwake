@@ -41,6 +41,29 @@ function bridge(active = false) {
   return { host: exposed, calls, events };
 }
 
+test("policy ports require activation for mutations and keep raw policy commands private", async () => {
+  const passive = bridge();
+  await passive.host.resourcePolicyInspection("inspect");
+  for (const action of ["mode", "rollback"])
+    assert.throws(() => passive.host.resourcePolicyInspection(action), /resource_policy_user_gesture_required/);
+  assert.throws(() => passive.host.experiencePolicyRollback({}), /experience_policy_user_gesture_required/);
+  assert.deepEqual(passive.calls, [["application-resource-policy-inspection", "inspect"]]);
+
+  const active = bridge(true);
+  const review = { workspaceId: "workspace", projectId: null, experimentId: "trial", policyVersion: 2 };
+  for (const command of ["resourcePolicyNative", "aepExperimentNative"])
+    await assert.rejects(active.host.command(command, {}), /unsupported_command/);
+  assert.throws(() => active.host.resourcePolicyInspection("set-mode"), /invalid_resource_inspection_action/);
+  await active.host.resourcePolicyInspection("mode");
+  await active.host.resourcePolicyInspection("rollback");
+  await active.host.experiencePolicyRollback(review);
+  assert.deepEqual(active.calls, [
+    ["application-resource-policy-inspection", "mode"],
+    ["application-resource-policy-inspection", "rollback"],
+    ["application-experience-policy-rollback", review],
+  ]);
+});
+
 test("closing a chat observer removes only its own native IPC listener", () => {
   const { host, events } = bridge();
   const first = [],
@@ -56,6 +79,25 @@ test("closing a chat observer removes only its own native IPC listener", () => {
   assert.equal(second.length, 2);
   stopOther();
   assert.equal(events.listenerCount("application-event"), 0);
+});
+
+test("saved memory preload routes reads and requires a gesture for mutations without exposing private commands", async () => {
+  const passive = bridge();
+  await passive.host.command("personalMemory", { type: "list", after: null });
+  await passive.host.command("personalMemory", { type: "read", id: "synthetic" });
+  for (const type of ["manage", "revokeSource", "enableProviderMemory", "disableProviderMemory"])
+    await assert.rejects(passive.host.command("personalMemory", { type }), /personal_memory_user_gesture_required/);
+  assert.equal(passive.calls.length, 2);
+  const active = bridge(true);
+  for (const command of ["personalMemoryManagementNative", "personalMemoryPolicyNative", "personalMemoryRevokeSourceNative"])
+    await assert.rejects(active.host.command(command, {}), /unsupported_command/);
+  assert.equal(active.calls.length, 0);
+  await active.host.command("personalMemory", { type: "enableProviderMemory", assistant: "ordinary", version: 2 });
+  await active.host.command("personalMemory", { type: "disableProviderMemory", assistant: "vela", version: 2 });
+  assert.deepEqual(active.calls, [
+    ["application-command", "personalMemory", { type: "enableProviderMemory", assistant: "ordinary", version: 2 }],
+    ["application-command", "personalMemory", { type: "disableProviderMemory", assistant: "vela", version: 2 }],
+  ]);
 });
 
 test("explicit native Copy requires current isolated-world activation and never exposes reads or generic clipboard commands", async () => {
