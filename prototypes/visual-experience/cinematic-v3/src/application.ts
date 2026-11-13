@@ -602,6 +602,10 @@ export function installApplication(hooks: Hooks) {
     }, (id) => { openCanonicalResource(id); }, {
       motion: experienceMotion,
       viewId: `mission-workroom:${resourceId}:${++missionWorkroomSerial}`,
+      readProfile: async (id) => {
+        const result = await host.command!("missions", { name: "execution-profile", input: { id } }) as MissionResponse;
+        return result && "kind" in result && result.kind === "execution-profile" ? result : null;
+      },
       readMission: async (id) => {
         const result = await host.command!("missions", { name: "read", input: { id } }) as MissionResponse;
         if (result === null) return null;
