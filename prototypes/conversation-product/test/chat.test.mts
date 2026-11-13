@@ -2264,6 +2264,29 @@ for (const unavailable of [true,false]) test('replace at the attachment limit pr
  } finally { f.pending?.reject(Error('synthetic cleanup')); await chat?.dispose(); f.restore(); }
 });
 
+test('a late failed attachment open does not report against its replacement', async () => {
+ const f=fixture('chatgpt-plan-responses');let chat;
+ const old={id:'file:old',version:1,title:'Old brief.pdf'};
+ const replacement={id:'file:new',version:1,title:'New brief.pdf'};
+ const opening=Promise.withResolvers<'unavailable'>();
+ try {
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:[old]});
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   openDocument:()=>opening.promise,chooseDocument:async()=>replacement});
+  await chat.ready;
+  named(f.view.root,'Old brief.pdf').fire('click');
+  named(f.view.root,'Replace').fire('click');
+  await until(()=>!!named(f.view.root,'New brief.pdf'));
+  const reads=f.calls.filter(call=>call.name==='readDraft').length;
+  opening.resolve('unavailable');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.calls.filter(call=>call.name==='readDraft').length,reads);
+  assert.doesNotMatch(f.view.root.querySelector('.cp-chat-status').textContent,/could not be opened/);
+  await chat.flush();
+  assert.deepEqual(f.draft.documents,[replacement]);
+ }finally{opening.resolve('unavailable');await chat?.dispose();f.restore();}
+});
+
 for (const action of ['close', 'switch', 'switch during save'] as const) test('chat manager '+action+' immediately invalidates a pending attachment handoff', async () => {
  const f = fixture('chatgpt-plan-responses');
  const resourceId = f.draft.resourceId;

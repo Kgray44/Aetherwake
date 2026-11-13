@@ -196,14 +196,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         decorateConversationControl(open,{identity:'source',emphasis:'secondary'});
         open.setAttribute('aria-label', 'Open attachment ' + label);
         open.addEventListener('click', async () => {
-          if (open.disabled || accessRevoked) return;
+          const inScope = options.captureDocumentHandoffScope?.();
+          const stillSelected = () => !retiring && !disposed && !accessRevoked && (inScope?.() ?? true) &&
+            session.snapshot().documents.some(item => item.id === document.id && item.version === document.version);
+          if (open.disabled || !root.contains(open) || !stillSelected()) return;
           try {
-            if (await options.openDocument!(document) === 'unavailable' && !disposed && !accessRevoked) {
+            if (await options.openDocument!(document) === 'unavailable' && stillSelected()) {
               await session.reload();
-              report(replace ? 'This attachment could not be opened. Replace or remove it before sending.'
+              if (stillSelected()) report(replace ? 'This attachment could not be opened. Replace or remove it before sending.'
                 : 'This attachment could not be opened. Check the selected document before sending.');
             }
-          } catch (error) { report(errorText(error)); }
+          } catch (error) { if (stillSelected()) report(errorText(error)); }
         });
         remove.textContent = '×';
         const askVela = options.askVelaAboutDocument && el('button', 'Ask Vela');
