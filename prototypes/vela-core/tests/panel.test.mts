@@ -434,13 +434,15 @@ test('terminal status survives request completion and refresh; connection probe 
 
 test('Vela source search keeps the latest query when an older lookup finishes last', async () => {
   const doc = new Document(), root = doc.createElement('main');
+  const canonical = state(), opened: unknown[] = [];
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
   type Results = Awaited<ReturnType<VelaClient['search']>>;
   let resolvePrevious!: (results: Results) => void;
   const previous = new Promise<Results>(resolve => { resolvePrevious = resolve; });
-  const newest = { id: 'file:new', kind: 'resource' as const, title: 'Latest source', version: 2 };
-  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => state(), {
+  const newest = { id: 'agent:new', kind: 'resource' as const, resourceKind: 'agent', title: 'Latest source', version: 2 };
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
     search: async text => text === 'old' ? previous : [newest],
-  }));
+  }), { onOpenSubject: ref => opened.push(ref) });
   try {
     await panel.open();
     const input = root.find(node => node.getAttribute('aria-label') === 'Search your work')!;
@@ -456,6 +458,14 @@ test('Vela source search keeps the latest query when an older lookup finishes la
     await new Promise(resolve => setImmediate(resolve));
     assert.match(results.textContent, /Latest source/);
     assert.doesNotMatch(results.textContent, /Outdated source/);
+    const route = named(results, 'Use agent profile');
+    const open = named(results, 'Open');
+    input.value = 'different query';
+    input.fire('input');
+    route.fire('click');
+    open.fire('click');
+    assert.equal(!!named(root, 'Remove selected agent profile'), false);
+    assert.deepEqual(opened, []);
   } finally { panel.dispose(); }
 });
 

@@ -188,13 +188,16 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         if (ref.kind === 'resource') { const include = el('input'); include.type = 'checkbox'; include.checked = selected.has(ref.id); sourceControls.set(ref.id, include); include.addEventListener('change', () => { if (!isCurrent()) return; if (include.checked) selected.set(ref.id, ref); else selected.delete(ref.id); renderSelection(); }); row.append(label(ref.title, include), el('span', 'vela-core-meta', ref.resourceKind || 'Item')); }
         else row.append(el('span', undefined, ref.title), el('span', 'vela-core-meta', ref.kind));
         if (ref.resourceKind === 'agent' && current?.planningProviders) row.append(button('Use agent profile', () => {
-          if (busy) return;
+          if (busy || !isCurrent()) return;
           routingAgentSelection = ref;
           renderSelection();
           closeContext(false);
           intent.focus();
         }));
-        if (options.onOpenSubject) row.append(button('Open', () => options.onOpenSubject?.(ref))); searchResults.append(row);
+        if (options.onOpenSubject) row.append(button('Open', () => {
+          if (isCurrent()) return options.onOpenSubject?.(ref);
+        }));
+        searchResults.append(row);
       }
     } catch (error) { if (isCurrent()) throw error; }
     finally { if (isCurrent()) searchButton.disabled = false; }
