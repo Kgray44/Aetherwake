@@ -10,9 +10,11 @@ async function capturePersonalMemory({ input, observeGesture, trustedFrame, allo
   }
   if (!await allowWrite()) throw Error('storage_reserve_admission_denied');
   if (!trustedFrame()) throw Error('personal_memory_frame_changed');
+  const expectedSourceText = input.expectedSourceText;
   const review = await preview(input);
   let committed = false;
   try {
+    if (review.sourceText !== expectedSourceText) throw Error('stale_personal_memory_source');
     if (!trustedFrame()) throw Error('personal_memory_frame_changed');
     if (await showReview(structuredClone(review)) !== true) return { status: 'cancelled' };
     if (!trustedFrame()) throw Error('personal_memory_frame_changed');

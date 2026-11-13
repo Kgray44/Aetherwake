@@ -159,21 +159,46 @@ test('editing a draft refreshes suggested search terms until the user edits them
   } finally { restore(); }
 });
 
-test('a stale source closes the capture draft and requires a fresh review', async () => {
+for (const code of ['stale_personal_memory_source', 'stale_personal_scope', 'conversation_source_unavailable']) {
+  test(`capture closes the draft after ${code}`, async () => {
+    const f = componentDocument(), restore = f.install();
+    const messages: string[] = [];
+    let returned = 0;
+    try {
+      const editor = createMemoryCaptureEditor({
+        content: 'Remember: Use quartz.', conversationId: 'chat', messageId: 'message', projectAvailable: true,
+        async review() { throw Error(code); },
+        report(message) { messages.push(message); }, returnFocus() { returned++; },
+      });
+      f.root.append(editor);
+      (editor as any).fire('submit');
+      await until(() => messages.length === 1);
+      assert.match(messages[0], code === 'conversation_source_unavailable' ? /original message is no longer available/ : /Open Remember message again/);
+      assert.equal(f.root.contains(editor), false);
+      assert.equal(returned, 1);
+    } finally { restore(); }
+  });
+}
+
+test('late memory approval does not report or restore focus to a detached chat', async () => {
   const f = componentDocument(), restore = f.install();
-  const messages: string[] = [];
+  let finish!: (saved: boolean) => void;
+  const reports: string[] = [];
   let returned = 0;
   try {
     const editor = createMemoryCaptureEditor({
       content: 'Remember: Use quartz.', conversationId: 'chat', messageId: 'message', projectAvailable: true,
-      async review() { throw Error('stale_personal_memory_source'); },
-      report(message) { messages.push(message); }, returnFocus() { returned++; },
+      review: () => new Promise(resolve => { finish = resolve; }),
+      report(message) { reports.push(message); }, returnFocus() { returned++; },
     });
-    f.root.append(editor);
+    const chat = f.doc.createElement('section');
+    f.root.append(chat);
+    chat.append(editor);
     (editor as any).fire('submit');
-    await until(() => messages.length === 1);
-    assert.match(messages[0], /Open Remember message again/);
-    assert.equal(f.root.contains(editor), false);
-    assert.equal(returned, 1);
+    chat.remove();
+    finish(true);
+    await until(() => !named(editor, 'Review memory').disabled);
+    assert.deepEqual(reports, []);
+    assert.equal(returned, 0);
   } finally { restore(); }
 });

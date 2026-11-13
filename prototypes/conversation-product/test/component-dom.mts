@@ -6,6 +6,7 @@ export function componentDocument() {
     listeners = new Map<string,((event:any)=>void)[]>(); className = ''; style: Record<string,string> = {}; value = ''; hidden = false; disabled = false; checked = false; open = false;
     scrollTop = 0; scrollHeight = 1000; clientHeight = 300; selectionStart = 0; selectionEnd = 0; selectionDirection = 'none'; private textValue = '';
     constructor(tag:string) {this.tagName=tag.toUpperCase();this.ownerDocument=doc;}
+    get isConnected(): boolean {return doc.root?.contains(this) ?? false;}
     get parentNode(){return this.parentElement;} get firstChild():any{return this.children[0]??(this.textValue?{parentElement:this,textContent:this.textValue}:null);}
     get classList(){const self=this;return {add(...names:string[]){self.className=[...new Set([...self.className.split(' ').filter(Boolean),...names])].join(' ');},remove(name:string){self.className=self.className.split(' ').filter(n=>n!==name).join(' ');},toggle(name:string){const has=self.className.split(' ').includes(name);if(has)this.remove(name);else this.add(name);return !has;}};}
     get textContent():string{return this.textValue+this.children.map(node=>node.textContent).join('');} set textContent(value:string){this.textValue=String(value);for(const child of this.children)child.parentElement=null;this.children=[];}
@@ -29,7 +30,8 @@ export function componentDocument() {
   doc.createElement=(tag:string)=>new Element(tag);doc.createTextNode=(text:string)=>{const node=new Element('#text');node.textContent=text;return node;};
   doc.createRange=()=>({content:null as any,end:0,selectNodeContents(node:any){this.content=node;},setEnd(_node:any,end:number){this.end=end;},toString(){return this.content.textContent.slice(0,this.end);}});
   let selection: any = null;
-  return {doc,root:doc.createElement('main'),window:{getSelection:()=>selection},select:(next:any)=>{selection=next;},install(){const old={document:globalThis.document,window:globalThis.window,CSS:globalThis.CSS};Object.assign(globalThis,{document:doc,window:this.window,CSS:{escape:(value:string)=>value}});return ()=>{for(const [key,value]of Object.entries(old)){if(value===undefined)delete (globalThis as any)[key];else (globalThis as any)[key]=value;}};}};
+  doc.root=doc.createElement('main');
+  return {doc,root:doc.root,window:{getSelection:()=>selection},select:(next:any)=>{selection=next;},install(){const old={document:globalThis.document,window:globalThis.window,CSS:globalThis.CSS};Object.assign(globalThis,{document:doc,window:this.window,CSS:{escape:(value:string)=>value}});return ()=>{for(const [key,value]of Object.entries(old)){if(value===undefined)delete (globalThis as any)[key];else (globalThis as any)[key]=value;}};}};
 }
 export const named=(scope:any,text:string,tag='button'):any=>scope.querySelectorAll(tag).find((node:any)=>node.textContent===text);
 export async function until(check:()=>boolean){for(let i=0;i<100&&!check();i++)await new Promise(resolve=>setImmediate(resolve));if(!check())throw new Error('Component wait timed out');}

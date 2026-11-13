@@ -20,6 +20,10 @@ test('native capture rechecks the trusted frame and storage after review', async
   assert.deepEqual(await capturePersonalMemory(options), { status: 'saved', id: 'saved' });
   assert.deepEqual(calls.splice(0), ['preview', 'review', 'commit']);
   await assert.rejects(capturePersonalMemory({
+    ...options, async preview() { calls.push('preview'); return { ...review, sourceText: 'Changed source' }; },
+  }), /stale_personal_memory_source/);
+  assert.deepEqual(calls.splice(0), ['preview', 'cancel']);
+  await assert.rejects(capturePersonalMemory({
     ...options, async commit() { throw Error('stale_personal_scope'); },
   }), /stale_personal_scope/);
   assert.deepEqual(calls.splice(0), ['preview', 'review', 'cancel']);

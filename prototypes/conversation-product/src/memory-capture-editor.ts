@@ -115,10 +115,14 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
       category: category.value as CaptureRequest['category'],
     };
     void options.review(request).then(saved => {
-      if (saved) { options.report('Memory saved'); close(); }
+      if (saved && form.isConnected) { options.report('Memory saved'); close(); }
     }, error => {
+      if (!form.isConnected) return;
       const message = error instanceof Error ? error.message : 'Memory review could not open.';
-      if (message === 'stale_personal_memory_source') {
+      if (message === 'conversation_source_unavailable') {
+        options.report('The original message is no longer available.');
+        close();
+      } else if (message === 'stale_personal_memory_source' || message === 'stale_personal_scope') {
         options.report('The original message or its project changed. Open Remember message again to review the current source.');
         close();
       } else {
