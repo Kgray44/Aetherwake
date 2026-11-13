@@ -26,7 +26,7 @@ interface BlindJournalState {
 export interface BlindClaim { claimToken: string; bindingDigest: string }
 export interface BlindRecovery {
   binding: string;
-  verify(claim: BlindClaim, result: unknown, signal: AbortSignal): Promise<boolean>;
+  verify(claim: BlindClaim, result: unknown, signal: AbortSignal, input: Readonly<BlindPayload>): Promise<boolean>;
 }
 export interface BlindJournal {
   read(): Promise<BlindJournalState | null>;
@@ -110,13 +110,16 @@ export async function runBlindCie(bytes: Buffer, candidate: Candidate,
     journalState = next;
   };
   let recovered = 0;
+  const verify = (claim: BlindClaim, result: unknown, input: BlindCase) => recovery!.verify(
+    structuredClone(claim), structuredClone(result), signal,
+    structuredClone({ id: input.id, request: input.request, sources: input.sources }));
   if (journalState?.inFlight && recovery) {
     const { inFlight, claim, pending } = journalState;
     if (!claim || !pending || pending.id !== inFlight || inputs[results.length]?.id !== inFlight ||
       !/^[a-f0-9]{64}$/.test(claim.claimToken) || claim.bindingDigest !== bindingFor(inFlight) ||
       !Number.isFinite(pending.endToEndMs) || pending.endToEndMs < 0 ||
       journalState.pendingDigest !== sha(JSON.stringify([journalState.checkpoint.predictionSha256, claim, pending])) ||
-      !await recovery.verify(structuredClone(claim), structuredClone(pending.result), signal)) throw new Error('blind_case_unreconciled');
+      !await verify(claim, pending.result, inputs[results.length])) throw new Error('blind_case_unreconciled');
     signal.throwIfAborted();
     results.push(structuredClone(pending));
     await persist(null);
@@ -146,7 +149,7 @@ export async function runBlindCie(bytes: Buffer, candidate: Candidate,
     }
     if (claim && prediction && !stopped) {
       await persist(input.id, claim, prediction);
-      if (!await recovery!.verify(structuredClone(claim), structuredClone(prediction.result), signal)) throw new Error('blind_case_unreconciled');
+      if (!await verify(claim, prediction.result, input)) throw new Error('blind_case_unreconciled');
       signal.throwIfAborted();
     }
     if (prediction && !stopped) results.push(prediction);
