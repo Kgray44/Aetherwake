@@ -1822,6 +1822,29 @@ test('History retires old results as soon as the search text changes',async t=>{
  }finally{await manager?.dispose();f.restore();}
 });
 
+test('History paging retires the old page before reading the next one',async()=>{
+ const f=fixture();let manager;
+ const page=Promise.withResolvers<void>();
+ const port={async command(name:string,input:any){
+  if(name==='list'&&input.offset===50)await page.promise;
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try{
+  f.history.items.push({kind:'conversation',resourceId:f.draft.resourceId,title:'Previous page result',excerpt:''});
+  f.history.total=51;
+  manager=mountConversationManager(f.view.root,port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const row=named(f.view.root,'Previous page result');assert.ok(row);
+  const next=named(f.view.root,'More results');next.focus();next.fire('click');
+  assert.ok(!named(f.view.root,'Previous page result'));
+  row.fire('click');next.fire('click');
+  page.resolve();
+  await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);
+  assert.equal(f.calls.filter(call=>call.name==='list'&&call.input.offset===50).length,1);
+  assert.equal(f.view.doc.activeElement,f.view.root.querySelector('input[aria-label="Search conversation history"]'));
+ }finally{page.resolve();await manager?.dispose();f.restore();}
+});
+
 test('History Enter runs a pending query once and leaves focus in the field',async t=>{
  const f=fixture();let manager;
  t.mock.timers.enable({apis:['setTimeout']});

@@ -303,6 +303,8 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const scheduleSwitcher=()=>{switchText=switchQuery.value.trim();invalidateSwitcher();if(switcher.node.open&&!switchComposing)switchTimer=setTimeout(()=>void loadSwitcher(),120);};
  const setHistoryQuery=(next:SearchQuery)=>{
   const projectChanged=next.projectId!==state.query.projectId;
+  clearTimeout(searchTimer);searchTimer=undefined;
+  retireHistoryResults();
   state.query=next;
   if(projectChanged&&switcher.node.open){
    if(switchComposing)invalidateSwitcher();
@@ -508,7 +510,14 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   newProviderCatalog=providers;newProvider.replaceChildren();for(const p of providers.filter(p=>p.record||p.id===explicitNewProvider)){const o=el('option',p.label+(p.record?'':' · unavailable'));o.value=p.id;o.disabled=!p.record;newProvider.append(o);}
   const preferred=explicitNewProvider??providers.find(p=>p.default&&p.available&&p.execute&&p.record)?.id??providers.find(p=>p.record&&!p.execute)?.id;
   if(preferred){if(![...newProvider.options].some(o=>o.value===preferred)){const missing=el('option','Selected provider · unavailable');missing.value=preferred;missing.disabled=true;newProvider.append(missing);}newProvider.value=preferred;}syncNewProvider();providerLabels=new Map(providers.map(provider=>[provider.id,provider.label]));renderTree(projects);renderMatches(list,providers);
-  const previous=button('Previous results',async()=>run(async()=>{state.query.offset=Math.max(0,list.offset-50);await refresh();}),{identity:'previous'}),next=button('More results',async()=>run(async()=>{if(list.hasMore){state.query.offset=list.offset+50;await refresh();}}),{identity:'next'});previous.disabled=list.offset===0;next.disabled=!list.hasMore;paging.dataset.cpGroup='history-navigation';paging.replaceChildren(previous,next);paging.hidden=list.total<=50;
+  const pageRevision=historyResultsRevision;
+  const showPage=(offset:number)=>{
+   if(disposed||closing||pageRevision!==historyResultsRevision)return;
+   request++;
+   setHistoryQuery({...state.query,offset});
+   return run(refresh);
+  };
+  const previous=button('Previous results',()=>showPage(Math.max(0,list.offset-50)),{identity:'previous'}),next=button('More results',()=>showPage(list.offset+50),{identity:'next'});previous.disabled=list.offset===0;next.disabled=!list.hasMore;paging.dataset.cpGroup='history-navigation';paging.replaceChildren(previous,next);paging.hidden=list.total<=50;
   // Available project IDs come from visible canonical summaries; host may also provide its normal project picker.
   const prior=project.value;project.replaceChildren();for(const p of [{value:'',label:'All projects'},{value:'__none',label:'No project'},...projects.map(p=>({value:p.id,label:p.title}))]){const o=el('option',p.label);o.value=p.value;project.append(o);}project.value=prior|| (state.query.projectId===null?'__none':state.query.projectId??'');await loadDetail(chatResource===null?selectedMessageId:undefined);
  };
@@ -527,7 +536,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   });collectionOpening=operation.catch(()=>{});return operation;
  };
  let historyComposing=false;
- const filter=()=>{clearTimeout(searchTimer);searchTimer=undefined;if(historyComposing)return;request++;retireHistoryResults();setHistoryQuery({...state.query,text:query.value,projectId:project.value==='__none'?null:project.value||undefined,collectionId:collection.value||undefined,archived:archive.value==='archived',favorite:favorite.checked,sort:sort.value as SearchQuery['sort'],searchMode:searchMode.value as SearchQuery['searchMode'],offset:0});syncFilterControls();if(busy)filterQueued=true;else void run(refresh);};
+ const filter=()=>{if(historyComposing)return;request++;setHistoryQuery({...state.query,text:query.value,projectId:project.value==='__none'?null:project.value||undefined,collectionId:collection.value||undefined,archived:archive.value==='archived',favorite:favorite.checked,sort:sort.value as SearchQuery['sort'],searchMode:searchMode.value as SearchQuery['searchMode'],offset:0});syncFilterControls();if(busy)filterQueued=true;else void run(refresh);};
  const scheduleHistorySearch=()=>{request++;retireHistoryResults();clearSearch.hidden=!query.value;clearTimeout(searchTimer);searchTimer=undefined;if(!historyComposing)searchTimer=setTimeout(filter,180);};
  query.addEventListener('compositionstart',()=>{historyComposing=true;scheduleHistorySearch();});
  query.addEventListener('compositionend',()=>{historyComposing=false;scheduleHistorySearch();});
