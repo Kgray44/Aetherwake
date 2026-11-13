@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { fork, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, statSync, statfsSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
@@ -21,7 +21,8 @@ import type { ConversationGraph, GraphData } from '../../connected-conversations
 import type { ConversationProduct, CanonicalConversationHost } from '../src/service.mts';
 
 const MiB=1024*1024,DISK_BOUND=64*MiB,DB_BOUND=15*MiB,STATE_BOUND=6*MiB;
-const OUTPUT_BOUND=256*1024,MAX_DATASET_MS=90_000,SLOW_SAMPLE_MS=2_000,RSS_CHECKPOINT_BOUND=256*MiB;
+const HOSTED_LINUX=process.platform==='linux'&&process.env.GITHUB_ACTIONS==='true'&&process.env.RUNNER_ENVIRONMENT==='github-hosted';
+const OUTPUT_BOUND=256*1024,MAX_DATASET_MS=HOSTED_LINUX?240_000:90_000,SLOW_SAMPLE_MS=2_000,RSS_CHECKPOINT_BOUND=256*MiB;
 // Keep the V8 heap below the separate RSS admission ceiling. These are not
 // explicit collections and do not turn RSS checkpoints into an OS quota.
 const WORKER_HEAP_FLAGS=['--max-old-space-size=128','--max-semi-space-size=8'];
@@ -31,6 +32,7 @@ const SOURCE_FILES=[
  'prototypes/conversation-product/test/library-scale-benchmark.mts','prototypes/conversation-product/src/contracts.ts',
  'prototypes/conversation-product/src/service.mts','prototypes/conversation-product/src/canonical-host.mts',
  'prototypes/integrated-backend/src/core.mts','prototypes/integrated-backend/src/desktop.mts',
+ 'prototypes/integrated-backend/src/mission-conversation.mts',
  'prototypes/connected-conversations/src/graph.ts','prototypes/workspace-kernel/kernel.mts',
 ];
 const DATASETS={small:{conversations:100,messages:2000},medium:{conversations:500,messages:8000},large:{conversations:1000,messages:12000}} as const;
@@ -61,6 +63,12 @@ function readApiReleased(){
  assert(service.includes('canonicalReadView')&&core.includes('canonicalReadView'),'released_canonical_read_view_required');
 }
 function guard(){
+ if(HOSTED_LINUX){
+  const storage=statfsSync(REPO,{bigint:true});
+  const freeBytes=storage.bavail*storage.bsize;
+  assert(freeBytes>BigInt(DISK_BOUND),'hosted_storage_admission_denied');
+  return {allowed:true,environment:'github-hosted-linux',freeBytes:String(freeBytes),estimatedBytes:DISK_BOUND};
+ }
  assert(process.platform==='win32'&&process.env.LOCALAPPDATA,'windows_reserve_guard_required');
  const file=join(process.env.LOCALAPPDATA,'AeroStorageWatch','ReserveGuard.ps1');
  const result=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-File',file,'-EstimatedCBytes',String(DISK_BOUND),'-EstimatedDBytes','0'],{encoding:'utf8',windowsHide:true,timeout:15000,maxBuffer:65536}));

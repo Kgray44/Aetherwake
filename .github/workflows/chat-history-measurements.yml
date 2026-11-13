@@ -1,0 +1,89 @@
+name: Chat history on-disk measurements
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/chat-history-measurements.yml'
+      - 'prototypes/conversation-product/test/library-scale-benchmark.mts'
+
+permissions:
+  contents: read
+
+jobs:
+  paired-medium-search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      NODE_DISABLE_COMPILE_CACHE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - name: Compare three exact revisions on the same runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          benchmark=prototypes/conversation-product/test/library-scale-benchmark.mts
+          cp "$benchmark" "$RUNNER_TEMP/library-scale-benchmark.mts"
+          evidence="$RUNNER_TEMP/chat-history-evidence"
+          mkdir "$evidence"
+          git config user.name 'Aerynth measurements'
+          git config user.email 'aerynth-measurements@users.noreply.github.com'
+          git log -1 --format='%H %T' > "$evidence/harness.txt"
+          lscpu > "$evidence/cpu.txt"
+          node --version > "$evidence/node.txt"
+          failed=0
+          for arm in baseline access-cost page; do
+            case "$arm" in
+              baseline) revision=571619734be791756678806fef2793fdde79c6fd ;;
+              access-cost) revision=7868ae561985b177902b1cfcd9a695e173b24092 ;;
+              page) revision=1c85f8cedd9b40c7d07689d932a60ee2e04be593 ;;
+            esac
+            git checkout --detach "$revision"
+            cp "$RUNNER_TEMP/library-scale-benchmark.mts" "$benchmark"
+            git add -- "$benchmark"
+            git commit --no-verify -m "Apply the common benchmark harness"
+            candidate="$(git rev-parse HEAD)"
+            git log -1 --format='%H %T %P' > "$evidence/$arm-source.txt"
+            mkdir "$evidence/$arm"
+            if ! node "$benchmark" --candidate="$candidate" --datasets=medium --search-only | tee "$evidence/$arm-run.json"; then
+              failed=1
+            fi
+            session="$(node --input-type=module -e '
+              import { readFileSync } from "node:fs";
+              try { console.log(JSON.parse(readFileSync(process.argv[1],"utf8")).session ?? ""); }
+              catch { console.log(""); }
+            ' "$evidence/$arm-run.json")"
+            if [[ -n "$session" ]]; then
+              for report in medium.json owner.json summary.json; do
+                if [[ -f "$session/$report" ]]; then
+                  cp "$session/$report" "$evidence/$arm/$report"
+                fi
+              done
+            fi
+            if [[ -f "$evidence/$arm/medium.json" ]]; then
+              node --input-type=module -e '
+                import { readFileSync } from "node:fs";
+                const receipt=JSON.parse(readFileSync(process.argv[1],"utf8"));
+                console.log(JSON.stringify({
+                  arm:process.argv[2],
+                  dataset:receipt.dataset,
+                  operations:receipt.operations?.map(({id,timing})=>({
+                    id,complete:timing.complete,p95Ms:timing.p95Ms
+                  })),
+                  error:receipt.error
+                }));
+              ' "$evidence/$arm/medium.json" "$arm"
+            fi
+          done
+          exit "$failed"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chat-history-on-disk
+          path: ${{ runner.temp }}/chat-history-evidence/
+          retention-days: 14
