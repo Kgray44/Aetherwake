@@ -2,8 +2,9 @@ import type { PersonalPolicy, RecordRef, ReviewedFact } from '../../../personal-
 
 type Page = { records: (RecordRef & { state: string })[]; next: string | null; policy: PersonalPolicy };
 type Command = (input: unknown) => Promise<unknown>;
+type OpenSource = (source: { conversationId: string; messageId: string }) => Promise<void>;
 
-export function createPersonalMemoryView(command: Command): HTMLElement {
+export function createPersonalMemoryView(command: Command, openSource?: OpenSource): HTMLElement {
   const section = document.createElement('section');
   section.setAttribute('aria-label', 'Saved memories');
   const status = document.createElement('p');
@@ -84,6 +85,19 @@ export function createPersonalMemoryView(command: Command): HTMLElement {
       ? `Source message ${fact.provenance.messageId} · conversation ${fact.provenance.conversationId}`
       : fact.provenance.kind === 'import' ? `Imported source ${fact.provenance.id}` : 'User statement';
     detail.append(body, source, manage('export'));
+    const origin = fact.provenance;
+    if (openSource && origin.kind === 'conversation-message') {
+      detail.append(button('Open original message', async () => {
+        const latest = await command({ type: 'read', id: fact.id }) as ReviewedFact;
+        if (intent !== selection) return;
+        const current = latest.provenance;
+        if (latest.version !== fact.version || current.kind !== 'conversation-message' ||
+            current.conversationId !== origin.conversationId || current.messageId !== origin.messageId ||
+            current.version !== origin.version || current.contentDigest !== origin.contentDigest)
+          throw Error('Memory has changed. Reload saved memories to see its current source.');
+        await openSource({ conversationId: origin.conversationId, messageId: origin.messageId });
+      }));
+    }
     if (record.state === 'active') {
       const editor = document.createElement('textarea');
       editor.setAttribute('aria-label', 'Corrected memory');
