@@ -213,6 +213,22 @@ test("Stop waits for a fresh authorized activity read after a disconnect", async
   } finally { off(); f.port.dispose(); }
 });
 
+test("Stop cannot dispatch after the desktop hides during activity readback", async () => {
+  let pending;
+  const f = setup(async (name) => name === "interrupt" ? { requested: true } : pending ?? [execution()]);
+  const off = f.port.observe("r", () => {});
+  try {
+    await f.port.refresh();
+    const readback = Promise.withResolvers();
+    pending = readback.promise;
+    const stopping = f.port.cancel("e");
+    f.setVisible(false);
+    readback.resolve([execution()]);
+    await assert.rejects(stopping, /No observed active/);
+    assert.equal(f.calls.filter(call => call.name === "interrupt").length, 0);
+  } finally { off(); f.port.dispose(); }
+});
+
 test("known backend disconnection fences a pending old read without inventing an execution outcome", async () => {
   let resolveStatus;
   const status = new Promise((resolve) => {

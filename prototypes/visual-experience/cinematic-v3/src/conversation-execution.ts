@@ -427,7 +427,7 @@ export function createConversationExecutionPort(
     async cancel(executionId) {
       await refresh();
       if (
-        connected !== true || ![...latest.values()].some(
+        !host.visible() || connected !== true || ![...latest.values()].some(
           (value) =>
             value.id === executionId &&
             active(value) &&
