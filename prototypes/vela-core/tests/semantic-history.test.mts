@@ -76,6 +76,24 @@ test('revisits a truncated discovery query when an incomplete need has no better
   assert.deepEqual(result.coverage[0].sources, [candidate]);
 });
 
+test('retrieves reviewed references from a cited partial match within the follow-up round', async () => {
+  const anchor = { ...candidate, sourceId: 'anchor', text: 'See the equipment handoff.' };
+  const result = await investigateSemanticHistory(request, {
+    search: () => ({ sources: [anchor], scan: 'bounded' }),
+    related: sources => {
+      assert.deepEqual(sources, [anchor]);
+      return { sources: [candidate], scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : { version: 1, assessment: [{
+      key: 's1', status: call.round === 1 ? 'partial' : 'supported',
+      sources: call.round === 1 ? ['e1'] : ['e1', 'e2'], query: '',
+    }] },
+  });
+  assert.equal(result.rounds, 2);
+  assert.deepEqual(result.coverage[0].sources, [anchor, candidate]);
+});
+
 test('a novel model refinement takes precedence over another page of the original query', async () => {
   const initial = { ...candidate, sourceId: 'initial' };
   const result = await investigateSemanticHistory(request, {

@@ -87,6 +87,8 @@ interface SemanticHistoryOwner<T extends SemanticHistorySource> {
   search(query: string): SemanticHistoryCandidates<T>;
   /** Return a bounded next page for a previously truncated query in the same review. */
   widen?(query: string): SemanticHistoryCandidates<T>;
+  /** Discover reviewed references from sources cited for unresolved needs. */
+  related?(sources: readonly T[]): SemanticHistoryCandidates<T>;
   selected?(): SemanticHistoryCandidates<T>;
   recent?(): SemanticHistoryCandidates<T>;
   isCurrent(source: T): boolean;
@@ -226,6 +228,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     const truncatedQueries = new Set<string>();
     let next = needs.map(need => need.query).filter(Boolean);
     let widen: string[] = [];
+    let related: T[] = [];
     let anchorsRead = false;
     let priorAssessment: EvidenceReview | undefined;
     let investigateAnchors = false;
@@ -310,6 +313,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         anchorsRead = true;
         addCandidates(owner.recent(), limit);
       }
+      if (owner.related && related.length && evidence.size < limit) addCandidates(owner.related(related), limit);
       // Keep the existing refinement and recent-evidence priorities.
       if (owner.widen && widen.length) {
         if (evidence.size >= limit) partial();
@@ -355,6 +359,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       }
       priorAssessment = assessment;
       const gaps = assessment.rows.filter(row => row.status !== 'supported');
+      related = owner.related ? [...new Set(gaps.flatMap(row => row.sources))].map(handle => evidence.get(handle)!) : [];
       next = gaps.filter(row => row.query && !queries.has(canonicalRetrievalQuery(row.query)!.digest)).map(row => row.query);
       const gapKeys = new Set(gaps.filter(row => !row.query || queries.has(canonicalRetrievalQuery(row.query)!.digest))
         .map(row => row.key));
@@ -364,8 +369,8 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       }) : [];
       investigateAnchors = !!owner.recent && !anchorsRead && gaps.length > 0;
       const budgetExhausted = rounds === maxRounds || evidence.size === candidateLimit;
-      if ((next.length || widen.length || investigateAnchors) && budgetExhausted) partial();
-      if ((!next.length && !widen.length && !investigateAnchors) || budgetExhausted) return assessed(assessment);
+      if ((next.length || widen.length || related.length || investigateAnchors) && budgetExhausted) partial();
+      if ((!next.length && !widen.length && !related.length && !investigateAnchors) || budgetExhausted) return assessed(assessment);
     }
     return empty('invalid', 'assessment-shape');
   } catch {

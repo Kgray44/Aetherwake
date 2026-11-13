@@ -95,3 +95,35 @@ test('reviewed project assessment finds fourth-ranked evidence without inventing
   assert.deepEqual(rounds, [1, 2]);
   assert.deepEqual(result.coverage[0].passages, [{ sourceId: 'd', title: 'Harbor inspection', quote: decisive }]);
 });
+
+test('a cited note leads to a uniquely named reviewed source outside the lexical results', async () => {
+  const receipt = { model: 'synthetic-model' };
+  const anchor = 'See the Equipment Handoff for the responsible party.';
+  const decisive = 'The duty engineer signs.';
+  const sources = [
+    ['a', 'Schedule', 'A separate schedule.'],
+    ['b', 'Inventory', 'A separate inventory.'],
+    ['c', 'Harbor inspection', anchor],
+    ['d', 'Equipment Handoff', decisive],
+  ].map(([sourceId, title, text]) => ({ sourceId, title, text, revision: '1', proofDigest: sourceId, sourceKind: 'note' as const }));
+  const api = {
+    qualifiedStructuredRoute: () => receipt,
+    resolveQualifiedStructuredRoute: async () => receipt,
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal(input: any) {
+      input.validate();
+      const call = input.payload;
+      if (call.stage === 'interpret') return { version: 2, objective: 'Find the signer', clarification: '',
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+        needs: [{ key: 'signer', question: 'Who signs?', query: 'harbor inspection' }] };
+      const found = call.excerpts.find((excerpt: { text: string }) => excerpt.text === decisive);
+      if (call.round === 1) assert.equal(found, undefined);
+      return { version: 3, clarification: '', assessment: [{ key: 'signer', status: found ? 'supported' : 'partial', query: '',
+        passages: [{ source: 'e1', quote: anchor }, ...(found ? [{ source: found.handle, quote: decisive }] : [])] }] };
+    },
+  } as unknown as VelaApiRuntime;
+  const result = await investigateReviewedVelaEvidence(api, 'Who signs the harbor inspection?', [], 1, 'synthetic-model', () => {},
+    new AbortController().signal, undefined, { sources, partial: false });
+  assert.equal(result.coverage[0].status, 'supported');
+  assert.deepEqual(result.coverage[0].passages.map(passage => passage.sourceId), ['c', 'd']);
+});

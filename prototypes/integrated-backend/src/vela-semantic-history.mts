@@ -145,6 +145,10 @@ export function investigateVelaHistoryWithApi(vela: Pick<VelaService, 'investiga
 
 type ReviewedEvidenceSource = VelaSemanticHistorySource & { title: string };
 
+function referenceText(text: string) {
+  return text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
 const sentences = new Intl.Segmenter('en', { granularity: 'sentence' });
 
 /** Keep attribution and qualifications from the same reviewed sentence with the checked quote. */
@@ -217,6 +221,19 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
           return { sources: matches.slice(3, 6).map(id => candidates.get(id)!), scan: matches.length > 6 ? 'partial' as const : scan };
         } } : {}),
         ...(discovery ? { recent: () => ({ sources: discovery.sources.slice(0, 2), scan }) } : {}),
+        ...(discovery ? { related: (anchors: readonly VelaSemanticHistorySource[]) => {
+          validate();
+          cancel?.throwIfAborted();
+          const anchorIds = new Set(anchors.map(anchor => anchor.sourceId));
+          const bodies = anchors.filter(isApproved).map(anchor => ' ' + referenceText(anchor.text) + ' ');
+          const titles = discovery.sources.map(source => ({ source, title: referenceText(source.title) }));
+          const uniqueTitles = new Map<string, number>();
+          for (const { title } of titles) uniqueTitles.set(title, (uniqueTitles.get(title) ?? 0) + 1);
+          const matches = titles.filter(({ source, title }) => !anchorIds.has(source.sourceId) &&
+            title.length >= 8 && title.includes(' ') && uniqueTitles.get(title) === 1 &&
+            bodies.some(body => body.includes(' ' + title + ' ')));
+          return { sources: matches.slice(0, 2).map(match => match.source), scan: matches.length > 2 ? 'partial' as const : scan };
+        } } : {}),
         isCurrent: source => isApproved(source) && authorize(),
         disclose: (call, sources, abort) => {
           observations?.validateReviewedTests?.();
