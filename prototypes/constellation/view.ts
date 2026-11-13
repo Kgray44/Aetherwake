@@ -217,7 +217,7 @@ export function mountConstellation(
         hint: "Enter · double-click",
         run: () => controller.approach(),
         enabled:
-          !!n && n.available && (n.kind !== "resource" || !!n.workspaceId),
+          !!n && n.available,
       },
       {
         id: "explore",
