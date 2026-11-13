@@ -200,3 +200,30 @@ test('a refreshable assessment receipt survives a cold interpretation route', as
   await investigateReviewedVelaEvidence(api, 'Synthetic request', [], 1, 'synthetic-model', () => {}, new AbortController().signal);
   assert.deepEqual(probes, ['interpret']);
 });
+
+test('a citation uses the admitted revision when a discovery record has the same source ID', async () => {
+  const receipt = { model: 'synthetic-model' };
+  const quote = 'Inspection is Tuesday.';
+  const selected = { sourceId: 'inspection', title: 'Selected inspection', text: quote,
+    revision: '2', proofDigest: 'reviewed-selected', sourceKind: 'note' as const };
+  const discovery = { ...selected, title: 'Discovery inspection', text: 'The draft said: ' + quote,
+    revision: '1', proofDigest: 'reviewed-discovery' };
+  const api = {
+    qualifiedStructuredRoute: () => receipt,
+    resolveQualifiedStructuredRoute: async () => receipt,
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal(input: any) {
+      input.validate();
+      if (input.payload.stage === 'interpret') return { version: 2, objective: 'Find the date', clarification: '',
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+        needs: [{ key: 'date', question: 'Which day?', query: 'inspection' }] };
+      assert.equal(input.payload.excerpts.length, 1);
+      assert.equal(input.payload.excerpts[0].text, quote);
+      return { version: 3, clarification: '', assessment: [{ key: 'date', status: 'supported', query: '',
+        passages: [{ source: 'e1', quote }] }] };
+    },
+  } as unknown as VelaApiRuntime;
+  const result = await investigateReviewedVelaEvidence(api, 'When is the inspection?', [selected], 1, receipt.model, () => {},
+    new AbortController().signal, undefined, { sources: [discovery], partial: false });
+  assert.deepEqual(result.coverage[0].passages, [{ sourceId: selected.sourceId, title: selected.title, quote }]);
+});

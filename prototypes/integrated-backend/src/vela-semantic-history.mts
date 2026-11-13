@@ -152,7 +152,7 @@ function referenceText(text: string) {
 const sentences = new Intl.Segmenter('en', { granularity: 'sentence' });
 
 /** Keep attribution and qualifications from the same reviewed sentence with the checked quote. */
-function reviewedCitationText(source: ReviewedEvidenceSource, quote: string) {
+function reviewedCitationText(source: VelaSemanticHistorySource, quote: string) {
   if (source.sourceKind !== 'note' && source.sourceKind !== 'file') return quote;
   const offset = source.text.indexOf(quote);
   if (offset < 0 || source.text.indexOf(quote, offset + 1) >= 0) return quote;
@@ -251,7 +251,6 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
   };
   const result = await investigateVelaHistoryWithApi(scoped, api, intent, { configurationVersion, models: [model], authorize }, signal, observations);
   validate();
-  const sourcesById = new Map([...approved].map(source => [source.sourceId, source]));
   const questions = new Map(result.proposal?.needs.map(need => [need.key, need.question]));
   if (!questions.size && result.proposal?.clarification) questions.set('clarification', result.proposal.clarification);
   return {
@@ -262,7 +261,7 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
     coverage: result.coverage.map(need => ({
       key: need.key, question: questions.get(need.key), status: need.status,
       passages: need.passages?.map(({ sourceId, quote }) => {
-        const source = sourcesById.get(sourceId);
+        const source = need.sources.find(source => source.sourceId === sourceId);
         return { sourceId, title: source?.title, quote: source ? reviewedCitationText(source, quote) : quote };
       }) ?? [],
     })),
