@@ -2701,6 +2701,10 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
       }[scenario];
       await assert.rejects(send(), expected);
       await assert.rejects(send(), /vela_app_request_consumed/);
+      if (scenario === 'app-owned retired') {
+        const replacement = prepareAppOwnedVelaRequest({ call, isCurrent: () => true, preview, resourceRefs });
+        await assert.rejects(replacement(), /vela_standing_preview_already_authorized/);
+      }
       assert.equal(f.requests.length, 0);
       assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 0);
       return;
@@ -2806,8 +2810,12 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
       assert.equal(f.requests.length,5);
       return;
     }
-    if (scenario === 'app-owned') await assert.rejects(send(), /vela_app_request_consumed/);
-    else {
+    if (scenario === 'app-owned') {
+      await assert.rejects(send(), /vela_app_request_consumed/);
+      const second = prepareAppOwnedVelaRequest({ call, isCurrent: () => ownerCurrent, preview, resourceRefs });
+      await assert.rejects(second(), /stale_vela_input_revision/);
+      assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 5);
+    } else {
       writeFileSync(path, 'Replaced synthetic source');
       await assert.rejects(send(), /source_changed|stale_vela_preview/);
     }
