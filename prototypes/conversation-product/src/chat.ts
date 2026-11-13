@@ -261,7 +261,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       if(options.deferHostResize?.()===true){layoutDeferred=true;return;}
       resize();
       if(!layoutDeferred){
-        if(followingLatest&&!pendingFollow&&!pendingAnchor&&!presentationAnchor)
+        if(followingLatest&&!pendingFollow&&!pendingAnchor&&!presentationAnchor&&!feedbackOpen&&stream.hidden)
           followLatestContent(current?.messages.items.at(-1)?.id);
         drainPendingFollow();drainAnchor();
       }
@@ -457,8 +457,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   function drainAnchor(){
     if (pendingAnchor && alignReadingAnchor(pendingAnchor)) pendingAnchor = null;
   }
-  function render(detail: Detail, around?:string,followMessageId?:string,restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>) {
-    const nearBottom = messages.scrollHeight-messages.scrollTop-messages.clientHeight < 80, scroll = messages.scrollTop;
+  function render(detail: Detail, around?:string,followMessageId?:string,restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>,preserveReading=false) {
+    const nearBottom = !preserveReading && messages.scrollHeight-messages.scrollTop-messages.clientHeight < 80, scroll = messages.scrollTop;
     userScroll=false;
     if (current?.conversation.providerId !== detail.conversation.providerId) thinking = undefined;
     current=detail; const nodes:HTMLElement[]=[],formats={parts:new Intl.DateTimeFormat('en-CA',{year:'numeric',month:'2-digit',day:'2-digit'}),day:new Intl.DateTimeFormat(undefined,{year:'numeric',month:'long',day:'numeric'}),time:new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'})};let previousDay:string|undefined;
@@ -480,7 +480,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const attached=detail.shares.filter(s=>s.attached&&s.status==='current').length;contextNote.textContent=attached?`${attached} source excerpt${attached===1?'':'s'} attached for send review. Attachment is not proof of model supply.`:'';
     const before=el('button','Earlier messages'),after=el('button','Later messages');before.type=after.type='button';before.disabled=detail.messages.offset===0;after.disabled=!detail.messages.hasMore;
     decorateConversationControl(before,{identity:'previous'});decorateConversationControl(after,{identity:'next'});paging.dataset.cpGroup='transcript-navigation';
-    const movedPage=()=>{markViewIntent();viewState();};before.addEventListener('click',()=>{offset=Math.max(0,detail.messages.offset-50);void refresh().then(movedPage).catch(error=>report(errorText(error)));});after.addEventListener('click',()=>{offset=detail.messages.offset+50;void refresh().then(movedPage).catch(error=>report(errorText(error)));});
+    const movePage=(nextOffset:number)=>{
+      followingLatest=false;pendingFollow=pendingAnchor=presentationAnchor=null;
+      offset=nextOffset;
+      void refresh({preserveReading:true}).then(()=>{markViewIntent();viewState();}).catch(error=>report(errorText(error)));
+    };
+    before.addEventListener('click',()=>movePage(Math.max(0,detail.messages.offset-50)));
+    after.addEventListener('click',()=>movePage(detail.messages.offset+50));
     paging.replaceChildren(before,el('span',`${detail.messages.total?detail.messages.offset+1:0}–${detail.messages.offset+detail.messages.items.length} of ${detail.messages.total}`),after);paging.hidden=detail.messages.total<=detail.messages.limit;
     disclosures?.sync();renderDraft();options.onDetail?.(detail);
     if (restoreAnchor || followMessageId || around) presentationAnchor = null;
@@ -498,7 +504,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       }
     }
   }
-  async function refresh(input: {aroundMessageId?:string;latest?:boolean;followMessageId?:string;restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>;restoreIntent?:number}={}) {
+  async function refresh(input: {aroundMessageId?:string;latest?:boolean;followMessageId?:string;restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>;restoreIntent?:number;preserveReading?:boolean}={}) {
     const request=++generation;
     const around=input.followMessageId??input.aroundMessageId??input.restoreAnchor?.messageId;
     let d: Detail;
@@ -508,7 +514,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(input.restoreAnchor&&input.restoreIntent!==viewIntent){await refresh({latest:true});return;}
     // Opening uses a bounded page, then fetches the actual latest page when count was not known.
     if((offset===undefined||input.latest)&&!around&&d.messages.hasMore){offset=Math.max(0,d.conversation.messageCount-50);await refresh();return;}
-    accessRevoked=false;root.dataset.resourceAvailable='true';offset=d.messages.offset;render(d,input.aroundMessageId,input.followMessageId,input.restoreAnchor);
+    accessRevoked=false;root.dataset.resourceAvailable='true';offset=d.messages.offset;render(d,input.aroundMessageId,input.followMessageId,input.restoreAnchor,input.preserveReading);
   }
   composer.addEventListener('submit',event=>{
     event.preventDefault();

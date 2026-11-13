@@ -692,6 +692,14 @@ test('resize keeps the followed reply visible and respects manual reading scroll
   list.fire('wheel');list.scrollTop=250;
   resize(360);
   assert.equal(list.scrollTop,250);
+  f.detail.messages.offset=50;f.detail.messages.total=52;f.detail.conversation.messageCount=52;
+  await chat.refresh();
+  list.scrollTop=900;
+  named(f.view.root,'Earlier messages').fire('click');
+  await until(()=>f.calls.at(-1)?.input.offset===0);
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  resize(340);
+  assert.equal(list.scrollTop,900,'Paging takes precedence over following the latest message');
  }finally{await chat?.dispose();Object.assign(globalThis,before);f.restore();}
 });
 
