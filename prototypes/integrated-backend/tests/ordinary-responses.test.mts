@@ -61,6 +61,53 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', h
  return {dir,get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(realpathSync.native(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
+for (const outcome of ['completed','newer draft','unknown','document']) test('restart reconciles an ordinary draft ('+outcome+')', async () => {
+ const f = fixture();
+ try {
+  const chat = await f.core.command('createConversation',{providerId,commandId:randomUUID()});
+  const resourceId = chat.resourceId, content = 'Synthetic submitted question';
+  let documents: {id:string;version:number}[] | undefined;
+  if (outcome==='document') {
+   const path=join(f.dir,'Synthetic restart.txt');
+   writeFileSync(path,'Synthetic evidence for the restart journey.');
+   const {resource}=await f.core.command('mediaImportTrusted',{
+    kind:'file',variant:'document',commandId:randomUUID(),selection:{kind:'file',path},
+   });
+   documents=[{id:resource.id,version:resource.version}];
+  }
+  const save = (expectedVersion:number,text:string) => f.core.command('conversation',{
+   name:'saveDraft',input:{resourceId,expectedVersion,content:text,documents},
+  }) as Promise<import('../../conversation-product/src/contracts.ts').ConversationDraft>;
+  const read = () => f.core.command('conversation',{name:'readDraft',input:{resourceId}});
+  const draft = await save(0,content);
+  f.responses.push(() => outcome === 'unknown'
+   ? sse([{type:'response.created',response:{id:'resp-draft-recovery'}}])
+   : complete('resp-draft-recovery'));
+  const result = await conversationCommand({ call:f.core.command.bind(f.core),reviewSources:async()=>true,
+   input:{name:'send',input:{resourceId,content,expectedRevision:chat.revision,commandId:randomUUID(),draftVersion:draft.version,documents}},
+  });
+  assert.equal(result.state,outcome==='unknown'?'unknown':'provider_completed');
+  assert.deepEqual(await read(),draft);
+  if(outcome==='newer draft')await save(draft.version,'Synthetic later edits');
+  await f.reopen();
+  const recovered = await read() as Awaited<ReturnType<typeof save>>;
+  assert.equal(recovered.version,draft.version+(outcome==='unknown'?0:1));
+  assert.equal(recovered.content,outcome==='unknown'?content:outcome==='newer draft'?'Synthetic later edits':'');
+  assert.equal(recovered.documents,undefined);
+  await f.reopen();
+  assert.deepEqual(await read(),recovered);
+  assert.equal(f.requests.length,1);
+  const egress=JSON.stringify(f.requests[0]);
+  assert.doesNotMatch(egress,/draftVersion|draftCheckpoint|documentsDigest/);
+  if(documents){
+   assert.match(egress,/Synthetic evidence for the restart journey/);
+   const stored=(await f.core.command('snapshot',{})).executions[result.id];
+   assert.equal(stored.draftCheckpoint,undefined);
+   assert.deepEqual(Object.keys(result.draftCheckpoint).sort(),['documentsDigest','version']);
+   assert.match(result.draftCheckpoint.documentsDigest,/^[a-f0-9]{64}$/);
+  }
+ } finally { await f.close(); }
+});
 test('ordinary document draft survives restart without persisting file contents or a path in the draft', async () => {
  const f = fixture();
  try {

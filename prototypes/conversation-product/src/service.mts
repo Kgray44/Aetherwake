@@ -194,6 +194,26 @@ export class ConversationProduct implements ConversationProductPort {
     new Set(value.map(ref=>ref.id)).size===value.length,'invalid_draft_documents');
   return value.map(({id,version})=>({id,version}));
  }
+ /** Reconcile a completed turn's durable checkpoint before any editor opens. */
+ clearCompletedDraft(input: {resourceId:string; draftVersion:number; content:string; documentsDigest:string}): void {
+  const {resourceId, draftVersion, content, documentsDigest} = input;
+  if (draftVersion === undefined || !Number.isSafeInteger(draftVersion) || draftVersion < 1 || draftVersion >= Number.MAX_SAFE_INTEGER ||
+      this.host.access?.(resourceId) !== true) return;
+  const row = this.db.prepare('SELECT documents_json FROM cp_drafts WHERE resource_id=? AND version=? AND content=?')
+   .get(resourceId,draftVersion,content);
+  if (!row || hash(String(row.documents_json)) !== documentsDigest) return;
+  this.db.prepare(`UPDATE cp_drafts SET version=version+1,content='',content_bytes=0,documents_json='[]',updated_at=?
+   WHERE resource_id=? AND version=? AND content=? AND documents_json=?
+     AND EXISTS(SELECT 1 FROM resources WHERE id=cp_drafts.resource_id AND kind='conversation' AND state='active')`)
+   .run(stamp(),resourceId,draftVersion,content,row.documents_json);
+ }
+ sendDraftCheckpoint(input: ProductCommandMap['send']['input']) {
+  if (input.draftVersion === undefined) return;
+  const documents = JSON.stringify(this.draftDocumentRefs(input.documents??[]));
+  const match = this.db.prepare('SELECT 1 FROM cp_drafts WHERE resource_id=? AND version=? AND content=? AND documents_json=?')
+   .get(input.resourceId,input.draftVersion,input.content,documents);
+  if (match) return {version:input.draftVersion,documentsDigest:hash(documents)};
+ }
  private saveDraft(v: View, input: ProductCommandMap['saveDraft']['input']): ConversationDraft {
   this.draftResource(v,input.resourceId);
   check(Number.isSafeInteger(input.expectedVersion)&&input.expectedVersion>=0,'invalid_draft_version');

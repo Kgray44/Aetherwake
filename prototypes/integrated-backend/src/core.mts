@@ -439,6 +439,7 @@ export class BackendCore {
       this.stopEvents = this.port.onEvent(e => this.ingest(e));
       this.desktop = new DesktopState(this.kernel, this.db,{allowSubjectAttachment:(subject,workspaceId)=>this.librarySubjectAllowed(subject,workspaceId)});
       this.initializeConversations();
+      this.recoverCompletedConversationDrafts();
       this.initializeLibrary();
       ensure(!options.velaPlanningPort||!this.privateMode,'synthetic_vela_planner_forbidden');
       this.initializeVela(options.velaPlanningPort);
@@ -5886,6 +5887,26 @@ export class BackendCore {
     });
   }
 
+  private recoverCompletedConversationDrafts(): void {
+    const pending = Object.values(this.state.executions).filter(execution => execution.draftCheckpoint);
+    if (!pending.length) return;
+    this.atomic(() => {
+      for (const execution of pending) {
+        const checkpoint = execution.draftCheckpoint;
+        if (!checkpoint) continue;
+        const graphId = this.state.resources[execution.resourceId];
+        const inputId = execution.inputMessageId;
+        if (execution.providerId === CHATGPT_PLAN_PROVIDER && execution.state === 'provider_completed' &&
+            graphId && inputId && this.conversationReadAccess(execution.resourceId,inputId)) {
+          const message = this.graph.readOwnMessage(graphId,inputId);
+          if (message?.role === 'user') this.conversations.clearCompletedDraft({
+            resourceId:execution.resourceId,draftVersion:checkpoint.version,content:message.content,documentsDigest:checkpoint.documentsDigest,
+          });
+        }
+        delete execution.draftCheckpoint;
+      }
+    });
+  }
   private conversationActivity(input:{resourceIds:string[]}):ConversationActivitySnapshot {
     ensure(input&&Array.isArray(input.resourceIds)&&input.resourceIds.length<=64&&input.resourceIds.every(id=>typeof id==='string'&&id.length>0&&id.length<=256)&&new Set(input.resourceIds).size===input.resourceIds.length,'invalid_conversation_activity');
     const resources=input.resourceIds.map(resourceId=>({resourceId,available:!!this.state.resources[resourceId]&&this.conversationAccess.access(resourceId)}));
@@ -6020,6 +6041,7 @@ export class BackendCore {
     ensure(input&&typeof input.content==='string'&&input.content.trim()&&Buffer.byteLength(input.content)<=16384,'invalid_prompt');
     ensure(typeof input.commandId==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,198}$/.test(input.commandId),'invalid_command_id');
     ensure(Number.isSafeInteger(input.expectedRevision)&&input.expectedRevision>0,'invalid_expected_version');
+    ensure(input.draftVersion===undefined||Number.isSafeInteger(input.draftVersion)&&input.draftVersion>0,'invalid_draft_version');
     ensure(this.conversationAccess.resource(input.resourceId),'source_unavailable');const c=this.conv(input.resourceId);
     ensure(c.providerId===this.port.id||c.providerId===CHATGPT_PLAN_PROVIDER,'native_provider_required');ensure(c.revision===input.expectedRevision+revisionOffset,'stale_resource_version');
     if (c.providerId === 'codex-app-server')
@@ -6054,7 +6076,7 @@ export class BackendCore {
     ensure(Buffer.byteLength(executionText)<=65536,'context_budget_exceeded');
     if(handoff)ensure(Buffer.byteLength(executionText)<=this.package(handoff.id).tokenBudget,'context_budget_exceeded');
     const documents = input.documents === undefined ? undefined : this.ordinaryDocuments(input);
-    const exact={commandId:input.commandId,resourceId:input.resourceId,providerId:c.providerId,expectedRevision:input.expectedRevision,prompt:input.content,...(input.model?{model:input.model}:{}),context,...(handoff?{handoff}:{}),...(documents?{documents}:{}),executionText};
+    const exact={commandId:input.commandId,resourceId:input.resourceId,providerId:c.providerId,expectedRevision:input.expectedRevision,prompt:input.content,...(input.draftVersion===undefined?{}:{draftVersion:input.draftVersion}),...(input.model?{model:input.model}:{}),context,...(handoff?{handoff}:{}),...(documents?{documents}:{}),executionText};
     if(c.providerId===CHATGPT_PLAN_PROVIDER){const responses=await this.ordinaryEgress(input,revisionOffset,ordinaryBinding ?? { executionId: randomUUID(), clock: ordinaryTurnClock() },context,handoff,documents),ordinary={...exact,model:responses.model,responses};return {...ordinary,fingerprint:hash({contract:'aerynth.conversation-send@1',...ordinary,boundaryDigest:this.ordinaryCatalog!.boundaryDigest})};}
     return {...exact,fingerprint:hash({contract:'aerynth.conversation-send@1',...exact,instanceId:this.port.instanceId,accountScope:this.port.accountScope})};
   }
@@ -6367,6 +6389,7 @@ export class BackendCore {
     const timing = observeConversationProvider('ordinary-adapter-entry', !!this.ordinaryTest, authority?.requestId ?? null, started,
       authority?.preview && { domain: this.missions.fullProfilingClock(), preview: authority.preview });
     const e:Execution={id:p.executionId,resourceId:input.resourceId,providerId:CHATGPT_PLAN_PROVIDER,commandId:input.commandId,state:'dispatching',binding:null,turnId:null,startedAt:now(),endedAt:null,taskVerified:false,connectionVersion:p.connectionVersion,requestedModel:p.model,requestBodyDigest:p.bodyDigest,contextDigest:p.contextDigest,instructionVersion:p.instructionVersion};
+    const draftCheckpoint = authority ? undefined : this.conversations.sendDraftCheckpoint(input);
     if (p.reasoningEffort !== undefined) e.requestedReasoningEffort = p.reasoningEffort;
     const handoff=preview.handoff&&!preview.handoff.continued?this.package(preview.handoff.id):null,controller=new AbortController();
     const cancel = () => controller.abort();
@@ -6435,6 +6458,7 @@ export class BackendCore {
           outputStagedMs = timing.elapsed();
         }
         this.state.revisions[e.resourceId]++;if(handoff)handoff.state=e.state==='provider_completed'?'applied':e.state==='unknown'?'unknown':e.state==='interrupted'?'interrupted':'failed';
+        if(e.state==='provider_completed'&&draftCheckpoint)e.draftCheckpoint=draftCheckpoint;
         this.record('execution/' + e.state, e.state === 'provider_completed' ? classification : 'inferred',
           undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER, execution: e,
             payload: { redacted: true, providerTiming: timing.settlement(outputStagedMs) } });

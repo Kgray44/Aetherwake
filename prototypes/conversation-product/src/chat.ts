@@ -784,7 +784,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       }
       let result: unknown;
       try {
-        result=await port.command('send',{resourceId,content,expectedRevision:input.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{}),...(attachments?{documents:attachments}:{})});
+        result=await port.command('send',{resourceId,content,expectedRevision:input.revision,commandId,...(plan?{draftVersion:checkpoint.record.version}:{}),...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{}),...(attachments?{documents:attachments}:{})});
       } catch (error) {
         if (input.providerId !== 'chatgpt-plan-responses' || observedSubmittedStop()) throw error;
         if (!disposed && (execution?.commandId !== commandId || execution.state !== 'provider_completed'))
