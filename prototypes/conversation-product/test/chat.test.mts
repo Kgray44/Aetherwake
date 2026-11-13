@@ -950,3 +950,60 @@ test('a detached send rejection is caught and leaves exact durable recovery with
 test('composer keyboard policy keeps newline and composition distinct from submit',()=>{
   const event={key:'Enter',shiftKey:false,isComposing:false,altKey:false,ctrlKey:false,metaKey:false};assert.equal(composerShouldSubmit(event),true);for(const field of ['shiftKey','isComposing','altKey']as const)assert.equal(composerShouldSubmit({...event,[field]:true}),false);assert.equal(composerShouldSubmit({...event,key:'Escape'}),false);
 });
+
+test('chat distinguishes a simulated memory acknowledgement from an unconfirmed send', async () => {
+  const f = fixture('chatgpt-plan-responses');
+  let chat, observe!: (event: ConversationExecutionObservation) => void;
+  try {
+    chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId,
+      execution: { observe(_id, listener) { observe = listener; return () => {}; }, async cancel() {} } });
+    await chat.ready;
+    const execution = { id: 'execution:memory', resourceId: f.draft.resourceId, providerId: 'chatgpt-plan-responses',
+      commandId: 'memory-command', state: 'dispatching' as const, startedAt: '2026-11-02T00:00:00Z',
+      endedAt: null, taskVerified: false as const };
+    const status = f.view.root.querySelector('.cp-chat-status');
+    observe({ execution });
+    assert.doesNotMatch(status.textContent, /acknowledged|saved-memory delivery/);
+    observe({ execution: { ...execution, state: 'running',
+      memoryDisclosure: { state: 'simulated', manifestDigest: 'a'.repeat(64) } } });
+    assert.match(status.textContent, /Simulated saved-memory delivery/);
+    assert.doesNotMatch(status.textContent, /Provider acknowledged/);
+  } finally { await chat?.dispose(); f.restore(); }
+});
+
+test('Remember message uses only eligible local sources and refreshes scope after a project move', async () => {
+  const f = fixture();
+  const original = f.detail.messages.items[0];
+  f.detail.messages.items.push(
+    { ...original, id: 'message:sensitive', sensitivity: 'sensitive' },
+    { ...original, id: 'message:inherited', inherited: true },
+    { ...original, id: 'message:foreign', resourceId: 'chat:foreign' },
+    { ...original, id: 'message:empty', content: '  ' },
+  );
+  let chat;
+  try {
+    chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId,
+      async onRememberMessage() { throw Error('unexpected memory submission'); } });
+    await chat.ready;
+    const row = (id: string) => f.view.root.querySelector(`[data-message-id="${id}"]`);
+    const remember = (id: string) => named(row(id), 'Remember message');
+    assert.ok(remember(original.id));
+    for (const id of ['message:sensitive', 'message:inherited', 'message:foreign', 'message:empty', 'message:assistant']) {
+      assert.ok(row(id), id);
+      assert.equal(remember(id), undefined, id);
+    }
+    remember(original.id)!.fire('click');
+    assert.ok(row(original.id).querySelector('.cp-memory-editor'));
+    f.detail.conversation.projectId = 'project:synthetic';
+    f.detail.conversation.projectIds = ['project:synthetic'];
+    f.detail.conversation.revision++;
+    await chat.refresh();
+    assert.equal(row(original.id).querySelector('.cp-memory-editor'), null);
+    remember(original.id)!.fire('click');
+    const scope = row(original.id).querySelector('.cp-memory-editor').querySelector('select');
+    assert.ok(Array.from(scope.options).some((option: any) => option.value === 'project'));
+  } finally {
+    await chat?.dispose();
+    f.restore();
+  }
+});

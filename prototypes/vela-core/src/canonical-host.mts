@@ -33,6 +33,7 @@ export interface CanonicalVelaHostOptions {
   };
   conversations: {
     ensure: VelaHostPort['ensureConversation']; read: VelaHostPort['readConversation']; append: VelaHostPort['appendMessage'];
+    canIncludeInContext?(messageId: string): boolean;
   };
   revisions: {
     /** Cheap current graph/message revision; do not load transcripts during metadata discovery. Null is unavailable. */
@@ -216,7 +217,10 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
     const entity = row('resources', id)!;
     if (entity.kind === 'conversation') {
       const conversation = readConversation(id, current);
-      const content = JSON.stringify({ resourceId: conversation.resourceId, revision: conversation.revision, messages: conversation.messages });
+      const messages = options.conversations.canIncludeInContext
+        ? conversation.messages.filter(message => options.conversations.canIncludeInContext!(message.id))
+        : conversation.messages;
+      const content = JSON.stringify({ resourceId: conversation.resourceId, revision: conversation.revision, messages });
       if (Buffer.byteLength(content) > contentLimit) return null;
       return { ref, content, source: 'aerynth://resource/' + encodeURIComponent(id) + '?conversationRevision=' + conversation.revision };
     }

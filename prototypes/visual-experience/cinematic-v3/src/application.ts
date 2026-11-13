@@ -1,4 +1,6 @@
 import { createApplicationNavigation } from "./application-navigation.ts";
+import type { MemoryCaptureRequest } from "../../../conversation-product/src/memory-capture-editor.ts";
+import { createPersonalMemoryView } from "./personal-memory-view.ts";
 import "../../../constellation/style.css";
 import type { Policy } from "../../../constellation/types.ts";
 import type { MotionCoordinator } from "./motion";
@@ -722,6 +724,10 @@ export function installApplication(hooks: Hooks) {
     { content: string; timer?: ReturnType<typeof setTimeout> }
   >();
   const chatViews = new Map<string, ReturnType<typeof mountBlockChat>>();
+  const reviewConversationMemory = async (request: MemoryCaptureRequest): Promise<boolean> => {
+    const result = await host.command!("personalMemoryCapture", request) as { status: "saved" | "cancelled" };
+    return result.status === "saved";
+  };
   const chatRefreshKeys = new Map<string, string>();
   const ordinaryModelControls = {
     selections: new Map<string, { id: string; label: string }>(),
@@ -2348,6 +2354,12 @@ export function installApplication(hooks: Hooks) {
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
+      memoryView: createPersonalMemoryView(request => host.command!("personalMemory", request), async source => {
+        const result = await resourceOpener.open({ resourceId: source.conversationId,
+          origin: { source: "application" }, selection: { messageId: source.messageId } });
+        if (result.status === "unavailable" || result.status === "unsupported") throw Error("Original message is unavailable.");
+      }),
+      onRememberMessage: reviewConversationMemory,
       onOpenChatGPT: async (reference) => {
         const receipt = (await host.command!(
           "firstPartyChat",
@@ -4127,6 +4139,7 @@ export function installApplication(hooks: Hooks) {
       if (!view && activeBlocks.get(b.id)) {
         const session = conversationDrafts.get(r.id);
         view = mountBlockChat(surface, {
+          onRememberMessage: reviewConversationMemory,
           copy: copyText,
           motion: experienceMotion,
           viewId: "block:" + b.id + ":conversation",

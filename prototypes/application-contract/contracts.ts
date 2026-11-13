@@ -114,6 +114,8 @@ export type PublicConversationExecution = {
   startedAt: string;
   endedAt: string | null;
   taskVerified: false;
+  /** Set only after a response-created acknowledgement for a reviewed memory body. */
+  memoryDisclosure?: { state: 'acknowledged' | 'simulated'; manifestDigest: string };
   recoveryAvailable?: true;
   errorCode?: string;
   httpDiagnostic?: Readonly<import("../openai-provider/contracts.mts").TurnHttpDiagnostic>;
