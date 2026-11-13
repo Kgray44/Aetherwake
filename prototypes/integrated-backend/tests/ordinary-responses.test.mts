@@ -5,10 +5,12 @@ import { execFileSync } from 'node:child_process';
 import { fixtureFileEditHost, fixtureFileEditScratchRoot } from './fixture-file-edit-admission.mts';
 import { tmpdir } from 'node:os';
 import { join,resolve,relative,isAbsolute } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { BackendCore } from '../src/core.mts';
+import { NativePersonalMemory } from '../src/personal-memory.mts';
+import { createPersonalMemoryReview } from '../src/personal-memory-review.mts';
 import { createRequire } from 'node:module';
 const { conversationCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/conversation-broker.cjs');
 const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
@@ -46,6 +48,56 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', h
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
+
+test('ordinary memory sends the exact reviewed body through Responses and fences stale sources', async () => {
+  const f = fixture();
+  const sourceText = 'Synthetic project uses a quartz relay.';
+  let sourceAvailable = true;
+  let wrapped: string;
+  const source = { conversationId: 'source', messageId: 'message', projectId: 'project',
+    role: 'user' as const, sensitive: false, version: '1', contentDigest: createHash('sha256').update(sourceText).digest('hex') };
+  const kernel = f.owner.kernel;
+  const sources = {
+    resolveConversationSource: () => sourceAvailable ? source : null,
+    resolveScope: (scope: import('../../personal-context/src/contracts.ts').PersonalScope) => ({ scope, version: '1' }),
+  };
+  const review = createPersonalMemoryReview({
+    ...sources, open: () => owner.open(), transaction: kernel.withTransaction.bind(kernel),
+    resolveRecallTarget: () => ({ projectId: 'project' }), readSourceText: () => sourceText,
+  });
+  const owner = new NativePersonalMemory({
+    kernel, secrets: { available: async () => true, async seal(value) { wrapped = value; return randomBytes(64); }, async open() { return wrapped; } },
+    host: { ...sources, identity: () => ({ userId: 'synthetic', policyVersion: '1' }),
+      authorize: request => review.authorize(request) ? { decision: 'allow', policyVersion: '1', authorizationRef: 'review' } : { decision: 'deny' } },
+  });
+  f.owner.personalMemoryReview = review;
+  f.owner.personalMemory = owner;
+  try {
+    await review.commitCapture(await review.previewCapture({ conversationId: 'source', messageId: 'message',
+      scope: 'project', category: 'decisions', text: sourceText, keywords: ['quartz'] }));
+    await review.setProviderUse('ordinary', true, 1);
+    const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+    const preview = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
+      content: 'Which quartz part?', expectedRevision: chat.revision, commandId: randomUUID(), useMemory: true });
+    assert(preview.responses?.memoryDigest);
+    assert.equal(preview.responses.requiresSourceReview, true);
+    const binding = { previewId: preview.id, fingerprint: preview.fingerprint, commandId: preview.commandId };
+    await assert.rejects(f.core.command('authorizeConversationSend', binding), /personal_memory_disclosure_review_required/);
+    const approval = await f.core.command('authorizeConversationSend', { ...binding, reviewedBodyDigest: preview.responses.bodyDigest });
+    f.responses.push(() => complete('memory-turn'));
+    assert.equal((await f.core.command('conversationSend', { ...binding, grantId: approval.grantId })).state, 'provider_completed');
+    assert.deepEqual(f.requests[0].input, preview.responses.messages);
+    const detail = await f.core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as any;
+    const next = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
+      content: 'Which quartz part?', expectedRevision: detail.conversation.revision, commandId: randomUUID(), useMemory: true });
+    assert(next.responses?.memoryDigest);
+    const nextBinding = { previewId: next.id, fingerprint: next.fingerprint, commandId: next.commandId };
+    const nextApproval = await f.core.command('authorizeConversationSend', { ...nextBinding, reviewedBodyDigest: next.responses.bodyDigest });
+    sourceAvailable = false;
+    await assert.rejects(f.core.command('conversationSend', { ...nextBinding, grantId: nextApproval.grantId }), /personal_memory_no_eligible_context|stale_send_preview/);
+    assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});
 
 test('a reviewed planning request compiles one graph and runs native dependencies and a specialist after review', async () => {
   const f = fixture();
