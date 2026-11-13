@@ -105,6 +105,7 @@ import type {FolderBrowseResponse} from '../../../application-contract/folder.ts
 import "../../../block-library/resource-links-view.css";
 import { createRelatedResourcesPort } from "./related-resources";
 import { createResourceOpener } from "./resource-opening.ts";
+import { createResourcePresenter } from "./resource-presentation.ts";
 import { createResourceSurface } from "./resource-surface.ts";
 import { mountProviderConnections } from "./provider-connections.ts";
 import { mountEnvironmentNavigator } from "./environment-navigator.ts";
@@ -880,66 +881,31 @@ export function installApplication(hooks: Hooks) {
         input,
       )) as ResourceOpeningResult;
     },
-    present: async (result, input, current) => {
-      if (!current()) return;
-      const resource = result.resource;
-      const projection = input.origin?.nodeKey
-        ? constellation?.layer.screenBodyProjection?.(input.origin.nodeKey)
-        : null;
-      const body =
-        projection?.resourceId === resource.id
-          ? projection.clippedBounds
-          : null;
-      const anchor =
-        body && body.right > body.left && body.bottom > body.top
-          ? {
-              x: body.left,
-              y: body.top,
-              width: body.right - body.left,
-              height: body.bottom - body.top,
-            }
-          : undefined;
-      if (state)
-        state = {
-          ...state,
-          resources: state.resources.some((item) => item.id === resource.id)
-            ? state.resources.map((item) =>
-                item.id === resource.id ? resource : item,
-              )
-            : [...state.resources, resource],
-        };
-      if (
-        result.presentation.mode === "existing-placement" &&
-        result.placement
-      ) {
-        const placement = result.placement;
-        await enqueueResult(async () => {
-          if (!current()) return;
-          await command({
-            type: "navigate",
-            target: { kind: "workspace", workspaceId: placement.workspaceId },
-          });
-          if (!current()) return;
-          surfaces.close("canonical-resource");
-          surfaces.close("conversations");
-          reveal(placement.blockId);
-          hooks.focus(placement.blockId);
-        });
-      } else if (result.presentation.kind === "agent") {
-        await showAgents(resource.id);
-      } else if (result.presentation.kind === "conversation") {
-        surfaces.close("canonical-resource");
-        await showConversations(
-          resource.id,
-          result.selection?.messageId,
-          current,
-          anchor,
-        );
-      } else {
-        surfaces.close("conversations");
-        directResources.show(resource, anchor);
-      }
-    },
+    present: createResourcePresenter({
+      remember: (resource) => {
+        if (state)
+          state = {
+            ...state,
+            resources: state.resources.some((item) => item.id === resource.id)
+              ? state.resources.map((item) => item.id === resource.id ? resource : item)
+              : [...state.resources, resource],
+          };
+      },
+      project: (nodeKey) => constellation?.layer.screenBodyProjection?.(nodeKey),
+      enqueue: enqueueResult,
+      navigate: (workspaceId) => command({
+        type: "navigate",
+        target: { kind: "workspace", workspaceId },
+      }),
+      close: (id) => surfaces.close(id),
+      focusPlacement: (blockId) => {
+        reveal(blockId);
+        hooks.focus(blockId);
+      },
+      showAgent: showAgents,
+      showConversation: showConversations,
+      showResource: directResources.show,
+    }),
     unavailable: (result) => {
       directResources.unavailable(result.resourceId);
       hooks.status(
