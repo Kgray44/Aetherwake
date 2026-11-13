@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
+export type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { ConversationSourceRef, FactDraft, PersonalAuthorization, PersonalContextHost, PersonalPolicy, ScopeProof } from '../../personal-context/src/contracts.ts';
 import { PersonalContextError, type PersonalContextService } from '../../personal-context/src/service.mts';
@@ -9,15 +11,6 @@ interface Options extends SourceReader {
   readSourceText(reference: ConversationSourceRef): string | null;
   transaction<T>(work: (db: DatabaseSync) => T): T;
   now?: () => number;
-}
-
-export interface CaptureRequest {
-  conversationId: string;
-  messageId: string;
-  scope: 'project' | 'conversation';
-  category: 'preferences' | 'projects' | 'technical' | 'decisions';
-  text: string;
-  keywords: readonly string[];
 }
 
 export interface CaptureReview {
