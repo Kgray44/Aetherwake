@@ -1,4 +1,5 @@
 import type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
+import { suggestMemoryFromMessage } from '../../vela-core/src/memory-candidate.ts';
 
 export type MemoryCaptureRequest = CaptureRequest;
 
@@ -53,13 +54,27 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
   keywords.maxLength = 1056;
   keywords.required = true;
   field('Search terms, separated by commas', keywords);
+  const suggest = document.createElement('button');
+  suggest.type = 'button';
+  suggest.textContent = 'Suggest a memory';
+  suggest.addEventListener('click', () => {
+    const candidate = suggestMemoryFromMessage(options.content);
+    if (!candidate) {
+      options.report('No clear memory suggestion in this message.');
+      return;
+    }
+    text.value = candidate.text;
+    category.value = candidate.category;
+    keywords.value = candidate.keywords.join(', ');
+    text.focus();
+  });
   const review = document.createElement('button');
   review.type = 'submit';
   review.textContent = 'Review memory';
   const cancel = document.createElement('button');
   cancel.type = 'button';
   cancel.textContent = 'Cancel';
-  form.append(review, cancel);
+  form.append(suggest, review, cancel);
   const close = () => { form.remove(); options.returnFocus?.(); };
   cancel.addEventListener('click', close);
   form.addEventListener('submit', event => {
@@ -70,7 +85,7 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
       options.report('Enter a memory and up to 16 search terms of 64 characters each.');
       return;
     }
-    review.disabled = cancel.disabled = true;
+    review.disabled = cancel.disabled = suggest.disabled = true;
     const request: CaptureRequest = {
       conversationId: options.conversationId, messageId: options.messageId,
       expectedProjectId, expectedSourceText,
@@ -80,7 +95,7 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     void options.review(request).then(saved => {
       if (saved) { options.report('Memory saved'); close(); }
     }, error => options.report(error instanceof Error ? error.message : 'Memory review could not open.')).finally(() => {
-      review.disabled = cancel.disabled = false;
+      review.disabled = cancel.disabled = suggest.disabled = false;
     });
   });
   return form;
