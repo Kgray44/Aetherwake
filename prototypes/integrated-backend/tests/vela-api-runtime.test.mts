@@ -106,7 +106,10 @@ test('private ledger reads preserve profile identity and refuse incomplete or un
     f.replies.push(()=>response('Synthetic completed answer.'));
     const request = await f.send('Explain ocean currents.');
     assert.equal(request.state,'responded');
-    const scope = {profileId:profile.profileId,configurationVersion:1,requestIds:[request.id]};
+    const admitted=runtime().receiptsForRequest(request.id);
+    assert.equal(admitted.length,1);
+    const expected=[{requestId:request.id,executionId:admitted[0].executionId}];
+    const scope = {profileId:profile.profileId,configurationVersion:1,expected};
     const result = runtime().readLedgerReceipts(scope);
     assert.equal(result.state,'terminal-receipts');
     if(result.state==='terminal-receipts'){
@@ -118,14 +121,19 @@ test('private ledger reads preserve profile identity and refuse incomplete or un
     const db=(f.core as unknown as {db:DatabaseSync}).db;
     db.prepare(`INSERT INTO vela_api_runs(execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state)
       VALUES('synthetic-interrupted','synthetic-interrupted',1,?,'body','context','dispatching')`).run(new Date().toISOString().slice(0,10));
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,expected:[
+      ...expected,{requestId:request.id,executionId:'missing-next-stage'},
+    ]}),{state:'unresolved'});
     await f.reopen();
     const reopenedDb=(f.core as unknown as {db:DatabaseSync}).db;
     const changes=()=>reopenedDb.prepare('SELECT total_changes() AS n').get()?.n;
     const before=changes();
     assert.equal(runtime().readLedgerProfile()?.profileId,profile.profileId);
     assert.deepEqual(runtime().readLedgerReceipts(scope),result);
-    assert.deepEqual(runtime().readLedgerReceipts({...scope,requestIds:[request.id,'synthetic-interrupted']}),{state:'unresolved'});
-    assert.deepEqual(runtime().readLedgerReceipts({...scope,requestIds:[request.id,'missing']}),{state:'unresolved'});
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,expected:[
+      ...expected,{requestId:'synthetic-interrupted',executionId:'synthetic-interrupted'},
+    ]}),{state:'unresolved'});
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,expected:[{requestId:request.id,executionId:'missing'}]}),{state:'unresolved'});
     assert.deepEqual(runtime().readLedgerReceipts({...scope,configurationVersion:2}),{state:'unresolved'});
     assert.deepEqual(runtime().readLedgerReceipts({...scope,profileId:'other'}),{state:'unresolved'});
     assert.equal(changes(),before);
@@ -147,7 +155,8 @@ test('CIE preflight refuses a stale catalog without dispatching or joining an in
     refreshing=runtime.models(1);
     for(let i=0;i<50&&f.catalogRequests===0;i++)await new Promise(resolve=>setImmediate(resolve));
     assert.equal(f.catalogRequests,1);
-    const unresolved=runtime.readLedgerReceipts({profileId:profile.profileId,configurationVersion:1,requestIds:['synthetic-preflight-interrupted']});
+    const unresolved=runtime.readLedgerReceipts({profileId:profile.profileId,configurationVersion:1,
+      expected:[{requestId:'synthetic-preflight-interrupted',executionId:'synthetic-preflight-interrupted'}]});
     assert.deepEqual(unresolved,{state:'unresolved'});
     await assert.rejects(runtime.modelsFromCurrentCatalog(1),/api_catalog_stale/);
     assert.equal(f.requests.length,0);

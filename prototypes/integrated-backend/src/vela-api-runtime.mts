@@ -29,8 +29,9 @@ const check: (value: unknown, code: string) => asserts value = (value, code) => 
 export interface VelaApiUsageStatus { enabled: boolean; configurationVersion: number | null; maxOutputTokens: number; requestsPerDay: number; usedToday: number }
 export interface VelaApiRunReceipt extends ApiRunDiagnostics {executionId:string;bodyDigest:string;contextDigest:string;state:TurnResult['outcome']|'dispatching';responseId:string|null;elapsedMs:number|null}
 export type VelaApiLedgerProfile = {profileId:string;configurationVersion:number|null;usage:VelaApiUsageStatus};
-type LedgerReceipt = {
-  requestId:string;executionId:string;outcome:'completed'|'incomplete'|'failed'|'cancelled-before-dispatch';
+type LedgerExecutionRef = {requestId:string;executionId:string};
+type LedgerReceipt = LedgerExecutionRef & {
+  outcome:'completed'|'incomplete'|'failed'|'cancelled-before-dispatch';
   elapsedMs:number|null;totalTokens:number|null;
 };
 export type VelaApiLedgerRead = {state:'unresolved'} | {state:'terminal-receipts';receipts:LedgerReceipt[]};
@@ -178,26 +179,30 @@ export class VelaApiRuntime {
       return {profileId:row.profile_id,configurationVersion:usage.configurationVersion,usage};
     });
   }
-  /** The host must supply complete, canonically bound request IDs. Terminal
+  /** The host must supply the complete, canonically bound execution set. Terminal
    * transport receipts alone do not settle a Vela request or a blind claim. */
-  readLedgerReceipts(input:{profileId:string;configurationVersion:number;requestIds:readonly string[]}): VelaApiLedgerRead {
+  readLedgerReceipts(input:{profileId:string;configurationVersion:number;expected:readonly LedgerExecutionRef[]}): VelaApiLedgerRead {
     const unresolved = {state:'unresolved'} as const;
-    const {profileId,configurationVersion,requestIds} = input;
+    const {profileId,configurationVersion,expected} = input;
+    const validId = (id:unknown) => typeof id==='string' && /^[a-zA-Z0-9_.:-]{1,200}$/.test(id);
     if (!Number.isSafeInteger(configurationVersion) || configurationVersion < 1 ||
-        !Array.isArray(requestIds) || !requestIds.length || requestIds.length > 12 ||
-        !requestIds.every(id=>typeof id==='string' && /^[a-zA-Z0-9_.:-]{1,200}$/.test(id)) ||
-        new Set(requestIds).size !== requestIds.length) return unresolved;
+        !Array.isArray(expected) || !expected.length || expected.length > 12 ||
+        !expected.every(ref=>ref && validId(ref.requestId) && validId(ref.executionId))) return unresolved;
+    const expectedRequests = new Map(expected.map(ref=>[ref.executionId,ref.requestId]));
+    if (expectedRequests.size !== expected.length) return unresolved;
+    const requestIds = [...new Set(expectedRequests.values())];
     return this.options.transaction(() => {
       const identity = this.options.db.prepare('SELECT profile_id FROM vela_api_ledger_identity WHERE id=1').get();
       if (!identity || identity.profile_id !== profileId) return unresolved;
       const db = this.options.db;
       const rows = db.prepare(`SELECT request_id,execution_id,configuration_version,state,elapsed_ms,usage_json
         FROM vela_api_runs WHERE request_id IN (${requestIds.map(()=>'?').join(',')}) ORDER BY rowid LIMIT 13`).all(...requestIds);
-      if (rows.length > 12 || new Set(rows.map(row=>row.request_id)).size !== requestIds.length) return unresolved;
+      if (rows.length !== expected.length) return unresolved;
       const receipts:LedgerReceipt[] = [];
       for (const row of rows) {
         const outcome = row.state;
-        if (row.configuration_version !== configurationVersion ||
+        if (expectedRequests.get(String(row.execution_id)) !== row.request_id ||
+            row.configuration_version !== configurationVersion ||
             (outcome !== 'completed' && outcome !== 'incomplete' && outcome !== 'failed' && outcome !== 'cancelled-before-dispatch')) return unresolved;
         let totalTokens:unknown;
         try {
