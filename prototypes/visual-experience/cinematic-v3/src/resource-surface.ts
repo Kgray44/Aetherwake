@@ -15,6 +15,11 @@ export interface DirectResourceView {
   hasUnsavedChanges?(): boolean;
 }
 
+export function supportsDocumentQuestion(resource: Resource): boolean {
+  return resource.kind === "file" && resource.media?.source === "file" &&
+    ["pdf", "docx", "text"].includes(resource.media.format);
+}
+
 /** Retains the actual focused editor DOM across closes. Only view state lives
  * here: content, drafts and mutations stay with the canonical component ports. */
 export function createResourceSurface(options: {
@@ -26,6 +31,7 @@ export function createResourceSurface(options: {
   anchor(): SurfaceAnchor;
   failed(error: unknown): void;
   placeNote?(resource: Resource): (() => Promise<void>) | undefined;
+  askAboutDocument?(resource: Resource): void;
 }) {
   const entries = new Map<
     string,
@@ -38,6 +44,7 @@ export function createResourceSurface(options: {
       active: boolean;
       request: ContextualSurfaceRequest;
       updatePlacement?: (resource: Resource) => void;
+      updateDocumentAction?: (resource: Resource) => void;
       width?: number;
       height?: number;
     }
@@ -76,9 +83,34 @@ export function createResourceSurface(options: {
         root.className = "application-direct-resource";
         root.dataset.resourceId = resource.id;
         const placementEnabled = resource.kind === "note" && options.placeNote;
-        const editor = placementEnabled ? document.createElement("div") : root;
-        if (placementEnabled) root.append(editor);
+        const documentAction = resource.kind === "file" && options.askAboutDocument;
+        const editor = placementEnabled || documentAction ? document.createElement("div") : root;
+        if (editor !== root) root.append(editor);
         const view = options.mount(editor, resource);
+        let updateDocumentAction: ((resource: Resource) => void) | undefined;
+        if (documentAction) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "aw-document-question";
+          button.textContent = "Ask Vela about this file";
+          button.dataset.aerynthMotionControl = "true";
+          let current = resource;
+          updateDocumentAction = (next) => {
+            current = next;
+            button.hidden = !supportsDocumentQuestion(next);
+          };
+          button.addEventListener("click", () => {
+            const entry = entries.get(resource.id);
+            if (!entry?.authorized || entry.updateDocumentAction !== updateDocumentAction || !entry.active || button.hidden) return;
+            try {
+              documentAction(current);
+            } catch (error) {
+              options.failed(error);
+            }
+          });
+          updateDocumentAction(resource);
+          root.prepend(button);
+        }
         let updatePlacement: ((resource: Resource) => void) | undefined;
         if (resource.kind === "note" && options.placeNote) {
           const button = document.createElement("button");
@@ -121,6 +153,7 @@ export function createResourceSurface(options: {
           root,
           view,
           updatePlacement,
+          updateDocumentAction,
           active: false,
           authorized: true,
           request: undefined as unknown as ContextualSurfaceRequest,
@@ -163,6 +196,7 @@ export function createResourceSurface(options: {
       }
       entry.view.update(resource);
       entry.updatePlacement?.(resource);
+      entry.updateDocumentAction?.(resource);
       entry.request.label = resource.title;
       if (anchor) entry.request.anchor = anchor;
       // The existing surface manager moves this same content node and reverses
@@ -197,6 +231,7 @@ export function createResourceSurface(options: {
         else {
           entry.view.update(resource);
           entry.updatePlacement?.(resource);
+          entry.updateDocumentAction?.(resource);
         }
       }
     },
