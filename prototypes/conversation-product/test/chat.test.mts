@@ -1347,12 +1347,13 @@ test('composer keyboard policy keeps newline and composition distinct from submi
 test('Save reply as note sends exact IDs, recovers the same command and preserves the draft',{timeout:5000},async()=>{
  const f=fixture(),attempts:unknown[]=[],opened:string[]=[];
  let chat,complete!:(receipt:{noteId:string})=>void,reject!:(error:Error)=>void;
+ const noteOpening=Promise.withResolvers<void>();
  let acknowledgeAttempt!:()=>void;
  const nextAttempt=()=>new Promise<void>(resolve=>{acknowledgeAttempt=resolve;});
  try{
   chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
    async saveReplyNote(input){attempts.push(input);acknowledgeAttempt();return new Promise((resolve,fail)=>{complete=resolve;reject=fail;});},
-   openReplyNote(id){opened.push(id);},
+   openReplyNote(id){opened.push(id);return noteOpening.promise;},
   });
   await chat.ready;
   const user=f.view.root.querySelector('.cp-message-user'),assistant=f.view.root.querySelector('.cp-message-assistant');
@@ -1379,8 +1380,12 @@ test('Save reply as note sends exact IDs, recovers the same command and preserve
   assert.equal(named(refreshed,'Saving reply…').disabled,true);
   complete({noteId:'note:saved'});
   await until(()=>!!named(refreshed,'Open saved note'));
-  named(refreshed,'Open saved note').fire('click');
+  const open=named(refreshed,'Open saved note');
+  open.fire('click');open.fire('click');
   assert.deepEqual(opened,['note:saved']);
+  assert.equal(open.disabled,true);
+  noteOpening.resolve();
+  await until(()=>!open.disabled);
   assert.equal(f.draft.content,'Saved unsent text');
   await chat.dispose();
   chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
@@ -1392,7 +1397,7 @@ test('Save reply as note sends exact IDs, recovers the same command and preserve
   await remountAttempt;
   assert.equal(attempts.length,3);
   assert.deepEqual(attempts[2],request,'a fresh view must recover the same canonical capture');
- }finally{await chat?.dispose();f.restore();}
+ }finally{noteOpening.resolve();await chat?.dispose();f.restore();}
 });
 
 test('an inherited citation opens through its source chat and suppresses repeat requests while pending',async()=>{

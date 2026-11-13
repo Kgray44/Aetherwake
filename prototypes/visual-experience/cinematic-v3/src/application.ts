@@ -773,7 +773,9 @@ export function installApplication(hooks: Hooks) {
       });
       return receipt;
     },
-    openReplyNote: (noteId: string) => openCanonicalResource(noteId),
+    async openReplyNote(noteId: string) {
+      await resourceOpener.open({ resourceId: noteId, origin: { source: "application" } });
+    },
   };
   const chatViewPersistence = new ConversationViewPersistence({
     port: composerPort,

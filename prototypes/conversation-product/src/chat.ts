@@ -617,7 +617,9 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const updateReplyNoteControl = (messageId: string, button: HTMLButtonElement) => {
     const capture = replyNotes.get(messageId);
     button.disabled = !!capture?.pending || !!capture?.noteId && !options.openReplyNote;
-    const label = capture?.noteId ? options.openReplyNote ? 'Open saved note' : 'Reply saved as note' : capture?.pending ? 'Saving reply…' : 'Save reply as note';
+    const label = capture?.noteId
+      ? capture.pending ? 'Opening saved note…' : options.openReplyNote ? 'Open saved note' : 'Reply saved as note'
+      : capture?.pending ? 'Saving reply…' : 'Save reply as note';
     setConversationControlLabel(button, label);
   };
   function messageNode(message: MessageView,clock:ReturnType<typeof canonicalClock>): HTMLElement {
@@ -664,15 +666,15 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         if (disposed || accessRevoked || !root.contains(save)) return;
         let capture = replyNotes.get(message.id);
         if (capture?.pending) return;
-        if (capture?.noteId) {
-          await options.openReplyNote?.(capture.noteId);
-          return;
-        }
         capture ??= { pending: false };
         replyNotes.set(message.id, capture);
-        capture.pending = save.disabled = true;
-        setConversationControlLabel(save, 'Saving reply…');
+        capture.pending = true;
+        updateReplyNoteControl(message.id, save);
         try {
+          if (capture.noteId) {
+            await options.openReplyNote?.(capture.noteId);
+            return;
+          }
           // Both chat surfaces use the same idempotency key for this exact reply.
           const source = new TextEncoder().encode(JSON.stringify([resourceId, message.id]));
           const digest = await crypto.subtle.digest('SHA-256', source);
@@ -683,7 +685,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           capture.noteId = receipt.noteId;
           if (!accessRevoked) report('Reply saved as a note.');
         } catch {
-          if (!accessRevoked) report('The save could not be confirmed. Retry to check the same save.');
+          if (!accessRevoked) report(capture.noteId ? 'The saved note could not open. Try again.' : 'The save could not be confirmed. Retry to check the same save.');
         } finally {
           capture.pending = false;
           const control = cache.get(message.id)?.node.querySelector<HTMLButtonElement>('[data-reply-note]');
