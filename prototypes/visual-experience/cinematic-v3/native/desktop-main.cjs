@@ -14,6 +14,10 @@ const {
   MenuItem,
   screen,
 } = require("electron");
+const { installDesktopTestAdmission, verificationLaunch } = require("./native-test-admission.cjs");
+const checkDesktopTest = verificationLaunch(process.argv)
+  ? installDesktopTestAdmission({ app, BrowserWindow, terminate: stopDesktopTest })
+  : () => {};
 const { createMediaPlayback, scheme: mediaScheme } = require("./media-playback.cjs");
 protocol.registerSchemesAsPrivileged([
   { scheme: mediaScheme, privileges: { standard: true, secure: true, stream: true } },
@@ -155,7 +159,7 @@ if (
   (verify || !profileArg || !path.isAbsolute(profileArg.slice(10)))
 )
   throw Error("explicit_normal_profile_required_for_catalog_check");
-if (verify && (!profileArg || !path.isAbsolute(profileArg.slice(10)))) {
+if ((verify || process.argv.includes("--native-test")) && (!profileArg || !path.isAbsolute(profileArg.slice(10)))) {
   console.error("absolute_verification_profile_required");
   process.exit(2);
 }
@@ -229,6 +233,10 @@ let win,
   child,
   serial = 0,
   closing = false;
+function stopDesktopTest() {
+  if (child && !child.killed) child.kill();
+  app.exit(2);
+}
 const deadlineArgument = process.argv.find((argument) =>
   argument.startsWith("--verification-deadline-ms="),
 );
@@ -374,6 +382,7 @@ function sendMissionHostSignal(missionHostSignal) {
   }
 }
 app.whenReady().then(async () => {
+  checkDesktopTest();
   nativeTheme.themeSource = "dark";
   const localURL = pathToFileURL(path.join(root, "dist/index.html")).href;
   child = spawn(
@@ -472,6 +481,7 @@ app.whenReady().then(async () => {
     (_wc, _permission, callback) => callback(false),
   );
   session.defaultSession.setPermissionCheckHandler(() => false);
+  checkDesktopTest();
   win = new BrowserWindow({
     width: 1600,
     height: 1000,
@@ -613,7 +623,7 @@ app.whenReady().then(async () => {
     !win.isMinimized() &&
     win.isFocused();
   let nativeReviewBusy=false;
-  const nativeReviewGate=async work=>{if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
+  const nativeReviewGate=async work=>{checkDesktopTest();if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
   const reviewProvider=args=>nativeReviewGate(()=>showVelaReview(args));
   const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
   if (!verify) {
@@ -1105,6 +1115,7 @@ app.whenReady().then(async () => {
     win.once("closed", () => clearInterval(sessionTimer));
     void maintainSession();
   }
+  checkDesktopTest();
   win.show();
   win.focus();
   active();
@@ -1473,6 +1484,7 @@ app.on("before-quit", (event) => {
         ["running", "dispatching"].includes(e.state),
       );
       if (active.length) {
+        checkDesktopTest();
         const choice = await dialog.showMessageBox(win, {
           type: "question",
           message: active.every(
@@ -1507,6 +1519,7 @@ app.on("before-quit", (event) => {
       app.quit();
     })
     .catch(async () => {
+      checkDesktopTest();
       const choice = await dialog.showMessageBox(win, {
         type: "warning",
         message: "Your latest edits could not be saved.",
