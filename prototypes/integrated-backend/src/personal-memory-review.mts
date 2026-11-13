@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
 export type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
 import type { DatabaseSync } from 'node:sqlite';
-import type { ContextRequest, ConversationSourceRef, FactDraft, PersonalAuthorization, PersonalContextHost, PersonalPolicy, ScopeProof } from '../../personal-context/src/contracts.ts';
+import type { ContextRequest, ConversationSourceRef, FactDraft, PersonalAuthorization, PersonalContextHost, PersonalPolicy, ScopeProof, ReviewedFact, RecordRef } from '../../personal-context/src/contracts.ts';
 import type { TurnInput } from '../../openai-provider/contracts.mts';
 import { attachPersonalMemory } from './personal-memory-prompt.mts';
 import { PersonalContextError, type PersonalContextService } from '../../personal-context/src/service.mts';
@@ -26,6 +26,9 @@ export interface CaptureReview {
   expiresAt: string;
 }
 
+type ManagementRequest = { action: 'correct' | 'revoke' | 'delete' | 'export'; id: string; version: number; text?: string };
+type ManagementReview = ManagementRequest & { ticket: string; fact: ReviewedFact | null; target: RecordRef; expiresAt: string };
+
 const identifier = (value: unknown): value is string =>
   typeof value === 'string' && value.length <= 200 && value.trim().length > 0 && !/[\x00-\x1f]/.test(value);
 
@@ -34,6 +37,7 @@ const identifier = (value: unknown): value is string =>
 export function createPersonalMemoryReview(options: Options) {
   const now = options.now ?? Date.now;
   const pending = new Map<string, { review: CaptureReview; expires: number }>();
+  const management = new Map<string, ManagementReview>();
   let permission: ((input: PersonalAuthorization) => boolean) | undefined;
   let closed = false;
 
@@ -130,6 +134,75 @@ export function createPersonalMemoryReview(options: Options) {
         input.operation === 'record.read' && input.subject?.kind === 'fact' && input.subject.id === id,
       () => service.readFact(id)));
     },
+    async previewManagement(input: ManagementRequest): Promise<ManagementReview> {
+      requireOpen();
+      if (!input || !identifier(input.id) || !Number.isSafeInteger(input.version) || input.version < 1 ||
+        !['correct', 'revoke', 'delete', 'export'].includes(input.action) ||
+        (input.action === 'correct' ? typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4096 : input.text !== undefined))
+        throw new PersonalContextError('invalid_personal_memory_management');
+      const { action, id, version, text } = input;
+      const service = await options.open();
+      requireOpen();
+      return options.transaction(() => {
+        const target = withPermission(request => request.operation === 'record.list' && request.subject?.id === id,
+          () => service.describeFact(id));
+        if (target.version !== version || (action === 'correct' || action === 'revoke') && target.state !== 'active')
+          throw new PersonalContextError('stale_personal_context_version');
+        const fact = action === 'delete' || action === 'revoke' ? null : withPermission(request =>
+          request.operation === 'record.read' && request.subject?.id === id, () => service.readFact(id));
+        const timestamp = now();
+        for (const [key, entry] of management) if (Date.parse(entry.expiresAt) <= timestamp) management.delete(key);
+        if (management.size >= 16) throw new PersonalContextError('personal_memory_review_busy');
+        const review = { action, id, version, ...(text === undefined ? {} : { text }), fact, target,
+          ticket: randomUUID(), expiresAt: new Date(timestamp + 300_000).toISOString() };
+        management.set(review.ticket, structuredClone(review));
+        return review;
+      });
+    },
+    async commitManagement(review: ManagementReview) {
+      requireOpen();
+      const approved = management.get(review?.ticket);
+      if (!approved || JSON.stringify(approved) !== JSON.stringify(review))
+        throw new PersonalContextError('personal_memory_review_mismatch');
+      management.delete(approved.ticket);
+      const service = await options.open();
+      requireOpen();
+      if (Date.parse(approved.expiresAt) <= now()) throw new PersonalContextError('personal_memory_review_mismatch');
+      const { id, version, action } = approved;
+      const expected = { id, expectedVersion: version };
+      return options.transaction(() => {
+        const target = withPermission(request => request.operation === 'record.list' && request.subject?.id === id,
+          () => service.describeFact(id));
+        if (target.version !== version) throw new PersonalContextError('stale_personal_context_version');
+        if (action === 'delete') {
+          withPermission(request => request.operation === 'record.delete' && request.subject?.id === id,
+            () => service.hardDelete(expected));
+          return { action, id };
+        }
+        if (action === 'revoke') {
+          withPermission(request => request.operation === 'record.revoke' && request.subject?.id === id,
+            () => service.revoke(expected));
+          return { action, id };
+        }
+        if (action === 'export') {
+          const bundle = withPermission(request => request.operation === 'record.export' && request.subject?.id === id,
+            () => service.export({ ids: [id], maxBytes: 524288 }));
+          return { action, id, bundle };
+        }
+        const { scope, purpose, category, keywords, certainty, sensitive, expiresAt, provenance } = approved.fact!;
+        const source = provenance.kind === 'import'
+          ? { kind: 'import' as const, id: provenance.id, version: provenance.version, start: provenance.start, end: provenance.end }
+          : provenance;
+        const corrected = withPermission(request =>
+          request.operation === 'record.read' && (request.subject?.id === id || source.kind === 'import' && request.subject?.id === source.id) ||
+          request.operation === 'fact.review' && (request.subject?.id === id || request.subject === null) &&
+            JSON.stringify(request.scope) === JSON.stringify(scope),
+        () => service.correctFact({ ...expected, replacement: { scope, purpose, category, keywords, certainty, sensitive,
+          expiresAt, source, text: approved.text! } }));
+        return { action, id: corrected.replacement.id };
+      });
+    },
+    cancelManagement(ticket: string) { management.delete(ticket); },
     async previewCapture(input: CaptureRequest): Promise<CaptureReview> {
       requireOpen();
       if (!input || !identifier(input.conversationId) || !identifier(input.messageId) ||
@@ -190,6 +263,6 @@ export function createPersonalMemoryReview(options: Options) {
       });
     },
     cancelCapture(id: string) { pending.delete(id); },
-    close() { closed = true; pending.clear(); },
+    close() { closed = true; pending.clear(); management.clear(); },
   };
 }

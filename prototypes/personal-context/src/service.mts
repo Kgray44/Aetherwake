@@ -173,6 +173,14 @@ export class PersonalContextService {
     });
   }
   /** Owner's inspectable metadata index, including retained revoked records. No private body decryption. */
+  describeFact(idValue: string): RecordRef & { state: string } {
+    return this.read(() => {
+      const head = this.required(idValue, 'fact');
+      const ref = this.ref(head);
+      this.authorize('record.list', ref.scope, ref);
+      return { ...ref, state: head.state };
+    });
+  }
   list(input: { kind: 'import' | 'fact'; after: string | null; limit: number }): { records: (RecordRef & { state: string })[]; next: string | null } {
     check(record(input) && exact(input, ['kind', 'after', 'limit']) && (input.kind === 'import' || input.kind === 'fact') && (input.after === null || id(input.after)) && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 100, 'invalid_record_list');
     return this.read(() => { const rows = this.opts.db.prepare('SELECT id FROM personal_context_heads WHERE owner=? AND kind=? AND id>? ORDER BY id LIMIT ?').all(this.identity().userId, input.kind, input.after ?? '', input.limit + 1), records: (RecordRef & { state: string })[] = [];
