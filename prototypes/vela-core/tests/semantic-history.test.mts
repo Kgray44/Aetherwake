@@ -128,7 +128,7 @@ test('a novel model refinement takes precedence over another page of the origina
   assert.deepEqual(result.coverage[0].sources, [candidate]);
 });
 
-test('one need can refine while another missing need falls back to its original question', async () => {
+test('a shared hit leaves room for another missing need to supply distinct evidence', async () => {
   const second = { key: 'second', question: 'Which engineer signs the release?', query: 'approval workflow' };
   const approver = { ...candidate, sourceId: 'approver', text: 'The duty engineer signs the release.' };
   const initial = Array.from({ length: 6 }, (_, index) => ({ ...candidate, sourceId: 'initial-' + index }));
@@ -138,7 +138,7 @@ test('one need can refine while another missing need falls back to its original 
     adaptiveDiscovery: true,
     search(query) {
       searched.push(query);
-      const sources = query === evidence.query ? initial : query === second.question ? [approver] :
+      const sources = query === evidence.query ? initial : query === second.question ? [candidate, approver] :
         query === 'replacement key' ? [candidate, secondary] : [];
       return { sources, scan: 'bounded' };
     },

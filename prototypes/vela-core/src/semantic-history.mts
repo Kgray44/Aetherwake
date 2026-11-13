@@ -313,17 +313,28 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         matches.push(batch);
         if (previouslyObserved) refinementResults.set(digest, batch);
       }
-      // Admit the top result from each query before lower-ranked results.
-      for (let rank = 0; rank < Math.max(0, ...matches.map(sources => sources.length)); rank++) {
-        const sources = matches.flatMap(group => group[rank] ? [group[rank]] : []);
-        addCandidates({ sources, scan: searchCoverage ?? 'bounded' }, limit);
-        if (rank === 0 && matches.some(group => group.length > 1) &&
+      // Give each query a turn to contribute one usable source. Rejected and
+      // already admitted hits do not consume that query's turn.
+      const groups = matches.map(sources => ({ sources, cursor: 0 }));
+      for (let pass = 0; groups.some(group => group.cursor < group.sources.length); pass++) {
+        for (const group of groups) {
+          const before = evidence.size;
+          while (group.cursor < group.sources.length && evidence.size === before && evidence.size < limit) {
+            const source = group.sources[group.cursor++];
+            if (observed.has(source.sourceId)) continue;
+            addCandidates({ sources: [source], scan: searchCoverage ?? 'bounded' }, limit);
+          }
+        }
+        if (pass === 0 && matches.some(group => group.length > 1) &&
           owner.adaptiveDiscovery && owner.recent && !anchorsRead && investigateAnchors && evidence.size < limit) {
           signal.throwIfAborted();
           anchorsRead = true;
           addCandidates(owner.recent(), Math.min(limit, evidence.size + 1));
         }
-        if (evidence.size >= limit && matches.some(group => group.length > rank + 1)) { partial(); break; }
+        if (evidence.size >= limit) {
+          if (groups.some(group => group.sources.slice(group.cursor).some(source => !observed.has(source.sourceId)))) partial();
+          break;
+        }
       }
       const remainingPages = widen.filter(({ refinement }) => !refinement ||
         !refinementResults.get(refinement)?.some(source => !previouslyObserved?.has(source.sourceId) && observed.has(source.sourceId)));
