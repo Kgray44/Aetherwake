@@ -5,7 +5,7 @@ const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { promisify } = require("node:util");
 const { test } = require("node:test");
-const admissionPath = require.resolve("../prototypes/visual-experience/cinematic-v3/native/native-test-admission.cjs");
+const admissionPath = require.resolve("../native/native-test-admission.cjs");
 const { createAdmission, verificationLaunch } = require(admissionPath);
 
 function fixture(t) {
