@@ -48,3 +48,36 @@ test('the inspector loads only on request and sends a version-bound correction',
     assert.deepEqual(calls[2], { type: 'manage', action: 'correct', id: 'fact-1', version: 3, text: 'Corrected decision' });
   } finally { restore(); }
 });
+
+test('opening a saved memory source rechecks the record and opens its exact message', async () => {
+  const f = componentDocument(), restore = f.install();
+  const opened = [];
+  const record = { id: 'fact-1', version: 3, scope: { kind: 'project', id: 'project' }, state: 'active' };
+  const fact = { ...record, text: 'Synthetic decision', provenance: { kind: 'conversation-message', conversationId: 'chat', messageId: 'message' } };
+  let current = fact;
+  try {
+    const view = createPersonalMemoryView(async request => {
+      if (request.type === 'list') return { records: [record], next: null, policy: { version: 1 } };
+      if (!current) throw Error('conversation_source_unavailable');
+      return current;
+    }, async source => { opened.push(source); });
+    named(view, 'Load saved memories').fire('click');
+    await until(() => !!named(view, 'Memory fact-1 · project · active'));
+    named(view, 'Memory fact-1 · project · active').fire('click');
+    await until(() => !!named(view, 'Open original message'));
+    const button = named(view, 'Open original message');
+    current = { ...fact, version: 4 };
+    button.fire('click');
+    await until(() => !button.disabled);
+    assert.deepEqual(opened, []);
+    assert.match(view.textContent, /Memory has changed/);
+    current = fact;
+    button.fire('click');
+    await until(() => !button.disabled);
+    assert.deepEqual(opened, [{ conversationId: 'chat', messageId: 'message' }]);
+    current = null;
+    button.fire('click');
+    await until(() => !button.disabled);
+    assert.equal(opened.length, 1);
+  } finally { restore(); }
+});
