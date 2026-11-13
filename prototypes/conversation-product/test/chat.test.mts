@@ -1360,6 +1360,20 @@ test('safe Markdown supports readable code/list/inline text without executing HT
   }finally{restore();}
 });
 
+test('a source ending inside a formatted phrase stays beside that phrase',()=>{
+ const view=componentDocument(),restore=view.install();
+ try{
+  const source='**Measured result** with context.';
+  const rendered=renderMarkdown(source,async()=>{},()=>{}, {
+   offsets:[source.indexOf('**',2)],element(index){const button=document.createElement('button');button.textContent='Source '+(index+1);return button;},
+  });
+  const paragraph=rendered.querySelector('p');
+  assert.equal(paragraph.querySelector('strong').textContent,'Measured result');
+  assert.equal(paragraph.querySelector('button')?.textContent,'Source 1');
+  assert.equal(rendered.querySelectorAll('button').length,1);
+ }finally{restore();}
+});
+
 test('mounted canonical chat reads only; refresh preserves composer, caret, keyed messages and scroll',async()=>{
   const f=fixture();let chat;try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;
     assert.ok(f.calls.every(c=>['readDraft','detail'].includes(c.name)));const editor=f.view.root.querySelector('textarea'),article=f.view.root.querySelector('.cp-message'),messages=f.view.root.querySelector('.cp-messages');
