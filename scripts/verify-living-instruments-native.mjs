@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
+import desktopTest from '../prototypes/visual-experience/cinematic-v3/native/native-test-admission.cjs';
 import { seedLivingFamilies } from './living-instruments-family-fixture.mts';
 import { seedLivingMission } from './living-instruments-mission-fixture.mts';
 import { BackendCore } from '../prototypes/integrated-backend/src/core.mts';
@@ -22,6 +23,9 @@ const dropOnly = process.argv.includes('--drop-only');
 const interactionOnly = process.argv.includes('--interaction-only') || dropOnly;
 assert(Number(familyOnly)+Number(familyCatalogOnly)+Number(visualOnly)+Number(missionOnly)+Number(timerOnly)+Number(interactionOnly)<=1,'Choose exactly one focused mode');
 assert.equal(process.platform, 'win32', 'Windows native verification required');
+const desktopAdmission = desktopTest.createAdmission(desktopTest.desktopDirectory());
+const desktopToken = process.env.AERYNTH_NATIVE_TEST_SLOT;
+desktopAdmission.checkPermit(desktopToken);
 const guard = path.join(process.env.LOCALAPPDATA, 'AeroStorageWatch/ReserveGuard.ps1');
 function admission() { const result = execFileSync('powershell.exe', ['-NoProfile', '-File', guard, '-EstimatedCBytes', String(256 * MiB), '-EstimatedDBytes', '0'], { encoding: 'utf8', windowsHide: true }); const receipt = JSON.parse(result.trim()); assert.equal(receipt.allowed, true, 'storage reserve admission denied'); return receipt; }
 const reserve = admission();
@@ -51,6 +55,7 @@ async function requireForeground(){if(!foregroundGuard||!cdp)return;if(foregroun
 async function wait(label,fn,ms=10000){const until=Math.min(deadline-2000,Date.now()+ms);let last,diagnosed=false;while(Date.now()<until){checkDeadline();await requireForeground();try{const value=await fn();if(value)return value;}catch(error){last=error.message;}if(!diagnosed&&Date.now()>=until-650){diagnosed=true;await diagnose('before timeout: '+label,last??'condition did not become ready');}await sleep(100);}throw Error(label+': timed out'+(last?' ('+last+')':''));}
 async function launch() {
   await budget();
+  desktopAdmission.checkPermit(desktopToken);
   const exe = path.join(root, 'node_modules/electron/dist/electron.exe');
   const environment = { ...process.env, AERYNTH_NODE_BIN: process.execPath }; delete environment.ELECTRON_RUN_AS_NODE;
   const child = spawn(exe, ['.', '--profile=' + profile, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--aerynth-capture-visible'], { cwd: root, env: environment, windowsHide: true, stdio: ['ignore','pipe','pipe'] }); children.add(child);
@@ -61,11 +66,11 @@ async function launch() {
   const target = await wait('owned page target', async () => (await (await fetch(origin + '/json/list', { signal: AbortSignal.timeout(3000) })).json()).find(value => value.type === 'page' && value.url.startsWith('file:')));
   const socket = new WebSocket(target.webSocketDebuggerUrl); await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
   let id = 0; const pending = new Map(); socket.addEventListener('message', event => { const value = JSON.parse(event.data); if (value.method === 'Runtime.exceptionThrown' || value.method === 'Log.entryAdded' && value.params.entry.level === 'error' || value.method === 'Runtime.consoleAPICalled' && value.params.type === 'error') receipt.rendererErrors.push(JSON.stringify(value).slice(0,4000)); const item = pending.get(value.id); if (item) { pending.delete(value.id); clearTimeout(item.timer); value.error ? item.reject(Error(JSON.stringify(value.error))) : item.resolve(value.result); } });
-  const command = (method, params = {}) => new Promise((resolve, reject) => { checkDeadline(); const key = ++id; const timer = setTimeout(() => { pending.delete(key); reject(Error(method + ' deadline')); }, Math.max(1, Math.min(8000, deadline - Date.now() - 1000))); pending.set(key, { resolve, reject, timer }); socket.send(JSON.stringify({ id: key, method, params })); });
+  const command = (method, params = {}) => new Promise((resolve, reject) => { checkDeadline(); if (method.startsWith('Input.')) desktopAdmission.checkLease(desktopToken, child.pid); const key = ++id; const timer = setTimeout(() => { pending.delete(key); reject(Error(method + ' deadline')); }, Math.max(1, Math.min(8000, deadline - Date.now() - 1000))); pending.set(key, { resolve, reject, timer }); socket.send(JSON.stringify({ id: key, method, params })); });
   const evaluate = async expression => { const result = await command('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }); if (result.exceptionDetails) throw Error(result.exceptionDetails.text + ': ' + result.exceptionDetails.exception?.description); return result.result?.value; };
   cdp = { child, command, evaluate, socket, log: () => log };
   await wait('actual application ready', () => evaluate('!!window.__aerynth?.application()?.resources'), 20000);
-  await command('Runtime.enable'); await command('Log.enable'); await command('Page.bringToFront');await wait('owned native foreground before interaction',()=>evaluate('window.__aerynth.snapshot().active===true'));foregroundGuard=true;
+  await command('Runtime.enable'); await command('Log.enable');await wait('owned native foreground before interaction',()=>evaluate('window.__aerynth.snapshot().active===true'));foregroundGuard=true;
   receipt.rendererSamples ??= []; receipt.rendererSamples.push({phase:'ready',observation:await evaluate('(()=>{const s=window.__aerynth.snapshot();return {metrics:s.metrics,gpu:s.gpu,graphicsFailed:s.graphicsFailed,active:s.active}})()')});
   receipt.processes ??= []; receipt.processes.push({ pid: child.pid, page: target.url });
   return cdp;
