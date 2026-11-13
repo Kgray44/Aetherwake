@@ -756,7 +756,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         if (panel.querySelector('.cp-memory-editor')) return;
         const editor = createMemoryCaptureEditor({
           conversationId: resourceId, messageId: message.id, content: message.content,
-          projectAvailable: !!current?.conversation.projectId,
+          projectId: current?.conversation.projectId ?? null,
           review: remember, report, returnFocus: () => button.focus(),
         });
         panel.append(editor);

@@ -9,7 +9,7 @@ test('the editor sends edited text and explicit scope only after review is reque
   const submissions: unknown[] = [];
   try {
     const editor = createMemoryCaptureEditor({
-      content: 'Original user text', conversationId: 'chat', messageId: 'message', projectAvailable: true,
+      content: 'Original user text', conversationId: 'chat', messageId: 'message', projectId: 'project',
       async review(request) { submissions.push(request); return true; },
       report() {},
     });
@@ -23,6 +23,7 @@ test('the editor sends edited text and explicit scope only after review is reque
     (editor as any).fire('submit');
     await until(() => !f.root.contains(editor));
     assert.deepEqual(submissions, [{ conversationId: 'chat', messageId: 'message', text: 'Use a relay',
+      expectedProjectId: 'project', expectedSourceText: 'Original user text',
       scope: 'project', category: 'decisions', keywords: ['relay', 'circuit'] }]);
     assert(named(editor, 'Review memory'));
   } finally { restore(); }
