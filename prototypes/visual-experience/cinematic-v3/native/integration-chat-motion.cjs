@@ -96,6 +96,31 @@ function viewScript(id, save = false, anchorId = null) {
 function geometryScript(id) {
   return `(${function(id) { const root = document.querySelector('.cp-manager'), node = root?.querySelector('.cp-chat[data-resource-id="' + CSS.escape(id) + '"]'), messages = node?.querySelector('.cp-messages'), input = node?.querySelector('textarea'), send = node?.querySelector('[data-cp-control=send]'); if (!messages || !input || !send) return null; const box = n => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom }; }, clip = messages.getBoundingClientRect(), lines = []; for (const content of messages.querySelectorAll('.cp-message-content')) { const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT); let text; while (text = walker.nextNode()) if (text.textContent.trim()) { const range = document.createRange(); range.selectNodeContents(text); for (const r of range.getClientRects()) if (r.height > 0 && r.width > 0) lines.push({ messageId: content.closest('[data-message-id]').dataset.messageId, x: r.x, y: r.y, width: r.width, height: r.height, fullyVisible: r.top >= clip.top - .5 && r.bottom <= clip.bottom + .5 && r.left >= clip.left - .5 && r.right <= clip.right + .5 }); } } const scrollOwners = [...node.querySelectorAll('*')].filter(n => ['auto', 'scroll'].includes(getComputedStyle(n).overflowY) && n.scrollHeight > n.clientHeight + 1 && n.clientHeight > 0).map(n => n.className); const visibleHit = n => { const r = n.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight && n.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); }; return { viewport: { width: innerWidth, height: innerHeight }, root: box(root), chat: box(node), messages: box(messages), input: box(input), send: box(send), rootOverflow: root.scrollWidth > root.clientWidth + 1, inputHit: visibleHit(input), sendHit: visibleHit(send), lines: lines.slice(-128), scrollOwners, redundantProviderSelects: root.querySelector('.cp-provider-capabilities')?.querySelectorAll('select').length ?? 0 }; }.toString()})(${JSON.stringify(id)})`;
 }
+function seededSearchVisibleScript({ resourceId, messageId, query, draft }, requireClosed) {
+  return `(${function(id, messageId, query, draft, requireClosed) {
+    const root = document.querySelector('.cp-manager');
+    if (root?.dataset.resourceId !== id || (requireClosed && root.querySelector('.cp-switcher')?.open !== false)) return false;
+    const chat = root.querySelector('.cp-chat[data-resource-id="' + CSS.escape(id) + '"]');
+    const messages = chat?.querySelector('.cp-messages');
+    const content = messages?.querySelector('[data-message-id="' + CSS.escape(messageId) + '"] .cp-message-content');
+    if (!content || chat.querySelector('textarea')?.value !== draft) return false;
+    const clip = messages.getBoundingClientRect();
+    const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+    for (let node; (node = walker.nextNode());) {
+      const offset = node.textContent.indexOf(query);
+      if (offset < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, offset);
+      range.setEnd(node, offset + query.length);
+      const rects = [...range.getClientRects()];
+      if (rects.length && rects.every(rect => rect.width > 0 && rect.height >= 12 &&
+        rect.top >= Math.max(0, clip.top) - .5 && rect.bottom <= Math.min(innerHeight, clip.bottom) + .5 &&
+        rect.left >= Math.max(0, clip.left) - .5 && rect.right <= Math.min(innerWidth, clip.right) + .5 &&
+        content.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)))) return true;
+    }
+    return false;
+  }.toString()})(${JSON.stringify(resourceId)},${JSON.stringify(messageId)},${JSON.stringify(query)},${JSON.stringify(draft)},${requireClosed})`;
+}
 function assertGeometry(value) {
   assert(value && !value.rootOverflow && value.inputHit && value.sendHit, 'actual_chat_composer_clipped_or_occluded'); assert.equal(value.redundantProviderSelects, 0);
   assert(value.messages.height >= 80 && value.input.height >= 32 && value.send.height >= 24, 'usable_transcript_composer_bounds_required');
@@ -202,7 +227,7 @@ function optionalRecording({ requested, restore, slot, win, session, localURL, o
     },
   };
 }
-Object.assign(exports, { assertOwnedProfile, assertRead, assertNoProvider, canonicalChat, assertMotionSample, assertGeometry, passingCheckpoint, motionScript, viewScript, geometryScript, validateMotionBudget, admitVideo, optionalRecording, validateSearchSeed, preflightSearchSeed, FIXTURE });
+Object.assign(exports, { assertOwnedProfile, assertRead, assertNoProvider, canonicalChat, assertMotionSample, assertGeometry, passingCheckpoint, motionScript, viewScript, geometryScript, seededSearchVisibleScript, validateMotionBudget, admitVideo, optionalRecording, validateSearchSeed, preflightSearchSeed, FIXTURE });
 
 exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, observeProviderActivity, session, localURL }) {
   const restore = process.argv.includes('--verify-restore'), record = process.argv.includes('--record-chat-motion'), limitMs = restore ? 12000 : 45000, root = path.resolve(privateRoot), out = path.join(root, 'chat-motion-evidence', `${restore ? 'restore' : 'initial'}-${Date.now()}`), expectedFile = path.join(root, 'chat-motion-expected.json'), budgetFile = path.join(root, 'chat-motion-capture-budget.json');
@@ -268,18 +293,13 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         assert.equal(stored.content, target.draft);
         return { ...target, draftVersion: stored.version };
       };
-      const visibleTarget = async () => {
-        const view = await js(viewScript(id, false, messageId));
-        const sample = await js(geometryScript(id));
-        return view?.resourceId === id && view.draft === target.draft &&
-          sample?.lines.some(line => line.messageId === messageId && line.fullyVisible && line.height >= 12);
-      };
+      const visibleTarget = seededSearchVisibleScript(target, !restore);
       receipt.canonical = await readTarget();
       win.setContentSize(1100, 800);
       await openManager();
       if (restore) {
         assert.deepEqual(receipt.canonical, expected.canonical);
-        await wait('Exact message and draft visible after desktop restart', visibleTarget);
+        await wait('Exact message and draft visible after desktop restart', () => js(visibleTarget));
         receipt.viewState = await savedView(id);
         assert.deepEqual(receipt.viewState, expected.viewState);
       } else {
@@ -294,8 +314,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         receipt.quickSearch = { resourceId: id, messageId, fixtureConversations: core.conversations.length, fixtureMessages: core.graph.messages.length,
           method: 'software-native-window-keyboard', pollIntervalMs: 35, insertToEnterMs: enterAt - typedAt };
         assert(receipt.quickSearch.insertToEnterMs < 120, 'enter_must_precede_typeahead_debounce');
-        await wait('Enter reveals the exact search message and draft', async () =>
-          await js("document.querySelector('.cp-switcher')?.open===false") && await visibleTarget());
+        await wait('Enter reveals the exact search message and draft', () => js(visibleTarget));
         receipt.quickSearch.enterToVisibleMessageMs = performance.now() - enterAt;
         await wait('Exact message anchor and draft acknowledged', async () => {
           const view = await savedView(id);

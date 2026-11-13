@@ -53,6 +53,50 @@ test('only bounded actual canonical reads are admitted; all creation/provider/au
  assert.throws(() => helper.assertRead('desktop', { type: 'createResource' })); assert.throws(() => helper.assertRead('conversation', { name: 'detail', input: { resourceId: 'synthetic-chat', limit: 51 } })); assert.throws(() => helper.assertRead('conversation', { name: 'readDraft', input: { resourceId: 'synthetic-chat', content: 'forbidden' } }));
 });
 
+test('seeded search observes only the exact visible matching text and unchanged draft', () => {
+ const target = {resourceId:'synthetic-chat',messageId:'msg-1',query:'RARE_MARKER',draft:'Unsent draft'};
+ const switcher = {open:false};
+ const editor = {value:target.draft};
+ const content = {contains: node => node === content};
+ const clip = {top:100,bottom:300,left:50,right:600};
+ const rect = {top:120,bottom:136,left:80,right:160,width:80,height:16};
+ let hit = content, text = 'Prefix RARE_MARKER suffix';
+ const messages = {
+   querySelector: selector => selector === '[data-message-id="msg-1"] .cp-message-content' ? content : null,
+   getBoundingClientRect: () => clip,
+ };
+ const chat = {querySelector: selector => selector === '.cp-messages' ? messages : selector === 'textarea' ? editor : null};
+ const manager = {
+   dataset:{resourceId:target.resourceId},
+   querySelector: selector => selector === '.cp-switcher' ? switcher : selector === '.cp-chat[data-resource-id="synthetic-chat"]' ? chat : null,
+ };
+ const context = {
+   CSS:{escape: value => value}, NodeFilter:{SHOW_TEXT:4}, innerHeight:800, innerWidth:1100,
+   document:{
+     querySelector: () => manager,
+     createTreeWalker: node => {
+       assert.equal(node,content);
+       const nodes = [{textContent:text}].values();
+       return {nextNode: () => nodes.next().value ?? null};
+     },
+     createRange: () => ({
+       setStart: (_node,offset) => assert.equal(offset,7),
+       setEnd: (_node,offset) => assert.equal(offset,18),
+       getClientRects: () => [rect],
+     }),
+     elementFromPoint: () => hit,
+   },
+ };
+ const observed = requireClosed => vm.runInNewContext(helper.seededSearchVisibleScript(target,requireClosed),context);
+ assert.equal(observed(true),true);
+ switcher.open=true; assert.equal(observed(true),false); assert.equal(observed(false),true);
+ switcher.open=false;
+ hit={}; assert.equal(observed(true),false); hit=content;
+ rect.bottom=301; assert.equal(observed(true),false); rect.bottom=136;
+ text='Other content in the same message'; assert.equal(observed(true),false); text='Prefix RARE_MARKER suffix';
+ editor.value='Different draft'; assert.equal(observed(true),false);
+});
+
 test('local-only proof needs actual zero attempt counters, complete events and no assistant/native execution', () => {
  const f = fixture(); helper.assertNoProvider(f.core, events(), counters());
  for (const key of ['codexConnections', 'providerRequests', 'systemMemoryReads']) assert.throws(() => helper.assertNoProvider(f.core, events(), { ...counters(), [key]: 1 }));
