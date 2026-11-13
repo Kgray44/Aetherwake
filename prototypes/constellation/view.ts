@@ -1078,6 +1078,12 @@ export function mountConstellation(
       void controller.persist();
     }
   }
+  root.inert = true;
+  root.setAttribute("aria-busy", "true");
+  const ready = controller.restore().finally(() => {
+    root.inert = false;
+    root.removeAttribute("aria-busy");
+  });
   paint();
   return {
     controller,
@@ -1091,7 +1097,7 @@ export function mountConstellation(
       return pickField(x, y)?.key ?? null;
     },
     activeDragKey: () => pointer?.key ?? null,
-    ready: controller.restore(),
+    ready,
     frame,
     update(snapshot: Snapshot) {
       controller.update(snapshot);
