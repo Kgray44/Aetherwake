@@ -39,7 +39,8 @@
   box-shadow: none;
   background: transparent;
 }
-.aw-note-placement {
+.aw-note-placement,
+.aw-document-question {
   margin-block-end: 8px;
   padding: 6px 10px;
   border: 1px solid #b9a4e24a;
@@ -50,7 +51,8 @@
   cursor: pointer;
 }
 .aw-note-placement:disabled { opacity: .55; cursor: default; }
-.aw-note-placement:focus-visible { outline: 2px solid #c4b5fd; outline-offset: 2px; }
+.aw-note-placement:focus-visible,
+.aw-document-question:focus-visible { outline: 2px solid #c4b5fd; outline-offset: 2px; }
 .application-direct-resource .aw-media-title,
 .working-content.aw-media .aw-media-heading {
   display: none;

@@ -106,7 +106,7 @@ import "../../../block-library/resource-links-view.css";
 import { createRelatedResourcesPort } from "./related-resources";
 import { createResourceOpener } from "./resource-opening.ts";
 import { createResourcePresenter } from "./resource-presentation.ts";
-import { createResourceSurface } from "./resource-surface.ts";
+import { createResourceSurface, supportsDocumentQuestion } from "./resource-surface.ts";
 import { mountProviderConnections } from "./provider-connections.ts";
 import { mountEnvironmentNavigator } from "./environment-navigator.ts";
 import "./environment-navigator.css";
@@ -815,6 +815,17 @@ export function installApplication(hooks: Hooks) {
       height: 16,
     }),
     failed: report,
+    askAboutDocument: (resource) => {
+      const current = state?.resources.find((item) => item.id === resource.id);
+      if (!current || current.available === false || current.visible === false ||
+          current.state === "archived" || !supportsDocumentQuestion(current))
+        throw Error("resource_unavailable");
+      if (!velaOpen) openVela();
+      velaPanel?.addDocumentSource({
+        id: current.id, kind: "resource", resourceKind: current.kind,
+        title: current.title, version: current.version, projectId: current.project_id,
+      });
+    },
     placeNote: (resource) => {
       const workspaceId = state?.activeWorkspaceId;
       if (!workspaceId || !notePlacementAllowed(resource, workspaceId)) return;
