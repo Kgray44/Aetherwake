@@ -249,19 +249,24 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
     const draft=copyDraft?draftSessions.get(input.resourceId)?.snapshot().content:undefined;
     const b=await call('branch',input);
     let reviewed=false;
-    const review=(approve:boolean)=>run(async()=>{
-     if(reviewed)return;
-     await call('reviewBranch',{handoffId:b.handoffId,fingerprint:b.fingerprint,approve});
-     reviewed=true;
-     let copyFailed=false;
-     if(draft){
-      try { await call('saveDraft',{resourceId:b.resourceId,expectedVersion:0,content:draft}); }
-      catch { copyFailed=true; }
-     }
-     await open(b.resourceId);
-     await refresh();
-     if(copyFailed)status.textContent='The branch opened. Draft copy could not be confirmed. Your original draft is still saved.';
-    });
+    const review=(approve:boolean)=>{
+     const intent=openIntent;
+     return run(async()=>{
+      if(reviewed||intent!==openIntent)return;
+      await call('reviewBranch',{handoffId:b.handoffId,fingerprint:b.fingerprint,approve});
+      reviewed=true;
+      let copyFailed=false;
+      if(draft){
+       try { await call('saveDraft',{resourceId:b.resourceId,expectedVersion:0,content:draft}); }
+       catch { copyFailed=true; }
+      }
+      if(intent!==openIntent||closing||disposed)return;
+      await open(b.resourceId,undefined,intent);
+      if(intent!==openIntent||closing||disposed)return;
+      await refresh();
+      if(copyFailed)status.textContent='The branch opened. Draft copy could not be confirmed. Your original draft is still saved.';
+     });
+    };
     secondary.replaceChildren(el('p','Branch created; source context is prepared, awaiting your review.'),
      button('Approve selected context',()=>review(true)),button('Reject context',()=>review(false)));
    }).finally(()=>{create.disabled=false;});
