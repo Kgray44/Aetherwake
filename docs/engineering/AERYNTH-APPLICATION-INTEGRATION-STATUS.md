@@ -1,5 +1,7 @@
 # Aerynth integration status
 
+> **Historical record, navigation notice added 2026-11-12.** The original November 3 snapshot and accumulated measurements below are historical evidence, not qualification of the latest main build. See the [documentation index](../README.md) for later source checkpoints and the current governance registry. Original evidence below is unchanged.
+
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
 ## November 3 Portable BU 50-card Fit profiling
