@@ -179,6 +179,19 @@ export function createPersonalMemoryReview(options: Options) {
         };
       });
     },
+    async velaPolicyFence() {
+      requireOpen();
+      const service = await options.open();
+      const read = () => {
+        requireOpen();
+        return withPermission(input => input.operation === 'policy.read', () => service.policy());
+      };
+      const policy = read();
+      if (!policy.storageEnabled || !policy.velaEnabled) return null;
+      return { version: policy.version, validate() {
+        if (read().version !== policy.version) throw new PersonalContextError('stale_personal_context');
+      } };
+    },
     async inspect(page: { after: string | null; limit: number }) {
       requireOpen();
       const service = await options.open();

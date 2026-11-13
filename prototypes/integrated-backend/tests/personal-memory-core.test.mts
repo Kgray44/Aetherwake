@@ -181,6 +181,40 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
     const input = { intent: 'Which quartz relay should I use?', resourceIds: [], adaptive: true,
       providerId: 'openai-api-vela', useMemory: true } as const;
+    const indirect = { ...input, resourceIds: [] as string[], intent: 'What did we settle on?', includeRecentHistory: false };
+    await assert.rejects(core.command('velaRequestPreview', indirect), /personal_memory_no_eligible_context/);
+    const base = await core.command('velaRequestPreview', { ...indirect, useMemory: undefined });
+    const searchBinding = { previewId: base.id, signature: base.signature };
+    assert.deepEqual(await core.command('velaMemorySearchNative', searchBinding), { kind: 'unavailable' });
+    const { velaApiRuntime: api } = core as unknown as { velaApiRuntime: VelaApiRuntime };
+    const qualification = Object.freeze({ model: 'gpt-6-luna' }) as NonNullable<ReturnType<VelaApiRuntime['qualifiedStructuredRoute']>>;
+    api.qualifiedStructuredRoute = () => qualification;
+    api.isStructuredQualificationCurrent = proof => proof === qualification;
+    let calls = 0;
+    api.structuredProposal = async ({ payload, validate }) => {
+      calls++;
+      validate();
+      assert.deepEqual(payload, { stage: 'interpret', request: indirect.intent });
+      return { version: 2, objective: 'Recall the decision', clarification: '',
+        perception: { kind: 'recall', explicitGoals: [], inferredGoals: [], constraints: [],
+          capabilityHints: [], deliverables: ['text'], verification: [] },
+        needs: [{ key: 'relay', question: 'Which relay was approved?', query: 'quartz relay' }] };
+    };
+    const queryReview = await core.command('velaMemorySearchNative', searchBinding);
+    assert.equal(queryReview.kind, 'review');
+    assert.equal(queryReview.request, indirect.intent);
+    assert.equal(calls, 0);
+    await assert.rejects(core.command('velaMemorySearchNative', { ...searchBinding, reviewDigest: '0'.repeat(64) }),
+      /personal_memory_disclosure_review_required/);
+    assert.equal(calls, 0);
+    const expanded = await core.command('velaMemorySearchNative', { ...searchBinding, reviewDigest: queryReview.digest });
+    assert.equal(expanded.kind, 'preview');
+    assert.equal(calls, 1);
+    await assert.rejects(core.command('velaMemorySearchNative', { ...searchBinding, reviewDigest: queryReview.digest }),
+      /vela_memory_requires_conversation/);
+    const expandedReview = await core.command('velaNativeReview', { previewId: base.id, signature: expanded.signature });
+    assert.match(expandedReview.prompt, new RegExp(saved.id));
+    assert.equal(calls, 1);
     const recall = () => core.command('velaRequestPreview', { ...input, resourceIds: [] });
     const preview = await recall();
     assert.equal(preview.sendDisposition, 'review-required');
