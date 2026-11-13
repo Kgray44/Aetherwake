@@ -2132,6 +2132,8 @@ for (const scenario of ['standing', 'evaluation', 'evaluation interrupt', 'provi
       assert.equal(recovered.answerDigest,result.response!.contentDigest);
       assert.deepEqual(f.core.readVelaEvaluationResult(claim,expected.slice(1)),{state:'unresolved'});
       assert.deepEqual(f.core.readVelaEvaluationResult({...claim,bindingDigest:'c'.repeat(64)},expected),{state:'unresolved'});
+      writeFileSync(path, 'Replaced synthetic source');
+      assert.deepEqual(f.core.readVelaEvaluationResult(claim,expected),{state:'unresolved'});
       assert.equal(f.requests.length,5);
       return;
     }
