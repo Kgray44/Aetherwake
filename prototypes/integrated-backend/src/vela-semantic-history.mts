@@ -4,7 +4,7 @@ import { canonicalRetrievalQuery, rankCanonicalRetrieval } from '../../vela-core
 import { investigateSemanticHistory, parseSemanticHistoryAssessment, parseSemanticHistoryProposal, semanticHistoryFormats } from '../../vela-core/src/semantic-history.mts';
 import type { ReviewedProjectCheckContext, SemanticHistoryCall } from '../../vela-core/src/semantic-history.mts';
 import type { VelaSemanticHistorySource, VelaService } from '../../vela-core/src/service.mts';
-import type { VelaApiRuntime, VelaStructuredQualification } from './vela-api-runtime.mts';
+import type { VelaApiRun, VelaApiRuntime, VelaStructuredQualification } from './vela-api-runtime.mts';
 import type { TurnResult } from '../../openai-provider/contracts.mts';
 
 const instructions = {
@@ -42,6 +42,7 @@ export interface SemanticHistoryReview {
 interface SemanticHistoryAuthority {
   configurationVersion: number;
   currentCatalogOnly?: true;
+  evaluationClaim?: VelaApiRun['evaluationClaim'];
   /** Explicit selection supplied by the trusted native caller. */
   selectedNoteIds?: readonly string[];
   /** Native authorization for the exact payload, purpose, destination and current source proofs.
@@ -50,7 +51,7 @@ interface SemanticHistoryAuthority {
 }
 export type SemanticHistoryAdmission = SemanticHistoryAuthority &
   ({ model: string; models?: never } | { model?: never; models: readonly string[] });
-export type SemanticHistoryProbeAdmission = Pick<SemanticHistoryAuthority, 'configurationVersion' | 'authorize' | 'currentCatalogOnly'> & { model: string };
+export type SemanticHistoryProbeAdmission = Pick<SemanticHistoryAuthority, 'configurationVersion' | 'authorize' | 'currentCatalogOnly' | 'evaluationClaim'> & { model: string };
 interface MissionCognitionObservations {
   reviewedMissionCapabilities?: readonly string[];
   reviewedProjectCheck?: ReviewedProjectCheckContext;
@@ -79,6 +80,7 @@ export async function qualifyVelaHistoryModelWithApi(api: VelaApiRuntime, admiss
     };
     const receipt = await api.qualifyStructuredRoute({ requestId: randomUUID(), model, payload: call,
       currentCatalogOnly: admission.currentCatalogOnly,
+      evaluationClaim: admission.evaluationClaim,
       instruction: instructions[call.stage], schema, binding: { configurationVersion, contextDigest }, validate,
       onResult: observations?.observeResult,
       ...(observations ? { missionCognition: {
@@ -131,6 +133,7 @@ export function investigateVelaHistoryWithApi(vela: Pick<VelaService, 'investiga
     };
     const proposal = await api.structuredProposal({ requestId: randomUUID(), model, payload: call, instruction,
       currentCatalogOnly: admission.currentCatalogOnly,
+      evaluationClaim: admission.evaluationClaim,
       binding: { configurationVersion, contextDigest }, schema, validate, bufferedText: true, onResult: observations?.observeResult,
       ...(observations ? { missionCognition: {
         owner: { kind: 'planning', requestId: observations.planningRequestId },
@@ -163,14 +166,15 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
   sources: readonly ReviewedEvidenceSource[], configurationVersion: number, model: string,
   validate: () => void, signal: AbortSignal, observations?: MissionCognitionObservations,
   discovery?: { sources: readonly ReviewedEvidenceSource[]; partial: boolean; missionGap?: string },
-  currentCatalogOnly?: true) {
+  evaluationClaim?: VelaApiRun['evaluationClaim']) {
+  const currentCatalogOnly = evaluationClaim ? true as const : undefined;
   const authorize = () => { validate(); return !signal.aborted; };
   validate();
   const perceptionSchema = semanticHistoryFormats.interpret.schema;
   const perception = api.qualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret) ??
     await api.resolveQualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret, signal, currentCatalogOnly);
   const assessment = api.qualifiedStructuredRoute(configurationVersion, [model], semanticHistoryFormats.assess.schema, instructions.assess);
-  if (!perception || !assessment) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize, currentCatalogOnly }, signal, observations);
+  if (!perception || !assessment) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize, currentCatalogOnly, evaluationClaim }, signal, observations);
   const candidates = new Map(discovery?.sources.map(source => [source.sourceId, source]));
   const searchable = [...candidates.values()].map(source => ({ id: source.sourceId, text: source.title + '\n' + source.text }));
   const approved = new Set([...sources, ...candidates.values()]);
@@ -202,7 +206,7 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
       }, cancel);
     },
   };
-  const result = await investigateVelaHistoryWithApi(scoped, api, intent, { configurationVersion, models: [model], authorize, currentCatalogOnly }, signal, observations);
+  const result = await investigateVelaHistoryWithApi(scoped, api, intent, { configurationVersion, models: [model], authorize, currentCatalogOnly, evaluationClaim }, signal, observations);
   validate();
   const sourcesById = new Map([...approved].map(source => [source.sourceId, source]));
   const questions = new Map(result.proposal?.needs.map(need => [need.key, need.question]));

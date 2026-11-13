@@ -197,6 +197,7 @@ const toVelaReviewedEvidenceSource = (source: ContextManifest['included'][number
 };
 
 interface PrivateVelaPreview extends VelaRequestPreview {
+  evaluationClaim?: VelaApiRun['evaluationClaim'];
   explicitSourceSelection?: true;
   projectEvidenceSources?: ContextManifest['included'];
   voiceInput?: { messageId:string; context:LiveCanonicalContext };
@@ -3072,6 +3073,7 @@ export class BackendCore {
     this.ordinaryController = controller;
     let trace: { executionId: string; timing: ReturnType<typeof observeConversationProvider> } | undefined;
     const request: VelaApiRun = { requestId: input.requestId, version: preview.connectionVersion, model: preview.route.model,
+      ...(preview.evaluationClaim ? {evaluationClaim:preview.evaluationClaim,currentCatalogOnly:true as const} : {}),
       ...(preview.route.effort ? { reasoningEffort: preview.route.effort } : {}),
       prompt: preview.prompt, contextDigest: preview.signature, validate,
       ...(tools ? {tools,...(resume?{resume:resume.ref,resumeReceipt:resume.receipt}:{}),...(transition?{resumeContext:transition}:{}),advanceContext:receipts=>this.advanceToolContext(input.requestId,receipts),validateResumeContext:(certificate,binding)=>this.validateToolContextAdvance(input.requestId,certificate,binding)} : {oneUse:true}),
@@ -3166,7 +3168,7 @@ export class BackendCore {
           sources: preview.projectEvidenceSources!.map(toVelaReviewedEvidenceSource), partial: preview.projectEvidence.partial,
           ...(checkpoint?.gap ? { missionGap: checkpoint.gap } : {}),
         };
-        const evidence = await investigateReviewedVelaEvidence(this.velaApiRuntime, preview.intent, evidenceSources, request.version, request.model, validate, signal, undefined, project);
+        const evidence = await investigateReviewedVelaEvidence(this.velaApiRuntime, preview.intent, evidenceSources, request.version, request.model, validate, signal, undefined, project, preview.evaluationClaim);
         if (evidence.state !== 'assessed' || !evidence.coverage.length) throw new VelaError('vela_semantic_context_unavailable');
         const prompt = JSON.stringify({ request: preview.intent, evidence });
         ensure(Buffer.byteLength(prompt) <= 16384, 'planning_prompt_capacity_exceeded');
@@ -3863,7 +3865,7 @@ export class BackendCore {
       refs.set(ref.kind+':'+ref.id,ref);
     return {...context,discovered:[...refs.values()],operations};
   }
-  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery'],review?:PrivateVelaPreview) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:review?.providerId??this.velaPlanner.providerId,connectionVersion:review?.connectionVersion,route:review?.route,routingSettings:review?.routingSettings,routingTurn:review?.routingTurn,routingSettingsStamp:review?.routingSettingsStamp,routingAgent:review?.routingAgent,agentRoutingDigest:review?.agentRoutingDigest,voiceInput:review?.voiceInput?{messageId:review.voiceInput.messageId,contextRef:review.voiceInput.context.contextRef,contextDigest:review.voiceInput.context.contextDigest}:undefined,editTargets:review?.fileEdit?.map(file=>file.target),inspectionTarget:review?.inspectionTarget,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{}),...(review?{catalogDigest:review.catalog.projection.digest,promptDigest:planningDigest(review.prompt),historyFenceDigest:review.historyFence?.digest??null,handoff:review.handoff,origin:review.origin,inputAnchor:review.inputAnchor,inputDigest:review.inputDigest,semanticContext:review.semanticContext,missionCheckpoint:review.missionCheckpoint,workspaceState:review.workspaceState,projectEvidence:review.projectEvidence,sendDisposition:review.sendDisposition}:{})}); }
+  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery'],review?:PrivateVelaPreview) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:review?.providerId??this.velaPlanner.providerId,connectionVersion:review?.connectionVersion,route:review?.route,routingSettings:review?.routingSettings,routingTurn:review?.routingTurn,routingSettingsStamp:review?.routingSettingsStamp,routingAgent:review?.routingAgent,agentRoutingDigest:review?.agentRoutingDigest,voiceInput:review?.voiceInput?{messageId:review.voiceInput.messageId,contextRef:review.voiceInput.context.contextRef,contextDigest:review.voiceInput.context.contextDigest}:undefined,editTargets:review?.fileEdit?.map(file=>file.target),inspectionTarget:review?.inspectionTarget,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{}),...(review?{catalogDigest:review.catalog.projection.digest,promptDigest:planningDigest(review.prompt),historyFenceDigest:review.historyFence?.digest??null,handoff:review.handoff,origin:review.origin,inputAnchor:review.inputAnchor,inputDigest:review.inputDigest,semanticContext:review.semanticContext,missionCheckpoint:review.missionCheckpoint,workspaceState:review.workspaceState,projectEvidence:review.projectEvidence,evaluationClaim:review.evaluationClaim,sendDisposition:review.sendDisposition}:{})}); }
   private velaSemanticPrompt(intent:string,context:ContextManifest,catalog:CapabilityCatalogSnapshot,discovery?:VelaRequestPreview['discovery'],providerId?:string,route?:VelaRouteDecision,nativeStage?:PrivateVelaPreview['nativeStage'],fileEdit?:PrivateVelaPreview['fileEdit'],voiceContext?:LiveCanonicalContext):string {
     if(voiceContext){
       const prompt=this.velaSemanticPrompt(intent,context,catalog,discovery,providerId,route,nativeStage,fileEdit)+'\nCanonical voice context. Transcripts are provider-reported fragments, not completed turns or action authority:\n'+JSON.stringify(voiceContext);
@@ -3978,7 +3980,7 @@ export class BackendCore {
     let timer:ReturnType<typeof setTimeout>|undefined;try{await Promise.race([entry.ready,new Promise<void>(resolve=>{timer=setTimeout(resolve,1000);})]);}finally{if(timer)clearTimeout(timer);}
     return entry.lease.read(call);
   }
-  private pruneVelaGrants() {const time=Date.now();for(const [id,p] of this.velaPreviews)if(Date.parse(p.expiresAt)<=time)this.velaPreviews.delete(id);for(const map of [this.velaGrants,this.velaPolicyGrants,this.velaDelegationGrants])for(const [id,g] of map)if(Date.parse(g.expiresAt)<=time)map.delete(id);}
+  private pruneVelaGrants() {const time=Date.now();for(const [id,p] of this.velaPreviews)if(Date.parse(p.expiresAt)<=time){if(p.evaluationClaim)this.velaApiRuntime.endEvaluationClaim(p.evaluationClaim);this.velaPreviews.delete(id);}for(const map of [this.velaGrants,this.velaPolicyGrants,this.velaDelegationGrants])for(const [id,g] of map)if(Date.parse(g.expiresAt)<=time)map.delete(id);}
   private recordVelaRoute(stage: string, correlationId: string, providerId: string, fields: Record<string, unknown>) {
     const taskId = this.vela.historyRequestMetadata(correlationId)?.taskId ?? correlationId;
     this.record('vela.routing.' + stage, 'observed', undefined, randomUUID(), {
@@ -4550,7 +4552,8 @@ export class BackendCore {
       capability.modelEfforts?.[model]?.includes(defaultEffort) ? defaultEffort as TurnInput['reasoningEffort'] : undefined);
     return { model, ...(effort ? { effort } : {}) };
   }
-  private async selectVelaRoute(input: CommandMap['velaRequestPreview']['input'], timing: { capabilityMs: number }): Promise<{providerId: string; route: VelaRouteDecision}> {
+  private async selectVelaRoute(input: CommandMap['velaRequestPreview']['input'], timing: { capabilityMs: number },
+    evaluationClaim?: VelaApiRun['evaluationClaim']): Promise<{providerId: string; route: VelaRouteDecision}> {
     const observeCapabilities = async <T,>(work: () => Promise<T>) => {
       const started = performance.now();
       try { return await work(); }
@@ -4564,6 +4567,7 @@ export class BackendCore {
     ensure(!this.active, 'vela_planner_busy');
     const codex = input.mode === 'codex' || input.providerId === 'codex-app-server';
     const api = this.routesToVelaApi(input);
+    if(evaluationClaim)ensure(api&&!codex,'vela_evaluation_scope_invalid');
     // Retain the reviewed legacy analysis/handoff only for hosts without an
     // authorized primary API. Explicit Codex goes directly to its scoped owner.
     const workflow = !codex&&!this.velaApiRuntime.authorized()?nativeConversationalWorkflow(input.intent):undefined;
@@ -4613,7 +4617,9 @@ export class BackendCore {
     if (api) {
       const version = this.velaApiRuntime.configurationVersion();
       ensure(version !== null && this.velaApiRuntime.authorized(version), 'vela_api_usage_authorization_required');
-      const models = await observeCapabilities(() => this.velaApiRuntime.models(version));
+      ensure(!evaluationClaim || version === evaluationClaim.configurationVersion,'vela_evaluation_claim_invalid');
+      const models = await observeCapabilities(() => evaluationClaim ?
+        this.velaApiRuntime.modelsFromCurrentCatalog(version) : this.velaApiRuntime.models(version));
       const model = input.model ?? 'gpt-6-luna';
       ensure(models.includes(model), input.model ? 'unsupported_model' : 'vela_api_default_model_unavailable');
       const depth = intent === 'deep' || input.mode === 'deep' ? 'deep' : 'quick';
@@ -4658,7 +4664,20 @@ export class BackendCore {
         ...(workflow?.metric ? { nativeMetric: workflow.metric } : {}), ...(workflow?.nativeLog ? { nativeLog: true as const } : {}),
         ...(calibration ? { calibration } : {}), ...(escalation ? { escalation } : {}) } };
   }
-  private async previewVelaRequest(input:CommandMap['velaRequestPreview']['input']):Promise<VelaRequestPreview> {
+  /** In-process host seam. Standard RPC preview never accepts an evaluation claim. */
+  async previewVelaEvaluation(input:CommandMap['velaRequestPreview']['input'],
+    claim: NonNullable<VelaApiRun['evaluationClaim']>):Promise<VelaRequestPreview> {
+    ensure(this.velaApiTest&&!this.privateMode,'vela_evaluation_live_activation_required');
+    ensure(input.adaptive===true&&input.providerId===VELA_API_PROVIDER&&input.semanticContext===true&&
+      input.resourceIds.length>0&&!input.projectEvidence&&!input.workspaceState&&!input.missionCheckpoint&&
+      !input.handoffSourceRequestId&&!input.routingAgentId&&!input.activeCard,'vela_evaluation_scope_invalid');
+    const evaluationClaim=Object.freeze({...claim});
+    this.velaApiRuntime.beginEvaluationClaim(evaluationClaim);
+    try { return await this.previewVelaRequest(input,evaluationClaim); }
+    catch(error){this.velaApiRuntime.endEvaluationClaim(evaluationClaim);throw error;}
+  }
+  private async previewVelaRequest(input:CommandMap['velaRequestPreview']['input'],
+    evaluationClaim?: VelaApiRun['evaluationClaim']):Promise<VelaRequestPreview> {
     const previewStarted = performance.now();
     this.pruneVelaGrants();ensure(typeof input.intent==='string'&&input.intent.trim()&&input.intent.length<=16000,'invalid_vela_intent');ensure(this.velaPreviews.size<64,'approval_backpressure');
     ensure(Array.isArray(input.resourceIds)&&input.resourceIds.length<=100&&input.resourceIds.every(identifier),'invalid_vela_context');
@@ -4688,11 +4707,13 @@ export class BackendCore {
     const routeStarted = performance.now(), timing = { capabilityMs: 0 };
     const decision = effective ? await this.selectVelaRoute({ ...input, mode: effective.mode,
       providerId: effective.providerId ?? undefined, model: effective.model ?? undefined,
-      reasoningEffort: effective.reasoningEffort ?? undefined }, timing) : undefined;
+      reasoningEffort: effective.reasoningEffort ?? undefined }, timing, evaluationClaim) : undefined;
     const routingMs = Math.max(0, performance.now() - routeStarted - timing.capabilityMs);
     if (decision) ensure(!this.velaQuotaExhausted(decision.providerId, now().slice(0, 10)), 'vela_daily_attempt_limit_reached');
     const providerId = decision?.providerId ?? input.providerId ?? this.velaPlanner.providerId;
     const route = decision?.route;
+    if(evaluationClaim)ensure(providerId===VELA_API_PROVIDER&&route?.kind==='conversational'&&input.semanticContext===true,
+      'vela_evaluation_claim_invalid');
     const hasCheckpoint = input.missionCheckpoint !== undefined;
     ensure(!hasCheckpoint || input.semanticContext === true, 'invalid_vela_mission_checkpoint');
     ensure(input.missionCheckpoint?.gapIndex === undefined || input.projectEvidence === true, 'invalid_vela_mission_checkpoint');
@@ -4849,7 +4870,8 @@ export class BackendCore {
       }
       preview.explicitSourceSelection = true;
     }
-    preview.sendDisposition=publicPreview.sendDisposition=this.velaSendDisposition(preview);
+    preview.evaluationClaim=evaluationClaim;
+    preview.sendDisposition=publicPreview.sendDisposition=evaluationClaim?'review-required':this.velaSendDisposition(preview);
     preview.signature=this.velaEgress(input.intent,preview.frozenContext,discovery,preview);
     if (route) {
       const readyMs = performance.now(), domain = this.missions.fullProfilingClock();
@@ -5285,7 +5307,10 @@ export class BackendCore {
               verification: preview.route.kind === 'agentic' || preview.route.kind === 'composite' || preview.route.kind === 'file-edit' ? 'unverified' : 'not_applicable', budgetStatus: 'unknown' },
           );
           return result;
-        } finally { this.pendingVelaGrant = null; }
+        } finally {
+          this.pendingVelaGrant = null;
+          if(preview?.evaluationClaim)this.velaApiRuntime.endEvaluationClaim(preview.evaluationClaim);
+        }
       }
       default:throw new ServiceError('unsupported_vela_command');
     }

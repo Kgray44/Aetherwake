@@ -1996,7 +1996,7 @@ test('reviewed CIE cites a selected local file and fences physical replacement b
   }
 });
 
-test('standing selected DOCX analysis runs through the broker and preserves partial extraction coverage', async () => {
+for (const evaluation of [false,true]) test('selected DOCX broker analysis preserves partial extraction (evaluation: '+evaluation+')', async () => {
   const bytes = docxFixture();
   let bodyText: string;
   const f = fixture(true, true, { extract: async (input, signal) => {
@@ -2016,6 +2016,9 @@ test('standing selected DOCX analysis runs through the broker and preserves part
     const resourceIds = [resource.id];
     const resourceRefs = [{ id: resource.id, kind: 'resource' as const, resourceKind: 'file',
       title: resource.title, version: resource.version }];
+    const runtime=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+    const claim={profileId:runtime.readLedgerProfile()!.profileId,configurationVersion:1,
+      claimToken:'a'.repeat(64),bindingDigest:'b'.repeat(64)};
     const preview = await f.core.command('velaRequestPreview', { intent, resourceIds, adaptive: true, providerId: 'openai-api-vela',
       model: 'gpt-6-luna', semanticContext: true, resourceRefs });
     assert.equal(preview.sendDisposition, 'standing-selected-evidence');
@@ -2025,8 +2028,12 @@ test('standing selected DOCX analysis runs through the broker and preserves part
     const send = () => velaCommand({
       win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
       directMessageSend: true, routeNative: true, dialog: {},
-      call: f.core.command.bind(f.core),
-      reviewProvider: async () => assert.fail('standing file analysis opened the sharing modal'),
+      call: (name: string,input: any) => evaluation&&name==='velaRequestPreview'
+        ? f.core.previewVelaEvaluation(input,claim) : (f.core.command as any)(name,input),
+      reviewProvider: async () => {
+        assert.ok(evaluation,'standing file analysis opened the sharing modal');
+        return true;
+      },
       input: { name: 'request', input: { intent, resourceIds, resourceRefs, authorizeProvider: true,
         providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
     }) as Promise<VelaRequest>;
@@ -2052,6 +2059,18 @@ test('standing selected DOCX analysis runs through the broker and preserves part
     assert.equal(result.state, 'responded');
     assert.equal(f.requests.length, 5);
     assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 5);
+    if(evaluation){
+      const expected=runtime.readEvaluationAdmissions(claim)!;
+      assert.equal(expected.length,5);
+      assert.ok(expected.some(stage=>stage.requestId===result.id));
+      assert.equal(runtime.readLedgerReceipts({...claim,expected}).state,'terminal-receipts');
+      await f.reopen();
+      const reopened=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+      assert.deepEqual(reopened.readEvaluationAdmissions(claim),expected);
+      assert.equal(reopened.readLedgerReceipts({...claim,expected}).state,'terminal-receipts');
+      assert.equal(f.requests.length,5);
+      return;
+    }
     writeFileSync(path, 'Replaced synthetic source');
     await assert.rejects(send(), /source_changed|stale_vela_preview/);
     assert.equal(f.requests.length, 5);
