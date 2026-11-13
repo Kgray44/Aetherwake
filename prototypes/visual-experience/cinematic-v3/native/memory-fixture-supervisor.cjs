@@ -1,11 +1,12 @@
 const { lstatSync, readdirSync, realpathSync, writeFileSync } = require("node:fs");
 const { basename, isAbsolute, join, resolve } = require("node:path");
 const { createAdmission, desktopDirectory } = require("./native-test-admission.cjs");
+const { artifactDigest, descriptorName, digest } = require("./memory-fixture-entry.cjs");
 
 // The fixture host must supply its own launcher and claim the canonical lease.
 // There is deliberately no executable, CLI, or inherited child environment here.
 function superviseMemoryFixture({
-  allocation, profileRoot, token, allowWrite, startFixture,
+  allocation, profileRoot, artifactPath, token, allowWrite, startFixture,
   locateDesktop = desktopDirectory, openAdmission = createAdmission, now = Date.now,
 }) {
   const directory = locateDesktop();
@@ -34,14 +35,21 @@ function superviseMemoryFixture({
   };
   requireFreshProfile();
   if (typeof startFixture !== "function") throw Error("native_memory_fixture_host_unavailable");
+  const descriptor = JSON.stringify({
+    contract: "aerynth.memory-fixture-descriptor@1",
+    profileRoot, artifactPath, artifactDigest: artifactDigest(artifactPath, check),
+    owner: allocation.owner, availabilityId: allocation.availabilityId,
+    permitDigest: digest(token), expiresAt: allocation.expiresAt,
+  });
+  if (Buffer.byteLength(descriptor) > 8192) throw Error("native_memory_fixture_descriptor_invalid");
   if (allowWrite?.() !== true) throw Error("storage_reserve_admission_denied");
   check();
   requireFreshProfile();
   // Once handed off, retain the marker even when the outcome is uncertain.
-  writeFileSync(join(profileRoot, "synthetic-packaged.started"), "", { flag: "wx", mode: 0o600 });
+  writeFileSync(join(profileRoot, descriptorName), descriptor, { flag: "wx", mode: 0o600 });
   check();
   return startFixture({
-    profileRoot,
+    profileRoot, artifactPath, descriptorDigest: digest(descriptor),
     expiresAt: allocation.expiresAt,
     env: { AERYNTH_NATIVE_TEST_SLOT: token },
   });
