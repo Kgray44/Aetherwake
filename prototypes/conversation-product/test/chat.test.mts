@@ -239,6 +239,12 @@ test('Switch chat waits for composed text and Escape invalidates a pending open'
   const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
   input.fire('compositionstart');
   input.value='未';input.fire('input',{isComposing:true});
+  for(const isComposing of [true,false]){
+   const composingEscape=input.fire('keydown',{key:'Escape',isComposing});
+   assert.equal(composingEscape.defaultPrevented,false);
+   assert.equal(switcher.open,true);
+   assert.equal(f.view.doc.activeElement,input);
+  }
   input.fire('keydown',{key:'Enter'});
   await new Promise(resolve=>setTimeout(resolve,140));
   assert.deepEqual(searches,[]);

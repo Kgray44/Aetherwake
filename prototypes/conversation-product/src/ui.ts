@@ -222,9 +222,10 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  switchQuery.addEventListener('compositionend',()=>{switchComposing=false;scheduleSwitcher();});
  switchQuery.addEventListener('input',event=>{if(!(event as InputEvent).isComposing)scheduleSwitcher();});
  switcher.node.addEventListener('keydown',event=>{
-  if(event.key!=='Escape'||event.isComposing||switchComposing||!switcher.node.open)return;
-  event.preventDefault();
+  if(event.key!=='Escape'||!switcher.node.open)return;
   event.stopPropagation();
+  if(event.isComposing||switchComposing)return;
+  event.preventDefault();
   switcher.node.open=false;
   resetSwitcher();
   switcher.summary.focus();
