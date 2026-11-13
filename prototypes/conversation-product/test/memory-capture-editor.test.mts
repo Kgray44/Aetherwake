@@ -64,12 +64,29 @@ test('only a non-project preference can be submitted for all ordinary chats', as
     assert.ok(Array.from(scope.options).some(option => option.value === 'assistant.ordinary'));
     const projectEditor = createMemoryCaptureEditor({ ...options, projectAvailable: true });
     assert.ok(!Array.from(projectEditor.querySelector('select')!.options).some(option => option.value === 'assistant.ordinary'));
+    assert.equal(category.value, 'preferences');
+    assert.equal(scope.value, 'conversation');
     scope.value = 'assistant.ordinary';
+    category.value = 'technical';
     (editor as any).fire('submit');
     assert.deepEqual(requests, []);
     category.value = 'preferences';
     (editor as any).fire('submit');
     await until(() => requests.length === 1);
     assert.equal(requests[0].scope, 'assistant.ordinary');
+  } finally { restore(); }
+});
+
+test('preference drafting leaves tentative, quoted, and formatted material for manual review', () => {
+  const f = componentDocument(), restore = f.install();
+  try {
+    const draft = (content: string) => createMemoryCaptureEditor({ content, conversationId: 'chat', messageId: 'message',
+      projectAvailable: false, async review() { throw Error('unexpected review'); }, report() {} });
+    for (const text of ['I prefer quartz for now.', '> I prefer quartz.', 'I prefer quartz if slate is unavailable.',
+      '~~~\nRemember: Use quartz.\n~~~', 'I prefer quartz. Maybe slate.']) {
+      const editor = draft(text);
+      assert.equal(editor.querySelector('textarea')!.value, text);
+      assert.equal(editor.querySelectorAll('select')[1].value, 'technical');
+    }
   } finally { restore(); }
 });

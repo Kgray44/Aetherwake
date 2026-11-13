@@ -294,15 +294,21 @@ export function createPersonalMemoryReview(options: Options) {
         typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4096 ||
         !validKeywords(input.keywords)) throw new PersonalContextError('invalid_personal_memory_capture');
       const { conversationId, messageId, scope, category, text, keywords } = structuredClone(input);
-      const service = await options.open();
-      requireOpen();
-      return options.transaction(() => {
-        const reference = { kind: 'conversation-message', conversationId, messageId } as const;
+      const reference = { kind: 'conversation-message', conversationId, messageId } as const;
+      const eligibleSource = () => {
         const source = options.resolveConversationSource(reference);
         if (!source || source.role !== 'user' || source.sensitive || source.conversationId !== conversationId || source.messageId !== messageId)
           throw new PersonalContextError('conversation_source_unavailable');
         if (scope === 'assistant.ordinary' && (source.projectId !== null || category !== 'preferences'))
           throw new PersonalContextError('conversation_source_scope_mismatch');
+        return source;
+      };
+      // Declining an ineligible source must not initialize protected storage.
+      options.transaction(eligibleSource);
+      const service = await options.open();
+      requireOpen();
+      return options.transaction(() => {
+        const source = eligibleSource();
         const requestedScope = scope === 'assistant.ordinary' ? { kind: scope } as const :
           scope === 'conversation' ? { kind: scope, id: conversationId } as const :
           source.projectId ? { kind: scope, id: source.projectId } as const : null;
