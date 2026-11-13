@@ -5,6 +5,7 @@ const {
   screen,
   nativeTheme,
 } = require("electron");
+const { installDesktopTestAdmission } = require("./native-test-admission.cjs");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const { createHash, randomBytes } = require("node:crypto");
@@ -56,6 +57,9 @@ const previewMode = process.argv.includes("--preview");
 const soakMode = process.argv.includes("--soak");
 const recordingTitle = `Aerynth · V3.5 capture · ${Date.now()}`;
 const renderWhileVisible = verifyMode || recordMode || previewMode || soakMode;
+const checkDesktopTest = renderWhileVisible
+  ? installDesktopTestAdmission({ app, BrowserWindow })
+  : () => {};
 app.setPath(
   "userData",
   path.join(
@@ -102,6 +106,7 @@ app
       { urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] },
       (_details, callback) => callback({ cancel: true }),
     );
+    checkDesktopTest();
     win = new BrowserWindow({
       show: !verifyMode && !soakMode,
       width: 1600,

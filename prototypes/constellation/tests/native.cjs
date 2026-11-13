@@ -1,5 +1,7 @@
 /** Native integration harness. Runs only the synthetic loopback fixture. */
 const { app, BrowserWindow } = require("electron");
+const { installDesktopTestAdmission } = require("../../visual-experience/cinematic-v3/native/native-test-admission.cjs");
+const checkDesktopTest = installDesktopTestAdmission({ app, BrowserWindow });
 const { spawn } = require("node:child_process");
 const {
   mkdtempSync,
@@ -92,6 +94,7 @@ async function capture(name) {
 }
 const browserErrors = [];
 async function open() {
+  checkDesktopTest();
   win = new BrowserWindow({
     width: 1440,
     height: 960,

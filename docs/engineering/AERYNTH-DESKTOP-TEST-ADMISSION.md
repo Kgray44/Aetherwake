@@ -1,0 +1,30 @@
+# Windows desktop verification incident and admission
+
+## November 13, 2026
+
+The owner reported repeated Aerynth fullscreen activations during gaming. The existing focus guard stops input after its target loses focus. It did not prevent a verifier from opening or activating its initial window.
+
+| Mission | Evidence at the incident review |
+|---|---|
+| 1 · Integration | The owner of the packaged FI-4 witness acknowledged a visible launch while the game held foreground. They also reported activating candidate `2a5649957a40b24c6e85926c3ab321939f3bfce8`, using keyboard and mouse automation, and relaunching for restart readback around 05:53–05:58 UTC without confirming that gaming had ended. The retained witness binds the package to that source. The mission reported no active child workers. [Acknowledgment](https://github.com/Kgray44/Aetherwake/pull/116#issuecomment-6845491937) |
+| 9 · Frontend | The 05:55 UTC audit identified a foreground main verifier. Receipt `expanded-1794549191287-m5n9Lz/expanded.json` records failure `native_owner_window_inactive`. The failure establishes focus loss, with no identification of the window that took focus. An offscreen comparison was proposed. [Coordination](https://github.com/Kgray44/Aetherwake/pull/177#issuecomment-6845487558) |
+| 10 · Everyday chat | Placement and restart verification was in progress. The latest completed proof used a recording callback. A visible run during gaming remains unconfirmed. [Coordination](https://github.com/Kgray44/Aetherwake/pull/189#issuecomment-6845488034) |
+| 6 · Memory and 7 · FI-4 | Both missions were active. The audit did not establish that either took desktop focus. [Memory](https://github.com/Kgray44/Aetherwake/pull/211#issuecomment-6845486851) [FI-4](https://github.com/Kgray44/Aetherwake/pull/148#issuecomment-6845571709) |
+| 2 · Documentation, 4 · CIE, 5 · BackendCore, 8 · FI-5, 11 · AIW | The audit saw terminal turns. Whether a child launched a window is unconfirmed. [Documentation](https://github.com/Kgray44/Aetherwake/pull/169#issuecomment-6845485738) [CIE](https://github.com/Kgray44/Aetherwake/pull/81#issuecomment-6845486003) [BackendCore](https://github.com/Kgray44/Aetherwake/pull/92#issuecomment-6845571965) [FI-5](https://github.com/Kgray44/Aetherwake/pull/82#issuecomment-6845487324) [AIW](https://github.com/Kgray44/Aetherwake/pull/112#issuecomment-6845488355) |
+| 3 · CI | A foreground launch remains unconfirmed. [Coordination](https://github.com/Kgray44/Aetherwake/pull/71#issuecomment-6845486343) |
+
+A posted notice records a handoff attempt. Each native owner must acknowledge receipt, identify launch and failure behavior, and confirm delivery to any child worker. Owner and worker acknowledgments belong in the linked discussions. Other activity remains unattributed.
+
+## Windows desktop slot
+
+Only the desktop coordinator opens, closes, pauses or resumes the slot. These commands run via an already headless launcher. Use hidden child consoles and keep the permit token local.
+
+- Before gaming, run `node scripts/native-test-slot.cjs pause`. It invalidates the permit and blocks new permits. Confirm `status` reports `gaming: true` and no lease, and that any previously admitted verifier and its child processes have exited, before beginning a gaming period.
+- During gaming, use work whose launch and failure paths cannot show or activate windows, restore focus, simulate mouse or keyboard input, or launch visible terminals. An offscreen flag does not establish those properties. Chat access grants no desktop permission.
+- After gaming, `node scripts/native-test-slot.cjs resume` clears the gaming lockout and leaves the slot closed. To schedule an already-authorized run, use `node scripts/native-test-slot.cjs open mission-9 10` and supply its token as `AERYNTH_NATIVE_TEST_SLOT` only to that verifier and its owned workers. For manual verification of a package containing the gate, pass `--native-test` and an explicit absolute `--profile` for the owned test profile at launch. Owners keep the slot for one named run and its authorized restarts. Existing functional, visual, accessibility, performance and owner acceptance requirements still apply.
+- The coordinator runs `close` when the run ends. The next owner waits for verifier and child exit. `status` shows the permit owner, expiry and lease PID without printing the token. An expired permit still needs `close` before the next `open`.
+- A forced exit can leave the lease in place. Close the permit, confirm the recorded process and all its test children have exited, and preserve the stale lease file as evidence before moving it out of the admission directory. For unreadable ownership, first establish custody and process identity. Do not clear a lease merely because its permit expired.
+
+The Windows gate uses a per-user directory under Local AppData shared across checkouts. Slot contention fails before the covered verifier starts. Covered entry points include the connected desktop's integration, explicit native-test, and CDP capture modes, the cinematic prototype's verify, record, preview and soak modes, the standalone Constellation verifier, and the Living Instruments CDP runner. The connected desktop's unqualified offscreen modes also require a permit pending a launch and failure-path audit. A running verifier rechecks at window activation and software native input boundaries, checks for revocation on a 200 ms timer, and exits its own test process on revocation. The Living Instruments runner no longer requests CDP foreground restoration.
+
+This is a repository admission control. Existing packages, launchers on older branches, manual launches without test mode, standalone tools outside the wired entry points, already-running processes, and other applications require separate coordination. A normal user launch of Aerynth still works. Cross-worktree fixture tests establish lock contention, expiry and revocation behavior. Physical Windows behavior and owner adoption require separate evidence.
