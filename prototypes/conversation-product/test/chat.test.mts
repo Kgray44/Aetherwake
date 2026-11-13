@@ -1804,6 +1804,24 @@ test('History waits for composed text before searching',async t=>{
  }finally{await manager?.dispose();f.restore();}
 });
 
+test('History retires old results as soon as the search text changes',async t=>{
+ const f=fixture();let manager;
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  f.history.items.push({kind:'conversation',resourceId:f.draft.resourceId,title:'Previous result',excerpt:''});
+  f.history.total=1;
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const row=named(f.view.root,'Previous result');assert.ok(row);
+  const query=f.view.root.querySelector('input[aria-label="Search conversation history"]');
+  query.value='new search';query.fire('input');
+  assert.ok(!named(f.view.root,'Previous result'));
+  const reads=f.calls.filter(call=>call.name==='detail').length;
+  row.fire('click');await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.calls.filter(call=>call.name==='detail').length,reads);
+ }finally{await manager?.dispose();f.restore();}
+});
+
 test('History Enter runs a pending query once and leaves focus in the field',async t=>{
  const f=fixture();let manager;
  t.mock.timers.enable({apis:['setTimeout']});
