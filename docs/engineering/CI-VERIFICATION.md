@@ -1,6 +1,6 @@
 # Aerynth continuous verification
 
-Architecture Recovery. The integrated workflow checks the PR merge revision, each push to `main`, a merge-group revision when GitHub requests one, and manual runs. Each platform runs the 17 existing groups once. Windows builds the shipping desktop and native helpers and executes the addon contract. Linux typechecks the backend, Vela Core and desktop. Both execute the worker-loss fixture as part of the existing full suite.
+Architecture Recovery. The integrated workflow checks the PR merge revision, each push to `main`, a merge-group revision when GitHub requests one, and manual runs. Each platform runs the 17 existing groups once. Windows divides the backend group across two jobs. The first job builds the shipping desktop and native helpers, executes the addon contract and runs the other 16 groups. Linux typechecks the backend, Vela Core and desktop. Both platforms execute the worker-loss fixture as part of the backend group.
 
 | Classification | Evidence |
 | --- | --- |
@@ -30,6 +30,12 @@ Set `AERYNTH_ACCEPTANCE_OUTPUT` to a fresh private directory to override `.runti
 For a suspected flake, keep the first report and set `AERYNTH_ACCEPTANCE_PREVIOUS` to that JSON before a second run of the same group on the same clean revision and environment. The runner records tests that switched between pass and fail. Preserve both reports and the first failure. CI performs no automatic retry. On a hosted rerun download the comparable earlier artifact locally for this comparison. A changed environment or revision cannot establish a flake. A cancelled job or failed setup can prevent suite reporting. The aggregate records job outcomes separately.
 
 The timing artifact measures verification wall time from the first job start to the last job completion and includes queue time when provided and job/step durations. Compare the same runner images, cache state and event class. Avoid adding durations of jobs that ran in parallel. The workflow reuses npm's download cache, skips desktop install scripts on Linux and removes the separately repeated addon and worker-loss tests because both still run inside the full suites. The full desktop build and addon diagnostic compile remain distinct checks. Run expensive profiler experiments and physical-desktop journeys separately.
+
+Windows discovers the backend test files using the existing suite glob and allocates them to four serial lanes, two per job. Weights are rounded sums of case times from [Windows report 14016804955](https://github.com/Kgray44/Aetherwake/actions/runs/43378396003/artifacts/14016804955). Newly discovered files receive a 10-second weight. The aggregate independently recomputes the plan and checks the observed files, worker-loss receipt and desktop add-on receipt. Both Windows reports must come from the same current workflow run, attempt and revision. Use **Re-run all jobs** when retrying so both current-attempt artifacts are produced.
+
+The backend-only Windows job first runs `mission-stream.test.mts` and `native-worker-services.test.mts` serially with no peer test process. These files are excluded from the two parallel lanes on each job. The aggregate verifies the serial phase as the third lane in that job's backend report.
+
+The recorded run spent 31m16s in the Windows backend group. The four-lane model estimates 15m30s of backend work per Windows job at similar test speeds. The second job repeats checkout, Node setup and installs, about 41 seconds in the recorded run, and needs a second Windows runner. The full pre-acceptance path took 117 seconds. Using that larger setup allowance, the added runner can start about 20 minutes after the first and still finish before the prior Windows baseline. Linux queued for about 112 minutes on that run and controlled the overall completion time. These are model estimates pending hosted verification.
 
 ## Recovery evidence
 
