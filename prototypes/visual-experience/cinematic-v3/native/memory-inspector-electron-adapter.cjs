@@ -123,8 +123,9 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
         webPreferences: { preload: preloadPath, session: isolated, sandbox: true,
           contextIsolation: true, nodeIntegration: false, devTools: false },
       });
-      let mounted = false;
+      let mounted = false, invalidateDetail;
       const finish = () => {
+        invalidateDetail?.();
         void close().catch(() => {});
         if (!win.isDestroyed()) win.destroy();
       };
@@ -142,6 +143,7 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
         win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
         win.webContents.on("will-navigate", event => event.preventDefault());
         win.webContents.on("will-attach-webview", event => event.preventDefault());
+        win.webContents.on("did-start-navigation", () => invalidateDetail?.());
         win.webContents.once("render-process-gone", finish);
       } catch (error) {
         clearInterval(timer);
@@ -151,8 +153,9 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
       }
       return {
         win, dialog,
-        async mount({ rendererURL, dispatch }) {
+        async mount({ rendererURL, dispatch, invalidateDetail: clearDetail }) {
           check();
+          invalidateDetail = clearDetail;
           approvedURL = rendererURL;
           approvedBundle = rendererURL.replace(/memory-inspector\.html$/u, "memory-inspector.js");
           ipcMain.handle("application-command", dispatch);
@@ -162,6 +165,7 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
           win.show();
         },
         close() {
+          invalidateDetail?.();
           clearInterval(timer);
           app.removeListener("before-quit", beforeQuit);
           win.removeListener("closed", finish);
