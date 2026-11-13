@@ -34,7 +34,8 @@ export function decorateConversationDisclosure(node: HTMLDetailsElement, summary
 }
 /** The host translates only observed assistant text deltas; never reasoning/tool summaries or fabricated approval events. */
 export type ConversationExecutionObservation = {
-  execution?: ConversationExecution; connection?: 'available'|'unavailable'; resourceAvailable?: boolean;
+  /** Null means an authorized activity read found no execution. Omission leaves it unchanged. */
+  execution?: ConversationExecution | null; connection?: 'available'|'unavailable'; resourceAvailable?: boolean;
   /** Complete, access-checked live buffer from the same canonical execution, through cursor. */
   preview?: { executionId: string; cursor: number; text: string } | null;
   delta?: { eventId: string; cursor: number; text: string };
@@ -283,6 +284,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let submittedTurn: { commandId: string; providerId: string; webSearch: boolean } | undefined;
   let reconcileSubmittedTurn: ((observed: ConversationExecution) => Promise<void>) | undefined;
   let reviewedExecutionId: string | undefined;
+  let missingExecution: ConversationExecution | null = null;
   const unresolvedOrdinaryExecution = () => {
     const canonical = current?.conversation.execution;
     const observed = execution && (!canonical || (execution.id === canonical.id
@@ -293,7 +295,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   };
   const needsSendReview = () => {
     const unresolved = unresolvedOrdinaryExecution();
-    return uncertain || (unresolved !== undefined && unresolved.id !== reviewedExecutionId);
+    return uncertain || missingExecution !== null || (unresolved !== undefined && unresolved.id !== reviewedExecutionId);
   };
   const observedSubmittedTurn = () => submittedTurn && execution?.resourceId === resourceId &&
     execution.commandId === submittedTurn.commandId && execution.providerId === submittedTurn.providerId ? execution : undefined;
@@ -598,7 +600,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   keep.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('keep-local',remote.version));} });
   useStored.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('use-stored',remote.version));} });
   retry.addEventListener('click', () => { markViewIntent();void recover(async()=>{await session.reload();await session.flush();}); });
-  reviewed.addEventListener('click', () => { if(sending)return;uncertain = false; submittedTurn = undefined; reconcileSubmittedTurn = undefined; reviewedExecutionId = unresolvedOrdinaryExecution()?.id; recovery.replaceChildren(); renderDraft(); });
+  reviewed.addEventListener('click', () => { if(sending)return;uncertain = false; missingExecution=null; submittedTurn = undefined; reconcileSubmittedTurn = undefined; reviewedExecutionId = unresolvedOrdinaryExecution()?.id; recovery.replaceChildren(); renderDraft(); });
   checkOutcome.addEventListener('click', () => {
     const id = execution?.id, port = options.execution;
     if (!id || checkOutcome.hidden || !port?.recoverTurn) return;
@@ -922,6 +924,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         if (acceptedConversationSubmission(input,observed,detail)) return detail;
       };
       const acknowledge = async (accepted: string) => {
+        if(missingExecution?.commandId===commandId&&missingExecution.providerId===input.providerId)
+          missingExecution=null;
         acceptedNotice = accepted;
         try {
           const cleared = await session.acknowledgeSent(checkpoint);
@@ -1047,7 +1051,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const statusKind=status.dataset.statusKind;
     const heldOffline=statusKind==='send-held-offline'||statusKind==='research-held-offline';
     const research=statusKind==='research-held-offline';
-    const next=observation.execution??execution;
+    const executionAbsent=observation.execution===null&&connection==='available'&&observation.resourceAvailable===true;
+    const next=executionAbsent?null:observation.execution??execution;
     const keepHeldNotice=heldOffline&&(!next||next.id===execution?.id&&next.state===execution.state&&
       !['dispatching','running','unknown'].includes(next.state));
     if(connection==='unavailable'){
@@ -1064,10 +1069,20 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       const action=research?'Choose Search web to retry.':'Press Send to submit your saved draft.';
       report((research?web:send).disabled?'Connection restored. Your draft is saved.':'Connection restored. '+action,statusKind);
     }
+    if(executionAbsent){
+      if(active())missingExecution??=execution;
+      const unresolved=unresolvedOrdinaryExecution();
+      if(unresolved&&unresolved.id!==reviewedExecutionId)uncertain=true;
+      execution=null;stopRequestedFor=null;streamExecution='';
+      streamText.textContent='';stream.hidden=true;lastCursor=-1;seenEvents.clear();streamLimited=false;liveFollow=false;
+      delete root.dataset.executionState;
+      if(needsSendReview())report('Send outcome is unconfirmed. Inspect the chat before retrying.');
+      renderDraft();
+    }
     if(!next){
       if(observation.connection==='available'&&!keepHeldNotice){
         renderDraft();
-        if(statusKind==='connection-unavailable') report('Connection restored.');
+        if(!needsSendReview()&&statusKind==='connection-unavailable') report('Connection restored.');
       }
       return;
     }
@@ -1079,6 +1094,9 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(execution&&next.id!==execution.id&&next.startedAt<execution.startedAt)return;
     if(execution?.id===next.id&&!['dispatching','running'].includes(execution.state)&&['dispatching','running'].includes(next.state))return;
     execution=next;
+    if(missingExecution?.id===next.id&&missingExecution.commandId===next.commandId&&
+      missingExecution.providerId===next.providerId&&['interrupted','failed'].includes(next.state))
+      missingExecution=null;
     const recoveredStop = uncertain && observedSubmittedStop();
     const recoveredFailure = uncertain && connection === 'available' && next.providerId === 'chatgpt-plan-responses' &&
       next.state === 'failed' && observedSubmittedTurn() === next ? failedSendNotice(!!submittedTurn?.webSearch, next.errorCode) : undefined;
