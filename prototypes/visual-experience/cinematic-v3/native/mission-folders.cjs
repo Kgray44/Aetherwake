@@ -58,8 +58,9 @@ try{do{
    Assert-ExactOwner $handle
    $window=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
    $editType=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Edit)
-   $edits=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$editType)|Where-Object {$_.Current.AutomationId -ceq '1148' -or $_.Current.AutomationId -ceq '1001'})
-   if($edits.Count -ne 1){$controls=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$editType)|Select-Object -First 16|ForEach-Object {@{automationId=$_.Current.AutomationId;class=$_.Current.ClassName;type=$_.Current.ControlType.ProgrammaticName;enabled=$_.Current.IsEnabled;offscreen=$_.Current.IsOffscreen}});throw ('source_dialog_exact_filename_control_unavailable '+(ConvertTo-Json -InputObject $controls -Compress))}
+   $controls=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$editType))
+   $edits=@($controls|Where-Object {$_.Current.AutomationId -ceq '1148' -or $_.Current.AutomationId -ceq '1001'})
+   if($edits.Count -ne 1){$ids=@($controls|ForEach-Object {$_.Current.AutomationId}|Sort-Object -Unique|Select-Object -First 24);throw ('source_dialog_exact_filename_control_unavailable '+(ConvertTo-Json -InputObject $ids -Compress))}
    $value=$edits[0].GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
    if($value.Current.IsReadOnly){throw 'source_dialog_filename_readonly'}
    Assert-ExactOwner $handle;$value.SetValue($target)
