@@ -63,6 +63,7 @@ import { createVelaWakeView } from "./vela-wake-view.ts";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
+import { createVelaObservationRefresh } from "./vela-observation-refresh.ts";
 import type { VelaPlan, VelaRequest, VelaState } from "../../../vela-core/src/contracts.ts";
 import { createVelaExperience } from "./vela-experience";
 import { velaVisualState, velaVisualLabels, type VelaVisualEvidence } from './vela-visual-state.ts';
@@ -334,9 +335,6 @@ export function installApplication(hooks: Hooks) {
   document.addEventListener("visibilitychange", velaMissions.observe);
   let velaOpen = false;
   let velaOpening = 0;
-  let velaRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-  let velaStateRead: Promise<unknown> | undefined;
-  let velaActive = false;
   const velaContent = document.createElement("div");
   velaContent.className = "application-vela-content";
   const velaManifestation = createVelaManifestation({
@@ -344,6 +342,16 @@ export function installApplication(hooks: Hooks) {
     root: velaContent,
     wake: hooks.wake,
     resize: (size) => surfaces.resize("vela", size),
+  });
+  const velaObservation = createVelaObservationRefresh({
+    available: () => !!velaPanel && !eventClosed && !eventDisconnected && !document.hidden,
+    read: () => {
+      // Preserve the editor while continuing to observe the canonical state.
+      const focused = document.activeElement;
+      const editing = velaContent.contains(focused) && focused?.matches("input,textarea,select");
+      return velaOpen && !editing ? velaPanel!.refresh() : velaClient.state();
+    },
+    failed: report,
   });
   const observeVelaOutput = createVelaOutputObservation(async output => host.command?.("rendererVelaOutput", output));
   const velaExperience = createVelaExperience({
@@ -458,9 +466,10 @@ export function installApplication(hooks: Hooks) {
       visualEvidence.pendingRequest = value.requests.some(request => request.state === 'checking');
       visualEvidence.applying = value.receipts.some(receipt => receipt.state === 'started');
       visualEvidence.needsInput = value.requests.some(request => request.state === 'awaiting-review');
-      velaActive = !!value.activeAnswer || !!visualEvidence.planning ||
-        !!visualEvidence.pendingRequest || !!visualEvidence.applying;
-      if (velaActive) refreshVelaFromEvent(1000);
+      velaObservation.observeActivity(
+        !!value.activeAnswer || !!visualEvidence.planning ||
+        !!visualEvidence.pendingRequest || !!visualEvidence.applying,
+      );
       if (velaOpen) velaPanel?.observeLiveAnswer(value.activeAnswer);
       if (
         value.requests.some((r) => r.state === "planning") ||
@@ -926,7 +935,7 @@ export function installApplication(hooks: Hooks) {
       eventClosed = true;
       eventRefreshGeneration++;
       clearTimeout(eventRefreshTimer);
-      clearTimeout(velaRefreshTimer);
+      velaObservation.stop();
       stopApplicationEvents?.();
       conversationExecution.dispose();
       window.removeEventListener("focus", recoverEventProjection);
@@ -2533,28 +2542,6 @@ export function installApplication(hooks: Hooks) {
     el("#vela").setAttribute("aria-controls", surface.id);
     el("#vela").setAttribute("aria-expanded", "true");
     void velaPanel.open().catch(report);
-  }
-  function refreshVelaFromEvent(delay = 150) {
-    if (!velaPanel || velaRefreshTimer || velaStateRead ||
-        eventClosed || eventDisconnected || document.hidden) return;
-    velaRefreshTimer = setTimeout(() => {
-      velaRefreshTimer = undefined;
-      if (eventClosed || eventDisconnected || document.hidden) return;
-      // Keep an in-progress settings edit intact while still observing real presence.
-      const editing =
-        velaContent.contains(document.activeElement) &&
-        document.activeElement?.matches("input,textarea,select");
-      velaStateRead = (velaOpen && !editing ? velaPanel!.refresh() : velaClient.state())
-        .catch(error => {
-          if (error instanceof Error && error.message === "vela_observation_superseded") {
-            velaActive = true;
-          } else report(error);
-        })
-        .finally(() => {
-          velaStateRead = undefined;
-          if (velaActive) refreshVelaFromEvent(1000);
-        });
-    }, delay);
   }
   dialog.addEventListener("close", () =>
     returnFocusAfterDialogClose(dialog, lastTrigger),
@@ -4728,7 +4715,7 @@ export function installApplication(hooks: Hooks) {
   function recoverEventProjection() {
     if (document.hidden || eventClosed || eventDisconnected) return;
     requestEventRefresh();
-    refreshVelaFromEvent();
+    velaObservation.request();
     void conversationExecution.refresh();
   }
   function refreshEvents(): Promise<void> {
@@ -4784,7 +4771,7 @@ export function installApplication(hooks: Hooks) {
         eventScannedThrough = result.cursor;
         if (sourceChanged) await enqueueResult(() => command({ type: "snapshot" }));
         if (executionChanged) void conversationExecution.refresh();
-        if (replayed) refreshVelaFromEvent();
+        if (replayed) velaObservation.request();
         scheduleStreamRefresh();
         if (result.status === "more") {
           requestEventRefresh();
@@ -4861,7 +4848,7 @@ export function installApplication(hooks: Hooks) {
     });
   }
   stopApplicationEvents = host.onEvent?.((event) => {
-    refreshVelaFromEvent();
+    velaObservation.request();
     const e = event as Activity & {
       resourceId?: string;
       payload?: { delta?: string };
@@ -4936,8 +4923,7 @@ export function installApplication(hooks: Hooks) {
     if (e.type === "backend/disconnected") {
       eventDisconnected = true;
       resetEventProjection();
-      clearTimeout(velaRefreshTimer);
-      velaRefreshTimer = undefined;
+      velaObservation.stop();
       velaPanel?.observeLiveAnswer(undefined);
       hooks.status(
         "Backend disconnected. Current surfaces are retained; restart to recover persisted data. Execution outcomes may be unknown.",
