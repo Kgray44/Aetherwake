@@ -172,6 +172,32 @@ test('CIE preflight refuses a stale catalog without dispatching or joining an in
   }
 });
 
+test('CIE dispatch refuses a catalog that expired after preflight without refreshing it', async () => {
+  const f=fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const {velaApiRuntime:runtime,velaApiConnection:connection}=f.core as unknown as {
+      velaApiRuntime:VelaApiRuntime;velaApiConnection:import('../src/vela-api-connection.mts').VelaApiConnection;
+    };
+    await runtime.models(1);
+    await runtime.modelsFromCurrentCatalog(1);
+    // Simulate expiration at the existing cache boundary without changing the
+    // global clock or the catalog rules used by other tests.
+    connection.resolveCatalog=async()=>{throw Object.assign(new Error('api_catalog_stale'),{code:'api_catalog_stale'});};
+    const requestId='synthetic-expired-cie-catalog';
+    const {result}=await runtime.run({
+      requestId,version:1,model:'gpt-6-luna',prompt:'Synthetic reviewed question',contextDigest:'a'.repeat(64),
+      currentCatalogOnly:true,validate(){},
+    },new AbortController().signal);
+    assert.equal(result.outcome,'failed');
+    assert.equal(result.dispatched,false);
+    assert.equal(f.catalogRequests,1);
+    assert.equal(f.requests.length,0);
+    assert.equal(runtime.receiptsForRequest(requestId)[0]?.state,'failed');
+  } finally {await f.close();}
+});
+
 const weatherQuery:WeatherQuery={startDate:null,endDate:null,period:'tomorrow',metrics:['temperature','humidity'],aggregation:'range'};
 const weatherCall=(query:unknown=weatherQuery,id='resp-weather',callId='call-weather')=>response('',id,[{type:'function_call',id:'fc-'+callId,call_id:callId,name:WEATHER_TOOL_NAME,arguments:JSON.stringify(query),status:'completed'}] as any);
 const unavailableWeather=()=>readWeatherData(weatherQuery,new AbortController().signal,{authorize(){throw Error('location_os_denied');},locate:async()=>{throw Error('unexpected_location');},fetch:async()=>{throw Error('unexpected_weather_network');}});

@@ -41,6 +41,7 @@ export interface SemanticHistoryReview {
 
 interface SemanticHistoryAuthority {
   configurationVersion: number;
+  currentCatalogOnly?: true;
   /** Explicit selection supplied by the trusted native caller. */
   selectedNoteIds?: readonly string[];
   /** Native authorization for the exact payload, purpose, destination and current source proofs.
@@ -49,7 +50,7 @@ interface SemanticHistoryAuthority {
 }
 export type SemanticHistoryAdmission = SemanticHistoryAuthority &
   ({ model: string; models?: never } | { model?: never; models: readonly string[] });
-export type SemanticHistoryProbeAdmission = Pick<SemanticHistoryAuthority, 'configurationVersion' | 'authorize'> & { model: string };
+export type SemanticHistoryProbeAdmission = Pick<SemanticHistoryAuthority, 'configurationVersion' | 'authorize' | 'currentCatalogOnly'> & { model: string };
 interface MissionCognitionObservations {
   reviewedMissionCapabilities?: readonly string[];
   reviewedProjectCheck?: ReviewedProjectCheckContext;
@@ -77,6 +78,7 @@ export async function qualifyVelaHistoryModelWithApi(api: VelaApiRuntime, admiss
       if (!authorize(structuredClone(review))) throw new Error('semantic_history_disclosure_denied');
     };
     const receipt = await api.qualifyStructuredRoute({ requestId: randomUUID(), model, payload: call,
+      currentCatalogOnly: admission.currentCatalogOnly,
       instruction: instructions[call.stage], schema, binding: { configurationVersion, contextDigest }, validate,
       onResult: observations?.observeResult,
       ...(observations ? { missionCognition: {
@@ -113,7 +115,7 @@ export function investigateVelaHistoryWithApi(vela: Pick<VelaService, 'investiga
     const schema = semanticHistoryFormats[call.stage].schema;
     const instruction = instructions[call.stage];
     const qualification = admission.model === undefined
-      ? await api.resolveQualifiedStructuredRoute(configurationVersion, allowed, schema, instruction, abort) : undefined;
+      ? await api.resolveQualifiedStructuredRoute(configurationVersion, allowed, schema, instruction, abort, admission.currentCatalogOnly) : undefined;
     const model = admission.model ?? qualification?.model;
     const needsAssessmentRoute = !!qualification && call.stage === 'interpret';
     const assessment = needsAssessmentRoute ? availableAssessment() : undefined;
@@ -128,6 +130,7 @@ export function investigateVelaHistoryWithApi(vela: Pick<VelaService, 'investiga
         (assessment && !api.isStructuredQualificationCurrent(assessment))) throw new Error('semantic_history_disclosure_denied');
     };
     const proposal = await api.structuredProposal({ requestId: randomUUID(), model, payload: call, instruction,
+      currentCatalogOnly: admission.currentCatalogOnly,
       binding: { configurationVersion, contextDigest }, schema, validate, bufferedText: true, onResult: observations?.observeResult,
       ...(observations ? { missionCognition: {
         owner: { kind: 'planning', requestId: observations.planningRequestId },
@@ -159,14 +162,15 @@ function reviewedCitationText(source: ReviewedEvidenceSource, quote: string) {
 export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, intent: string,
   sources: readonly ReviewedEvidenceSource[], configurationVersion: number, model: string,
   validate: () => void, signal: AbortSignal, observations?: MissionCognitionObservations,
-  discovery?: { sources: readonly ReviewedEvidenceSource[]; partial: boolean; missionGap?: string }) {
+  discovery?: { sources: readonly ReviewedEvidenceSource[]; partial: boolean; missionGap?: string },
+  currentCatalogOnly?: true) {
   const authorize = () => { validate(); return !signal.aborted; };
   validate();
   const perceptionSchema = semanticHistoryFormats.interpret.schema;
   const perception = api.qualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret) ??
-    await api.resolveQualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret, signal);
+    await api.resolveQualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret, signal, currentCatalogOnly);
   const assessment = api.qualifiedStructuredRoute(configurationVersion, [model], semanticHistoryFormats.assess.schema, instructions.assess);
-  if (!perception || !assessment) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize }, signal, observations);
+  if (!perception || !assessment) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize, currentCatalogOnly }, signal, observations);
   const candidates = new Map(discovery?.sources.map(source => [source.sourceId, source]));
   const searchable = [...candidates.values()].map(source => ({ id: source.sourceId, text: source.title + '\n' + source.text }));
   const approved = new Set([...sources, ...candidates.values()]);
@@ -198,7 +202,7 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
       }, cancel);
     },
   };
-  const result = await investigateVelaHistoryWithApi(scoped, api, intent, { configurationVersion, models: [model], authorize }, signal, observations);
+  const result = await investigateVelaHistoryWithApi(scoped, api, intent, { configurationVersion, models: [model], authorize, currentCatalogOnly }, signal, observations);
   validate();
   const sourcesById = new Map([...approved].map(source => [source.sourceId, source]));
   const questions = new Map(result.proposal?.needs.map(need => [need.key, need.question]));

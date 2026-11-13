@@ -83,6 +83,8 @@ export interface VelaApiRuntimeOptions {
 }
 export interface VelaApiRun {
   requestId: string; version: number; model: string; prompt: string; instruction?: string; contextDigest: string;
+  /** Private evaluation callers require an already qualified catalog throughout. */
+  currentCatalogOnly?: true;
   reasoningEffort?: ReasoningEffort;
   missionCognition?: VelaMissionCognitionAttribution;
   catalog?: CapabilityCatalogSnapshot; outputSchema?: ApiJsonSchema;
@@ -488,7 +490,7 @@ export class VelaApiRuntime {
               // A tool loop can outlive the catalog TTL while retaining its
               // original request, model and usage grant. Reuse bounded catalog
               // refresh/coalescing, then recheck every original authority fence.
-              await abortable(this.models(input.version), combined);
+              if (!input.currentCatalogOnly) await abortable(this.models(input.version), combined);
               fence();
               const current = await abortable(this.options.connection.resolveCatalog(input.version), combined);
               fence();
@@ -649,13 +651,14 @@ export class VelaApiRuntime {
   }
 
   async resolveQualifiedStructuredRoute(version: number, allowed: readonly string[], schema: ApiJsonSchema, instruction: string,
-    signal: AbortSignal) {
+    signal: AbortSignal, currentCatalogOnly?: true) {
     if (!this.currentStructuredQualifications(version, allowed, schema, instruction).length) return;
-    await abortable(this.models(version), signal);
+    await abortable(currentCatalogOnly ? this.modelsFromCurrentCatalog(version) : this.models(version), signal);
     return this.qualifiedStructuredRoute(version, allowed, schema, instruction);
   }
 
   async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;
+    currentCatalogOnly?: true;
     bufferedText?: true;
     missionCognition?: VelaMissionCognitionAttribution;
     /** Native binding for a reviewed cognitive payload and its current source provenance. */
@@ -669,10 +672,13 @@ export class VelaApiRuntime {
       check(binding.configurationVersion === version && /^[a-f0-9]{64}$/.test(binding.contextDigest), 'api_configuration_changed');
       input.validate();
     }
-    const model=input.model??'gpt-6-luna',models = await this.models(version); check(models.includes(model), 'vela_api_default_model_unavailable');
+    const model=input.model??'gpt-6-luna',models = await abortable(input.currentCatalogOnly ?
+      this.modelsFromCurrentCatalog(version) : this.models(version),signal);
+    check(models.includes(model), 'vela_api_default_model_unavailable');
     const prompt = JSON.stringify(input.payload); check(Buffer.byteLength(prompt) <= 32768, 'context_budget_exceeded');
     const reasoningEffort = input.reasoningEffort ?? (binding ? undefined : 'low');
     const { result } = await this.run({ requestId: input.requestId, version, model, prompt,
+      currentCatalogOnly: input.currentCatalogOnly,
       instruction: input.instruction, ...(reasoningEffort ? { reasoningEffort } : {}),
       contextDigest: binding?.contextDigest ?? digest(prompt), ...(binding ? { oneUse: true as const } : {}),
       missionCognition: input.missionCognition, bufferedText: input.bufferedText,
