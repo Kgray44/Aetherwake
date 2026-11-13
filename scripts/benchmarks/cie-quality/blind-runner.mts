@@ -14,6 +14,15 @@ interface BlindCheckpoint {
   complete: boolean;
   predictionSha256: string;
 }
+interface BlindJournalState {
+  checkpoint: BlindCheckpoint;
+  inFlight: string | null;
+}
+interface BlindJournal {
+  read(): Promise<BlindJournalState | null>;
+  /** Atomically compare durable state and commit the next state before resolving. */
+  compareAndSet(expected: BlindJournalState | null, next: BlindJournalState): Promise<boolean>;
+}
 const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 function exact(value: any, keys: string[]) {
   return value && typeof value === 'object' && !Array.isArray(value) &&
@@ -43,36 +52,57 @@ export function readBlindInputs(bytes: Buffer): readonly BlindCase[] {
  * No fallback inference, retries, fabricated predictions, credential reader or promotion. */
 export async function runBlindCie(bytes: Buffer, candidate: Candidate,
   run: (input: Readonly<BlindPayload>, signal: AbortSignal) => Promise<unknown>, signal: AbortSignal,
-  options: { maxCases?: number; resume?: BlindCheckpoint } = {}): Promise<BlindCheckpoint> {
+  options: { maxCases?: number; resume?: BlindCheckpoint; journal?: BlindJournal } = {}): Promise<BlindCheckpoint> {
   if (![candidate.commit, candidate.tree].every(value => /^[a-f0-9]{40}$/.test(value))) throw new Error('candidate_identity');
   const inputs = readBlindInputs(bytes);
   const maxCases = options.maxCases ?? inputs.length;
   if (!Number.isSafeInteger(maxCases) || maxCases < 1 || maxCases > inputs.length) throw new Error('blind_batch_capacity');
   const results: Prediction[] = [];
-  if (options.resume) {
-    const { predictionSha256, ...checkpoint } = options.resume;
+  const journal = options.journal;
+  if (journal && options.resume) throw new Error('blind_checkpoint_conflicting_owners');
+  let journalState = journal ? await journal.read() : null;
+  if (journalState && journalState.inFlight !== null) throw new Error('blind_case_unreconciled');
+  const resume = journalState?.checkpoint ?? options.resume;
+  if (resume) {
+    const { predictionSha256, ...checkpoint } = resume;
     if (checkpoint.contract !== 'aerynth.cie-blind-predictions@1' || checkpoint.inputSha256 !== BLIND_INPUT_SHA256 ||
       checkpoint.candidate?.commit !== candidate.commit || checkpoint.candidate?.tree !== candidate.tree ||
-      checkpoint.stopped !== null || checkpoint.complete !== false || !Array.isArray(checkpoint.results) ||
-      checkpoint.results.length >= inputs.length || checkpoint.results.some((row, index) =>
+      checkpoint.stopped !== null || !Array.isArray(checkpoint.results) ||
+      checkpoint.results.length > inputs.length || checkpoint.complete !== (checkpoint.results.length === inputs.length) ||
+      (checkpoint.complete && !journal) || checkpoint.results.some((row, index) =>
         row?.id !== inputs[index].id || !Number.isFinite(row.endToEndMs) || row.endToEndMs < 0) ||
       sha(JSON.stringify(checkpoint)) !== predictionSha256) throw new Error('blind_checkpoint_invalid');
+    if (checkpoint.complete) return structuredClone(resume);
     results.push(...structuredClone(checkpoint.results));
   }
   let stopped: BlindCheckpoint['stopped'] = null;
+  const snapshot = (): BlindCheckpoint => {
+    const payload = { contract: 'aerynth.cie-blind-predictions@1' as const, inputSha256: BLIND_INPUT_SHA256,
+      candidate: { ...candidate }, results: structuredClone(results), stopped, complete: results.length === inputs.length && !stopped };
+    return { ...payload, predictionSha256: sha(JSON.stringify(payload)) };
+  };
+  const persist = async (inFlight: string | null) => {
+    if (!journal) return;
+    const next = { checkpoint: snapshot(), inFlight };
+    if (!await journal.compareAndSet(journalState, next)) throw new Error('blind_journal_changed');
+    journalState = next;
+  };
   for (const input of inputs.slice(results.length, results.length + maxCases)) {
     if (signal.aborted) { stopped = { caseId: input.id, kind: 'cancelled' }; break; }
+    if (journal) await persist(input.id);
     // The host must include qualification/preparation inside this callback. No labels exist here.
     const start = performance.now();
     try {
+      signal.throwIfAborted();
       const result = await run(structuredClone({ id: input.id, request: input.request, sources: input.sources }), signal);
       results.push({ id: input.id, result: structuredClone(result), endToEndMs: performance.now() - start });
-      if (signal.aborted) { stopped = { caseId: input.id, kind: 'cancelled' }; break; }
+      if (signal.aborted) stopped = { caseId: input.id, kind: 'cancelled' };
     } catch {
       // Preserve completed predictions; never echo possible private host/credential error text.
-      stopped = { caseId: input.id, kind: signal.aborted ? 'cancelled' : 'host-error' }; break;
+      stopped = { caseId: input.id, kind: signal.aborted ? 'cancelled' : 'host-error' };
     }
+    if (journal) await persist(stopped ? input.id : null);
+    if (stopped) break;
   }
-  const payload = { contract: 'aerynth.cie-blind-predictions@1' as const, inputSha256: BLIND_INPUT_SHA256, candidate, results, stopped, complete: results.length === inputs.length && !stopped };
-  return { ...payload, predictionSha256: sha(JSON.stringify(payload)) };
+  return snapshot();
 }

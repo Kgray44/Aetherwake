@@ -31,6 +31,33 @@ test('a host failure is not retried or replaced with a guessed prediction', asyn
   assert.equal(calls, 1);
 });
 
+test('concurrent journal runners dispatch each case at most once', async () => {
+  const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  type Journal = NonNullable<NonNullable<Parameters<typeof runBlindCie>[4]>['journal']>;
+  let stored: Awaited<ReturnType<Journal['read']>> = null;
+  const journal: Journal = {
+    async read() { return stored; },
+    async compareAndSet(expected, next) {
+      if (stored !== expected) return false;
+      stored = next;
+      return true;
+    },
+  };
+  const seen: string[] = [];
+  const run = (maxCases: number) => runBlindCie(bytes, identity, async input => {
+    seen.push(input.id);
+    return { status: 'synthetic' };
+  }, new AbortController().signal, { journal, maxCases });
+  const outcomes = await Promise.allSettled([run(1), run(1)]);
+  assert.equal(outcomes.filter(outcome => outcome.status === 'fulfilled').length, 1);
+  assert.deepEqual(seen, ['blind-001']);
+  const completed = await run(48);
+  assert.equal(completed.complete, true);
+  assert.equal(new Set(seen).size, 48);
+  assert.deepEqual(await run(48), completed);
+  assert.equal(seen.length, 48);
+});
+
 test('bounded batches resume the sealed prefix without replaying an evaluated case', async () => {
   const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
   const signal = new AbortController().signal;
@@ -47,4 +74,25 @@ test('bounded batches resume the sealed prefix without replaying an evaluated ca
   const failed = await runBlindCie(bytes, identity, async () => { throw new Error('unknown outcome'); }, signal, { maxCases: 1 });
   await assert.rejects(runBlindCie(bytes, identity, host, signal, { resume: failed }), /checkpoint/);
   assert.equal(seen.length, 3);
+});
+
+test('a lost completion receipt leaves a durable claim and blocks replay on restart', async () => {
+  const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const signal = new AbortController().signal;
+  type Journal = NonNullable<NonNullable<Parameters<typeof runBlindCie>[4]>['journal']>;
+  let stored: Awaited<ReturnType<Journal['read']>> = null;
+  let calls = 0;
+  const journal: Journal = {
+    async read() { return stored; },
+    async compareAndSet(expected, next) {
+      assert.deepEqual(stored, expected);
+      if (next.inFlight === null) throw new Error('completion receipt unavailable');
+      stored = next;
+      return true;
+    },
+  };
+  const host = async () => { calls++; return { status: 'synthetic' }; };
+  await assert.rejects(runBlindCie(bytes, identity, host, signal, { journal, maxCases: 1 }), /completion receipt/);
+  await assert.rejects(runBlindCie(bytes, identity, host, signal, { journal, maxCases: 1 }), /blind_case_unreconciled/);
+  assert.equal(calls, 1);
 });

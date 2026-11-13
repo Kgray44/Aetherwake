@@ -59,6 +59,8 @@ These observations come from 12 profiles per revision on Windows. The candidate 
 
 For a controlled multi-day run, pass a host-approved `maxCases` and persist each successful batch's returned checkpoint in the evaluation evidence location. Resume only the exact input and candidate with `resume` set to that checkpoint. A stopped batch with a cancelled or unknown host outcome is ineligible for automatic resume. The checkpoint detects accidental drift or tampering against its retained digest. The host must retain the external digest and use its canonical call budget to choose batch size. These controls do not authorize a call, increase a quota, or recover an unpersisted in-flight batch.
 
+For host-managed restart protection, supply `journal` in place of `resume`. Its compare-and-set must atomically compare the stored state and durably persist the replacement. The runner claims each case before calling the host and clears the claim after storing a completed prediction. A lost receipt leaves a claim that blocks replay until the host reconciles it with canonical execution evidence. A completed journal returns its existing predictions without dispatching. The journal interface tracks evaluation progress. Provider timing and usage stay in canonical AEP receipts.
+
 The AEP report groups reported model executions by exact reported model. Dispatch totals and unknown states are distinct. Token sums cover only dispatched executions with consistent usage receipts, with sample coverage shown. These totals describe observed dispatch and usage and do not establish what was billed.
 
 ### Independent lexical holdout baseline
