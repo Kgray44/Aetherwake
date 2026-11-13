@@ -48,7 +48,7 @@ test('canonical read batches memoize only this synchronous authority check and f
    assert.throws(()=>core.canonicalConversationReadBatch(()=>null),/conversation_read_batch_active/);
    return m.id;
   });
-  assert.equal(result,m.id);assert.equal(checks,2,'one resource and one message decision, shared by graph and CP host paths');
+  assert.equal(result,m.id);assert.equal(checks,1,'the first message read also resolves the resource, and later reads reuse both decisions');
   assert.throws(()=>escaped.messageMetadata(m.id),/conversation_read_batch_closed/);
   assert.throws(()=>escaped.graph.visibleMessages(escaped.resourceMap[c.resourceId]),/conversation_read_batch_closed/);
   assert.throws(()=>escaped.resourceContent(c.resourceId),/conversation_read_batch_closed/);
