@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { BLIND_INPUT_SHA256, readBlindInputs } from './blind-runner.mts';
 import { createDormantNativeCieHost } from './native-host-adapter.mts';
+import { historyDigest } from '../../../prototypes/vela-core/src/bounded-history.mts';
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
 
@@ -20,7 +21,17 @@ test('dormant CIE host binds frozen inputs, budgets and canonical receipts witho
     bindingDigest: sha(JSON.stringify([BLIND_INPUT_SHA256, candidate.commit, candidate.tree, route,
       JSON.stringify([profileId, configurationVersion]), id])) };
   const admissions = [{ requestId: 'request', executionId: 'execution' }];
-  let catalog = catalogDigest, usedToday = 0, starts = 0, terminal = false;
+  const answer = 'No "sources" supplied.\nPlease provide a source.';
+  const expected = {
+    answer, requestId: 'request', messageId: 'message', outcome: 'no-evidence' as const,
+    calls: 1, totalTokens: 140, tokenSamples: 1, admissions,
+    settlements: [{ executionId: 'execution', stage: 'answer' as const, elapsedMs: 12,
+      usage: { totalTokens: 140, source: 'provider-reported' }, reportedModel: route.model }],
+    requestedModel: route.model, transport: 'synthetic' as const,
+    evidenceAudit: { outbound: [{ inputDigest: sha('exact outbound'), stage: 'other', textSourceIds: [], sourceSignals: [] }],
+      sourceBindings: [], assessments: [], compositions: [] },
+  };
+  let catalog = catalogDigest, usedToday = 0, starts = 0, terminal = true;
   const options = {
     bytes, candidate, route, profileId, configurationVersion, catalogDigest,
     core: {
@@ -30,12 +41,12 @@ test('dormant CIE host binds frozen inputs, budgets and canonical receipts witho
       readVelaEvaluationAdmissions: () => starts ? admissions : null,
       readVelaEvaluationResult: () => terminal ? {
         state: 'verified-answer' as const, requestId: 'request', messageId: 'message',
-        answer: 'No sources supplied.', answerDigest: sha('No sources supplied.'),
-        receipts: [{ ...admissions[0], outcome: 'completed' as const, elapsedMs: 12, totalTokens: null }],
+        answer, answerDigest: historyDigest(answer),
+        receipts: [{ ...admissions[0], outcome: 'completed' as const, elapsedMs: 12, totalTokens: 140 }],
       } : { state: 'unresolved' as const },
     },
     async readCatalog() { return { configurationVersion, digest: catalog, models: [route.model] }; },
-    async runReviewed(input: typeof payload) { assert.deepEqual(input, payload); starts++; },
+    async runReviewed(input: typeof payload) { assert.deepEqual(input, payload); starts++; return expected; },
   };
   const signal = new AbortController().signal;
   assert.throws(() => createDormantNativeCieHost({ ...options, route: { ...route, transport: 'live' } }),
@@ -50,14 +61,19 @@ test('dormant CIE host binds frozen inputs, budgets and canonical receipts witho
   assert.equal(starts, 0);
   usedToday = 0;
   const admittedClaim = { ...claim, claimToken: 'e'.repeat(64) };
-  await assert.rejects(host.runReviewedCase(payload, signal, admittedClaim), /case_unreconciled/u);
+  assert.deepEqual(await host.runReviewedCase(payload, signal, admittedClaim), expected);
+  assert.notEqual(historyDigest(answer), sha(answer));
   const reopened = createDormantNativeCieHost(options);
-  assert.equal(await reopened.verifyRetainedCase(admittedClaim, {}, signal), false);
+  terminal = false;
+  assert.equal(await reopened.verifyRetainedCase(admittedClaim, expected, signal), false);
   await assert.rejects(reopened.runReviewedCase(payload, signal, admittedClaim), /case_unreconciled/u);
   terminal = true;
-  const expected = { ...options.core.readVelaEvaluationResult(), admissions, provider: route.provider,
-    model: route.model, catalogDigest };
   assert.equal(await reopened.verifyRetainedCase(admittedClaim, expected, signal), true);
   assert.equal(await reopened.verifyRetainedCase(admittedClaim, { ...expected, answer: 'substituted' }, signal), false);
+  for (const changed of [
+    { outcome: undefined }, { calls: 2 }, { totalTokens: null },
+    { settlements: [{ ...expected.settlements[0], elapsedMs: 13 }] },
+    { evidenceAudit: { ...expected.evidenceAudit, assessments: [{ unexpected: true }] } },
+  ]) assert.equal(await reopened.verifyRetainedCase(admittedClaim, { ...expected, ...changed }, signal), false);
   assert.equal(starts, 1);
 });
