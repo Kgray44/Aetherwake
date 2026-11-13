@@ -6,6 +6,7 @@
  * not physical OS input. No refocus, global hooks, auth, provider or fixture RPC.
  */
 const fs = require('node:fs/promises');
+const { lstatSync, realpathSync, readFileSync } = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
@@ -26,7 +27,16 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const encode = value => { const text = JSON.stringify(value, null, 2); assert(Buffer.byteLength(text) <= MiB, 'chat_motion_receipt_capacity'); return text; };
 function assertOwnedProfile(root, argv, title) {
   assert(argv.includes('--integration-chat-motion'), 'explicit_chat_motion_flag_required');
-  assert(typeof root === 'string' && path.win32.isAbsolute(root) && path.win32.parse(root).root.toLowerCase() === 'c:\\' && /^review-chat-motion-\d+$/.test(path.win32.basename(root)), 'fresh_owned_chat_motion_profile_required');
+  const seed = argv.includes('--chat-search-seeded');
+  const name = typeof root === 'string' ? path.win32.basename(root) : '';
+  const validName = seed
+    ? name === 'large' && /^library-scale-\d+-[a-f0-9]{8}$/.test(path.win32.basename(path.win32.dirname(root)))
+    : /^review-chat-motion-\d+$/.test(name);
+  assert(typeof root === 'string' && path.win32.isAbsolute(root) && path.win32.parse(root).root.toLowerCase() === 'c:\\' && validName, 'fresh_owned_chat_motion_profile_required');
+  if (seed) {
+    assert(!argv.includes('--record-chat-motion') && !argv.includes('--chat-reading-only'), 'seeded_search_scope_required');
+    assert.deepEqual(argv.filter(value => value.startsWith('--integration-')), ['--integration-chat-motion'], 'one_seeded_search_journey_required');
+  }
   assert.match(title, /Automated check/i, 'owned_automated_window_required');
 }
 function assertRead(name, input) {
@@ -86,6 +96,31 @@ function viewScript(id, save = false, anchorId = null) {
 function geometryScript(id) {
   return `(${function(id) { const root = document.querySelector('.cp-manager'), node = root?.querySelector('.cp-chat[data-resource-id="' + CSS.escape(id) + '"]'), messages = node?.querySelector('.cp-messages'), input = node?.querySelector('textarea'), send = node?.querySelector('[data-cp-control=send]'); if (!messages || !input || !send) return null; const box = n => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom }; }, clip = messages.getBoundingClientRect(), lines = []; for (const content of messages.querySelectorAll('.cp-message-content')) { const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT); let text; while (text = walker.nextNode()) if (text.textContent.trim()) { const range = document.createRange(); range.selectNodeContents(text); for (const r of range.getClientRects()) if (r.height > 0 && r.width > 0) lines.push({ messageId: content.closest('[data-message-id]').dataset.messageId, x: r.x, y: r.y, width: r.width, height: r.height, fullyVisible: r.top >= clip.top - .5 && r.bottom <= clip.bottom + .5 && r.left >= clip.left - .5 && r.right <= clip.right + .5 }); } } const scrollOwners = [...node.querySelectorAll('*')].filter(n => ['auto', 'scroll'].includes(getComputedStyle(n).overflowY) && n.scrollHeight > n.clientHeight + 1 && n.clientHeight > 0).map(n => n.className); const visibleHit = n => { const r = n.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight && n.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); }; return { viewport: { width: innerWidth, height: innerHeight }, root: box(root), chat: box(node), messages: box(messages), input: box(input), send: box(send), rootOverflow: root.scrollWidth > root.clientWidth + 1, inputHit: visibleHit(input), sendHit: visibleHit(send), lines: lines.slice(-128), scrollOwners, redundantProviderSelects: root.querySelector('.cp-provider-capabilities')?.querySelectorAll('select').length ?? 0 }; }.toString()})(${JSON.stringify(id)})`;
 }
+function seededSearchVisibleScript({ resourceId, messageId, query, draft }, requireClosed) {
+  return `(${function(id, messageId, query, draft, requireClosed) {
+    const root = document.querySelector('.cp-manager');
+    if (root?.dataset.resourceId !== id || (requireClosed && root.querySelector('.cp-switcher')?.open !== false)) return false;
+    const chat = root.querySelector('.cp-chat[data-resource-id="' + CSS.escape(id) + '"]');
+    const messages = chat?.querySelector('.cp-messages');
+    const content = messages?.querySelector('[data-message-id="' + CSS.escape(messageId) + '"] .cp-message-content');
+    if (!content || chat.querySelector('textarea')?.value !== draft) return false;
+    const clip = messages.getBoundingClientRect();
+    const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+    for (let node; (node = walker.nextNode());) {
+      const offset = node.textContent.indexOf(query);
+      if (offset < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, offset);
+      range.setEnd(node, offset + query.length);
+      const rects = [...range.getClientRects()];
+      if (rects.length && rects.every(rect => rect.width > 0 && rect.height >= 12 &&
+        rect.top >= Math.max(0, clip.top) - .5 && rect.bottom <= Math.min(innerHeight, clip.bottom) + .5 &&
+        rect.left >= Math.max(0, clip.left) - .5 && rect.right <= Math.min(innerWidth, clip.right) + .5 &&
+        content.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)))) return true;
+    }
+    return false;
+  }.toString()})(${JSON.stringify(resourceId)},${JSON.stringify(messageId)},${JSON.stringify(query)},${JSON.stringify(draft)},${requireClosed})`;
+}
 function assertGeometry(value) {
   assert(value && !value.rootOverflow && value.inputHit && value.sendHit, 'actual_chat_composer_clipped_or_occluded'); assert.equal(value.redundantProviderSelects, 0);
   assert(value.messages.height >= 80 && value.input.height >= 32 && value.send.height >= 24, 'usable_transcript_composer_bounds_required');
@@ -94,6 +129,52 @@ function assertGeometry(value) {
 }
 async function bounded(promise, ms, code) { assert(ms > 0, code); let timer; try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error(code)), ms); })]); } finally { clearTimeout(timer); } }
 async function readJson(file) { assert((await fs.stat(file)).size <= MiB, 'bounded_chat_motion_checkpoint_required'); return JSON.parse(await fs.readFile(file, 'utf8')); }
+function validateSearchSeed(seed) {
+  assert(seed?.contract === 'aerynth.library-scale@1' && seed.synthetic === true && seed.passed === true && seed.providerCalls === 0, 'passing_synthetic_search_seed_required');
+  assert.equal(seed.dataset?.name, 'large');
+  assert.equal(seed.dataset.actual?.conversations, 1072);
+  assert.equal(seed.dataset.actual?.graphMessages, 12072);
+  assert(seed.profile?.directory === 'large' && seed.profile.database === 'aerynth.sqlite' &&
+    seed.profile.reopenedThroughCore === true && seed.profile.contentPolicy === 'local-private' &&
+    /^[a-f0-9]{64}$/.test(seed.profile.sha256), 'verified_search_database_required');
+  const target = seed.profile.target;
+  assert(target?.query === 'SYNTHETIC_RARE_LIBRARY_TOKEN' && /^[a-f0-9-]{36}$/.test(target.resourceId) &&
+    /^msg-\d+$/.test(target.messageId) && target.draft === 'Synthetic unsent search acceptance draft.', 'exact_search_target_required');
+  return { resourceId: target.resourceId, messageId: target.messageId, query: target.query, draft: target.draft, databaseDigest: seed.profile.sha256 };
+}
+function ownedSearchSeed(root, argv) {
+  assertOwnedProfile(root, argv, 'Automated check');
+  assert(process.env.LOCALAPPDATA && path.isAbsolute(process.env.LOCALAPPDATA), 'absolute_local_app_data_required');
+  const evidenceRoot = path.join(realpathSync(process.env.LOCALAPPDATA), 'Aerynth', 'synthetic-chat-search-profiles');
+  assert.equal(realpathSync(root).toLowerCase(), path.join(evidenceRoot, path.basename(path.dirname(root)), 'large').toLowerCase(), 'owned_search_evidence_root_required');
+  return path.join(root, '../large.json');
+}
+function preflightSearchSeed(root, argv, source) {
+  const receiptFile = ownedSearchSeed(root, argv);
+  const readBounded = (file, maxBytes) => {
+    const stat = lstatSync(file);
+    assert(stat.isFile() && stat.size <= maxBytes, 'bounded_search_seed_required');
+    return readFileSync(file);
+  };
+  const seed = JSON.parse(readBounded(receiptFile, MiB));
+  const target = validateSearchSeed(seed);
+  const benchmark = 'prototypes/conversation-product/test/library-scale-benchmark.mts';
+  const hashes = seed.binding?.hashes;
+  assert(hashes && Object.keys(hashes).length === 8 && hashes[benchmark], 'search_seed_source_binding_required');
+  for (const [name, digest] of Object.entries(hashes)) {
+    const current = name === benchmark ? hash(readFileSync(path.resolve(__dirname, '../../../..', name))) : source.hashes[name];
+    assert(current && current === digest, 'search_seed_source_changed:' + name);
+  }
+  const database = readBounded(path.join(root, 'aerynth.sqlite'), 15 * MiB);
+  if (argv.includes('--verify-restore')) {
+    const checkpoint = JSON.parse(readBounded(path.join(root, 'chat-motion-expected.json'), MiB));
+    assert.equal(checkpoint.scope, 'representative-search');
+    assert.deepEqual(checkpoint.source, sourceIdentity(source));
+    assert.deepEqual(checkpoint.canonical, { ...target, draftVersion: checkpoint.canonical?.draftVersion });
+  } else {
+    assert.equal(hash(database), target.databaseDigest, 'search_seed_database_changed');
+  }
+}
 function validateMotionBudget(budget) {
   validateBudget(budget); assert(Number.isSafeInteger(budget.videos) && budget.videos >= 0 && budget.videos <= 1 && Number.isSafeInteger(budget.videoBytes) && budget.videoBytes >= 0 && budget.videoBytes <= 32 * MiB && (budget.videos === 0) === (budget.videoBytes === 0), 'chat_motion_video_budget_invalid'); return budget;
 }
@@ -146,11 +227,12 @@ function optionalRecording({ requested, restore, slot, win, session, localURL, o
     },
   };
 }
-Object.assign(exports, { assertOwnedProfile, assertRead, assertNoProvider, canonicalChat, assertMotionSample, assertGeometry, passingCheckpoint, motionScript, viewScript, geometryScript, validateMotionBudget, admitVideo, optionalRecording, FIXTURE });
+Object.assign(exports, { assertOwnedProfile, assertRead, assertNoProvider, canonicalChat, assertMotionSample, assertGeometry, passingCheckpoint, motionScript, viewScript, geometryScript, seededSearchVisibleScript, validateMotionBudget, admitVideo, optionalRecording, validateSearchSeed, preflightSearchSeed, FIXTURE });
 
 exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, observeProviderActivity, session, localURL }) {
   const restore = process.argv.includes('--verify-restore'), record = process.argv.includes('--record-chat-motion'), limitMs = restore ? 12000 : 45000, root = path.resolve(privateRoot), out = path.join(root, 'chat-motion-evidence', `${restore ? 'restore' : 'initial'}-${Date.now()}`), expectedFile = path.join(root, 'chat-motion-expected.json'), budgetFile = path.join(root, 'chat-motion-capture-budget.json');
-  const scope = process.argv.includes('--chat-reading-only') ? 'resize-search-and-reading' : 'full-chat-motion';
+  const seeded = process.argv.includes('--chat-search-seeded');
+  const scope = seeded ? 'representative-search' : process.argv.includes('--chat-reading-only') ? 'resize-search-and-reading' : 'full-chat-motion';
   const receipt = { contract: 'aerynth.chat-motion-integration@1', source, restore, passed: false, syntheticOnly: true, inputMethod: 'App-only software native-window mouse/key/wheel/insertText; all journey evaluations FALSE. Optional recorder alone uses the existing exact-window media authority. Renderer writes only temporary observation references, never product state or activation.', limits: { milliseconds: limitMs, combinedPNGs: 3, combinedPNGBytes: 16 * MiB, videos: record && !restore ? 1 : 0, combinedVideoBytes: 32 * MiB }, actions: [], samples: [], captures: [], checks: [], errors: [], limitations: ['No provider/handoff/account/native-thread or generated-title proof.', 'Shared-MC CSS samples and native-window capture are not physical input, monitor-presentation, artistic or performance acceptance.', 'Reading position compares the canonical message anchor at matching viewport geometry; this does not qualify arbitrary viewport changes or IME recovery.', 'Optional initial-only exact-window/no-audio recording needs successful bounded stop acknowledgement; capture overhead is included and requested30fps is not monitor performance.', 'Root must inspect PNGs/optional WebM and independently confirm all test processes exited.'] };
   receipt.scope = scope;
   if (scope === 'resize-search-and-reading') receipt.limitations.push('Picker and disclosure motion samples are outside this run.');
@@ -192,7 +274,68 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       }
     });
     const canonical = async id => { const { core, desktop: d } = await proof(); return canonicalChat(await detail(id), await draft(id), d, core, await rpc('conversation', { name: 'collections', input: {} })); };
-    await wait('Combined actual app ready', () => js("document.body.dataset.applicationHydrated==='true'")); const start = await proof();
+    await wait('Combined actual app ready', () => js("document.body.dataset.applicationHydrated==='true'"));
+    if (seeded) {
+      const seed = await readJson(ownedSearchSeed(root, process.argv)), target = validateSearchSeed(seed);
+      const { resourceId: id, messageId, query } = target;
+      const core = await rpc('snapshot', {});
+      const assertSeededHistory = snapshot => {
+        assert.equal(snapshot.conversations.length, seed.dataset.actual.conversations);
+        assert.equal(snapshot.graph.messages.length, seed.dataset.actual.graphMessages);
+        assert.equal(Object.keys(snapshot.executions).length, 0);
+        assert(snapshot.conversations.every(conversation => conversation.providerId === 'local'));
+      };
+      assertSeededHistory(core);
+      const readTarget = async () => {
+        const current = await detail(id);
+        assert(current.messages.items.some(message => message.id === messageId && message.content.includes(query)));
+        const stored = await draft(id);
+        assert.equal(stored.content, target.draft);
+        return { ...target, draftVersion: stored.version };
+      };
+      const visibleTarget = seededSearchVisibleScript(target, !restore);
+      receipt.canonical = await readTarget();
+      win.setContentSize(1100, 800);
+      await openManager();
+      if (restore) {
+        assert.deepEqual(receipt.canonical, expected.canonical);
+        await wait('Exact message and draft visible after desktop restart', () => js(visibleTarget));
+        receipt.viewState = await savedView(id);
+        assert.deepEqual(receipt.viewState, expected.viewState);
+      } else {
+        await click('.cp-switcher>summary');
+        const search = '.cp-switcher input[type="search"]';
+        await click(search);
+        await wait('Quick search input focused', () => js(`document.activeElement===document.querySelector(${JSON.stringify(search)})`));
+        const typedAt = performance.now();
+        await bounded(win.webContents.insertText(query), slot.workRemaining(), 'chat_motion_input_deadline');
+        const enterAt = performance.now();
+        key('Return');
+        receipt.quickSearch = { resourceId: id, messageId, fixtureConversations: core.conversations.length, fixtureMessages: core.graph.messages.length,
+          method: 'software-native-window-keyboard', pollIntervalMs: 35, insertToEnterMs: enterAt - typedAt };
+        assert(receipt.quickSearch.insertToEnterMs < 120, 'enter_must_precede_typeahead_debounce');
+        await wait('Enter reveals the exact search message and draft', () => js(visibleTarget));
+        receipt.quickSearch.enterToVisibleMessageMs = performance.now() - enterAt;
+        await wait('Exact message anchor and draft acknowledged', async () => {
+          const view = await savedView(id);
+          if (view.selected.resourceId !== id || view.view?.position?.anchor?.messageId !== messageId) return false;
+          receipt.viewState = view;
+          return true;
+        });
+        receipt.quickSearch.enterToSavedViewMs = performance.now() - enterAt;
+        assert.deepEqual(await readTarget(), receipt.canonical);
+        pendingExpected = { contract: 'aerynth.chat-motion-checkpoint@1', scope, source: sourceIdentity(source), moduleHashes: receipt.moduleHashes,
+          resourceId: id, canonical: receipt.canonical, viewState: receipt.viewState, initialReceipt: path.relative(root, path.join(out, 'journey.json')) };
+      }
+      const counters = await bounded(observeProviderActivity(), slot.workRemaining(), 'chat_motion_observer_deadline');
+      assert.equal(counters?.scope, 'process-session-native-attempts');
+      for (const key of ['codexConnections', 'providerRequests', 'systemMemoryReads']) assert.equal(counters[key], 0, 'native_attempt_forbidden:' + key);
+      receipt.counters = counters;
+      assertSeededHistory(await rpc('snapshot', {}));
+      assert.equal(startupErrors.length, 0); assert.equal(receipt.errors.length, 0); slot.check(); passed = true;
+      return;
+    }
+    const start = await proof();
     let id;
     if (restore) { id = expected.resourceId; receipt.canonical = await canonical(id); assert.deepEqual(receipt.canonical, expected.canonical, 'exact_local_chat_draft_message_identity_restart_without_replay'); assert(expected.viewState?.view?.position?.anchor, 'saved_native_chat_anchor_required'); assert.deepEqual(await savedView(id), expected.viewState);
       win.setContentSize(780, 700); await openManager(); await wait('Saved conversation selected on actual library open', () => js(`document.querySelector('.cp-manager')?.dataset.resourceId===${JSON.stringify(id)}`)); await verifyRendered(id, receipt.canonical);
@@ -210,18 +353,33 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       const match = receipt.canonical.messages.items[1];
       await capture('01-local-chat'); win.setContentSize(780, 700); receipt.tightGeometry=await waitForGeometry('Actual tight-width usable latest message and composer', id, match.id);
       await click('.cp-switcher>summary');
-      await fill('.cp-switcher input[type="search"]', 'second local message');
-      const resultSelector = `.cp-switcher-results [data-message-id=${JSON.stringify(match.id)}]`;
-      await wait('Exact canonical message appears in quick search', () => js(`document.querySelector(${JSON.stringify(resultSelector)})?.textContent.includes('second local message')`));
+      const quickInput = '.cp-switcher input[type="search"]';
+      await click(quickInput);
+      await wait('Quick search input focused', () => js(`document.activeElement===document.querySelector(${JSON.stringify(quickInput)})`));
+      const typedAt = performance.now();
+      await bounded(win.webContents.insertText('second local message'), slot.workRemaining(), 'chat_motion_input_deadline');
+      const enterAt = performance.now();
       key('Return');
-      await wait('Enter opens the exact message and keeps the unsent draft', async () => {
+      const insertToEnterMs = enterAt - typedAt;
+      assert(insertToEnterMs < 120, 'enter_must_precede_typeahead_debounce');
+      const timing = receipt.quickSearch = {
+        resourceId: id, messageId: match.id, method: 'software-native-window-keyboard',
+        insertToEnterMs, tier: 'native key dispatch to polled renderer geometry and backend draft/view acknowledgement',
+        pollIntervalMs: 35, fixtureMessages: receipt.canonical.messages.total,
+      };
+      await wait('Enter closes the switcher and reveals the exact message line', async () => {
         if (await js("document.querySelector('.cp-switcher')?.open!==false")) return false;
+        const sample = await js(geometryScript(id));
+        return sample?.lines.some(line => line.messageId === match.id && line.fullyVisible && line.height >= 12);
+      });
+      timing.enterToVisibleMessageMs = performance.now() - enterAt;
+      await wait('Exact message anchor and unchanged draft are acknowledged', async () => {
         const view = await js(viewScript(id, false, match.id));
         return view?.draft === FIXTURE.draft && view.anchorOffsetY !== null && (await savedView(id)).view?.position?.anchor?.messageId === match.id;
       });
-      receipt.quickSearch = { resourceId: id, messageId: match.id, method: 'software-native-window-keyboard' };
+      timing.enterToSavedViewMs = performance.now() - enterAt;
       await click(chat(id) + ' textarea'); await wait('Actual message editor focus', () => js(`document.activeElement===document.querySelector(${JSON.stringify(chat(id) + ' textarea')})`)); key('Home', ['control']); for (let i = 0; i < 3; i++) key('Right'); for (let i = 0; i < 8; i++) key('Right', ['shift']); await wait('Exact native draft selection', () => js(`(()=>{const n=document.querySelector(${JSON.stringify(chat(id) + ' textarea')});return n.selectionStart===3&&n.selectionEnd===11})()`));
-      const v = await js(geometryScript(id)), priorScroll = (await js(viewScript(id))).scroll, point = { x: Math.round(v.messages.x + v.messages.width / 2), y: Math.round(v.messages.y + v.messages.height / 2) }; assert(priorScroll > 0, 'long_actual_transcript_required_for_reading_position_test'); assert(await js(`!!document.elementFromPoint(${point.x},${point.y})?.closest('.cp-messages')`), 'actual_transcript_wheel_hit_required'); win.webContents.sendInputEvent({ type: 'mouseMove', ...point }); win.webContents.sendInputEvent({ type: 'mouseWheel', ...point, deltaX: 0, deltaY: 180, canScroll: true }); receipt.actions.push({ method: 'software-native-window-wheel', deltaY: 180, priorScroll }); let previousScroll, stableScroll = 0; await wait('Actual native reading scroll delivery and settling', async () => { const a = await js(viewScript(id)); stableScroll = a?.scroll < priorScroll && a.scroll === previousScroll ? stableScroll + 1 : 0; previousScroll = a?.scroll; return stableScroll >= 2; }); const before = await js(viewScript(id, true));
+      const v = await js(geometryScript(id)), priorScroll = (await js(viewScript(id))).scroll, point = { x: Math.round(v.messages.x + v.messages.width / 2), y: Math.round(v.messages.y + v.messages.height / 2) }; assert(priorScroll > 0, 'long_actual_transcript_required_for_reading_position_test'); assert(await js(`!!document.elementFromPoint(${point.x},${point.y})?.closest('.cp-messages')`), 'actual_transcript_wheel_hit_required'); win.webContents.sendInputEvent({ type: 'mouseMove', ...point }); win.webContents.sendInputEvent({ type: 'mouseWheel', ...point, deltaX: 0, deltaY: 80, canScroll: true }); receipt.actions.push({ method: 'software-native-window-wheel', deltaY: 80, priorScroll }); let previousScroll, stableScroll = 0; await wait('Actual native reading scroll delivery and settling', async () => { const a = await js(viewScript(id)); stableScroll = a?.scroll < priorScroll && a.scroll === previousScroll ? stableScroll + 1 : 0; previousScroll = a?.scroll; return stableScroll >= 2; }); const before = await js(viewScript(id, true));
       if (scope === 'full-chat-motion') {
         const sampleUntil = (selector, kind, state) => wait('Actual MC ' + kind + ' ' + state, async () => { const value = await js(motionScript(selector, kind)); try { assertMotionSample(value, kind, state); receipt.samples.push({ kind, state, selector, value }); return value; } catch { return false; } });
         assert.equal(await js("window.__aerynth.snapshot().reduced"), false, 'normal_motion_policy_required_for_intermediate_samples');
@@ -229,7 +387,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         for (const selector of ['.cp-chat-options', '.cp-chat-extras', '.cp-filters', '.cp-history-tools', '.cp-new-chat', '.cp-switcher']) { const revealHistory = !(await js(targetScript(selector + '>summary', 'inspect'))).ready && ['.cp-filters', '.cp-history-tools'].includes(selector); if (revealHistory) await click('.cp-history-toggle'); await click(selector + '>summary'); await sampleUntil(selector, 'details', 'opening'); await sampleUntil(selector, 'details', 'settled'); await click(selector + '>summary'); await sampleUntil(selector, 'details', 'closing'); if (selector === '.cp-chat-options') { await click(selector + '>summary'); await sampleUntil(selector, 'details', 'opening'); await sampleUntil(selector, 'details', 'settled'); await click(selector + '>summary'); } await sampleUntil(selector, 'details', 'closed'); if (revealHistory) await click('.cp-history-toggle'); }
         await click('.cp-history-toggle'); const collectionGroup = '.cp-library-tree [data-tree-key="collections"]', folder = `[data-collection-id=${JSON.stringify(receipt.canonical.collections[0].id)}]`; await click(collectionGroup + '>summary'); await sampleUntil(collectionGroup, 'details', 'opening'); await sampleUntil(collectionGroup, 'details', 'settled'); await click(folder + '>summary'); await sampleUntil(folder, 'details', 'opening'); await sampleUntil(folder, 'details', 'settled'); await click(folder + '>summary'); await sampleUntil(folder, 'details', 'closing'); await sampleUntil(folder, 'details', 'closed'); await click(collectionGroup + '>summary'); await sampleUntil(collectionGroup, 'details', 'closing'); await sampleUntil(collectionGroup, 'details', 'closed'); await click('.cp-history-toggle');
       }
-      const after = await js(viewScript(id)); receipt.retainedView = { before, after }; assert.equal(after.retained, true); for (const field of ['resourceId', 'draft', 'start', 'end', 'scroll', 'editorScroll']) assert.equal(after[field], before[field], 'same_composer_' + field); assert.deepEqual(await canonical(id), receipt.canonical, 'view_only_motion_must_not_mutate_canonical_history_or_draft'); assertGeometry(await js(geometryScript(id))); await capture('02-tight-chat-motion');
+      const after = await js(viewScript(id)); receipt.retainedView = { before, after }; assert.equal(after.retained, true); for (const field of ['resourceId', 'draft', 'start', 'end', 'scroll', 'editorScroll']) assert.equal(after[field], before[field], 'same_composer_' + field); assert.deepEqual(await canonical(id), receipt.canonical, 'view_only_motion_must_not_mutate_canonical_history_or_draft'); receipt.postWheelGeometry=await waitForGeometry('Readable canonical text after the native reading scroll', id); await capture('02-tight-chat-motion');
       receipt.reducedMotion = { status: 'not-run', reason: 'This bounded journey measures normal-motion continuity. The scene policy control needs a separate native check at a usable width.' };
       await wait('Exact native view metadata acknowledged by canonical service', async () => { const stored=await savedView(id), v=stored.view, anchor=v?.position?.anchor, selection=v?.selection; if(stored.selected.resourceId!==id||!anchor||selection?.draftVersion!==receipt.canonical.draft.version||selection.start!==before.start||selection.end!==before.end||selection.direction!==before.direction)return false;const actual=await js(viewScript(id,false,anchor.messageId));if(actual?.anchorOffsetY==null||Math.abs(actual.anchorOffsetY-anchor.offsetY)>1.2)return false;receipt.viewState=stored;return true; });
       await click('.cp-header-actions [data-cp-control="close"]'); await wait('Actual chat surface closed after canonical draft drain', () => js(`!document.querySelector(${JSON.stringify(surface)})`)); await openManager(); await wait('Same-process exact draft, selection and message anchor restored', async () => { const saved=receipt.viewState.view, v=await js(viewScript(id,false,saved.position.anchor.messageId)); if(!v||v.draft!==FIXTURE.draft||v.start!==saved.selection.start||v.end!==saved.selection.end||v.direction!==saved.selection.direction||v.anchorOffsetY===null||Math.abs(v.anchorOffsetY-saved.position.anchor.offsetY)>1.2)return false;receipt.reopenedView=v;return true; });

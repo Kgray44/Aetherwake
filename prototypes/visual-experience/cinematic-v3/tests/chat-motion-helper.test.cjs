@@ -28,12 +28,73 @@ test('wrong actual Chromium profile performs zero control, RPC, evidence or app 
  finally { process.argv = argv; console.log = log; }
 });
 
+test('representative search requires its explicit owned profile and a complete synthetic seed receipt', () => {
+ const root = 'C:\\Owned\\library-scale-123-abcdef01\\large';
+ const args = ['--integration-chat-motion', '--chat-search-seeded'];
+ helper.assertOwnedProfile(root, args, 'Automated check');
+ assert.throws(() => helper.assertOwnedProfile(root, args.slice(0, 1), 'Automated check'));
+ assert.throws(() => helper.assertOwnedProfile(root, [...args, '--record-chat-motion'], 'Automated check'));
+ assert.throws(() => helper.assertOwnedProfile(root.replace(/large$/, 'medium'), args, 'Automated check'));
+ const target = { resourceId: '12345678-1234-1234-1234-123456789abc', messageId: 'msg-01019',
+  query: 'SYNTHETIC_RARE_LIBRARY_TOKEN', draft: 'Synthetic unsent search acceptance draft.' };
+ const receipt = { contract: 'aerynth.library-scale@1', synthetic: true, passed: true, providerCalls: 0,
+  dataset: { name: 'large', actual: { conversations: 1072, graphMessages: 12072 } },
+  profile: { directory: 'large', database: 'aerynth.sqlite', reopenedThroughCore: true, contentPolicy: 'local-private', sha256: 'a'.repeat(64), target } };
+ assert.deepEqual(helper.validateSearchSeed(receipt), { ...target, databaseDigest: receipt.profile.sha256 });
+ assert.throws(() => helper.validateSearchSeed({ ...receipt, providerCalls: 1 }), /passing_synthetic_search_seed_required/);
+ assert.throws(() => helper.validateSearchSeed({ ...receipt, dataset: { name: 'large', actual: { conversations: 1, graphMessages: 2 } } }));
+});
+
 test('only bounded actual canonical reads are admitted; all creation/provider/auth/save paths require UI and never helper RPC', () => {
  for (const name of ['detail', 'readDraft', 'readViewState']) helper.assertRead('conversation', { name, input: { resourceId: 'synthetic-chat', ...(name === 'detail' ? { limit: 50 } : {}) } });
  helper.assertRead('conversation', { name: 'collections', input: {} }); helper.assertRead('conversation', { name: 'list', input: { limit: 50 } }); helper.assertRead('desktop', { type: 'snapshot' }); helper.assertRead('snapshot', {}); helper.assertRead('replay', { after: 0 });
  for (const name of ['send', 'create', 'saveDraft', 'branch', 'organize', 'selectProvider']) assert.throws(() => helper.assertRead('conversation', { name, input: {} }));
  for (const name of ['execute', 'providerConnection', 'providerAuth', 'ordinaryProviderCheck', 'notes', 'vela']) assert.throws(() => helper.assertRead(name, {}));
  assert.throws(() => helper.assertRead('desktop', { type: 'createResource' })); assert.throws(() => helper.assertRead('conversation', { name: 'detail', input: { resourceId: 'synthetic-chat', limit: 51 } })); assert.throws(() => helper.assertRead('conversation', { name: 'readDraft', input: { resourceId: 'synthetic-chat', content: 'forbidden' } }));
+});
+
+test('seeded search observes only the exact visible matching text and unchanged draft', () => {
+ const target = {resourceId:'synthetic-chat',messageId:'msg-1',query:'RARE_MARKER',draft:'Unsent draft'};
+ const switcher = {open:false};
+ const editor = {value:target.draft};
+ const content = {contains: node => node === content};
+ const clip = {top:100,bottom:300,left:50,right:600};
+ const rect = {top:120,bottom:136,left:80,right:160,width:80,height:16};
+ let hit = content, text = 'Prefix RARE_MARKER suffix';
+ const messages = {
+   querySelector: selector => selector === '[data-message-id="msg-1"] .cp-message-content' ? content : null,
+   getBoundingClientRect: () => clip,
+ };
+ const chat = {querySelector: selector => selector === '.cp-messages' ? messages : selector === 'textarea' ? editor : null};
+ const manager = {
+   dataset:{resourceId:target.resourceId},
+   querySelector: selector => selector === '.cp-switcher' ? switcher : selector === '.cp-chat[data-resource-id="synthetic-chat"]' ? chat : null,
+ };
+ const context = {
+   CSS:{escape: value => value}, NodeFilter:{SHOW_TEXT:4}, innerHeight:800, innerWidth:1100,
+   document:{
+     querySelector: () => manager,
+     createTreeWalker: node => {
+       assert.equal(node,content);
+       const nodes = [{textContent:text}].values();
+       return {nextNode: () => nodes.next().value ?? null};
+     },
+     createRange: () => ({
+       setStart: (_node,offset) => assert.equal(offset,7),
+       setEnd: (_node,offset) => assert.equal(offset,18),
+       getClientRects: () => [rect],
+     }),
+     elementFromPoint: () => hit,
+   },
+ };
+ const observed = requireClosed => vm.runInNewContext(helper.seededSearchVisibleScript(target,requireClosed),context);
+ assert.equal(observed(true),true);
+ switcher.open=true; assert.equal(observed(true),false); assert.equal(observed(false),true);
+ switcher.open=false;
+ hit={}; assert.equal(observed(true),false); hit=content;
+ rect.bottom=301; assert.equal(observed(true),false); rect.bottom=136;
+ text='Other content in the same message'; assert.equal(observed(true),false); text='Prefix RARE_MARKER suffix';
+ editor.value='Different draft'; assert.equal(observed(true),false);
 });
 
 test('local-only proof needs actual zero attempt counters, complete events and no assistant/native execution', () => {
