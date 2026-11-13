@@ -46,6 +46,7 @@ exports.conversationCommand = async ({
   reviewSources = showVelaReview,
   openExternal,
   beforeMemoryPreview,
+  shouldPreviewMemory,
   validateMemoryReview,
 }) => {
   if (
@@ -105,7 +106,17 @@ exports.conversationCommand = async ({
       const local = await call("conversationClock", request);
       if (local !== null) return local;
     }
-    const preview = await call("conversationSendPreview", request);
+    let preview;
+    let reviewedMemory = useMemory === true;
+    if (!webSearch && !reviewedMemory && validateMemoryReview && await shouldPreviewMemory?.()) {
+      try {
+        preview = await call("conversationSendPreview", { ...request, useMemory: true });
+        reviewedMemory = true;
+      } catch (error) {
+        if (error?.message !== "personal_memory_no_eligible_context") throw error;
+      }
+    }
+    preview ??= await call("conversationSendPreview", request);
     const r = preview?.responses;
     if (
       !r ||
@@ -133,7 +144,7 @@ exports.conversationCommand = async ({
       !Array.isArray(r.history) ||
       r.history.length >= r.messages.length ||
       r.webSearch !== webSearch ||
-      (useMemory ? !/^[a-f0-9]{64}$/u.test(r.memoryDigest ?? "") || r.requiresSourceReview !== true : r.memoryDigest !== undefined) ||
+      (reviewedMemory ? !/^[a-f0-9]{64}$/u.test(r.memoryDigest ?? "") || r.requiresSourceReview !== true : r.memoryDigest !== undefined) ||
       (webSearch && (r.messages.length !== 1 || r.history.length || r.requiresSourceReview)) ||
       typeof r.requiresSourceReview !== "boolean" ||
       r.messages.at(-1).role !== "user" ||
@@ -160,7 +171,7 @@ exports.conversationCommand = async ({
         parent: win,
         experience: "ordinary",
         expiresAt: preview.expiresAt,
-        intent: useMemory ? "Share the memory in this exact request with ChatGPT?"
+        intent: reviewedMemory ? "Share the memory in this exact request with ChatGPT?"
           : "Share these selected sources in this ChatGPT-plan conversation?",
         review: {
           providerId: PLAN,
@@ -178,7 +189,7 @@ exports.conversationCommand = async ({
         },
       });
       if (approved !== true) throw Error("authorization_cancelled");
-      if (useMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
+      if (reviewedMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
     }
     // An ordinary Send authorizes this exact own-chat request. Source sharing
     // has the additional native review above; neither path can mint its own
@@ -188,8 +199,8 @@ exports.conversationCommand = async ({
       fingerprint: preview.fingerprint,
       commandId: preview.commandId,
     };
-    const grant = await call("authorizeConversationSend", { ...binding, ...(useMemory ? { reviewedBodyDigest: digest } : {}) });
-    if (useMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
+    const grant = await call("authorizeConversationSend", { ...binding, ...(reviewedMemory ? { reviewedBodyDigest: digest } : {}) });
+    if (reviewedMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
     return call("conversationSend", { ...binding, grantId: grant.grantId });
   }
   if (resource.provider === "local")
