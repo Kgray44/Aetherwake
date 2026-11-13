@@ -822,14 +822,12 @@ app.whenReady().then(async () => {
               message: labels[review.action] + "?", detail, buttons: ["Cancel", labels[review.action]], defaultId: 0, cancelId: 0, noLink: true });
             return choice.response === 1;
           },
-          saveExport: async bundle => {
+          chooseExport: async () => {
             const choice = await reviewDialogs.showSaveDialog(win, { title: "Export memory",
               defaultPath: "aerynth-memory.json", filters: [{ name: "JSON", extensions: ["json"] }] });
-            if (choice.canceled || !choice.filePath) return false;
-            if (!currentFrame() || !await storage.allowWrite() || !currentFrame()) throw Error("personal_memory_frame_changed");
-            writeFileSync(choice.filePath, JSON.stringify(bundle, null, 2), { flag: "wx", mode: 0o600 });
-            return true;
+            return choice.canceled ? null : choice.filePath ?? null;
           },
+          writeExport: (path, bundle) => writeFileSync(path, JSON.stringify(bundle, null, 2), { flag: "wx", mode: 0o600 }),
         });
       }
       else if (command === "personalMemoryCapture") {
