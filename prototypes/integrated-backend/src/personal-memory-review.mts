@@ -3,12 +3,15 @@ import { containsRecognizableMemoryCredential } from '../../application-contract
 import type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
 export type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
 import type { DatabaseSync } from 'node:sqlite';
-import type { ConversationSourceRef, FactDraft, PersonalAuthorization, PersonalContextHost, PersonalPolicy, ScopeProof, ReviewedFact, RecordRef } from '../../personal-context/src/contracts.ts';
+import type { ContextRequest, ConversationSourceRef, FactDraft, PersonalAuthorization, PersonalContextHost, PersonalPolicy, ScopeProof, ReviewedFact, RecordRef } from '../../personal-context/src/contracts.ts';
+import type { TurnInput } from '../../openai-provider/contracts.mts';
+import { attachPersonalMemory } from './personal-memory-prompt.mts';
 import { PersonalContextError, type PersonalContextService } from '../../personal-context/src/service.mts';
 
 type SourceReader = Required<Pick<PersonalContextHost, 'resolveConversationSource' | 'resolveScope'>>;
 interface Options extends SourceReader {
   open(): Promise<PersonalContextService>;
+  resolveRecallTarget?(id: string): { projectId: string | null } | null;
   readSourceText(reference: ConversationSourceRef): string | null;
   transaction<T>(work: (db: DatabaseSync) => T): T;
   now?: () => number;
@@ -67,6 +70,38 @@ export function createPersonalMemoryReview(options: Options) {
       throw new PersonalContextError('stale_personal_memory_source');
   }
 
+  function prepareDisclosure(service: PersonalContextService, request: ContextRequest, validateTarget: () => boolean) {
+    const sameRequest = (input: PersonalAuthorization) => JSON.stringify(input.request) === JSON.stringify(request);
+    const recordRead = (input: PersonalAuthorization) => input.operation === 'record.read';
+    const manifest = withPermission(input => recordRead(input) || input.operation === 'context.preview' && sameRequest(input),
+      () => service.previewContext(request));
+    const withBoundDisclosure = <T,>(work: () => T): T =>
+      withPermission(input => recordRead(input) || input.operation === 'context.disclose' &&
+        sameRequest(input) && input.manifestDigest === manifest.digest, work);
+    const expires = now() + 300_000;
+    let status: 'pending' | 'approved' | 'revoked' = 'pending';
+    function requireCurrent() {
+      requireOpen();
+      if (now() >= expires || !validateTarget()) throw new PersonalContextError('stale_personal_context');
+    }
+    return {
+      manifest,
+      approve(expected: string, reviewed: string) {
+        requireCurrent();
+        if (status !== 'pending') throw new PersonalContextError('personal_memory_disclosure_review_required');
+        if (expected !== reviewed) throw new PersonalContextError('personal_memory_body_changed');
+        withBoundDisclosure(() => service.validateContext(manifest, request));
+        status = 'approved';
+      },
+      validate<T>(work: () => T) {
+        requireCurrent();
+        if (status !== 'approved') throw new PersonalContextError('personal_memory_disclosure_review_required');
+        return withBoundDisclosure(work);
+      },
+      revoke() { status = 'revoked'; },
+    };
+  }
+
   return {
     authorize: (input: PersonalAuthorization) => !closed && permission?.(input) === true,
     withSourceErasure<T>(source: ConversationSourceRef, erase: () => T): T {
@@ -96,6 +131,43 @@ export function createPersonalMemoryReview(options: Options) {
       return withPermission(input => input.operation === 'policy.write', () => service.setPolicy({
         expectedVersion, patch: { storageEnabled: false, ordinaryEnabled: false, velaEnabled: false },
       }));
+    },
+    async prepareOrdinaryRecall(conversationId: string, turn: TurnInput, sourceAnchors?: readonly ConversationSourceRef[]) {
+      requireOpen();
+      const exactTurn = structuredClone(turn);
+      const anchors = sourceAnchors?.map(anchor => structuredClone(anchor));
+      const query = exactTurn.messages.at(-1);
+      if (turn.webSearch || turn.assistant !== 'ordinary' || turn.providerId !== 'chatgpt-plan-responses' ||
+        query?.role !== 'user' || query.content.length > 4000) return null;
+      const service = await options.open();
+      requireOpen();
+      return options.transaction(() => {
+        const target = options.resolveRecallTarget?.(conversationId);
+        if (!target) throw new PersonalContextError('canonical_scope_unavailable');
+        const projectId = target.projectId;
+        const request: ContextRequest = {
+          requestId: exactTurn.requestId, assistant: 'ordinary', providerId: exactTurn.providerId,
+          query: query.content, projectId, conversationId,
+          sharedFactIds: [], includeBehavior: false, maxBytes: 4096, maxItems: 4,
+          ...(anchors?.length ? { sourceAnchors: anchors } : {}),
+        };
+        const disclosure = prepareDisclosure(service, request, () => options.resolveRecallTarget?.(conversationId)?.projectId === projectId);
+        const { manifest } = disclosure;
+        if (!manifest.items.length) return null;
+        const attachment = attachPersonalMemory(exactTurn, request, manifest);
+        return {
+          turn: attachment.turn,
+          bodyDigest: attachment.bodyDigest,
+          manifest: structuredClone(manifest),
+          approve(bodyDigest: string) {
+            disclosure.approve(attachment.bodyDigest, bodyDigest);
+          },
+          validate(current: TurnInput) {
+            return disclosure.validate(() => attachment.validate(service, current));
+          },
+          revoke: disclosure.revoke,
+        };
+      });
     },
     async inspect(page: { after: string | null; limit: number }) {
       requireOpen();
