@@ -4905,17 +4905,7 @@ export class BackendCore {
       ensure(usingApi && route?.kind === 'conversational' && !route.nativeMetric && !route.nativeLog && !nativeStage &&
         !workflowScope && !context.included.length && !context.activeResourceId && conversationId, 'vela_memory_requires_conversation');
       const projectId = this.velaContext().currentProjectId;
-      const query = canonicalRetrievalQuery(input.intent);
-      const sourceTerms = (query?.terms ?? []).filter(term => /^message:msg-\d+$/u.test(term)).slice(0, 8);
-      const owners = sourceTerms.length ? Object.entries(this.state.resources) : [];
-      const sourceAnchors = sourceTerms.flatMap(term => {
-        const messageId = term.slice('message:'.length);
-        const header = this.graph.messageHeader(messageId);
-        if (!header || header.unavailable) return [];
-        const owner = owners.find(([, graphId]) => graphId === header.conversationId)?.[0];
-        if (!owner || !this.graph.ownsMessage(header.conversationId, messageId) || !this.productResourceAccess(owner, messageId)) return [];
-        return [{ kind: 'conversation-message' as const, conversationId: owner, messageId }];
-      });
+      const sourceAnchors = this.personalMemorySourceAnchors(input.intent);
       const memoryRecall = await this.personalMemoryReview!.prepareVelaRecall({ conversationId,
         projectId, requestId: preview.id, intent: input.intent, prompt: preview.prompt, sourceAnchors });
       ensure(memoryRecall, 'personal_memory_no_eligible_context');
@@ -6090,12 +6080,27 @@ export class BackendCore {
     const messages = [...recent, ...required];
     const contextDigest = hash({history,context,handoff,clock,instructions,instructionVersion:packet.version});
     const baseTurn = { ...turn, messages, contextDigest };
-    const memory = input.useMemory ? await this.personalMemoryReview?.prepareOrdinaryRecall(input.resourceId, baseTurn) : null;
+    const memory = input.useMemory ? await this.personalMemoryReview?.prepareOrdinaryRecall(input.resourceId, baseTurn,
+      this.personalMemorySourceAnchors(input.content)) : null;
     if (input.useMemory) ensure(memory, 'personal_memory_no_eligible_context');
     if (memory) captureMemory?.(memory);
     const exact = memory?.turn ?? baseTurn;
     const prepared = prepareResponsesTurn(exact);
     return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions, instructionVersion: packet.version, messages: exact.messages, history, contextDigest: exact.contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview: requiresSourceReview || !!memory, ...(memory ? { memoryDigest: memory.manifest.digest } : {}) };
+  }
+  private personalMemorySourceAnchors(intent: string) {
+    const query = canonicalRetrievalQuery(intent);
+    const sourceTerms = (query?.terms ?? []).filter(term => /^message:msg-\d+$/u.test(term)).slice(0, 8);
+    if (!sourceTerms.length) return [];
+    const owners = Object.entries(this.state.resources);
+    return sourceTerms.flatMap(term => {
+      const messageId = term.slice('message:'.length);
+      const header = this.graph.messageHeader(messageId);
+      if (!header || header.unavailable) return [];
+      const owner = owners.find(([, graphId]) => graphId === header.conversationId)?.[0];
+      if (!owner || !this.graph.ownsMessage(header.conversationId, messageId) || !this.productResourceAccess(owner, messageId)) return [];
+      return [{ kind: 'conversation-message' as const, conversationId: owner, messageId }];
+    });
   }
   private async prepareConversationSend(input:ConversationSendInput,revisionOffset=0,dispatchingHandoffId?:string,ordinaryBinding?: OrdinarySendBinding,captureMemory?: (memory: OrdinaryMemoryRecall) => void):Promise<Omit<ConversationSendPreview,'id'|'expiresAt'>> {
     ensure(input&&typeof input.content==='string'&&input.content.trim()&&Buffer.byteLength(input.content)<=16384,'invalid_prompt');

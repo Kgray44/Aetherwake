@@ -98,9 +98,10 @@ export function createPersonalMemoryReview(options: Options) {
       return withPermission(input => input.operation === 'policy.write',
         () => service.setPolicy({ expectedVersion, patch }));
     },
-    async prepareOrdinaryRecall(conversationId: string, turn: TurnInput) {
+    async prepareOrdinaryRecall(conversationId: string, turn: TurnInput, sourceAnchors?: readonly ConversationSourceRef[]) {
       requireOpen();
       const exactTurn = structuredClone(turn);
+      const anchors = sourceAnchors?.map(anchor => structuredClone(anchor));
       const query = exactTurn.messages.at(-1);
       if (turn.webSearch || turn.assistant !== 'ordinary' || turn.providerId !== 'chatgpt-plan-responses' ||
         query?.role !== 'user' || query.content.length > 4000) return null;
@@ -114,6 +115,7 @@ export function createPersonalMemoryReview(options: Options) {
           requestId: exactTurn.requestId, assistant: 'ordinary', providerId: exactTurn.providerId,
           query: query.content, projectId, conversationId,
           sharedFactIds: [], includeBehavior: false, maxBytes: 4096, maxItems: 4,
+          ...(anchors?.length ? { sourceAnchors: anchors } : {}),
         };
         const disclosure = prepareDisclosure(service, request, () => options.resolveRecallTarget?.(conversationId)?.projectId === projectId);
         const { manifest } = disclosure;
