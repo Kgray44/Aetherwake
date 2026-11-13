@@ -37,6 +37,18 @@ test('native authority rejects forged promotion, foreign scope, and changed gove
     configVersion = 2;
     await assert.rejects(host.command(scope, { name: 'test', id }), /aep_trial_environment_changed/);
     assert.equal(host.evidence(scope, id).trials.length, 0);
+    const review = { name: 'rollback-reviewed' as const, ...scope, experimentId: id, policyVersion: 1 };
+    await assert.rejects(host.command(scope, review), /aep_policy_review_changed/);
+    missions.experiencePolicy.promote(scope, 1, id, 'test-cohort', configVersion, Date.now());
+    await assert.rejects(host.command(scope, { ...review, policyVersion: 2, workspaceId: other.workspaceId }),
+      /aep_policy_review_changed/);
+    await assert.rejects(host.command(scope, { ...review, policyVersion: 2, experimentId: 'different' }),
+      /aep_policy_review_changed/);
+    await assert.rejects(host.command(scope, review), /aep_policy_review_changed/);
+    assert.equal(missions.experiencePolicy.read(scope).experimentId, id);
+    await assert.rejects(host.command(scope, { ...review, policyVersion: 2 }), /aep_policy_transition_unavailable/);
+    assert.equal(missions.experiencePolicy.read(scope).version, 2);
+    assert.equal(missions.experiencePolicy.read(scope).experimentId, id);
     authorized = false;
     assert.throws(() => host.finding(scope, id, nativeTrialProtocol), /aep_scope_denied/);
   } finally { await missions.close(); db.close(); }

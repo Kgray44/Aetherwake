@@ -1,7 +1,10 @@
+import type { ResourcePolicyPort } from './resource-policy-view.ts';
+import type { MissionExecutionProfile } from '../../../integrated-backend/src/execution-profiler.mts';
 import type { TimelineExperience } from "../../../block-library/timeline-view.ts";
 import type { MissionProjection, MissionTaskState, MissionWorkroomDashboard, MissionWorkroomResource } from "../../../integrated-backend/src/mission-contracts.mts";
 import { missionAdmissionDetails, missionAdmissionRefreshMs, missionEventLabel, missionStateLabel } from "./vela-missions.ts";
 import type { ExperienceMotionPort } from '../../../application-contract/motion.ts';
+import { mountIntelligenceInspection } from "./adaptive-workspace-view.ts";
 import { mountMissionFlow } from '../../../block-library/mission-flow.ts';
 
 export interface MissionWorkroomView extends TimelineExperience {
@@ -39,7 +42,7 @@ export function mountMissionWorkroomView(
   mountManual: ((container: HTMLElement) => TimelineExperience) | undefined,
   openMission: (id: string) => void,
   openResource?: (id: string) => void,
-  options?: { motion: ExperienceMotionPort; viewId: string; readMission(id: string): Promise<MissionProjection | null> },
+  options?: { motion: ExperienceMotionPort; viewId: string; readMission(id: string): Promise<MissionProjection | null>; readProfile?(id: string): Promise<MissionExecutionProfile | null>; resourcePolicy?: ResourcePolicyPort },
 ): MissionWorkroomView {
   const doc = root.ownerDocument;
   const section = doc.createElement("section");
@@ -95,6 +98,7 @@ export function mountMissionWorkroomView(
   let admissionRefresh: ReturnType<typeof setTimeout> | undefined;
   let primaryTimeline = false, flowMode = 'flow', flowEpoch = 0;
   let flow: ReturnType<typeof mountMissionFlow> | undefined, fullMission: MissionProjection | null = null;
+  const intelligence = options ? mountIntelligenceInspection(section, options.viewId, options.readProfile, options.resourcePolicy) : undefined;
   const modeButtons = new Map<string, HTMLButtonElement>();
   const eligibleFlow = (value: MissionWorkroomResource | null) => value?.dashboard?.kind === 'graph' || value?.dashboard?.kind === 'stream';
   const syncFlowPresentation = () => {
@@ -107,6 +111,7 @@ export function mountMissionWorkroomView(
     status.title = fullMission && presentation === 'workspace' ? statusDetail : '';
   };
   function clearFlow() {
+    intelligence?.invalidate("Mission evidence unavailable.");
     for (const tool of [intro, open, flowControls, flowStatus]) section.insertBefore(tool, flowHost);
     flowEpoch++; flow?.dispose(); flow = undefined; fullMission = null;
     flowHost.hidden = true; flowControls.hidden = true; flowStatus.hidden = true; flowStatus.textContent = ''; list.hidden = false;
@@ -136,6 +141,7 @@ export function mountMissionWorkroomView(
       if (!mission || mission.contract !== 'aerynth.vela-mission@1' || mission.id !== value.missionId || mission.revision < minimumRevision || projection?.missionId !== mission.id)
         throw new Error('mission_flow_projection_unavailable');
       fullMission = mission;
+      intelligence?.update(mission, { ...mission.scope, missionId: value.missionId });
       flow ??= mountMissionFlow(flowHost, { motion: options.motion, viewId: `${options.viewId}:${generation}:${flowEpoch}`, active, openMission,
         presentation, optionsHost: flowOptionsHost, contextTools: [open, flowControls, flowStatus, intro] });
       flowControls.hidden = false; flowStatus.textContent = 'Current authorized task dependencies · retained event rows remain available in Forensic.';
@@ -464,6 +470,7 @@ export function mountMissionWorkroomView(
       while (queued && active && !disposed && !doc.hidden) {
         queued = false;
         const stamp = generation;
+        intelligence?.invalidate("Checking authorized mission evidence…");
         try {
           const value = scope ? await read() : null;
           if (stamp !== generation || disposed || !active || doc.hidden) continue;
@@ -500,6 +507,7 @@ export function mountMissionWorkroomView(
   return {
     setScope(next) {
       if (scope === next) return;
+      intelligence?.invalidate("Workspace changed. Mission evidence unavailable.", true);
       scope = next;
       generation++;
       resolvedManual = false;
@@ -511,6 +519,7 @@ export function mountMissionWorkroomView(
     observe(accessChanged) {
       if (resolvedManual && !accessChanged) return;
       if (accessChanged) {
+        intelligence?.invalidate("Mission access changed. Checking evidence…", true);
         generation++;
         resolvedManual = false;
         statusOnly("Checking mission card access…");
@@ -521,7 +530,7 @@ export function mountMissionWorkroomView(
     setActive(next) {
       if (active === next) return;
       active = next;
-      if (!next) { generation++; clearFlow(); } else flow?.setActive(true);
+      if (!next) { intelligence?.invalidate("Mission inspection inactive.", true); generation++; clearFlow(); } else flow?.setActive(true);
       syncAdmissionRefresh();
       section.inert = !next;
       manualDetails.inert = !next;
@@ -541,6 +550,7 @@ export function mountMissionWorkroomView(
     frame() { if (active && !disposed && !doc.hidden) { manual?.frame(); flow?.frame(); } },
     reflow() { manual?.reflow(); flow?.reflow(); },
     dispose() {
+      intelligence?.dispose();
       disposed = true;
       generation++; clearFlow();
       syncAdmissionRefresh();

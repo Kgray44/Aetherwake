@@ -116,11 +116,15 @@ exports.resourcePolicyMenu = function resourcePolicyMenu({ call, show, ready, ca
       if (ready()) await show({ type: "warning", title: "GPU buffer diagnostic", message: "Diagnostic unavailable", detail }).catch(() => {});
     } finally { busy = false; }
   };
+  const reviewMode = choose("Choose a resource profile",
+    () => profiles.map(([mode, label]) => ({ label, request: { name: "set-mode", mode } })));
+  const reviewRollback = choose("Undo the last resource policy change", view =>
+    view.canRollback ? [{ label: "Undo", request: { name: "rollback" } }] : []);
   return {
+    reviewMode, reviewRollback,
     label: "Performance",
     submenu: [
-      { label: "Resource Profile…", click: choose("Choose a resource profile",
-        () => profiles.map(([mode, label]) => ({ label, request: { name: "set-mode", mode } }))) },
+      { label: "Resource Profile…", click: reviewMode },
       { label: "CPU Worker Limit…", click: choose("Set the maximum local CPU workers", view =>
         Array.from({ length: view.maxCpuWorkers + 1 }, (_, limit) =>
           ({ label: String(limit), request: { name: "set-cpu-limit", limit } }))) },
@@ -137,8 +141,7 @@ exports.resourcePolicyMenu = function resourcePolicyMenu({ call, show, ready, ca
         ] : []) },
       { label: "Run GPU Buffer Diagnostic…", click: runGpuDiagnostic },
       { type: "separator" },
-      { label: "Undo Last Policy Change…", click: choose("Undo the last resource policy change", view =>
-        view.canRollback ? [{ label: "Undo", request: { name: "rollback" } }] : []) },
+      { label: "Undo Last Policy Change…", click: reviewRollback },
       { label: "Restore Policy Defaults…", click: choose("Restore the default resource policy",
         () => [{ label: "Restore Defaults", request: { name: "restore-defaults" } }]) },
     ],
