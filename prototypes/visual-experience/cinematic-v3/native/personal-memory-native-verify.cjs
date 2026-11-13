@@ -58,6 +58,7 @@ async function waitFor(read) {
 
 async function run() {
   const { Backend } = await import('../../../integrated-backend/src/service.mts');
+  const { BackendCore } = await import('../../../integrated-backend/src/core.mts');
   const { createNativeHostClient } = await import('../../../integrated-backend/src/native-host.mts');
   const client = createNativeHostClient(wire => broker.handle(wire));
   const broker = createProtectedStorageBroker({
@@ -84,6 +85,32 @@ async function run() {
       const fact = await backend.call('personalMemoryManagementNative', read);
       assert.equal(fact.text, factText);
       assert.deepEqual(fact.provenance, preview.draft.source);
+      stage = 'recall in a second chat through the local owner';
+      await backend.close();
+      backend = undefined;
+      const local = new BackendCore({ path, privateRoot: root, contentPolicy: 'local-private', provider: 'fixture' }, undefined, client.services);
+      try {
+        const vela = await local.command('vela', { name: 'open', input: {} });
+        const conversationId = vela.conversation.resourceId;
+        assert.notEqual(conversationId, expected.input.conversationId);
+        await local.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: expected.workspaceId } });
+        await local.command('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: preview.policy.version });
+        const query = { conversationId, projectId: expected.projectId, requestId: 'synthetic-memory-restore',
+          intent: 'Which quartz relay?', prompt: 'Synthetic local recall only.' };
+        const owner = local.personalMemoryReview;
+        const recall = await owner.prepareVelaRecall(query);
+        assert.ok(recall);
+        const data = JSON.parse(recall.prompt.slice(recall.prompt.lastIndexOf('\n') + 1));
+        assert.deepEqual(data.items.map(item => [item.factId, item.provenance.messageId]), [[fact.id, expected.input.messageId]]);
+        assert.throws(() => recall.validate(recall.prompt), /personal_memory_disclosure_review_required/);
+        recall.revoke();
+        const policy = await local.command('personalMemoryPolicyNative', {});
+        await local.command('personalMemoryPolicyNative', { assistant: 'vela', enable: false, expectedVersion: policy.version });
+        const activity = await local.command('providerActivity', {});
+        assert.equal(activity.providerRequests, 0);
+        assert.equal(activity.codexConnections, 0);
+      } finally { await local.command('close', {}); }
+      backend = startBackend();
       stage = 'revoke the exact restored source';
       const revoke = await backend.call('personalMemoryManagementNative', {
         type: 'previewSourceRevocation', id: fact.id, version: fact.version,
@@ -102,15 +129,21 @@ async function run() {
       const opened = await backend.call('openResource', { resourceId: conversationId, selection: { messageId } });
       assert.equal(opened.status, 'unavailable');
       console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron,
-        restoredFact: true, providerUseOff: true, revokedSourceSurvivedWorkerRestart: true }));
+        restoredFact: true, localCrossChatRecall: true, providerUseOff: true, revokedSourceSurvivedWorkerRestart: true }));
       return;
     }
     stage = 'seed canonical conversation';
+    const project = (await backend.call('desktop', { type: 'createProject', title: 'Synthetic memory project' })).projects[0];
+    const workspace = (await backend.call('desktop', { type: 'createWorkspace', title: 'Synthetic memory workspace', projectId: project.id })).workspaces[0];
     const chat = await backend.call('createConversation', { title: 'Synthetic memory witness', commandId: 'chat' });
+    await backend.call('conversation', { name: 'organize', input: {
+      type: 'associateProject', resourceId: chat.resourceId, projectId: project.id, expectedVersion: 1,
+    } });
+    const detail = await backend.call('conversation', { name: 'detail', input: { resourceId: chat.resourceId } });
     const message = await backend.call('addMessage', { resourceId: chat.resourceId, role: 'user',
-      content: text, expectedRevision: chat.revision, commandId: 'message' });
+      content: text, expectedRevision: detail.conversation.revision, commandId: 'message' });
     const input = { conversationId: chat.resourceId, messageId: message.id, text: factText,
-      scope: 'conversation', category: 'decisions', keywords: ['quartz', 'relay'] };
+      scope: 'project', expectedProjectId: project.id, category: 'decisions', keywords: ['quartz', 'relay'] };
     stage = 'open isolated parent';
     parent = new BrowserWindow({ width: 820, height: 630, show: false, webPreferences: { sandbox: true } });
     await parent.loadURL('data:text/html,<title>Aerynth synthetic memory check</title><button>Review memory</button>');
@@ -167,7 +200,7 @@ async function run() {
     await backend.close();
     backend = undefined;
     assert(!readFileSync(path).includes(Buffer.from(factText)));
-    writeFileSync(receiptPath, JSON.stringify({ input, id: saved.id, pid: process.pid }), { flag: 'wx' });
+    writeFileSync(receiptPath, JSON.stringify({ input, id: saved.id, workspaceId: workspace.id, projectId: project.id, pid: process.pid }), { flag: 'wx' });
     console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron, nativeApproval: true, replayDenied: true }));
   } catch (error) {
     const code = /^[a-z][a-z0-9_]{1,79}$/u.test(error.message) ? error.message : error.code ?? error.name;
