@@ -1,8 +1,12 @@
 import { Worker } from 'node:worker_threads';
+import { randomUUID } from 'node:crypto';
 import { missionCpuWorkerProtocol, type inspectBackendSource } from './mission-cpu-worker.mts';
 
 type Inspection = Awaited<ReturnType<typeof inspectBackendSource>>;
-type Slot = { worker: Worker; busy: boolean; retiring: boolean };
+type Slot = { worker: Worker; instanceId: string; busy: boolean; retiring: boolean };
+const exitedInspections = new WeakSet<object>();
+/** Live producer custody, not a renderer/model-supplied exit assertion. */
+export const isExitedBackendInspection = (value: object) => exitedInspections.has(value);
 const inspectionOldGenerationMiB = 32;
 // Allow for the rest of V8 and native allocations in addition to the old-generation limit.
 export const missionCpuInspectionRamBytes = (inspectionOldGenerationMiB + 32) * 2 ** 20;
@@ -20,7 +24,7 @@ export function createMissionCpuPool(limit: number, spawn = spawnInspectionWorke
 
   function newSlot() {
     const worker = spawn();
-    const slot = { worker, busy: false, retiring: false };
+    const slot = { worker, instanceId: randomUUID(), busy: false, retiring: false };
     slots.add(slot);
     worker.on('error', () => { slot.retiring = true; });
     worker.once('exit', () => { slots.delete(slot); });
@@ -34,13 +38,17 @@ export function createMissionCpuPool(limit: number, spawn = spawnInspectionWorke
   }
 
   return {
-    async inspect(signal: AbortSignal): Promise<{ evidence: Inspection; threadId: number }> {
+    async inspect(signal: AbortSignal, terminalBinding?: string): Promise<{ evidence: Inspection; threadId: number;
+      bindingDigest?: string; exit?: { effectId: string; workerInstanceId: string; threadId: number; quiescence: 'worker-exit' } }> {
       signal.throwIfAborted();
+      if (terminalBinding !== undefined && (spawn !== spawnInspectionWorker || !/^[a-f0-9]{64}$/.test(terminalBinding)))
+        throw Error('mission_cpu_terminal_unsupported_worker');
       if (closed) throw Error('mission_cpu_pool_closed');
       const slot = [...slots].find(candidate => !candidate.busy && !candidate.retiring) ??
         (slots.size < limit ? newSlot() : undefined);
       if (!slot) throw Error('mission_cpu_backpressure');
       slot.busy = true;
+      const effectId = randomUUID();
       const { worker } = slot, { threadId } = worker;
       worker.ref();
       return new Promise((resolve, reject) => {
@@ -58,9 +66,29 @@ export function createMissionCpuPool(limit: number, spawn = spawnInspectionWorke
         };
         const result = (evidence: Inspection | null) => {
           if (signal.aborted || slot.retiring) return;
-          cleanup();
-          if (evidence) resolve({ evidence, threadId });
-          else reject(Error('backend_source_unavailable'));
+          if (terminalBinding && evidence) {
+            slot.retiring = true;
+            // The original worker must exit before its result can become a terminal receipt.
+            const exited = worker.terminate();
+            cleanup();
+            void exited.then(() => {
+              if (signal.aborted) reject(signal.reason);
+              else {
+                const terminal = { evidence, threadId, bindingDigest: terminalBinding, exit: { effectId, workerInstanceId: slot.instanceId,
+                  threadId, quiescence: 'worker-exit' as const } };
+                Object.freeze(terminal.evidence.value);
+                Object.freeze(terminal.evidence);
+                Object.freeze(terminal.exit);
+                Object.freeze(terminal);
+                exitedInspections.add(terminal);
+                resolve(terminal);
+              }
+            }, reject);
+          } else {
+            cleanup();
+            if (evidence) resolve({ evidence, threadId });
+            else reject(Error('backend_source_unavailable'));
+          }
         };
         worker.once('message', result);
         worker.once('exit', exited);
