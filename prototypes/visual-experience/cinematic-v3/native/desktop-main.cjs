@@ -986,13 +986,21 @@ app.whenReady().then(async () => {
               if (!policy.storageEnabled) throw Error("personal_memory_no_eligible_context");
               const choice = await reviewDialogs.showMessageBox(win, {
                 type: "question", title: "Aerynth memory", message: "Enable saved memory for the Vela API?",
-                detail: "When you request saved memory, Vela can include relevant facts after you review the exact request.",
+                detail: "Vela will look for relevant saved facts in eligible Vela API conversations. If it finds a match, you’ll review the exact request before it is shared. You can turn this off in Saved memories.",
                 buttons: ["Cancel", "Enable memory"], defaultId: 0, cancelId: 0, noLink: true,
               });
               if (choice.response !== 1) throw Error("authorization_cancelled");
               if (!trustedApplicationFrame(event) || !await storage.allowWrite() || !trustedApplicationFrame(event)) return false;
               await call("personalMemoryPolicyNative", { assistant: "vela", enable: true, expectedVersion: policy.version });
               return trustedApplicationFrame(event);
+            },
+            shouldPreviewMemory: async () => {
+              if (!trustedActiveFrame(event)) return false;
+              const policy = await call("personalMemoryPolicyNative", {}).catch(error => {
+                if (["private_key_unavailable", "personal_memory_native_required"].includes(error?.message)) return null;
+                throw error;
+              });
+              return trustedActiveFrame(event) && policy?.storageEnabled === true && policy.velaEnabled === true;
             },
             validateMemoryReview: () => !closing && !backendFailed && trustedApplicationFrame(event),
             offerPlanningByDefault: !verify || verifyAirLocal,

@@ -159,6 +159,7 @@ exports.velaCommand = async ({
   routeNative = directMessageSend,
   requireInspectionDirectory = false,
   beforeMemoryPreview,
+  shouldPreviewMemory,
   validateMemoryReview,
   observeNativeRequest,
   missionFileEditRequest,
@@ -327,7 +328,7 @@ exports.velaCommand = async ({
         ...(request.routingAgentId ? { routingAgentId: request.routingAgentId } : {}),
         ...(value.activeCard === undefined ? {} : { activeCard: value.activeCard }),
     };
-    const preview = await stage("preview", async () => {
+    let preview = await stage("preview", async () => {
       try { return await call("velaRequestPreview", previewInput); }
       catch (error) {
         if (value.useMemory) throw error;
@@ -350,7 +351,20 @@ exports.velaCommand = async ({
         return call("velaRequestPreview", { ...previewInput, ...paths });
       }
     });
-    if (!!preview.memory !== !!value.useMemory || (value.useMemory &&
+    let reviewedMemory = value.useMemory === true;
+    if (!reviewedMemory && directMessageSend && preview.providerId === "openai-api-vela" &&
+        preview.route?.kind === "conversational" && !preview.route.nativeMetric && !preview.route.nativeLog &&
+        !preview.workflowScope && !value.activeCard && !value.semanticContext && !request.handoffSourceRequestId &&
+        !request.routingAgentId && !request.resourceIds.length && !request.resourceRefs && !allowEscalation &&
+        validateMemoryReview && await shouldPreviewMemory?.()) {
+      try {
+        preview = await stage("preview", () => call("velaRequestPreview", { ...previewInput, useMemory: true, providerId: preview.providerId }));
+        reviewedMemory = true;
+      } catch (error) {
+        if ((error?.code ?? error?.message) !== "personal_memory_no_eligible_context") throw error;
+      }
+    }
+    if (!!preview.memory !== reviewedMemory || (reviewedMemory &&
         (preview.sendDisposition !== "review-required" || preview.providerId !== "openai-api-vela" ||
          preview.route?.kind !== "conversational" || preview.route.nativeMetric || preview.route.nativeLog || preview.workflowScope)))
       throw Error("invalid_native_vela_review");
@@ -404,7 +418,7 @@ exports.velaCommand = async ({
       expiresAt: preview.expiresAt,
     });
     if (approved !== true) throw Error("authorization_cancelled");
-    if (value.useMemory && validateMemoryReview?.() !== true) throw Error("personal_memory_frame_changed");
+    if (reviewedMemory && validateMemoryReview?.() !== true) throw Error("personal_memory_frame_changed");
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
     const grant = await stage("grant", () =>
@@ -417,7 +431,7 @@ exports.velaCommand = async ({
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    if (value.useMemory && validateMemoryReview?.() !== true) throw Error("personal_memory_frame_changed");
+    if (reviewedMemory && validateMemoryReview?.() !== true) throw Error("personal_memory_frame_changed");
     const result = await stage("request", () =>
       call("vela", {
         name: "request",
