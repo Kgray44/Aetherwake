@@ -879,5 +879,14 @@ export class VelaApiRuntime {
     }
     try{return JSON.parse(result.partialText);}catch{throw new VelaError('vela_api_proposal_invalid');}
   }
-  close() { this.lifetime.abort(); }
+  close() {
+    this.lifetime.abort();
+    if (!this.syntheticBatchAccounting) return;
+    // Release this owner's unused slots. Other runtime IDs may still be live.
+    // Canonical run rows, including uncertain dispatches, remain charged.
+    this.options.transaction(() => {
+      this.options.db.prepare(`UPDATE vela_api_synthetic_evaluation_batches SET revoked=1
+        WHERE runtime_id=? AND revoked=0`).run(this.cognitionClock);
+    });
+  }
 }

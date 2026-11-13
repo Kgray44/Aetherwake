@@ -312,6 +312,57 @@ test('synthetic CIE batch reserves daily capacity and debits each admitted stage
   }
 });
 
+test('closing a synthetic CIE runtime releases its unused reservations and preserves admitted runs', async () => {
+  const f = fixture(true);
+  try {
+    await f.configure();
+    await f.authorize();
+    const runtime = () => (f.core as unknown as { velaApiRuntime: VelaApiRuntime }).velaApiRuntime;
+    const { db, kernel, velaApiConnection } = f.core as unknown as {
+      db: DatabaseSync;
+      kernel: import('../../workspace-kernel/kernel.mts').WorkspaceKernel;
+      velaApiConnection: import('../src/vela-api-connection.mts').VelaApiConnection;
+    };
+    const peer = new VelaApiRuntime({ db, transaction: work => kernel.withTransaction(work), connection: velaApiConnection,
+      test: { syntheticBatchAccounting: true, async fetch() { throw Error('Unexpected peer transport'); } } });
+    const { profileId } = runtime().readLedgerProfile()!;
+    const batch = { batchId: '1'.repeat(64), profileId, configurationVersion: 1, maxCalls: 63, expiresAt: Date.now() + 60_000 };
+    runtime().beginSyntheticEvaluationBatch(batch);
+    peer.beginSyntheticEvaluationBatch({ ...batch, batchId: '2'.repeat(64), maxCalls: 1 });
+    const claim = { profileId, configurationVersion: 1, claimToken: 'a'.repeat(64), bindingDigest: 'b'.repeat(64) };
+    runtime().beginEvaluationClaim(claim, { batchId: batch.batchId, maxCalls: 2 });
+    await runtime().models(1);
+    const input = { requestId: 'old-runtime-stage', version: 1, model: 'gpt-6-luna', prompt: 'Synthetic stage',
+      contextDigest: 'c'.repeat(64), currentCatalogOnly: true as const, evaluationClaim: claim, validate() {} };
+    const signal = new AbortController().signal;
+    f.replies.push(() => response('Synthetic answer.'));
+    const completed = await runtime().run(input, signal);
+    assert.equal(completed.result.outcome, 'completed');
+    f.replies.push(() => { throw Error('Synthetic transport outcome unknown'); });
+    const unknownRequestId = 'old-runtime-interrupted-stage';
+    const unknown = await runtime().run({ ...input, requestId: unknownRequestId }, signal);
+    assert.equal(unknown.result.outcome, 'unknown');
+    runtime().close();
+    // The live peer's slot and both canonical execution debits still count.
+    const next = { ...batch, batchId: '3'.repeat(64), maxCalls: 62 };
+    assert.throws(() => peer.beginSyntheticEvaluationBatch(next), /vela_api_daily_limit_reached/);
+    peer.beginSyntheticEvaluationBatch({ ...next, maxCalls: 61 });
+    peer.close();
+    await f.reopen();
+    runtime().beginSyntheticEvaluationBatch({ ...next, batchId: '4'.repeat(64) });
+    assert.equal(runtime().usageStatus().usedToday, 2);
+    const settled = { requestId: input.requestId, executionId: completed.executionId };
+    const interrupted = { requestId: unknownRequestId, executionId: unknown.executionId };
+    assert.deepEqual(runtime().readEvaluationAdmissions(claim), [settled, interrupted]);
+    assert.equal(runtime().readLedgerReceipts({ ...claim, expected: [settled] }).state, 'terminal-receipts');
+    assert.deepEqual(runtime().readLedgerReceipts({ ...claim, expected: [settled, interrupted] }), { state: 'unresolved' });
+    assert.throws(() => runtime().beginEvaluationClaim({ ...claim, claimToken: 'd'.repeat(64) },
+      { batchId: '4'.repeat(64), maxCalls: 2 }), /vela_evaluation_claim_exists/);
+    await assert.rejects(runtime().run(input, signal), /vela_evaluation_claim_invalid/);
+    assert.equal(f.requests.length, 2);
+  } finally { await f.close(); }
+});
+
 const weatherQuery:WeatherQuery={startDate:null,endDate:null,period:'tomorrow',metrics:['temperature','humidity'],aggregation:'range'};
 const weatherCall=(query:unknown=weatherQuery,id='resp-weather',callId='call-weather')=>response('',id,[{type:'function_call',id:'fc-'+callId,call_id:callId,name:WEATHER_TOOL_NAME,arguments:JSON.stringify(query),status:'completed'}] as any);
 const unavailableWeather=()=>readWeatherData(weatherQuery,new AbortController().signal,{authorize(){throw Error('location_os_denied');},locate:async()=>{throw Error('unexpected_location');},fetch:async()=>{throw Error('unexpected_weather_network');}});
