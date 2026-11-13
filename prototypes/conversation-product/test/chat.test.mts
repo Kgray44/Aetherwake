@@ -222,7 +222,8 @@ test('Switch chat Escape cancels a result still waiting for the draft to save', 
  } finally {release();await manager?.dispose();f.restore();}
 });
 
-for (const unavailable of [false,true]) test('Switch chat recovers a failed result open (unavailable: '+unavailable+')', async () => {
+for (const failure of ['temporary detail failure','message_unavailable','conversation_missing']) test('Switch chat recovers a failed result open ('+failure+')', async () => {
+ const unavailable=failure!=='temporary detail failure';
  const f=fixture(),resourceId=f.draft.resourceId,messageId=f.detail.messages.items[0].id;
  const opened:string[]=[];
  let manager,failed=false,searches=0;
@@ -232,7 +233,7 @@ for (const unavailable of [false,true]) test('Switch chat recovers a failed resu
    const items=unavailable&&failed?[]:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:'exact phrase'}];
    return {items,total:items.length,offset:0,limit:12,hasMore:false};
   }
-  if(name==='detail'&&input.aroundMessageId===messageId&&!failed){failed=true;throw Error(unavailable?'message_unavailable':'temporary detail failure');}
+  if(name==='detail'&&input.aroundMessageId===messageId&&!failed){failed=true;throw Error(failure);}
   return (f.port.command as any)(name,input);
  }} as ConversationProductPort;
  try {
