@@ -4,6 +4,7 @@ import { mountConversationChat, decorateConversationControl, decorateConversatio
 import type { ExperienceMotionPort } from '../../application-contract/motion.ts';
 import { enhanceConversationSelect, conversationControlStates, conversationDisclosures, conversationHistoryDrawer, conversationDetailReveal } from './picker.ts';
 import type { ConversationViewPersistence } from './view-persistence.ts';
+import type { MemoryCaptureRequest } from './memory-capture-editor.ts';
 export { acceptedConversationSubmission } from './chat.ts';
 
 export type ManagerState = { selectedResourceId: string | null; drafts: Record<string,string>; scroll: Record<string,number>; query: SearchQuery; messageOffset: Record<string,number> };
@@ -44,7 +45,8 @@ const renderChatGPTCompatibility=(report:NativeChatGPTFidelityDescriptor,onOpenE
 };
 
 /** Temporary surface: the host decides placement, focus transition, and shared Motion Coordinator. */
-export function mountConversationManager(container: HTMLElement, port: ConversationProductPort, options: ManagerOptions = {}) {
+export function mountConversationManager(container: HTMLElement, port: ConversationProductPort,
+  options: ManagerOptions & { onRememberMessage?: (request: MemoryCaptureRequest) => Promise<boolean> } = {}) {
  if(options.motion&&!options.viewId?.trim())throw new Error('conversation_motion_identity_required');
  const state=options.state??createManagerState();if(options.resourceId)state.selectedResourceId=options.resourceId;
  const root=el('section',undefined,'cp-manager aw-optical-controls'+(options.embedded===false?' cp-standalone':' cp-embedded'));root.dataset.awOptics='workspace';root.setAttribute('role','region');root.setAttribute('aria-label','Conversations');
@@ -123,6 +125,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   if(!session){if(options.draftSession)session=options.draftSession(resourceId);else{session=new ConversationDraftSession({resourceId,port,...(Object.hasOwn(state.drafts,resourceId)?{initialContent:state.drafts[resourceId]}:{})});ownedDraftSessions.add(session);}if(session.resourceId!==resourceId)throw new Error('draft_resource_mismatch');draftSessions.set(resourceId,session);}else await session.reload();
   const initialView=restoredView?.resourceId===resourceId?restoredView:undefined;restoredView=null;
   chatResource=resourceId;chat=mountConversationChat(chatHost,{port,resourceId,draftSession:session,execution:options.execution,copy:options.copy,motion:options.motion,models:options.models,viewId:options.viewId?options.viewId+':chat:'+resourceId:undefined,onProviderChange:requestProviderChange,initialScroll:options.viewPersistence?undefined:state.scroll[resourceId],initialOffset:options.viewPersistence?undefined:state.messageOffset[resourceId],viewPersistence:options.viewPersistence,initialView,initialAroundMessageId:aroundMessageId,
+   onRememberMessage:options.onRememberMessage,
    onViewState:view=>{state.drafts[view.resourceId]=view.content;state.scroll[view.resourceId]=view.scroll;state.messageOffset[view.resourceId]=view.offset;save();},onDetail:renderDetail,onUnavailable:()=>{current=null;detailHeader.replaceChildren();secondary.replaceChildren();extras.open=false;},onChanged:refresh,
    onMessageAction:async event=>{if(event.action==='source'){options.onResource?.(event.message.resourceId,event.message.id);return;}if(event.action==='branch'){if(current)showBranch(current,event.message.id);return;}
     const selection=event.selection;if(!selection||event.message.content.slice(selection.start,selection.end)!==selection.text)throw new Error('Select a current source excerpt');
