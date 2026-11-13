@@ -115,3 +115,61 @@ test('opening a saved memory source rechecks the record and opens its exact mess
     assert.equal(opened.length, 1);
   } finally { restore(); }
 });
+
+test('superseded memory opens its replacement through a fresh authorized read', async () => {
+  const f = componentDocument(), restore = f.install(), reads = [];
+  const old = { id: 'old', version: 2, scope: { kind: 'project', id: 'project' }, state: 'superseded',
+    text: 'Old preference', certainty: 'user-preference', provenance: { kind: 'user-statement' },
+    supersededBy: 'new', keywords: ['preference'] };
+  const replacement = { ...old, id: 'new', state: 'active', version: 1, text: 'Current preference', supersededBy: null };
+  let canReadReplacement = false;
+  try {
+    const view = createPersonalMemoryView(async request => {
+      if (request.type === 'list') return { records: [old], next: null, policy: { version: 1 } };
+      reads.push(request.id);
+      if (request.id === old.id) return old;
+      if (!canReadReplacement) throw Error('Memory unavailable');
+      return replacement;
+    });
+    named(view, 'Load saved memories').fire('click');
+    await until(() => !!named(view, 'Memory old · project · superseded'));
+    const original = named(view, 'Memory old · project · superseded');
+    original.fire('click');
+    await until(() => !!named(view, 'Open replacement memory'));
+    assert.match(view.textContent, /Superseded · This project · User preference/);
+    assert.match(view.textContent, /Excluded from future recall/);
+    assert.equal(named(view, 'Review correction'), undefined);
+    named(view, 'Open replacement memory').fire('click');
+    await until(() => view.textContent.includes('Memory unavailable'));
+    assert.doesNotMatch(view.textContent, /Current preference/);
+    canReadReplacement = true;
+    original.fire('click');
+    await until(() => !!named(view, 'Open replacement memory'));
+    named(view, 'Open replacement memory').fire('click');
+    await until(() => view.textContent.includes('Current preference'));
+    assert.match(view.textContent, /Eligible for recall/);
+    assert.doesNotMatch(view.textContent, /Old preference/);
+    assert.deepEqual(reads, ['old', 'new', 'old', 'new']);
+  } finally { restore(); }
+});
+
+test('a listed memory whose source cannot be opened can still be deleted', async () => {
+  const f = componentDocument(), restore = f.install(), changes = [];
+  const record = { id: 'old', version: 2, scope: { kind: 'project', id: 'project' }, state: 'revoked' };
+  try {
+    const view = createPersonalMemoryView(async request => {
+      if (request.type === 'list') return { records: [record], next: null, policy: { version: 1 } };
+      if (request.type === 'read') throw Error('Memory unavailable');
+      changes.push(request);
+      return { status: 'applied' };
+    });
+    named(view, 'Load saved memories').fire('click');
+    await until(() => !!named(view, 'Memory old · project · revoked'));
+    named(view, 'Memory old · project · revoked').fire('click');
+    await until(() => !!named(view, 'Delete'));
+    assert.equal(named(view, 'Export'), undefined);
+    named(view, 'Delete').fire('click');
+    await until(() => changes.length === 1);
+    assert.deepEqual(changes, [{ type: 'manage', action: 'delete', id: 'old', version: 2 }]);
+  } finally { restore(); }
+});
