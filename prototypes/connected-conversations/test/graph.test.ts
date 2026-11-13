@@ -83,6 +83,21 @@ test('nested and multiple branches retain ordering, provenance, and independent 
   assert.equal(graph.visibleMessages(root.id).length, 3);
   assert.equal(one.handoff.items[0].provenance, 'user');
 });
+test('graph import rejects a cycle even after validating a separate root', () => {
+  const { graph, root, a } = seed();
+  const first = graph.branch({
+    sourceConversationId: root.id, sourceMessageId: a.id, targetKind: 'ordinary',
+    targetProviderId: 'mock-ordinary', title: 'First branch',
+  });
+  const second = graph.branch({
+    sourceConversationId: first.conversation.id, sourceMessageId: a.id, targetKind: 'ordinary',
+    targetProviderId: 'mock-ordinary', title: 'Second branch',
+  });
+  const data = graph.snapshot();
+  data.edges.find(edge => edge.id === first.edge.id)!.parentId = second.conversation.id;
+  assert.throws(() => new ConversationGraph(mockAdapters(), data), /lineage cycle/);
+});
+
 test('unavailable source blocks new inclusion and marks old handoffs stale', () => {
   const { graph, root, a, b } = seed();
   const child = graph.branch({ sourceConversationId: root.id, sourceMessageId: b.id,

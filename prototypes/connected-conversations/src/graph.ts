@@ -457,7 +457,8 @@ export class ConversationGraph {
       assert(Array.isArray(d[name]), 'invalid ' + name);
     assert(d.idempotency && typeof d.idempotency === 'object', 'invalid idempotency map');
     const all = [...d.conversations, ...d.messages, ...d.artifacts, ...d.edges, ...d.handoffs];
-    assert(new Set(all.map(x => x.id)).size === all.length, 'duplicate identity');
+    const identities = new Set(all.map(x => x.id));
+    assert(identities.size === all.length, 'duplicate identity');
     const conversations = new Map(d.conversations.map(c => [c.id, c]));
     const messages = new Map(d.messages.map(m => [m.id, m]));
     for (const c of d.conversations) {
@@ -469,20 +470,24 @@ export class ConversationGraph {
     }
     for (const m of d.messages)
       assert(conversations.has(m.conversationId) && typeof m.content === 'string', 'invalid message');
-    for (const e of d.edges)
+    const handoffIds = new Set(d.handoffs.map(handoff => handoff.id));
+    const parentByChild = new Map<string, string>();
+    for (const e of d.edges) {
       assert(conversations.has(e.parentId) && conversations.has(e.childId) &&
-        messages.has(e.sourceMessageId) && d.handoffs.some(h => h.id === e.handoffId), 'invalid edge');
-    assert(new Set(d.edges.map(e => e.childId)).size === d.edges.length, 'multiple parents');
+        messages.has(e.sourceMessageId) && handoffIds.has(e.handoffId), 'invalid edge');
+      assert(!parentByChild.has(e.childId), 'multiple parents');
+      parentByChild.set(e.childId, e.parentId);
+    }
+    const validated = new Set<string>();
     for (const c of d.conversations) {
-      let cursor = c.id;
-      const seen = new Set<string>();
-      while (true) {
-        assert(!seen.has(cursor), 'lineage cycle');
-        seen.add(cursor);
-        const edge = d.edges.find(e => e.childId === cursor);
-        if (!edge) break;
-        cursor = edge.parentId;
+      let cursor: string | undefined = c.id;
+      const path = new Set<string>();
+      while (cursor !== undefined && !validated.has(cursor)) {
+        assert(!path.has(cursor), 'lineage cycle');
+        path.add(cursor);
+        cursor = parentByChild.get(cursor);
       }
+      for (const id of path) validated.add(id);
     }
     for (const h of d.handoffs) {
       assert(conversations.has(h.targetConversationId) && conversations.has(h.sourceConversationId), 'invalid handoff');
@@ -493,6 +498,6 @@ export class ConversationGraph {
     }
     for (const id of d.unavailableMessageIds) assert(messages.has(id), 'invalid unavailable message');
     for (const id of Object.values(d.idempotency))
-      assert(all.some(item => item.id === id), 'invalid idempotency result');
+      assert(identities.has(id), 'invalid idempotency result');
   }
 }
