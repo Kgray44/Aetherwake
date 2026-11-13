@@ -190,6 +190,31 @@ test('quick search Enter submits pending text immediately and opens the first ex
  } finally {await manager?.dispose();f.restore();}
 });
 
+test('Switch chat keeps an exact result available when opening it fails', async () => {
+ const f=fixture(),resourceId=f.draft.resourceId,messageId=f.detail.messages.items[0].id;
+ const opened:string[]=[];
+ let manager,failed=false;
+ const port={async command(name:string,input:any){
+  if(name==='search')return {items:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:'exact phrase'}],total:1,offset:0,limit:12,hasMore:false};
+  if(name==='detail'&&input.aroundMessageId===messageId&&!failed){failed=true;throw Error('temporary detail failure');}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(_id,message)=>{if(message)opened.push(message);}});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'),input=switcher.querySelector('input');
+  input.value='exact phrase';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await until(()=>failed&&!f.view.root.querySelector('.cp-manager').getAttribute('aria-busy'));
+  assert.equal(switcher.open,true);
+  assert.equal(input.value,'exact phrase');
+  assert.match(switcher.querySelector('.cp-switcher-status').textContent,/Couldn’t open/);
+  input.fire('keydown',{key:'Enter'});
+  await until(()=>opened.length===1&&!switcher.open);
+  assert.deepEqual(opened,[messageId]);
+ } finally {await manager?.dispose();f.restore();}
+});
+
 test('Switch chat does not auto-open a result after a newer conversation open', async () => {
  const f=fixture(), resourceId=f.draft.resourceId, messageId=f.detail.messages.items[0].id;
  const opened:(string|undefined)[]=[];

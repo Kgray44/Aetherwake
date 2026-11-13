@@ -180,11 +180,21 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
     if(mode==='running'&&item.execution?.state!=='dispatching'&&item.execution?.state!=='running')return [];
     return [{kind:'conversation',resourceId:item.resourceId,title:item.title,excerpt:'',summary:item,providerId:item.providerId}];
    });
+   let opening=false;
    const rows=hits.map(hit=>{
-    const row=button(hit.title,()=>{
-     if(!stillCurrent())return;
-     switcher.node.open=false;
-     return requestOpen(hit.resourceId,hit.messageId);
+    const row=button(hit.title,async()=>{
+     if(!stillCurrent()||opening)return;
+     opening=true;
+     const pending=requestOpen(hit.resourceId,hit.messageId),intent=openIntent;
+     try{
+      await pending;
+      if(stillCurrent()&&intent===openIntent)switcher.node.open=false;
+     }catch{
+      if(stillCurrent()&&intent===openIntent){
+       switchStatus.textContent='Couldn’t open the conversation. Choose a result to try again.';
+       if(switcher.node.contains(document.activeElement))switchQuery.focus();
+      }
+     }finally{opening=false;}
     },{identity:'history-result'});
     row.dataset.resourceId=hit.resourceId;
     if(hit.messageId){
