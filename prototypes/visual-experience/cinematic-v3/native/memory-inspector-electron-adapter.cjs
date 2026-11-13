@@ -38,7 +38,7 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
         });
       } catch (error) { wire.close(); throw error; }
       const pending = new Map();
-      let sequence = 0, active = true, stopping = false, buffer = "";
+      let sequence = 0, active = true, stopping = false, buffer = "", seeded = false;
       const exited = new Promise(resolve => {
         child.once("close", resolve);
       });
@@ -46,15 +46,15 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
         check();
         child.stdin.write(JSON.stringify(message) + "\n");
       };
-      const fail = () => {
+      const fail = (failure = Error("memory_fixture_worker_disconnected")) => {
         active = false;
-        for (const request of pending.values()) request.reject(Error("memory_fixture_worker_disconnected"));
+        for (const request of pending.values()) request.reject(failure);
         pending.clear();
         if (!stopping) void close().catch(() => {});
       };
-      child.once("error", fail);
-      child.once("close", fail);
-      child.stdin.on("error", fail);
+      child.once("error", () => fail());
+      child.once("close", () => fail());
+      child.stdin.on("error", () => fail());
       child.stdout.setEncoding("utf8").on("data", chunk => {
         if (!active) return;
         try {
@@ -65,6 +65,17 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
           while ((split = buffer.indexOf("\n")) !== -1) {
             const message = JSON.parse(buffer.slice(0, split));
             buffer = buffer.slice(split + 1);
+            if (Object.hasOwn(message, "startupError")) throw Error("memory_fixture_seed_failed");
+            if (Object.hasOwn(message, "fixtureSeed")) {
+              const seed = message.fixtureSeed;
+              const validId = value => typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,256}$/u.test(value);
+              if (seeded || Object.keys(message).length !== 1 || !seed || Object.keys(seed).length !== 4 ||
+                  seed.contract !== "aerynth.memory-fixture-seed@1" ||
+                  ![seed.conversationId, seed.messageId, seed.factId].every(validId))
+                throw Error("memory_fixture_seed_invalid");
+              seeded = true;
+              continue;
+            }
             if (wire?.handle(message) || message.event) continue;
             const request = pending.get(message.id);
             if (!request) throw Error("memory_fixture_unexpected_reply");
@@ -72,7 +83,9 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
             if (message.error) request.reject(Error(message.error));
             else request.resolve(message.result);
           }
-        } catch { fail(); }
+        } catch (error) {
+          fail(["memory_fixture_seed_failed", "memory_fixture_seed_invalid"].includes(error?.message) ? error : undefined);
+        }
       });
       let ready = false;
       const worker = {
@@ -88,7 +101,7 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
         },
         async waitUntilReady() {
           const reply = await bounded(worker.call({ command: "capabilities", input: {} }), readinessMs);
-          if (reply?.providerId !== "fixture-codex") throw Error("memory_fixture_worker_not_ready");
+          if (!active || !seeded || reply?.providerId !== "fixture-codex") throw Error("memory_fixture_worker_not_ready");
           ready = true;
         },
         async close() {
