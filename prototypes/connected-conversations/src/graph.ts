@@ -28,6 +28,25 @@ export interface Message {
 }
 export type MessageMetadata = Readonly<Pick<Message,'id'|'conversationId'|'sequence'|'role'|'sensitivity'> & {ordinal:number;bodyBytes:number;unavailable:boolean}>;
 export interface MessageMetadataWindow {items:MessageMetadata[];emittedCount:number;emittedBodyBytes:number;hasMore:boolean;limitedBy:null|'scan-limit'|'byte-limit'|'denied'}
+export type MessageSearchMatch = Readonly<Pick<Message, 'id' | 'createdAt'> & { excerpt: string }>;
+class SearchMatch implements MessageSearchMatch {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly #content: string;
+  readonly #index: number;
+
+  constructor(message: Message, content: string, index: number) {
+    this.id = message.id;
+    this.createdAt = message.createdAt;
+    this.#content = content;
+    this.#index = index;
+    Object.freeze(this);
+  }
+
+  get excerpt() {
+    return this.#content.slice(Math.max(0, this.#index - 60), this.#index + 160);
+  }
+}
 class MetadataScanLimit extends Error {}
 export interface Artifact {
   id: string; conversationId: string; sourceMessageId: string;
@@ -123,12 +142,12 @@ export class ConversationGraph {
   }
   private conversation(id: string): Conversation {
     const value = this.conversationsById.get(id);
-    assert(value, 'conversation missing: ' + id);
+    if (!value) throw new Error('conversation missing: ' + id);
     return value;
   }
   private message(id: string): Message {
     const value = this.messagesById.get(id);
-    assert(value, 'message missing: ' + id);
+    if (!value) throw new Error('message missing: ' + id);
     return value;
   }
   private once(key: string | undefined): string | undefined {
@@ -203,19 +222,78 @@ export class ConversationGraph {
     return !!message && message.conversationId === conversationId && this.conversationsById.get(conversationId)?.ownMessageIds[message.sequence - 1] === messageId;
   }
   private visibleMessageRecords(conversationId:string,budget?:{remaining:number}):Message[] {
-    const c = this.conversation(conversationId);
-    if(budget){const count=1+c.ownMessageIds.length;if(count>budget.remaining)throw new MetadataScanLimit();budget.remaining-=count;}
-    const edge = this.edgesByChild.get(c.id);
-    let inherited: Message[] = [];
-    if (edge) {
-      const parent = this.visibleMessageRecords(edge.parentId,budget);
-      const index = parent.findIndex(m => m.id === edge.sourceMessageId);
-      assert(index >= 0, 'fork point absent');
-      inherited = parent.slice(0, index + 1);
+    const lineage: Conversation[] = [];
+    for (let c = this.conversation(conversationId); ; ) {
+      if (budget) {
+        const count = 1 + c.ownMessageIds.length;
+        if (count > budget.remaining) throw new MetadataScanLimit();
+        budget.remaining -= count;
+      }
+      lineage.push(c);
+      const edge = this.edgesByChild.get(c.id);
+      if (!edge) break;
+      c = this.conversation(edge.parentId);
     }
-    return [...inherited, ...c.ownMessageIds.map(id => this.message(id))];
+
+    // Reuse one array as each fork trims the parent view to its anchor.
+    const records: Message[] = [];
+    for (const c of lineage.reverse()) {
+      const edge = this.edgesByChild.get(c.id);
+      if (edge) {
+        const index = records.findIndex(message => message.id === edge.sourceMessageId);
+        assert(index >= 0, 'fork point absent');
+        records.length = index + 1;
+      }
+      for (const id of c.ownMessageIds) records.push(this.message(id));
+    }
+    return records;
   }
-  visibleMessages(conversationId: string): Message[] {return this.visibleMessageRecords(conversationId).map(copy);}
+  visibleMessages(conversationId: string): Message[] {
+    return this.visibleMessageRecords(conversationId).filter(message => !this.unavailableMessages.has(message.id)).map(copy);
+  }
+  pageVisibleMessages(
+    conversationId: string,
+    select: (ids: readonly string[]) => { offset: number; limit: number },
+    allow: (conversationId: string, messageId: string) => boolean,
+  ): { items: Message[]; total: number; offset: number; limit: number; hasMore: boolean } {
+    const records = this.visibleMessageRecords(conversationId)
+      .filter(message => !this.unavailableMessages.has(message.id) && allow(message.conversationId, message.id));
+    const { offset, limit } = select(records.map(message => message.id));
+    assert(Number.isInteger(offset) && offset >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 200, 'invalid_page');
+    return {
+      items: records.slice(offset, offset + limit).map(copy),
+      total: records.length,
+      offset,
+      limit,
+      hasMore: offset + limit < records.length,
+    };
+  }
+  searchVisibleMessages(
+    conversationIds: readonly string[],
+    needle: string,
+    allow: (conversationId: string, messageId: string) => boolean,
+  ): Map<string, MessageSearchMatch[]> {
+    const results = new Map<string, MessageSearchMatch[]>();
+    const examined = new Map<string, MessageSearchMatch | null>();
+    for (const conversationId of conversationIds) {
+      const matches: MessageSearchMatch[] = [];
+      for (const message of this.visibleMessageRecords(conversationId)) {
+        let match = examined.get(message.id);
+        if (match === undefined) {
+          match = null;
+          if (!this.unavailableMessages.has(message.id) && allow(message.conversationId, message.id)) {
+            const content = message.content;
+            const index = content.toLocaleLowerCase().indexOf(needle);
+            if (index >= 0) match = new SearchMatch(message, content, index);
+          }
+          examined.set(message.id, match);
+        }
+        if (match) matches.push(match);
+      }
+      if (matches.length) results.set(conversationId, matches);
+    }
+    return results;
+  }
   /** Bounded lineage projection only. Counts/bytes describe this window, never the entire history.
    * maxScan counts ancestry nodes plus own-message refs before allocation.
    * The mandatory host policy gates ALL contributing messages before anything escapes. */
@@ -242,11 +320,14 @@ export class ConversationGraph {
     const previous = this.once(input.key);
     if (previous) {
       const c = this.conversation(previous);
-      return { conversation: copy(c), edge: copy(this.data.edges.find(e => e.childId === c.id)!),
-        handoff: copy(this.data.handoffs.find(h => h.targetConversationId === c.id)!) };
+      const edge = this.data.edges.find(e => e.childId === c.id)!;
+      const handoff = this.inspectHandoff(edge.handoffId);
+      assert(!handoff.staleMessageIds.length, 'fork source unavailable');
+      const { staleMessageIds: _stale, ...context } = handoff;
+      return { conversation: copy(c), edge: copy(edge), handoff: context };
     }
     const source = this.conversation(input.sourceConversationId);
-    const visible = this.visibleMessages(source.id);
+    const visible = this.visibleMessageRecords(source.id);
     const end = visible.findIndex(m => m.id === input.sourceMessageId);
     assert(end >= 0, 'fork source message is not visible');
     assert(!this.data.unavailableMessageIds.includes(input.sourceMessageId), 'fork source unavailable');
@@ -286,6 +367,7 @@ export class ConversationGraph {
     for (const artifactId of handoff.artifactIds) {
       const a = this.data.artifacts.find(item => item.id === artifactId);
       assert(a && eligible.some(m => m.id === a.sourceMessageId), 'artifact outside fork boundary');
+      assert(!this.unavailableMessages.has(a.sourceMessageId), 'artifact source unavailable');
     }
     let providerSessionId: string | null = null;
     try {
@@ -347,7 +429,16 @@ export class ConversationGraph {
       return !source || this.data.unavailableMessageIds.includes(item.sourceMessageId) ||
         digest(source.content) !== item.digest;
     }).map(item => item.sourceMessageId);
-    return { ...copy(h), staleMessageIds };
+    if (this.unavailableMessages.has(h.forkMessageId) && !staleMessageIds.includes(h.forkMessageId))
+      staleMessageIds.push(h.forkMessageId);
+    const stale = new Set(staleMessageIds);
+    const artifactIds = h.artifactIds.filter(id => {
+      const artifact = this.data.artifacts.find(item => item.id === id);
+      if (!artifact || !this.unavailableMessages.has(artifact.sourceMessageId)) return true;
+      stale.add(artifact.sourceMessageId);
+      return false;
+    });
+    return { ...copy({ ...h, artifactIds, items: h.items.filter(item => !stale.has(item.sourceMessageId)) }), staleMessageIds: [...stale] };
   }
   snapshot(): GraphData { return copy(this.data); }
   exportJson(): string { this.validate(); return JSON.stringify(this.data, null, 2); }
