@@ -2068,6 +2068,14 @@ for (const evaluation of [false,true]) test('selected DOCX broker analysis prese
       const reopened=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
       assert.deepEqual(reopened.readEvaluationAdmissions(claim),expected);
       assert.equal(reopened.readLedgerReceipts({...claim,expected}).state,'terminal-receipts');
+      const recovered=f.core.readVelaEvaluationResult(claim,expected);
+      assert.equal(recovered.state,'verified-answer');
+      assert.equal(recovered.requestId,result.id);
+      assert.equal(recovered.messageId,result.response!.messageId);
+      assert.equal(recovered.answer,'The extracted body contains “Table cell.”');
+      assert.equal(recovered.answerDigest,result.response!.contentDigest);
+      assert.deepEqual(f.core.readVelaEvaluationResult(claim,expected.slice(1)),{state:'unresolved'});
+      assert.deepEqual(f.core.readVelaEvaluationResult({...claim,bindingDigest:'c'.repeat(64)},expected),{state:'unresolved'});
       assert.equal(f.requests.length,5);
       return;
     }

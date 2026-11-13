@@ -4676,6 +4676,36 @@ export class BackendCore {
     try { return await this.previewVelaRequest(input,evaluationClaim); }
     catch(error){this.velaApiRuntime.endEvaluationClaim(evaluationClaim);throw error;}
   }
+  /** Reconcile a previously admitted synthetic claim without contacting a provider. */
+  readVelaEvaluationResult(claim: NonNullable<VelaApiRun['evaluationClaim']>,
+    expected: Parameters<VelaApiRuntime['readLedgerReceipts']>[0]['expected']) {
+    const unresolved = {state:'unresolved'} as const;
+    if (!this.velaApiTest || this.privateMode) return unresolved;
+    return this.kernel.withTransaction(() => {
+      const ledger = this.velaApiRuntime.readLedgerReceipts({...claim,expected});
+      if (ledger.state !== 'terminal-receipts' || ledger.receipts.some(receipt=>receipt.outcome!=='completed')) return unresolved;
+      const admitted = this.velaApiRuntime.readEvaluationAdmissions(claim);
+      if (!admitted || admitted.length !== ledger.receipts.length ||
+        !ledger.receipts.every((receipt,index)=>receipt.executionId===admitted[index].executionId &&
+          receipt.requestId===admitted[index].requestId)) return unresolved;
+      const final = ledger.receipts.at(-1)!;
+      const request = this.vela.historyRequestMetadata(final.requestId);
+      if (request?.state !== 'responded' || request.providerId !== VELA_API_PROVIDER || request.response?.kind !== 'answer') return unresolved;
+      const scope = this.velaHost.scope();
+      if (request.sourceDependencies.some(({ref,content})=>{
+        const current = this.velaHost.resolve(ref,scope);
+        return !current || current.version !== ref.version || (content && this.velaHost.canReadContent?.(current,scope) !== true);
+      })) return unresolved;
+      const {conversationId,response:{messageId,contentDigest}} = request;
+      const metadata = this.velaHistoryMessageMetadata(conversationId,messageId);
+      const contribution = metadata?.providerContribution;
+      if (!metadata || metadata.role !== 'assistant' || metadata.responseKind !== 'answer' ||
+        contribution?.executionId !== final.executionId || !this.verifyVelaHistoryContribution(contribution,metadata,request)) return unresolved;
+      const answer = this.state.graph.messages.find(message=>message.id===messageId)?.content;
+      if (answer === undefined || historyDigest(answer) !== contentDigest) return unresolved;
+      return {state:'verified-answer' as const,requestId:request.id,messageId,answer,answerDigest:contentDigest,receipts:ledger.receipts};
+    });
+  }
   private async previewVelaRequest(input:CommandMap['velaRequestPreview']['input'],
     evaluationClaim?: VelaApiRun['evaluationClaim']):Promise<VelaRequestPreview> {
     const previewStarted = performance.now();
