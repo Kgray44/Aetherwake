@@ -389,6 +389,7 @@ export class ConstellationController {
     return name;
   }
   async saveView(input: string) {
+    if (this.restoring) await this.restoring;
     if (this.destroyed || this.pending)
       throw Error("Finish navigation before saving a view.");
     const name = this.viewName(input),
@@ -407,6 +408,7 @@ export class ConstellationController {
     return id;
   }
   async renameView(id: string, input: string) {
+    if (this.restoring) await this.restoring;
     if (!this.state.savedViews.some((view) => view.id === id))
       throw Error("Saved view is unavailable.");
     const name = this.viewName(input, id);
@@ -417,6 +419,7 @@ export class ConstellationController {
     await this.persist();
   }
   async removeView(id: string) {
+    if (this.restoring) await this.restoring;
     if (!this.state.savedViews.some((view) => view.id === id))
       throw Error("Saved view is unavailable.");
     this.state.savedViews = this.state.savedViews.filter(
@@ -426,6 +429,7 @@ export class ConstellationController {
     await this.persist();
   }
   async returnView(id: string) {
+    if (this.restoring) await this.restoring;
     const view = this.cleanSavedViews(this.state.savedViews).find(
       (view) => view.id === id,
     );
@@ -696,6 +700,7 @@ export class ConstellationController {
     }
   }
   async zoomOut() {
+    if (this.restoring) await this.restoring;
     const l = this.location;
     if (l.kind === "surface")
       return this.go({ kind: "workspace", workspaceId: l.workspaceId });
@@ -715,6 +720,7 @@ export class ConstellationController {
     spatialOverride?: SpatialCamera,
     historyTravel?: { history: HistoryEntry[]; future: HistoryEntry[] },
   ) {
+    if (this.restoring) await this.restoring;
     if (location.kind === "surface") {
       if (!returning && !historyTravel)
         return this.openResource(location.resourceId, {
@@ -813,6 +819,7 @@ export class ConstellationController {
     }
   }
   async back() {
+    if (this.restoring) await this.restoring;
     const h = this.state.history.at(-1);
     if (!h) return;
     return this.go(h.location, h.bookmark, undefined, {
@@ -824,6 +831,7 @@ export class ConstellationController {
     });
   }
   async forward() {
+    if (this.restoring) await this.restoring;
     const h = this.state.future.at(-1);
     if (!h) return;
     return this.go(h.location, h.bookmark, undefined, {
@@ -835,6 +843,7 @@ export class ConstellationController {
     });
   }
   async returnHistory(index: number) {
+    if (this.restoring) await this.restoring;
     const history = [...this.state.history],
       h = history[index];
     if (!h) return;
@@ -871,6 +880,7 @@ export class ConstellationController {
     await this.saveChain;
   }
   async pin(key: string, point: Point) {
+    if (this.restoring) await this.restoring;
     const n = this.nodes.get(key);
     if (!n || n.kind === "resource" || !finite(point.x) || !finite(point.y))
       throw new Error("Invalid anchor");

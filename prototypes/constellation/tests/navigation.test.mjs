@@ -642,6 +642,8 @@ test("snapshot refresh cannot overwrite a saved pin while restore is reading", a
   });
   const restore = c.restore();
   c.update(snapshot);
+  const savedView = c.saveView("View during startup");
+  const laterView = c.saveView("Second startup view");
   const flush = c.persist();
   await new Promise((resolve) => setImmediate(resolve));
   const writesBeforeRead = writes.length;
@@ -649,6 +651,10 @@ test("snapshot refresh cannot overwrite a saved pin while restore is reading", a
   await Promise.all([restore, flush]);
   assert.equal(writesBeforeRead, 0);
   assert.deepEqual(c.state.anchors["project:p"], pin);
+  assert.deepEqual(
+    saved.savedViews.map(({ id, name }) => [id, name]),
+    [[await savedView, "View during startup"], [await laterView, "Second startup view"]],
+  );
   await c.pin("project:p", { x: 80, y: 60 });
   assert.deepEqual(saved.anchors["project:p"], { x: 80, y: 60 });
   c.dispose();
