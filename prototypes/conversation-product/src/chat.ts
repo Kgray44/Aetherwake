@@ -41,6 +41,7 @@ export type ConversationExecutionObservation = {
 };
 export interface ConversationExecutionPort {
   observe(resourceId: string, listener: (observation: ConversationExecutionObservation) => void): () => void;
+  refresh?(): Promise<void>;
   cancel(executionId: string): Promise<unknown>;
   recoverTurn?(resourceId: string, executionId: string): Promise<{ state: 'unchanged' | 'provider_completed' | 'failed' | 'interrupted' }>;
 }
@@ -110,7 +111,7 @@ export function acceptedConversationSubmission(input: { resourceId:string;provid
   if (!result || typeof result !== 'object') return false; const value = result as Record<string, unknown>;
   if (value.resourceId !== input.resourceId || typeof value.id !== 'string') return false;
   if (value.role === 'user' && value.content === input.content && typeof value.revision === 'number' && value.revision > input.revision) return true;
-  return value.commandId === input.commandId && value.providerId === input.providerId && ['running','provider_completed'].includes(String(value.state)) && after?.conversation.resourceId === input.resourceId && after.conversation.revision > input.revision && after.messages.items.some(m => m.resourceId === input.resourceId && !m.inherited && m.role === 'user' && m.content === input.content && !input.priorMessageIds.includes(m.id)) === true;
+  return value.commandId === input.commandId && value.providerId === input.providerId && ['running','provider_completed'].includes(String(value.state)) && after?.conversation.resourceId === input.resourceId && after.conversation.revision > input.revision && after.messages.items.some(m => m.resourceId === input.resourceId && !m.inherited && m.role === 'user' && m.content === input.content && !input.priorMessageIds.includes(m.id) && (value.inputMessageId === undefined || m.id === value.inputMessageId)) === true;
 }
 
 /** One canonical chat, independent of its block/panel placement. No store, provider connection or authorization issuance. */
@@ -214,6 +215,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   }
   let sendTask: Promise<void>|null = null, stopRequestedFor: string|null = null, streamLimited = false, accessRevoked = false;
   let submittedTurn: { commandId: string; providerId: string } | undefined;
+  let reconcileSubmittedTurn: ((observed: ConversationExecution) => Promise<void>) | undefined;
   let reviewedExecutionId: string | undefined;
   const unresolvedOrdinaryExecution = () => {
     const canonical = current?.conversation.execution;
@@ -460,6 +462,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     else if (!needsSendReview()) recovery.replaceChildren();
     if (needsSendReview() && reviewed.parentNode !== recovery) recovery.append(el('p','Send acceptance is not confirmed. Your draft is retained; inspect the chat before retrying.'),reviewed);
     keep.disabled = useStored.disabled = retry.disabled = recovering;
+    reviewed.disabled = sending;
     const codexOutcomeUnknown = execution?.providerId === 'codex-app-server' && execution.state === 'unknown';
     checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
     checkOutcome.disabled = recovering;
@@ -486,7 +489,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   keep.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('keep-local',remote.version));} });
   useStored.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('use-stored',remote.version));} });
   retry.addEventListener('click', () => { markViewIntent();void recover(async()=>{await session.reload();await session.flush();}); });
-  reviewed.addEventListener('click', () => { uncertain = false; submittedTurn = undefined; reviewedExecutionId = unresolvedOrdinaryExecution()?.id; recovery.replaceChildren(); renderDraft(); });
+  reviewed.addEventListener('click', () => { if(sending)return;uncertain = false; submittedTurn = undefined; reconcileSubmittedTurn = undefined; reviewedExecutionId = unresolvedOrdinaryExecution()?.id; recovery.replaceChildren(); renderDraft(); });
   checkOutcome.addEventListener('click', () => {
     const id = execution?.id, port = options.execution;
     if (!id || checkOutcome.hidden || !port?.recoverTurn) return;
@@ -744,21 +747,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       if (checkpoint.record.documents?.length) attachments = checkpoint.record.documents.map(({ id, version }) => ({ id, version }));
       if (reasoningEffort !== undefined) thinking = undefined;
       sendStarted = true;
-      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{}),...(attachments?{documents:attachments}:{})});
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
-      const receipt = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
-      const matchingReceipt = receipt && typeof receipt.id === 'string' && receipt.commandId === commandId && receipt.resourceId === resourceId && receipt.providerId === input.providerId;
-      const failed = matchingReceipt && receipt.state === 'failed';
-      const interrupted = (matchingReceipt && receipt.state === 'interrupted') || observedSubmittedStop();
-      if(!failed&&!interrupted&&!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
-      let followMessageId:string|undefined;
-      if (receipt && !failed && !interrupted && acceptedConversationSubmission(input, result, evidence)) {
-        const clockMessageId = typeof receipt.deviceClockMessageId === 'string' ? receipt.deviceClockMessageId : undefined;
-        followMessageId = clockMessageId ?? (receipt.role === 'user' ? String(receipt.id) :
-          evidence?.messages.items.find(m => m.resourceId === resourceId && !m.inherited &&
-            m.role === 'user' && m.content === content && !input.priorMessageIds.includes(m.id))?.id);
-        const accepted = clockMessageId ? 'Answered from this device’s clock.' : 'Message accepted.';
+      const readAcceptedMessage = async (observed: ConversationExecution | null) => {
+        if (!observed || observed.providerId !== 'chatgpt-plan-responses' || observed.providerId !== input.providerId ||
+            observed.state !== 'provider_completed' || observed.commandId !== commandId ||
+            observed.resourceId !== resourceId || !observed.inputMessageId) return;
+        reconcileSubmittedTurn = undefined;
+        const detail = await port.command('detail',{resourceId,limit:50,aroundMessageId:observed.inputMessageId});
+        if (acceptedConversationSubmission(input,observed,detail)) return detail;
+      };
+      const acknowledge = async (accepted: string) => {
         acceptedNotice = accepted;
         try {
           const cleared = await session.acknowledgeSent(checkpoint);
@@ -767,6 +766,47 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           acceptedNotice = accepted + ' Check draft recovery before sending again.';
         }
         report(acceptedNotice, 'send-accepted');
+      };
+      if (input.providerId === 'chatgpt-plan-responses') {
+        reconcileSubmittedTurn = async observed => {
+          const detail = await readAcceptedMessage(observed);
+          if (disposed || accessRevoked) return;
+          if (!detail) {
+            report('Send acceptance is not confirmed. Inspect the chat before retrying.');
+            return;
+          }
+          uncertain = false;
+          await acknowledge('Message accepted.');
+          await refresh({latest:true,followMessageId:observed.inputMessageId}).catch(() => {
+            if (!accessRevoked) report(acceptedNotice + ' The chat could not refresh.');
+          });
+        };
+      }
+      let result: unknown;
+      try {
+        result=await port.command('send',{resourceId,content,expectedRevision:input.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{}),...(attachments?{documents:attachments}:{})});
+      } catch (error) {
+        if (input.providerId !== 'chatgpt-plan-responses' || observedSubmittedStop()) throw error;
+        if (!disposed && (execution?.commandId !== commandId || execution.state !== 'provider_completed'))
+          await options.execution?.refresh?.().catch(() => {});
+        const observed = execution;
+        evidence = await readAcceptedMessage(observed);
+        if (!evidence) throw error;
+        result = observed;
+      }
+      const receipt = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
+      const matchingReceipt = receipt && typeof receipt.id === 'string' && receipt.commandId === commandId && receipt.resourceId === resourceId && receipt.providerId === input.providerId;
+      const failed = matchingReceipt && receipt.state === 'failed';
+      const interrupted = (matchingReceipt && receipt.state === 'interrupted') || observedSubmittedStop();
+      if(!evidence&&!failed&&!interrupted&&!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
+      let followMessageId:string|undefined;
+      if (receipt && !failed && !interrupted && acceptedConversationSubmission(input, result, evidence)) {
+        const clockMessageId = typeof receipt.deviceClockMessageId === 'string' ? receipt.deviceClockMessageId : undefined;
+        const inputMessageId = typeof receipt.inputMessageId === 'string' ? receipt.inputMessageId : undefined;
+        followMessageId = clockMessageId ?? inputMessageId ?? (receipt.role === 'user' ? String(receipt.id) :
+          evidence?.messages.items.find(m => m.resourceId === resourceId && !m.inherited &&
+            m.role === 'user' && m.content === content && !input.priorMessageIds.includes(m.id))?.id);
+        await acknowledge(clockMessageId ? 'Answered from this device’s clock.' : 'Message accepted.');
       } else if (interrupted) {
         report('Reply stopped. Your draft is still here.');
       } else if (failed) {
@@ -794,8 +834,26 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       else if (attachments && ['document_text_unavailable','unsupported_document_attachment','source_selection_unavailable','source_selection_changed','source_changed','media_source_unavailable','document_extraction_busy'].includes(code))
         report('A selected document could not be read. Remove or reattach it before sending.');
       else { uncertain=true;report('Send could not be confirmed: '+code); }
-    }).finally(()=>{if(!uncertain)submittedTurn=undefined;sending=false;sendTask=null;webSearchCommandId=undefined;renderDraft();});
+    }).finally(()=>{if(!uncertain){submittedTurn=undefined;reconcileSubmittedTurn=undefined;}sending=false;sendTask=null;webSearchCommandId=undefined;renderDraft();if(execution)reconcileLateCompletion(execution);});
   });
+  function reconcileLateCompletion(next: ConversationExecution) {
+    if (disposed || accessRevoked || sending || !uncertain || !reconcileSubmittedTurn ||
+        next.commandId !== submittedTurn?.commandId || next.providerId !== submittedTurn.providerId ||
+        next.state !== 'provider_completed' || !next.inputMessageId) return false;
+    const reconcile = reconcileSubmittedTurn;
+    reconcileSubmittedTurn = undefined;
+    sending = true;
+    renderDraft();
+    sendTask = reconcile(next).catch(() => {
+      if (!accessRevoked) report('Send acceptance is not confirmed. Inspect the chat before retrying.');
+    }).finally(() => {
+      if (!uncertain) submittedTurn = undefined;
+      sending = false;
+      sendTask = null;
+      renderDraft();
+    });
+    return true;
+  }
   const stopStatus = 'Stop requested. Waiting for the provider to confirm.';
   stop.addEventListener('click',()=>{
     if(disposed||accessRevoked||!execution||!options.execution||!active()||stop.disabled)return;
@@ -832,7 +890,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(execution?.id===next.id&&!['dispatching','running'].includes(execution.state)&&['dispatching','running'].includes(next.state))return;
     execution=next;
     const recoveredStop = uncertain && observedSubmittedStop();
-    if(recoveredStop){uncertain=false;submittedTurn=undefined;}
+    if(recoveredStop){uncertain=false;submittedTurn=undefined;reconcileSubmittedTurn=undefined;}
     if(stopRequestedFor!==next.id||!active())stopRequestedFor=null;
     if(streamExecution!==next.id){streamExecution=next.id;streamText.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;liveFollow=false;}
     const preview=observation.preview;
@@ -853,6 +911,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':stopRequestedFor?stopStatus:researchRunning?(streamText.textContent?.trim()?'Writing the research reply…':'Web research is running.'):next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
     if(recoveredStop)report('Reply stopped. Your draft is still here.');
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
+    if(reconcileLateCompletion(next))return;
     if(!active())void refresh({latest:true}).catch(error=>report(errorText(error)));
   });
   const ready=(async()=>{
@@ -894,7 +953,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(options.layoutActive?.()===false){layoutDeferred=true;return;}
     const scroll=messages.scrollTop;
     resize();if(!presentationAnchor)setScroll(scroll);drainPendingFollow();drainAnchor();
-  },flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
+  },flush,async whenSubmissionSettled(){while(sendTask)await sendTask;},async dispose(){
     if(disposed)return;await flush();disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();modelPicker?.dispose();thinkingPicker?.dispose();documentPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){
       if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}

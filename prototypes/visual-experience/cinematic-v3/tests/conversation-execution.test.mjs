@@ -93,6 +93,21 @@ function setup(command) {
   };
 }
 
+test("ordinary execution observations preserve the authorized input message anchor", async () => {
+  const f = setup(() => [execution({
+    providerId: "chatgpt-plan-responses",
+    state: "provider_completed",
+    inputMessageId: "message:accepted",
+  })]);
+  const received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  try {
+    await f.port.refresh();
+    assert.ok(received.some(value => value.execution?.inputMessageId === "message:accepted"));
+    assert.equal(JSON.stringify(received).includes("private-native-id"), false);
+  } finally { off(); f.port.dispose(); }
+});
+
 test("native chat observations strip private bindings and only forward exact reported assistant deltas, including metadata sharing the same event ID", async () => {
   const f = setup(),
     received = [];
