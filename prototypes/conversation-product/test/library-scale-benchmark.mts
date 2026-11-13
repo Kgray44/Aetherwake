@@ -4,6 +4,7 @@
  * Commit this file and the released canonical read API before running:
  *   node test/library-scale-benchmark.mts --candidate=<HEAD> --datasets=small
  * Add --search-only to measure the 12-result Switch chat query on the same fixture.
+ * Add --history-only instead to measure the 50-result History view in All matches mode.
  * Add --measure-worker to also time the same requests after reopening through the backend worker.
  * Use --prepare-search-profile to seed and reopen one synthetic desktop-sized profile.
  * --describe is read-only. No npm installs, external providers or GUI are used.
@@ -52,13 +53,14 @@ const serializeError=(error:unknown)=>({name:error instanceof Error?error.name:'
 const parsed=new Map(process.argv.slice(2).map(arg=>{assert(arg.startsWith('--'),'invalid_argument');const n=arg.indexOf('=');return n<0?[arg.slice(2),'true']:[arg.slice(2,n),arg.slice(n+1)];}));
 const prepareSearchProfile=parsed.has('prepare-search-profile');
 const measureWorker=parsed.has('measure-worker');
+const historyOnly=parsed.has('history-only');
 function outputRoot(){
  if(!prepareSearchProfile)return OUTPUT_ROOT;
  const local=process.env.LOCALAPPDATA;
  assert(local&&isAbsolute(local),'absolute_local_app_data_required');
  return join(realpathSync(local),'Aerynth','synthetic-chat-search-profiles');
 }
-const datasetDeadlineMs=parsed.has('search-only')||prepareSearchProfile?MAX_SEARCH_DATASET_MS:MAX_DATASET_MS;
+const datasetDeadlineMs=parsed.has('search-only')||historyOnly||prepareSearchProfile?MAX_SEARCH_DATASET_MS:MAX_DATASET_MS;
 const git=(...args:string[])=>execFileSync('git',args,{cwd:REPO,encoding:'utf8',windowsHide:true,maxBuffer:2*MiB}).trim();
 function directoryBytes(root:string):number{let count=0,total=0;const visit=(dir:string)=>{for(const e of readdirSync(dir,{withFileTypes:true})){assert(++count<=256,'fixture_file_bound');const p=join(dir,e.name);if(e.isDirectory())visit(p);else{assert(e.isFile()&&!e.isSymbolicLink(),'unexpected_fixture_entry');total+=statSync(p).size;}}};visit(root);return total;}
 function writeReceipt(file:string,value:unknown){const bytes=Buffer.from(JSON.stringify(value,null,2)+'\n');assert(bytes.length<=OUTPUT_BOUND,'receipt_capacity');writeFileSync(file,bytes,{flag:'wx'});}
@@ -223,9 +225,9 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
    // inherited hits, and exclude denied or revoked source messages.
    const revoked=new Set(graph.unavailableMessageIds);
    const sourceResources=new Map(active.map(e=>[e.graphId,e.resourceId]));
-   const pickerLimit=12;
-   const rareInput={...rareSearch,searchMode:'chat-history' as const,sort:'activity' as const,limit:pickerLimit};
-   const commonInput={...commonSearch,searchMode:'chat-history' as const,sort:'activity' as const,limit:pickerLimit};
+   const scope={searchMode:historyOnly?'all' as const:'chat-history' as const,sort:'activity' as const,limit:historyOnly?50:12};
+   const rareInput={...rareSearch,...scope};
+   const commonInput={...commonSearch,...scope};
    const expectedCommon=new Set<string>();
    for(const entry of active)for(const message of owner.graph.visibleMessages(entry.graphId)){
     const source=sourceResources.get(message.conversationId);
@@ -267,6 +269,15 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
      assert.equal(p.items.length,0);
     }},
    ];
+   if(historyOnly){
+    selectedOperations=selectedOperations.map(operation=>({...operation,id:operation.id.replace('switch-chat-','history-')}));
+    selectedOperations.push({id:'history-resource-match',name:'search',input:{...resourceSearch,...scope},check:value=>{
+     const p=page(value);
+     assert.equal(p.total,notes.length);
+     assert(p.items.every(row=>row.kind==='resource'));
+     assert.deepEqual(p.items.map(row=>String(row.resourceId)).sort(),[...notes].sort());
+    }});
+   }
   }
   const observations:unknown[]=[];receipt.operations=observations;
   const workerQueries:{id:string;input:SearchQuery;digest:string}[]=[];
@@ -320,7 +331,8 @@ async function measureReopenedWorker(dataset:Dataset,session:string,candidate:st
  const profile=join(session,dataset),file=join(profile,'canonical.sqlite');
  assert.equal(realpathSync(file).toLowerCase(),file.toLowerCase(),'worker_database_redirected');
  const queries=seed.workerQueries as {id:string;input:SearchQuery;digest:string}[];
- assert(queries?.length===4&&queries.every(query=>query.input.limit===12&&query.input.searchMode==='chat-history'),'invalid_worker_queries');
+ assert(queries?.length===(historyOnly?5:4)&&queries.every(query=>query.input.limit===(historyOnly?50:12)&&
+  query.input.searchMode===(historyOnly?'all':'chat-history')),'invalid_worker_queries');
  const receipt:Record<string,unknown>={binding,dataset,passed:false};
  const startupAt=performance.now();
  const backend=new Backend({path:file,privateRoot:profile,contentPolicy:'synthetic-only',provider:'fixture'});
@@ -352,11 +364,12 @@ async function measureReopenedWorker(dataset:Dataset,session:string,candidate:st
  }
 }
 async function main(){
- const allowed=new Set(['candidate','datasets','describe','worker','session','dataset','search-only','prepare-search-profile','measure-worker','worker-reopen']);for(const key of parsed.keys())assert(allowed.has(key),'unknown_argument');
- const searchOnly=parsed.has('search-only');
+ const allowed=new Set(['candidate','datasets','describe','worker','session','dataset','search-only','history-only','prepare-search-profile','measure-worker','worker-reopen']);for(const key of parsed.keys())assert(allowed.has(key),'unknown_argument');
+ assert(!(historyOnly&&parsed.has('search-only')),'conflicting_search_modes');
+ const searchOnly=parsed.has('search-only')||historyOnly;
  assert(!(searchOnly&&prepareSearchProfile),'conflicting_fixture_modes');
  assert(!measureWorker||searchOnly,'worker_measurement_requires_search_only');
- if(parsed.has('describe')){console.log(JSON.stringify({contract:'aerynth.library-scale-plan@1',datasets:DATASETS,modes:['full-library','search-only','prepare-search-profile'],bounds:{disk:DISK_BOUND,db:DB_BOUND,state:STATE_BOUND,receipt:OUTPUT_BOUND,perDatasetMs:MAX_DATASET_MS,searchOnlyPerDatasetMs:MAX_SEARCH_DATASET_MS},providerCalls:0,qualification:'No benchmark performed by --describe'}));return;}
+ if(parsed.has('describe')){console.log(JSON.stringify({contract:'aerynth.library-scale-plan@1',datasets:DATASETS,modes:['full-library','search-only','history-only','prepare-search-profile'],bounds:{disk:DISK_BOUND,db:DB_BOUND,state:STATE_BOUND,receipt:OUTPUT_BOUND,perDatasetMs:MAX_DATASET_MS,searchOnlyPerDatasetMs:MAX_SEARCH_DATASET_MS},providerCalls:0,qualification:'No benchmark performed by --describe'}));return;}
  const candidate=parsed.get('candidate');assert(candidate,'explicit_candidate_required');
  if(parsed.has('worker')){assert(parsed.get('session')&&parsed.get('dataset'));const dataset=parsed.get('dataset') as Dataset;assert(Object.hasOwn(DATASETS,dataset));const result=await worker(dataset,parsed.get('session')!,candidate,searchOnly);process.exitCode=result.passed?0:1;return;}
  if(parsed.has('worker-reopen')){
@@ -376,7 +389,7 @@ async function main(){
   guard();assert(directoryBytes(session)<DISK_BOUND-DB_BOUND*2-OUTPUT_BOUND,'insufficient_owned_envelope');
   const runStage=(mode:string)=>new Promise<{dataset:string;mode:string;code:number|null;signal:string|null;deadline:boolean}>((done,reject)=>{
    const options={cwd:REPO,execArgv:WORKER_HEAP_FLAGS,env:{...process.env,NODE_DISABLE_COMPILE_CACHE:'1'},silent:true,windowsHide:true};
-   const child=fork(HERE,[mode,'--candidate='+candidate,'--session='+session,'--dataset='+dataset,...(searchOnly?['--search-only']:[]),...(prepareSearchProfile?['--prepare-search-profile']:[]),...(measureWorker?['--measure-worker']:[])],options);let deadline=false,output=0;
+   const child=fork(HERE,[mode,'--candidate='+candidate,'--session='+session,'--dataset='+dataset,...(searchOnly?[historyOnly?'--history-only':'--search-only']:[]),...(prepareSearchProfile?['--prepare-search-profile']:[]),...(measureWorker?['--measure-worker']:[])],options);let deadline=false,output=0;
    const timer=setTimeout(()=>{deadline=true;child.kill();},datasetDeadlineMs+3000);
    for(const stream of [child.stdout,child.stderr])stream?.on('data',(data:Buffer)=>{output+=data.length;if(output>65536){deadline=true;child.kill();}});
    child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',(code,signal)=>{clearTimeout(timer);done({dataset,mode,code,signal,deadline});});
