@@ -142,6 +142,64 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     assert.equal((await f.core.command('personalMemoryPolicyNative', { enable: false, expectedVersion: policy.version })).ordinaryEnabled, false);
     await assert.rejects(f.core.command('conversationSend', { ...pendingBinding, grantId: pendingApproval.grantId }), /personal_memory_no_eligible_context|stale_send_preview/);
     assert.equal(f.requests.length, 1);
+    const liveSource = await f.core.command('createConversation', { providerId: 'local', commandId: randomUUID() });
+    const liveMessage = await f.core.command('addMessage', { resourceId: liveSource.resourceId, role: 'user',
+      content: sourceText, expectedRevision: liveSource.revision });
+    Object.assign(source, { conversationId: liveSource.resourceId, messageId: liveMessage.id });
+    const pausedPolicy = await f.core.command('personalMemoryPolicyNative', {});
+    await f.core.command('personalMemoryPolicyNative', { enable: true, expectedVersion: pausedPolicy.version });
+    await review.commitCapture(await review.previewCapture({ conversationId: liveSource.resourceId, messageId: liveMessage.id,
+      scope: 'project', category: 'decisions', text: sourceText, keywords: ['quartz'] }));
+    const live = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId, content: 'Which quartz relay?',
+      expectedRevision: detail.conversation.revision, commandId: randomUUID(), useMemory: true });
+    const liveBinding = { previewId: live.id, fingerprint: live.fingerprint, commandId: live.commandId };
+    const liveApproval = await f.core.command('authorizeConversationSend', { ...liveBinding, reviewedBodyDigest: live.responses!.bodyDigest });
+    const firstDelta = 'Synthetic reply before source revocation.';
+    const withheldDelta = 'Synthetic reply after source revocation.';
+    const responseId = 'memory-stream-revocation';
+    let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const sendEvents = (...events: unknown[]) => {
+      assert(stream);
+      stream.enqueue(new TextEncoder().encode(events.map(event => 'data: ' + JSON.stringify(event) + '\n\n').join('')));
+    };
+    f.responses.push(init => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        stream = controller;
+        sendEvents({ type: 'response.created', response: { id: responseId } },
+          { type: 'response.output_text.delta', delta: firstDelta });
+        init.signal?.addEventListener('abort', () => controller.error(Error('Synthetic abort')), { once: true });
+      },
+    }), { headers: { 'Content-Type': 'text/event-stream' } }));
+    const streaming = f.core.command('conversationSend', { ...liveBinding, grantId: liveApproval.grantId });
+    try {
+      const activity = () => f.core.command('conversationActivity', { resourceIds: [chat.resourceId] });
+      for (let i = 0; i < 100 && !f.events.some(event => event.payload.delta === firstDelta); i++) await wait(5);
+      assert(f.events.some(event => event.payload.delta === firstDelta));
+      assert.equal((await activity()).preview?.text, firstDelta);
+      const revoked = await f.core.command('personalMemoryRevokeSourceNative', {
+        conversationId: liveSource.resourceId, messageId: liveMessage.id, expectedRevision: liveMessage.revision,
+      });
+      assert.equal(revoked.erasedFacts, 1);
+      const afterRevocation = await activity();
+      assert.equal(afterRevocation.preview, null);
+      assert.equal(afterRevocation.previewAllowedFor, null);
+      sendEvents({ type: 'response.output_text.delta', delta: withheldDelta },
+        { type: 'response.completed', response: { id: responseId, status: 'completed', model, output: [] } });
+      stream!.close();
+      stream = undefined;
+      const result = await streaming;
+      assert.equal(result.state, 'unknown');
+      assert.equal(result.errorCode, 'ordinary_context_changed');
+      assert.equal(result.outputMessageId, undefined);
+      assert(!f.events.some(event => event.payload.delta === withheldDelta));
+      const transcript = await f.core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } });
+      assert(!JSON.stringify(transcript).includes(firstDelta));
+      assert(!JSON.stringify(transcript).includes(withheldDelta));
+    } finally {
+      if (stream) stream.close();
+      await streaming.catch(() => {});
+    }
+    assert.equal(f.requests.length, 2);
     await f.reopen();
     const restored = await prepare(f, chat.resourceId, 'Can you explain after restart?');
     assert.ok(restored.preview.responses);
