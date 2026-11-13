@@ -572,22 +572,25 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     ...(connected && routingAgentSelection ? { routingAgentId: routingAgentSelection.id } : {}),
     ...(connected && (useAutomaticOnce || handoffSelection && !routingAgentSelection) ? { overrideDefaults: true as const } : {}),
   }, revision = draftRevision, submittedView = ++viewRevision;
-    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; projectEvidence.checked = workspaceState.checked = semanticContext.checked = routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
+    const selectedInvestigation = semanticContext.checked;
+    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; projectEvidence.checked = workspaceState.checked = routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
       try {
         const recorded = await client.request(submitted);
         if (disposed) return;
-        if (recorded.handoff?.sourceRequestId === handoffSelection?.requestId && recorded.handoff &&
-            !['provider-unavailable', 'failed', 'invalid-plan', 'unknown', 'cancelled'].includes(recorded.state)) {
+        const keepDraft = ['provider-unavailable', 'failed', 'invalid-plan', 'unknown', 'cancelled'].includes(recorded.state);
+        if (!keepDraft && recorded.handoff && recorded.handoff.sourceRequestId === handoffSelection?.requestId) {
           handoffSelection = null;
           renderSelection();
         }
-        if (recorded.routingAgent?.resourceId === routingAgentSelection?.id && recorded.routingAgent &&
-            !['provider-unavailable', 'failed', 'invalid-plan', 'unknown', 'cancelled'].includes(recorded.state)) {
+        if (!keepDraft && recorded.routingAgent && recorded.routingAgent.resourceId === routingAgentSelection?.id) {
           routingAgentSelection = null;
           renderSelection();
         }
-        if (!['provider-unavailable','failed','invalid-plan','unknown'].includes(recorded.state) && draftRevision === revision && intent.value === submitted.intent) intent.value = '';
+        if (!keepDraft && draftRevision === revision && intent.value === submitted.intent) {
+          intent.value = '';
+          if (selectedInvestigation) semanticContext.checked = false;
+        }
         observeLiveAnswer(undefined);
         await settleSubmittedView(submittedView);
       }

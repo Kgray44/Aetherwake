@@ -59,8 +59,9 @@ async function settles(check: () => boolean) { for (let i = 0; i < 50 && !check(
 const named = (root: Node, text: string) => root.find(node => node.tagName === 'button' && (node.getAttribute('aria-label') === text || node.textContent === text))!;
 function displayed(node: Node) { for (let parent: Node | null = node; parent; parent = parent.parent) { if (parent.hidden) return false; if (parent.tagName === 'details' && !parent.open && !parent.children[0]?.contains(node)) return false; } return true; }
 
-test('a document opened from the viewer enters Vela’s existing draft and waits for Send', async () => {
+for (const investigate of [false, true]) test('a document opened from the viewer waits for Send (investigate: '+investigate+')', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
   const turns: Parameters<VelaClient['request']>[0][] = [];
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
     request: async input => { turns.push(input); return request(); },
@@ -77,11 +78,21 @@ test('a document opened from the viewer enters Vela’s existing draft and waits
     assert.equal(doc.activeElement, editor);
     assert.equal(editor.value, 'Explain the findings in this document.');
     assert.equal(root.querySelectorAll('button').filter(node => node.getAttribute('aria-label') === 'Remove source Brief.pdf').length, 1);
+    const option = form.find(node => node.tagName === 'label' && node.textContent === 'Investigate selected notes or files with Vela API')!;
+    assert.equal(option.hidden, false);
+    const checkbox = option.querySelector('input')!;
+    assert.equal(checkbox.checked, false);
+    if (investigate) {
+      checkbox.checked = true;
+      checkbox.fire('change');
+    }
     assert.equal(turns.length, 0);
     form.fire('submit');
     await settles(() => turns.length === 1);
     assert.deepEqual(turns[0].resourceIds, [ref.id]);
     assert.deepEqual(turns[0].resourceRefs, [ref]);
+    assert.equal(turns[0].semanticContext, investigate ? true : undefined);
+    if (investigate) assert.equal(turns[0].providerId, 'openai-api-vela');
   } finally { panel.dispose(); }
 });
 
@@ -458,14 +469,14 @@ test('terminal status survives request completion and refresh; connection probe 
   panel.dispose(); assert.equal(root.children.length, 0);
 });
 
-test('the composer can explicitly investigate an attached file without opening provider settings', async () => {
+for (const outcome of ['responded', 'provider-unavailable', 'cancelled', 'unknown'] as const) test('the selected file composer preserves explicit Send and handles '+outcome, async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
   const turns: Parameters<VelaClient['request']>[0][] = [];
   const file = { id: 'file:brief', kind: 'file' as const, title: 'Brief.docx', version: 3, projectId: null };
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
     pickSources: async () => ({ resources: [file] }),
-    request: async input => { turns.push(input); return request(); },
+    request: async input => { turns.push(input); return request({state:outcome}); },
   }));
   try {
     await panel.open();
@@ -497,7 +508,15 @@ test('the composer can explicitly investigate an attached file without opening p
     assert.equal(turns[0].providerId, 'openai-api-vela');
     assert.equal(turns[0].semanticContext, true);
     assert.deepEqual(turns[0].resourceRefs, [{ ...file, kind: 'resource', resourceKind: 'file' }]);
-    assert.equal(checkbox.checked, false);
+    await settles(() => composer.closest('form')?.getAttribute('aria-busy') === 'false');
+    assert.equal(composer.value, outcome === 'responded' ? '' : 'What does this file say about the schedule?');
+    assert.equal(turns.length, 1);
+    assert.equal(checkbox.checked, outcome !== 'responded');
+    if (outcome === 'provider-unavailable') {
+      composer.fire('keydown', { key: 'Enter' });
+      await settles(() => turns.length === 2 && composer.closest('form')?.getAttribute('aria-busy') === 'false');
+      assert.deepEqual(turns[1], turns[0]);
+    }
   } finally { panel.dispose(); }
 });
 
