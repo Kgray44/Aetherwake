@@ -49,6 +49,38 @@ test('a matching confirmed interruption keeps the draft and allows an explicit n
  }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.dispose();f.restore();}
 });
 
+for (const observedBeforeLoss of [true,false]) test(`an observed interruption recovers a draft when the matching send response is lost (observation first: ${observedBeforeLoss})`, async () => {
+ const f=fixture('chatgpt-plan-responses');
+ let chat, observe!: (value: ConversationExecutionObservation) => void;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+   observe(_id,listener){observe=listener;return()=>{};},
+   async cancel(){},
+  }});
+  await chat.ready;
+  const form=f.view.root.querySelector('.cp-composer'), send=named(form,'Send');
+  form.fire('submit');
+  await until(()=>!!f.pending);
+  const stopped={
+   id:'execution:confirmed-stop',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',
+   commandId:f.pending!.input.commandId,state:'interrupted' as const,taskVerified:false as const,
+   startedAt:'2026-11-02T00:00:02Z',endedAt:'2026-11-02T00:00:03Z',
+  };
+  if(observedBeforeLoss)observe({execution:stopped});
+  f.pending!.reject(Error('synthetic transport response lost'));
+  await chat.whenSubmissionSettled();
+  if(!observedBeforeLoss){
+   observe({execution:{...stopped,id:'execution:unrelated',commandId:'command:unrelated'}});
+   assert.equal(send.disabled,true,'An unrelated stop cannot release recovery');
+   observe({execution:stopped});
+  }
+  assert.equal(send.disabled,false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Reply stopped/);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+ } finally {f.pending?.reject(Error('synthetic cleanup'));await chat?.dispose();f.restore();}
+});
+
 test('Stop follows the observed turn through acknowledgment, settlement and a subsequent turn',async()=>{
   for(const settleBeforeAck of [true,false]){
     const f=fixture('chatgpt-plan-responses');

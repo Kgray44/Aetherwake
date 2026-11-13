@@ -139,6 +139,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   root.append(top,messages,paging,feedback,composer);messages.append(stream,feedbackBody);container.append(root);
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
   let sendTask: Promise<void>|null = null, stopRequestedFor: string|null = null, streamLimited = false, accessRevoked = false;
+  let submittedTurn: { commandId: string; providerId: string } | undefined;
+  const observedSubmittedStop = () => !!submittedTurn && execution?.state === 'interrupted' &&
+    execution.resourceId === resourceId && execution.commandId === submittedTurn.commandId &&
+    execution.providerId === submittedTurn.providerId;
   let pendingFollow:{messageId?:string}|null=null;
   let followingLatest=false;
   let pendingAnchor:NonNullable<ConversationViewPosition['anchor']>|null=null,viewIntent=0,viewWanted=false,userScroll=false,preferredViewAnchor:string|undefined,persistenceIntent:number|undefined;
@@ -351,7 +355,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   keep.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('keep-local',remote.version));} });
   useStored.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('use-stored',remote.version));} });
   retry.addEventListener('click', () => { markViewIntent();void recover(async()=>{await session.reload();await session.flush();}); });
-  reviewed.addEventListener('click', () => { uncertain = false; recovery.replaceChildren(); renderDraft(); });
+  reviewed.addEventListener('click', () => { uncertain = false; submittedTurn = undefined; recovery.replaceChildren(); renderDraft(); });
   checkOutcome.addEventListener('click', () => {
     const id = execution?.id, port = options.execution;
     if (!id || checkOutcome.hidden || !port?.recoverTurn) return;
@@ -541,6 +545,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       ? selectedModel?.id
       : plan && options.models?.selections.get(resourceId)?.id;
     sending = true;
+    submittedTurn = { commandId, providerId: before.conversation.providerId };
     renderDraft();
     report(webSearch?'Searching the web…':providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
@@ -552,7 +557,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       const receipt = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
       const matchingReceipt = receipt && typeof receipt.id === 'string' && receipt.commandId === commandId && receipt.resourceId === resourceId && receipt.providerId === input.providerId;
       const failed = matchingReceipt && receipt.state === 'failed';
-      const interrupted = matchingReceipt && receipt.state === 'interrupted';
+      const interrupted = (matchingReceipt && receipt.state === 'interrupted') || observedSubmittedStop();
       if(!failed&&!interrupted&&!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
       let followMessageId:string|undefined;
       if (receipt && acceptedConversationSubmission(input, result, evidence)) {
@@ -578,12 +583,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       }
     })().catch(error=>{
       const code = errorText(error);
-      if (code === 'authorization_cancelled') report('Send cancelled. Your saved draft was retained.');
+      if (observedSubmittedStop()) report('Reply stopped. Your draft is still here.');
+      else if (code === 'authorization_cancelled') report('Send cancelled. Your saved draft was retained.');
       else if (code === 'unsupported_model') report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');
       else if (code === 'unsupported_reasoning_effort') report('This model cannot use the requested thinking level. Your draft is still here.');
       else if (code === 'unsupported_web_search_model') report('This model cannot use web search. Your draft is still here.');
       else { uncertain=true;report('Send could not be confirmed: '+code); }
-    }).finally(()=>{sending=false;sendTask=null;renderDraft();});
+    }).finally(()=>{if(!uncertain)submittedTurn=undefined;sending=false;sendTask=null;renderDraft();});
   });
   const stopStatus = 'Stop requested. Waiting for the provider to confirm.';
   stop.addEventListener('click',()=>{
@@ -615,6 +621,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(execution&&next.id!==execution.id&&next.startedAt<execution.startedAt)return;
     if(execution?.id===next.id&&!['dispatching','running'].includes(execution.state)&&['dispatching','running'].includes(next.state))return;
     execution=next;
+    const recoveredStop = uncertain && observedSubmittedStop();
+    if(recoveredStop){uncertain=false;submittedTurn=undefined;}
     if(stopRequestedFor!==next.id||!active())stopRequestedFor=null;
     if(streamExecution!==next.id){streamExecution=next.id;streamText.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;liveFollow=false;}
     const preview=observation.preview;
@@ -632,6 +640,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(streamText.textContent!==previousPreview&&wasFollowing&&!feedbackOpen&&!stream.hidden){presentationAnchor=null;liveFollow=true;options.motion?.wake();}
     const label=current?.providers.find(p=>p.id===next.providerId)?.label??next.providerId;
     report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':stopRequestedFor?stopStatus:next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
+    if(recoveredStop)report('Reply stopped. Your draft is still here.');
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
     if(!active())void refresh({latest:true}).catch(error=>report(errorText(error)));
   });
