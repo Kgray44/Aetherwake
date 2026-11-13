@@ -1,14 +1,15 @@
 import type { MissionExecutionProfile } from '../../../integrated-backend/src/execution-profiler.mts';
 import { intelligenceZones, projectIntelligence, type IntelligenceBinding, type IntelligenceRegion } from './adaptive-workspace.ts';
+import { mountResourcePolicy, type ResourcePolicyPort } from './resource-policy-view.ts';
 import type { MissionProjection } from '../../../integrated-backend/src/mission-contracts.mts';
 
-/** Accessible read-only inspection inside the existing spatial workroom. No camera or task ownership. */
-export function mountIntelligenceInspection(root: HTMLElement, viewId: string, readProfile?: (id: string) => Promise<MissionExecutionProfile | null>) {
+/** Accessible inspection and reviewed resource controls inside the existing spatial workroom. */
+export function mountIntelligenceInspection(root: HTMLElement, viewId: string, readProfile?: (id: string) => Promise<MissionExecutionProfile | null>, resourcePolicy?: ResourcePolicyPort) {
   const doc = root.ownerDocument, details = doc.createElement('details'), summary = doc.createElement('summary');
   details.className = 'aw-mission-workroom-controls aw-intelligence-inspection';
   details.dataset.noCardDrag = 'true';
   details.hidden = true;
-  summary.textContent = 'Inspect intelligence · read only';
+  summary.textContent = 'Inspect intelligence';
   const status = doc.createElement('p'), tabs = doc.createElement('div'), panel = doc.createElement('section');
   status.setAttribute('role', 'status');
   tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Intelligence regions');
@@ -16,6 +17,8 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
   const heading = doc.createElement('h4'), limitation = doc.createElement('p'), readings = doc.createElement('dl');
   panel.append(heading, limitation, readings); details.append(summary, status, tabs, panel); root.append(details);
   let regions: IntelligenceRegion[] = [], selected = 0, binding: IntelligenceBinding | null = null, disposed = false;
+  const policy = resourcePolicy && mountResourcePolicy(doc, resourcePolicy);
+  if (policy) panel.insertBefore(policy.element, limitation);
   let profileEpoch = 0, requestProfile: (() => Promise<void>) | undefined;
   const buttons = intelligenceZones.map(([id, label], index) => {
     const button = doc.createElement('button'); button.type = 'button'; button.textContent = label;
@@ -40,6 +43,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
     panel.setAttribute('aria-labelledby', buttons[selected].id);
     const region = regions[selected]; heading.textContent = intelligenceZones[selected][1];
     limitation.textContent = region?.limitation ?? 'Unavailable: authorized mission evidence is not currently bound.';
+    policy?.setVisible(details.open && !!binding && !!region && region.id === 'resource');
     readings.replaceChildren();
     for (const reading of region?.readings ?? []) {
       const term = doc.createElement('dt'), value = doc.createElement('dd');
@@ -55,7 +59,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
   }
   details.onkeydown = event => {
     if (event.key !== 'Escape' || !details.open) return;
-    event.preventDefault(); event.stopPropagation(); details.open = false; summary.focus({ preventScroll: true });
+    event.preventDefault(); event.stopPropagation(); details.open = false; policy?.setVisible(false); summary.focus({ preventScroll: true });
   };
   function invalidate(message: string, close = false) {
     profileEpoch++; requestProfile = undefined; regions = []; status.textContent = message;
@@ -66,7 +70,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
     }
     render();
   }
-  details.ontoggle = () => { if (details.open) void requestProfile?.(); };
+  details.ontoggle = () => { render(); if (details.open) void requestProfile?.(); };
   invalidate('Mission evidence unavailable.');
   return {
     update(mission: MissionProjection, expected: IntelligenceBinding) {
@@ -105,6 +109,6 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
       if (details.open) void requestProfile();
     },
     invalidate,
-    dispose() { disposed = true; regions = []; binding = null; details.remove(); },
+    dispose() { disposed = true; regions = []; binding = null; policy?.setVisible(false); details.remove(); },
   };
 }
