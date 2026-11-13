@@ -56,7 +56,7 @@ test('conversation timing joins only a preview that finished in the same clock d
   assert.equal(observe('after-restart', 30).settlement().fromPreview, undefined);
   assert.equal(observe(clock.domain, 19).settlement().fromPreview, undefined);
 });
-function fixture() {
+function fixture(syntheticBatchAccounting = false) {
   const base = resolve(tmpdir()), dir = mkdtempSync(join(base,'aerynth-api-runtime-')), path = join(dir,'canonical.sqlite'), requests: any[] = [], events: StreamEvent[] = [], replies: ((body:any)=>Response|Promise<Response>)[] = [];
   const encryptionKey = randomBytes(32);
   let catalogRequests=0, catalogGate:Promise<void>|undefined;
@@ -65,7 +65,7 @@ function fixture() {
     seal: async text => { const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm',encryptionKey,iv); return Buffer.concat([iv,cipher.update(text),cipher.final(),cipher.getAuthTag()]); },
     open: async bytes => { const data = Buffer.from(bytes), cipher = createDecipheriv('aes-256-gcm',encryptionKey,data.subarray(0,12)); cipher.setAuthTag(data.subarray(-16)); return Buffer.concat([cipher.update(data.subarray(12,-16)),cipher.final()]).toString(); },
   } };
-  const api = { fetch: (async (url,init) => {
+  const api = { syntheticBatchAccounting, fetch: (async (url,init) => {
     if (url === 'https://api.openai.com/v1/models') {
       catalogRequests++;
       await catalogGate;
@@ -231,6 +231,85 @@ test('CIE claim binds admitted stages atomically and survives restart without pe
     assert.equal(f.requests.length,1);
     assert.equal(runtime().readLedgerProfile()?.usage.usedToday,1);
   } finally {await f.close();}
+});
+
+test('synthetic CIE batch reserves daily capacity and debits each admitted stage once', async () => {
+  const f = fixture(true), disabled = fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const runtime = () => (f.core as unknown as {velaApiRuntime: VelaApiRuntime}).velaApiRuntime;
+    const disabledRuntime = (disabled.core as unknown as {velaApiRuntime: VelaApiRuntime}).velaApiRuntime;
+    const { profileId } = runtime().readLedgerProfile()!;
+    const batch = { batchId: '1'.repeat(64), profileId, configurationVersion: 1, maxCalls: 3, expiresAt: Date.now() + 60_000 };
+    assert.throws(() => disabledRuntime.beginSyntheticEvaluationBatch(batch), /vela_synthetic_evaluation_batch_disabled/);
+    assert.throws(() => runtime().beginSyntheticEvaluationBatch({ ...batch, configurationVersion: 2 }),
+      /vela_api_usage_authorization_required/);
+    assert.throws(() => runtime().beginSyntheticEvaluationBatch({ ...batch, expiresAt: Date.now() }),
+      /vela_synthetic_evaluation_batch_invalid/);
+    runtime().beginSyntheticEvaluationBatch(batch);
+    assert.equal(runtime().usageStatus().usedToday, 0);
+    assert.throws(() => runtime().beginSyntheticEvaluationBatch(batch), /vela_synthetic_evaluation_batch_exists/);
+    assert.throws(() => runtime().beginSyntheticEvaluationBatch({ ...batch, batchId: '2'.repeat(64), maxCalls: 63 }),
+      /vela_api_daily_limit_reached/);
+    const claim = { profileId, configurationVersion: 1, claimToken: 'a'.repeat(64), bindingDigest: 'b'.repeat(64) };
+    assert.throws(() => runtime().beginEvaluationClaim(claim), /vela_synthetic_evaluation_batch_required/);
+    runtime().beginEvaluationClaim(claim, { batchId: batch.batchId, maxCalls: 1 });
+    assert.throws(() => runtime().beginEvaluationClaim({ ...claim, claimToken: 'c'.repeat(64) },
+      { batchId: batch.batchId, maxCalls: 1 }), /vela_evaluation_claim_exists/);
+    const interrupted = { ...claim, claimToken: 'd'.repeat(64), bindingDigest: 'e'.repeat(64) };
+    runtime().beginEvaluationClaim(interrupted, { batchId: batch.batchId, maxCalls: 2 });
+    assert.throws(() => runtime().beginEvaluationClaim({ ...claim, claimToken: 'f'.repeat(64), bindingDigest: '0'.repeat(64) },
+      { batchId: batch.batchId, maxCalls: 1 }), /vela_synthetic_evaluation_batch_limit/);
+    const filler = { ...batch, batchId: '5'.repeat(64), maxCalls: 61 };
+    runtime().beginSyntheticEvaluationBatch(filler);
+    await runtime().models(1);
+    const input = { requestId: 'batch-stage', version: 1, model: 'gpt-6-luna', prompt: 'Synthetic stage',
+      contextDigest: 'c'.repeat(64), currentCatalogOnly: true as const, evaluationClaim: claim, validate() {} };
+    const signal = new AbortController().signal;
+    assert.equal((await runtime().run({ ...input, requestId: 'outside-reservation', evaluationClaim: undefined }, signal))
+      .result.dispatched, false);
+    const rollback = await runtime().run({ ...input, stage() { throw Error('rollback synthetic debit'); } }, signal);
+    assert.equal(rollback.result.dispatched, false);
+    assert.equal(runtime().usageStatus().usedToday, 0);
+    f.replies.push(() => response('Synthetic answer.'));
+    const admitted = await runtime().run(input, signal);
+    assert.equal(admitted.result.outcome, 'completed');
+    assert.equal((await runtime().run(input, signal)).result.dispatched, false);
+    assert.equal((await runtime().run({ ...input, requestId: 'over-claim-limit' }, signal)).result.dispatched, false);
+    f.replies.push(() => { throw Error('synthetic transport outcome unknown'); });
+    const unknown = await runtime().run({ ...input, requestId: 'interrupted-stage', evaluationClaim: interrupted }, signal);
+    assert.equal(unknown.result.outcome, 'unknown');
+    const blocked = await runtime().run({ ...input, requestId: 'next-stage-after-unknown', evaluationClaim: interrupted }, signal);
+    assert.equal(blocked.result.dispatched, false);
+    assert.equal(f.requests.length, 2);
+    assert.equal(runtime().usageStatus().usedToday, 2);
+    runtime().authorizeUsage(1, false);
+    runtime().authorizeUsage(1, true);
+    const revoked = { ...batch, batchId: '3'.repeat(64), maxCalls: 1 };
+    runtime().beginSyntheticEvaluationBatch(revoked);
+    const revokedClaim = { ...claim, claimToken: '4'.repeat(64), bindingDigest: '5'.repeat(64) };
+    runtime().beginEvaluationClaim(revokedClaim, { batchId: revoked.batchId, maxCalls: 1 });
+    runtime().authorizeUsage(1, false);
+    runtime().authorizeUsage(1, true);
+    await assert.rejects(runtime().run({ ...input, requestId: 'revoked-stage', evaluationClaim: revokedClaim }, signal),
+      /vela_synthetic_evaluation_batch_unavailable/);
+    await f.reopen();
+    const laterBatch = { ...batch, batchId: '6'.repeat(64) };
+    runtime().beginSyntheticEvaluationBatch(laterBatch);
+    assert.throws(() => runtime().beginEvaluationClaim({ ...interrupted, claimToken: '7'.repeat(64) },
+      { batchId: laterBatch.batchId, maxCalls: 1 }), /vela_evaluation_claim_exists/);
+    const expected = [{ requestId: 'interrupted-stage', executionId: unknown.executionId }];
+    assert.deepEqual(runtime().readEvaluationAdmissions(interrupted), expected);
+    assert.deepEqual(runtime().readLedgerReceipts({ ...interrupted, expected }), { state: 'unresolved' });
+    await assert.rejects(runtime().run({ ...input, requestId: 'replayed-stage', evaluationClaim: interrupted }, signal),
+      /vela_evaluation_claim_invalid/);
+    assert.equal(f.requests.length, 2);
+    assert.equal(runtime().usageStatus().usedToday, 2);
+  } finally {
+    await f.close();
+    await disabled.close();
+  }
 });
 
 const weatherQuery:WeatherQuery={startDate:null,endDate:null,period:'tomorrow',metrics:['temperature','humidity'],aggregation:'range'};
