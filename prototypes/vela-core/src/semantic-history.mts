@@ -420,11 +420,15 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       priorAssessment = assessment;
       const gaps = assessment.rows.filter(row => row.status !== 'supported');
       related = owner.related ? [...new Set(gaps.flatMap(row => row.sources))].map(handle => evidence.get(handle)!) : [];
-      next = gaps.filter(row => row.query && !queries.has(canonicalRetrievalQuery(row.query)!.digest)).map(row => row.query);
       const gapsByKey = new Map(gaps.map(row => [row.key, row]));
-      questionFallbacks = owner.adaptiveDiscovery && !next.length && rounds < maxRounds
+      const refinements = new Map(gaps.flatMap(row => {
+        const query = canonicalRetrievalQuery(row.query);
+        return query && !queries.has(query.digest) ? [[row.key, row.query] as const] : [];
+      }));
+      next = [...refinements.values()];
+      questionFallbacks = owner.adaptiveDiscovery && rounds < maxRounds
         ? needs.filter(need => {
-          if (gapsByKey.get(need.key)?.status !== 'missing') return false;
+          if (gapsByKey.get(need.key)?.status !== 'missing' || refinements.has(need.key)) return false;
           const question = canonicalRetrievalQuery(need.question);
           return question && !queries.has(question.digest);
         }).map(need => need.question) : [];

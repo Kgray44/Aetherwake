@@ -128,6 +128,28 @@ test('a novel model refinement takes precedence over another page of the origina
   assert.deepEqual(result.coverage[0].sources, [candidate]);
 });
 
+test('one need can refine while another missing need falls back to its original question', async () => {
+  const second = { key: 'second', question: 'Which engineer signs the release?', query: 'approval workflow' };
+  const approver = { ...candidate, sourceId: 'approver', text: 'The duty engineer signs the release.' };
+  const searched: string[] = [];
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search(query) {
+      searched.push(query);
+      return { sources: query === second.question ? [approver] : query === 'replacement key' ? [candidate] : [], scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? { ...proposal, needs: [evidence, second] } : {
+      version: 1, assessment: [
+        { key: evidence.key, status: call.round === 1 ? 'missing' : 'supported', sources: call.round === 1 ? [] : ['e1'], query: call.round === 1 ? 'replacement key' : '' },
+        { key: second.key, status: call.round === 1 ? 'missing' : 'supported', sources: call.round === 1 ? [] : ['e2'], query: '' },
+      ],
+    },
+  });
+  assert.deepEqual(searched, [evidence.query, second.query, 'replacement key', second.question]);
+  assert.deepEqual(result.coverage[1].sources, [approver]);
+});
+
 test('a refinement that returns only previously reviewed sources falls back to the next original page', async () => {
   const initial = { ...candidate, sourceId: 'initial', text: 'Earlier inspection planning.' };
   const result = await investigateSemanticHistory(request, {

@@ -1766,7 +1766,7 @@ test('reviewed project evidence expands a model-proposed search and fences corre
       return resource.id;
     }
     const other = await project('Other project');
-    await note('Private decision', 'FOREIGN-TEXT-459', other.workspaceId);
+    const foreign = await note('Private decision', 'FOREIGN-TEXT-459', other.workspaceId);
     const current = await project('Current project');
     const history = await note('Launch proposal', 'The launch proposal was superseded by the harbor decision.', current.workspaceId);
     const correction = 'The harbor decision assigns release approval to the duty engineer.';
@@ -1826,6 +1826,15 @@ test('reviewed project evidence expands a model-proposed search and fences corre
       });
     assert.equal((await send(true)).state, 'responded');
     assert.equal(f.requests.length, 6);
+    const audit = collectBlindEvidenceAudit(f.requests, intent, [
+      { fixtureId: 'foreign', sourceId: foreign, title: 'Private decision', text: 'FOREIGN-TEXT-459' },
+      { fixtureId: 'correction', sourceId: selected, title: 'Harbor decision', text: correction },
+    ]);
+    assert.ok(audit.outbound.every(call => !call.textSourceIds.includes('foreign')));
+    assert.ok(audit.outbound.some(call => call.stage === 'assess' && call.textSourceIds.includes('correction')));
+    assert.deepEqual(audit.assessments.map(assessment => assessment.round), [1, 2]);
+    assert.ok(audit.compositions.every(packet => packet.coverage.every(row =>
+      row.passages.every(passage => passage.sourceId !== foreign))));
     f.replies.push(reply(firstQuery), async body => {
       const snapshot = await f.core.command('desktop', { type: 'snapshot' });
       const source = snapshot.resources.find(resource => resource.id === selected)!;
