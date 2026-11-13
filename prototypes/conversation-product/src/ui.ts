@@ -164,8 +164,10 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  let switchOpen:{generation:number;intent:number}|undefined;
  let switchFailedGeneration:number|undefined;
  let switchComposing=false;
+ let switchText='';
  const loadSwitcher=async(openFirst=false)=>{
   const generation=invalidateSwitcher(),text=switchQuery.value.trim(),mode=switchMode.value;
+  switchText=text;
   if(openFirst)switchOpen={generation,intent:openIntent};
   const stillCurrent=()=>!disposed&&!closing&&generation===switchGeneration&&switcher.node.open;
   const scope:SearchQuery={projectId:state.query.projectId,...(mode==='favorite'?{favorite:true}:{}),sort:mode==='running'?'active':'activity',limit:12};
@@ -238,7 +240,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const openSwitcher=()=>{if(disposed)return Promise.reject(new Error('conversation_manager_closed'));switcher.node.open=true;switchQuery.focus();return loadSwitcher();};
  const resetSwitcher=()=>{invalidateSwitcher();switchLoading=false;switchOpen=undefined;switchComposing=false;};
  switcher.node.addEventListener('toggle',()=>{if(switcher.node.open){switchQuery.focus();if(!switchLoading&&switchTimer===undefined&&!switchComposing)void loadSwitcher();}else resetSwitcher();});
- const scheduleSwitcher=()=>{invalidateSwitcher();if(switcher.node.open&&!switchComposing)switchTimer=setTimeout(()=>void loadSwitcher(),120);};
+ const scheduleSwitcher=()=>{switchText=switchQuery.value.trim();invalidateSwitcher();if(switcher.node.open&&!switchComposing)switchTimer=setTimeout(()=>void loadSwitcher(),120);};
  const setHistoryQuery=(next:SearchQuery)=>{
   const projectChanged=next.projectId!==state.query.projectId;
   state.query=next;
@@ -249,7 +251,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  };
  switchQuery.addEventListener('compositionstart',()=>{switchComposing=true;invalidateSwitcher();});
  switchQuery.addEventListener('compositionend',()=>{switchComposing=false;scheduleSwitcher();});
- switchQuery.addEventListener('input',event=>{if(!(event as InputEvent).isComposing)scheduleSwitcher();});
+ switchQuery.addEventListener('input',event=>{if(!(event as InputEvent).isComposing&&switchQuery.value.trim()!==switchText)scheduleSwitcher();});
  switcher.node.addEventListener('keydown',event=>{
   if(event.key!=='Escape'||!switcher.node.open)return;
   event.stopPropagation();

@@ -183,6 +183,8 @@ test('quick search Enter submits pending text immediately and opens the first ex
   assert.equal(searches,0);
   input.fire('keydown',{key:'Enter'});
   assert.equal(searches,1,'Enter bypasses the pending debounce');
+  input.value='exact phrase ';
+  input.fire('input');
   input.fire('keydown',{key:'Enter'});
   await until(()=>opened.length===1);
   assert.deepEqual(opened,[[resourceId,messageId]]);
