@@ -1804,6 +1804,25 @@ test('History waits for composed text before searching',async t=>{
  }finally{await manager?.dispose();f.restore();}
 });
 
+test('History Enter runs a pending query once and leaves focus in the field',async t=>{
+ const f=fixture();let manager;
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const query=f.view.root.querySelector('input[aria-label="Search conversation history"]');
+  query.focus();query.value='exact keyboard query';query.fire('input');
+  assert.equal(query.fire('keydown',{key:'Enter',isComposing:true}).defaultPrevented,false);
+  assert.equal(query.fire('keydown',{key:'Enter'}).defaultPrevented,true);
+  query.fire('keydown',{key:'Enter',repeat:true});
+  await until(()=>f.calls.some(call=>call.name==='search'));
+  t.mock.timers.tick(180);
+  await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);
+  assert.deepEqual(f.calls.filter(call=>call.name==='search').map(call=>call.input.text),['exact keyboard query']);
+  assert.equal(f.view.doc.activeElement,query);
+ }finally{await manager?.dispose();f.restore();}
+});
+
 test('a History filter change consumes the pending text debounce',async t=>{
  const f=fixture();let manager;
  t.mock.timers.enable({apis:['setTimeout']});

@@ -468,6 +468,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const loadDetail=async(aroundMessageId?:string)=>{const id=state.selectedResourceId;if(!id){const selected=collections.find(c=>c.id===state.query.collectionId&&c.state==='active');if(selected){root.dataset.collectionId=selected.id;detailHeader.replaceChildren(el('h3',selected.title),el('p','Choose a conversation or resource from this collection.'));}else{delete root.dataset.collectionId;detailHeader.replaceChildren(el('p','Open or create a conversation.'));}return;}delete root.dataset.collectionId;await bindChat(id,aroundMessageId);};
  const reloadCollections=async(provided?:Collection[])=>{collections=provided??await call('collections',{});const previous=collection.value;collection.replaceChildren(el('option','All collections'));collection.options[0].value='';for(const c of collections){const o=el('option',`${c.parentId?'↳ ':''}${c.title}${c.rule?' (smart)':''}`);o.value=c.id;collection.append(o);}collection.value=state.query.collectionId??previous;syncFilterControls();};
  type CatalogRead={collections:Collection[];list:ProductCommandMap['search']['output'];providers:ProductCommandMap['providers']['output'];projects:ProductCommandMap['projects']['output']};
+ let failedHistoryGeneration:number|undefined;
  const refresh=async(provided?:CatalogRead)=>{
   const generation=++request,scope={...state.query};save();
   const catalogRead=provided?[provided.collections,provided.list,provided.providers,provided.projects] as const:
@@ -475,9 +476,10 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
     [visible,...await Promise.all([readMatches(scope),call('providers',{}),call('projects',{})])] as const).catch(()=>null);
   if(disposed||generation!==request)return;
   if(!catalogRead){
-   const notice=el('p','Couldn’t load conversation history.');notice.setAttribute('role','status');
+   failedHistoryGeneration=generation;
+   const notice=el('p','Couldn’t load conversation history. Press Enter in the search field to retry.');notice.setAttribute('role','status');
    const retry=button('Retry history search',()=>{
-    if(disposed||closing||generation!==request)return;
+    if(disposed||closing||busy||generation!==request)return;
     query.focus();return run(refresh);
    });
    resultCount.textContent='';paging.replaceChildren();paging.hidden=true;
@@ -485,6 +487,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    return;
   }
   const [visible,list,providers,projects]=catalogRead;
+  failedHistoryGeneration=undefined;
   await reloadCollections(visible);if(disposed||generation!==request)return;
   newProviderCatalog=providers;newProvider.replaceChildren();for(const p of providers.filter(p=>p.record||p.id===explicitNewProvider)){const o=el('option',p.label+(p.record?'':' · unavailable'));o.value=p.id;o.disabled=!p.record;newProvider.append(o);}
   const preferred=explicitNewProvider??providers.find(p=>p.default&&p.available&&p.execute&&p.record)?.id??providers.find(p=>p.record&&!p.execute)?.id;
@@ -512,6 +515,14 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const scheduleHistorySearch=()=>{request++;clearSearch.hidden=!query.value;clearTimeout(searchTimer);searchTimer=undefined;if(!historyComposing)searchTimer=setTimeout(filter,180);};
  query.addEventListener('compositionstart',()=>{historyComposing=true;scheduleHistorySearch();});
  query.addEventListener('compositionend',()=>{historyComposing=false;scheduleHistorySearch();});
+ query.addEventListener('keydown',event=>{
+  if(event.key!=='Enter'||event.isComposing||historyComposing||event.keyCode===229||
+    event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
+  event.preventDefault();
+  if(event.repeat)return;
+  if(searchTimer!==undefined)filter();
+  else if(!busy&&failedHistoryGeneration===request)void run(refresh);
+ });
  query.addEventListener('input',scheduleHistorySearch);for(const control of [project,collection,archive,favorite,sort,searchMode])control.addEventListener('change',filter);
  createForm.addEventListener('submit',event=>{event.preventDefault();void run(async()=>{const c=await call('create',{title:newTitle.value.trim()||'New conversation',...(explicitNewProvider?{providerId:explicitNewProvider}:{}),commandId:crypto.randomUUID()});newTitle.value='';newChat.node.open=false;await open(c.resourceId);await refresh();chat?.focusComposer();});});
  createFolder.addEventListener('submit',event=>{event.preventDefault();void run(async()=>{const parentId=state.query.collectionId,created=await call('organize',{type:'createCollection',title:folderTitle.value,projectId:state.query.projectId??collections.find(item=>item.id===parentId)?.projectId??null});await reloadCollections();const c=createdCollection(created);if(parentId)await call('collectionRule',{collectionId:c.id,parentId,rule:null,expectedVersion:c.version,expectedRuleRevision:c.ruleRevision});folderTitle.value='';await refresh();});});
