@@ -263,6 +263,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const semanticContext = el('input');
   semanticContext.type = 'checkbox';
   const selectedEvidenceOption = label('Investigate selected notes or files with Vela API', semanticContext);
+  const evidenceApiAvailable = () => current?.planningProviders?.some(route =>
+    route.providerId === 'openai-api-vela' && route.available) === true;
   const workspaceState = el('input');
   workspaceState.type = 'checkbox';
   const projectEvidence = el('input');
@@ -302,9 +304,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const sourceCount = selected.size + Number(!!handoffSelection?.reviewedEvidence);
     const ineligible = !selected.size || sourceCount > 4 || incompatibleSource;
     selectedEvidenceOption.hidden = ineligible;
-    semanticContext.disabled = ineligible || !current?.planningProviders?.some(route =>
-      route.providerId === 'openai-api-vela' && route.available);
-    if (semanticContext.disabled || chosenProviderId !== 'openai-api-vela') semanticContext.checked = false;
+    if (ineligible || chosenProviderId !== 'openai-api-vela') semanticContext.checked = false;
+    semanticContext.disabled = ineligible || (!evidenceApiAvailable() && !semanticContext.checked);
     workspaceState.disabled = apiUnavailable || incompatibleSource || sourceCount + Number(projectEvidence.checked) > 3 || !current?.applicationContext?.currentWorkspaceId;
     if (workspaceState.disabled) workspaceState.checked = false;
     projectEvidence.disabled = apiUnavailable || incompatibleSource || sourceCount + Number(workspaceState.checked) > 3 || !current?.applicationContext?.currentProjectId;
@@ -503,6 +504,12 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
   form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return;
+    if (semanticContext.checked && !evidenceApiAvailable()) {
+      status.hidden = false;
+      status.textContent = 'Vela API is unavailable. Reconnect to investigate the selected sources. Your question is still here.';
+      present();
+      return;
+    }
     const missions = options.missions;
     if (missions && EXPLICIT_MISSION_PREFIX.test(intent.value.normalize('NFKC').trim())) {
       const objective = intent.value, revision = draftRevision, sources = [...selected.values()];
@@ -1233,9 +1240,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     provider.textContent = state.planner.available ? providerName(state.planner.providerId) + (state.planner.busy ? ' · busy' : ' · available') : 'Provider unavailable';
     providerRoutes.hidden = !state.planningProviders;
     providerConsent.hidden = !!state.planningProviders;
-    providerHint.textContent = state.planningProviders ? 'Auto uses local capabilities, a connected conversational model, or Codex according to the request. Attached sources and Codex work require review.' : state.planner.available ? 'Context sharing needs approval.' : 'Provider unavailable.';
+    providerHint.textContent = state.planningProviders ? 'Auto uses local capabilities, a connected conversational model, or Codex according to the request. Broader evidence and Codex work require review.' : state.planner.available ? 'Context sharing needs approval.' : 'Provider unavailable.';
     providerConsent.firstElementChild!.textContent = 'Use ' + providerName(state.planner.providerId) + ' for this request';
-    allowProvider.disabled = !state.planner.available || state.planner.busy; if (!state.planningProviders && chosenProviderId !== state.planner.providerId) { allowProvider.checked = false; chosenProviderId = null; } renderProviderChoice();
+    allowProvider.disabled = !state.planner.available || state.planner.busy; if (!state.planningProviders && chosenProviderId !== state.planner.providerId && !semanticContext.checked) { allowProvider.checked = false; chosenProviderId = null; } renderProviderChoice();
     const chosen = projectChosen ? nativeProject.value : state.applicationContext?.currentProjectId ?? ''; nativeProject.replaceChildren(); const global = el('option', undefined, 'No project'); global.value = ''; nativeProject.append(global);
     for (const ref of state.applicationContext?.references.filter(ref => ref.kind === 'project') ?? []) { const option = el('option', undefined, ref.title); option.value = ref.id; nativeProject.append(option); }
     if (chosen && !Array.from(nativeProject.options).some(option => option.value === chosen)) { const unavailable = el('option', undefined, 'Previously selected project · unavailable'); unavailable.value = chosen; unavailable.disabled = true; nativeProject.append(unavailable); } nativeProject.value = chosen; updateWorkspaceAvailability();
