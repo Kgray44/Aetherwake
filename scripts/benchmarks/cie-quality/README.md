@@ -88,3 +88,18 @@ Run `node scripts/benchmarks/cie-quality/fts-candidates.mts <sealed-input> <new-
 | Candidate-stage p50 / p95, including index build | 0.026 / 0.342 ms | 0.401 / 0.832 ms |
 
 Both arms returned zero denied and unknown fixture IDs after eligibility filtering. FTS improved one material case by relevant-source count and tied the other 38. The candidate commit was `e888f963fdfafcd5776e32f54b541d402cc162ee` and frozen prediction SHA-256 was `4c3c2f316b5e2ab188569eaef4150857e7978bceb9cb11f1c976d9f1676f4f6d`. The one pass over the corpus includes setup and timing noise. FTS remains in shadow pending useful gains on untouched cases and native permission, evidence, and answer verification.
+
+### Lexical and FTS rank fusion
+
+The same command now emits a third arm. It combines the two top-three lists with reciprocal rank fusion, puts exact eligible source IDs first, and returns at most three sources. The fused timing includes both candidate channels run serially and the merge. Eligibility and query normalization are shared setup outside the candidate-stage timers.
+
+| Candidate metric | Lexical | SQLite FTS | Fusion |
+| --- | ---: | ---: | ---: |
+| Relevant-source recall | 44/52 (84.62%) | 46/52 (88.46%) | 46/52 (88.46%) |
+| Precision | 44/105 (41.90%) | 46/110 (41.82%) | 46/110 (41.82%) |
+| Material cases with complete recall | 32/39 | 33/39 | 33/39 |
+| Benign cases with zero candidates | 1/6 | 0/6 | 0/6 |
+| Denied / unknown fixture IDs | 0 / 0 | 0 / 0 | 0 / 0 |
+| Candidate-stage p50 / p95 (48 cases) | 0.021 / 0.444 ms | 0.347 / 0.761 ms | 0.385 / 1.309 ms |
+
+Independent scoring used the original labels after predictions were frozen at `f2c1d9b7a28b4ac92cc590af36692008188d9f0e`. Prediction SHA-256 was `25d09bcaed9a46069d45c46e7b4b4363995a54ed60a74545c8fc266dcccecf84`. Fusion tied FTS on the graded candidate measures and took longer in this run. It remains offline. This experiment used zero provider calls and leaves end-to-end latency, authorization under native dispatch, and answer quality unmeasured.
