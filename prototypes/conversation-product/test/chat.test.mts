@@ -13,12 +13,12 @@ import { ConversationViewPersistence } from '../src/view-persistence.ts';
 /** Synthetic port receipts only: these tests make no database, provider, native-window or network claims. */
 function fixture(providerId='local') {
   const view=componentDocument(),restore=view.install(),calls:{name:string;input:any}[]=[];
-  let draft={resourceId:'chat:synthetic',version:3,content:'Saved unsent text',updatedAt:'2026-11-02T00:00:00Z'},denied=false,detailGate:Promise<void>|null=null,searchError:string|null=null;
+  let draft={resourceId:'chat:synthetic',version:3,content:'Saved unsent text',updatedAt:'2026-11-02T00:00:00Z',documents:undefined as {id:string;version:number;title:string}[]|undefined},denied=false,detailGate:Promise<void>|null=null,searchError:string|null=null;
   const detail:Detail={conversation:{resourceId:draft.resourceId,conversationId:'graph:synthetic',title:'Synthetic conversation',providerId,revision:2,version:1,projectId:null,projectIds:[],state:'active',createdAt:'2026-11-02T00:00:00Z',favorite:false,messageCount:2,collectionIds:[]},messages:{items:[{id:'message:user',resourceId:draft.resourceId,role:'user',content:'A user message',createdAt:'2026-11-02T00:00:00Z',provenance:'user',inherited:false,sensitivity:'internal'},{id:'message:assistant',resourceId:draft.resourceId,role:'assistant',content:'A **readable** response.\n\n```ts\nconst answer = 42;\n```',createdAt:'2026-11-02T00:00:01Z',provenance:'application',inherited:false,sensitivity:'internal'}],total:2,offset:0,limit:50,hasMore:false},lineage:[],policy:{resourceId:draft.resourceId,revision:1,mode:'independent',allowedSourceIds:[],allowCrossProject:false,maxSensitivity:'internal',categories:['excerpt']},shares:[],providers:[{id:providerId,label:providerId==='local'?'Local recording':'Native Codex',available:true,record:true,execute:providerId!=='local',nativeFork:false,history:'local',simulated:false,models:[]}]};
   let pending: {input:any;resolve:(value:unknown)=>void;reject:(error:Error)=>void}|null=null;
   const collections:Collection[]=[],projects:{id:string;title:string;version:number}[]=[],history={items:[] as SearchHit[],total:0};
   const port={async command(name:string,input:any):Promise<any>{calls.push({name,input});if(denied)throw new Error('source_unavailable');
-    if(name==='readDraft')return {...draft};if(name==='saveDraft'){if(input.expectedVersion!==draft.version)throw new Error('stale_draft_version');draft={...draft,version:draft.version+1,content:input.content};return {...draft};}
+    if(name==='readDraft')return {...draft};if(name==='saveDraft'){if(input.expectedVersion!==draft.version)throw new Error('stale_draft_version');draft={...draft,version:draft.version+1,content:input.content,documents:input.documents??draft.documents};return {...draft};}
     if(name==='detail'){const captured=structuredClone(detail);await detailGate;return captured;}if(name==='send')return new Promise((resolve,reject)=>{pending={input,resolve,reject};}).finally(()=>{pending=null;});
     if(name==='providers')return detail.providers;if(name==='collections')return structuredClone(collections);if(name==='projects')return structuredClone(projects);if(name==='list'){if(searchError)throw new Error(searchError);return {items:history.items.filter(hit=>hit.kind==='conversation').map(hit=>hit.summary??{...detail.conversation,resourceId:hit.resourceId,title:hit.title}).slice(input.offset??0,(input.offset??0)+(input.limit??50)),total:history.total,offset:input.offset??0,limit:input.limit??50,hasMore:(input.offset??0)+(input.limit??50)<history.total};}if(name==='search'){if(searchError)throw new Error(searchError);const items=input.searchMode&&input.searchMode!=='all'?history.items.filter(hit=>hit.kind===input.searchMode.replace(/s$/,'')):history.items;return {...history,items,offset:input.offset??0,limit:50,hasMore:(input.offset??0)+50<history.total};}if(name==='favorite'){detail.conversation.favorite=input.favorite;return input.favorite;}throw new Error('Unexpected command '+name);
   }} as ConversationProductPort;
@@ -29,6 +29,313 @@ function fixture(providerId='local') {
 function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativeChatGPTFidelityDescriptor()){
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
+
+test('confirmed submission stays accepted when the host refresh fails', async () => {
+ const f = fixture();
+ let chat;
+ try {
+  chat = mountConversationChat(f.view.root, {
+   port: f.port, resourceId: f.draft.resourceId,
+   onChanged: async () => { throw Error('synthetic_refresh_failure'); },
+  });
+  await chat.ready;
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  f.accept();
+  await chat.whenSubmissionSettled();
+  assert.equal(f.draft.content, '');
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, /Message accepted\. The chat could not refresh/);
+  const editor = f.view.root.querySelector('textarea');
+  editor.value = 'Next question';
+  editor.fire('input');
+  assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled, false);
+  assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+for (const outcome of ['matching','wrong anchor','disconnected read','still disconnected']) test('lost send response checks the exact authored message ('+outcome+')', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const matchingAnchor = outcome !== 'wrong anchor';
+ let evidenceReads = 0;
+ const port = {async command(name:string,input:any){
+  if (name==='detail'&&input.aroundMessageId==='message:confirmed') {
+   evidenceReads++;
+   if (outcome==='still disconnected'||outcome==='disconnected read'&&evidenceReads===1) throw Error('backend_disconnected');
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ let chat, observe!: (observation: ConversationExecutionObservation) => void;
+ try {
+  const resourceId = f.draft.resourceId;
+  let commandId = '';
+  chat = mountConversationChat(f.view.root, { port, resourceId, execution: {
+   observe(_id, listener) { observe = listener; return () => {}; },
+   async cancel() {},
+   async refresh() { observe({ execution: {
+    id: 'execution:confirmed', resourceId, commandId, providerId: 'chatgpt-plan-responses',
+    state: 'provider_completed', startedAt: '2026-11-02T00:00:00Z', endedAt: '2026-11-02T00:00:01Z',
+    inputMessageId: matchingAnchor ? 'message:confirmed' : 'message:other', taskVerified: false,
+   } }); },
+  } });
+  await chat.ready;
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  commandId = f.pending!.input.commandId;
+  f.detail.messages.items.push({ ...f.detail.messages.items[0], id: 'message:confirmed', content: f.draft.content });
+  f.detail.conversation.revision++;
+  f.pending!.reject(Error('synthetic response lost'));
+  await chat.whenSubmissionSettled();
+  const confirmed=matchingAnchor&&outcome!=='still disconnected';
+  assert.equal(f.draft.content, confirmed ? '' : 'Saved unsent text');
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, confirmed ? /Message accepted/ : /not confirmed|could not be confirmed/);
+  assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
+  // A successful retry is followed by one display refresh around the accepted message.
+  if(outcome==='disconnected read')assert.equal(evidenceReads,3);
+  if(outcome==='still disconnected')assert.equal(evidenceReads,2);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+for (const scenario of ['no edits', 'later edits', 'reconnect']) test('late completion reconciles the exact lost send ('+scenario+')', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const editWhileWaiting = scenario === 'later edits';
+ let connected = true;
+ let evidenceReads = 0;
+ const port = { async command(name:string,input:any) {
+  if (name === 'detail' && input.aroundMessageId === 'message:confirmed') {
+   evidenceReads++;
+   if (!connected) throw Error('backend_disconnected');
+  }
+  return (f.port.command as any)(name,input);
+ } } as ConversationProductPort;
+ let chat, observe!: (observation: ConversationExecutionObservation) => void;
+ try {
+  const resourceId = f.draft.resourceId;
+  chat = mountConversationChat(f.view.root, { port, resourceId, execution: {
+   observe(_id, listener) { observe = listener; return () => {}; },
+   async cancel() {},
+   async refresh() {},
+  } });
+  await chat.ready;
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  const commandId = f.pending!.input.commandId;
+  const completion: ConversationExecutionObservation = { execution: {
+   id: 'execution:confirmed', resourceId, commandId, providerId: 'chatgpt-plan-responses',
+   state: 'provider_completed', startedAt: '2026-11-02T00:00:00Z', endedAt: '2026-11-02T00:00:01Z',
+   inputMessageId: 'message:confirmed', taskVerified: false,
+  } };
+  if (scenario === 'reconnect') {
+   observe(completion);
+   connected = false;
+   observe({ connection: 'unavailable' });
+  }
+  f.pending!.reject(Error('synthetic response lost'));
+  await chat.whenSubmissionSettled();
+  assert.equal(f.draft.content, 'Saved unsent text');
+  if (editWhileWaiting) {
+   const editor = f.view.root.querySelector('textarea');
+   editor.value = 'My next question';
+   editor.fire('input');
+   await chat.flush();
+  }
+  f.detail.messages.items.push({ ...f.detail.messages.items[0], id: 'message:confirmed', content: 'Saved unsent text' });
+  f.detail.conversation.revision++;
+  if (scenario === 'reconnect') {
+   assert.equal(evidenceReads, 0);
+   connected = true;
+   observe({ connection: 'available' });
+  } else observe(completion);
+  await chat.whenSubmissionSettled();
+  assert.equal(f.draft.content, editWhileWaiting ? 'My next question' : '');
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, /Message accepted/);
+  assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+for (const arrivesBeforeRejection of [false, true]) test('a confirmed provider failure releases a lost send for explicit retry (early: '+arrivesBeforeRejection+')', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ let chat, observe!: (observation: ConversationExecutionObservation) => void;
+ try {
+  const resourceId = f.draft.resourceId;
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId, execution: {
+   observe(_id, listener) { observe = listener; return () => {}; },
+   async cancel() {},
+  } });
+  await chat.ready;
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  const execution = {
+   id: 'execution:rejected', resourceId, commandId: f.pending!.input.commandId,
+   providerId: 'chatgpt-plan-responses', state: 'failed' as const,
+   startedAt: '2026-11-02T00:00:00Z', endedAt: '2026-11-02T00:00:01Z', taskVerified: false as const,
+  };
+  const send = f.view.root.querySelector('[data-cp-control="send"]');
+  if (arrivesBeforeRejection) observe({ execution });
+  f.pending!.reject(Error('synthetic response lost'));
+  await chat.whenSubmissionSettled();
+  if (!arrivesBeforeRejection) {
+   observe({ execution: { ...execution, commandId: 'unrelated-command' } });
+   assert.equal(send.disabled, true);
+   observe({ execution: { ...execution, state: 'unknown' } });
+   assert.equal(send.disabled, true);
+   observe({ execution });
+  }
+  assert.equal(f.draft.content, 'Saved unsent text');
+  assert.equal(send.disabled, false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, /provider ended the reply with an error.*draft is still here/i);
+  assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+test('a competing draft save after delivery keeps the confirmed message and offers draft recovery', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ let chat;
+ try {
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId });
+  await chat.ready;
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  f.external('Draft written by the other view');
+  f.accept(true);
+  await chat.whenSubmissionSettled();
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, /Message accepted\. Check draft recovery/);
+  assert.equal(f.view.root.querySelector('.cp-draft-status').dataset.phase, 'conflict');
+  assert.equal(f.draft.content, 'Draft written by the other view');
+  assert.equal(f.detail.messages.items.at(-1)?.content, 'Saved unsent text');
+  named(f.view.root, 'Use the stored draft').fire('click');
+  await until(() => f.view.root.querySelector('.cp-draft-status').dataset.phase === 'clean');
+  assert.equal(f.view.root.querySelector('textarea').value, f.draft.content);
+  assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+test('a reopened chat ignores active observations older than its canonical turn', async () => {
+ const f=fixture('chatgpt-plan-responses'), resourceId=f.draft.resourceId;
+ const latest={id:'execution:latest',resourceId,providerId:'chatgpt-plan-responses',commandId:'send:latest',
+  state:'provider_completed' as const,startedAt:'2026-11-02T00:00:04Z',endedAt:'2026-11-02T00:00:05Z',taskVerified:false as const};
+ f.detail.conversation.execution=latest;
+ let chat, observe!: (value:ConversationExecutionObservation)=>void;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId,execution:{
+   observe(_id,listener){observe=listener;return()=>{};},async cancel(){throw Error('Unexpected Stop');},
+  }});
+  await chat.ready;
+  observe({execution:{...latest,id:'execution:old',commandId:'send:old',state:'running',startedAt:'2026-11-02T00:00:02Z',endedAt:null}});
+  assert.equal(named(f.view.root,'Send').disabled,false);
+  assert.equal(named(f.view.root,'Stop').hidden,true);
+  observe({execution:{...latest,id:'execution:new',commandId:'send:new',state:'running',startedAt:'2026-11-02T00:00:06Z',endedAt:null}});
+  assert.equal(named(f.view.root,'Send').disabled,true);
+  assert.equal(named(f.view.root,'Stop').hidden,false);
+ } finally {await chat?.dispose();f.restore();}
+});
+
+test('reopening an ordinary chat with an unresolved turn requires explicit review before another send', async () => {
+ const f=fixture('chatgpt-plan-responses'), resourceId=f.draft.resourceId;
+ const execution={id:'execution:unknown',resourceId,providerId:'chatgpt-plan-responses',commandId:'send:unknown',state:'unknown' as const,startedAt:'2026-11-02T00:00:02Z',endedAt:null,taskVerified:false as const};
+ f.detail.conversation.execution=execution;
+ let chat;
+ try {
+  const mount=()=>mountConversationChat(f.view.root,{port:f.port,resourceId});
+  chat=mount();await chat.ready;
+  assert.equal(named(f.view.root,'Send').disabled,true);
+  named(f.view.root,'I reviewed the send outcome').fire('click');
+  await chat.refresh();
+  assert.equal(named(f.view.root,'Send').disabled,false);
+  await chat.dispose();
+  chat=mount();await chat.ready;
+  assert.equal(named(f.view.root,'Send').disabled,true);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+ } finally {await chat?.dispose();f.restore();}
+});
+
+test('a matching confirmed interruption keeps the draft and allows an explicit next send',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;
+  const form=f.view.root.querySelector('.cp-composer'),send=named(form,'Send'),editor=form.querySelector('textarea');
+  form.fire('submit');await until(()=>!!f.pending);
+  editor.value='New draft after stopping';editor.fire('input');
+  f.pending!.resolve({id:'execution:stopped',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:f.pending!.input.commandId,state:'interrupted'});
+  await chat.whenSubmissionSettled();await chat.flush();
+  assert.equal(send.disabled,false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Reply stopped/);
+  assert.equal(f.draft.content,'New draft after stopping');
+  assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+  form.fire('submit');await until(()=>!!f.pending);
+  assert.equal(f.pending!.input.content,'New draft after stopping');
+  f.accept(true);await chat.whenSubmissionSettled();
+ }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.dispose();f.restore();}
+});
+
+for (const observedBeforeLoss of [true,false]) test(`an observed interruption recovers a draft when the matching send response is lost (observation first: ${observedBeforeLoss})`, async () => {
+ const f=fixture('chatgpt-plan-responses');
+ let chat, observe!: (value: ConversationExecutionObservation) => void;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+   observe(_id,listener){observe=listener;return()=>{};},
+   async cancel(){},
+  }});
+  await chat.ready;
+  const form=f.view.root.querySelector('.cp-composer'), send=named(form,'Send');
+  form.fire('submit');
+  await until(()=>!!f.pending);
+  const stopped={
+   id:'execution:confirmed-stop',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',
+   commandId:f.pending!.input.commandId,state:'interrupted' as const,taskVerified:false as const,
+   startedAt:'2026-11-02T00:00:02Z',endedAt:'2026-11-02T00:00:03Z',
+  };
+  if(observedBeforeLoss)observe({execution:stopped});
+  f.pending!.reject(Error('synthetic transport response lost'));
+  await chat.whenSubmissionSettled();
+  if(!observedBeforeLoss){
+   observe({execution:{...stopped,id:'execution:unrelated',commandId:'command:unrelated'}});
+   assert.equal(send.disabled,true,'An unrelated stop cannot release recovery');
+   observe({execution:stopped});
+  }
+  assert.equal(send.disabled,false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Reply stopped/);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+ } finally {f.pending?.reject(Error('synthetic cleanup'));await chat?.dispose();f.restore();}
+});
+
+test('Stop follows the observed turn through acknowledgment, settlement and a subsequent turn',async()=>{
+  for(const settleBeforeAck of [true,false]){
+    const f=fixture('chatgpt-plan-responses');
+    let chat, observe:(value:ConversationExecutionObservation)=>void;
+    let acknowledge!:()=>void, requests=0;
+    const pending=new Promise<void>(resolve=>{acknowledge=resolve;});
+    const turn={id:'execution:first',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:'command:first',state:'running' as const,startedAt:'2026-11-02T00:00:02Z',endedAt:null,taskVerified:false};
+    try{
+      chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+        observe(_id,listener){observe=listener;return()=>{};},
+        cancel(id){assert.equal(id,turn.id);requests++;return pending;},
+      }});
+      await chat.ready;
+      const stop=named(f.view.root,'Stop'),status=f.view.root.querySelector('.cp-chat-status');
+      observe!({execution:turn});
+      stop.fire('click');
+      assert.equal(stop.disabled,true);
+      const settle=()=>observe!({execution:{...turn,state:'interrupted',endedAt:'2026-11-02T00:00:03Z'}});
+      if(settleBeforeAck)settle();
+      acknowledge();
+      await new Promise<void>(resolve=>setImmediate(resolve));
+      if(!settleBeforeAck){
+        observe!({execution:turn});
+        assert.equal(stop.disabled,true,'Acknowledgment and later activity must not re-enable Stop');
+        assert.match(status.textContent,/Stop requested/);
+        stop.fire('click');
+        settle();
+      }
+      assert.equal(requests,1);
+      assert.match(status.textContent,/confirmed the turn stopped/);
+      observe!({execution:{...turn,id:'execution:second',startedAt:'2026-11-02T00:00:04Z'}});
+      assert.equal(stop.disabled,false);
+      assert.match(status.textContent,/is running/);
+    }finally{acknowledge();await chat?.dispose();f.restore();}
+  }
+});
 
 test('Remember message is limited to an eligible own user message and opens native review on submit', async () => {
   const f = fixture();
@@ -143,6 +450,7 @@ test('quick search opens the exact message from the keyboard and never activates
     }
     if(name==='search'&&input.text==='readable'){
       assert.equal(input.limit,12);
+      assert.equal(input.searchMode,'chat-history');
       return {items:[{kind:'message',resourceId,messageId,title:summary.title,excerpt:'A readable response.'}],total:1,offset:0,limit:12,hasMore:false};
     }
     return (f.port.command as any)(name,input);
@@ -240,13 +548,52 @@ test('Switch chat Escape cancels a result still waiting for the draft to save', 
  } finally {release();await manager?.dispose();f.restore();}
 });
 
-test('Switch chat keeps the previous draft available after a different chat fails to open', async () => {
+for (const unavailable of [false,true]) test('Switch chat Escape preserves the prior message when a same-chat result is still loading (unavailable: '+unavailable+')', async () => {
+ const f=fixture(), v=viewPort(f), resourceId=f.draft.resourceId;
+ const [previous,target]=f.detail.messages.items;
+ let manager, reading=false, release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const port={async command(name:string,input:any){
+  if(name==='search')return {items:[{kind:'message',resourceId,messageId:target.id,title:'Match',excerpt:target.content}],total:1,offset:0,limit:12,hasMore:false};
+  if(name==='detail'&&input.aroundMessageId===target.id){reading=true;await gate;}
+  if(name==='detail'&&input.aroundMessageId===target.id&&unavailable){
+   await (v.port.command as any)(name,input);
+   throw Error('source_unavailable');
+  }
+  return (v.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,initialMessageId:previous.id,viewPersistence:v.persistence});
+  await manager.ready;
+  await manager.openSwitcher();
+  const detailReads=f.calls.filter(call=>call.name==='detail').length;
+  const input=f.view.root.querySelector('.cp-switcher').querySelector('input');
+  input.value='Match';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await until(()=>reading);
+  input.fire('keydown',{key:'Escape'});release();
+  await until(()=>!f.view.root.querySelector('.cp-manager').getAttribute('aria-busy'));
+  await manager.flush();
+  assert.equal(f.calls.filter(call=>call.name==='detail').length,detailReads+1);
+  assert.equal(f.view.root.querySelector('.cp-chat').dataset.resourceAvailable,'true');
+  assert.ok(f.view.root.querySelector('.cp-message'));
+  assert.equal(v.view.position?.anchor?.messageId,previous.id);
+  assert.equal(v.trace.some(call=>call.name==='saveViewState'&&call.input.position?.anchor?.messageId===target.id),false);
+  assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
+ } finally {release();await manager?.dispose();f.restore();}
+});
+
+for (const cancel of [false,true]) test('Switch chat restores the previous draft after a failed or cancelled open (cancel: '+cancel+')', async () => {
  const f=fixture(), resourceId=f.draft.resourceId, target='chat:missing';
- let manager;
+ let manager, reading=false, release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
  const port={async command(name:string,input:any){
   if(name==='search')return {items:[{kind:'conversation',resourceId:target,title:'Other chat',excerpt:''}],total:1,offset:0,limit:12,hasMore:false};
   if(name==='readDraft'&&input.resourceId===target)return {resourceId:target,version:0,content:'',updatedAt:null};
-  if(name==='detail'&&input.resourceId===target)throw Error('temporary detail failure');
+  if(name==='detail'&&input.resourceId===target){
+   if(!cancel)throw Error('temporary detail failure');
+   reading=true;await gate;
+   return {...f.detail,conversation:{...f.detail.conversation,resourceId:target}};
+  }
   return (f.port.command as any)(name,input);
  }} as ConversationProductPort;
  try {
@@ -255,10 +602,15 @@ test('Switch chat keeps the previous draft available after a different chat fail
   await manager.openSwitcher();
   const input=f.view.root.querySelector('.cp-switcher').querySelector('input');
   input.value='Other chat';input.fire('input');input.fire('keydown',{key:'Enter'});
-  await until(()=>f.view.root.querySelector('.cp-switcher-status').textContent.includes('Couldn’t open'));
+  if(cancel){
+   await until(()=>reading);
+   input.fire('keydown',{key:'Escape'});
+   release();
+   await until(()=>!f.view.root.querySelector('.cp-manager').getAttribute('aria-busy'));
+  }else await until(()=>f.view.root.querySelector('.cp-switcher-status').textContent.includes('Couldn’t open'));
   assert.equal(manager.state.selectedResourceId,resourceId);
   assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
- } finally {await manager?.dispose();f.restore();}
+ } finally {release();await manager?.dispose();f.restore();}
 });
 
 for (const failure of ['temporary detail failure','message_unavailable','conversation_missing']) test('Switch chat recovers a failed result open ('+failure+')', async () => {
@@ -368,7 +720,7 @@ for(const retryWithButton of [false,true])test('Switch chat retries a failed que
  } finally {await manager?.dispose();f.restore();}
 });
 
-test('Switch chat refreshes its exact query when the history project changes', async () => {
+for (const focusResult of [false,true]) test('Switch chat refreshes its exact query when the history project changes (result focused: '+focusResult+')', async () => {
  const f=fixture(), resourceId=f.draft.resourceId;
  const scopes:(string|null|undefined)[]=[], opened:string[]=[];
  const firstSearch=Promise.withResolvers<void>();
@@ -395,14 +747,78 @@ test('Switch chat refreshes its exact query when the history project changes', a
   await firstSearch.promise;
   await until(()=>results.querySelector('button')?.textContent==='First project chat');
   const stale=results.querySelector('button');
+   const focused=focusResult?stale:project;
+   focused.focus();
   project.value='project:second';project.fire('change');
   assert.equal(!!results.querySelector('button'),false);
+   assert.ok(f.view.doc.activeElement===(focusResult?input:focused),'Only a removed result should return focus to the query');
   stale.fire('click');
   await until(()=>scopes.length===2);
   assert.deepEqual(scopes,['project:first','project:second']);
   assert.deepEqual(opened,[]);
   assert.equal(input.value,'project chat');
  } finally {await manager?.dispose();f.restore();}
+});
+
+test('Switch chat uses the canonical running-only page and its pagination status', async () => {
+ const f=fixture();let manager;
+ const running={...f.detail.conversation,title:'Running synthetic chat',execution:{state:'running'}};
+ const port={async command(name:string,input:any){
+  if(name==='list'&&input.sort==='active'){
+   assert.equal(input.runningOnly,true);
+   return {items:[running],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try{
+  manager=mountConversationManager(f.view.root,port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'),group=switcher.querySelector('select');
+  group.value='running';group.fire('change');
+  await until(()=>!!named(switcher,'Running synthetic chat'));
+  assert.equal(switcher.querySelector('.cp-switcher-status').textContent,'1 conversation');
+ }finally{await manager?.dispose();f.restore();}
+});
+
+for (const action of ['focus result','focus filter','change from open to focus','leave query after Enter','return to query after Enter','held Enter after focus returns']) test('Switch chat handles a pending keyboard action ('+action+')', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId;
+ const started=Promise.withResolvers<void>(), response=Promise.withResolvers<void>();
+ const opened:string[]=[];
+ const port={async command(name:string,input:any){
+  if(name==='search'&&input.searchMode==='chat-history'){
+   started.resolve();
+   await response.promise;
+   return {items:[{kind:'conversation',resourceId,title:'Pending match',excerpt:''}],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ let manager;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:id=>opened.push(id)});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
+  const filter=switcher.querySelector('select');
+  input.value='Pending';input.fire('input');
+  const heldEnter=action==='held Enter after focus returns';
+  const returnsToQuery=heldEnter||action==='return to query after Enter';
+  const opens=heldEnter||action.includes('after Enter');
+  if(opens||action==='change from open to focus')input.fire('keydown',{key:'Enter'});
+  if(!opens)input.fire('keydown',{key:'ArrowDown'});
+  await started.promise;
+  const leavesQuery=opens||action==='focus filter';
+  if(leavesQuery){input.fire('blur');filter.focus();}
+  if(returnsToQuery)input.focus();
+  if(heldEnter)assert.equal(input.fire('keydown',{key:'Enter',repeat:true}).defaultPrevented,true);
+  response.resolve();
+  const results=switcher.querySelector('.cp-switcher-results');
+  await until(()=>!!results.querySelector('button'));
+  const expectedFocus=returnsToQuery?input:leavesQuery?filter:results.querySelector('button');
+  assert.ok(f.view.doc.activeElement===expectedFocus);
+  assert.equal(switcher.open,true);
+  assert.deepEqual(opened,[]);
+ } finally {response.resolve();await manager?.dispose();f.restore();}
 });
 
 test('Switch chat waits for composed text and Escape invalidates a pending open', async () => {
@@ -466,10 +882,28 @@ test('shared provider pill passes exact empty/continuation hints to the host wit
  }finally{await chat?.dispose();assert.equal(m.poses.size,0);f.restore();}
 });
 
-test('manager continuation reviews selected canonical messages on a new provider and opens the child only after explicit review',async()=>{
- const f=fixture(),m=pickerMotion(),actions:any[]=[];let manager;const target='chatgpt-plan-responses',childId='chat:child-reviewed';f.detail.providers.push({id:target,label:'ChatGPT plan',available:true,record:true,execute:true,nativeFork:false,history:'local',simulated:false,models:[]});const native=f.port.command.bind(f.port),port={async command(name:any,input:any){if(name==='branch'){actions.push({name,input});return {resourceId:childId,handoffId:'handoff:reviewed',fingerprint:'fingerprint:reviewed'};}if(name==='reviewBranch'){actions.push({name,input});return {};}if(name==='readDraft'&&input.resourceId===childId)return {resourceId:childId,version:0,content:'',updatedAt:null};if(name==='detail'&&input.resourceId===childId){const detail=structuredClone(f.detail);detail.conversation={...detail.conversation,resourceId:childId,conversationId:'graph:child-reviewed',title:'Reviewed child',providerId:target,revision:1,messageCount:0};detail.messages={items:[],offset:0,total:0,limit:50,hasMore:false};detail.policy.resourceId=childId;return detail;}return (native as any)(name,input);}} as ConversationProductPort;
- try{manager=mountConversationManager(f.view.root,port,{resourceId:f.draft.resourceId,motion:m.motion,viewId:'manager:review'});await manager.ready;const editor=f.view.root.querySelector('textarea'),draft=f.draft;await manager.beginProviderContinuation(target);assert.equal(actions.length,0);assert.equal(manager.state.selectedResourceId,f.draft.resourceId);assert.equal(f.detail.conversation.providerId,'local');assert.ok(f.view.root.querySelector('textarea')===editor);assert.deepEqual(f.draft,draft);const sourceForm=f.view.root.querySelector('.cp-secondary').querySelector('form'),provider=sourceForm.querySelector('select[aria-label="Branch provider"]');assert.equal(provider.value,target);assert.equal(provider.hidden,true);const boxes=sourceForm.querySelector('fieldset').querySelectorAll('input');boxes[0].checked=true;boxes[0].fire('change');boxes[1].checked=false;boxes[1].fire('change');sourceForm.fire('submit');await until(()=>actions.length===1&&!!named(f.view.root,'Approve selected context'));assert.deepEqual(actions[0].input.includeMessageIds,['message:user']);assert.equal(actions[0].input.messageId,'message:assistant');assert.equal(actions[0].input.providerId,target);assert.equal(actions[0].input.expectedRevision,2);assert.equal(manager.state.selectedResourceId,f.draft.resourceId);named(f.view.root,'Approve selected context').fire('click');await until(()=>manager!.state.selectedResourceId===childId&&!!f.view.root.querySelector('.cp-chat[data-resource-id="chat:child-reviewed"]'));await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);assert.deepEqual(actions.map(a=>a.name),['branch','reviewBranch']);assert.equal(actions[1].input.approve,true);assert.equal(f.detail.conversation.providerId,'local');assert.deepEqual(f.draft,draft);assert.equal(f.calls.some(c=>['send','selectProvider'].includes(c.name)),false);manager.frame();}
+for (const scenario of ['copied','declined','copy failed','newer navigation','documents only','document changed during review'] as const) test('provider continuation draft: '+scenario,async()=>{
+ const f=fixture(),m=pickerMotion(),actions:any[]=[],opened:string[]=[],childReads:string[]=[];let manager, navigation:Promise<void>|undefined;const target='chatgpt-plan-responses',childId='chat:child-reviewed',withDocuments=scenario==='documents only'||scenario==='document changed during review';f.detail.providers.push({id:target,label:'ChatGPT plan',available:true,record:true,execute:true,nativeFork:false,history:'local',simulated:false,models:[]});const native=f.port.command.bind(f.port),port={async command(name:any,input:any){if(name==='branch'){actions.push({name,input});return {resourceId:childId,handoffId:'handoff:reviewed',fingerprint:'fingerprint:reviewed'};}if(name==='reviewBranch'){actions.push({name,input});return {};}if(name==='saveDraft'&&input.resourceId===childId){actions.push({name,input});if(scenario==='copy failed')throw Error('synthetic draft write failure');if(scenario==='newer navigation')navigation=manager!.open(f.draft.resourceId);return {resourceId:childId,version:1,content:input.content,updatedAt:null};}if(name==='readDraft'&&input.resourceId===childId&&scenario!=='copy failed'&&actions.some(a=>a.name==='saveDraft'))return {resourceId:childId,version:1,content:scenario==='documents only'?'':'Saved unsent text',updatedAt:null,...(scenario==='documents only'?{documents:[{id:'file:brief',version:3,title:'Brief.pdf'}]}:{})};if(name==='readDraft'&&input.resourceId===childId)return {resourceId:childId,version:0,content:'',updatedAt:null};if(name==='detail'&&input.resourceId===childId){childReads.push(input.resourceId);const detail=structuredClone(f.detail);detail.conversation={...detail.conversation,resourceId:childId,conversationId:'graph:child-reviewed',title:'Reviewed child',providerId:target,revision:1,messageCount:0};detail.messages={items:[],offset:0,total:0,limit:50,hasMore:false};detail.policy.resourceId=childId;return detail;}return (native as any)(name,input);}} as ConversationProductPort;
+ try{if(withDocuments)await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:'',documents:[{id:'file:brief',version:3,title:'Brief.pdf'}]});manager=mountConversationManager(f.view.root,port,{resourceId:f.draft.resourceId,motion:m.motion,viewId:'manager:review',onResource:id=>opened.push(id)});await manager.ready;const editor=f.view.root.querySelector('textarea'),draft=f.draft;await manager.beginProviderContinuation(target);assert.equal(actions.length,0);assert.equal(manager.state.selectedResourceId,f.draft.resourceId);assert.equal(f.detail.conversation.providerId,'local');assert.ok(f.view.root.querySelector('textarea')===editor);assert.deepEqual(f.draft,draft);const sourceForm=f.view.root.querySelector('.cp-secondary').querySelector('form'),provider=sourceForm.querySelector('select[aria-label="Branch provider"]');assert.equal(provider.value,target);assert.equal(provider.hidden,true);const boxes=sourceForm.querySelector('fieldset').querySelectorAll('input');boxes[0].checked=true;boxes[0].fire('change');boxes[1].checked=false;boxes[1].fire('change');const carry=sourceForm.querySelector('input[aria-label="Copy unsent draft to the new branch"]');if(withDocuments){assert.equal(carry,null);const documents=sourceForm.querySelector('input[aria-label="Copy selected documents to the new branch draft"]');assert.equal(documents.checked,false);assert.match(sourceForm.textContent,/Brief.pdf/);documents.checked=true;}else{assert.ok(carry);assert.equal(carry.checked,false);carry.checked=scenario!=='declined';}sourceForm.fire('submit');await until(()=>actions.length===1&&!!named(f.view.root,'Approve selected context'));assert.deepEqual(actions[0].input.includeMessageIds,['message:user']);assert.equal(actions[0].input.messageId,'message:assistant');assert.equal(actions[0].input.providerId,target);assert.equal(actions[0].input.expectedRevision,2);assert.equal(manager.state.selectedResourceId,f.draft.resourceId);if(scenario==='document changed during review')await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:'',documents:[]});named(f.view.root,'Approve selected context').fire('click');if(scenario==='newer navigation'){await until(()=>!!navigation);await navigation;}else await until(()=>manager!.state.selectedResourceId===childId&&!!f.view.root.querySelector('.cp-chat[data-resource-id="chat:child-reviewed"]'));await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);const copyAttempted=scenario!=='declined'&&scenario!=='document changed during review';assert.deepEqual(actions.map(a=>a.name),copyAttempted?['branch','reviewBranch','saveDraft']:['branch','reviewBranch']);if(copyAttempted)assert.deepEqual(actions[2].input,{resourceId:childId,expectedVersion:0,content:draft.content,...(scenario==='documents only'?{documents:[{id:'file:brief',version:3}]}:{})});if(scenario==='documents only')assert.ok(named(f.view.root,'Brief.pdf ×'));if(scenario==='copy failed'||scenario==='document changed during review')assert.match(f.view.root.textContent,/Draft copy could not be confirmed/);if(scenario==='newer navigation'){assert.equal(manager.state.selectedResourceId,f.draft.resourceId);assert.ok(!opened.includes(childId));assert.deepEqual(childReads,[]);assert.equal(actions.filter(a=>a.name==='saveDraft').length,1);}assert.equal(actions[1].input.approve,true);assert.equal(f.detail.conversation.providerId,'local');if(scenario!=='document changed during review')assert.deepEqual(f.draft,draft);assert.equal(f.calls.some(c=>['send','selectProvider'].includes(c.name)),false);manager.frame();}
  finally{await manager?.dispose();assert.equal(m.poses.size,0);f.restore();}
+});
+
+test('newer navigation prevents a queued provider continuation from preparing the source again', async () => {
+ const f=fixture();let manager;
+ try {
+  const target='chatgpt-plan-responses';
+  f.detail.providers.push({id:target,label:'ChatGPT plan',available:true,record:true,execute:true,nativeFork:false,history:'local',simulated:false,models:[]});
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const detailReads=()=>f.calls.filter(call=>call.name==='detail').length;
+  const before=detailReads();
+  const continuation=manager.beginProviderContinuation(target);
+  const navigation=manager.open(f.draft.resourceId);
+  await Promise.all([continuation,navigation]);
+  assert.equal(detailReads()-before,1,'only the newer navigation reads the conversation');
+  assert.equal(f.view.root.querySelector('input[aria-label="Copy unsent draft to the new branch"]'),null);
+  assert.equal(f.draft.content,'Saved unsent text');
+ } finally {await manager?.dispose();f.restore();}
 });
 
 test('unknown send recovery and actual live preview share one transcript scroll owner with a compact MC summary and stable editor',async()=>{
@@ -817,6 +1251,74 @@ test('thinking is bound to the observed model and applies only to the next submi
  } finally { await chat?.dispose(); f.restore(); }
 });
 
+for (const duringSave of [false,true]) test('a missing pinned model leaves the draft unsent until the model is reset (during save: '+duringSave+')', async () => {
+ const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
+ const selections = new Map([[f.draft.resourceId,{id:'gpt-6.1-sol',label:'Synthetic Sol'}]]);
+ f.detail.providers[0].modelOptions = [{id:'gpt-6.1-sol',label:'Synthetic Sol'}];
+ const save=Promise.withResolvers<void>();
+ let chat, saving=false, blockSave=duringSave;
+ const port={async command(name:string,input:any){
+  if(name==='saveDraft'&&blockSave){saving=true;await save.promise;}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,
+   motion:motion.motion,viewId:'model-stale',models:{selections,async refresh(){}}});
+  await chat.ready;
+  const form=f.view.root.querySelector('form'),send=named(form,'Send');
+  if(duringSave){form.fire('submit');await until(()=>saving);}
+  f.detail.providers[0].modelOptions=[{id:'gpt-6.1-luna',label:'Synthetic Luna'}];
+  await chat.refresh();
+  blockSave=false;save.resolve();
+  if(duringSave)await until(()=>f.calls.some(call=>call.name==='send')||/model is no longer available/i.test(f.view.root.querySelector('.cp-chat-status').textContent));
+  assert.equal(send.disabled,true);
+  assert.match(send.title,/model is no longer available/i);
+  form.fire('submit');
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+  assert.equal(f.draft.content,'Saved unsent text');
+  f.view.root.querySelector('[data-cp-picker-for="Conversation model"]').fire('click');
+  f.view.root.querySelector('[data-cp-option-value="automatic"]').fire('click');
+  assert.equal(send.disabled,false);
+  form.fire('submit');
+  await until(()=>!!f.pending);
+  assert.equal(Object.hasOwn(f.pending!.input,'model'),false);
+  f.accept(true);
+  await chat.whenSubmissionSettled();
+ } finally {save.resolve();f.pending?.reject(Error('fixture cleanup'));await chat?.dispose();f.restore();}
+});
+
+for (const capability of ['research','thinking']) test('chat retains the draft when '+capability+' support disappears during save', async () => {
+ const f=fixture('chatgpt-plan-responses'), motion=pickerMotion();
+ const save=Promise.withResolvers<void>();
+ let chat, saving=false;
+ const model={id:'gpt-6.1-sol',label:'Synthetic Sol',reasoningEfforts:['low'],eligibleTools:['web_search']};
+ f.detail.providers[0].modelOptions=[model];
+ const port={async command(name:string,input:any){
+  if(name==='saveDraft'){saving=true;await save.promise;}
+  if(name==='send'){f.calls.push({name,input});throw Error('unexpected dispatch');}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,
+   motion:motion.motion,viewId:'capability-change',models:{selections:new Map(),async refresh(){}}});
+  await chat.ready;
+  if(capability==='thinking'){
+   f.view.root.querySelector('[data-cp-picker-for="Thinking for next message"]').fire('click');
+   f.view.root.querySelector('[data-cp-option-value="low"]').fire('click');
+  }
+  const form=f.view.root.querySelector('form');
+  form.fire('submit',capability==='research'?{submitter:named(form,'Search web')}:{});
+  await until(()=>saving);
+  f.detail.providers[0].modelOptions=[{...model,...(capability==='research'?{eligibleTools:[]}:{reasoningEfforts:[]})}];
+  await chat.refresh();
+  save.resolve();
+  await chat.whenSubmissionSettled();
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,capability==='research'?/web search.*unavailable/i:/thinking level is unavailable/i);
+ } finally {save.resolve();await chat?.dispose();f.restore();}
+});
+
 test('an undocumented catalog model offers no tool and a stale thinking choice cannot silently send', async () => {
  const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
  f.detail.providers[0].modelOptions = [{ id: 'gpt-6.1-sol', label: 'Synthetic Sol', reasoningEfforts: ['low'], eligibleTools: ['web_search'] }];
@@ -881,7 +1383,71 @@ test('Enter submits once; Shift+Enter and IME do not submit; draft draining is i
     editor.value='Exact submitted text';editor.fire('input');const entered=editor.fire('keydown',{key:'Enter'});assert.equal(entered.defaultPrevented,true);await until(()=>!!f.pending);assert.equal(f.pending!.input.content,'Exact submitted text');assert.equal(f.draft.content,'Exact submitted text');
     editor.value='Later typing while native approval waits';editor.fire('input');let drained=false;const drain=chat.flush().then(()=>{drained=true;});await until(()=>drained);assert.ok(f.pending,'Provider/native send is still pending after draft drain');assert.equal(f.draft.content,editor.value);f.accept();await drain;await chat.whenSubmissionSettled();
     assert.equal(editor.value,'Later typing while native approval waits');assert.equal(f.draft.content,editor.value);assert.equal(f.calls.filter(c=>c.name==='send').length,1);assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Later draft edits/);
+    const repeated=editor.fire('keydown',{key:'Enter',repeat:true});
+    assert.equal(repeated.defaultPrevented,true);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+    editor.fire('keydown',{key:'Enter',repeat:false});
+    await until(()=>!!f.pending);
+    assert.equal(f.pending!.input.content,'Later typing while native approval waits');
+    f.accept();await chat.whenSubmissionSettled();
   }finally{await chat?.dispose();f.restore();}
+});
+
+for (const interruption of ['revoked','restored','disconnected','research-disconnected']) test('a send checkpoint retains the draft without dispatch when '+interruption,async()=>{
+  const f=fixture('chatgpt-plan-responses');
+  const disconnected = interruption.endsWith('disconnected');
+  const checkpoint=Promise.withResolvers<void>();
+  let chat, started=false, observe!:(value:ConversationExecutionObservation)=>void;
+  const port={async command(name:string,input:any){
+    if(name==='saveDraft'){started=true;await checkpoint.promise;}
+    if(name==='send'){f.calls.push({name,input});throw Error('unexpected synthetic dispatch');}
+    return (f.port.command as any)(name,input);
+  }} as ConversationProductPort;
+  try {
+    if (interruption==='research-disconnected') {
+      f.detail.providers[0].modelOptions=[{id:'gpt-6.1-sol',label:'Synthetic Sol',eligibleTools:['web_search']}];
+      f.detail.conversation.execution={id:'execution:prior',resourceId:f.draft.resourceId,commandId:'prior-turn',
+        providerId:'chatgpt-plan-responses',state:'provider_completed',startedAt:'2026-11-02T01:00:00Z',endedAt:'2026-11-02T01:01:00Z',taskVerified:false};
+    }
+    chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,execution:{
+      observe(_id,listener){observe=listener;return()=>{};},async cancel(){},
+    }});
+    await chat.ready;
+    if (interruption==='research-disconnected') observe({connection:'available',execution:f.detail.conversation.execution});
+    if (interruption==='disconnected') {
+      observe({connection:'unavailable'});
+      observe({connection:'available'});
+      assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/^Connection restored\.$/);
+    }
+    const form=f.view.root.querySelector('form');
+    if (interruption==='research-disconnected') form.fire('submit',{submitter:named(form,'Search web')});
+    else form.fire('submit');
+    await until(()=>started);
+    if (disconnected) observe({connection:'unavailable'});
+    else observe({resourceAvailable:false});
+    if (interruption==='restored') await chat.refresh();
+    checkpoint.resolve();
+    await chat.whenSubmissionSettled();
+    assert.equal(f.calls.filter(call=>call.name==='send').length,0);
+    assert.equal(f.draft.content,'Saved unsent text');
+    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,
+      interruption==='research-disconnected'?/reconnect.*search web again/i:disconnected?/reconnect.*send again/i:interruption==='restored'?/access changed.*send again/i:/no longer available/);
+    if (disconnected) {
+      const send=f.view.root.querySelector('[data-cp-control="send"]');
+      assert.equal(send.disabled,true);
+      observe({connection:'unavailable'});
+      observe({connection:'available'});
+      assert.equal(send.disabled,false);
+      const restored=interruption==='research-disconnected'?/connection restored.*search web/i:/connection restored.*press send/i;
+      assert.match(f.view.root.querySelector('.cp-chat-status').textContent,restored);
+      if (interruption==='research-disconnected') {
+        observe({connection:'available',execution:f.detail.conversation.execution});
+        assert.match(f.view.root.querySelector('.cp-chat-status').textContent,restored);
+      }
+      assert.equal(f.calls.filter(call=>call.name==='send').length,0);
+    }
+  } finally {checkpoint.resolve();await chat?.dispose();f.restore();}
 });
 
 test('accepted local send clears only its captured CAS draft; unknown and native-cancelled sends retain recovery',async()=>{
@@ -897,7 +1463,7 @@ test('only an earlier successful send acknowledgement clears on new editor input
   try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,draftSession:session,presentation:'workspace'});await chat.ready;const editor=f.view.root.querySelector('textarea'),form=f.view.root.querySelector('.cp-composer'),status=f.view.root.querySelector('.cp-chat-status');form.fire('submit');await until(()=>!!f.pending);f.accept();await chat.whenSubmissionSettled();assert.equal(status.dataset.statusKind,'send-accepted');assert.match(status.textContent,/Message accepted/);
     await chat.refresh();editor.fire('input');assert.match(status.textContent,/Message accepted/,'Refresh and unchanged input do not erase an acknowledgement');session.update('Shared session recovery update');assert.match(status.textContent,/Message accepted/,'A programmatic recovery notification is not new user input');editor.value='Actual next draft';editor.setSelectionRange(3,3);editor.fire('input');assert.equal(status.textContent,'');assert.equal(status.dataset.statusKind,'notice');assert.equal(f.view.root.querySelector('textarea'),editor);assert.deepEqual([editor.selectionStart,editor.selectionEnd],[3,3]);await chat.flush();assert.equal(f.draft.content,'Actual next draft');
     form.fire('submit');await until(()=>!!f.pending);f.pending!.reject(new Error('provider_unavailable'));await chat.whenSubmissionSettled();const failed=status.textContent;editor.value='Text after failure';editor.fire('input');assert.equal(status.textContent,failed);assert.match(failed,/provider_unavailable/);assert.equal(status.dataset.statusKind,'notice');named(f.view.root,'I reviewed the send outcome').fire('click');form.fire('submit');await until(()=>!!f.pending);f.pending!.resolve({id:'execution:unknown',resourceId:f.draft.resourceId,state:'unknown'});await chat.whenSubmissionSettled();const unknown=status.textContent;editor.value='Text after unknown outcome';editor.fire('input');assert.equal(status.textContent,unknown);assert.match(unknown,/not confirmed/);await chat.flush();
-    f.external('Concurrent canonical recovery');editor.value='This editor conflict';editor.fire('input');await assert.rejects(chat.flush(),/stale_draft_version/);editor.value='Further conflict edit';editor.fire('input');assert.equal(status.textContent,unknown);assert.equal(f.view.root.querySelector('.cp-draft-status').dataset.phase,'conflict');assert.match(f.view.root.querySelector('.cp-draft-status').textContent,/Choose which text to keep/);assert.equal(session.snapshot().content,'Further conflict edit');
+    f.external('Concurrent canonical recovery');editor.value='This editor conflict';editor.fire('input');await assert.rejects(chat.flush(),/stale_draft_version/);editor.value='Further conflict edit';editor.fire('input');assert.equal(status.textContent,unknown);assert.equal(f.view.root.querySelector('.cp-draft-status').dataset.phase,'conflict');assert.match(f.view.root.querySelector('.cp-draft-status').textContent,/Choose which draft to keep/);assert.equal(session.snapshot().content,'Further conflict edit');
   }finally{f.pending?.reject(new Error('synthetic cleanup'));await chat?.whenSubmissionSettled();const remote=session.snapshot().remote;if(remote)await session.resolve('keep-local',remote.version);await chat?.dispose();await session.dispose();f.restore();}
 });
 
@@ -914,7 +1480,22 @@ test('real-observation port alone drives live text/cancel; foreign, duplicate an
     const execution={id:'execution:observed',resourceId:f.draft.resourceId,providerId:'codex:native',commandId:'command:observed',state:'running' as const,startedAt:'2026-11-02T00:00:00Z',endedAt:null,taskVerified:false as const};
     observe!({execution:{...execution,resourceId:'chat:other'},delta:{eventId:'foreign',cursor:1,text:'Not this chat'}});assert.equal(f.view.root.querySelector('.cp-stream').hidden,true);
     observe!({execution});observe!({execution,delta:{eventId:'event:2',cursor:2,text:'Actual synthetic delta'}});observe!({execution,delta:{eventId:'event:2',cursor:2,text:' duplicated'}});assert.equal(f.view.root.querySelector('.cp-stream-text').textContent,'Actual synthetic delta');assert.equal(named(f.view.root,'Stop').hidden,false);assert.equal(named(f.view.root,'Send').disabled,true);
-    observe!({connection:'unavailable'});assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Last observed: running.*unconfirmed/);assert.equal(f.view.root.querySelector('.cp-chat').dataset.executionState,'running');assert.equal(named(f.view.root,'Stop').disabled,true);observe!({execution,connection:'available'});
+    const announcements: string[] = [];
+    const status = f.view.root.querySelector('.cp-chat-status');
+    const text = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(status), 'textContent')!;
+    Object.defineProperty(status, 'textContent', {
+      get: () => text.get!.call(status),
+      set: (value: string) => { announcements.push(value); text.set!.call(status, value); },
+    });
+    observe!({execution,delta:{eventId:'event:3',cursor:3,text:' continues'}});
+    assert.deepEqual(announcements, []);
+    observe!({connection:'unavailable'});assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Last observed: running.*unconfirmed/);assert.equal(f.view.root.querySelector('.cp-chat').dataset.executionState,'running');assert.equal(named(f.view.root,'Stop').disabled,true);
+    observe!({execution,preview:{executionId:execution.id,cursor:20,text:'Stale disconnected preview'}});
+    observe!({execution,delta:{eventId:'event:21',cursor:21,text:'Stale disconnected delta'}});
+    assert.equal(f.view.root.querySelector('.cp-stream').hidden,true);
+    assert.equal(f.view.root.querySelector('.cp-stream-text').textContent,'');
+    observe!({execution,connection:'available',preview:{executionId:execution.id,cursor:3,text:'Reconciled live preview'}});
+    assert.equal(f.view.root.querySelector('.cp-stream-text').textContent,'Reconciled live preview');
     await chat.refresh();assert.equal(f.view.root.querySelectorAll('.cp-message').length,2,'History reads remain usable while running');named(f.view.root,'Stop').fire('click');await until(()=>cancellations.length===1);assert.deepEqual(cancellations,[execution.id]);assert.equal(f.view.root.querySelector('.cp-chat').dataset.executionState,'running','Cancellation request is not confirmed cancellation');
     observe!({execution:{...execution,state:'interrupted',endedAt:'2026-11-02T00:00:02Z'}});observe!({execution});assert.equal(f.view.root.querySelector('.cp-chat').dataset.executionState,'interrupted');assert.equal(f.view.root.querySelector('.cp-stream').hidden,true);
   }finally{await chat?.dispose();assert.equal(unsubscribed,true);f.restore();}
@@ -927,6 +1508,37 @@ test('externally owned draft session survives unmount; explicit conflict resolut
     const raw=f.view.root.querySelectorAll('.cp-message-raw')[1],text='αβ 🧭',start=raw.textContent.indexOf(text);f.view.select({isCollapsed:false,rangeCount:1,anchorNode:raw.firstChild,focusNode:raw.firstChild,getRangeAt:()=>({startContainer:raw.firstChild,startOffset:start,toString:()=>text})});raw.fire('mouseup');const publish=f.view.root.querySelectorAll('.cp-message-actions')[1];named(publish,'Publish selected excerpt').fire('click');assert.deepEqual(actions[0].selection,{start,end:start+text.length,text});assert.equal(actions[0].message.resourceId,'chat:source');assert.equal(f.calls.some(c=>c.name==='publish'),false,'Component delegates reviewed source operation; never publishes itself');
     f.external('Competing durable draft');session.update('Local recovery');await assert.rejects(chat.flush(),/stale_draft_version/);assert.equal(named(f.view.root,'Record message').disabled,true);named(f.view.root,'Keep this editor’s draft').fire('click');await until(()=>session.snapshot().phase==='clean');assert.equal(f.draft.content,'Local recovery');await chat.dispose();chat=undefined;session.update('Owner can still edit');await session.flush();assert.equal(f.draft.content,'Owner can still edit');
   }finally{await chat?.dispose();await session.dispose();f.restore();}
+});
+
+test('a missing execution after reconnect retires Stop but keeps the draft for outcome review',async()=>{
+  const f=fixture('chatgpt-plan-responses');
+  let chat,observe:((value:ConversationExecutionObservation)=>void)|undefined;
+  const execution={id:'execution:missing',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:'command:missing',state:'running' as const,startedAt:'2026-11-02T00:00:00Z',endedAt:null,taskVerified:false as const};
+  try{
+    chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+      observe(_id,listener){observe=listener;return()=>{};},async cancel(){assert.fail('No automatic Stop');}
+    }});
+    await chat.ready;
+    observe!({execution,preview:{executionId:execution.id,cursor:1,text:'Partial reply'}});
+    assert.equal(named(f.view.root,'Stop').hidden,false);
+    observe!({connection:'unavailable'});
+    observe!({connection:'available'});
+    observe!({resourceAvailable:true,connection:'available',execution:null,preview:null});
+    assert.equal(named(f.view.root,'Stop').hidden,true);
+    assert.equal(f.view.root.querySelector('.cp-stream').hidden,true);
+    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/outcome.*unconfirmed/i);
+    observe!({resourceAvailable:true,connection:'available',execution:null,preview:null});
+    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/outcome.*unconfirmed/i);
+    assert.ok(named(f.view.root,'I reviewed the send outcome'));
+    const stopped={...execution,state:'interrupted' as const,endedAt:'2026-11-02T00:00:01Z'};
+    observe!({execution:{...stopped,id:'execution:other',commandId:'command:other'}});
+    assert.ok(named(f.view.root,'I reviewed the send outcome'));
+    observe!({execution:stopped});
+    assert.equal(named(f.view.root,'I reviewed the send outcome'),undefined);
+    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/stopped/i);
+    assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
+    assert.equal(f.calls.some(call=>call.name==='send'),false);
+  }finally{await chat?.dispose();f.restore();}
 });
 
 test('reopening an ongoing execution restores only its scoped complete preview then appends strictly later deltas without a duplicate prefix',async()=>{
@@ -1241,4 +1853,595 @@ test('a detached send rejection is caught and leaves exact durable recovery with
 
 test('composer keyboard policy keeps newline and composition distinct from submit',()=>{
   const event={key:'Enter',shiftKey:false,isComposing:false,altKey:false,ctrlKey:false,metaKey:false};assert.equal(composerShouldSubmit(event),true);for(const field of ['shiftKey','isComposing','altKey']as const)assert.equal(composerShouldSubmit({...event,[field]:true}),false);assert.equal(composerShouldSubmit({...event,key:'Escape'}),false);
+});
+
+test('Save reply as note sends exact IDs, recovers the same command and preserves the draft',{timeout:5000},async()=>{
+ const f=fixture(),attempts:unknown[]=[],opened:string[]=[];
+ let chat,complete!:(receipt:{noteId:string})=>void,reject!:(error:Error)=>void;
+ const noteOpening=Promise.withResolvers<void>();
+ let acknowledgeAttempt!:()=>void;
+ const nextAttempt=()=>new Promise<void>(resolve=>{acknowledgeAttempt=resolve;});
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   async saveReplyNote(input){attempts.push(input);acknowledgeAttempt();return new Promise((resolve,fail)=>{complete=resolve;reject=fail;});},
+   openReplyNote(id){opened.push(id);return noteOpening.promise;},
+  });
+  await chat.ready;
+  const user=f.view.root.querySelector('.cp-message-user'),assistant=f.view.root.querySelector('.cp-message-assistant');
+  assert.equal(!!named(user,'Save reply as note'),false);
+  const save=named(assistant,'Save reply as note');
+  assert.ok(save);
+  const firstAttempt=nextAttempt();
+  save.fire('click');save.fire('click');
+  await firstAttempt;
+  assert.equal(attempts.length,1);
+  const request=attempts[0] as Record<string,string>;
+  assert.deepEqual(Object.keys(request).sort(),['commandId','messageId','resourceId']);
+  assert.equal(request.resourceId,f.draft.resourceId);
+  assert.equal(request.messageId,'message:assistant');
+  reject(Error('connection lost'));
+  await until(()=>!save.disabled);
+  const retryAttempt=nextAttempt();
+  save.fire('click');
+  await retryAttempt;
+  assert.deepEqual(attempts,[request,request]);
+  f.detail.messages.items[1].outputState='complete';
+  await chat.refresh();
+  const refreshed=f.view.root.querySelector('.cp-message-assistant');
+  assert.equal(named(refreshed,'Saving reply…').disabled,true);
+  complete({noteId:'note:saved'});
+  await until(()=>!!named(refreshed,'Open saved note'));
+  const open=named(refreshed,'Open saved note');
+  open.focus();
+  open.fire('click');open.fire('click');
+  assert.deepEqual(opened,['note:saved']);
+  assert.equal(open.disabled,false);
+  assert.equal(open.getAttribute('aria-disabled'),'true');
+  noteOpening.reject(Error('synthetic note lookup failed'));
+  await until(()=>open.getAttribute('aria-disabled')===null);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/saved note could not open/i);
+  assert.ok(f.view.doc.activeElement===open);
+  assert.equal(f.draft.content,'Saved unsent text');
+  await chat.dispose();
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   async saveReplyNote(input){attempts.push(input);acknowledgeAttempt();return {noteId:'note:saved'};},
+  });
+  await chat.ready;
+  const remountAttempt=nextAttempt();
+  named(f.view.root.querySelector('.cp-message-assistant'),'Save reply as note').fire('click');
+  await remountAttempt;
+  assert.equal(attempts.length,3);
+  assert.deepEqual(attempts[2],request,'a fresh view must recover the same canonical capture');
+ }finally{noteOpening.resolve();await chat?.dispose();f.restore();}
+});
+
+test('an inherited citation opens through its source chat and suppresses repeat requests while pending',async()=>{
+ const f=fixture();let chat,finish!:(value:{requested:true})=>void;
+ try{
+  const message=f.detail.messages.items[1];
+  message.resourceId='chat:source';
+  message.inherited=true;
+  message.webSearch={completed:true,citations:[{url:'https://science.example.org/moon',title:'Moon facts',start:0,end:1}]};
+  const port={async command(name:string,input:any){
+   if(name!=='openCitation')return (f.port.command as any)(name,input);
+   f.calls.push({name,input});
+   return new Promise(resolve=>{finish=resolve;});
+  }} as ConversationProductPort;
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId});
+  await chat.ready;
+  const citation=f.view.root.querySelector('.cp-web-citation');
+  citation.fire('click');citation.fire('click');
+    message.outputState='complete';
+    await chat.refresh();
+    const updated=f.view.root.querySelector('.cp-web-citation');
+    assert.ok(updated!==citation);
+    updated.fire('click');
+  assert.deepEqual(f.calls.filter(c=>c.name==='openCitation').map(c=>c.input),
+   [{resourceId:'chat:source',messageId:message.id,index:0}]);
+    assert.equal(updated.disabled,false);
+    assert.equal(updated.getAttribute('aria-disabled'),'true');
+  finish({requested:true});
+    await until(()=>updated.getAttribute('aria-disabled')===null);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/browser/i);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+test('research progress yields to Stop and a disconnected turn keeps the draft for explicit retry',async()=>{
+ const f=fixture('chatgpt-plan-responses'),cancelled:string[]=[];let chat,observe!:(value:ConversationExecutionObservation)=>void;
+ try{
+  f.detail.providers[0].modelOptions=[{id:'gpt-6.1-sol',label:'Synthetic Sol',eligibleTools:['web_search']}];
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+   observe(_id,listener){observe=listener;return ()=>{};},async cancel(id){cancelled.push(id);},
+  }});
+  await chat.ready;
+  const form=f.view.root.querySelector('form'),status=f.view.root.querySelector('.cp-chat-status');
+  form.fire('submit',{submitter:named(form,'Search web')});
+  await until(()=>!!f.pending);
+  assert.match(status.textContent,/Preparing web search/);
+  const execution={id:'execution:research',resourceId:f.draft.resourceId,commandId:f.pending!.input.commandId,
+   providerId:'chatgpt-plan-responses',state:'running' as const,startedAt:'2026-11-02T01:00:00Z',endedAt:null,taskVerified:false as const};
+  observe({execution:{...execution,id:'execution:other',commandId:'another-turn',
+   startedAt:'2026-11-02T01:00:01Z'},delta:{eventId:'delta:other',cursor:1,text:'Unrelated output'}});
+  assert.match(status.textContent,/Preparing web search/);
+  assert.doesNotMatch(f.view.root.textContent,/Unrelated output/);
+  observe({execution});
+  assert.equal(status.textContent,'Web research is running.');
+  observe({execution,delta:{eventId:'delta:research',cursor:1,text:'Synthetic answer'}});
+  assert.equal(status.textContent,'Writing the research reply…');
+  const stop=f.view.root.querySelector('[data-cp-control="stop"]');
+  stop.fire('click');stop.fire('click');
+  observe({execution,delta:{eventId:'delta:research-late',cursor:2,text:' while stopping'}});
+  assert.deepEqual(cancelled,[execution.id]);
+  assert.match(status.textContent,/Stop requested/);
+  observe({execution:{...execution,state:'interrupted'}});
+  Object.assign(f.detail.providers[0],{available:false,execute:false});
+  f.pending!.reject(Error('lost synthetic submit receipt'));
+  await chat.whenSubmissionSettled();
+  await chat.refresh();
+  const editor=f.view.root.querySelector('textarea'),send=f.view.root.querySelector('[data-cp-control="send"]');
+  assert.equal(send.disabled,true);
+  assert.equal(editor.value,'Saved unsent text');
+  Object.assign(f.detail.providers[0],{available:true,execute:true});
+  await chat.refresh();
+  assert.equal(send.disabled,false);
+  assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+ }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();f.restore();}
+});
+
+test('an ordinary chat sends only the selected document identity and retains it when review is cancelled', async () => {
+ const f=fixture('chatgpt-plan-responses'); let chat;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   chooseDocument:async()=>({id:'file:brief',version:3,title:'Brief.pdf'}),
+  });
+  await chat.ready;
+  const attach = named(f.view.root,'Attach document');
+  assert.equal(attach.hidden,false);
+  assert.equal(attach.disabled,false);
+  attach.fire('click');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(named(f.view.root,'Brief.pdf ×'),f.view.root.querySelector('.cp-chat-status').textContent);
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+  await chat.dispose();
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   chooseDocument:async()=>{throw Error('Recovered attachment must not reopen the picker');},
+  });
+  await chat.ready;
+  assert.ok(named(f.view.root,'Brief.pdf ×'));
+  f.view.root.querySelector('form').fire('submit');
+  await until(()=>!!f.pending);
+  assert.deepEqual(f.pending!.input.documents,[{id:'file:brief',version:3}]);
+  f.pending!.reject(Error('authorization_cancelled'));
+  await chat.whenSubmissionSettled();
+  assert.ok(named(f.view.root,'Brief.pdf ×'));
+  assert.equal(f.draft.content,'Saved unsent text');
+  named(f.view.root,'Brief.pdf ×').fire('click');
+  assert.equal(!!named(f.view.root,'Brief.pdf ×'),false);
+  await chat.flush();
+  assert.deepEqual(f.draft.documents,[]);
+ } finally {f.pending?.reject(Error('synthetic cleanup'));await chat?.dispose();f.restore();}
+});
+
+test('a disconnected ChatGPT plan keeps the draft editable and enables an explicit send after reconnect', async () => {
+ const f=fixture('chatgpt-plan-responses');
+ let chat;
+ try {
+  Object.assign(f.detail.providers[0],{available:false,record:false,execute:false,reason:'Connect an eligible ChatGPT account.'});
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});
+  await chat.ready;
+  const editor=f.view.root.querySelector('textarea'),composer=f.view.root.querySelector('.cp-composer');
+  const send=f.view.root.querySelector('[data-cp-control="send"]');
+  assert.equal(send.disabled,true);
+  assert.match(send.title,/disconnected/);
+  editor.value='Synthetic draft edited offline';
+  editor.fire('input');
+  composer.fire('submit');
+  await chat.flush();
+  assert.equal(f.draft.content,editor.value);
+  assert.equal(f.calls.filter(c=>c.name==='send').length,0);
+  Object.assign(f.detail.providers[0],{available:true,record:true,execute:true});
+  await chat.refresh();
+  assert.equal(send.disabled,false);
+  assert.equal(editor.value,'Synthetic draft edited offline');
+  assert.equal(f.calls.filter(c=>c.name==='send').length,0);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+test('local chat can stage an offline attachment without sending or changing provider', async () => {
+ const f = fixture('local');
+ let chat;
+ try {
+  const selected = {id:'file:offline',version:2,title:'Offline brief.txt'};
+  f.detail.conversation.projectId='project:chat';
+  const pickerProjects: (string|null)[] = [];
+  chat = mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   chooseDocument:async projectId=>{pickerProjects.push(projectId);return selected;}});
+  await chat.ready;
+  const attach = named(f.view.root,'Attach document');
+  assert.equal(attach.hidden,false);
+  attach.fire('click');
+  await until(()=>!!named(f.view.root,'Offline brief.txt ×'));
+  await chat.flush();
+  assert.deepEqual(pickerProjects,['project:chat']);
+  assert.deepEqual(f.draft.documents,[selected]);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.match(f.view.root.querySelector('.cp-composer-documents').textContent,/Switch to ChatGPT/);
+  const composer = f.view.root.querySelector('form');
+  composer.fire('submit');
+  assert.equal(f.calls.some(call=>call.name==='send'||call.name==='selectProvider'),false);
+  named(f.view.root,'Offline brief.txt ×').fire('click');
+  await chat.flush();
+  assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,false);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+for (const empty of [true,false]) test('attachment continuation uses the existing provider action (empty: '+empty+')', async () => {
+ const f=fixture('local');
+ let chat,release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const requested:unknown[]=[];
+ try {
+  if(empty){f.detail.messages.items=[];f.detail.messages.total=f.detail.conversation.messageCount=0;}
+  const target={...f.detail.providers[0],id:'chatgpt-plan-responses',label:'ChatGPT',available:false};
+  f.detail.providers.push(target);
+  const documents=[{id:'file:offline',version:2,title:'Offline brief.txt'}];
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,
+   content:f.draft.content,documents});
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   onProviderChange:async change=>{requested.push(change);await gate;}});
+  await chat.ready;
+  const button=named(f.view.root,'Continue with ChatGPT');
+  assert.equal(button.hidden,true);
+  target.available=true;
+  await chat.refresh();
+  assert.equal(button.hidden,false);
+  const draft=f.draft;
+  button.fire('click');button.fire('click');
+  assert.equal(button.disabled,true);
+  assert.deepEqual(requested,[{resourceId:draft.resourceId,targetProviderId:target.id,
+   expectedRevision:f.detail.conversation.revision,mode:empty?'empty':'continuation'}]);
+  assert.deepEqual(f.draft,draft);
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+  release();
+  await until(()=>!button.disabled);
+ } finally {release();await chat?.dispose();f.restore();}
+});
+
+for (const reason of ['source_selection_changed', 'source_selection_unavailable']) test('a refused document send refreshes the saved attachment ('+reason+')', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const source = { id:'file:brief', version:3, title:'Brief.pdf' };
+ const projection = reason === 'source_selection_changed'
+  ? { ...source, unavailable:'changed' }
+  : { ...source, title:'Unavailable document', unavailable:'inaccessible' };
+ let chat, refused = false;
+ const port = { async command(name:string,input:any) {
+  if (name==='send') {
+   f.calls.push({name,input});
+   refused = true;
+   throw Error(reason);
+  }
+  const result = await (f.port.command as any)(name,input);
+  if (name==='readDraft' && refused) {
+   return { ...result, documents: [projection] };
+  }
+  return result;
+ } } as ConversationProductPort;
+ try {
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:[source]});
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,chooseDocument:async()=>null});
+  await chat.ready;
+  const send=f.view.root.querySelector('[data-cp-control="send"]');
+  assert.equal(send.disabled,false);
+  f.view.root.querySelector('form').fire('submit');
+  await chat.whenSubmissionSettled();
+  assert.equal(send.disabled,true);
+  const attachments = f.view.root.querySelector('.cp-composer-documents').textContent;
+  if (reason === 'source_selection_changed') assert.match(attachments,/Brief\.pdf \(changed\)/);
+  else assert.doesNotMatch(attachments,/Brief\.pdf/);
+  assert.ok(named(f.view.root,'Replace'));
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.deepEqual(f.draft.documents,[source]);
+  assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+test('a recovered unavailable document can be removed without losing the draft or sending', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ let chat;
+ try {
+  const documents = [{ id: 'file:brief', version: 3, title: 'Unavailable document', unavailable: 'inaccessible' as const }];
+  await f.port.command('saveDraft', {
+   resourceId: f.draft.resourceId, expectedVersion: f.draft.version, content: f.draft.content, documents,
+  });
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId });
+  await chat.ready;
+  const send = f.view.root.querySelector('[data-cp-control="send"]');
+  assert.equal(send.disabled, true);
+  assert.match(send.title, /replace/);
+  f.view.root.querySelector('form').fire('submit');
+  named(f.view.root, 'Unavailable document ×').fire('click');
+  await chat.flush();
+  assert.equal(send.disabled, false);
+  assert.equal(f.draft.content, 'Saved unsent text');
+  assert.equal(f.calls.some(call => call.name === 'send'), false);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+test('a picker result cannot overfill a draft shared by two chat views', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const session = new ConversationDraftSession({resourceId:f.draft.resourceId,port:f.port});
+ const picked = Promise.withResolvers<{id:string;version:number;title:string}>();
+ const source = { id:'file:late', version:3, title:'Late brief.pdf' };
+ const documents = [1,2,3,4].map(i=>({id:'file:'+i,version:1,title:'Document '+i}));
+ let chat;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,draftSession:session,chooseDocument:()=>picked.promise});
+  await chat.ready;
+  named(f.view.root,'Attach document').fire('click');
+  session.updateDocuments(documents);
+  picked.resolve(source);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(session.snapshot().documents,documents);
+  await chat.flush();
+  assert.deepEqual(f.draft.documents,documents);
+  assert.equal(f.draft.content,'Saved unsent text');
+ } finally {picked.resolve(source);await chat?.dispose();await session.dispose();f.restore();}
+});
+
+test('a picker result cannot attach after the chat starts closing', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const picked = Promise.withResolvers<{id:string;version:number;title:string}>();
+ const save = Promise.withResolvers<void>();
+ const source = { id:'file:brief', version:3, title:'Brief.pdf' };
+ let chat, pickerOpened=false, saving=false;
+ const port = {async command(name:string,input:any){
+  if(name==='saveDraft'){saving=true;await save.promise;}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,chooseDocument:async()=>{
+   pickerOpened=true;return picked.promise;
+  }});
+  await chat.ready;
+  named(f.view.root,'Attach document').fire('click');
+  await until(()=>pickerOpened);
+  const editor=f.view.root.querySelector('textarea');
+  editor.value='Keep this draft';editor.fire('input');
+  const closing=chat.dispose();
+  await until(()=>saving);
+  picked.resolve(source);
+  await new Promise(resolve=>setImmediate(resolve));
+  save.resolve();
+  await closing;
+  assert.equal(f.draft.content,'Keep this draft');
+  assert.deepEqual(f.draft.documents??[],[]);
+ } finally {picked.resolve(source);save.resolve();await chat?.dispose();f.restore();}
+});
+
+test('replace at the attachment limit preserves the old selection on cancellation and checkpoints the explicit replacement', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ let chat;
+ try {
+  const documents = [
+   { id: 'file:old', version: 1, title: 'Unavailable document', unavailable: 'inaccessible' as const },
+   ...[1, 2, 3].map(i => ({ id: 'file:' + i, version: 1, title: 'Document ' + i })),
+  ];
+  await f.port.command('saveDraft', { resourceId: f.draft.resourceId, expectedVersion: f.draft.version, content: f.draft.content, documents });
+  const replacement = { id: 'file:new', version: 2, title: 'Replacement.pdf' };
+  let picks = 0;
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId, chooseDocument: async () => ++picks === 1 ? null : replacement });
+  await chat.ready;
+  const attach = named(f.view.root, 'Attach document');
+  const replace = named(f.view.root, 'Replace');
+  assert.equal(attach.disabled, true);
+  replace.fire('click');
+  await until(() => picks === 1 && !replace.disabled);
+  assert.deepEqual(f.draft.documents, documents);
+  replace.fire('click');
+  await until(() => !!named(f.view.root, 'Replacement.pdf ×'));
+  await chat.flush();
+  assert.deepEqual(f.draft.documents, [replacement, ...documents.slice(1)]);
+  assert.equal(f.draft.content, 'Saved unsent text');
+  assert.equal(f.calls.some(call => call.name === 'send'), false);
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  assert.deepEqual(f.pending!.input.documents, [replacement, ...documents.slice(1)].map(({ id, version }) => ({ id, version })));
+  f.pending!.reject(Error('authorization_cancelled'));
+  await chat.whenSubmissionSettled();
+ } finally { f.pending?.reject(Error('synthetic cleanup')); await chat?.dispose(); f.restore(); }
+});
+
+for (const action of ['close', 'switch', 'switch during save'] as const) test('chat manager '+action+' immediately invalidates a pending attachment handoff', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const resourceId = f.draft.resourceId;
+ const document = { id: 'file:brief', version: 1, title: 'Brief.pdf' };
+ const destination = 'chat:other';
+ let saving = false;
+ let releaseSave!: () => void;
+ const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+ const port = { async command(name: string, input: any) {
+  if (name === 'saveDraft' && input.content === 'Edited before handoff') {
+   saving = true;
+   await saveGate;
+  }
+  if (name === 'detail' && input.resourceId === destination) {
+   const detail = structuredClone(f.detail);
+   detail.conversation.resourceId = destination;
+   detail.policy.resourceId = destination;
+   return detail;
+  }
+  if (name === 'readDraft' && input.resourceId === destination)
+   return { resourceId: destination, content: '', version: 0, updatedAt: null };
+  return (f.port.command as any)(name, input);
+ }} as ConversationProductPort;
+ let manager, isCurrent: (() => boolean) | undefined, closed = false;
+ let release!: () => void;
+ const gate = new Promise<void>(resolve => { release = resolve; });
+ try {
+  await f.port.command('saveDraft',{resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:[document]});
+  manager = mountConversationManager(f.view.root,port,{resourceId,onClose:()=>{closed=true;},openDocument:async ()=>'opened',
+   askVelaAboutDocument:async (_document, current)=>{isCurrent=current;await gate;}});
+  await manager.ready;
+  if (action === 'switch during save') {
+   const editor = f.view.root.querySelector('textarea');
+   editor.value = 'Edited before handoff';
+   editor.fire('input');
+   named(f.view.root,'Ask Vela').fire('click');
+   await until(()=>saving);
+   const navigation = manager.open(destination);
+   releaseSave();
+   await navigation;
+   assert.equal(isCurrent,undefined);
+   assert.equal(manager.state.selectedResourceId,destination);
+   assert.equal(f.draft.content,'Edited before handoff');
+   assert.deepEqual(f.draft.documents,[document]);
+   return;
+  }
+  named(f.view.root,'Ask Vela').fire('click');
+  await until(()=>!!isCurrent);
+  assert.equal(isCurrent?.(),true);
+  const navigation = action === 'switch' ? manager.open(destination) : undefined;
+  if (action === 'close') named(f.view.root,'Close').fire('click');
+  assert.equal(isCurrent?.(),false);
+  if (navigation) {
+   await navigation;
+   assert.equal(manager.state.selectedResourceId,destination);
+  } else await until(()=>closed);
+  assert.deepEqual(f.draft.documents,[document]);
+ } finally { releaseSave(); release(); await manager?.dispose(); f.restore(); }
+});
+
+test('Ask Vela refreshes the saved attachment when the host refuses the selected version', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const source = { id:'file:brief', version:3, title:'Brief.pdf' };
+ let chat, refused = false;
+ const port = { async command(name:string,input:any) {
+  const result = await (f.port.command as any)(name,input);
+  return name==='readDraft' && refused
+   ? { ...result, documents:[{ ...source, title:'Unavailable document', unavailable:'inaccessible' }] }
+   : result;
+ } } as ConversationProductPort;
+ try {
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:[source]});
+  chat=mountConversationChat(f.view.root,{
+   port,resourceId:f.draft.resourceId,chooseDocument:async()=>null,openDocument:async()=> 'opened',
+   askVelaAboutDocument:async()=>{refused=true;return 'unavailable' as const;},
+  });
+  await chat.ready;
+  named(f.view.root,'Ask Vela').fire('click');
+  await until(()=>!!named(f.view.root,'Replace'));
+  assert.doesNotMatch(f.view.root.querySelector('.cp-composer-documents').textContent,/Brief\.pdf/);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.deepEqual(f.draft.documents,[source]);
+  assert.equal(f.calls.filter(call=>call.name==='send').length,0);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+test('removing and reattaching a document retires the pending Ask Vela action', async () => {
+ const f=fixture('chatgpt-plan-responses');
+ const document={id:'file:brief',version:3,title:'Brief.pdf'};
+ const session=new ConversationDraftSession({port:f.port,resourceId:f.draft.resourceId});
+ let chat, isCurrent:(()=>boolean)|undefined, release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ try {
+  chat=mountConversationChat(f.view.root,{
+   port:f.port,resourceId:f.draft.resourceId,draftSession:session,
+   openDocument:async()=>'opened',
+   askVelaAboutDocument:async(_document,current)=>{isCurrent=current;await gate;},
+  });
+  await chat.ready;
+  session.updateDocuments([document]);
+  named(f.view.root,'Ask Vela').fire('click');
+  await until(()=>!!isCurrent);
+  assert.equal(isCurrent?.(),true);
+  session.updateDocuments([]);
+  assert.equal(isCurrent?.(),false);
+  session.updateDocuments([document]);
+  assert.equal(isCurrent?.(),false);
+  release();
+  await chat.flush();
+  assert.deepEqual(f.draft.documents,[document]);
+ } finally {release();await chat?.dispose();await session.dispose();f.restore();}
+});
+
+for (const closeDuringHandoff of [false, true]) test('saved document picker reuses an exact current resource (close during handoff: '+closeDuringHandoff+')', async () => {
+ const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
+ let chat;
+ let releaseHandoff!: () => void;
+ const handoffGate = new Promise<void>(resolve => { releaseHandoff = resolve; });
+ try {
+  const saved = { id: 'file:saved', version: 1, title: 'Saved brief.pdf' };
+  let available = [saved];
+  const opened: typeof available = [];
+  const staged: typeof available = [];
+  let verifyHandoff: (() => boolean) | undefined;
+  let opening: 'opened' | 'unavailable' = 'opened';
+  const port = {async command(name:string,input:any) {
+   const result = await (f.port.command as any)(name,input);
+   return name==='saveDraft' ? structuredClone(result) : result;
+  }} as ConversationProductPort;
+  chat = mountConversationChat(f.view.root, {
+   port, resourceId: f.draft.resourceId, motion: motion.motion, viewId: 'chat:saved-document',
+   listDocuments: id => { assert.equal(id, f.draft.resourceId); return available; },
+   openDocument: async document => { opened.push(document); return opening; },
+   askVelaAboutDocument: async (document, isCurrent) => {
+    if (staged.length) {
+      verifyHandoff = isCurrent;
+      await handoffGate;
+    }
+    if (isCurrent()) staged.push(document);
+   },
+   chooseDocument: async () => { throw Error('Saved selection must not use the file picker'); },
+  });
+  await chat.ready;
+  const picker = f.view.root.querySelector('[data-cp-picker-for="Attach saved note or document"]');
+  picker.fire('click');
+  available = [{ ...saved, version: 2 }];
+  f.view.root.querySelector('[data-cp-option-value="file:saved:1"]').fire('click');
+  assert.equal(f.draft.documents, undefined);
+  assert.equal(f.view.root.querySelector('[data-cp-option-value="file:saved:1"]'), null);
+  picker.fire('click');
+  f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').fire('click');
+  await chat.flush();
+  assert.deepEqual(f.draft.documents, available);
+  const draft = f.draft;
+  const openAttachment = named(f.view.root,'Saved brief.pdf');
+  assert.equal(openAttachment.getAttribute('aria-label'),'Open attachment Saved brief.pdf');
+  openAttachment.fire('click');
+  assert.deepEqual(opened,available);
+  const askVela = named(f.view.root,'Ask Vela');
+  assert.equal(askVela.getAttribute('aria-label'),'Ask Vela about Saved brief.pdf');
+  const editor = f.view.root.querySelector('textarea');
+  editor.value = 'Unsent question typed before asking Vela';
+  editor.fire('input');
+  askVela.fire('click');askVela.fire('click');
+  await until(()=>f.draft.content===editor.value&&!named(f.view.root,'Ask Vela').disabled);
+  assert.deepEqual(staged,available);
+  assert.equal(f.draft.content,editor.value);
+  assert.deepEqual(f.draft.documents,draft.documents);
+  assert.equal(f.calls.some(call => call.name === 'send'), false);
+  picker.fire('click');
+  assert.equal(f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').disabled, true);
+  picker.fire('click');
+  if (!closeDuringHandoff) {
+   opening = 'unavailable';
+   const changed = [{ ...available[0], unavailable: 'changed' as const }];
+   await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:changed});
+   named(f.view.root,'Saved brief.pdf').fire('click');
+   await until(() => !!named(f.view.root,'Replace'));
+   assert.equal(f.draft.content,editor.value);
+   assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,true);
+   return;
+  }
+  named(f.view.root,'Ask Vela').fire('click');
+  await until(()=>!!verifyHandoff);
+  assert.equal(verifyHandoff?.(),true);
+  const closing = chat.dispose();
+  assert.equal(verifyHandoff?.(),false,'closing retires the handoff before draft flushing finishes');
+  releaseHandoff();
+  await closing;
+  assert.equal(staged.length,1);
+  assert.equal(f.draft.content,editor.value);
+  assert.deepEqual(f.draft.documents,draft.documents);
+ } finally { releaseHandoff(); await chat?.dispose(); assert.equal(motion.poses.size, 0); f.restore(); }
 });

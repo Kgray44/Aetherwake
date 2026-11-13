@@ -8,20 +8,21 @@ async function until(check: () => boolean) { for (let i = 0; i < 50 && !check();
 function fixture(initial: Partial<ConversationDraftRecord> = {}) {
   let record: ConversationDraftRecord = { resourceId: 'chat:synthetic', version: 0, content: '', updatedAt: null, ...initial };
   const writes: { resourceId: string; expectedVersion: number; content: string }[] = [];
-  let readGate: Promise<void> | null = null, responseGate: Promise<void> | null = null, lostResponse = false, denied = false, active = 0, maximumActive = 0, readCount = 0;
+  let readGate: Promise<void> | null = null, responseGate: Promise<void> | null = null, lostResponse: string | undefined, denied = false, active = 0, maximumActive = 0, readCount = 0;
   const port: ConversationDraftPort = { async command(name: string, input: any) {
     if (denied) throw new Error('source_unavailable');
     if (name === 'readDraft') { readCount++; const result = { ...record }; await readGate; return result; }
     active++; maximumActive = Math.max(maximumActive, active); writes.push({ ...input });
     try {
       if (record.version !== input.expectedVersion) throw new Error('stale_draft_version');
-      record = { resourceId: input.resourceId, version: record.version + 1, content: input.content, updatedAt: '2026-11-02T00:00:00Z' };
-      const result = { ...record }; await responseGate; if (lostResponse) { lostResponse = false; throw new Error('synthetic_response_lost'); } return result;
+      record = { ...record, version: record.version + 1, content: input.content, updatedAt: '2026-11-02T00:00:00Z',
+        ...(input.documents === undefined ? {} : { documents: input.documents }) };
+      const result = { ...record }; await responseGate; if (lostResponse) { const error = lostResponse; lostResponse = undefined; throw new Error(error); } return result;
     } finally { active--; }
   } };
   const create = (initialContent?: string) => new ConversationDraftSession({ port, resourceId: record.resourceId, debounceMs: 10000, ...(initialContent !== undefined ? { initialContent } : {}) });
   return { port, create, writes, get record() { return { ...record }; }, get maximumActive() { return maximumActive; }, get readCount() { return readCount; },
-    setReadGate: (gate: Promise<void> | null) => { readGate = gate; }, setResponseGate: (gate: Promise<void> | null) => { responseGate = gate; }, loseResponse: () => { lostResponse = true; }, deny: (value: boolean) => { denied = value; },
+    setReadGate: (gate: Promise<void> | null) => { readGate = gate; }, setResponseGate: (gate: Promise<void> | null) => { responseGate = gate; }, loseResponse: (error = 'synthetic_response_lost') => { lostResponse = error; }, deny: (value: boolean) => { denied = value; },
     external: (content: string) => { record = { ...record, version: record.version + 1, content, updatedAt: '2026-11-02T00:00:01Z' }; } };
 }
 
@@ -29,6 +30,27 @@ test('canonical recovery loads on the same ID and reopening reads durable text w
   const f = fixture({ version: 7, content: 'Synthetic durable unsent text' }), session = f.create(); await session.ready;
   assert.equal(session.snapshot().content, f.record.content); assert.equal(session.snapshot().version, 7); assert.equal(session.snapshot().phase, 'clean'); assert.deepEqual(f.writes, []); await session.dispose();
   const reopened = f.create(); await reopened.ready; assert.equal(reopened.snapshot().content, 'Synthetic durable unsent text'); await reopened.dispose();
+});
+
+test('attachment-only conflicts preserve both selections and an accepted checkpoint clears the selected draft', async () => {
+  const f = fixture({ content: 'Same text in both editors' });
+  const first = f.create(), second = f.create();
+  await Promise.all([first.ready, second.ready]);
+  const saved = { id: 'file:first', version: 2, title: 'First document' };
+  const competing = { id: 'file:second', version: 1, title: 'Second document' };
+  first.updateDocuments([saved]);
+  await first.flush();
+  second.updateDocuments([competing]);
+  await assert.rejects(second.flush(), /stale_draft_version/);
+  assert.deepEqual(second.snapshot().documents, [competing]);
+  assert.deepEqual(second.snapshot().remote?.documents, [saved]);
+  await second.resolve('use-stored', f.record.version);
+  const checkpoint = await second.checkpoint();
+  assert.deepEqual(checkpoint.record.documents, [saved]);
+  assert.equal(await second.acknowledgeSent(checkpoint), true);
+  assert.deepEqual(f.record.documents, []);
+  assert.equal(f.record.content, '');
+  await Promise.all([first.dispose(), second.dispose()]);
 });
 
 test('writes serialize and coalesce later edits while an exact submission checkpoint retains its own version', async () => {
@@ -76,9 +98,51 @@ test('an edit generation is retained even when later typing returns to identical
   const f = fixture(), session = f.create(); await session.ready; session.update('Submitted text'); const sent = await session.checkpoint(); session.update('Later typing'); session.update('Submitted text'); assert.equal(await session.acknowledgeSent(sent), false); assert.equal(session.snapshot().content, 'Submitted text'); await session.dispose();
 });
 
+for (const laterEdit of [undefined, 'A later draft', 'Accepted draft']) test('recovery of a committed accepted-draft clear preserves later edits ('+String(laterEdit)+')', async () => {
+  const f = fixture({content:'Accepted draft',version:1,documents:[{id:'note:example',title:'Synthetic note',version:1}]}), session = f.create();
+  await session.ready;
+  const checkpoint = await session.checkpoint();
+  f.loseResponse('backend_disconnected');
+  await assert.rejects(session.acknowledgeSent(checkpoint), /backend_disconnected/);
+  if (laterEdit !== undefined) {
+    session.update('Intermediate edit');
+    session.update(laterEdit);
+  }
+  await session.reload();
+  await session.flush();
+  assert.equal(session.snapshot().phase, 'clean');
+  assert.equal(session.snapshot().content, laterEdit ?? '');
+  assert.equal(session.snapshot().documents.length, laterEdit === undefined ? 0 : 1);
+  assert.equal(f.writes.length, laterEdit === undefined ? 2 : 3);
+  await session.dispose();
+});
+
 test('lost draft response and access denial preserve text; explicit reload reconciles actual saved recovery without replay', async () => {
   const f = fixture(), session = f.create(); await session.ready; f.loseResponse(); session.update('Recovery whose response was lost'); await assert.rejects(session.flush(), /synthetic_response_lost/); assert.equal(session.snapshot().content, 'Recovery whose response was lost'); assert.equal(session.snapshot().phase, 'error');
   await session.reload(); await session.flush(); assert.equal(f.writes.length, 1); assert.equal(session.snapshot().phase, 'clean'); f.deny(true); await assert.rejects(session.reload(), /source_unavailable/); assert.equal(session.snapshot().content, 'Recovery whose response was lost'); f.deny(false); await session.reload(); await session.dispose();
+});
+
+for (const [competing,later] of [[false,'Later local edit'],[false,''],[true,'Later local edit'],[true,'']] as const)
+test('lost draft save response with later typing (competing edit: '+competing+', cleared: '+!later+')', async () => {
+  const f = fixture(), session = f.create();
+  await session.ready;
+  f.loseResponse('backend_disconnected');
+  session.update('First local edit');
+  await assert.rejects(session.flush(), /backend_disconnected/);
+  session.update(later);
+  if (competing) f.external('Competing stored edit');
+  await session.reload();
+  assert.equal(session.snapshot().content, later);
+  if (competing) {
+    assert.equal(session.snapshot().remote?.content, 'Competing stored edit');
+    assert.equal(f.writes.length, 1);
+    await session.resolve('use-stored', f.record.version);
+  } else {
+    await session.flush();
+    assert.equal(f.record.content, later);
+    assert.deepEqual(f.writes.map(write => write.expectedVersion), [0, 1]);
+  }
+  await session.dispose();
 });
 
 test('over-limit input remains local and visible until corrected; it is never truncated or sent', async () => {

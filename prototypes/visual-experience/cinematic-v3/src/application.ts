@@ -98,7 +98,7 @@ import "../../../block-library/resource-links-view.css";
 import { createRelatedResourcesPort } from "./related-resources";
 import { createResourceOpener } from "./resource-opening.ts";
 import { createResourcePresenter } from "./resource-presentation.ts";
-import { createResourceSurface } from "./resource-surface.ts";
+import { createResourceSurface, supportsDocumentQuestion } from "./resource-surface.ts";
 import { mountProviderConnections } from "./provider-connections.ts";
 import { mountEnvironmentNavigator } from "./environment-navigator.ts";
 import "./environment-navigator.css";
@@ -810,6 +810,19 @@ export function installApplication(hooks: Hooks) {
       })) as ProductCommandMap[K]["output"];
     },
   };
+  const replyNoteActions = {
+    async saveReplyNote(input: ProductCommandMap["captureReplyNote"]["input"]) {
+      const receipt = await composerPort.command("captureReplyNote", input);
+      // The canonical save has committed. Refresh the workspace independently.
+      void command({ type: "snapshot" }).catch(() => {
+        if (!eventClosed) hooks.status("Note saved. The workspace could not refresh.");
+      });
+      return receipt;
+    },
+    async openReplyNote(noteId: string) {
+      await resourceOpener.open({ resourceId: noteId, origin: { source: "application" } });
+    },
+  };
   const conversationDrafts = createConversationDrafts({
     port: composerPort,
     available: (resourceId) => !!state?.resources.some(
@@ -864,6 +877,39 @@ export function installApplication(hooks: Hooks) {
       height: 16,
     }),
     failed: report,
+    askAboutDocument: (resource) => {
+      const current = state?.resources.find((item) => item.id === resource.id);
+      if (!current || current.available === false || current.visible === false ||
+          current.state === "archived" || !supportsDocumentQuestion(current))
+        throw Error("resource_unavailable");
+      if (!velaOpen) openVela();
+      velaPanel?.addDocumentSource({
+        id: current.id, kind: "resource", resourceKind: current.kind,
+        title: current.title, version: current.version, projectId: current.project_id,
+      });
+    },
+    placeNote: (resource) => {
+      const workspaceId = state?.activeWorkspaceId;
+      if (!workspaceId || !notePlacementAllowed(resource, workspaceId)) return;
+      return () => enqueueResult(async () => {
+        await flush();
+        const current = state?.resources.find((item) => item.id === resource.id);
+        if (!current || !notePlacementAllowed(current, workspaceId))
+          throw Error("note_placement_context_changed");
+        const attach = libraryClient.attachBlock;
+        if (!attach || !state) throw Error("attachment_unavailable");
+        await attach({
+          commandId: crypto.randomUUID(),
+          workspaceId,
+          expectedLayoutVersion: state.layoutVersion,
+          bounds: viewBounds(),
+          resourceId: current.id,
+          kind: "note",
+          expectedResourceVersion: current.version,
+        });
+        hooks.status("Note added to this workspace.");
+      });
+    },
     mount: (root, resource) =>
       mountDirectResourceExperience(root, resource, {
         notes: notesClient,
@@ -2411,9 +2457,14 @@ export function installApplication(hooks: Hooks) {
       motion: experienceMotion,
       viewId: "conversation-manager",
       models: ordinaryModelControls,
+      chooseDocument: chooseChatDocument,
+      listDocuments: listChatDocuments,
+      openDocument: openChatDocument,
+      askVelaAboutDocument: askVelaAboutChatDocument,
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
+      ...replyNoteActions,
       onRememberMessage: async (request) => {
         const result = await host.command!("personalMemoryCapture", request) as { status: "saved" | "cancelled" };
         return result.status === "saved";
@@ -2450,6 +2501,49 @@ export function installApplication(hooks: Hooks) {
       },
     });
     await controller.ready;
+  }
+  async function chooseChatDocument(projectId: string | null) {
+    const picked = await mediaClient.chooseMediaForAdd({ kind: "file", variant: "document", projectId });
+    if (!picked) return null;
+    const { id, version, title } = picked.resource;
+    return { id, version, title };
+  }
+  function listChatDocuments(conversationId: string) {
+    const chat = state?.resources.find(resource => resource.id === conversationId);
+    if (!chat || chat.visible === false || chat.available === false || chat.state === "archived") return [];
+    return (state?.resources ?? [])
+      .filter(resource => resource.visible !== false &&
+        resource.available !== false && resource.state !== "archived" &&
+        (resource.project_id == null || resource.project_id === chat.project_id) &&
+        (resource.kind === "note" || resource.kind === "file" && resource.media?.source === "file" &&
+          ["pdf", "docx", "text"].includes(resource.media.format)))
+      .map(({ id, version, title }) => ({ id, version, title }))
+      .sort((left, right) => left.title.localeCompare(right.title));
+  }
+  async function openChatDocument(document: {id: string; version: number}) {
+    const result = await resourceOpener.open({
+      resourceId: document.id,
+      expectedVersion: document.version,
+      preferredPresentation: "direct",
+      origin: { source: "application" },
+    });
+    return result.status === "ready" ? "opened" as const
+      : result.status === "superseded" ? "superseded" as const : "unavailable" as const;
+  }
+  async function askVelaAboutChatDocument(document: {id: string; version: number}, isCurrent: () => boolean) {
+    const result = await host.command!("openResource", {
+      resourceId: document.id, expectedVersion: document.version, origin: { source: "application" },
+    }) as ResourceOpeningResult;
+    if (!isCurrent()) return;
+    if (result.status !== "ready" || result.resource.kind !== "note" && !supportsDocumentQuestion(result.resource))
+      return "unavailable" as const;
+    if (!velaOpen) openVela();
+    if (!velaPanel) throw Error("Vela could not open.");
+    const resource = result.resource;
+    velaPanel.addDocumentSource({
+      id: resource.id, kind: "resource", resourceKind: resource.kind, version: resource.version,
+      title: resource.title, projectId: resource.project_id,
+    });
   }
   function openVela() {
     if (velaOpen) {
@@ -3701,6 +3795,15 @@ export function installApplication(hooks: Hooks) {
       throw error;
     }
   }
+  function notePlacementAllowed(resource: Resource, workspaceId: string): boolean {
+    const workspace = state?.workspaces.find((item) => item.id === workspaceId);
+    return !!workspace && !!libraryClient.attachBlock &&
+      state?.navigation.kind === "workspace" && state.activeWorkspaceId === workspaceId &&
+      resource.kind === "note" && resource.state !== "archived" &&
+      resource.available !== false && resource.visible !== false &&
+      (resource.project_id == null || resource.project_id === workspace.project_id) &&
+      !state.blocks.some((block) => block.workspace_id === workspaceId && block.resource_id === resource.id);
+  }
   function openCanonicalResource(resourceId: string, messageId?: string) {
     void resourceOpener
       .open({
@@ -4198,10 +4301,15 @@ export function installApplication(hooks: Hooks) {
       if (!view && activeBlocks.get(b.id)) {
         const session = conversationDrafts.get(r.id);
         view = mountBlockChat(surface, {
+          ...replyNoteActions,
           copy: copyText,
           motion: experienceMotion,
           viewId: "block:" + b.id + ":conversation",
           models: ordinaryModelControls,
+          chooseDocument: chooseChatDocument,
+          listDocuments: listChatDocuments,
+          openDocument: openChatDocument,
+          askVelaAboutDocument: askVelaAboutChatDocument,
           viewPersistence: chatViewPersistence,
           onProviderChange: async (change) => {
             if (change.mode === "continuation") {

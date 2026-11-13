@@ -115,6 +115,7 @@ export type PublicConversationExecution = {
   endedAt: string | null;
   taskVerified: false;
   recoveryAvailable?: true;
+  inputMessageId?: string;
   errorCode?: string;
   httpDiagnostic?: Readonly<import("../openai-provider/contracts.mts").TurnHttpDiagnostic>;
   outputTiming?: ConversationOutputTiming;

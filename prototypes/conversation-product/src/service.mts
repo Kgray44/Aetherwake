@@ -35,6 +35,7 @@ export interface CanonicalConversationHost {
 export type AttachedContext = { shareId: string; sourceResourceId: string; sourceMessageId: string; digest: string; evidence: Evidence; content: string };
 export class ProductError extends Error { code: string; constructor(code: string) { super(code); this.code=code; } }
 const check: (condition: unknown, code: string) => asserts condition = (condition, code) => { if (!condition) throw new ProductError(code); };
+export const CONVERSATION_PRODUCT_SCHEMA_VERSIONS: readonly number[] = [1, 2, 3, 4];
 const hash = (content: string) => createHash('sha256').update(content).digest('hex');
 const stamp = () => new Date().toISOString();
 const evidence: Evidence[] = ['excerpt', 'reported', 'observed', 'hypothesis', 'decision', 'disputed'];
@@ -92,7 +93,7 @@ export class ConversationProduct implements ConversationProductPort {
   this.db=db;this.host=host;
   this.tx(() => {
    const installed=!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_schema'").get();
-   if(installed){const versions=db.prepare('SELECT id,version FROM cp_schema').all();check(versions.length===1&&versions[0].id===1&&(versions[0].version===1||versions[0].version===2||versions[0].version===3),'unsupported_conversation_product_schema');}
+   if(installed){const versions=db.prepare('SELECT id,version FROM cp_schema').all();check(versions.length===1&&versions[0].id===1&&CONVERSATION_PRODUCT_SCHEMA_VERSIONS.includes(Number(versions[0].version)),'unsupported_conversation_product_schema');}
    db.exec(`CREATE TABLE IF NOT EXISTS cp_schema(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS cp_flags(resource_id TEXT PRIMARY KEY REFERENCES resources(id), favorite INTEGER NOT NULL CHECK(favorite IN(0,1)));
     CREATE TABLE IF NOT EXISTS cp_collection_rules(collection_id TEXT PRIMARY KEY REFERENCES collections(id), parent_id TEXT REFERENCES collections(id), rule TEXT, version INTEGER NOT NULL);
@@ -111,6 +112,10 @@ export class ConversationProduct implements ConversationProductPort {
      CREATE TABLE cp_view_selection(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL CHECK(version>=1 AND version<=9007199254740991),resource_id TEXT REFERENCES resources(id),updated_at TEXT NOT NULL) STRICT;`);
     db.prepare('UPDATE cp_schema SET version=3 WHERE id=1 AND version=2').run();
    }else for(const table of ['cp_views','cp_view_selection'])check(!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table),'conversation_view_storage_unavailable');
+   if(db.prepare('SELECT version FROM cp_schema WHERE id=1').get()!.version===3){
+    db.exec("ALTER TABLE cp_drafts ADD COLUMN documents_json TEXT NOT NULL DEFAULT '[]' CHECK(length(CAST(documents_json AS BLOB))<=4096)");
+    db.prepare('UPDATE cp_schema SET version=4 WHERE id=1 AND version=3').run();
+   }
   });
  }
  private tx<T>(fn: () => T): T { this.db.exec('SAVEPOINT conversation_product'); try { const result = fn(); this.db.exec('RELEASE conversation_product'); return result; } catch (error) { this.db.exec('ROLLBACK TO conversation_product'); this.db.exec('RELEASE conversation_product'); throw error; } }
@@ -163,11 +168,51 @@ export class ConversationProduct implements ConversationProductPort {
   check(r.kind==='conversation'&&(r.state===undefined||r.state==='active')&&canonical?.kind==='conversation'&&canonical.state==='active'&&!!v.resourceMap[id]&&v.conversations.some(c=>c.resourceId===id),'source_unavailable');
  }
  private draft(id: string): ConversationDraft {
-  const row=this.db.prepare('SELECT version,content,content_bytes,updated_at FROM cp_drafts WHERE resource_id=?').get(id);
+  const row=this.db.prepare('SELECT version,content,content_bytes,updated_at,documents_json FROM cp_drafts WHERE resource_id=?').get(id);
   if(!row)return {resourceId:id,version:0,content:'',updatedAt:null};
   const content=String(row.content),version=Number(row.version),updatedAt=String(row.updated_at);
   check(Number.isSafeInteger(version)&&version>=1&&content.length<=CONVERSATION_DRAFT_LIMITS.contentUnits&&Buffer.byteLength(content,'utf8')===row.content_bytes&&Number(row.content_bytes)<=CONVERSATION_DRAFT_LIMITS.contentBytes&&!Number.isNaN(Date.parse(updatedAt)),'corrupt_conversation_draft');
-  return {resourceId:id,version,content,updatedAt};
+  const documents = this.draftDocumentRefs(JSON.parse(String(row.documents_json))).map(ref => {
+   const file = this.draftDocument(id, ref.id);
+   if (!file)
+    return { ...ref, title: 'Unavailable document', unavailable: 'inaccessible' as const };
+   return { ...ref, title: String(file.title), ...(file.version !== ref.version ? { unavailable: 'changed' as const } : {}) };
+  });
+  return {resourceId:id,version,content,updatedAt,...(documents.length?{documents}:{})};
+ }
+ private draftDocument(conversationId: string, sourceId: string) {
+  const file = this.db.prepare(`SELECT r.title,r.version
+   FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id
+   JOIN resources chat ON chat.id=?
+   WHERE r.id=? AND (d.kind='file' OR r.kind='note') AND r.state='active'
+     AND (r.project_id IS NULL OR r.project_id=chat.project_id)`).get(conversationId,sourceId);
+  return file && this.host.access?.(sourceId) === true ? file : undefined;
+ }
+ private draftDocumentRefs(value: unknown): { id: string; version: number }[] {
+  check(Array.isArray(value) && value.length<=4 && value.every(ref=>ref && typeof ref.id==='string' &&
+    /^[a-zA-Z0-9_.:@-]{1,200}$/.test(ref.id) && Number.isSafeInteger(ref.version) && ref.version>0) &&
+    new Set(value.map(ref=>ref.id)).size===value.length,'invalid_draft_documents');
+  return value.map(({id,version})=>({id,version}));
+ }
+ /** Reconcile a completed turn's durable checkpoint before any editor opens. */
+ clearCompletedDraft(input: {resourceId:string; draftVersion:number; content:string; documentsDigest:string}): void {
+  const {resourceId, draftVersion, content, documentsDigest} = input;
+  if (draftVersion === undefined || !Number.isSafeInteger(draftVersion) || draftVersion < 1 || draftVersion >= Number.MAX_SAFE_INTEGER ||
+      this.host.access?.(resourceId) !== true) return;
+  const row = this.db.prepare('SELECT documents_json FROM cp_drafts WHERE resource_id=? AND version=? AND content=?')
+   .get(resourceId,draftVersion,content);
+  if (!row || hash(String(row.documents_json)) !== documentsDigest) return;
+  this.db.prepare(`UPDATE cp_drafts SET version=version+1,content='',content_bytes=0,documents_json='[]',updated_at=?
+   WHERE resource_id=? AND version=? AND content=? AND documents_json=?
+     AND EXISTS(SELECT 1 FROM resources WHERE id=cp_drafts.resource_id AND kind='conversation' AND state='active')`)
+   .run(stamp(),resourceId,draftVersion,content,row.documents_json);
+ }
+ sendDraftCheckpoint(input: ProductCommandMap['send']['input']) {
+  if (input.draftVersion === undefined) return;
+  const documents = JSON.stringify(this.draftDocumentRefs(input.documents??[]));
+  const match = this.db.prepare('SELECT 1 FROM cp_drafts WHERE resource_id=? AND version=? AND content=? AND documents_json=?')
+   .get(input.resourceId,input.draftVersion,input.content,documents);
+  if (match) return {version:input.draftVersion,documentsDigest:hash(documents)};
  }
  private saveDraft(v: View, input: ProductCommandMap['saveDraft']['input']): ConversationDraft {
   this.draftResource(v,input.resourceId);
@@ -180,8 +225,14 @@ export class ConversationProduct implements ConversationProductPort {
    const usage=this.db.prepare('SELECT COUNT(*) AS records,COALESCE(SUM(content_bytes),0) AS bytes FROM cp_drafts').get()!;
    check((previous.version>0||Number(usage.records)<CONVERSATION_DRAFT_LIMITS.records)&&Number(usage.bytes)-Buffer.byteLength(previous.content,'utf8')+encoded.length<=CONVERSATION_DRAFT_LIMITS.aggregateBytes,'draft_capacity_exceeded');
    const updatedAt=stamp(),version=previous.version+1;
-   const result=this.db.prepare('INSERT INTO cp_drafts(resource_id,version,content,content_bytes,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(resource_id) DO UPDATE SET version=excluded.version,content=excluded.content,content_bytes=excluded.content_bytes,updated_at=excluded.updated_at WHERE cp_drafts.version=?').run(input.resourceId,version,input.content,encoded.length,updatedAt,input.expectedVersion);
-   check(Number(result.changes)===1,'stale_draft_version');return {resourceId:input.resourceId,version,content:input.content,updatedAt};
+   const documents = this.draftDocumentRefs(input.documents ?? previous.documents ?? []);
+   for (const ref of documents) {
+    if (previous.documents?.some(prior=>prior.id===ref.id && prior.version===ref.version)) continue;
+    this.resource(v, ref.id);
+    check(this.draftDocument(input.resourceId, ref.id)?.version===ref.version,'source_unavailable');
+   }
+   const result=this.db.prepare('INSERT INTO cp_drafts(resource_id,version,content,content_bytes,updated_at,documents_json) VALUES(?,?,?,?,?,?) ON CONFLICT(resource_id) DO UPDATE SET version=excluded.version,content=excluded.content,content_bytes=excluded.content_bytes,updated_at=excluded.updated_at,documents_json=excluded.documents_json WHERE cp_drafts.version=?').run(input.resourceId,version,input.content,encoded.length,updatedAt,JSON.stringify(documents),input.expectedVersion);
+   check(Number(result.changes)===1,'stale_draft_version');return this.draft(input.resourceId);
   });
  }
  /** View metadata requires explicit current host authority, including for an
@@ -266,22 +317,26 @@ export class ConversationProduct implements ConversationProductPort {
   const result:ConversationSummary={ resourceId, conversationId: g.id, title: r.title, providerId: c.providerId, revision: c.revision, version: r.version, projectId: r.project_id ?? null, projectIds:[...this.projectIds(v,resourceId)], state: r.state ?? 'active', createdAt: g.createdAt,lastActivityAt,historyMetadataStatus,...(execution?{execution}:{}),favorite:v.indices.flags!.has(resourceId),messageCount,collectionIds:[...(v.indices.memberships!.get(resourceId)??[])] };
   v.projection?.summaries.set(key,result);return result;
  }
- private candidates(v:View,q:SearchQuery,ignoreCollection=false) {
+ private candidates(v:View,q:ProductCommandMap['list']['input'],ignoreCollection=false) {
   this.validateQuery(q);
   const family = q.familyOf ? this.family(v, q.familyOf) : null;
   const collection = !ignoreCollection && q.collectionId ? this.collections(v).find(c => c.id === q.collectionId) : null;
   if (q.collectionId && !ignoreCollection) check(collection, 'collection_missing');
   if(q.favorite)this.summaryMetadata(v);
   return v.conversations.filter(c=>{
+   if(q.runningOnly){
+    const state=v.indices.executions.get(c.resourceId)?.state;
+    if(state!=='dispatching'&&state!=='running')return false;
+   }
    const r=v.indices.resources.get(c.resourceId),g=v.indices.headers.get(v.resourceMap[c.resourceId]);
    return !!r&&!!g&&(q.archived?r.state==='archived':(r.state??'active')==='active')&&(!q.providerId||c.providerId===q.providerId)&&(!family||family.has(c.resourceId))&&(!collection||collection.memberIds.includes(c.resourceId))&&(q.projectId===undefined||(q.projectId===null?this.projectIds(v,c.resourceId).length===0:this.projectIds(v,c.resourceId).includes(q.projectId)))&&(!q.favorite||v.indices.flags!.has(c.resourceId))&&(!q.after||g.createdAt>=q.after)&&(!q.before||g.createdAt<=q.before)&&this.readable(v,c.resourceId,undefined,!!q.archived);
   });
  }
- private summaries(v: View, q: SearchQuery = {}, ignoreCollection = false): ConversationSummary[] {
+ private summaries(v: View, q: ProductCommandMap['list']['input'] = {}, ignoreCollection = false): ConversationSummary[] {
   const candidates = this.matchingCandidates(v, q, ignoreCollection);
   return this.sortSummaries(candidates.map(c=>this.summary(v,c.resourceId,!!q.archived)), q);
  }
- private matchingCandidates(v: View, q: SearchQuery, ignoreCollection = false) {
+ private matchingCandidates(v: View, q: ProductCommandMap['list']['input'], ignoreCollection = false) {
   const candidates = this.candidates(v, q, ignoreCollection);
   if (!q.text) return candidates;
   const needle = q.text.toLocaleLowerCase();
@@ -321,8 +376,12 @@ export class ConversationProduct implements ConversationProductPort {
   });
   if(v.projection)v.projection.collections=result;return result;
  }
- private readProjection(v:View,name:'list'|'search'|'collections',a:SearchQuery):unknown {
-  if(name==='list')return page(this.summaries(v,a),a);
+ private readProjection(v:View,name:'list'|'search'|'collections',a:ProductCommandMap['list']['input']):unknown {
+  if(name==='list'){
+   check(a.runningOnly===undefined||typeof a.runningOnly==='boolean','invalid_running_filter');
+   return page(this.summaries(v,a),a);
+  }
+  check(a.runningOnly===undefined,'invalid_running_filter');
   if(name==='collections')return this.collections(v);
   const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','chat-history','resources','all'].includes(mode),'invalid_search_mode');
   const titlesAndMessages = mode === 'all' || mode === 'chat-history';
