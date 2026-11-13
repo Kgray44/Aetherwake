@@ -28,6 +28,23 @@ test('wrong actual Chromium profile performs zero control, RPC, evidence or app 
  finally { process.argv = argv; console.log = log; }
 });
 
+test('representative search requires its explicit owned profile and a complete synthetic seed receipt', () => {
+ const root = 'C:\\Owned\\library-scale-123-abcdef01\\large';
+ const args = ['--integration-chat-motion', '--chat-search-seeded'];
+ helper.assertOwnedProfile(root, args, 'Automated check');
+ assert.throws(() => helper.assertOwnedProfile(root, args.slice(0, 1), 'Automated check'));
+ assert.throws(() => helper.assertOwnedProfile(root, [...args, '--record-chat-motion'], 'Automated check'));
+ assert.throws(() => helper.assertOwnedProfile(root.replace(/large$/, 'medium'), args, 'Automated check'));
+ const target = { resourceId: '12345678-1234-1234-1234-123456789abc', messageId: 'msg-01019',
+  query: 'SYNTHETIC_RARE_LIBRARY_TOKEN', draft: 'Synthetic unsent search acceptance draft.' };
+ const receipt = { contract: 'aerynth.library-scale@1', synthetic: true, passed: true, providerCalls: 0,
+  dataset: { name: 'large', actual: { conversations: 1072, graphMessages: 12072 } },
+  profile: { directory: 'large', database: 'aerynth.sqlite', reopenedThroughCore: true, sha256: 'a'.repeat(64), target } };
+ assert.deepEqual(helper.validateSearchSeed(receipt), { ...target, databaseDigest: receipt.profile.sha256 });
+ assert.throws(() => helper.validateSearchSeed({ ...receipt, providerCalls: 1 }), /passing_synthetic_search_seed_required/);
+ assert.throws(() => helper.validateSearchSeed({ ...receipt, dataset: { name: 'large', actual: { conversations: 1, graphMessages: 2 } } }));
+});
+
 test('only bounded actual canonical reads are admitted; all creation/provider/auth/save paths require UI and never helper RPC', () => {
  for (const name of ['detail', 'readDraft', 'readViewState']) helper.assertRead('conversation', { name, input: { resourceId: 'synthetic-chat', ...(name === 'detail' ? { limit: 50 } : {}) } });
  helper.assertRead('conversation', { name: 'collections', input: {} }); helper.assertRead('conversation', { name: 'list', input: { limit: 50 } }); helper.assertRead('desktop', { type: 'snapshot' }); helper.assertRead('snapshot', {}); helper.assertRead('replay', { after: 0 });

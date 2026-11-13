@@ -6,6 +6,7 @@
  * not physical OS input. No refocus, global hooks, auth, provider or fixture RPC.
  */
 const fs = require('node:fs/promises');
+const { lstatSync, realpathSync, readFileSync } = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
@@ -26,7 +27,16 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const encode = value => { const text = JSON.stringify(value, null, 2); assert(Buffer.byteLength(text) <= MiB, 'chat_motion_receipt_capacity'); return text; };
 function assertOwnedProfile(root, argv, title) {
   assert(argv.includes('--integration-chat-motion'), 'explicit_chat_motion_flag_required');
-  assert(typeof root === 'string' && path.win32.isAbsolute(root) && path.win32.parse(root).root.toLowerCase() === 'c:\\' && /^review-chat-motion-\d+$/.test(path.win32.basename(root)), 'fresh_owned_chat_motion_profile_required');
+  const seed = argv.includes('--chat-search-seeded');
+  const name = typeof root === 'string' ? path.win32.basename(root) : '';
+  const validName = seed
+    ? name === 'large' && /^library-scale-\d+-[a-f0-9]{8}$/.test(path.win32.basename(path.win32.dirname(root)))
+    : /^review-chat-motion-\d+$/.test(name);
+  assert(typeof root === 'string' && path.win32.isAbsolute(root) && path.win32.parse(root).root.toLowerCase() === 'c:\\' && validName, 'fresh_owned_chat_motion_profile_required');
+  if (seed) {
+    assert(!argv.includes('--record-chat-motion') && !argv.includes('--chat-reading-only'), 'seeded_search_scope_required');
+    assert.deepEqual(argv.filter(value => value.startsWith('--integration-')), ['--integration-chat-motion'], 'one_seeded_search_journey_required');
+  }
   assert.match(title, /Automated check/i, 'owned_automated_window_required');
 }
 function assertRead(name, input) {
@@ -94,6 +104,46 @@ function assertGeometry(value) {
 }
 async function bounded(promise, ms, code) { assert(ms > 0, code); let timer; try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error(code)), ms); })]); } finally { clearTimeout(timer); } }
 async function readJson(file) { assert((await fs.stat(file)).size <= MiB, 'bounded_chat_motion_checkpoint_required'); return JSON.parse(await fs.readFile(file, 'utf8')); }
+function validateSearchSeed(seed) {
+  assert(seed?.contract === 'aerynth.library-scale@1' && seed.synthetic === true && seed.passed === true && seed.providerCalls === 0, 'passing_synthetic_search_seed_required');
+  assert.equal(seed.dataset?.name, 'large');
+  assert.equal(seed.dataset.actual?.conversations, 1072);
+  assert.equal(seed.dataset.actual?.graphMessages, 12072);
+  assert(seed.profile?.directory === 'large' && seed.profile.database === 'aerynth.sqlite' &&
+    seed.profile.reopenedThroughCore === true && /^[a-f0-9]{64}$/.test(seed.profile.sha256), 'verified_search_database_required');
+  const target = seed.profile.target;
+  assert(target?.query === 'SYNTHETIC_RARE_LIBRARY_TOKEN' && /^[a-f0-9-]{36}$/.test(target.resourceId) &&
+    /^msg-\d+$/.test(target.messageId) && target.draft === 'Synthetic unsent search acceptance draft.', 'exact_search_target_required');
+  return { resourceId: target.resourceId, messageId: target.messageId, query: target.query, draft: target.draft, databaseDigest: seed.profile.sha256 };
+}
+function preflightSearchSeed(root, argv, source) {
+  assertOwnedProfile(root, argv, 'Automated check');
+  const evidenceRoot = realpathSync(path.resolve(__dirname, '../.runtime/application-evidence'));
+  assert.equal(path.dirname(path.dirname(realpathSync(root))).toLowerCase(), evidenceRoot.toLowerCase(), 'owned_search_evidence_root_required');
+  const readBounded = (file, maxBytes) => {
+    const stat = lstatSync(file);
+    assert(stat.isFile() && stat.size <= maxBytes, 'bounded_search_seed_required');
+    return readFileSync(file);
+  };
+  const seed = JSON.parse(readBounded(path.join(root, '../large.json'), MiB));
+  const target = validateSearchSeed(seed);
+  const benchmark = 'prototypes/conversation-product/test/library-scale-benchmark.mts';
+  const hashes = seed.binding?.hashes;
+  assert(hashes && Object.keys(hashes).length === 8 && hashes[benchmark], 'search_seed_source_binding_required');
+  for (const [name, digest] of Object.entries(hashes)) {
+    const current = name === benchmark ? hash(readFileSync(path.resolve(__dirname, '../../../..', name))) : source.hashes[name];
+    assert(current && current === digest, 'search_seed_source_changed:' + name);
+  }
+  const database = readBounded(path.join(root, 'aerynth.sqlite'), 15 * MiB);
+  if (argv.includes('--verify-restore')) {
+    const checkpoint = JSON.parse(readBounded(path.join(root, 'chat-motion-expected.json'), MiB));
+    assert.equal(checkpoint.scope, 'representative-search');
+    assert.deepEqual(checkpoint.source, sourceIdentity(source));
+    assert.deepEqual(checkpoint.canonical, { ...target, draftVersion: checkpoint.canonical?.draftVersion });
+  } else {
+    assert.equal(hash(database), target.databaseDigest, 'search_seed_database_changed');
+  }
+}
 function validateMotionBudget(budget) {
   validateBudget(budget); assert(Number.isSafeInteger(budget.videos) && budget.videos >= 0 && budget.videos <= 1 && Number.isSafeInteger(budget.videoBytes) && budget.videoBytes >= 0 && budget.videoBytes <= 32 * MiB && (budget.videos === 0) === (budget.videoBytes === 0), 'chat_motion_video_budget_invalid'); return budget;
 }
@@ -146,11 +196,12 @@ function optionalRecording({ requested, restore, slot, win, session, localURL, o
     },
   };
 }
-Object.assign(exports, { assertOwnedProfile, assertRead, assertNoProvider, canonicalChat, assertMotionSample, assertGeometry, passingCheckpoint, motionScript, viewScript, geometryScript, validateMotionBudget, admitVideo, optionalRecording, FIXTURE });
+Object.assign(exports, { assertOwnedProfile, assertRead, assertNoProvider, canonicalChat, assertMotionSample, assertGeometry, passingCheckpoint, motionScript, viewScript, geometryScript, validateMotionBudget, admitVideo, optionalRecording, validateSearchSeed, preflightSearchSeed, FIXTURE });
 
 exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, observeProviderActivity, session, localURL }) {
   const restore = process.argv.includes('--verify-restore'), record = process.argv.includes('--record-chat-motion'), limitMs = restore ? 12000 : 45000, root = path.resolve(privateRoot), out = path.join(root, 'chat-motion-evidence', `${restore ? 'restore' : 'initial'}-${Date.now()}`), expectedFile = path.join(root, 'chat-motion-expected.json'), budgetFile = path.join(root, 'chat-motion-capture-budget.json');
-  const scope = process.argv.includes('--chat-reading-only') ? 'resize-search-and-reading' : 'full-chat-motion';
+  const seeded = process.argv.includes('--chat-search-seeded');
+  const scope = seeded ? 'representative-search' : process.argv.includes('--chat-reading-only') ? 'resize-search-and-reading' : 'full-chat-motion';
   const receipt = { contract: 'aerynth.chat-motion-integration@1', source, restore, passed: false, syntheticOnly: true, inputMethod: 'App-only software native-window mouse/key/wheel/insertText; all journey evaluations FALSE. Optional recorder alone uses the existing exact-window media authority. Renderer writes only temporary observation references, never product state or activation.', limits: { milliseconds: limitMs, combinedPNGs: 3, combinedPNGBytes: 16 * MiB, videos: record && !restore ? 1 : 0, combinedVideoBytes: 32 * MiB }, actions: [], samples: [], captures: [], checks: [], errors: [], limitations: ['No provider/handoff/account/native-thread or generated-title proof.', 'Shared-MC CSS samples and native-window capture are not physical input, monitor-presentation, artistic or performance acceptance.', 'Reading position compares the canonical message anchor at matching viewport geometry; this does not qualify arbitrary viewport changes or IME recovery.', 'Optional initial-only exact-window/no-audio recording needs successful bounded stop acknowledgement; capture overhead is included and requested30fps is not monitor performance.', 'Root must inspect PNGs/optional WebM and independently confirm all test processes exited.'] };
   receipt.scope = scope;
   if (scope === 'resize-search-and-reading') receipt.limitations.push('Picker and disclosure motion samples are outside this run.');
@@ -192,7 +243,76 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       }
     });
     const canonical = async id => { const { core, desktop: d } = await proof(); return canonicalChat(await detail(id), await draft(id), d, core, await rpc('conversation', { name: 'collections', input: {} })); };
-    await wait('Combined actual app ready', () => js("document.body.dataset.applicationHydrated==='true'")); const start = await proof();
+    await wait('Combined actual app ready', () => js("document.body.dataset.applicationHydrated==='true'"));
+    if (seeded) {
+      const evidenceRoot = path.resolve(__dirname, '../.runtime/application-evidence');
+      assert.equal(path.dirname(path.dirname(await fs.realpath(root))).toLowerCase(), (await fs.realpath(evidenceRoot)).toLowerCase(), 'owned_search_evidence_root_required');
+      const seed = await readJson(path.join(root, '../large.json')), target = validateSearchSeed(seed);
+      const { resourceId: id, messageId, query } = target;
+      const core = await rpc('snapshot', {});
+      const assertSeededHistory = snapshot => {
+        assert.equal(snapshot.conversations.length, seed.dataset.actual.conversations);
+        assert.equal(snapshot.graph.messages.length, seed.dataset.actual.graphMessages);
+        assert.equal(Object.keys(snapshot.executions).length, 0);
+        assert(snapshot.conversations.every(conversation => conversation.providerId === 'local'));
+      };
+      assertSeededHistory(core);
+      const readTarget = async () => {
+        const current = await detail(id);
+        assert(current.messages.items.some(message => message.id === messageId && message.content.includes(query)));
+        const stored = await draft(id);
+        assert.equal(stored.content, target.draft);
+        return { ...target, draftVersion: stored.version };
+      };
+      const visibleTarget = async () => {
+        const view = await js(viewScript(id, false, messageId));
+        const sample = await js(geometryScript(id));
+        return view?.resourceId === id && view.draft === target.draft &&
+          sample?.lines.some(line => line.messageId === messageId && line.fullyVisible && line.height >= 12);
+      };
+      receipt.canonical = await readTarget();
+      win.setContentSize(1100, 800);
+      await openManager();
+      if (restore) {
+        assert.deepEqual(receipt.canonical, expected.canonical);
+        await wait('Exact message and draft visible after desktop restart', visibleTarget);
+        receipt.viewState = await savedView(id);
+        assert.deepEqual(receipt.viewState, expected.viewState);
+      } else {
+        await click('.cp-switcher>summary');
+        const search = '.cp-switcher input[type="search"]';
+        await click(search);
+        await wait('Quick search input focused', () => js(`document.activeElement===document.querySelector(${JSON.stringify(search)})`));
+        const typedAt = performance.now();
+        await bounded(win.webContents.insertText(query), slot.workRemaining(), 'chat_motion_input_deadline');
+        const enterAt = performance.now();
+        key('Return');
+        receipt.quickSearch = { resourceId: id, messageId, fixtureConversations: core.conversations.length, fixtureMessages: core.graph.messages.length,
+          method: 'software-native-window-keyboard', pollIntervalMs: 35, insertToEnterMs: enterAt - typedAt };
+        assert(receipt.quickSearch.insertToEnterMs < 120, 'enter_must_precede_typeahead_debounce');
+        await wait('Enter reveals the exact search message and draft', async () =>
+          await js("document.querySelector('.cp-switcher')?.open===false") && await visibleTarget());
+        receipt.quickSearch.enterToVisibleMessageMs = performance.now() - enterAt;
+        await wait('Exact message anchor and draft acknowledged', async () => {
+          const view = await savedView(id);
+          if (view.selected.resourceId !== id || view.view?.position?.anchor?.messageId !== messageId) return false;
+          receipt.viewState = view;
+          return true;
+        });
+        receipt.quickSearch.enterToSavedViewMs = performance.now() - enterAt;
+        assert.deepEqual(await readTarget(), receipt.canonical);
+        pendingExpected = { contract: 'aerynth.chat-motion-checkpoint@1', scope, source: sourceIdentity(source), moduleHashes: receipt.moduleHashes,
+          resourceId: id, canonical: receipt.canonical, viewState: receipt.viewState, initialReceipt: path.relative(root, path.join(out, 'journey.json')) };
+      }
+      const counters = await bounded(observeProviderActivity(), slot.workRemaining(), 'chat_motion_observer_deadline');
+      assert.equal(counters?.scope, 'process-session-native-attempts');
+      for (const key of ['codexConnections', 'providerRequests', 'systemMemoryReads']) assert.equal(counters[key], 0, 'native_attempt_forbidden:' + key);
+      receipt.counters = counters;
+      assertSeededHistory(await rpc('snapshot', {}));
+      assert.equal(startupErrors.length, 0); assert.equal(receipt.errors.length, 0); slot.check(); passed = true;
+      return;
+    }
+    const start = await proof();
     let id;
     if (restore) { id = expected.resourceId; receipt.canonical = await canonical(id); assert.deepEqual(receipt.canonical, expected.canonical, 'exact_local_chat_draft_message_identity_restart_without_replay'); assert(expected.viewState?.view?.position?.anchor, 'saved_native_chat_anchor_required'); assert.deepEqual(await savedView(id), expected.viewState);
       win.setContentSize(780, 700); await openManager(); await wait('Saved conversation selected on actual library open', () => js(`document.querySelector('.cp-manager')?.dataset.resourceId===${JSON.stringify(id)}`)); await verifyRendered(id, receipt.canonical);
