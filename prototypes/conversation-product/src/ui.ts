@@ -201,10 +201,12 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
      try{
       await pending;
       if(stillCurrent()&&intent===openIntent)switcher.node.open=false;
-     }catch{
+     }catch(error){
       if(stillCurrent()&&intent===openIntent){
-       switchStatus.textContent='Couldn’t open the conversation. Choose a result to try again.';
        if(switcher.node.contains(document.activeElement))switchQuery.focus();
+       const code=error instanceof Error?error.message:String(error);
+       if(/(?:^|: )(?:message_unavailable|message_missing|source_unavailable|source_revoked|access_denied|conversation_not_found)$/.test(code))await loadSwitcher();
+       else switchStatus.textContent='Couldn’t open the conversation. Choose a result to try again.';
       }
      }finally{opening=false;}
     },{identity:'history-result'});

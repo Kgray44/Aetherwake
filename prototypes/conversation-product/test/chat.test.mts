@@ -220,13 +220,17 @@ test('Switch chat Escape cancels a result still waiting for the draft to save', 
  } finally {release();await manager?.dispose();f.restore();}
 });
 
-test('Switch chat keeps an exact result available when opening it fails', async () => {
+for (const unavailable of [false,true]) test('Switch chat recovers a failed result open (unavailable: '+unavailable+')', async () => {
  const f=fixture(),resourceId=f.draft.resourceId,messageId=f.detail.messages.items[0].id;
  const opened:string[]=[];
- let manager,failed=false;
+ let manager,failed=false,searches=0;
  const port={async command(name:string,input:any){
-  if(name==='search')return {items:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:'exact phrase'}],total:1,offset:0,limit:12,hasMore:false};
-  if(name==='detail'&&input.aroundMessageId===messageId&&!failed){failed=true;throw Error('temporary detail failure');}
+  if(name==='search'){
+   searches++;
+   const items=unavailable&&failed?[]:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:'exact phrase'}];
+   return {items,total:items.length,offset:0,limit:12,hasMore:false};
+  }
+  if(name==='detail'&&input.aroundMessageId===messageId&&!failed){failed=true;throw Error(unavailable?'message_unavailable':'temporary detail failure');}
   return (f.port.command as any)(name,input);
  }} as ConversationProductPort;
  try {
@@ -238,6 +242,12 @@ test('Switch chat keeps an exact result available when opening it fails', async 
   await until(()=>failed&&!f.view.root.querySelector('.cp-manager').getAttribute('aria-busy'));
   assert.equal(switcher.open,true);
   assert.equal(input.value,'exact phrase');
+  if(unavailable){
+   await until(()=>searches===2&&switcher.querySelector('.cp-switcher-status').textContent.includes('No matches'));
+   assert.equal(switcher.querySelector('[data-message-id]'),null);
+   assert.deepEqual(opened,[]);
+   return;
+  }
   assert.match(switcher.querySelector('.cp-switcher-status').textContent,/Couldn’t open/);
   input.fire('keydown',{key:'Enter'});
   await until(()=>opened.length===1&&!switcher.open);
