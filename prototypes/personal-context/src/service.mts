@@ -72,7 +72,9 @@ export class PersonalContextService {
       check(!row || row.version === 1, 'unsupported_personal_context_schema');
       options.db.exec(`CREATE TABLE IF NOT EXISTS personal_context_heads(owner TEXT NOT NULL,id TEXT NOT NULL,kind TEXT NOT NULL,version INTEGER NOT NULL,scope TEXT,state TEXT NOT NULL,PRIMARY KEY(owner,id));
         CREATE TABLE IF NOT EXISTS personal_context_revisions(owner TEXT NOT NULL,id TEXT NOT NULL,version INTEGER NOT NULL,scope TEXT,state TEXT NOT NULL,cipher BLOB NOT NULL,PRIMARY KEY(owner,id,version));
-        CREATE TABLE IF NOT EXISTS personal_context_dependencies(owner TEXT NOT NULL,dependent TEXT NOT NULL,source TEXT NOT NULL,source_version INTEGER NOT NULL,PRIMARY KEY(owner,dependent,source,source_version));`);
+        CREATE TABLE IF NOT EXISTS personal_context_dependencies(owner TEXT NOT NULL,dependent TEXT NOT NULL,source TEXT NOT NULL,source_version INTEGER NOT NULL,PRIMARY KEY(owner,dependent,source,source_version));
+        CREATE TABLE IF NOT EXISTS personal_context_conversation_sources(owner TEXT NOT NULL,conversation_id TEXT NOT NULL,message_id TEXT NOT NULL,dependent TEXT NOT NULL,PRIMARY KEY(owner,conversation_id,message_id,dependent));
+        CREATE INDEX IF NOT EXISTS personal_context_conversation_sources_by_fact ON personal_context_conversation_sources(owner,dependent);`);
       if (!row) options.db.prepare('INSERT INTO personal_context_schema VALUES(1,1)').run();
     });
   }
@@ -134,7 +136,13 @@ export class PersonalContextService {
     check(cipher instanceof Uint8Array && cipher.length > 0 && cipher.length <= LIMITS.importBytes + 65536 && Number(counts.bytes) + cipher.length <= LIMITS.cipherBytes, 'personal_context_capacity_reached');
     this.opts.db.prepare('INSERT INTO personal_context_revisions VALUES(?,?,?,?,?,?)').run(owner, valueId, value.version, scopeValue ? encode(scopeValue) : null, state, cipher);
     this.opts.db.prepare('INSERT INTO personal_context_heads VALUES(?,?,?,?,?,?) ON CONFLICT(owner,id) DO UPDATE SET version=excluded.version,scope=excluded.scope,state=excluded.state').run(owner, valueId, kind, value.version, scopeValue ? encode(scopeValue) : null, state);
-    if (kind === 'fact') { const provenance = (value as ReviewedFact).provenance; if (provenance.kind === 'import') this.opts.db.prepare('INSERT OR IGNORE INTO personal_context_dependencies VALUES(?,?,?,?)').run(owner, valueId, provenance.id, provenance.version); }
+    if (kind === 'fact') {
+      const provenance = (value as ReviewedFact).provenance;
+      if (provenance.kind === 'import')
+        this.opts.db.prepare('INSERT OR IGNORE INTO personal_context_dependencies VALUES(?,?,?,?)').run(owner, valueId, provenance.id, provenance.version);
+      if (provenance.kind === 'conversation-message')
+        this.opts.db.prepare('INSERT OR IGNORE INTO personal_context_conversation_sources VALUES(?,?,?,?)').run(owner, provenance.conversationId, provenance.messageId, valueId);
+    }
   }
   private policyValue(): PersonalPolicy { const head = this.head('policy'); return head ? this.decode<PersonalPolicy>(head) : defaultPolicy(); }
   policy(): PersonalPolicy { return this.read(() => { this.authorize('policy.read', null); return this.policyValue(); }); }
@@ -234,10 +242,33 @@ export class PersonalContextService {
   hardDelete(input: { id: string; expectedVersion: number }): { deleted: RecordRef[] } {
     return this.tx(() => { const owner = this.identity().userId, head = this.head(input.id); check(head && head.kind !== 'policy' && head.version === input.expectedVersion, 'stale_personal_context_version');
       const dependents = this.opts.db.prepare('SELECT DISTINCT dependent FROM personal_context_dependencies WHERE owner=? AND source=?').all(owner, head.id).map(row => this.head(String(row.dependent))).filter((value): value is Head => !!value);
-      const heads = [head, ...dependents], references = heads.map(value => this.ref(value));
-      for (const value of heads) this.authorize('record.delete', value.scope, this.ref(value), { references });
-      for (const value of heads) { this.opts.db.prepare('DELETE FROM personal_context_revisions WHERE owner=? AND id=?').run(owner, value.id); this.opts.db.prepare('DELETE FROM personal_context_dependencies WHERE owner=? AND (dependent=? OR source=?)').run(owner, value.id, value.id); this.opts.db.prepare('DELETE FROM personal_context_heads WHERE owner=? AND id=?').run(owner, value.id); }
-      return { deleted: references }; });
+      return this.deleteHeads(owner, [head, ...dependents]); });
+  }
+  /** Invoked by the canonical owner for an explicitly authorized source
+   * erasure. Can join the source owner's transaction without decrypting data. */
+  eraseConversationSource(source: ConversationSourceRef): { deleted: RecordRef[] } {
+    check(record(source) && exact(source, ['kind', 'conversationId', 'messageId']) &&
+      source.kind === 'conversation-message' && id(source.conversationId) && id(source.messageId), 'invalid_provenance');
+    return this.tx(() => {
+      const owner = this.identity().userId;
+      this.authorize('source.erase', null, null, { conversationSource: source });
+      const rows = this.opts.db.prepare('SELECT dependent FROM personal_context_conversation_sources WHERE owner=? AND conversation_id=? AND message_id=? ORDER BY dependent')
+        .all(owner, source.conversationId, source.messageId);
+      const heads = rows.map(row => this.required(String(row.dependent), 'fact'));
+      return this.deleteHeads(owner, heads, source);
+    });
+  }
+  private deleteHeads(owner: string, heads: Head[], conversationSource?: ConversationSourceRef): { deleted: RecordRef[] } {
+    const references = heads.map(value => this.ref(value));
+    for (const reference of references)
+      this.authorize('record.delete', reference.scope, reference, conversationSource ? { conversationSource } : { references });
+    for (const value of heads) {
+      this.opts.db.prepare('DELETE FROM personal_context_revisions WHERE owner=? AND id=?').run(owner, value.id);
+      this.opts.db.prepare('DELETE FROM personal_context_dependencies WHERE owner=? AND (dependent=? OR source=?)').run(owner, value.id, value.id);
+      this.opts.db.prepare('DELETE FROM personal_context_conversation_sources WHERE owner=? AND dependent=?').run(owner, value.id);
+      this.opts.db.prepare('DELETE FROM personal_context_heads WHERE owner=? AND id=?').run(owner, value.id);
+    }
+    return { deleted: references };
   }
   export(input: { ids: string[]; maxBytes: number }): PersonalExport {
     check(record(input) && exact(input, ['ids', 'maxBytes']) && Array.isArray(input.ids) && input.ids.length <= 128 && input.ids.every(id) && new Set(input.ids).size === input.ids.length && Number.isSafeInteger(input.maxBytes) && input.maxBytes >= 1 && input.maxBytes <= LIMITS.exportBytes, 'invalid_export');
