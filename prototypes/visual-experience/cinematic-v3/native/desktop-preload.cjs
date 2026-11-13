@@ -56,6 +56,13 @@ contextBridge.exposeInMainWorld(
         text,
       });
     },
+    resourcePolicyInspection(action) {
+      if (action !== "inspect" && action !== "mode" && action !== "rollback")
+        throw new Error("invalid_resource_inspection_action");
+      if (action !== "inspect" && navigator.userActivation?.isActive !== true)
+        throw new Error("resource_policy_user_gesture_required");
+      return ipcRenderer.invoke("application-resource-policy-inspection", action);
+    },
     async command(name, input) {
       if (
         ![
@@ -91,9 +98,12 @@ contextBridge.exposeInMainWorld(
           "missions",
           "workspaceRecovery",
           "firstPartyChat",
+          "personalMemoryCapture",
         ].includes(name)
       )
         throw new Error("unsupported_command");
+      if (name === "personalMemoryCapture" && navigator.userActivation?.isActive !== true)
+        throw new Error("personal_memory_user_gesture_required");
       if ((name === 'clockTimers' && ['create', 'mutate'].includes(input?.name) ||
            name === 'library' && input?.name === 'createBlock' && input?.input?.kind === 'clock_timer' ||
            name === 'desktop' && input?.type === 'createResource' && input?.kind === 'clock_timer') &&

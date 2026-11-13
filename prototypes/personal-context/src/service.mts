@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { PERSONAL_CONTEXT_CONTRACT } from './contracts.ts';
+import type { ConversationSourceRef, ConversationSourceProof } from './contracts.ts';
 import type { Category, Certainty, ContextItem, ContextRequest, FactDraft, OmissionReason, Operation, OriginalImport, OriginalInput, PersonalAuthorization, PersonalContextHost, PersonalContextManifest, PersonalCrypto, PersonalExport, PersonalPolicy, PersonalScope, PolicyPatch, Provenance, RecordRef, ReviewedFact, ScopeProof } from './contracts.ts';
 
 export class PersonalContextError extends Error { readonly code: string; constructor(code: string) { super(code); this.name = 'PersonalContextError'; this.code = code; } }
@@ -12,6 +13,7 @@ const encode = (v: unknown) => JSON.stringify(canonical(v));
 const hash = (v: unknown) => createHash('sha256').update(encode(v)).digest('hex');
 const bytes = (v: unknown) => Buffer.byteLength(encode(v), 'utf8');
 const same = (a: unknown, b: unknown) => encode(a) === encode(b);
+const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const exact = (v: Record<string, unknown>, keys: string[]) => Object.keys(v).sort().join(',') === keys.sort().join(',');
 const categories: Category[] = ['identity', 'preferences', 'projects', 'people', 'technical', 'decisions', 'temporary', 'conversation'];
 const certainties: Certainty[] = ['explicit-statement', 'user-preference', 'imported-summary', 'historical-observation', 'inference', 'conflicting', 'unknown'];
@@ -47,6 +49,11 @@ function draft(input: unknown): asserts input is FactDraft {
   check(Array.isArray(input.keywords) && input.keywords.length > 0 && input.keywords.length <= 16 && input.keywords.every(v => typeof v === 'string' && v.trim().length > 0 && v.length <= 64) && new Set(input.keywords).size === input.keywords.length, 'invalid_keywords');
   check(input.purpose !== 'behavior' || input.scope.kind !== 'user.shared', 'shared_behavior_forbidden');
   const source = input.source; check(record(source), 'invalid_provenance');
+  if (source.kind === 'conversation-message') {
+    check(exact(source, ['kind', 'conversationId', 'messageId', 'version', 'contentDigest']) &&
+      id(source.conversationId) && id(source.messageId) && id(source.version) && digest(source.contentDigest), 'invalid_provenance');
+    return;
+  }
   check(source.kind === 'user-statement' ? exact(source, ['kind']) : source.kind === 'import' && exact(source, ['kind', 'id', 'version', 'start', 'end']) && id(source.id) && Number.isSafeInteger(source.version) && Number(source.version) >= 1 && Number.isSafeInteger(source.start) && Number(source.start) >= 0 && Number.isSafeInteger(source.end) && Number(source.end) > Number(source.start), 'invalid_provenance');
 }
 function request(value: ContextRequest) {
@@ -65,7 +72,9 @@ export class PersonalContextService {
       check(!row || row.version === 1, 'unsupported_personal_context_schema');
       options.db.exec(`CREATE TABLE IF NOT EXISTS personal_context_heads(owner TEXT NOT NULL,id TEXT NOT NULL,kind TEXT NOT NULL,version INTEGER NOT NULL,scope TEXT,state TEXT NOT NULL,PRIMARY KEY(owner,id));
         CREATE TABLE IF NOT EXISTS personal_context_revisions(owner TEXT NOT NULL,id TEXT NOT NULL,version INTEGER NOT NULL,scope TEXT,state TEXT NOT NULL,cipher BLOB NOT NULL,PRIMARY KEY(owner,id,version));
-        CREATE TABLE IF NOT EXISTS personal_context_dependencies(owner TEXT NOT NULL,dependent TEXT NOT NULL,source TEXT NOT NULL,source_version INTEGER NOT NULL,PRIMARY KEY(owner,dependent,source,source_version));`);
+        CREATE TABLE IF NOT EXISTS personal_context_dependencies(owner TEXT NOT NULL,dependent TEXT NOT NULL,source TEXT NOT NULL,source_version INTEGER NOT NULL,PRIMARY KEY(owner,dependent,source,source_version));
+        CREATE TABLE IF NOT EXISTS personal_context_conversation_sources(owner TEXT NOT NULL,conversation_id TEXT NOT NULL,message_id TEXT NOT NULL,dependent TEXT NOT NULL,PRIMARY KEY(owner,conversation_id,message_id,dependent));
+        CREATE INDEX IF NOT EXISTS personal_context_conversation_sources_by_fact ON personal_context_conversation_sources(owner,dependent);`);
       if (!row) options.db.prepare('INSERT INTO personal_context_schema VALUES(1,1)').run();
     });
   }
@@ -102,8 +111,14 @@ export class PersonalContextService {
       if (head.kind === 'import') { const { id: _id, version: _version, state: _state, createdAt: _created, updatedAt: _updated, contentDigest: _digest, ...fields } = value; original(fields); check(value.state === 'active' || value.state === 'revoked', 'corrupt_personal_context'); check(value.contentDigest === hash(value.text), 'corrupt_personal_context'); }
       else {
         const { id: _id, version: _version, state: _state, createdAt: _created, updatedAt: _updated, reviewedAt: _reviewed, reviewedBy: _by, provenance, supersededBy: _next, ...fields } = value;
-        check(record(provenance) && (provenance.kind === 'user-statement' ? exact(provenance, ['kind']) : provenance.kind === 'import' && exact(provenance, ['kind', 'id', 'version', 'contentDigest', 'start', 'end']) && typeof provenance.contentDigest === 'string' && /^[a-f0-9]{64}$/.test(provenance.contentDigest)), 'corrupt_personal_context');
-        const { contentDigest: _sourceDigest, ...source } = provenance; draft({ ...fields, source });
+        check(record(provenance), 'corrupt_personal_context');
+        if (provenance.kind === 'conversation-message') draft({ ...fields, source: provenance });
+        else {
+          check(provenance.kind === 'user-statement' ? exact(provenance, ['kind']) :
+            provenance.kind === 'import' && exact(provenance, ['kind', 'id', 'version', 'contentDigest', 'start', 'end']) && digest(provenance.contentDigest), 'corrupt_personal_context');
+          const { contentDigest: _sourceDigest, ...source } = provenance;
+          draft({ ...fields, source });
+        }
         check(['active', 'revoked', 'superseded'].includes(value.state) && id(value.reviewedBy) && typeof value.reviewedAt === 'string' && Number.isFinite(Date.parse(value.reviewedAt)) && (value.supersededBy === null || id(value.supersededBy)), 'corrupt_personal_context');
       }
     }
@@ -121,7 +136,13 @@ export class PersonalContextService {
     check(cipher instanceof Uint8Array && cipher.length > 0 && cipher.length <= LIMITS.importBytes + 65536 && Number(counts.bytes) + cipher.length <= LIMITS.cipherBytes, 'personal_context_capacity_reached');
     this.opts.db.prepare('INSERT INTO personal_context_revisions VALUES(?,?,?,?,?,?)').run(owner, valueId, value.version, scopeValue ? encode(scopeValue) : null, state, cipher);
     this.opts.db.prepare('INSERT INTO personal_context_heads VALUES(?,?,?,?,?,?) ON CONFLICT(owner,id) DO UPDATE SET version=excluded.version,scope=excluded.scope,state=excluded.state').run(owner, valueId, kind, value.version, scopeValue ? encode(scopeValue) : null, state);
-    if (kind === 'fact') { const provenance = (value as ReviewedFact).provenance; if (provenance.kind === 'import') this.opts.db.prepare('INSERT OR IGNORE INTO personal_context_dependencies VALUES(?,?,?,?)').run(owner, valueId, provenance.id, provenance.version); }
+    if (kind === 'fact') {
+      const provenance = (value as ReviewedFact).provenance;
+      if (provenance.kind === 'import')
+        this.opts.db.prepare('INSERT OR IGNORE INTO personal_context_dependencies VALUES(?,?,?,?)').run(owner, valueId, provenance.id, provenance.version);
+      if (provenance.kind === 'conversation-message')
+        this.opts.db.prepare('INSERT OR IGNORE INTO personal_context_conversation_sources VALUES(?,?,?,?)').run(owner, provenance.conversationId, provenance.messageId, valueId);
+    }
   }
   private policyValue(): PersonalPolicy { const head = this.head('policy'); return head ? this.decode<PersonalPolicy>(head) : defaultPolicy(); }
   policy(): PersonalPolicy { return this.read(() => { this.authorize('policy.read', null); return this.policyValue(); }); }
@@ -144,7 +165,13 @@ export class PersonalContextService {
   }
   private readable<T extends Stored>(head: Head, version = head.version): T { const ref = this.revision(head, version); check(ref.scope, 'invalid_record_kind'); this.proof(ref.scope); this.authorize('record.read', ref.scope, this.ref(ref)); return this.decode<T>(ref); }
   readImport(idValue: string, version?: number): OriginalImport { return this.read(() => this.readable<OriginalImport>(this.required(idValue, 'import'), version)); }
-  readFact(idValue: string, version?: number): ReviewedFact { return this.read(() => this.readable<ReviewedFact>(this.required(idValue, 'fact'), version)); }
+  readFact(idValue: string, version?: number): ReviewedFact {
+    return this.read(() => {
+      const value = this.readable<ReviewedFact>(this.required(idValue, 'fact'), version);
+      this.requireCurrentConversationSource(value);
+      return value;
+    });
+  }
   /** Owner's inspectable metadata index, including retained revoked records. No private body decryption. */
   list(input: { kind: 'import' | 'fact'; after: string | null; limit: number }): { records: (RecordRef & { state: string })[]; next: string | null } {
     check(record(input) && exact(input, ['kind', 'after', 'limit']) && (input.kind === 'import' || input.kind === 'fact') && (input.after === null || id(input.after)) && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 100, 'invalid_record_list');
@@ -152,8 +179,43 @@ export class PersonalContextService {
       for (const row of rows.slice(0, input.limit)) { const head = this.required(String(row.id), input.kind); try { this.authorize('record.list', head.scope, this.ref(head)); records.push({ ...this.ref(head), state: head.state }); } catch (error) { if (!(error instanceof PersonalContextError && error.code === 'personal_context_not_authorized')) throw error; } }
       return { records, next: rows.length > input.limit ? String(rows[input.limit - 1].id) : null }; });
   }
+  private conversationSource(reference: ConversationSourceRef): ConversationSourceProof | null {
+    const { conversationId, messageId } = reference;
+    let source;
+    try {
+      source = this.opts.host.resolveConversationSource?.({ kind: 'conversation-message', conversationId, messageId });
+    } catch {
+      return null;
+    }
+    return source?.conversationId === conversationId && source.messageId === messageId &&
+      source.role === 'user' && id(source.version) && digest(source.contentDigest) &&
+      (source.projectId === null || id(source.projectId)) && typeof source.sensitive === 'boolean' ? source : null;
+  }
+  private sourceScopeMatches(scopeValue: PersonalScope, source: ConversationSourceProof): boolean {
+    return (scopeValue.kind === 'conversation' && scopeValue.id === source.conversationId) ||
+      (scopeValue.kind === 'project' && scopeValue.id === source.projectId);
+  }
+  private currentConversationSource(value: ReviewedFact): ConversationSourceProof | null {
+    const provenance = value.provenance;
+    if (provenance.kind !== 'conversation-message') return null;
+    const source = this.conversationSource(provenance);
+    return source && source.version === provenance.version && source.contentDigest === provenance.contentDigest &&
+      this.sourceScopeMatches(value.scope, source) && (!source.sensitive || value.sensitive) ? source : null;
+  }
+  private requireCurrentConversationSource(value: ReviewedFact): void {
+    if (value.provenance.kind === 'conversation-message')
+      check(this.currentConversationSource(value), 'conversation_source_unavailable');
+  }
   private provenance(input: FactDraft): Provenance {
     if (input.source.kind === 'user-statement') return { kind: 'user-statement' };
+    if (input.source.kind === 'conversation-message') {
+      const source = this.conversationSource(input.source);
+      check(source, 'conversation_source_unavailable');
+      check(source.version === input.source.version && source.contentDigest === input.source.contentDigest, 'stale_conversation_source');
+      check(input.purpose === 'knowledge' && this.sourceScopeMatches(input.scope, source), 'conversation_source_scope_mismatch');
+      check(!source.sensitive || input.sensitive, 'sensitive_source_requires_sensitive_fact');
+      return structuredClone(input.source);
+    }
     const head = this.required(input.source.id, 'import', input.source.version), source = this.readable<OriginalImport>(head);
     check(source.state === 'active' && (!source.expiresAt || Date.parse(source.expiresAt) > Date.parse(this.now())) && input.source.end <= source.text.length, 'import_source_unavailable');
     check(!source.sensitive || input.sensitive, 'sensitive_source_requires_sensitive_fact');
@@ -171,7 +233,7 @@ export class PersonalContextService {
     draft(input.replacement); return this.tx(() => { const head = this.required(input.id, 'fact', input.expectedVersion), old = this.readable<ReviewedFact>(head), value = this.reviewed(input.replacement, old); this.put('fact', value, value.scope, value.state, old.version); return value; });
   }
   correctFact(input: { id: string; expectedVersion: number; replacement: FactDraft }): { previous: ReviewedFact; replacement: ReviewedFact } {
-    draft(input.replacement); return this.tx(() => { const head = this.required(input.id, 'fact', input.expectedVersion), old = this.readable<ReviewedFact>(head); this.authorize('fact.review', old.scope, this.ref(head)); const replacement = this.reviewed(input.replacement), previous: ReviewedFact = { ...old, version: old.version + 1, state: 'superseded', supersededBy: replacement.id, updatedAt: this.now() }; this.put('fact', replacement, replacement.scope, replacement.state, 0); this.put('fact', previous, previous.scope, previous.state, old.version); return { previous, replacement }; });
+    draft(input.replacement); return this.tx(() => { const head = this.required(input.id, 'fact', input.expectedVersion), old = this.readable<ReviewedFact>(head); this.requireCurrentConversationSource(old); this.authorize('fact.review', old.scope, this.ref(head)); const replacement = this.reviewed(input.replacement), previous: ReviewedFact = { ...old, version: old.version + 1, state: 'superseded', supersededBy: replacement.id, updatedAt: this.now() }; this.put('fact', replacement, replacement.scope, replacement.state, 0); this.put('fact', previous, previous.scope, previous.state, old.version); return { previous, replacement }; });
   }
   revoke(input: { id: string; expectedVersion: number }): RecordRef {
     return this.tx(() => { const head = this.head(input.id); check(head && head.kind !== 'policy' && head.version === input.expectedVersion, 'stale_personal_context_version'); this.authorize('record.revoke', head.scope, this.ref(head)); const old = this.decode<OriginalImport | ReviewedFact>(head), value = { ...old, version: old.version + 1, state: 'revoked' as const, updatedAt: this.now() }; this.put(head.kind, value, value.scope, value.state, old.version); return { ...this.ref(head), version: value.version }; });
@@ -180,15 +242,53 @@ export class PersonalContextService {
   hardDelete(input: { id: string; expectedVersion: number }): { deleted: RecordRef[] } {
     return this.tx(() => { const owner = this.identity().userId, head = this.head(input.id); check(head && head.kind !== 'policy' && head.version === input.expectedVersion, 'stale_personal_context_version');
       const dependents = this.opts.db.prepare('SELECT DISTINCT dependent FROM personal_context_dependencies WHERE owner=? AND source=?').all(owner, head.id).map(row => this.head(String(row.dependent))).filter((value): value is Head => !!value);
-      const heads = [head, ...dependents], references = heads.map(value => this.ref(value));
-      for (const value of heads) this.authorize('record.delete', value.scope, this.ref(value), { references });
-      for (const value of heads) { this.opts.db.prepare('DELETE FROM personal_context_revisions WHERE owner=? AND id=?').run(owner, value.id); this.opts.db.prepare('DELETE FROM personal_context_dependencies WHERE owner=? AND (dependent=? OR source=?)').run(owner, value.id, value.id); this.opts.db.prepare('DELETE FROM personal_context_heads WHERE owner=? AND id=?').run(owner, value.id); }
-      return { deleted: references }; });
+      return this.deleteHeads(owner, [head, ...dependents]); });
+  }
+  /** Invoked by the canonical owner for an explicitly authorized source
+   * erasure. Can join the source owner's transaction without decrypting data. */
+  eraseConversationSource(source: ConversationSourceRef): { deleted: RecordRef[] } {
+    check(record(source) && exact(source, ['kind', 'conversationId', 'messageId']) &&
+      source.kind === 'conversation-message' && id(source.conversationId) && id(source.messageId), 'invalid_provenance');
+    return this.tx(() => {
+      const owner = this.identity().userId;
+      this.authorize('source.erase', null, null, { conversationSource: source });
+      const rows = this.opts.db.prepare('SELECT dependent FROM personal_context_conversation_sources WHERE owner=? AND conversation_id=? AND message_id=? ORDER BY dependent')
+        .all(owner, source.conversationId, source.messageId);
+      const heads = rows.map(row => this.required(String(row.dependent), 'fact'));
+      return this.deleteHeads(owner, heads, source);
+    });
+  }
+  private deleteHeads(owner: string, heads: Head[], conversationSource?: ConversationSourceRef): { deleted: RecordRef[] } {
+    const references = heads.map(value => this.ref(value));
+    for (const reference of references)
+      this.authorize('record.delete', reference.scope, reference, conversationSource ? { conversationSource } : { references });
+    for (const value of heads) {
+      this.opts.db.prepare('DELETE FROM personal_context_revisions WHERE owner=? AND id=?').run(owner, value.id);
+      this.opts.db.prepare('DELETE FROM personal_context_dependencies WHERE owner=? AND (dependent=? OR source=?)').run(owner, value.id, value.id);
+      this.opts.db.prepare('DELETE FROM personal_context_conversation_sources WHERE owner=? AND dependent=?').run(owner, value.id);
+      this.opts.db.prepare('DELETE FROM personal_context_heads WHERE owner=? AND id=?').run(owner, value.id);
+    }
+    return { deleted: references };
   }
   export(input: { ids: string[]; maxBytes: number }): PersonalExport {
     check(record(input) && exact(input, ['ids', 'maxBytes']) && Array.isArray(input.ids) && input.ids.length <= 128 && input.ids.every(id) && new Set(input.ids).size === input.ids.length && Number.isSafeInteger(input.maxBytes) && input.maxBytes >= 1 && input.maxBytes <= LIMITS.exportBytes, 'invalid_export');
     return this.read(() => { const value: PersonalExport = { contract: PERSONAL_CONTEXT_CONTRACT, ownerId: this.identity().userId, exportedAt: this.now(), records: [] };
-      for (const idValue of input.ids) { const head = this.head(idValue); check(head && head.kind !== 'policy', 'personal_record_unavailable'); const revisions: (OriginalImport | ReviewedFact)[] = []; value.records.push({ kind: head.kind, revisions }); for (let version = 1; version <= head.version; version++) { const ref = this.revision(head, version); this.authorize('record.export', ref.scope, this.ref(ref)); revisions.push(this.decode<OriginalImport | ReviewedFact>(ref)); check(bytes(value) <= input.maxBytes, 'export_budget_exceeded'); } }
+      for (const idValue of input.ids) {
+        const head = this.head(idValue);
+        check(head && head.kind !== 'policy', 'personal_record_unavailable');
+        const revisions: (OriginalImport | ReviewedFact)[] = [];
+        value.records.push({ kind: head.kind, revisions });
+        for (let version = 1; version <= head.version; version++) {
+          const ref = this.revision(head, version);
+          check(ref.scope, 'invalid_record_kind');
+          this.proof(ref.scope);
+          this.authorize('record.export', ref.scope, this.ref(ref));
+          const revision = this.decode<OriginalImport | ReviewedFact>(ref);
+          if ('provenance' in revision) this.requireCurrentConversationSource(revision);
+          revisions.push(revision);
+          check(bytes(value) <= input.maxBytes, 'export_budget_exceeded');
+        }
+      }
       return value; });
   }
   private inScope(value: PersonalScope, input: ContextRequest) { return value.kind === 'assistant.' + input.assistant || value.kind === 'user.shared' || value.kind === 'project' && value.id === input.projectId || value.kind === 'conversation' && value.id === input.conversationId; }
@@ -200,6 +300,10 @@ export class PersonalContextService {
     if (!this.inScope(value.scope, input)) return 'outside-scope';
     if (value.scope.kind === 'user.shared' && (!policy.sharingEnabled || !input.sharedFactIds.includes(value.id))) return 'not-shared';
     if (value.purpose === 'behavior' && (!input.includeBehavior || value.scope.kind === 'user.shared')) return 'irrelevant';
+    if (value.provenance.kind === 'conversation-message') {
+      const source = this.currentConversationSource(value);
+      if (!source || (source.sensitive && !policy.sensitiveEnabled)) return 'source-changed';
+    }
     if (value.provenance.kind === 'import') {
       const source = this.head(value.provenance.id); if (!source || source.kind !== 'import' || source.state !== 'active' || source.version !== value.provenance.version) return 'source-changed';
       this.proof(source.scope!); this.authorize('record.read', source.scope, this.ref(source));
