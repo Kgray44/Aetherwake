@@ -10,8 +10,9 @@ import { crc32, deflateSync } from 'node:zlib';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
 import { projectMissionExecution, type MissionExecutionProfile } from '../src/execution-profiler.mts';
-import { nativeMissionExecutors, missionResultAvailable } from '../src/mission-native.mts';
-import type { MissionExecutor,MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
+import { nativeMissionExecutors, nativeMissionPlan, missionResultAvailable } from '../src/mission-native.mts';
+import { composeReviewedArtifactMission } from '../src/mission-reviewed-composition.mts';
+import type { MissionExecutor,MissionPlan,MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
 import type { ProviderPort, VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
 import { createMissionProjectCheck } from '../src/mission-project-check.mts';
@@ -288,6 +289,127 @@ test('one qualified live illustration mission delivers a verified file, image an
   assert.ok(credential, 'Existing ephemeral API credential is required');
   delete process.env.OPENAI_API_KEY;
   await verifyIllustrationMission(credential, false, process.env.AERYNTH_ARTIFACT_EVIDENCE_DIR);
+});
+
+test('composed artifact mission retains verified files when a native branch fails and retries', { timeout: 145_000 }, async t => {
+  const live = process.env.AERYNTH_VERIFY_LIVE_MIXED_ARTIFACT === '1';
+  const serial = process.env.AERYNTH_MIXED_ARTIFACT_SEQUENTIAL === '1';
+  const destination = live ? process.env.AERYNTH_MIXED_ARTIFACT_EVIDENCE_DIR : undefined;
+  if (destination) preflightArtifactEvidence(destination);
+  const credential = live ? process.env.OPENAI_API_KEY : undefined;
+  if (live) {
+    assert.ok(process.platform === 'win32' && credential);
+    delete process.env.OPENAI_API_KEY;
+  }
+  const f = fixture(false, true, undefined, credential, true);
+  try {
+    f.setCatalogModels([missionImageModel]);
+    await f.ready();
+    const illustration = 'Run a mission to generate an illustration: A simple abstract geometric illustration. Any colors.';
+    const artifact = await f.core.command('missions', { name: 'preview', input: { objective: illustration } }) as MissionPreview;
+    const work = nativeMissionPlan('Investigate Aerynth backend performance using workspace notes', artifact.plan.scope)!;
+    const goal = 'Investigate Aerynth backend performance using workspace notes and generate an abstract geometric illustration';
+    const plan = composeReviewedArtifactMission(goal, work, artifact.plan);
+    const proposalId = randomUUID();
+    // Inject a host-owned proposal in this harness until Core composition wiring lands.
+    const proposals = (f.core as unknown as { missionProposals: Map<string, { plan: MissionPlan; expires: number }> }).missionProposals;
+    proposals.set(proposalId, { plan, expires: Date.now() + 150_000 });
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective: goal, proposalId } }) as MissionPreview;
+    assert.equal(preview.artifactReview?.digest, artifact.artifactReview?.digest);
+    const input = { objective: goal, proposalId, fingerprint: preview.fingerprint, requestId: proposalId };
+    await assert.rejects(f.core.command('missions', { name: 'start', input }), /mission_artifact_review_required/);
+    if (!live) f.replies.push(() => Response.json({ data: [{ b64_json: illustrationFixture().toString('base64') }] }));
+    const usage = await f.core.command('velaApiUsageStatus', {});
+    const timingStarted = performance.now(), cpuStarted = process.cpuUsage();
+    const approval = { ...input, approvedArtifactDigest: preview.artifactReview!.digest };
+    const start = f.core.command('missionStartReviewed', approval) as Promise<MissionProjection>;
+    // Core commits Start synchronously. In the baseline, set the canonical
+    // control in the same host turn before the scheduler microtask runs.
+    if (serial) {
+      const db = (f.core as unknown as { db: import('node:sqlite').DatabaseSync }).db;
+      const row = db.prepare('SELECT id, json FROM vela_missions WHERE request_id=?').get(proposalId);
+      assert.ok(row && typeof row.id === 'string' && typeof row.json === 'string');
+      const control = f.core.command('missions', { name: 'control', input: { id: row.id, revision: JSON.parse(row.json).revision,
+        control: { type: 'concurrency', concurrency: 1 } } }) as Promise<MissionProjection>;
+      const controlled = await control;
+      assert.ok(controlled.tasks.every(task => task.attempts.length === 0));
+    }
+    const { id } = await start;
+    const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
+    const settle = async () => {
+      const deadline = performance.now() + (live ? 125_000 : 7_000);
+      do {
+        const mission = await read();
+        if (!['running', 'queued'].includes(mission.outcome)) return mission;
+        await delay(30);
+      } while (performance.now() < deadline);
+      throw Error('composed_artifact_mission_deadline');
+    };
+    const first = await settle();
+    assert.equal(first.outcome, 'failed', JSON.stringify(first.tasks.map(task => [task.id, task.state, task.detail])));
+    const image = first.tasks.find(task => task.id === 'illustration')!;
+    const notes = first.tasks.find(task => task.id === 'notes')!;
+    assert.equal(image.state, 'verified');
+    assert.equal(notes.state, 'failed');
+    assert.equal(first.tasks.find(task => task.id === 'report')!.attempts.length, 0);
+    const title = 'Investigate Aerynth backend performance using workspace notes';
+    const { resources } = await f.core.command('desktop', { type: 'createResource', kind: 'note',
+      title, workspaceId: plan.scope.workspaceId });
+    const note = resources.find(resource => resource.title === title)!;
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version,
+      content: 'Aerynth backend performance observation: collect repeated native timer and memory samples before attributing a slowdown.' });
+    await f.core.command('missions', { name: 'control', input: { id, revision: first.revision, control: { type: 'retry', taskId: notes.id } } });
+    const result = await settle();
+    const elapsedMs = performance.now() - timingStarted, processCpu = process.cpuUsage(cpuStarted);
+    assert.equal(result.outcome, 'verified', JSON.stringify(result.tasks.map(task => [task.id, task.state, task.detail])));
+    assert.deepEqual(result.tasks.find(task => task.id === image.id)?.attempts, image.attempts);
+    assert.deepEqual(result.tasks.find(task => task.id === notes.id)?.attempts.map(attempt => attempt.outcome), ['failed', 'verified']);
+    assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, usage.usedToday + 1);
+    const trace = await f.core.command('missions', { name: 'execution-profile', input: { id } }) as MissionExecutionProfile;
+    const imageSpan = image.attempts[0].timing?.phases?.execution;
+    assert.ok(imageSpan);
+    const imageNativeOverlapMs = Math.max(0, ...first.tasks.filter(task => task.id !== image.id).flatMap(task =>
+      task.attempts.flatMap(attempt => {
+        const span = attempt.timing?.phases?.execution;
+        return span && attempt.timing?.phases?.clock === image.attempts[0].timing?.phases?.clock ?
+          [Math.min(span[1], imageSpan[1]) - Math.max(span[0], imageSpan[0])] : [];
+      })));
+    if (serial) {
+      assert.equal(trace.work.peakWorkers, 1);
+      assert.equal(trace.work.overlapMs, 0);
+      assert.equal(imageNativeOverlapMs, 0);
+    } else {
+      assert.ok(trace.work.overlapMs && trace.work.overlapMs > 0);
+      assert.ok(imageNativeOverlapMs > 0);
+    }
+    assert.ok(trace.work.criticalPath);
+    const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
+    const report = state.conversation?.messages.find(message => message.missionReport?.missionId === id);
+    assert.ok(report);
+    assert.match(report?.content ?? '', /illustration\.png.*illustration-notes\.txt/u);
+    assert.match(report?.content ?? '', /CPU .*RAM /su);
+    await f.reopen();
+    assert.equal((await read()).outcome, 'verified');
+    const restored = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
+    assert.equal(restored.conversation?.messages.find(message => message.missionReport?.missionId === id)?.id, report?.id);
+    const retained = { png: readFileSync(join(f.directory, 'mission-artifacts', id, 'illustration.png')),
+      notes: readFileSync(join(f.directory, 'mission-artifacts', id, 'illustration-notes.txt')), report: report.content };
+    const reopenedProposals = (f.core as unknown as { missionProposals: typeof proposals }).missionProposals;
+    reopenedProposals.set(proposalId, { plan, expires: Date.now() + 150_000 });
+    assert.equal((await f.core.command('missionStartReviewed', approval) as MissionProjection).id, id);
+    assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, usage.usedToday + 1);
+    writeFileSync(join(f.directory, 'mission-artifacts', id, 'illustration-notes.txt'), 'Changed after verification.');
+    assert.equal((await read()).outcome, 'blocked');
+    const stale = (await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState).conversation?.messages
+      .find(message => message.missionReport?.missionId === id);
+    assert.equal(stale?.id, report.id);
+    assert.equal(stale?.missionReport?.stale, true);
+    if (destination) retainArtifactEvidence(destination, { ...retained, provider: 'real-openai-api',
+      objective: goal, missionId: id, reportId: report.id });
+    t.diagnostic(JSON.stringify({ live, serial, id, verified: true, overlapMs: trace.work.overlapMs, imageNativeOverlapMs,
+      criticalPathMs: trace.work.criticalPath.durationMs, elapsedMs, processCpu,
+      reportRestored: true, imageRequests: 1, nativeRetries: 1, costCoverage: trace.economics.costCoverage }));
+  } finally { await f.close(); }
 });
 
 async function verifyReviewedPlanningRetry(live?: { credential: string; model: string }) {
@@ -1183,19 +1305,23 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
     const require = createRequire(import.meta.url);
     const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
     const { reviewPage } = require('../../visual-experience/cinematic-v3/native/vela-review.cjs');
-    const send = (allow: boolean) => velaCommand({
+    const send = (allow: boolean, selectedVersion?: number) => velaCommand({
       win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
       directMessageSend: true, routeNative: true, dialog: {},
       call: f.core.command.bind(f.core),
       reviewProvider: async (reviewed: { review: typeof review }) => {
+        assert.equal(selectedVersion, undefined, 'standing selected evidence must not open the sharing modal');
         assert.equal(reviewed.review.semanticContext, true);
         assert.match(reviewPage(reviewed.review, intent), /up to six API calls/);
         return allow;
       },
       input: { name: 'request', input: { intent, resourceIds: [note.id], authorizeProvider: true,
-        providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
+        providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true,
+        ...(selectedVersion === undefined ? {} : { resourceRefs: [{ id: note.id, kind: 'resource', resourceKind: 'note', version: selectedVersion }] }) } },
     });
     await assert.rejects(send(false), /authorization_cancelled/);
+    assert.equal(f.requests.length, 0);
+    await assert.rejects(send(true, note.version), /source_selection_changed/);
     assert.equal(f.requests.length, 0);
     const interpreted = { version: 2, objective: 'Find the return condition', clarification: '', perception: {
       kind: 'answer', explicitGoals: ['Find the condition'], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [],
@@ -1224,7 +1350,23 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
         assert.doesNotMatch(JSON.stringify(body), /Unrelated serial/);
         return response('The west lift can return after inspection.', body.model);
       });
-    const result = await send(true) as VelaRequest;
+    const current = (await f.core.command('desktop', { type: 'snapshot' })).resources.find(item => item.id === note.id)!;
+    const selectedPreview = await f.core.command('velaRequestPreview', { intent, resourceIds: [note.id],
+      resourceRefs: [{ id: note.id, kind: 'resource', version: current.version, title: current.title }],
+      providerId: 'openai-api-vela', model: 'gpt-6-luna', adaptive: true, semanticContext: true });
+    assert.equal(selectedPreview.sendDisposition, 'standing-selected-evidence');
+    const selectedReview = await f.core.command('velaNativeReview', { previewId: selectedPreview.id, signature: selectedPreview.signature });
+    const admission = { previewId: selectedPreview.id, signature: selectedPreview.signature,
+      reviewDigest: selectedReview.reviewDigest, directSend: true as const };
+    await assert.rejects(f.core.command('authorizeVelaRequest', { ...admission, reviewDigest: '0'.repeat(64) }), /vela_native_review_required/);
+    const grant = await f.core.command('authorizeVelaRequest', admission);
+    await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
+    await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: true });
+    await assert.rejects(f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds: [note.id], authorizeProvider: true, previewId: selectedPreview.id, grantId: grant.grantId,
+    } }), /native_vela_grant_expired|vela_preview_expired/);
+    assert.equal(f.requests.length, 0);
+    const result = await send(true, current.version) as VelaRequest;
     assert.equal(result.state, 'responded');
     assert.equal(f.requests.length, 5);
     const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
@@ -2194,7 +2336,8 @@ test('reviewed CIE cites a selected local file and fences physical replacement b
   }
 });
 
-test('reviewed CIE treats extracted document coverage as partial and keeps extraction notices out of citations', async () => {
+for (const scenario of ['standing', 'evaluation', 'provider failure', 'interrupt', 'revoke'] as const) test('selected DOCX broker analysis: '+scenario, {timeout:15_000}, async () => {
+  const evaluation = scenario === 'evaluation';
   const bytes = docxFixture();
   let bodyText: string;
   const f = fixture(true, true, { extract: async (input, signal) => {
@@ -2212,11 +2355,29 @@ test('reviewed CIE treats extracted document coverage as partial and keeps extra
     const { resource } = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file', selection: { kind: 'file', path } });
     const intent = 'Which text was extracted from the table?';
     const resourceIds = [resource.id];
+    const resourceRefs = [{ id: resource.id, kind: 'resource' as const, resourceKind: 'file',
+      title: resource.title, version: resource.version }];
+    const runtime=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+    const claim={profileId:runtime.readLedgerProfile()!.profileId,configurationVersion:1,
+      claimToken:'a'.repeat(64),bindingDigest:'b'.repeat(64)};
     const preview = await f.core.command('velaRequestPreview', { intent, resourceIds, adaptive: true, providerId: 'openai-api-vela',
-      model: 'gpt-6-luna', semanticContext: true });
+      model: 'gpt-6-luna', semanticContext: true, resourceRefs });
+    assert.equal(preview.sendDisposition, 'standing-selected-evidence');
     const review = await f.core.command('velaNativeReview', { previewId: preview.id, signature: preview.signature });
     assert.match(review.context.included[0].content, /Extracted DOCX body text/);
-    const { grantId } = await f.core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature, reviewDigest: review.reviewDigest });
+    const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    const send = () => velaCommand({
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      directMessageSend: true, routeNative: true, dialog: {},
+      call: (name: string,input: any) => evaluation&&name==='velaRequestPreview'
+        ? f.core.previewVelaEvaluation(input,claim) : (f.core.command as any)(name,input),
+      reviewProvider: async () => {
+        assert.ok(evaluation,'standing file analysis opened the sharing modal');
+        return true;
+      },
+      input: { name: 'request', input: { intent, resourceIds, resourceRefs, authorizeProvider: true,
+        providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
+    }) as Promise<VelaRequest>;
     const proposal = (key: string) => ({ version: 2, objective: intent, clarification: '',
       perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
       needs: [{ key, question: intent, query: 'table text' }] });
@@ -2224,19 +2385,82 @@ test('reviewed CIE treats extracted document coverage as partial and keeps extra
       { key, status: 'supported', passages: [{ source: 'e1', quote }], query: '' },
     ] });
     const reply = (value: unknown) => (body: any) => response(JSON.stringify(value), body.model);
+    let signalFinalDispatch!: () => void;
+    const finalDispatch = new Promise<void>(resolve=>{signalFinalDispatch=resolve;});
+    let releaseProvider!: () => void;
+    const providerReleased = new Promise<void>(resolve=>{releaseProvider=resolve;});
     f.replies.push(reply(proposal('day')), reply(assessment('day', 'The pump inspection is on Tuesday.')), reply(proposal('table')),
       body => {
         assert.deepEqual(JSON.parse(body.input[0].content).excerpts, [
           { handle: 'e1', sourceKind: 'file', title: resource.title, text: bodyText, partial: true },
         ]);
         return reply(assessment('table', 'Table cell'))(body);
-      }, body => {
+      }, async body => {
         assert.equal(JSON.parse(body.input[0].content).evidence.searchCoverage, 'partial');
         assert.doesNotMatch(JSON.stringify(body.input), /Extracted DOCX body text/);
+        signalFinalDispatch();
+        if (scenario === 'provider failure') return new Response(null,{status:400});
+        if (scenario === 'interrupt' || scenario === 'revoke') await providerReleased;
         return response('The extracted body contains “Table cell.”', body.model);
       });
-    const result = await f.core.command('vela', { name: 'request', input: { intent, resourceIds, authorizeProvider: true, previewId: preview.id, grantId } }) as VelaRequest;
+    const pending = send();
+    if (scenario === 'interrupt' || scenario === 'revoke') {
+      try {
+        await Promise.race([finalDispatch,pending.then(()=>assert.fail('request settled before final dispatch'))]);
+        const running = Object.values((await f.core.command('snapshot',{})).executions).find(execution=>execution.state==='dispatching' && execution.commandId.startsWith('vela-api:'));
+        assert.ok(running);
+        if (scenario === 'interrupt') {
+          assert.deepEqual(await f.core.command('interrupt',{executionId:running.id}),{requested:true,confirmed:false});
+        } else {
+          assert.equal((await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:false})).enabled,false);
+        }
+      } finally {
+        releaseProvider();
+      }
+    }
+    const result = await pending;
+    if (scenario === 'provider failure' || scenario === 'interrupt' || scenario === 'revoke') {
+      const outcome = scenario === 'provider failure' ? 'failed' : 'unknown';
+      assert.equal(result.state,outcome);
+      assert.equal(result.response,undefined);
+      assert.equal(f.requests.length,5);
+      assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,5);
+      await f.reopen();
+      const restoredExecution = Object.values((await f.core.command('snapshot',{})).executions)
+        .find(execution=>execution.commandId==='vela-api:'+result.id);
+      assert.equal(restoredExecution?.state,outcome);
+      const state = await f.core.command('vela',{name:'state',input:{}});
+      const restored = (state as {requests:VelaRequest[]}).requests.find(request=>request.id===result.id);
+      assert.equal(restored?.state,result.state);
+      assert.equal(restored?.response,undefined);
+      assert.equal(f.requests.length,5);
+      return;
+    }
     assert.equal(result.state, 'responded');
+    assert.equal(f.requests.length, 5);
+    assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 5);
+    if(evaluation){
+      const expected=runtime.readEvaluationAdmissions(claim)!;
+      assert.equal(expected.length,5);
+      assert.ok(expected.some(stage=>stage.requestId===result.id));
+      assert.equal(runtime.readLedgerReceipts({...claim,expected}).state,'terminal-receipts');
+      await f.reopen();
+      const reopened=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+      assert.deepEqual(reopened.readEvaluationAdmissions(claim),expected);
+      assert.equal(reopened.readLedgerReceipts({...claim,expected}).state,'terminal-receipts');
+      const recovered=f.core.readVelaEvaluationResult(claim,expected);
+      assert.equal(recovered.state,'verified-answer');
+      assert.equal(recovered.requestId,result.id);
+      assert.equal(recovered.messageId,result.response!.messageId);
+      assert.equal(recovered.answer,'The extracted body contains “Table cell.”');
+      assert.equal(recovered.answerDigest,result.response!.contentDigest);
+      assert.deepEqual(f.core.readVelaEvaluationResult(claim,expected.slice(1)),{state:'unresolved'});
+      assert.deepEqual(f.core.readVelaEvaluationResult({...claim,bindingDigest:'c'.repeat(64)},expected),{state:'unresolved'});
+      assert.equal(f.requests.length,5);
+      return;
+    }
+    writeFileSync(path, 'Replaced synthetic source');
+    await assert.rejects(send(), /source_changed|stale_vela_preview/);
     assert.equal(f.requests.length, 5);
   } finally {
     await f.close();
