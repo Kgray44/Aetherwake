@@ -24,6 +24,43 @@ test("turning off ChatGPT memory requires current gesture and forwards only a ve
   ]);
 });
 
+test("source revocation only commits the native binding after confirmation and renewed admission", async () => {
+  const binding = { conversationId: "chat", messageId: "message", expectedRevision: 7 };
+  for (const outcome of ["apply", "cancel", "frame", "reserve", "gesture"]) {
+    const calls = [];
+    let current = true;
+    let storageAllowed = true;
+    const operation = managePersonalMemory({
+      input: { type: "revokeSource", id: "fact", version: 3, messageId: "forged" },
+      trustedFrame: () => current,
+      observeGesture: () => outcome !== "gesture",
+      allowWrite: () => storageAllowed,
+      async call(command, request) {
+        calls.push([command, request]);
+        return request.type === "previewSourceRevocation"
+          ? { binding, sourceText: "Synthetic original" }
+          : { erasedFacts: 2 };
+      },
+      async confirm(review) {
+        assert.deepEqual(review, { action: "revokeSource", sourceText: "Synthetic original" });
+        current = outcome !== "frame";
+        storageAllowed = outcome !== "reserve";
+        return outcome !== "cancel";
+      },
+    });
+    if (outcome === "apply") assert.deepEqual(await operation, { status: "applied", erasedFacts: 2 });
+    if (outcome === "cancel") assert.deepEqual(await operation, { status: "cancelled" });
+    if (outcome === "frame") await assert.rejects(operation, /personal_memory_frame_changed/);
+    if (outcome === "reserve") await assert.rejects(operation, /storage_reserve_admission_denied/);
+    if (outcome === "gesture") await assert.rejects(operation, /personal_memory_user_gesture_required/);
+    const expected = outcome === "gesture" ? [] : [
+      ["personalMemoryManagementNative", { type: "previewSourceRevocation", id: "fact", version: 3 }],
+    ];
+    if (outcome === "apply") expected.push(["personalMemoryRevokeSourceNative", binding]);
+    assert.deepEqual(calls, expected);
+  }
+});
+
 test("management keeps review private and cancels after frame loss", async () => {
   const calls = [];
   let current = true;

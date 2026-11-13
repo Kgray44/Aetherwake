@@ -6732,6 +6732,21 @@ export class BackendCore {
       switch (request?.type) {
         case 'list': return await review.inspect({ after: request.after, limit: 20 }) as CommandMap[K]['output'];
         case 'read': return await review.read(request.id) as CommandMap[K]['output'];
+        case 'previewSourceRevocation': {
+          const fact = await review.read(request.id);
+          ensure(fact.version === request.version, 'stale_personal_context_version');
+          const source = fact.provenance;
+          ensure(source.kind === 'conversation-message', 'conversation_source_unavailable');
+          const { conversationId, messageId } = source;
+          const message = this.graph.readOwnMessage(this.gid(conversationId), messageId);
+          ensure(message?.role === 'user' && message.provenance === 'user' &&
+            this.productResourceAccess(conversationId, messageId) && String(message.sequence) === source.version &&
+            createHash('sha256').update(message.content).digest('hex') === source.contentDigest, 'conversation_source_unavailable');
+          return {
+            binding: { conversationId, messageId, expectedRevision: this.state.revisions[conversationId] },
+            sourceText: message.content,
+          } as CommandMap[K]['output'];
+        }
         case 'preview': return await review.previewManagement(request.request) as CommandMap[K]['output'];
         case 'commit': return await review.commitManagement(request.review) as CommandMap[K]['output'];
         case 'cancel': review.cancelManagement(request.ticket); return null as CommandMap[K]['output'];
