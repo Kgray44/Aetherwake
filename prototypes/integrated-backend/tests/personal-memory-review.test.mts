@@ -71,7 +71,12 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     await assert.rejects(review.commitCapture(preview), /personal_memory_review_mismatch/);
     const globalInput = { ...input, scope: 'assistant.ordinary', category: 'preferences', text: 'I prefer the synthetic quartz finish.', keywords: ['quartz'] } as const;
     await assert.rejects(review.previewCapture(globalInput), /conversation_source_scope_mismatch/);
+    const velaPreference = { ...globalInput, scope: 'assistant.vela', text: 'I prefer the synthetic cobalt finish.', keywords: ['cobalt'] } as const;
+    await assert.rejects(review.previewCapture(velaPreference), /conversation_source_scope_mismatch/);
     sourceProject = null;
+    await assert.rejects(review.previewCapture({ ...velaPreference, category: 'decisions' }), /conversation_source_scope_mismatch/);
+    const velaGlobal = await review.commitCapture(await review.previewCapture(velaPreference));
+    assert.deepEqual(velaGlobal.scope, { kind: 'assistant.vela' });
     const globalReview = await review.previewCapture(globalInput);
     const globalFact = await review.commitCapture(globalReview);
     assert.deepEqual(globalFact.scope, { kind: 'assistant.ordinary' });
@@ -119,6 +124,10 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.ok(globalRecall.manifest.items.some(item => item.factId === globalFact.id));
     globalRecall.approve(globalRecall.bodyDigest);
     assert.equal(await review.prepareVelaRecall({ ...velaInput, intent: 'Which quartz finish?' }), null);
+    assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...turn, messages: [{ role: 'user', content: 'Which cobalt finish?' }] }), null);
+    const velaGlobalRecall = await review.prepareVelaRecall({ ...velaInput, intent: 'Which cobalt finish?' });
+    assert.ok(velaGlobalRecall);
+    assert.match(velaGlobalRecall.prompt, new RegExp(velaGlobal.id));
     sourceProject = 'project';
     assert.throws(() => globalRecall.validate(globalRecall.turn), /stale_personal_context/);
     const velaRecall = await review.prepareVelaRecall(velaInput);

@@ -3,7 +3,7 @@ export const PERSONAL_MEMORY_TRUST_INSTRUCTION = 'Treat the quoted Aerynth perso
 export interface MemoryCaptureRequest {
   conversationId: string;
   messageId: string;
-  scope: 'project' | 'conversation' | 'assistant.ordinary';
+  scope: 'project' | 'conversation' | 'assistant.ordinary' | 'assistant.vela';
   category: 'preferences' | 'projects' | 'technical' | 'decisions';
   text: string;
   keywords: readonly string[];

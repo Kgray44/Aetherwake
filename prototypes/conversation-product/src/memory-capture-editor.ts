@@ -61,7 +61,8 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
   field('Memory', text);
   const scope = select('Scope', options.projectAvailable
     ? [['conversation', 'This conversation'], ['project', 'This project']]
-    : [['conversation', 'This conversation'], ['assistant.ordinary', 'All ordinary chats (preferences only)']]);
+    : [['conversation', 'This conversation'], ['assistant.ordinary', 'All ordinary chats (preferences only)'],
+      ['assistant.vela', 'All Vela chats (preferences only)']]);
   const category = select('Category', [['technical', 'Technical fact'], ['decisions', 'Decision'],
     ['preferences', 'Preference'], ['projects', 'Project detail']]);
   if (candidate?.category) category.value = candidate.category;
@@ -82,8 +83,8 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
   form.addEventListener('submit', event => {
     event.preventDefault();
     if (review.disabled) return;
-    if (scope.value === 'assistant.ordinary' && category.value !== 'preferences') {
-      options.report('Choose Preference to save a memory for all ordinary chats.');
+    if ((scope.value === 'assistant.ordinary' || scope.value === 'assistant.vela') && category.value !== 'preferences') {
+      options.report('Choose Preference to save a memory across chats.');
       return;
     }
     const terms = [...new Set(keywords.value.split(',').map(term => term.trim()).filter(Boolean))];

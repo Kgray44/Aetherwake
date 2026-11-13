@@ -214,7 +214,7 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
   if (experience === "memory-capture") {
     const draft = review?.draft;
     const scope = draft?.scope;
-    const globalPreference = scope?.kind === "assistant.ordinary" && draft.category === "preferences" && scope.id === undefined;
+    const globalPreference = ["assistant.ordinary", "assistant.vela"].includes(scope?.kind) && draft.category === "preferences" && scope.id === undefined;
     const scoped = ["project", "conversation"].includes(scope?.kind) && typeof scope.id === "string" &&
       scope.id.trim() && scope.id.length <= 200;
     if (typeof review?.sourceText !== "string" || Buffer.byteLength(review.sourceText) > 16384 ||
@@ -225,7 +225,7 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
         draft.keywords.some(keyword => typeof keyword !== "string" || !keyword.trim() || keyword.length > 64))
       throw Error("invalid_native_memory_review");
     const styleHash = createHash("sha256").update(css).digest("base64");
-    const scopeName = globalPreference ? "All ordinary chats" : `${scope.kind === "project" ? "Project" : "Conversation"} ${escape(scope.id)}`;
+    const scopeName = globalPreference ? (scope.kind === "assistant.vela" ? "All Vela chats" : "All ordinary chats") : `${scope.kind === "project" ? "Project" : "Conversation"} ${escape(scope.id)}`;
     const categoryName = { preferences: "Preference", projects: "Project detail", technical: "Technical fact", decisions: "Decision" }[draft.category];
     const storage = review.enableStorage ? "<p>Enable local memory storage and save this fact. Provider sharing settings stay as they are.</p>"
       : "<p>Save this fact to local memory.</p>";

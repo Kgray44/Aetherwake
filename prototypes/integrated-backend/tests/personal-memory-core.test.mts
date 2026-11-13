@@ -170,6 +170,13 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     const saved = await core.command('personalMemoryCaptureCommitNative', await core.command('personalMemoryCapturePreviewNative', {
       conversationId: chat.resourceId, messageId: message.id, scope: 'project', category: 'decisions', text: content, keywords: ['quartz', 'relay'],
     }));
+    const preferenceChat = await core.command('createConversation', { title: 'Synthetic preferences', commandId: 'preferences-chat' });
+    const preference = await core.command('addMessage', { resourceId: preferenceChat.resourceId, role: 'user',
+      content: 'I prefer the synthetic amber enclosure.', expectedRevision: preferenceChat.revision, commandId: 'preference-message' });
+    const global = await core.command('personalMemoryCaptureCommitNative', await core.command('personalMemoryCapturePreviewNative', {
+      conversationId: preferenceChat.resourceId, messageId: preference.id, scope: 'assistant.vela', category: 'preferences',
+      text: 'I prefer the synthetic amber enclosure.', keywords: ['amber', 'enclosure'],
+    }));
     const policy = await core.command('personalMemoryPolicyNative', {});
     assert.equal(policy.velaEnabled, false);
     await core.command('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: policy.version });
@@ -183,6 +190,11 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
     const input = { intent: 'Which quartz relay should I use?', resourceIds: [], adaptive: true,
       providerId: 'openai-api-vela', useMemory: true } as const;
+    const globalPreview = await core.command('velaRequestPreview', { ...input, resourceIds: [], intent: 'Which amber enclosure?' });
+    const globalReview = await core.command('velaNativeReview', { previewId: globalPreview.id, signature: globalPreview.signature });
+    assert.match(globalReview.prompt, new RegExp(global.id));
+    assert.match(globalReview.prompt, new RegExp(preference.id));
+    assert.doesNotMatch(globalReview.prompt, new RegExp(saved.id));
     const indirect = { ...input, resourceIds: [] as string[], intent: 'What did we settle on?', includeRecentHistory: false };
     await assert.rejects(core.command('velaRequestPreview', indirect), /personal_memory_no_eligible_context/);
     const base = await core.command('velaRequestPreview', { ...indirect, useMemory: undefined });
