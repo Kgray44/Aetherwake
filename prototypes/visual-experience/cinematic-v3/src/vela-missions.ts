@@ -150,13 +150,20 @@ export function missionTaskControls(
 ) {
   const active =
     mission.disposition !== "cancelled" && mission.outcome !== "verified";
+  const attempt = task.attempts.at(-1), receipt = attempt?.backendInspection;
+  // This offers host readback only; the renderer cannot establish receipt validity or quiescence.
+  const reconcile = active && task.executor === "inspect.backend-source" && !!attempt?.id &&
+    (task.state === "failed" || task.state === "uncertain") &&
+    receipt?.contract === "aerynth.backend-inspection-terminal@1" && receipt.missionId === mission.id &&
+    receipt.taskId === task.id && receipt.attemptId === attempt.id;
   return {
+    reconcile,
     retry:
-      active &&
+      reconcile || (active &&
       task.executor !== "chatgpt.specialist" &&
       task.executor !== "api.specialist" &&
       (task.state === "failed" || task.state === "blocked") &&
-      task.attempts.length < task.maxAttempts,
+      task.attempts.length < task.maxAttempts),
     priority: active && task.state === "queued",
     cancel:
       active &&
@@ -811,14 +818,10 @@ export function createVelaMissionView(
       "Start opens a native picker for up to four tracked Node tests. You will review the exact checkout and command before it runs."));
     if (plan.planning) section.append(el("p", "vela-core-meta",
       `Proposed by ${plan.planning.model}. Review the tasks and dependencies before starting.`));
-    section.append(
-      artifactReview
-        ? el(
-            "p",
-            "vela-core-meta",
-            `Start opens native review for one billable image request to OpenAI using ${artifactReview.model} at ${artifactReview.quality} quality. Approval saves a ${artifactReview.width} × ${artifactReview.height} PNG and text notes as managed workspace files ${artifactReview.files.join(" and ")}.`,
-          )
-        : externalReview
+    if (artifactReview) section.append(el("p", "vela-core-meta",
+      `Start opens native review for one billable image request to OpenAI using ${artifactReview.model} at ${artifactReview.quality} quality. Approval saves a ${artifactReview.width} × ${artifactReview.height} PNG and text notes as managed workspace files ${artifactReview.files.join(" and ")}.`));
+    if (externalReview || !artifactReview) section.append(
+      externalReview
         ? el(
             "p",
             "vela-core-meta",
@@ -1412,7 +1415,7 @@ export function createVelaMissionView(
         );
       if (task.detail)
         item.append(el("p", "vela-core-meta", contextDetail[task.detail] ?? task.detail.replace(/_/g, " ")));
-      const available = retired ? { priority: false, retry: false, cancel: false } : missionTaskControls(current, task),
+      const available = retired ? { priority: false, retry: false, cancel: false, reconcile: false } : missionTaskControls(current, task),
         controls = actions();
       if (available.priority) {
         const priority = select(
@@ -1432,7 +1435,7 @@ export function createVelaMissionView(
       }
       if (available.retry)
         controls.append(
-          control("Retry task", `${task.id}-retry`, current, () => ({
+          control(available.reconcile ? "Recover original result" : "Retry task", `${task.id}-retry`, current, () => ({
             type: "retry",
             taskId: task.id,
           })),

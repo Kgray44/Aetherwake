@@ -144,6 +144,7 @@ export interface MissionAttemptPhaseTiming {
   verification?: MissionPhaseInterval;
 }
 export interface MissionAttempt {
+  backendInspection?: import('./mission-source-receipt.mts').BackendInspectionReceipt;
   id: string;
   executor: string;
   admittedAt: string;
@@ -154,6 +155,13 @@ export interface MissionAttempt {
   context?: MissionContextPackage['manifest'];
   admission?: MissionAdmission;
   resourceLease?: import('./resource-policy.mts').ResourceLease['receipt'];
+  /** Host-only gate; absence on legacy records is not proof of no dispatch. */
+  dispatch?: { contract: 'aerynth.mission-dispatch@1'; attemptId: string;
+    state: 'reserved' | 'entered'; reservedRevision: number };
+  /** Terminal proof for the never-dispatched class, not external-effect readback. */
+  reconciliation?: { contract: 'aerynth.mission-no-dispatch@1'; attemptId: string;
+    reservedRevision: number; observedRevision: number; observedAt: string;
+    authority: 'mission-service:dispatch-gate'; outcome: 'not-dispatched' };
   timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number; phases?: MissionAttemptPhaseTiming };
   telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string;
     providerEvidence?: MissionPlanningReceipt['providerEvidence'];
@@ -419,6 +427,8 @@ export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSum
   { kind: 'mission-report'; missionId: string; messageId: string } | null;
 
 export interface MissionExecutionContext {
+  /** Trusted fixed-source producer only; unavailable to renderer/model tools. */
+  recordBackendInspection?(terminal: import('./mission-source-receipt.mts').BackendInspectionTerminal): void;
   /** Cooperative checkpoint request. Task cancellation remains a separate signal. */
   resourceCheckpoint?: AbortSignal;
   missionId: string;
