@@ -753,8 +753,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         if (!observed || observed.providerId !== 'chatgpt-plan-responses' || observed.providerId !== input.providerId ||
             observed.state !== 'provider_completed' || observed.commandId !== commandId ||
             observed.resourceId !== resourceId || !observed.inputMessageId) return;
+        let detail:Detail;
+        try {
+          detail = await port.command('detail',{resourceId,limit:50,aroundMessageId:observed.inputMessageId});
+        } catch (error) {
+          // A disconnected read can use the existing one-shot late completion check.
+          // Access or evidence failures still retire it immediately.
+          if (errorText(error)!=='backend_disconnected')reconcileSubmittedTurn=undefined;
+          throw error;
+        }
         reconcileSubmittedTurn = undefined;
-        const detail = await port.command('detail',{resourceId,limit:50,aroundMessageId:observed.inputMessageId});
+        if (accessRevoked) return;
         if (acceptedConversationSubmission(input,observed,detail)) return detail;
       };
       const acknowledge = async (accepted: string) => {

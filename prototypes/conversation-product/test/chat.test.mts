@@ -53,13 +53,22 @@ test('confirmed submission stays accepted when the host refresh fails', async ()
  } finally { await chat?.dispose(); f.restore(); }
 });
 
-for (const matchingAnchor of [true, false]) test('lost send response checks the exact authored message (matching anchor: '+matchingAnchor+')', async () => {
+for (const outcome of ['matching','wrong anchor','disconnected read','still disconnected']) test('lost send response checks the exact authored message ('+outcome+')', async () => {
  const f = fixture('chatgpt-plan-responses');
+ const matchingAnchor = outcome !== 'wrong anchor';
+ let evidenceReads = 0;
+ const port = {async command(name:string,input:any){
+  if (name==='detail'&&input.aroundMessageId==='message:confirmed') {
+   evidenceReads++;
+   if (outcome==='still disconnected'||outcome==='disconnected read'&&evidenceReads===1) throw Error('backend_disconnected');
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
  let chat, observe!: (observation: ConversationExecutionObservation) => void;
  try {
   const resourceId = f.draft.resourceId;
   let commandId = '';
-  chat = mountConversationChat(f.view.root, { port: f.port, resourceId, execution: {
+  chat = mountConversationChat(f.view.root, { port, resourceId, execution: {
    observe(_id, listener) { observe = listener; return () => {}; },
    async cancel() {},
    async refresh() { observe({ execution: {
@@ -76,9 +85,13 @@ for (const matchingAnchor of [true, false]) test('lost send response checks the 
   f.detail.conversation.revision++;
   f.pending!.reject(Error('synthetic response lost'));
   await chat.whenSubmissionSettled();
-  assert.equal(f.draft.content, matchingAnchor ? '' : 'Saved unsent text');
-  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, matchingAnchor ? /Message accepted/ : /could not be confirmed/);
+  const confirmed=matchingAnchor&&outcome!=='still disconnected';
+  assert.equal(f.draft.content, confirmed ? '' : 'Saved unsent text');
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, confirmed ? /Message accepted/ : /not confirmed|could not be confirmed/);
   assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
+  // A successful retry is followed by one display refresh around the accepted message.
+  if(outcome==='disconnected read')assert.equal(evidenceReads,3);
+  if(outcome==='still disconnected')assert.equal(evidenceReads,2);
  } finally { await chat?.dispose(); f.restore(); }
 });
 
