@@ -1250,11 +1250,11 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
   } finally { await f.close(); }
 });
 
-test('sealed CIE cases resume through native review and canonical usage accounting', async () => {
-  const f = fixture(true, true);
-  const journalPath = join(f.directory, 'blind-evaluation.sqlite');
+async function verifySealedReviewedCie(live?: { credential: string; model: string; commit: string; tree: string; journalPath: string }) {
+  const f = fixture(true, true, undefined, live?.credential);
+  const journalPath = live?.journalPath ?? join(f.directory, 'blind-evaluation.sqlite');
   const bytes = readFileSync(new URL('../../../scripts/benchmarks/cie-quality/cases.public.json', import.meta.url));
-  const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const identity = live ? { commit: live.commit, tree: live.tree } : { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
   const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
   const signal = new AbortController().signal;
   const usage = () => f.core.command('velaApiUsageStatus', {});
@@ -1264,9 +1264,10 @@ test('sealed CIE cases resume through native review and canonical usage accounti
   const assess = (key: string, quote: string) => ({ version: 3, clarification: '',
     assessment: [{ key, status: 'supported', query: '', passages: [{ source: 'e1', quote }] }] });
   const reply = (value: unknown) => (body: { model: string }) => response(JSON.stringify(value), body.model);
+  const predictions = [];
   try {
     await f.ready();
-    for (const expectedCase of ['blind-001', 'blind-002']) {
+    for (const expectedCase of live ? ['blind-001'] : ['blind-001', 'blind-002']) {
       const journal = openBlindJournal(journalPath);
       try {
         let hostError: unknown;
@@ -1287,9 +1288,9 @@ test('sealed CIE cases resume through native review and canonical usage accounti
             const quote = input.sources[0].text;
             const eventCursor = (await f.core.command('replay', { limit: 1 })).latest;
             const before = await usage();
-            if (!before.usedToday) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
+            if (!live && !before.usedToday) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
               reply(assess('day', 'The pump inspection is on Tuesday.')));
-            f.replies.push(reply(interpret(input.request, input.sources[0].title)), reply(assess('fact', quote)),
+            if (!live) f.replies.push(reply(interpret(input.request, input.sources[0].title)), reply(assess('fact', quote)),
               body => {
                 const packet = JSON.parse(body.input[0].content);
                 assert.deepEqual(packet.evidence.coverage[0].passages, [
@@ -1306,30 +1307,58 @@ test('sealed CIE cases resume through native review and canonical usage accounti
                 return true;
               },
               input: { name: 'request', input: { intent: input.request, resourceIds, authorizeProvider: true,
-                providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
+                providerId: 'openai-api-vela', model: live?.model ?? 'gpt-6-luna', semanticContext: true } },
             }) as VelaRequest;
             assert.equal(result.state, 'responded', result.errorCode);
             const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
             const answer = state.conversation?.messages.find(message => message.id === result.response?.messageId)?.content;
-            assert.equal(answer, quote);
+            assert.ok(answer?.trim());
+            if (!live) assert.equal(answer, quote);
             assert.equal(f.replies.length, 0);
-            const simulatedCalls = (await usage()).usedToday - before.usedToday;
-            assert.equal(simulatedCalls, expectedCase === 'blind-001' ? 5 : 3);
+            const calls = (await usage()).usedToday - before.usedToday;
+            if (live) assert.ok(calls >= 3 && calls <= 6);
+            else assert.equal(calls, expectedCase === 'blind-001' ? 5 : 3);
             const replay = await f.core.command('replay', { after: eventCursor, limit: 500 });
-            const usageEvents = replay.events.filter(event => event.type === 'provider/usage' && event.classification === 'simulated');
-            assert.equal(usageEvents.length, simulatedCalls);
-            const simulatedTokens = usageEvents.reduce((total, event) => total + (event.payload.usage?.totalTokens ?? 0), 0);
-            assert.equal(simulatedTokens, simulatedCalls * 140);
-            return { answer, simulatedCalls, simulatedTokens };
+            assert.equal(replay.truncated, false);
+            const usageEvents = replay.events.filter(event => event.type === 'provider/usage' &&
+              event.classification === (live ? 'reported' : 'simulated'));
+            const tokenSamples = usageEvents.flatMap(event => event.payload.usage?.totalTokens ?? []);
+            const totalTokens = tokenSamples.length === calls ? tokenSamples.reduce((total, value) => total + value, 0) : null;
+            if (!live) assert.equal(totalTokens, calls * 140);
+            return { answer, calls, totalTokens, tokenSamples: tokenSamples.length, requestedModel: live?.model ?? 'gpt-6-luna',
+              transport: live ? 'live' : 'synthetic' };
           } catch (error) { hostError = error; throw error; }
         }, signal, { journal, maxCases: 1, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
         if (hostError) throw hostError;
         assert.equal(checkpoint.stopped, null);
         assert.equal(checkpoint.results.at(-1)?.id, expectedCase);
+        predictions.push(checkpoint);
       } finally { journal.close(); }
     }
-    assert.equal((await usage()).usedToday, 8);
+    if (!live) assert.equal((await usage()).usedToday, 8);
+    return predictions.at(-1)!;
   } finally { await f.close(); }
+}
+
+test('sealed CIE cases resume through native review and canonical usage accounting', async () => {
+  await verifySealedReviewedCie();
+});
+
+test('authorized live CIE smoke returns a sealed native prediction', {
+  skip: process.env.AERYNTH_VERIFY_LIVE_CIE !== '1', timeout: 120_000,
+}, async t => {
+  const credential = process.env.OPENAI_API_KEY;
+  const model = process.env.AERYNTH_CIE_LIVE_MODEL;
+  const journalPath = process.env.AERYNTH_CIE_LIVE_JOURNAL;
+  assert.ok(process.platform === 'win32' && credential && model && journalPath && isAbsolute(journalPath),
+    'Live CIE smoke requires Windows, an authorized OPENAI_API_KEY, AERYNTH_CIE_LIVE_MODEL and an absolute AERYNTH_CIE_LIVE_JOURNAL path');
+  assert.equal(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim(), '');
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const tree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim();
+  delete process.env.OPENAI_API_KEY;
+  writeFileSync(journalPath, '', { flag: 'wx' });
+  const prediction = await verifySealedReviewedCie({ credential, model, commit, tree, journalPath });
+  t.diagnostic(JSON.stringify({ predictionSha256: prediction.predictionSha256, cases: prediction.results.length }));
 });
 
 test('benchmark native reviewed CIE from request through canonical answer readback', {
