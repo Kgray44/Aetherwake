@@ -84,6 +84,19 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.equal(await review.prepareOrdinaryRecall('other-chat', turn), null);
     await review.setProviderUse('ordinary', true, enabledPolicy.version + 1);
     assert.throws(() => recall.validate(recall.turn), /stale_personal_context/);
+    const velaInput = { conversationId: 'other-chat', projectId: 'project', requestId: 'vela-recall',
+      intent: 'Which relay?', prompt: 'Trusted Vela envelope\n{"intent":"Which relay?"}' };
+    assert.equal(await review.prepareVelaRecall(velaInput), null);
+    const policy = (await review.inspect({ after: null, limit: 1 })).policy;
+    await review.setProviderUse('vela', true, policy.version);
+    const velaRecall = await review.prepareVelaRecall(velaInput);
+    assert.ok(velaRecall);
+    assert.match(velaRecall.prompt, /synthetic relay/);
+    assert.throws(() => velaRecall.validate(velaRecall.prompt), /personal_memory_disclosure_review_required/);
+    velaRecall.approve(velaRecall.promptDigest);
+    assert.doesNotThrow(() => velaRecall.validate(velaRecall.prompt));
+    assert.throws(() => velaRecall.validate(velaRecall.prompt + ' altered'), /personal_memory_body_changed/);
+    await assert.rejects(review.prepareVelaRecall({ ...velaInput, projectId: 'foreign-project' }), /canonical_scope_unavailable/);
     assert.equal(await review.prepareOrdinaryRecall('foreign-chat', turn), null);
     assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...turn, webSearch: true }), null);
     assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...turn, messages: [{ role: 'user', content: 'Weather tomorrow' }] }), null);
@@ -98,6 +111,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     await assert.rejects(review.commitCapture(stale), /conversation_source_unavailable/);
     await assert.rejects(review.read(saved.id), /conversation_source_unavailable/);
     assert.throws(() => recall.validate(recall.turn), /stale_personal_context/);
+    assert.throws(() => velaRecall.validate(velaRecall.prompt), /stale_personal_context/);
     enabled = true;
     const correction = await review.previewManagement({ action: 'correct', id: saved.id, version: saved.version, text: 'Use the revised synthetic relay' });
     await assert.rejects(review.commitManagement({ ...correction, text: 'Tampered' }), /personal_memory_review_mismatch/);
