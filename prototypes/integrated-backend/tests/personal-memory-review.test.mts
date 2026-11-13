@@ -123,6 +123,32 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.throws(() => velaRecall.validate(velaRecall.prompt + ' altered'), /personal_memory_body_changed/);
     const followup = { ...velaInput, requestId: 'anchored-vela-recall', intent: 'What did we settle on?' };
     assert.equal(await review.prepareVelaRecall(followup), null);
+    // The original wording misses. Only a validated evidence query may add search hints.
+    const cieProposal = { version: 2, objective: 'Recall the choice', clarification: '',
+      perception: { kind: 'recall', explicitGoals: [], inferredGoals: [], constraints: [],
+        capabilityHints: [], deliverables: ['text'], verification: [] },
+      needs: [{ key: 'choice', question: 'Which relay was selected?', query: 'synthetic relay' }] };
+    const expanded = await review.prepareVelaRecall(followup, cieProposal);
+    assert.ok(expanded);
+    assert.match(expanded.prompt, new RegExp(saved.id));
+    assert(!expanded.prompt.includes(cieProposal.objective));
+    expanded.approve(expanded.promptDigest);
+    assert.doesNotThrow(() => expanded.validate(expanded.prompt));
+    assert.equal(await review.prepareVelaRecall(followup, { ...cieProposal, projectId: 'project' }), null);
+    assert.equal(await review.prepareVelaRecall(followup, { ...cieProposal,
+      needs: [{ ...cieProposal.needs[0], sourceAnchors }] }), null);
+    const expandedPolicy = (await review.inspect({ after: null, limit: 1 })).policy;
+    await review.setProviderUse('vela', false, expandedPolicy.version);
+    assert.equal(await review.prepareVelaRecall(followup, cieProposal), null);
+    assert.throws(() => expanded.validate(expanded.prompt), /stale_personal_context/);
+    await review.setProviderUse('vela', true, expandedPolicy.version + 1);
+    const expandedAgain = await review.prepareVelaRecall(followup, cieProposal);
+    assert.ok(expandedAgain);
+    expandedAgain.approve(expandedAgain.promptDigest);
+    activeVelaProject = 'foreign-project';
+    assert.equal(await review.prepareVelaRecall({ ...followup, projectId: 'foreign-project' }, cieProposal), null);
+    assert.throws(() => expandedAgain.validate(expandedAgain.prompt), /stale_personal_context/);
+    activeVelaProject = 'project';
     const anchored = await review.prepareVelaRecall({ ...followup,
       sourceAnchors: [{ kind: 'conversation-message', conversationId: input.conversationId, messageId: input.messageId }] });
     assert.ok(anchored);
@@ -153,6 +179,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     await assert.rejects(review.read(saved.id), /conversation_source_unavailable/);
     assert.throws(() => recall.validate(recall.turn), /stale_personal_context/);
     assert.throws(() => velaRecall.validate(velaRecall.prompt), /stale_personal_context/);
+    assert.equal(await review.prepareVelaRecall(followup, cieProposal), null);
     enabled = true;
     const correction = await review.previewManagement({ action: 'correct', id: saved.id, version: saved.version, text: 'Use the revised synthetic relay' });
     await assert.rejects(review.commitManagement({ ...correction, text: 'Tampered' }), /personal_memory_review_mismatch/);

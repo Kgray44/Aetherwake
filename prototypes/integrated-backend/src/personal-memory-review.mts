@@ -4,6 +4,7 @@ export type { MemoryCaptureRequest as CaptureRequest } from '../../application-c
 import type { DatabaseSync } from 'node:sqlite';
 import type { ContextRequest, ConversationSourceRef, FactDraft, PersonalAuthorization, PersonalContextHost, PersonalPolicy, ScopeProof, ReviewedFact, RecordRef } from '../../personal-context/src/contracts.ts';
 import type { TurnInput } from '../../openai-provider/contracts.mts';
+import { parseSemanticHistoryProposal } from '../../vela-core/src/semantic-history.mts';
 import { attachPersonalMemory } from './personal-memory-prompt.mts';
 import { PersonalContextError, type PersonalContextService } from '../../personal-context/src/service.mts';
 
@@ -137,9 +138,12 @@ export function createPersonalMemoryReview(options: Options) {
     },
     /** Trusted conversational Vela preview, for the separately authorized API destination. */
     async prepareVelaRecall(input: { conversationId: string; projectId: string | null; requestId: string; intent: string; prompt: string;
-      sourceAnchors?: readonly ConversationSourceRef[] }) {
+      sourceAnchors?: readonly ConversationSourceRef[] }, cieProposal?: unknown) {
       requireOpen();
       const { conversationId, projectId, requestId, intent, prompt: base } = input;
+      // Accept search text only. Canonical target, scope, and authority come from the native owner.
+      const proposal = parseSemanticHistoryProposal(cieProposal);
+      const evidenceQueries = proposal?.version === 2 ? [...new Set(proposal.needs.map(need => need.query))] : [];
       const sourceAnchors = input.sourceAnchors?.map(anchor => structuredClone(anchor));
       const service = await options.open();
       requireOpen();
@@ -153,6 +157,7 @@ export function createPersonalMemoryReview(options: Options) {
           requestId, assistant: 'vela', providerId: 'openai-api-vela', query: intent, projectId, conversationId,
           sharedFactIds: [], includeBehavior: false, maxBytes: 4096, maxItems: 4,
           ...(sourceAnchors?.length ? { sourceAnchors } : {}),
+          ...(evidenceQueries.length ? { evidenceQueries } : {}),
         };
         const disclosure = prepareDisclosure(service, request, targetCurrent);
         const { manifest } = disclosure;

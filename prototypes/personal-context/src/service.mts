@@ -57,8 +57,14 @@ function draft(input: unknown): asserts input is FactDraft {
   check(source.kind === 'user-statement' ? exact(source, ['kind']) : source.kind === 'import' && exact(source, ['kind', 'id', 'version', 'start', 'end']) && id(source.id) && Number.isSafeInteger(source.version) && Number(source.version) >= 1 && Number.isSafeInteger(source.start) && Number(source.start) >= 0 && Number.isSafeInteger(source.end) && Number(source.end) > Number(source.start), 'invalid_provenance');
 }
 function request(value: ContextRequest) {
-  check(record(value) && Object.keys(value).every(k => ['requestId', 'assistant', 'providerId', 'query', 'projectId', 'conversationId', 'sharedFactIds', 'includeBehavior', 'maxBytes', 'maxItems', 'maxScan', 'sourceAnchors'].includes(k)) && id(value.requestId) && id(value.providerId) && (value.assistant === 'ordinary' || value.assistant === 'vela') && typeof value.query === 'string' && value.query.length <= 4000 && (value.projectId === null || id(value.projectId)) && (value.conversationId === null || id(value.conversationId)) && Array.isArray(value.sharedFactIds) && value.sharedFactIds.length <= 128 && value.sharedFactIds.every(id) && new Set(value.sharedFactIds).size === value.sharedFactIds.length && typeof value.includeBehavior === 'boolean', 'invalid_context_request');
+  check(record(value) && Object.keys(value).every(k => ['requestId', 'assistant', 'providerId', 'query', 'projectId', 'conversationId', 'sharedFactIds', 'includeBehavior', 'maxBytes', 'maxItems', 'maxScan', 'sourceAnchors', 'evidenceQueries'].includes(k)) && id(value.requestId) && id(value.providerId) && (value.assistant === 'ordinary' || value.assistant === 'vela') && typeof value.query === 'string' && value.query.length <= 4000 && (value.projectId === null || id(value.projectId)) && (value.conversationId === null || id(value.conversationId)) && Array.isArray(value.sharedFactIds) && value.sharedFactIds.length <= 128 && value.sharedFactIds.every(id) && new Set(value.sharedFactIds).size === value.sharedFactIds.length && typeof value.includeBehavior === 'boolean', 'invalid_context_request');
   check(Number.isSafeInteger(value.maxBytes) && value.maxBytes >= 1024 && value.maxBytes <= LIMITS.contextBytes && Number.isSafeInteger(value.maxItems) && value.maxItems >= 1 && value.maxItems <= 32 && (value.maxScan === undefined || Number.isSafeInteger(value.maxScan) && value.maxScan >= 1 && value.maxScan <= 512), 'invalid_context_budget');
+  if (value.evidenceQueries !== undefined) {
+    const queries = value.evidenceQueries;
+    check(Array.isArray(queries) && queries.length > 0 && queries.length <= 4 &&
+      queries.every(query => typeof query === 'string' && query.trim() && Buffer.byteLength(query) <= 512) &&
+      new Set(queries).size === queries.length, 'invalid_context_request');
+  }
   if (value.sourceAnchors !== undefined) {
     check(Array.isArray(value.sourceAnchors) && value.sourceAnchors.length <= 8 && value.sourceAnchors.every(anchor =>
       record(anchor) && exact(anchor, ['kind', 'conversationId', 'messageId']) && anchor.kind === 'conversation-message' &&
@@ -455,7 +461,8 @@ export class PersonalContextService {
       check(heads.length <= LIMITS.facts, 'personal_context_capacity_reached');
       const anchors = this.sourceCandidates(input, who.userId);
       if (anchors.size) heads.sort((a, b) => Number(anchors.has(String(b.id))) - Number(anchors.has(String(a.id))));
-      const query = words(input.query), candidates: { value: ReviewedFact; score: number; anchored: boolean; proofs: ScopeProof[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
+      const queries = [input.query, ...(input.evidenceQueries ?? [])].map(words);
+      const candidates: { value: ReviewedFact; score: number; primary: boolean; anchored: boolean; proofs: ScopeProof[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
       for (const row of heads) {
         const head = this.decodeHead(row);
         check(head.kind === 'fact' && head.scope, 'corrupt_personal_context');
@@ -466,20 +473,24 @@ export class PersonalContextService {
         try {
           const proof = this.proof(head.scope!); this.authorize('record.read', head.scope, this.ref(head)); const value = this.decode<ReviewedFact>(head), reason = this.usable(value, head, input, policy, sourceCache); if (reason) { omit(reason); continue; }
           const keywordTerms = words(value.keywords.join(' '));
-          const keywordMatches = [...keywordTerms].filter(word => query.has(word)).length;
-          const textMatches = [...words(value.text)].filter(word => query.has(word)).length;
-          const score = value.purpose === 'behavior' ? 1000
-            : keywordMatches ? 129 + keywordMatches : textMatches >= 2 ? textMatches : 0;
+          const textTerms = words(value.text);
+          const scores = queries.map(query => {
+            if (value.purpose === 'behavior') return 1000;
+            const keywordMatches = [...keywordTerms].filter(word => query.has(word)).length;
+            const textMatches = [...textTerms].filter(word => query.has(word)).length;
+            return keywordMatches ? 129 + keywordMatches : textMatches >= 2 ? textMatches : 0;
+          });
+          const score = scores[0] || Math.max(...scores);
           const provenance = value.provenance;
           const anchored = anchors.has(value.id) && provenance.kind === 'conversation-message' && input.sourceAnchors!.some(anchor =>
             anchor.conversationId === provenance.conversationId && anchor.messageId === provenance.messageId);
           if (!score && !anchored) { omit('irrelevant'); continue; }
           const proofs = [proof]; if (provenance.kind === 'import') proofs.push(this.proof(this.head(provenance.id)!.scope!));
-          candidates.push({ value, score, anchored, proofs });
+          candidates.push({ value, score, primary: scores[0] > 0, anchored, proofs });
         } catch (error) { if (error instanceof PersonalContextError && ['canonical_scope_unavailable', 'personal_context_not_authorized', 'private_content_unavailable'].includes(error.code)) { omit('unavailable'); continue; } throw error; }
       }
       // Reserve the bounded omission envelope before packing WHOLE reviewed facts; no text truncation.
-      candidates.sort((a, b) => Number(b.anchored) - Number(a.anchored) || b.score - a.score || a.value.id.localeCompare(b.value.id));
+      candidates.sort((a, b) => Number(b.anchored) - Number(a.anchored) || Number(b.primary) - Number(a.primary) || b.score - a.score || a.value.id.localeCompare(b.value.id));
       for (const candidate of candidates) {
         if (items.length >= input.maxItems) { omit('item-budget'); continue; }
         const oldScopes = scopes.length; for (const proof of candidate.proofs) if (!scopes.some(value => same(value, proof))) scopes.push(proof);

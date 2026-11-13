@@ -25,6 +25,8 @@ export interface ContextRequest {
   sharedFactIds: string[]; includeBehavior: boolean; maxBytes: number; maxItems: number; maxScan?: number;
   /** Exact source messages resolved by the trusted context owner. */
   sourceAnchors?: ConversationSourceRef[];
+  /** Bounded CIE search hints. These do not grant access or act as exact source anchors. */
+  evidenceQueries?: string[];
 }
 export interface ContextItem {
   factId: string; version: number; scope: PersonalScope; purpose: ReviewedFact['purpose']; category: Category;
