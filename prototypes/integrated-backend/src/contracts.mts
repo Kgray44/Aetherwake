@@ -263,6 +263,19 @@ export interface Options {
   syntheticTimerClock?: TimerClockReading;
 }
 export interface CommandMap {
+  personalMemoryRevokeSourceNative: { input: { conversationId: string; messageId: string; expectedRevision: number }; output: { revision: number; erasedFacts: number } };
+  personalMemoryCapturePreviewNative: { input: import('./personal-memory-review.mts').CaptureRequest; output: import('./personal-memory-review.mts').CaptureReview };
+  personalMemoryCaptureCommitNative: { input: import('./personal-memory-review.mts').CaptureReview; output: { id: string } };
+  personalMemoryCaptureCancelNative: { input: { id: string }; output: null };
+  personalMemoryPolicyNative: { input: { assistant?: 'ordinary' | 'vela'; enable?: boolean; expectedVersion?: number }; output: import('../../personal-context/src/contracts.ts').PersonalPolicy };
+  personalMemoryManagementNative: {
+    input: { type: 'list'; after: string | null } | { type: 'read'; id: string }
+      | { type: 'previewSourceRevocation'; id: string; version: number }
+      | { type: 'preview'; request: import('./personal-memory-review.mts').ManagementRequest }
+      | { type: 'commit'; review: import('./personal-memory-review.mts').ManagementReview }
+      | { type: 'cancel'; ticket: string };
+    output: unknown;
+  };
   hostOperationReviewNative:{input:{operationId:string;selection?:{kind:'codex-directory';directory:string}};output:import('../../application-contract/vela-host-operations.ts').VelaHostReviewBinding};
   hostOperationDispatchNative:{input:{binding:import('../../application-contract/vela-host-operations.ts').VelaHostReviewBinding;identityDigest:string;approvalDigest:string};output:import('../../application-contract/windows-maintenance.ts').WindowsMaintenanceDispatchClaim};
   hostOperationResultNative:{input:import('../../application-contract/vela-host-operations.ts').VelaHostOperationNativeResult;output:import('../../application-contract/vela-tools.ts').VelaHostOperationView};
