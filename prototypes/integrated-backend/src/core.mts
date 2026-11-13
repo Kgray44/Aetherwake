@@ -271,7 +271,7 @@ export function memoryFixtureOptions(descriptor: MemoryFixtureBootstrap): Option
     rendererEventTransport: true };
 }
 
-function memoryFixtureAllows(name: string, input: unknown): boolean {
+function memoryFixtureAllows(name: string, input: unknown, nativePolicyReview: boolean): boolean {
   const value = input as { type?: string; name?: string; providerId?: unknown; provider?: unknown;
     role?: string; kind?: string; input?: { providerId?: unknown; webSearch?: unknown } } | undefined;
   switch (name) {
@@ -286,7 +286,16 @@ function memoryFixtureAllows(name: string, input: unknown): boolean {
     case 'createConversation': return value?.providerId === undefined || value.providerId === 'local';
     case 'addMessage': return value?.role === 'user';
     case 'vela': return value?.name === 'state' || value?.name === 'open';
-    case 'personalMemoryPolicyNative': return !!value && Object.keys(value).length === 0;
+    case 'personalMemoryPolicyNative': {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      if (Object.keys(value).length === 0) return true;
+      const policy = value as CommandMap['personalMemoryPolicyNative']['input'];
+      return nativePolicyReview && Object.keys(policy).length === 3 &&
+        Object.keys(policy).every(key => ['assistant', 'enable', 'expectedVersion'].includes(key)) &&
+        (policy.assistant === 'ordinary' || policy.assistant === 'vela') &&
+        typeof policy.enable === 'boolean' && Number.isSafeInteger(policy.expectedVersion) && policy.expectedVersion! > 0;
+    }
+    case 'openResource': return true;
     case 'personalMemoryCapturePreviewNative':
     case 'personalMemoryCaptureCommitNative':
     case 'personalMemoryCaptureCancelNative':
@@ -5742,6 +5751,11 @@ export class BackendCore {
     const request=parseResourceOpeningInput(input),resourceId=request.resourceId,base={contract:RESOURCE_OPENING_CONTRACT,resourceId};
     const unavailable=(reason:'resource-unavailable'|'selection-unavailable'='resource-unavailable'):ResourceOpeningResult=>({...base,status:'unavailable',reason});
     return this.kernel.withTransaction(()=>{
+      if (this.fixtureMemory && (!request.selection || request.preferredPlacement ||
+          request.preferredPresentation === 'existing-placement' ||
+          !this.state.resources[resourceId] ||
+          !this.graph.ownsMessage(this.state.resources[resourceId], request.selection.messageId)))
+        return unavailable('selection-unavailable');
       const row=this.db.prepare('SELECT r.*,d.kind AS desktop_kind,d.metadata_json FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=?').get(resourceId);
       if(!row||row.state!=='active'||!this.libraryAuthorized({kind:'resource',id:resourceId})||!this.conversationReadAccess(resourceId))return unavailable();
       const actualKind=row.kind==='conversation'?'conversation':row.desktop_kind??(row.kind==='generic'?'reference':row.kind),kinds:CanonicalResourceKind[]=['conversation','note','research','task','task_group','reference','stream','agent','checklist','timeline','task_objective','clock_timer','file','link','folder'];
@@ -6909,8 +6923,9 @@ export class BackendCore {
     }
     return structuredClone(e);
   }
-  async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
-    if (this.fixtureMemory) ensure(memoryFixtureAllows(name, input), 'memory_fixture_command_denied');
+  async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input'],
+    nativePolicyReview = false): Promise<CommandMap[K]['output']> {
+    if (this.fixtureMemory) ensure(memoryFixtureAllows(name, input, nativePolicyReview), 'memory_fixture_command_denied');
     if (name === 'personalMemoryRevokeSourceNative') {
       const memory = this.personalMemory, review = this.personalMemoryReview;
       ensure(memory && review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');

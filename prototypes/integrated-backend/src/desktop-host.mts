@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline";
+import { timingSafeEqual } from "node:crypto";
 import { basename } from "node:path";
 import { Backend } from "./service.mts";
 import type { Options } from "./contracts.mts";
@@ -24,6 +25,14 @@ if (fixtureLaunch) {
   } catch { throw Error('memory_fixture_bootstrap_invalid'); }
 } else if (argv.some(arg => arg.startsWith('--memory-fixture'))) {
   throw Error('memory_fixture_bootstrap_invalid');
+}
+// The native acceptance parent holds this separate startup capability.
+const fixturePolicyToken = fixtureStartup ? process.env.AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN : undefined;
+if (fixtureStartup) delete process.env.AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN;
+const tokenPattern = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u;
+function fixturePolicyAuthorized(token: unknown): boolean {
+  return typeof token === 'string' && !!fixturePolicyToken && tokenPattern.test(token) &&
+    tokenPattern.test(fixturePolicyToken) && timingSafeEqual(Buffer.from(token), Buffer.from(fixturePolicyToken));
 }
 const write = (v: unknown) => process.stdout.write(JSON.stringify(v) + "\n");
 const profilerFlags = flags.filter(flag => flag.startsWith('--mission-profiler-benchmark='));
@@ -84,6 +93,15 @@ lines.on("line", async (line) => {
       return;
     }
     id = request.id;
+    if (fixtureStartup && request.command === 'personalMemoryPolicyNative' &&
+        Object.hasOwn(request, 'fixturePolicyToken')) {
+      if (Object.keys(request).length !== 4 ||
+          !Object.keys(request).every(key => ['id', 'command', 'input', 'fixturePolicyToken'].includes(key)) ||
+          !fixturePolicyAuthorized(request.fixturePolicyToken))
+        throw Error('memory_fixture_command_denied');
+      write({ id, result: await backend.call('personalMemoryPolicyNative', request.input, true) });
+      return;
+    }
     if (['personalMemoryCapturePreviewNative', 'personalMemoryCaptureCommitNative', 'personalMemoryCaptureCancelNative',
       'personalMemoryManagementNative', 'personalMemoryPolicyNative', 'personalMemoryRevokeSourceNative'].includes(request.command)) {
       if ((!nativeClient && !fixtureCustody) || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))

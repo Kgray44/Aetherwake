@@ -60,14 +60,15 @@ export class Backend {
       this.worker.on('error', fail); this.worker.on('exit', fail);
     });
   }
-  async call<K extends keyof CommandMap>(command: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
+  async call<K extends keyof CommandMap>(command: K, input: CommandMap[K]['input'],
+    fixturePolicyReviewed = false): Promise<CommandMap[K]['output']> {
     await this.ready;
     if (this.dead||this.closed) throw new ServiceError('backend_disconnected');
     const control=input as any,cleanup=command==='close'||command==='velaWakeCaptureState'||command==='velaWake'&&['masterOff','disableWake'].includes(control?.name)||command==='velaVoice'&&control?.name==='stop';
     if (this.pending.size >= (cleanup?68:64)) throw new ServiceError('backpressure');
     if (Buffer.byteLength(JSON.stringify(input)) > (command === 'viewState' ? 2 * 1024 * 1024 + 1024 : command==='checklists'?600*1024:256 * 1024)) throw new ServiceError('command_too_large');
     const id = ++this.next;
-    return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ id, contract: CONTRACT, command, input }); });
+    return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ id, contract: CONTRACT, command, input, ...(fixturePolicyReviewed ? { fixturePolicyReviewed } : {}) }); });
   }
   /** Reserved for the native process. Coarse host observations consume no RPC slots. */
   observeMissionHostSignal(signal: CommandMap['missionHostSignal']['input']): void {
