@@ -136,6 +136,28 @@ export class ConversationProduct implements ConversationProductPort {
   if(!v.indices.flags)v.indices.flags=new Set(this.db.prepare('SELECT resource_id FROM cp_flags WHERE favorite=1').all().map(r=>String(r.resource_id)));
   if(!v.indices.memberships){const memberships=new Map<string,string[]>(),members=new Map<string,string[]>();for(const row of this.db.prepare('SELECT collection_id,resource_id FROM collection_members').all()){const rid=String(row.resource_id),cid=String(row.collection_id);if(!v.indices.resources.has(rid))continue;const cs=memberships.get(rid)??[];cs.push(cid);memberships.set(rid,cs);const rs=members.get(cid)??[];rs.push(rid);members.set(cid,rs);}v.indices.memberships=memberships;v.indices.members=members;}
  }
+ private messageView(v: View, message: Message, conversationId: string): MessageView {
+  return { id: message.id, resourceId: v.publicIds.get(message.conversationId)!, role: message.role,
+   content: message.content, createdAt: message.createdAt, provenance: message.provenance,
+   inherited: message.conversationId !== conversationId, sensitivity: message.sensitivity, ...v.messageEvidence?.[message.id] };
+ }
+ /** A native source selection exposes only the authorized own message. */
+ exactSourceDetail(resourceId: string, message: Message): Detail {
+  check(this.host.canonicalReadBatch, 'source_unavailable');
+  return this.host.canonicalReadBatch(view => {
+   const v = this.indexed(view, true);
+   this.resource(v, resourceId, message.id);
+   check(v.resourceMap[resourceId] === message.conversationId, 'source_unavailable');
+   const { execution: _execution, ...conversation } = this.summary(v, resourceId);
+   const item = this.messageView(v, message, conversation.conversationId);
+   return {
+    conversation: { ...conversation, messageCount: 1, lastActivityAt: message.createdAt,
+     historyMetadataStatus: 'limited', collectionIds: [], projectIds: conversation.projectId ? [conversation.projectId] : [] },
+    messages: page([item], { limit: 1 }), lineage: [], shares: [], providers: [],
+    policy: { ...this.policy(resourceId), allowedSourceIds: [] },
+   };
+  });
+ }
  private async view(): Promise<View> {
   if(this.host.canonicalReadView)return this.indexed(await this.host.canonicalReadView());
   // Sequential reads share the backend's owning command queue. Access is checked again below.
@@ -394,7 +416,7 @@ export class ConversationProduct implements ConversationProductPort {
   switch(name) {
    case 'list': case 'search': case 'collections': result=this.readProjection(v,name,a);break;
    case 'detail': {
-    this.resource(v,a.resourceId,undefined,true); const c = this.summary(v,a.resourceId,true), all = v.graph.visibleMessages(c.conversationId).filter(m => this.readable(v,v.publicIds.get(m.conversationId)!,m.id,true)).map(m => ({id:m.id,resourceId:v.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==c.conversationId,sensitivity:m.sensitivity,...v.messageEvidence?.[m.id]}));
+    this.resource(v,a.resourceId,undefined,true); const c = this.summary(v,a.resourceId,true), all = v.graph.visibleMessages(c.conversationId).filter(m => this.readable(v,v.publicIds.get(m.conversationId)!,m.id,true)).map(m => this.messageView(v,m,c.conversationId));
     const around = a.aroundMessageId ? all.findIndex(m => m.id === a.aroundMessageId) : -1; if (a.aroundMessageId) check(around>=0,'message_unavailable');
     const family=this.family(v,a.resourceId); const lineage=v.graphMetadata.edges.filter(e=>family.has(v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.childId)!)).filter(e=>{if(v.graphMetadata.unavailableMessageIds.includes(e.sourceMessageId))return false;const source=v.messageMetadata(e.sourceMessageId);return !!source&&this.readable(v,v.publicIds.get(source.conversationId)!,e.sourceMessageId);}).map(e=>({id:e.id,parentResourceId:v.publicIds.get(e.parentId)!,childResourceId:v.publicIds.get(e.childId)!,sourceMessageId:e.sourceMessageId,mode:e.mode,createdAt:e.createdAt}));
     result={conversation:{...c,messageCount:all.length},messages:page<MessageView>(all,{...a,...(around>=0?{offset:Math.max(0,around-Math.min(10,Math.floor((a.limit??50)/2)))}:{})}),lineage,policy:this.policy(a.resourceId),shares:this.db.prepare('SELECT * FROM cp_shares WHERE source_resource_id=? OR id IN(SELECT share_id FROM cp_adoptions WHERE target_id=?)').all(a.resourceId,a.resourceId).map(row=>this.share(v,row,a.resourceId)),providers:await this.providers(v)} satisfies Detail; break;

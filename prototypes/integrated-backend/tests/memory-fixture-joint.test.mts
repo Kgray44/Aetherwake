@@ -56,8 +56,10 @@ test('admitted desktop fixture captures and revokes a canonical source through t
   const hostPath = fileURLToPath(new URL('../src/desktop-host.mts', import.meta.url));
   const hostArgs = (descriptor: unknown) => [hostPath, '--memory-fixture-bootstrap-v1', JSON.stringify(descriptor)];
   const policyToken = randomBytes(32).toString('base64url');
+  const detailToken = randomBytes(32).toString('base64url');
   const env = {
     AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN: policyToken,
+    AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN: detailToken,
     AERYNTH_MEMORY_FIXTURE_SEED: 'inspector-v1',
     SystemRoot: process.env.SystemRoot, TEMP: root, TMP: root,
     APPDATA: unrelatedProfile, LOCALAPPDATA: unrelatedProfile, USERPROFILE: unrelatedProfile,
@@ -84,6 +86,12 @@ test('admitted desktop fixture captures and revokes a canonical source through t
     });
     assert.equal(unsupportedSeed.status, 1);
     assert.match(unsupportedSeed.stderr, /memory_fixture_seed_invalid/u);
+    const reusedToken = spawnSync(process.execPath, hostArgs(entered.backendDescriptor), {
+      ...launchOptions, env: { ...env, AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN: policyToken },
+      timeout: 5000, encoding: 'utf8',
+    });
+    assert.equal(reusedToken.status, 1);
+    assert.match(reusedToken.stderr, /memory_fixture_detail_invalid/u);
     assert.deepEqual(readdirSync(profileRoot).sort(), ['synthetic-packaged.consumed', 'synthetic-packaged.started']);
     const key = randomBytes(32);
     let protector: ReturnType<typeof createSyntheticMemoryProtector>;
@@ -129,10 +137,11 @@ test('admitted desktop fixture captures and revokes a canonical source through t
     const replies = lines[Symbol.asyncIterator]();
     let id = 0;
     const seeds: { contract: string; conversationId: string; messageId: string; factId: string }[] = [];
-    async function call<K extends keyof CommandMap>(command: K, input: CommandMap[K]['input'], fixturePolicyToken?: string): Promise<CommandMap[K]['output']> {
+    async function call<K extends keyof CommandMap>(command: K, input: CommandMap[K]['input'], fixturePolicyToken?: string,
+      fixtureDetailToken?: string): Promise<CommandMap[K]['output']> {
       entered.check();
       const wanted = ++id;
-      child.stdin.write(JSON.stringify({ id: wanted, command, input, fixturePolicyToken }) + '\n');
+      child.stdin.write(JSON.stringify({ id: wanted, command, input, fixturePolicyToken, fixtureDetailToken }) + '\n');
       for (;;) {
         const line = await replies.next();
         assert.equal(line.done, false, stderr);
@@ -200,17 +209,45 @@ test('admitted desktop fixture captures and revokes a canonical source through t
       const opened = await call('openResource', target);
       assert.equal(opened.status, 'ready');
       assert.deepEqual(opened.status === 'ready' && opened.selection, target.selection);
+      const detail = (resourceId = chat.resourceId, aroundMessageId = source.id, token = detailToken) =>
+        call('conversation', { name: 'detail', input: { resourceId, aroundMessageId } }, undefined, token);
+      await assert.rejects(detail(), /memory_fixture_command_denied/u);
+      await call('openResource', target, undefined, detailToken);
+      await assert.rejects(call('conversation', { name: 'detail', input: { resourceId: chat.resourceId, aroundMessageId: source.id } }),
+        /memory_fixture_command_denied/u);
+      await assert.rejects(detail(chat.resourceId, source.id, policyToken), /memory_fixture_command_denied/u);
+      await assert.rejects(call('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }, undefined, detailToken),
+        /memory_fixture_command_denied/u);
+      await assert.rejects(call('conversation', { name: 'detail', input: {
+        resourceId: chat.resourceId, aroundMessageId: source.id, limit: 50,
+      } }, undefined, detailToken), /memory_fixture_command_denied/u);
+      const neighbor = await call('addMessage', { resourceId: chat.resourceId, role: 'user',
+        content: 'Synthetic neighboring message', expectedRevision: chat.revision });
+      await assert.rejects(detail(chat.resourceId, neighbor.id), /memory_fixture_command_denied/u);
+      const projected = await detail() as import('../../conversation-product/src/contracts.ts').Detail;
+      assert.equal(projected.conversation.resourceId, seed.conversationId);
+      assert.equal(projected.conversation.messageCount, 1);
+      assert.deepEqual(projected.messages, { items: [{
+        id: seed.messageId, resourceId: seed.conversationId, role: source.role, content: source.content,
+        createdAt: source.createdAt, provenance: source.provenance, sensitivity: source.sensitivity, inherited: false,
+      }], total: 1, offset: 0, limit: 1, hasMore: false });
+      assert.deepEqual([projected.lineage, projected.shares, projected.providers], [[], [], []]);
       const other = await call('createConversation', { title: 'Unrelated synthetic chat', commandId: 'joint-other' });
       assert.equal((await call('openResource', { ...target, resourceId: other.resourceId })).status, 'unavailable');
+      await assert.rejects(detail(other.resourceId), /memory_fixture_command_denied/u);
+      assert.equal((await call('openResource', { ...target, resourceId: other.resourceId }, undefined, detailToken)).status, 'unavailable');
+      await assert.rejects(detail(), /memory_fixture_command_denied/u);
+      await call('openResource', target, undefined, detailToken);
       const revocation = await call('personalMemoryManagementNative', {
         type: 'previewSourceRevocation', id: receipt.id, version: 1,
       }) as { binding: CommandMap['personalMemoryRevokeSourceNative']['input'] };
       assert.equal(revocation.binding.messageId, source.id);
       assert.deepEqual(await call('personalMemoryRevokeSourceNative', revocation.binding), {
-        revision: chat.revision + 1, erasedFacts: 1,
+        revision: chat.revision + 2, erasedFacts: 1,
       });
       await assert.rejects(call('personalMemoryManagementNative', { type: 'read', id: receipt.id }), /personal_record_unavailable/u);
       assert.equal((await call('openResource', target)).status, 'unavailable');
+      await assert.rejects(detail(), /source_unavailable/u);
       assert.equal((await call('providerActivity', {})).providerRequests, 0);
       await call('close', {});
       assert.deepEqual(await done, [0, null]);

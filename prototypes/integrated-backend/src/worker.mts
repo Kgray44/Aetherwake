@@ -40,7 +40,8 @@ try {
     const { id, contract, command, input } = request;
     try {
       if (contract !== CONTRACT) throw Object.assign(new Error(), { code: 'unsupported_contract' });
-      const result = await core.command(command, input, !!fixture && request.fixturePolicyReviewed === true);
+      const result = await core.command(command, input, !!fixture && request.fixturePolicyReviewed === true,
+        !!fixture && request.fixtureDetailReviewed === true);
       port.postMessage({ id, result });
       if (command === 'close') { maintenanceClient?.close();computerClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();port.close(); }
     } catch (e) {

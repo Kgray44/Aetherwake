@@ -271,7 +271,7 @@ export function memoryFixtureOptions(descriptor: MemoryFixtureBootstrap): Option
     rendererEventTransport: true };
 }
 
-function memoryFixtureAllows(name: string, input: unknown, nativePolicyReview: boolean): boolean {
+function memoryFixtureAllows(name: string, input: unknown, nativePolicyReview: boolean, nativeDetailReview: boolean): boolean {
   const value = input as { type?: string; name?: string; providerId?: unknown; provider?: unknown;
     role?: string; kind?: string; input?: { providerId?: unknown; webSearch?: unknown } } | undefined;
   switch (name) {
@@ -279,9 +279,10 @@ function memoryFixtureAllows(name: string, input: unknown, nativePolicyReview: b
       return ['snapshot', 'createProject', 'createWorkspace', 'navigate'].includes(value?.type ?? '') ||
         (value?.type === 'createResource' && value.kind === 'conversation' && value.provider === 'local');
     case 'conversation':
+      if (value?.name === 'detail') return nativeDetailReview;
       if (value?.name === 'create') return value.input?.providerId === undefined || value.input.providerId === 'local';
       if (value?.name === 'send') return value.input?.webSearch === undefined;
-      return ['list', 'search', 'collections', 'detail', 'providers', 'projects',
+      return ['list', 'search', 'collections', 'providers', 'projects',
         'readDraft', 'saveDraft', 'readViewState', 'saveViewState', 'selectView'].includes(value?.name ?? '');
     case 'createConversation': return value?.providerId === undefined || value.providerId === 'local';
     case 'addMessage': return value?.role === 'user';
@@ -6924,8 +6925,8 @@ export class BackendCore {
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input'],
-    nativePolicyReview = false): Promise<CommandMap[K]['output']> {
-    if (this.fixtureMemory) ensure(memoryFixtureAllows(name, input, nativePolicyReview), 'memory_fixture_command_denied');
+    nativePolicyReview = false, nativeDetailReview = false): Promise<CommandMap[K]['output']> {
+    if (this.fixtureMemory) ensure(memoryFixtureAllows(name, input, nativePolicyReview, nativeDetailReview), 'memory_fixture_command_denied');
     if (name === 'personalMemoryRevokeSourceNative') {
       const memory = this.personalMemory, review = this.personalMemoryReview;
       ensure(memory && review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
@@ -7353,6 +7354,17 @@ export class BackendCore {
         return { url: citation.url } as any;
       }
       case 'conversation': {
+        if (this.fixtureMemory && a.name === 'detail') {
+          const { resourceId, aroundMessageId } = a.input as ProductCommandMap['detail']['input'];
+          ensure(identifier(resourceId) && identifier(aroundMessageId), 'memory_fixture_command_denied');
+          return this.kernel.withTransaction(() => {
+            const opened = this.openResource({ resourceId, selection: { messageId: aroundMessageId } });
+            ensure(opened.status === 'ready', 'source_unavailable');
+            const message = this.graph.readOwnMessage(this.gid(resourceId), aroundMessageId);
+            ensure(message, 'source_unavailable');
+            return this.conversations.exactSourceDetail(resourceId, message) as CommandMap[K]['output'];
+          });
+        }
         if(a.name==='send'){
           const request=a.input as ConversationSendInput,conversation=this.conv(request.resourceId);
           if(['local','mock-ordinary'].includes(conversation.providerId)){

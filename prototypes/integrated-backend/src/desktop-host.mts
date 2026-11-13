@@ -34,10 +34,22 @@ if (fixtureSeedMode !== undefined && (!fixtureStartup || fixtureSeedMode !== 'in
 // The native acceptance parent holds this separate startup capability.
 const fixturePolicyToken = fixtureStartup ? process.env.AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN : undefined;
 if (fixtureStartup) delete process.env.AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN;
+const fixtureDetailToken = process.env.AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN;
+delete process.env.AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN;
 const tokenPattern = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u;
-function fixturePolicyAuthorized(token: unknown): boolean {
-  return typeof token === 'string' && !!fixturePolicyToken && tokenPattern.test(token) &&
-    tokenPattern.test(fixturePolicyToken) && timingSafeEqual(Buffer.from(token), Buffer.from(fixturePolicyToken));
+function fixtureTokenAuthorized(token: unknown, expected: string | undefined): boolean {
+  return typeof token === 'string' && !!expected && tokenPattern.test(token) &&
+    tokenPattern.test(expected) && timingSafeEqual(Buffer.from(token), Buffer.from(expected));
+}
+if (fixtureDetailToken !== undefined && (!fixtureStartup || !tokenPattern.test(fixtureDetailToken) ||
+    fixtureTokenAuthorized(fixtureDetailToken, fixturePolicyToken)))
+  throw Error('memory_fixture_detail_invalid');
+let detailOpenGeneration = 0;
+let detailSelection: { resourceId: string; messageId: string } | undefined;
+
+function exactFields(value: unknown, fields: readonly string[]): boolean {
+  return !!value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).length === fields.length && fields.every(field => Object.hasOwn(value, field));
 }
 const write = (v: unknown) => process.stdout.write(JSON.stringify(v) + "\n");
 const profilerFlags = flags.filter(flag => flag.startsWith('--mission-profiler-benchmark='));
@@ -133,9 +145,35 @@ lines.on("line", async (line) => {
         Object.hasOwn(request, 'fixturePolicyToken')) {
       if (Object.keys(request).length !== 4 ||
           !Object.keys(request).every(key => ['id', 'command', 'input', 'fixturePolicyToken'].includes(key)) ||
-          !fixturePolicyAuthorized(request.fixturePolicyToken))
+          !fixtureTokenAuthorized(request.fixturePolicyToken, fixturePolicyToken))
         throw Error('memory_fixture_command_denied');
       write({ id, result: await backend.call('personalMemoryPolicyNative', request.input, true) });
+      return;
+    }
+    if (Object.hasOwn(request, 'fixtureDetailToken') ||
+        fixtureStartup && request.command === 'conversation' && request.input?.name === 'detail') {
+      if (!exactFields(request, ['id', 'command', 'input', 'fixtureDetailToken']) ||
+          !fixtureTokenAuthorized(request.fixtureDetailToken, fixtureDetailToken))
+        throw Error('memory_fixture_command_denied');
+      if (request.command === 'openResource') {
+        const generation = ++detailOpenGeneration;
+        detailSelection = undefined;
+        const result = await backend.call('openResource', request.input);
+        if (generation !== detailOpenGeneration) throw Error('memory_fixture_command_denied');
+        if (result.status === 'ready' && result.presentation.kind === 'conversation' && result.selection)
+          detailSelection = { resourceId: result.resourceId, messageId: result.selection.messageId };
+        write({ id, result });
+        return;
+      }
+      const input = request.input?.input;
+      const selection = detailSelection;
+      if (request.command !== 'conversation' || request.input?.name !== 'detail' ||
+          !exactFields(request.input, ['name', 'input']) || !exactFields(input, ['resourceId', 'aroundMessageId']) ||
+          !selection || input.resourceId !== selection.resourceId || input.aroundMessageId !== selection.messageId)
+        throw Error('memory_fixture_command_denied');
+      const result = await backend.call('conversation', request.input, false, true);
+      if (detailSelection !== selection) throw Error('memory_fixture_command_denied');
+      write({ id, result });
       return;
     }
     if (['personalMemoryCapturePreviewNative', 'personalMemoryCaptureCommitNative', 'personalMemoryCaptureCancelNative',
