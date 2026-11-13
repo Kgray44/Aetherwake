@@ -81,3 +81,25 @@ test('observed capability cache is side-effect free, cloned, expires honestly an
   const graph=(await f.core.command('snapshot',{})).graph,legacyOnly={providers:graph.providers.filter(p=>p.id!=='local')};assert.equal(resolveLocalRecordingProvider(legacyOnly).legacyCompatibility,true);assert.deepEqual(resolveLocalRecordingProvider(graph),{providerId:'local',legacyCompatibility:false,modelExecution:false});assert.equal(matchObservedExecutionProvider(graph,capability)?.id,'fixture-codex');assert.equal(matchObservedExecutionProvider(graph,{...capability,providerId:'mock-ordinary'}),undefined);
  }finally{await f.close();}
 });
+
+test('canonical read batches reuse resource policy without skipping message policy or revocation', () => {
+ const db=new DatabaseSync(':memory:');
+ try {
+  db.exec(`CREATE TABLE projects(id TEXT,state TEXT);
+   CREATE TABLE workspaces(id TEXT,project_id TEXT,state TEXT);
+   CREATE TABLE blocks(resource_id TEXT,workspace_id TEXT);
+   CREATE TABLE resources(id TEXT,project_id TEXT,state TEXT);
+   INSERT INTO resources VALUES('chat',NULL,'active');`);
+  let parentChecks=0;
+  const access=createCanonicalAccessHelper({db,allow:request=>{
+   if(request.kind==='resource')parentChecks++;
+   return request.kind!=='message'||request.messageId!=='denied';
+  },messageVisible:(_id,messageId)=>messageId!=='revoked'});
+  const batchResources=new Map<string,boolean>();
+  assert.deepEqual(['first','denied','revoked','last'].map(id=>access.access('chat',id,batchResources)),[true,false,false,true]);
+  assert.equal(parentChecks,1);
+  db.prepare("UPDATE resources SET state='archived' WHERE id=?").run('chat');
+  assert.equal(access.access('chat','first',new Map()),false);
+  assert.equal(access.access('chat','first'),false);
+ } finally { db.close(); }
+});

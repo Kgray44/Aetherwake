@@ -4,7 +4,7 @@ import {createHash,createCipheriv,createDecipheriv,randomBytes} from 'node:crypt
 import {DatabaseSync} from 'node:sqlite';
 import {VelaApiConnection} from '../src/vela-api-connection.mts';
 import {VelaApiRuntime} from '../src/vela-api-runtime.mts';
-import { investigateReviewedVelaEvidence } from '../src/vela-semantic-history.mts';
+import { investigateReviewedVelaEvidence, qualifyVelaHistoryModelWithApi } from '../src/vela-semantic-history.mts';
 import {createCapabilityCatalog} from '../../vela-core/src/capability-catalog.mts';
 import {CAPABILITIES} from '../../vela-core/src/capabilities.ts';
 
@@ -28,7 +28,7 @@ function fixture(){
  const prompt=JSON.stringify({intent:'Synthetic scoped discovery',capabilityCatalog:catalog.projection}),contextDigest=createHash('sha256').update(prompt).digest('hex');
  const input={requestId:'synthetic-catalog-expiry',version:1,model:'gpt-6-luna',reasoningEffort:'low' as const,prompt,contextDigest,catalog,oneUse:true as const,validate(){assert(live,'synthetic_scope_revoked');}};
  const reply=(discovery=false, text='Synthetic discovery complete.')=>{const id='synthetic-response-'+ ++serial,output=discovery?[{type:'function_call',id:'synthetic-item-'+serial,call_id:'synthetic-call-'+serial,name:'aerynth_capability_schemas',arguments:JSON.stringify({catalogDigest:catalog.projection.digest,ids:['createWorkspace']}),status:'completed'}]:[{type:'message',id:'synthetic-answer-'+serial,role:'assistant',status:'completed',content:[{type:'output_text',text,annotations:[]}]}];return new Response([{type:'response.created',response:{id}},...(!discovery?[{type:'response.output_text.delta',delta:text}]:[]),{type:'response.completed',response:{id,status:'completed',model:'gpt-6-luna',output,usage:{input_tokens:2,output_tokens:1,total_tokens:3}}}].map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'content-type':'text/event-stream'}});};
- return {db,connection,runtime,controller,input,bodies,replies,catalogErrors,reply,get gets(){return gets;},set catalogReply(value:()=>Response|Promise<Response>){catalogReply=value;},expire(){clock+=60001;},revokeScope(){live=false;},async ready(){await connection.configureNative({configurationId:'vela-primary',apiKey:'SYNTHETIC_ONLY_CATALOG_REFRESH'},null);await connection.catalog(1);runtime.authorizeUsage(1,true);},run(){return runtime.run(input,controller.signal);},async settleRefresh(){await Promise.allSettled([...catalogOperations]);},async close(){await Promise.allSettled([...catalogOperations]);runtime.close();connection.close();db.close();}};
+ return {db,connection,runtime,controller,input,bodies,replies,catalogErrors,reply,get gets(){return gets;},set catalogReply(value:()=>Response|Promise<Response>){catalogReply=value;},expire(ms=60001){clock+=ms;},revokeScope(){live=false;},async ready(){await connection.configureNative({configurationId:'vela-primary',apiKey:'SYNTHETIC_ONLY_CATALOG_REFRESH'},null);await connection.catalog(1);runtime.authorizeUsage(1,true);},run(){return runtime.run(input,controller.signal);},async settleRefresh(){await Promise.allSettled([...catalogOperations]);},async close(){await Promise.allSettled([...catalogOperations]);runtime.close();connection.close();db.close();}};
 }
 
 test('actual connection refreshes an expired catalog between tool stages without replay or changed pins',async()=>{
@@ -78,7 +78,69 @@ test('reviewed notes refresh catalog membership without repeating current semant
     assert.equal((await investigate()).state, 'assessed');
     assert.equal(f.gets, 2);
     assert.equal(f.bodies.length, 6);
+
+    // An unchanged catalog refresh preserves qualification, but revoking and
+    // granting usage again requires both contracts to qualify under new consent.
+    f.runtime.authorizeUsage(1, false);
+    await assert.rejects(investigate());
+    assert.equal(f.bodies.length, 6);
+    f.runtime.authorizeUsage(1, true);
+    f.replies.push(respond(perception), respond(assessment), respond(perception), respond(assessment));
+    assert.equal((await investigate()).state, 'assessed');
+    assert.equal(f.bodies.length, 10);
+    assert.equal(f.gets, 2);
+
+    const qualificationLifetimeMs = 15 * 60_000;
+    f.expire(qualificationLifetimeMs);
+    t.mock.timers.tick(qualificationLifetimeMs);
+    f.replies.push(respond(perception), respond(assessment), respond(perception), respond(assessment));
+    assert.equal((await investigate()).state, 'assessed');
+    assert.equal(f.bodies.length, 14);
+    assert.equal(f.gets, 3);
   } finally {
+    await f.close();
+  }
+});
+
+test('independent CIE qualification probes can overlap under native admission', { timeout: 10_000 }, async () => {
+  const f = fixture();
+  let markArrived!: () => void;
+  let release!: () => void;
+  const arrived = new Promise<void>(resolve => { markArrived = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  const signal = AbortSignal.any([f.controller.signal, AbortSignal.timeout(8_000)]);
+  const probe = (stage: 'interpret' | 'assess') => qualifyVelaHistoryModelWithApi(f.runtime,
+    { configurationVersion: 1, model: 'gpt-6-luna', authorize: review => review.call.stage === stage && review.sources.length === 0 },
+    signal, undefined, [stage]);
+  const responseFor = async () => {
+    const { stage } = JSON.parse(f.bodies.at(-1).input[0].content);
+    if (f.bodies.length === 2) markArrived();
+    await released;
+    const value = stage === 'interpret' ? { version: 2, objective: 'Find the weekday', clarification: '',
+      perception: { kind: 'recall', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: [], verification: [] },
+      needs: [{ key: 'day', question: 'Which weekday?', query: 'pump inspection weekday' }] } :
+      { version: 3, clarification: '', assessment: [{ key: 'day', status: 'supported', query: '',
+        passages: [{ source: 'e1', quote: 'The pump inspection is on Tuesday.' }] }] };
+    return f.reply(false, JSON.stringify(value));
+  };
+  let running: ReturnType<typeof probe>[] = [];
+  try {
+    await f.ready();
+    f.replies.push(responseFor, responseFor);
+    running = [probe('interpret'), probe('assess')];
+    const results = Promise.all(running);
+    await Promise.race([arrived, results]);
+    assert.equal(f.bodies.length, 2);
+    assert.equal(f.runtime.usageStatus().usedToday, 2);
+    await assert.rejects(probe('interpret'), /vela_api_busy/);
+    assert.equal(f.bodies.length, 2);
+    release();
+    const receipts = await results;
+    assert.deepEqual(receipts.map(([receipt]) => receipt.stage), ['interpret', 'assess']);
+    assert.notEqual(receipts[0][0].contractDigest, receipts[1][0].contractDigest);
+  } finally {
+    release();
+    await Promise.allSettled(running);
     await f.close();
   }
 });
