@@ -100,6 +100,9 @@ export class PersonalContextService {
   private head(idValue: string): Head | null {
     check(id(idValue), 'invalid_record_id'); const row = this.opts.db.prepare('SELECT id,kind,version,scope,state FROM personal_context_heads WHERE owner=? AND id=?').get(this.identity().userId, idValue);
     if (!row) return null;
+    return this.decodeHead(row);
+  }
+  private decodeHead(row: Record<string, unknown>): Head {
     check(['import', 'fact', 'policy'].includes(String(row.kind)) && Number.isSafeInteger(row.version) && Number(row.version) >= 1, 'corrupt_personal_context');
     const value = row.scope === null ? null : JSON.parse(String(row.scope)); if (value !== null) scope(value);
     return { id: String(row.id), kind: row.kind as Kind, version: Number(row.version), scope: value, state: String(row.state) };
@@ -352,12 +355,18 @@ export class PersonalContextService {
       const base = (reasons = omissions) => this.seal({ contract: PERSONAL_CONTEXT_CONTRACT, id: manifestId, createdAt: created, ownerId: who.userId, hostPolicyVersion: who.policyVersion, policyVersion: policy.version, requestDigest: hash(input), trust: 'untrusted-personalization-data', scopes, items, omissions: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => a.reason.localeCompare(b.reason)) });
       const manifestId = randomUUID(), created = this.now();
       if (!(input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled)) { omit('disabled'); const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return result; }
-      const heads = this.opts.db.prepare("SELECT id FROM personal_context_heads WHERE owner=? AND kind='fact' ORDER BY id LIMIT ?").all(who.userId, LIMITS.facts + 1); check(heads.length <= LIMITS.facts, 'personal_context_capacity_reached');
+      // Current revision insertion order prioritizes new reviews within the scan budget.
+      const heads = this.opts.db.prepare(`SELECT h.id,h.kind,h.version,h.scope,h.state
+        FROM personal_context_heads h LEFT JOIN personal_context_revisions r
+          ON r.owner=h.owner AND r.id=h.id AND r.version=h.version
+        WHERE h.owner=? AND h.kind='fact' ORDER BY r.rowid DESC,h.id LIMIT ?`).all(who.userId, LIMITS.facts + 1);
+      check(heads.length <= LIMITS.facts, 'personal_context_capacity_reached');
       const anchors = this.sourceCandidates(input, who.userId);
       if (anchors.size) heads.sort((a, b) => Number(anchors.has(String(b.id))) - Number(anchors.has(String(a.id))));
       const query = words(input.query), candidates: { value: ReviewedFact; score: number; anchored: boolean; proofs: ScopeProof[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
       for (const row of heads) {
-        const head = this.required(String(row.id), 'fact');
+        const head = this.decodeHead(row);
+        check(head.kind === 'fact' && head.scope, 'corrupt_personal_context');
         if (!this.inScope(head.scope!, input)) { omit('outside-scope'); continue; }
         if (head.scope!.kind === 'user.shared' && (!policy.sharingEnabled || !input.sharedFactIds.includes(head.id))) { omit('not-shared'); continue; }
         if (head.state !== 'active') { omit('inactive'); continue; }
