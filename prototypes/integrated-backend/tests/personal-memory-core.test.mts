@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { createPersonalMemoryReview } from '../src/personal-memory-review.mts';
+import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { BackendCore } from '../src/core.mts';
 import type { NativePersonalMemory } from '../src/personal-memory.mts';
 
@@ -54,8 +55,9 @@ test('Core composes a lazy private memory owner only in a native private profile
 test('Core native capture persists a canonical user message across a private profile restart', async () => {
   const root = mkdtempSync(join(tmpdir(), 'aerynth-memory-capture-'));
   let wrapped: string;
+  let custodyAvailable = true;
   const secrets = {
-    available: async () => true,
+    available: async () => custodyAvailable,
     async seal(value: string) { wrapped = value; return randomBytes(64); },
     async open() { return wrapped; },
   };
@@ -110,10 +112,31 @@ test('Core native capture persists a canonical user message across a private pro
       await assert.rejects(core.command('personalMemoryRevokeSourceNative', revoke), /synthetic graph write failure/);
     } finally { graph.markUnavailable = mark; }
     assert.equal((await inspection.read(saved.id)).text, content);
-    assert.deepEqual(await core.command('personalMemoryRevokeSourceNative', revoke), { revision: message.revision + 1, erasedFacts: 1 });
+    const correction = await inspection.previewManagement({ action: 'correct', id: saved.id, version: fact.version,
+      text: 'I prefer a corrected synthetic relay.' });
+    const corrected = await inspection.commitManagement(correction);
+    await core.command('close', {});
+    core = undefined;
+    const legacy = WorkspaceKernel.openExisting(join(root, 'profile.sqlite'));
+    try {
+      legacy.withTransaction(db => {
+        db.prepare('DELETE FROM personal_context_conversation_sources WHERE dependent=?').run(corrected.id);
+        db.exec('DROP TABLE personal_context_lineage_repair');
+      });
+    } finally { legacy.close(); }
+    core = open();
+    // Revocation is the first memory operation after opening this pre-repair profile.
+    custodyAvailable = false;
+    await assert.rejects(core.command('personalMemoryRevokeSourceNative', revoke), /private_key_unavailable/);
+    assert.equal((await core.command('openResource', {
+      resourceId: chat.resourceId, selection: { messageId: message.id },
+    })).status, 'ready');
+    custodyAvailable = true;
+    assert.deepEqual(await core.command('personalMemoryRevokeSourceNative', revoke), { revision: message.revision + 1, erasedFacts: 2 });
     await core.command('close', {});
     core = open();
     await assert.rejects(core.command('personalMemoryManagementNative', { type: 'read', id: saved.id }), /personal_record_unavailable/);
+    await assert.rejects(core.command('personalMemoryManagementNative', { type: 'read', id: corrected.id }), /personal_record_unavailable/);
     const reopenedSource = await core.command('openResource', { resourceId: chat.resourceId, selection: { messageId: message.id } });
     assert.equal(reopenedSource.status, 'unavailable');
     const replays = await Promise.allSettled([
