@@ -67,6 +67,38 @@ test('the tracked Node check includes workspace notes only when explicitly reque
   assert.equal(nativeMissionPlan(`${work} using notes from another workspace`, scope), null);
 });
 
+test('profiler off, minimal and full preserve verification and uncertain cancellation', async () => {
+  const outcomes = [];
+  for (const mode of ['off', 'minimal', 'full'] as const) {
+    const f = fixture(false);
+    const service = new MissionService({ ...f.host, profilerMode: mode });
+    try {
+      const accepted = service.create('profiler-parity-success', plan(task('verify')));
+      await flush();
+      f.active.get('verify')!.release();
+      await flush();
+      const verified = service.read(accepted.id, scope);
+      assert.equal(verified.outcome, 'verified');
+      assert.equal(verified.tasks[0].attempts[0].verification?.passed, true);
+      assert.equal(service.fullProfilingClock() !== null, mode === 'full');
+
+      const pending = service.create('profiler-parity-cancel', plan(task('effect')));
+      await flush();
+      assert.ok(f.active.has('effect'));
+      const running = service.read(pending.id, scope);
+      service.control(pending.id, scope, running.revision, { type: 'cancel' });
+      await flush();
+      const cancelled = service.read(pending.id, scope);
+      assert.equal(cancelled.tasks[0].state, 'uncertain');
+      assert.notEqual(cancelled.outcome, 'verified');
+      outcomes.push({ outcome: verified.outcome, state: verified.tasks[0].state,
+        source: verified.tasks[0].attempts[0].evidence?.source, value: verified.tasks[0].attempts[0].evidence?.value,
+        cancelled: cancelled.outcome, effect: cancelled.tasks[0].state });
+    } finally { await service.close(); f.db.close(); }
+  }
+  assert.deepEqual(outcomes, Array(3).fill(outcomes[0]));
+});
+
 test('MissionService admits remote work under local pressure and releases attempt leases on settlement', async () => {
   const f = fixture();
   let available = 0;
