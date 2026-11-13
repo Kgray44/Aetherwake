@@ -40,7 +40,8 @@ const output = resolve(process.env.AERYNTH_ACCEPTANCE_OUTPUT ?? '.runtime/accept
 mkdirSync(output, { recursive: true });
 type Case = { file: string | null; line: number | null; name: string; status: string; durationMs: number | null };
 type Group = { directory: string; classifications: string[]; status: string; exitCode: number | null;
-  signal: string | null; durationMs: number; counts: Record<string, number> | null; tests: Case[] };
+  signal: string | null; durationMs: number; counts: Record<string, number> | null; tests: Case[];
+  missingRequiredCases: { file: string; name: string }[] };
 const groups: Group[] = [];
 const failures: string[] = [];
 for (const [question, directory, ...tests] of selected) {
@@ -64,24 +65,36 @@ for (const [question, directory, ...tests] of selected) {
   } finally {
     rmSync(groupReport, { force: true });
   }
-  const passed = result.status === 0 && (details.counts?.tests ?? 0) > 0
-    && details.counts?.failed === 0 && details.counts?.cancelled === 0 && (details.counts?.passed ?? 0) > 0;
+  const requiredCases = [];
+  if (directory === 'integrated-backend') requiredCases.push({ file: 'tests/mission-integration.test.mts',
+    name: 'a lost worker never treats its in-flight native work as verified on reopen' });
+  if (directory === 'visual-experience/cinematic-v3' && process.platform === 'win32') requiredCases.push({
+    file: 'tests/windows-system-build.test.mjs',
+    name: 'fixed Windows addon reads real memory/process facts, preserves consent diagnoses and rejects an unissued reclaim',
+  });
+  const missingRequiredCases = requiredCases.filter(required =>
+    !details.tests.some(test => test.file === required.file && test.name === required.name && test.status === 'passed'));
+  const passed = result.status === 0 && missingRequiredCases.length === 0 && (details.counts?.tests ?? 0) > 0
+    && details.counts?.failed === 0 && details.counts?.cancelled === 0 && (details.counts?.passed ?? 0) > 0
+    && !details.tests.some(test => test.status === 'failed');
   groups.push({
     directory,
     classifications: [
       'synthetic',
       ...(directory === 'integrated-backend' || directory === 'block-library' || directory === 'visual-experience/cinematic-v3'
         ? ['component', 'cross-package'] : ['component']),
-      ...(directory === 'visual-experience/cinematic-v3' && process.platform === 'win32' ? ['native'] : []),
+      ...(directory === 'visual-experience/cinematic-v3' && requiredCases.length && !missingRequiredCases.length ? ['native'] : []),
     ],
     status: passed ? 'passed' : 'failed',
     exitCode: result.status,
     signal: result.signal,
     durationMs: Math.round(performance.now() - start),
+    missingRequiredCases,
     ...details,
   });
   if (!passed) {
-    console.error(result.error?.message ?? result.signal ?? `Test process exited with ${result.status}.`);
+    if (result.status !== 0) console.error(result.error?.message ?? result.signal ?? `Test process exited with ${result.status}.`);
+    for (const item of missingRequiredCases) console.error(`Required case did not pass: ${item.file}: ${item.name}`);
     failures.push(directory);
   }
 }

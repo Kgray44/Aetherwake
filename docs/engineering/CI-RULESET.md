@@ -7,7 +7,7 @@ After the new checks have registered successfully, configure an active branch ru
 - `Aerynth required checks`
 - `Aerynth governance`
 
-The integration gate depends on Linux, Windows and security. It rejects missing, skipped, cancelled and failed dependencies. Require the aggregate so platform implementation names can evolve. Keep workflow and verification-code changes under maintainer review. Where available, bind each required check to its GitHub Actions source and limit bypasses to the repository's approved break-glass actors.
+The integration gate depends on Linux, Windows and security. It rejects missing, skipped, cancelled and failed dependencies. Require the aggregate so platform implementation names can evolve. Also require maintainer approval for workflow and verification-code changes. Binding a check to GitHub Actions alone does not protect its editable workflow definition. Where available, bind each required check to its GitHub Actions source and limit bypasses to the repository's approved break-glass actors.
 
 Use required up-to-date branches for direct PR merge, or require the merge queue if the repository elects to use one. Both required workflows listen for `merge_group` with `checks_requested`. Verify the rule on a real PR and, if enabled, a real queue entry. Confirm a docs-only PR still reports both checks, a failing dependency prevents merge, and a new passing revision can proceed. The post-merge `main` push also runs both workflows.
 

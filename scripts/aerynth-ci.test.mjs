@@ -38,10 +38,11 @@ test('Node reporter identifies failing and skipped tests without serializing err
   const report = join(directory, 'tests.json');
   const fixture = join(directory, 'fixture.test.mjs');
   writeFileSync(fixture, [
-    "import { test } from 'node:test';",
+    "import { after, describe, test } from 'node:test';",
     "test('successful synthetic scenario', () => {});",
     "test('failed synthetic scenario', () => { throw new Error('private fixture detail'); });",
     "test('skipped synthetic scenario', { skip: 'private skip detail' }, () => {});",
+    "describe('suite with failed teardown', () => { test('passing case', () => {}); after(() => { throw new Error('private fixture detail'); }); });",
   ].join('\n'));
   const env = { ...process.env, AERYNTH_TEST_REPORT: report };
   delete env.NODE_TEST_CONTEXT;
@@ -56,4 +57,5 @@ test('Node reporter identifies failing and skipped tests without serializing err
   assert.equal(data.counts.skipped, 1);
   assert.ok(data.tests.some(entry => entry.name === 'failed synthetic scenario' && entry.status === 'failed'));
   assert.ok(data.tests.some(entry => entry.name === 'skipped synthetic scenario' && entry.status === 'skipped'));
+  assert.ok(data.tests.some(entry => entry.name === 'suite with failed teardown' && entry.status === 'failed'));
 });

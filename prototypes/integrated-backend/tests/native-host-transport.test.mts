@@ -219,6 +219,10 @@ test("actual desktop-host three-argument and opt-in processes suppress mixed/mal
       );
       const snapshot = await call(2, "snapshot", {});
       assert.ok(snapshot.result);
+      await call(3, "close", {});
+      await exit;
+      assert.equal(child.exitCode, 0);
+      assert.equal(failure?.message, "desktop_fixture_exited:0");
       assert.ok(
         !replies.some(
           (value) =>
@@ -227,10 +231,6 @@ test("actual desktop-host three-argument and opt-in processes suppress mixed/mal
         ),
       );
       assert.ok(!JSON.stringify(replies).includes(marker));
-      await call(3, "close", {});
-      await exit;
-      assert.equal(child.exitCode, 0);
-      assert.equal(failure?.message, "desktop_fixture_exited:0");
     } finally {
       clearTimeout(deadline);
       child.stdin.end();

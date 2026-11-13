@@ -9,8 +9,10 @@ if (!lockfiles.length) throw new Error('No tracked npm lockfiles to audit');
 async function audit(lockfile) {
   // This gate runs on Ubuntu. Each audit uses the committed lockfile and does
   // not install dependencies or run lifecycle hooks.
-  const child = spawn('npm', ['audit', '--json', '--audit-level=high'], {
+  const child = spawn('npm', ['audit', '--json', '--audit-level=high', '--package-lock-only',
+    '--registry=https://registry.npmjs.org', '--include=dev', '--include=optional', '--include=peer'], {
     cwd: dirname(lockfile), stdio: ['ignore', 'pipe', 'ignore'],
+    env: { ...process.env, NODE_ENV: 'development' },
   });
   const exited = new Promise((resolve, reject) => {
     child.on('error', reject);

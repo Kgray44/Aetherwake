@@ -9,7 +9,8 @@ export default async function* reporter(source) {
     if (type !== 'test:pass' && type !== 'test:fail') continue;
     // A file wrapper with passing children is not a test. A failing wrapper
     // without test children is retained so load errors have an identity.
-    if (data.details.type === 'suite' || (data.name === data.file && type === 'test:pass')) continue;
+    if (type === 'test:pass' && !data.skip && !data.todo &&
+        (data.details.type === 'suite' || data.name === data.file)) continue;
     const status = data.skip ? 'skipped' : data.todo ? 'todo' : type === 'test:fail' ? 'failed' : 'passed';
     tests.push({
       file: data.file ? relative(process.cwd(), data.file).replaceAll('\\', '/') : null,
