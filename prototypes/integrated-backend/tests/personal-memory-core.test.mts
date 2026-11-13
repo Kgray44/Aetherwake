@@ -58,8 +58,16 @@ test('Core native capture persists a canonical user message across a private pro
     core = open();
     const chat = await core.command('createConversation', { title: 'Synthetic chat', commandId: 'chat' });
     const content = 'I prefer a synthetic relay.';
-    const message = await core.command('addMessage', { resourceId: chat.resourceId, role: 'user',
-      content, expectedRevision: chat.revision, commandId: 'message' });
+    const append = { resourceId: chat.resourceId, role: 'user' as const,
+      content, expectedRevision: chat.revision, commandId: 'message' };
+    const message = await core.command('addMessage', append);
+    const branch = { resourceId: chat.resourceId, messageId: message.id, includeMessageIds: [message.id],
+      providerId: 'local', title: 'Synthetic branch', commandId: 'branch', tokenBudget: 8192,
+      expectedRevision: message.revision };
+    const fork = await core.command('branch', branch);
+    assert.equal(fork.context.items[0]?.content, content);
+    assert.deepEqual(await core.command('addMessage', append), message);
+    assert.deepEqual(await core.command('branch', branch), fork);
     const preview = await core.command('personalMemoryCapturePreviewNative', {
       conversationId: chat.resourceId, messageId: message.id,
       scope: 'conversation', category: 'preferences', text: content, keywords: ['relay'],
@@ -90,6 +98,14 @@ test('Core native capture persists a canonical user message across a private pro
     await assert.rejects(core.command('personalMemoryManagementNative', { type: 'read', id: saved.id }), /personal_record_unavailable/);
     const reopenedSource = await core.command('openResource', { resourceId: chat.resourceId, selection: { messageId: message.id } });
     assert.equal(reopenedSource.status, 'unavailable');
+    const replays = await Promise.allSettled([
+      core.command('branch', branch),
+      core.command('addMessage', append),
+    ]);
+    for (const replay of replays) {
+      assert.equal(replay.status, 'rejected', 'Revoked source text must never escape a cached command receipt');
+      assert.match(String(replay.reason), /source_unavailable/);
+    }
   } finally {
     await core?.command('close', {});
     rmSync(root, { recursive: true, force: true });
