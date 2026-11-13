@@ -63,6 +63,7 @@ export function readBlindInputs(bytes: Buffer): readonly BlindCase[] {
 export async function runBlindCie(bytes: Buffer, candidate: Candidate,
   run: (input: Readonly<BlindPayload>, signal: AbortSignal, claim?: BlindClaim) => Promise<unknown>, signal: AbortSignal,
   options: { maxCases?: number; resume?: BlindCheckpoint; journal?: BlindJournal; route?: EvaluationRoute;
+    // Preflight reads admission state only; dispatch belongs to run.
     canStartCase?: (signal: AbortSignal) => Promise<boolean>; recovery?: BlindRecovery } = {}): Promise<BlindCheckpoint> {
   if (![candidate.commit, candidate.tree].every(value => /^[a-f0-9]{40}$/.test(value))) throw new Error('candidate_identity');
   const inputs = readBlindInputs(bytes);
@@ -126,11 +127,18 @@ export async function runBlindCie(bytes: Buffer, candidate: Candidate,
     if (signal.aborted) { stopped = { caseId: input.id, kind: 'cancelled' }; break; }
     const claim = recovery ? { claimToken: randomBytes(32).toString('hex'), bindingDigest: bindingFor(input.id) } : undefined;
     if (claim) await persist(input.id, claim);
-    if (options.canStartCase && !await options.canStartCase(signal)) {
+    let canStart: boolean;
+    try {
+      canStart = await options.canStartCase?.(signal) ?? true;
+    } catch (error) {
       if (claim) await persist(null);
+      throw error;
+    }
+    if (!canStart || signal.aborted) {
+      if (claim) await persist(null);
+      if (signal.aborted) stopped = { caseId: input.id, kind: 'cancelled' };
       break;
     }
-    if (signal.aborted) { stopped = { caseId: input.id, kind: 'cancelled' }; break; }
     if (journal && !claim) await persist(input.id);
     // The host must include qualification/preparation inside this callback. No labels exist here.
     const start = performance.now();
