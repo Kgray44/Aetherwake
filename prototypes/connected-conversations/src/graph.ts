@@ -28,6 +28,7 @@ export interface Message {
 }
 export type MessageMetadata = Readonly<Pick<Message,'id'|'conversationId'|'sequence'|'role'|'sensitivity'> & {ordinal:number;bodyBytes:number;unavailable:boolean}>;
 export interface MessageMetadataWindow {items:MessageMetadata[];emittedCount:number;emittedBodyBytes:number;hasMore:boolean;limitedBy:null|'scan-limit'|'byte-limit'|'denied'}
+export type MessageSearchMatch = Readonly<Pick<Message, 'id' | 'createdAt'> & { excerpt: string }>;
 class MetadataScanLimit extends Error {}
 export interface Artifact {
   id: string; conversationId: string; sourceMessageId: string;
@@ -221,6 +222,53 @@ export class ConversationGraph {
   }
   visibleMessages(conversationId: string): Message[] {
     return this.visibleMessageRecords(conversationId).filter(message => !this.unavailableMessages.has(message.id)).map(copy);
+  }
+  pageVisibleMessages(
+    conversationId: string,
+    select: (ids: readonly string[]) => { offset: number; limit: number },
+    allow: (conversationId: string, messageId: string) => boolean,
+  ): { items: Message[]; total: number; offset: number; limit: number; hasMore: boolean } {
+    const records = this.visibleMessageRecords(conversationId)
+      .filter(message => !this.unavailableMessages.has(message.id) && allow(message.conversationId, message.id));
+    const { offset, limit } = select(records.map(message => message.id));
+    assert(Number.isInteger(offset) && offset >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 200, 'invalid_page');
+    return {
+      items: records.slice(offset, offset + limit).map(copy),
+      total: records.length,
+      offset,
+      limit,
+      hasMore: offset + limit < records.length,
+    };
+  }
+  searchVisibleMessages(
+    conversationIds: readonly string[],
+    needle: string,
+    allow: (conversationId: string, messageId: string) => boolean,
+  ): Map<string, MessageSearchMatch[]> {
+    const results = new Map<string, MessageSearchMatch[]>();
+    const examined = new Map<string, MessageSearchMatch | null>();
+    for (const conversationId of conversationIds) {
+      const matches: MessageSearchMatch[] = [];
+      for (const message of this.visibleMessageRecords(conversationId)) {
+        if (!examined.has(message.id)) {
+          let match: MessageSearchMatch | null = null;
+          if (!this.unavailableMessages.has(message.id) && allow(message.conversationId, message.id)) {
+            const content = message.content;
+            const index = content.toLocaleLowerCase().indexOf(needle);
+            if (index >= 0) match = Object.freeze({
+              id: message.id,
+              createdAt: message.createdAt,
+              get excerpt() { return content.slice(Math.max(0, index - 60), index + 160); },
+            });
+          }
+          examined.set(message.id, match);
+        }
+        const match = examined.get(message.id);
+        if (match) matches.push(match);
+      }
+      if (matches.length) results.set(conversationId, matches);
+    }
+    return results;
   }
   /** Bounded lineage projection only. Counts/bytes describe this window, never the entire history.
    * maxScan counts ancestry nodes plus own-message refs before allocation.
