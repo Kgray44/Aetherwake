@@ -30,7 +30,7 @@ const identifier = (value: unknown): value is string =>
  * a renderer-facing capture request must never forward directly to commit. */
 export function createPersonalMemoryReview(options: Options) {
   const now = options.now ?? Date.now;
-  const pending = new Map<string, { review: CaptureReview; expires: number }>();
+  const pending = new Map<string, { review: CaptureReview; expires: number; projectId: string | null }>();
   let permission: ((input: PersonalAuthorization) => boolean) | undefined;
   let closed = false;
 
@@ -42,6 +42,20 @@ export function createPersonalMemoryReview(options: Options) {
     permission = allowed;
     try { return work(); }
     finally { permission = undefined; }
+  }
+
+  function eligibleCaptureSource(reference: ConversationSourceRef) {
+    const source = options.resolveConversationSource(reference);
+    if (!source || source.role !== 'user' || source.sensitive ||
+      source.conversationId !== reference.conversationId || source.messageId !== reference.messageId)
+      throw new PersonalContextError('conversation_source_unavailable');
+    return source;
+  }
+
+  function requireSameCaptureSource(source: ReturnType<typeof eligibleCaptureSource>,
+    expected: Pick<ReturnType<typeof eligibleCaptureSource>, 'projectId' | 'version' | 'contentDigest'>) {
+    if (source.projectId !== expected.projectId || source.version !== expected.version || source.contentDigest !== expected.contentDigest)
+      throw new PersonalContextError('stale_personal_memory_source');
   }
 
   return {
@@ -71,24 +85,33 @@ export function createPersonalMemoryReview(options: Options) {
       if (!input || !identifier(input.conversationId) || !identifier(input.messageId) ||
         !['conversation', 'project'].includes(input.scope) || !['preferences', 'projects', 'technical', 'decisions'].includes(input.category) ||
         typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4096 ||
+        (input.expectedProjectId !== undefined && input.expectedProjectId !== null && !identifier(input.expectedProjectId)) ||
+        (input.expectedSourceText !== undefined && (typeof input.expectedSourceText !== 'string' || Buffer.byteLength(input.expectedSourceText) > 16384)) ||
         !Array.isArray(input.keywords) || !input.keywords.length || input.keywords.length > 16 ||
         !input.keywords.every(keyword => typeof keyword === 'string' && keyword.trim() && keyword.length <= 64) ||
         new Set(input.keywords).size !== input.keywords.length) throw new PersonalContextError('invalid_personal_memory_capture');
-      const { conversationId, messageId, scope, category, text, keywords } = structuredClone(input);
-      const service = await options.open();
-      requireOpen();
-      return options.transaction(() => {
-        const reference = { kind: 'conversation-message', conversationId, messageId } as const;
-        const source = options.resolveConversationSource(reference);
-        if (!source || source.role !== 'user' || source.sensitive || source.conversationId !== conversationId || source.messageId !== messageId)
-          throw new PersonalContextError('conversation_source_unavailable');
-        const scopeId = scope === 'project' ? source.projectId : conversationId;
-        const proof = scopeId ? options.resolveScope({ kind: scope, id: scopeId }) : null;
-        if (!proof) throw new PersonalContextError('canonical_scope_unavailable');
+      const { conversationId, messageId, scope, category, text, keywords, expectedProjectId, expectedSourceText } = structuredClone(input);
+      const expectedDigest = expectedSourceText === undefined ? undefined : createHash('sha256').update(expectedSourceText).digest('hex');
+      const reference = { kind: 'conversation-message', conversationId, messageId } as const;
+      const { original, sourceText } = options.transaction(() => {
+        const source = eligibleCaptureSource(reference);
+        if ((expectedProjectId !== undefined && source.projectId !== expectedProjectId) ||
+          (expectedDigest !== undefined && source.contentDigest !== expectedDigest))
+          throw new PersonalContextError('stale_personal_memory_source');
         const sourceText = options.readSourceText(reference);
         if (sourceText === null || Buffer.byteLength(sourceText) > 16384 ||
           createHash('sha256').update(sourceText).digest('hex') !== source.contentDigest)
           throw new PersonalContextError('conversation_source_unavailable');
+        return { original: { ...source }, sourceText };
+      });
+      const service = await options.open();
+      requireOpen();
+      return options.transaction(() => {
+        const source = eligibleCaptureSource(reference);
+        requireSameCaptureSource(source, original);
+        const scopeId = scope === 'project' ? source.projectId : conversationId;
+        const proof = scopeId ? options.resolveScope({ kind: scope, id: scopeId }) : null;
+        if (!proof) throw new PersonalContextError('canonical_scope_unavailable');
         const policy = withPermission(input => input.operation === 'policy.read', () => service.policy());
         const draft: FactDraft = {
           scope: proof.scope, purpose: 'knowledge', category, text, keywords: [...keywords],
@@ -100,7 +123,7 @@ export function createPersonalMemoryReview(options: Options) {
         if (pending.size >= 16) throw new PersonalContextError('personal_memory_review_busy');
         const expires = timestamp + 300_000;
         const review = { id: randomUUID(), draft, sourceText, scopeProof: proof, policy, enableStorage: !policy.storageEnabled, expiresAt: new Date(expires).toISOString() };
-        pending.set(review.id, { review: structuredClone(review), expires });
+        pending.set(review.id, { review: structuredClone(review), expires, projectId: source.projectId });
         return review;
       });
     },
@@ -115,6 +138,9 @@ export function createPersonalMemoryReview(options: Options) {
       requireOpen();
       if (pendingReview.expires <= now()) throw new PersonalContextError('personal_memory_review_mismatch');
       return options.transaction(() => {
+        const original = approved.draft.source;
+        if (original.kind !== 'conversation-message') throw new PersonalContextError('personal_memory_review_mismatch');
+        requireSameCaptureSource(eligibleCaptureSource(original), { ...original, projectId: pendingReview.projectId });
         const current = options.resolveScope(approved.draft.scope);
         if (JSON.stringify(current) !== JSON.stringify(approved.scopeProof)) throw new PersonalContextError('stale_personal_scope');
         return withPermission(input => input.operation === 'policy.read' || input.operation === 'policy.write' && approved.enableStorage ||
