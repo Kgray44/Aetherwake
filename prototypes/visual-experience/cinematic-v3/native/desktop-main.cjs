@@ -40,6 +40,7 @@ const {
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
 const {showVelaReview,projectEvidenceMatches}=require('./vela-review.cjs');
+const {capturePersonalMemory}=require('./personal-memory-capture.cjs');
 const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
@@ -168,6 +169,12 @@ if (verifyMissions) {
   if(process.argv.includes('--missions-persistence-reopen-only'))require('./mission-persistence.cjs').assertMissionPersistenceReopen({profile:privateRoot,argv:process.argv,source});
   else if(!/^review-vela-missions-\d+$/u.test(path.basename(privateRoot))||existsSync(privateRoot))throw Error('fresh_offline_mission_profile_required');
 }
+if (process.argv.includes("--missions-aiw-inspection") &&
+  (!verifyMissions || !process.argv.includes("--missions-aep-presentation-only") ||
+    process.argv.includes("--bootstrap-vela-api") ||
+    process.argv.some(arg => arg.startsWith("--integration-") && arg !== "--integration-vela-missions" ||
+      arg.startsWith("--missions-") && !["--missions-aep-presentation-only", "--missions-aiw-inspection"].includes(arg))))
+  throw Error("owned_offline_aiw_verification_required");
 if (missionProfilerFlags.length && (missionProfilerFlags.length !== 1 || !verifyMissions ||
   !["off", "minimal", "full"].includes(missionProfilerMode) ||
   !process.argv.includes("--missions-aep-presentation-only") || !process.argv.includes("--missions-aep-composer") ||
@@ -610,15 +617,24 @@ app.whenReady().then(async () => {
   const nativeReviewGate=async work=>{if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
   const reviewProvider=args=>nativeReviewGate(()=>showVelaReview(args));
   const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
+  const policyReady = () => !closing && !backendFailed && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
+  const { reviewMode, reviewRollback, ...performanceMenu } = require("./resource-policy-menu.cjs").resourcePolicyMenu({
+    call, show: options => reviewDialogs.showMessageBox(win, options),
+    ready: policyReady, canWrite: () => storage.allowWrite(),
+  });
   if (!verify) {
     const menu = Menu.getApplicationMenu() ?? new Menu();
-    menu.append(new MenuItem(require("./resource-policy-menu.cjs").resourcePolicyMenu({
-      call, show: options => reviewDialogs.showMessageBox(win, options),
-      ready: () => !closing && !backendFailed && !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
-      canWrite: () => storage.allowWrite(),
-    })));
+    menu.append(new MenuItem(performanceMenu));
     Menu.setApplicationMenu(menu);
   }
+  ipcMain.handle("application-resource-policy-inspection", require("./resource-policy-inspection.cjs").resourcePolicyInspection({
+    trusted: event => policyReady() && trustedActiveFrame(event),
+    hasGesture: event => !verify && event.senderFrame.executeJavaScript(
+      "navigator.userActivation.isActive && document.hasFocus()", false,
+    ).catch(() => false),
+    inspect: () => call("resourcePolicyNative", { name: "inspect" }),
+    reviewMode, reviewRollback,
+  }));
   const validateHostOperation=async(binding,{phase='before-dispatch'}={})=>{
       const frame=maintenanceReviewFrames.get(binding.operationId);
       const trusted=()=>!closing&&!backendFailed&&!!frame&&maintenanceReviewFrames.get(binding.operationId)===frame&&(phase==='after-dispatch'?trustedApplicationFrame:trustedActiveFrame)({sender:win.webContents,senderFrame:frame});
@@ -664,7 +680,9 @@ app.whenReady().then(async () => {
   win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
-      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative'].includes(command))throw Error('unauthorized_private_command');
+      if (typeof command === "string" && command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture")
+        throw Error("unauthorized_private_command");
+      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative','aepExperimentNative'].includes(command))throw Error('unauthorized_private_command');
       if (
         event.sender !== win.webContents ||
         event.senderFrame !== win.webContents.mainFrame ||
@@ -749,7 +767,7 @@ app.whenReady().then(async () => {
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && (isVelaRead(input) || input?.name === "submissionStatus")) &&
-        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experiment-hypothesis", "compare-native-samples", "resource-experiment-preview", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
+        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experience-list", "experience-evidence", "experience-finding", "experiment-hypothesis", "compare-native-samples", "resource-experiment-preview", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
         !(command === "workspaceRecovery" && ["state", "preview"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
@@ -784,7 +802,20 @@ app.whenReady().then(async () => {
           event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
         throw new Error("unauthorized_sender");
       let result;
-      if (command === "desktop") result = await call("desktop", input);
+      if (command === "personalMemoryCapture") {
+        result = await capturePersonalMemory({
+          input,
+          trustedFrame: () => !closing && !backendFailed && trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized(),
+          observeGesture: () => trustedActiveFrame(event) &&
+            event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false),
+          allowWrite: () => storage.allowWrite(),
+          preview: value => call("personalMemoryCapturePreviewNative", value),
+          showReview: review => reviewProvider({ parent: win, review, experience: "memory-capture", expiresAt: review.expiresAt }),
+          commit: review => call("personalMemoryCaptureCommitNative", review),
+          cancel: id => call("personalMemoryCaptureCancelNative", { id }),
+        });
+      }
+      else if (command === "desktop") result = await call("desktop", input);
       else if (command === "openResource")
         result = await call("openResource", input);
       else if (command === "providerConnection")
