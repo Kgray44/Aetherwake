@@ -3,7 +3,7 @@
  * provider qualification, Electron input/paint measurement or user-data tool.
  * Commit this file and the released canonical read API before running:
  *   node test/library-scale-benchmark.mts --candidate=<HEAD> --datasets=small
- * Add --search-only to measure Switch chat on the same fixture.
+ * Add --search-only to measure the 12-result Switch chat query on the same fixture.
  * Use --prepare-search-profile to seed and reopen one synthetic desktop-sized profile.
  * --describe is read-only. No npm installs, external providers or GUI are used.
  */
@@ -211,8 +211,9 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
    // inherited hits, and exclude denied or revoked source messages.
    const revoked=new Set(graph.unavailableMessageIds);
    const sourceResources=new Map(active.map(e=>[e.graphId,e.resourceId]));
-   const rareInput={...rareSearch,searchMode:'chat-history' as const};
-   const commonInput={...commonSearch,searchMode:'chat-history' as const};
+   const pickerLimit=12;
+   const rareInput={...rareSearch,searchMode:'chat-history' as const,sort:'activity' as const,limit:pickerLimit};
+   const commonInput={...commonSearch,searchMode:'chat-history' as const,sort:'activity' as const,limit:pickerLimit};
    const expectedCommon=new Set<string>();
    for(const entry of active)for(const message of owner.graph.visibleMessages(entry.graphId)){
     const source=sourceResources.get(message.conversationId);
@@ -248,7 +249,7 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
     {id:'switch-chat-common-second-page',name:'search',input:{...commonInput,offset:commonInput.limit},check:value=>{
      for(const key of validateCommon(value,commonInput.limit))assert(!firstPage.has(key));
     }},
-    {id:'switch-chat-absent',name:'search',input:{text:'SYNTHETIC_NEVER_PRESENT_098765',searchMode:'chat-history',limit:50},check:value=>{
+    {id:'switch-chat-absent',name:'search',input:{...rareInput,text:'SYNTHETIC_NEVER_PRESENT_098765'},check:value=>{
      const p=page(value);
      assert.equal(p.total,0);
      assert.equal(p.items.length,0);
@@ -272,7 +273,7 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
    finally{restores.forEach(restore=>restore());owner.graph.snapshot=originalSnapshot;owner.graph.visibleMessages=originalVisible;owner.kernel.getResource=originalResource;}
    work.sqliteChanges=Number(db.prepare('SELECT total_changes() AS n').get()!.n)-before;work.providerCalls=providerCalls;assert.equal(work.sqliteChanges,0);assert.equal(providerCalls,0);
    const actual=operation.name==='detail'?(value as {messages:{items:{id:string}[]}}).messages.items.map(row=>row.id):page(value).items.map(row=>row.kind==='message'?String(row.resourceId)+'/'+String(row.messageId):String(row.resourceId));
-   const observation:Record<string,unknown>={id:operation.id,kind:operation.name,queryClass:operation.id,limit:50,work,instrumentationCoverage:['same canonical graph/state message content getters','graph snapshot/visibleMessages entry points','kernel.getResource note-return counter; direct SQL note reads not counted'],correctness:{passed:true,resultIdentityDigest:digestIds(actual)},timing:{tier:'in-process-Core-CP-read',warmups:0,samplesMs:[]}};observations.push(observation);
+   const observation:Record<string,unknown>={id:operation.id,kind:operation.name,queryClass:operation.id,limit:operation.input.limit,work,instrumentationCoverage:['same canonical graph/state message content getters','graph snapshot/visibleMessages entry points','kernel.getResource note-return counter; direct SQL note reads not counted'],correctness:{passed:true,resultIdentityDigest:digestIds(actual)},timing:{tier:'in-process-Core-CP-read',warmups:0,samplesMs:[]}};observations.push(observation);
    const samples:number[]=[],timing=observation.timing as {tier:string;warmups:number;samplesMs:number[];medianMs?:number;p95Ms?:number;complete?:boolean;stopped?:string};
    for(let n=0;n<25;n++){
     fixtureFence(session,profile,started);const time=performance.now(),result=await invoke(operation),elapsed=performance.now()-time;operation.check(result);
