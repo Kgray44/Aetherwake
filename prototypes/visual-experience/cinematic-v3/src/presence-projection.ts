@@ -31,6 +31,7 @@ export class PresenceProjection {
   private current?: Samples;
   private matrix = new THREE.Matrix4();
   private point = new THREE.Vector3();
+  private readonly centerline: [number, number, number, number, number, number] = [0, 0, 0, 0, 0, 0];
   sample(attribute: THREE.BufferAttribute, pose: RibbonPose) {
     let s = this.caches.get(attribute);
     if (!s) {
@@ -71,7 +72,7 @@ export class PresenceProjection {
       const sin = Math.sin(t), cos = Math.cos(t);
       const sinDouble = Math.sin(2 * t), cosDouble = Math.cos(2 * t);
       const radius = 0.93 + 0.23 * cos, radiusDerivative = -0.23 * sin;
-      const shaped = pose.shape ? velaCenter(t, pose.shape) : null;
+      const shaped = pose.shape ? velaCenter(t, pose.shape, this.centerline) : null;
       const cx = (shaped?.[0] ?? morph(1.13 * sinDouble * (0.88 + 0.12 * cos), radius * sinDouble)) * ex;
       const cy = (shaped?.[1] ?? morph(1.18 * cos + 0.12 * Math.sin(3 * t), radius * cosDouble)) * ey;
       const cz =

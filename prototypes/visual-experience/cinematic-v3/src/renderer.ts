@@ -514,14 +514,10 @@ export class Environment {
   private readonly targetTint = new THREE.Color(0x8c7cdb);
   private lost = false;
   private disposed = false;
-  private readonly onContextLost = () => {
+  contextLost() {
     this.lost = true;
     this.spatialLayer?.contextLost?.();
-  };
-  private readonly onContextRestored = () => {
-    this.lost = false;
-    this.spatialLayer?.contextRestored?.();
-  };
+  }
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly motion?: MotionCoordinator) {
     try {
@@ -577,8 +573,6 @@ export class Environment {
     this.buildField();
     this.buildFolios();
     this.prepareSceneFades();
-    canvas.addEventListener("webglcontextlost", this.onContextLost);
-    canvas.addEventListener("webglcontextrestored", this.onContextRestored);
   }
 
   private prepareSceneFades() {
@@ -1258,6 +1252,7 @@ export class Environment {
       frame.sceneWeights?.living ?? (frame.study === "living" ? 1 : 0);
     this.instrumentStudy = study;
     this.frameSlabs.clear();
+    this.surfaceOrder.length = 0;
     for (const visual of this.folios) {
       visual.root.visible = false;
       visual.contact.visible = false;
@@ -1267,7 +1262,11 @@ export class Environment {
         this.canvas.dataset.materials = "opaque";
       return;
     }
-    const live = new Set(surfaces.map((pose) => pose.id));
+    const live = new Set<string>();
+    for (const pose of surfaces) {
+      live.add(pose.id);
+      this.surfaceOrder.push(pose);
+    }
     for (const visual of this.folios)
       if (visual.id && !live.has(visual.id)) {
         this.folioById.delete(visual.id);
@@ -1275,9 +1274,10 @@ export class Environment {
       }
     if (surfaces.length > this.folios.length)
       this.buildFolios(surfaces.length - this.folios.length);
-    this.surfaceOrder.length = 0;
-    for (const pose of surfaces) this.surfaceOrder.push(pose);
     this.surfaceOrder.sort(compareSurfaceStack);
+    const viewOpacity = Number.isFinite(this.surfaceView.opacity)
+      ? THREE.MathUtils.clamp(this.surfaceView.opacity!, 0, 1)
+      : 1;
     for (let i = 0; i < this.surfaceOrder.length; i++) {
       const pose = this.surfaceOrder[i];
       if (
@@ -1300,9 +1300,6 @@ export class Environment {
       }
       visual.root.visible = true;
       visual.contact.visible = livingWeight > 0.001;
-      const viewOpacity = Number.isFinite(this.surfaceView.opacity)
-        ? THREE.MathUtils.clamp(this.surfaceView.opacity!, 0, 1)
-        : 1;
       const opacity =
         (Number.isFinite(pose.opacity)
           ? THREE.MathUtils.clamp(pose.opacity!, 0, 1)
@@ -2198,11 +2195,6 @@ export class Environment {
     this.motion?.bodies.delete(this.shapeKey);
     this.spatialLayer = null; // Application owns layer lifetime across renderer recovery.
     this.presenceProjection.dispose();
-    this.canvas.removeEventListener("webglcontextlost", this.onContextLost);
-    this.canvas.removeEventListener(
-      "webglcontextrestored",
-      this.onContextRestored,
-    );
     const geometries = new Set<THREE.BufferGeometry>(),
       materials = new Set<THREE.Material>();
     for (const folio of this.folios) {
