@@ -153,7 +153,38 @@ test('trusted native reserve observations defer mission dispatch and persist the
 for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
   test(`mission ${fault} publication recovers after worker termination without duplicate receipts`, { timeout: 15_000 }, async t => {
     let stage = 'worker and SQLite setup';
-    const reportStage = () => t.diagnostic(`Publication fixture stage at abort: ${stage}`);
+    let rpc = 'idle';
+    let lastMission: MissionProjection | undefined;
+    const missionDiagnostic = () => JSON.stringify(lastMission ? {
+      outcome: lastMission.outcome,
+      workerLimit: lastMission.admission?.workerLimit,
+      admissionReasons: lastMission.admission?.reasons.slice(0, 16),
+      tasks: lastMission.tasks.slice(0, 4).map(task => ({
+        id: task.id,
+        state: task.state,
+        wait: lastMission?.waits[task.id],
+        attemptCount: task.attempts.length,
+        attempts: task.attempts.slice(-2).map(attempt => {
+          const sampleMs = (attempt.evidence?.value as { sampleMs?: unknown } | undefined)?.sampleMs;
+          return {
+            outcome: attempt.outcome,
+            executionMs: attempt.timing?.executionMs,
+            cpuSampleMs: attempt.evidence?.source === 'node:os.cpus' && typeof sampleMs === 'number' ? sampleMs : undefined,
+            verified: attempt.verification?.passed,
+          };
+        }),
+      })),
+    } : null);
+    const reportStage = () => t.diagnostic(`Publication fixture stage at abort: ${stage}. RPC: ${rpc}. Last mission: ${missionDiagnostic()}`);
+    const trace = async <T,>(label: string, call: () => Promise<T>): Promise<T> => {
+      rpc = `begin ${label}`;
+      t.diagnostic(`${stage}: ${rpc}`);
+      try { return await call(); }
+      finally {
+        rpc = `end ${label}`;
+        if (!t.signal.aborted) t.diagnostic(`${stage}: ${rpc}`);
+      }
+    };
     t.signal.addEventListener('abort', reportStage, { once: true });
     const directory = mkdtempSync(join(tmpdir(), 'aerynth-mission-publication-'));
     const options = { path: join(directory, 'state.sqlite'), contentPolicy: 'synthetic-only' as const };
@@ -168,21 +199,25 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
       return state.conversation?.messages.filter(message => message.missionReport?.missionId === id) ?? [];
     };
     const start = async (requestId: string) => {
+      lastMission = undefined;
       const objective = 'Measure CPU and RAM';
-      const preview = await backend.call('missions', { name: 'preview', input: { objective } }) as MissionPreview;
-      return await backend.call('missions', { name: 'start', input: {
+      const preview = await trace('Preview', () => backend.call('missions', { name: 'preview', input: { objective } })) as MissionPreview;
+      lastMission = await trace('Start', () => backend.call('missions', { name: 'start', input: {
         objective, fingerprint: preview.fingerprint, requestId,
-      } }) as MissionProjection;
+      } })) as MissionProjection;
+      return lastMission;
     };
     const verified = async (id: string) => {
       const read = () => backend.call('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
-      let mission = await read();
+      let mission = lastMission = await trace('first Read', read);
       const deadline = performance.now() + 5000;
       while (['queued', 'running'].includes(mission.outcome) && performance.now() < deadline) {
         await delay(20);
-        mission = await read();
+        rpc = 'polling Read';
+        mission = lastMission = await read();
+        rpc = 'polling delay or settlement';
       }
-      assert.equal(mission.outcome, 'verified', nativeMissionDiagnostics(mission));
+      assert.equal(mission.outcome, 'verified', missionDiagnostic());
       return mission;
     };
     const pending = (id: string) => {
