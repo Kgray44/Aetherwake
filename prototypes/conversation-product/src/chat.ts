@@ -616,7 +616,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   textarea.addEventListener('input', () => { markViewIntent();if(status.dataset.statusKind==='send-accepted'&&textarea.value!==session.snapshot().content)report('');session.update(textarea.value);resize();viewState(); });
   textarea.addEventListener('compositionstart',()=>{composing=true;markViewIntent();});textarea.addEventListener('compositionend',()=>{composing=false;viewState();});
   for(const name of ['keyup','pointerup'])textarea.addEventListener(name,()=>{markViewIntent();viewState();});
-  textarea.addEventListener('keydown', event => { if (!composing && composerShouldSubmit(event)) { event.preventDefault(); if (!send.disabled) composer.requestSubmit(); } });
+  textarea.addEventListener('keydown', event => {
+    if (composing || !composerShouldSubmit(event)) return;
+    event.preventDefault();
+    if (!event.repeat && !send.disabled) composer.requestSubmit();
+  });
   messages.addEventListener('scroll',()=>{if(userScroll)markViewIntent();viewState();},{passive:true});
   const beginTranscriptScroll = () => {
     followingLatest = false;

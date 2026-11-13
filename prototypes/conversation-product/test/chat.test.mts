@@ -982,6 +982,14 @@ test('Enter submits once; Shift+Enter and IME do not submit; draft draining is i
     editor.value='Exact submitted text';editor.fire('input');const entered=editor.fire('keydown',{key:'Enter'});assert.equal(entered.defaultPrevented,true);await until(()=>!!f.pending);assert.equal(f.pending!.input.content,'Exact submitted text');assert.equal(f.draft.content,'Exact submitted text');
     editor.value='Later typing while native approval waits';editor.fire('input');let drained=false;const drain=chat.flush().then(()=>{drained=true;});await until(()=>drained);assert.ok(f.pending,'Provider/native send is still pending after draft drain');assert.equal(f.draft.content,editor.value);f.accept();await drain;await chat.whenSubmissionSettled();
     assert.equal(editor.value,'Later typing while native approval waits');assert.equal(f.draft.content,editor.value);assert.equal(f.calls.filter(c=>c.name==='send').length,1);assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Later draft edits/);
+    const repeated=editor.fire('keydown',{key:'Enter',repeat:true});
+    assert.equal(repeated.defaultPrevented,true);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+    editor.fire('keydown',{key:'Enter',repeat:false});
+    await until(()=>!!f.pending);
+    assert.equal(f.pending!.input.content,'Later typing while native approval waits');
+    f.accept();await chat.whenSubmissionSettled();
   }finally{await chat?.dispose();f.restore();}
 });
 
