@@ -3056,6 +3056,7 @@ export class BackendCore {
     // Leave room for the host to return a terminal result before the desktop command deadline.
     const turnSignal = gapFollowup ? AbortSignal.any([controller.signal, AbortSignal.timeout(VELA_REVIEWED_GAP_TURN_MS)]) : controller.signal;
     const planning = preview.route.kind === 'app-planning';
+    const emptyEvaluation = !!preview.evaluationClaim && preview.resourceIds.length === 0;
     const tools=preview.semanticContext ? undefined : this.toolPort(input,preview);
     const weatherTool=preview.semanticContext ? undefined : this.apiWeatherTool(input.requestId);
     const validate = () => {
@@ -3145,7 +3146,9 @@ export class BackendCore {
     };
     // Reserve the foreground slot before the transport can synchronously publish admission.
     const task = Promise.resolve().then(async () => {
-      if (preview.semanticContext) {
+      if (emptyEvaluation) {
+        request.instruction = 'Answer the request using only the supplied evidence. No sources were supplied. Explain what cannot be determined and what evidence would be needed. Do not invent findings, excerpts, or citations. No actions or tools are authorized.';
+      } else if (preview.semanticContext) {
         const sources = preview.frozenContext.included.map(toVelaReviewedEvidenceSource);
         const checkpoint = preview.missionCheckpoint && this.readVelaMissionCheckpoint(preview.missionCheckpoint.selection);
         const workspace = preview.workspaceState && this.readVelaWorkspaceState();
@@ -3194,7 +3197,8 @@ export class BackendCore {
       if (preview.semanticContext) {
         const [message, ...extra] = result.api?.outputItems.filter(item => item.type !== 'reasoning') ?? [];
         const confirmed = result.reportedModel === request.model && !result.refusalText && message?.type === 'message' &&
-          message.status === 'completed' && !extra.length && message.content.every(part => part.type === 'output_text') &&
+          message.status === 'completed' && !extra.length && message.content.every(part =>
+            part.type === 'output_text' && (!emptyEvaluation || part.annotations.length === 0)) &&
           message.content.map(part => part.type === 'output_text' ? part.text : '').join('') === result.partialText;
         if (!confirmed) throw new VelaError('vela_semantic_answer_unconfirmed');
       }
@@ -3954,7 +3958,13 @@ export class BackendCore {
     if(preview.frozenContext.operations)this.vela.validateOperationContext(preview.frozenContext.operations,this.inspectVelaOperationWorkspace);
     if((preview.nativeReviewed||options.nativeReview)&&!preview.historyFence)this.validateVelaInputAnchor(preview,options.metadataOnly===true);
     // The schema tool validates immutable proof metadata only; it never serializes cached source/history bodies.
-    if(!options.metadataOnly)ensure(this.velaEgress(preview.intent,preview.frozenContext,preview.discovery,preview)===preview.signature&&this.velaSemanticPrompt(preview.intent,preview.frozenContext,preview.catalog,preview.discovery,preview.providerId,preview.route,preview.nativeStage,preview.fileEdit,preview.voiceInput?.context)===preview.prompt,'stale_vela_preview');
+    if (!options.metadataOnly) {
+      const prompt = preview.evaluationClaim && !preview.resourceIds.length
+        ? JSON.stringify({ request: preview.intent, evidence: [] })
+        : this.velaSemanticPrompt(preview.intent,preview.frozenContext,preview.catalog,preview.discovery,preview.providerId,preview.route,preview.nativeStage,preview.fileEdit,preview.voiceInput?.context);
+      ensure(this.velaEgress(preview.intent,preview.frozenContext,preview.discovery,preview)===preview.signature &&
+        prompt===preview.prompt,'stale_vela_preview');
+    }
   }
   private releaseVelaCatalog(requestId: string) {
     const entry = this.velaCatalogLeases.get(requestId);
@@ -4681,7 +4691,8 @@ export class BackendCore {
     claim: NonNullable<VelaApiRun['evaluationClaim']>):Promise<VelaRequestPreview> {
     ensure(this.velaApiTest&&!this.privateMode,'vela_evaluation_live_activation_required');
     ensure(input.adaptive===true&&input.providerId===VELA_API_PROVIDER&&input.semanticContext===true&&
-      input.resourceIds.length>0&&!input.projectEvidence&&!input.workspaceState&&!input.missionCheckpoint&&
+      (input.resourceIds.length>0 || Array.isArray(input.resourceRefs) && input.resourceRefs.length===0)&&
+      !input.projectEvidence&&!input.workspaceState&&!input.missionCheckpoint&&
       !input.handoffSourceRequestId&&!input.routingAgentId&&!input.activeCard,'vela_evaluation_scope_invalid');
     const evaluationClaim=Object.freeze({...claim});
     this.velaApiRuntime.beginEvaluationClaim(evaluationClaim);
@@ -4792,7 +4803,7 @@ export class BackendCore {
         providerId === VELA_API_PROVIDER && route?.kind === 'conversational' &&
         (kind === 'quick' || kind === 'deep') && !nativeVelaFact(input.intent) && !velaStandingMutationRequested(input.intent) &&
         !route.nativeMetric && !route.nativeLog && !route.escalation && !agent && !input.activeCard &&
-        Buffer.byteLength(input.intent) <= 8192 && sourceCount >= 1 && sourceCount <= 4 &&
+        Buffer.byteLength(input.intent) <= 8192 && (sourceCount >= 1 || !!evaluationClaim) && sourceCount <= 4 &&
         new Set(input.resourceIds).size === input.resourceIds.length, 'vela_semantic_context_ineligible');
     }
     const missionCheckpoint = hasCheckpoint ? this.readVelaMissionCheckpoint(input.missionCheckpoint!) : undefined;
@@ -4936,6 +4947,8 @@ export class BackendCore {
       preview.explicitSourceSelection = true;
     }
     preview.evaluationClaim=evaluationClaim;
+    if (evaluationClaim && !input.resourceIds.length)
+      preview.prompt = JSON.stringify({ request: input.intent, evidence: [] });
     preview.sendDisposition=publicPreview.sendDisposition=evaluationClaim?'review-required':this.velaSendDisposition(preview);
     preview.signature=this.velaEgress(input.intent,preview.frozenContext,discovery,preview);
     if (route) {

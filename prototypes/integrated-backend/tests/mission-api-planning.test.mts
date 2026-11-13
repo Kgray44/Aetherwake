@@ -1996,6 +1996,55 @@ test('reviewed CIE cites a selected local file and fences physical replacement b
   }
 });
 
+test('private CIE evaluation binds an explicit empty selection to one canonical answer', async () => {
+  const f = fixture(true, true);
+  try {
+    await f.ready();
+    const profile = f.core.readVelaEvaluationProfile()!;
+    const claim = { profileId: profile.profileId, configurationVersion: profile.configurationVersion,
+      claimToken: 'a'.repeat(64), bindingDigest: 'b'.repeat(64) };
+    const intent = 'Which date is supported by the supplied evidence?';
+    const input = { intent, resourceIds: [], adaptive: true as const, providerId: 'openai-api-vela',
+      model: 'gpt-6-luna', semanticContext: true as const };
+    await assert.rejects(f.core.previewVelaEvaluation(input, claim), /vela_evaluation_scope_invalid/);
+    await assert.rejects(f.core.command('velaRequestPreview', { ...input, resourceRefs: [] }), /vela_semantic_context_ineligible/);
+    const answer = 'No sources were supplied, so I cannot determine the date. A dated source record would be needed.';
+    f.replies.push(body => {
+      assert.deepEqual(JSON.parse(body.input[0].content), { request: intent, evidence: [] });
+      assert.match(JSON.stringify(body.instructions), /Do not invent findings, excerpts, or citations/);
+      assert.deepEqual(body.tools ?? [], []);
+      assert.equal(body.store, false);
+      return response(answer, body.model);
+    });
+    const preview = await f.core.previewVelaEvaluation({ ...input, resourceRefs: [] }, claim);
+    assert.equal(preview.sendDisposition, 'review-required');
+    const binding = { previewId: preview.id, signature: preview.signature };
+    const review = await f.core.command('velaNativeReview', binding);
+    assert.deepEqual(review.context.included, []);
+    const authority = { ...binding, reviewDigest: review.reviewDigest };
+    await assert.rejects(f.core.command('authorizeVelaRequest', { ...authority, directSend: true }));
+    const grant = await f.core.command('authorizeVelaRequest', authority);
+    const result = await f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId: grant.grantId,
+    } }) as VelaRequest;
+    assert.equal(result.state, 'responded');
+    const expected = f.core.readVelaEvaluationAdmissions(claim)!;
+    assert.equal(expected.length, 1);
+    assert.equal(expected[0].requestId, result.id);
+    assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 1);
+    await f.reopen();
+    const recovered = f.core.readVelaEvaluationResult(claim, expected);
+    assert.equal(recovered.state, 'verified-answer');
+    assert.equal(recovered.answer, answer);
+    assert.equal(recovered.messageId, result.response!.messageId);
+    assert.equal(recovered.answerDigest, result.response!.contentDigest);
+    assert.deepEqual(f.core.readVelaEvaluationResult({ ...claim, bindingDigest: 'c'.repeat(64) }, expected), { state: 'unresolved' });
+    assert.equal(f.requests.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
 for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation interrupt', 'provider failure', 'interrupt', 'revoke'] as const) test('selected evidence broker analysis: '+scenario, {timeout:15_000}, async () => {
   const evaluation = scenario.startsWith('evaluation');
   const noteCase = scenario === 'evaluation note';
