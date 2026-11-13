@@ -23,10 +23,12 @@ export interface Rate {
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const nonnegative = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const tokens = (value: unknown): value is number => nonnegative(value) && Number.isSafeInteger(value);
-function cost(run: Run, rates: readonly Rate[]) {
-  const candidates = rates.filter(rate => rate.model === run.reportedModel);
-  if (run.providerEvidence !== 'reported' || candidates.length !== 1 || !run.usage) return null;
-  const rate = candidates[0], usage = run.usage;
+export function estimateReportedTokenCost(model: unknown, observation: unknown, rates: readonly Rate[]) {
+  if (typeof model !== 'string' || !observation || typeof observation !== 'object') return null;
+  const candidates = rates.filter(rate => rate.model === model);
+  if (candidates.length !== 1) return null;
+  const rate = candidates[0];
+  const usage = observation as Partial<Record<keyof NonNullable<Run['usage']>, number>>;
   const cacheWrites = usage.cacheWriteInputTokens === undefined ? 0 : usage.cacheWriteInputTokens;
   if (rate.cacheWriteInputPerMillion !== undefined && !nonnegative(rate.cacheWriteInputPerMillion)) return null;
   if (rate.cacheWriteInputPerMillion !== undefined && usage.cacheWriteInputTokens === undefined) return null;
@@ -100,7 +102,7 @@ export function reportCognitiveRepetitions(repetitions: readonly Repetition[], r
       if (run.providerEvidence !== 'reported') issues.push('simulated-provider');
       if (run.dispatched === null) issues.push('dispatch-unknown');
       if (!run.usage) issues.push('usage-unavailable');
-      return { ...run, cost: cost(run, rates),
+      return { ...run, cost: run.providerEvidence === 'reported' ? estimateReportedTokenCost(run.reportedModel, run.usage, rates) : null,
         qualityContribution: 'not causally identified; independent ablation evidence required' };
     });
     return { id: repetition.id, arm: repetition.arm, endToEndMs: nonnegative(repetition.endToEndMs) ? repetition.endToEndMs : null,

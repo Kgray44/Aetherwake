@@ -70,3 +70,17 @@ test('blind reports reject duplicate executions and receipt groups inconsistent 
       transport === 'live' ? /blind_settlement_execution/ : /blind_settlement_binding/);
   }
 });
+
+test('blind cost prices only model-confirmed live receipts with complete cache usage', async () => {
+  const usage = { inputTokens: 100, outputTokens: 10, totalTokens: 110, cachedInputTokens: 20, cacheWriteInputTokens: 10 };
+  const native = await runBlindCie(input, prediction.candidate, async () => ({
+    transport: 'live', requestedModel: 'test-model', calls: 3,
+    settlements: [{ executionId: 'confirmed', reportedModel: 'test-model', usage },
+      { executionId: 'unconfirmed', usage },
+      { executionId: 'incomplete', reportedModel: 'test-model', usage: { ...usage, cacheWriteInputTokens: null } }],
+  }), new AbortController().signal, { maxCases: 1 });
+  const rates = [{ model: 'test-model', currency: 'USD', source: 'synthetic-fixture', effectiveAt: '2026-11-12',
+    inputPerMillion: 1, cachedInputPerMillion: .1, cacheWriteInputPerMillion: 2, outputPerMillion: 5 }];
+  const report = reportBlindQuality(input, native, { ...evaluation, predictionSha256: native.predictionSha256, grades: [], rates });
+  assert.deepEqual(report.providerObservations.groups[0].estimatedTokenCost, [{ rate: rates[0], samples: 1, amount: .000142 }]);
+});

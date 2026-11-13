@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { BLIND_INPUT_SHA256, readBlindInputs, type BlindCheckpoint } from './blind-runner.mts';
-import { distribution, summarizeTokenUsage } from './report.mts';
+import { distribution, estimateReportedTokenCost, summarizeTokenUsage, type Rate } from './report.mts';
 
 /** Scores are supplied by the independent evaluator after predictions are frozen. */
 export interface BlindCaseGrade {
@@ -11,9 +11,11 @@ export interface BlindCaseGrade {
   answer?: boolean;
 }
 
-function summarizeSettlements(prediction: BlindCheckpoint) {
+function summarizeSettlements(prediction: BlindCheckpoint, rates: readonly Rate[]) {
   const seen = new Set<string>();
-  const groups = new Map<string, { transport: string; requestedModel: string; settledCalls: number; times: number[]; usage: unknown[] }>();
+  type Group = { transport: string; requestedModel: string; settledCalls: number; times: number[]; usage: unknown[];
+    cost?: { rate: Rate; samples: number; amount: number } };
+  const groups = new Map<string, Group>();
   let casesWithReceipts = 0;
   for (const { result } of prediction.results) {
     if (!result || typeof result !== 'object' || !Object.hasOwn(result, 'settlements')) continue;
@@ -24,7 +26,7 @@ function summarizeSettlements(prediction: BlindCheckpoint) {
       throw new Error('blind_settlement_binding');
     }
     const key = JSON.stringify([transport, requestedModel]);
-    const group = groups.get(key) ?? { transport, requestedModel, settledCalls: 0, times: [], usage: [] };
+    const group: Group = groups.get(key) ?? { transport, requestedModel, settledCalls: 0, times: [], usage: [] };
     for (const receipt of settlements) {
       if (typeof receipt?.executionId !== 'string' || !receipt.executionId.trim() || seen.has(receipt.executionId)) {
         throw new Error('blind_settlement_execution');
@@ -34,13 +36,21 @@ function summarizeSettlements(prediction: BlindCheckpoint) {
         group.times.push(receipt.elapsedMs);
       }
       group.usage.push(receipt.usage);
+      const estimate = transport === 'live' && receipt.reportedModel === requestedModel
+        ? estimateReportedTokenCost(receipt.reportedModel, receipt.usage, rates) : null;
+      if (estimate) {
+        const cost = group.cost ??= { rate: estimate.rate, samples: 0, amount: 0 };
+        cost.samples++;
+        cost.amount += estimate.amount;
+      }
     }
     casesWithReceipts++;
     group.settledCalls += settlements.length;
     groups.set(key, group);
   }
-  return { casesWithReceipts, groups: [...groups.values()].map(({ times, usage, ...group }) => ({
+  return { casesWithReceipts, groups: [...groups.values()].map(({ times, usage, cost, ...group }) => ({
     ...group, latencyMs: distribution(times), usage: summarizeTokenUsage(usage),
+    ...(rates.length ? { estimatedTokenCost: cost ? [cost] : [] } : {}),
   })) };
 }
 
@@ -49,6 +59,7 @@ export function reportBlindQuality(input: Buffer, prediction: BlindCheckpoint, e
   predictionSha256: string;
   rubricSha256: string;
   grades: readonly BlindCaseGrade[];
+  rates?: readonly Rate[];
 }) {
   const hash = /^[a-f0-9]{64}$/;
   const { predictionSha256, ...payload } = prediction;
@@ -104,7 +115,7 @@ export function reportBlindQuality(input: Buffer, prediction: BlindCheckpoint, e
     expectedCases: expected.length, predictedCases: predicted.size, casesWithGrades: scored.size,
     stopped: payload.stopped,
     endToEndMs: distribution(payload.results.map(result => result.endToEndMs)),
-    providerObservations: summarizeSettlements(prediction),
+    providerObservations: summarizeSettlements(prediction, evaluation.rates ?? []),
     candidates: { ...candidates, recall: candidates.relevant ? candidates.hits / candidates.relevant : null,
       precision: candidates.returned ? candidates.hits / candidates.returned : null },
     disclosure, contradiction, answer,

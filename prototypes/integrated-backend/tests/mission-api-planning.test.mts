@@ -1372,6 +1372,9 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
                 stage: event.type === 'vela.api/scoped-completed' ? 'structured' : 'answer',
                 elapsedMs: event.payload.api?.elapsedMs ?? null,
                 usage: event.payload.usage ?? null,
+                // A completed reviewed turn has passed the exact reported-model
+                // check on every bound proposal and on the canonical answer.
+                reportedModel: live?.model ?? 'gpt-6-luna',
               }));
             assert.equal(settlements.length, calls);
             assert.ok(settlements.every(receipt => receipt.executionId));
@@ -1385,6 +1388,7 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
             const evidenceAudit = collectBlindEvidenceAudit(requests.slice(requestStart), input.request, sources);
             assert.equal(evidenceAudit.outbound.length, calls);
             if (!live) {
+              assert.ok(settlements.every(receipt => receipt.reportedModel === 'gpt-6-luna'));
               assert.equal(evidenceAudit.assessments.length, 1);
               assert.ok(evidenceAudit.assessments[0].excerpts.some(excerpt => excerpt.text === quote));
               assert.deepEqual(evidenceAudit.compositions[0].coverage[0].passages,
