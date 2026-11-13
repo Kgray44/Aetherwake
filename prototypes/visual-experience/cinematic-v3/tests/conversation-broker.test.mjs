@@ -169,7 +169,7 @@ test("Codex send rejects mismatched previews and a window closed during native a
   assert(!closing.calls.some(entry => entry.name === "conversationSend"));
 });
 
-function planFixture({ shared = false, approve = true } = {}) {
+function planFixture({ shared = false, approve = true, memory = false } = {}) {
   const f = fixture("local"),
     original = f.call,
     reviews = [];
@@ -189,6 +189,7 @@ function planFixture({ shared = false, approve = true } = {}) {
         ...(shared
           ? [{ role: "user", content: "A reviewed selected source" }]
           : []),
+        ...(memory ? [{ role: "user", content: "Quoted saved memory" }] : []),
         { role: "user", content: input.content },
       ];
       const model = input.model ?? "synthetic-catalog-model",
@@ -231,7 +232,8 @@ function planFixture({ shared = false, approve = true } = {}) {
           ],
           bodyDigest: createHash("sha256").update(body).digest("hex"),
           bodyBytes: Buffer.byteLength(body),
-          requiresSourceReview: shared,
+          requiresSourceReview: shared || memory,
+          ...(memory ? { memoryDigest: "f".repeat(64) } : {}),
         },
       };
     }
@@ -243,6 +245,27 @@ function planFixture({ shared = false, approve = true } = {}) {
   };
   return { ...f, reviews };
 }
+
+test("memory egress requires the exact native review and a current frame", async () => {
+  for (const frameCurrent of [false, true]) {
+    const f = planFixture({ memory: true });
+    f.input.input.useMemory = true;
+    f.input.input.reviewedBodyDigest = "forged";
+    const options = { ...f, beforeMemoryPreview: async () => {}, validateMemoryReview: () => frameCurrent };
+    if (frameCurrent) await conversationCommand(options);
+    else await assert.rejects(conversationCommand(options), /personal_memory_frame_changed/);
+    assert.equal(f.reviews.length, 1);
+    const shown = f.reviews[0].review;
+    assert.match(shown.prompt, /Quoted saved memory/);
+    const grant = f.calls.find(call => call.name === "authorizeConversationSend");
+    assert.equal(grant?.input.reviewedBodyDigest, frameCurrent ? shown.promptDigest : undefined);
+    assert.equal(f.calls.some(call => call.name === "conversationSend"), frameCurrent);
+  }
+  const f = planFixture({ memory: true });
+  f.input.input.useMemory = f.input.input.webSearch = true;
+  await assert.rejects(conversationCommand(f), /invalid_memory_scope/);
+  assert.deepEqual(f.calls, []);
+});
 
 test("ordinary ChatGPT-plan sends use real canonical execution even when the legacy resource projection is local", async () => {
   const f = planFixture();

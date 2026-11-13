@@ -1,3 +1,4 @@
+import { createPersonalMemoryView } from './personal-memory-view.ts';
 import type {
   GraphActions,
   SpatialRenderLayer,
@@ -590,6 +591,11 @@ export function installApplication(hooks: Hooks) {
     }, (id) => { openCanonicalResource(id); }, {
       motion: experienceMotion,
       viewId: `mission-workroom:${resourceId}:${++missionWorkroomSerial}`,
+      resourcePolicy: host.resourcePolicyInspection,
+      readProfile: async (id) => {
+        const result = await host.command!("missions", { name: "execution-profile", input: { id } }) as MissionResponse;
+        return result && "kind" in result && result.kind === "execution-profile" ? result : null;
+      },
       readMission: async (id) => {
         const result = await host.command!("missions", { name: "read", input: { id } }) as MissionResponse;
         if (result === null) return null;
@@ -2556,6 +2562,11 @@ export function installApplication(hooks: Hooks) {
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
+      memoryView: createPersonalMemoryView(request => host.command!("personalMemory", request)),
+      onRememberMessage: async (request) => {
+        const result = await host.command!("personalMemoryCapture", request) as { status: "saved" | "cancelled" };
+        return result.status === "saved";
+      },
       onOpenChatGPT: async (reference) => {
         const receipt = (await host.command!(
           "firstPartyChat",
