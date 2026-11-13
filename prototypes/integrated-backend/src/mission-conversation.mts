@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
+import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { lastMissionVerificationEvent } from './mission-publication.mts';
-import type { DatabaseSync } from 'node:sqlite';
 import type { MissionProjection } from './mission-contracts.mts';
 import { missionCompletion, missionResultAvailable } from './mission-native.mts';
 
@@ -23,6 +23,7 @@ function evidenceDigest(mission: MissionProjection): string {
 /** An attributed handoff in one canonical local chat, independent of Vela's global history. */
 export class MissionConversationReceipts {
   private readonly host: ReceiptHost;
+  private readonly receiptByMessage: StatementSync;
   private readonly checking = new Set<string>();
 
   constructor(host: ReceiptHost) {
@@ -34,6 +35,7 @@ export class MissionConversationReceipts {
       message_id TEXT NOT NULL UNIQUE,
       UNIQUE(mission_id,evidence_digest)
     ) STRICT;`);
+    this.receiptByMessage = host.db.prepare('SELECT mission_id, evidence_digest, resource_id FROM vela_mission_conversation_receipts WHERE message_id=?');
   }
 
   publish(mission: MissionProjection, acknowledge: () => void): boolean {
@@ -65,7 +67,7 @@ export class MissionConversationReceipts {
 
   /** Every source read, including inherited branch messages and future sends, rechecks authority. */
   sourceAllowed(messageId: string): boolean {
-    const row = this.host.db.prepare('SELECT * FROM vela_mission_conversation_receipts WHERE message_id=?').get(messageId);
+    const row = this.receiptByMessage.get(messageId);
     if (!row) return true;
     const id = String(row.mission_id);
     if (this.checking.has(id)) return false;
