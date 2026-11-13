@@ -10,6 +10,18 @@ interface MissionPublicationHost {
   conversation?(missionId: string, seq: number, ack: () => void): boolean;
 }
 
+/** Verification time may follow execution settlement; do not invent a second execution span. */
+export function lastMissionVerificationEvent(mission: Pick<Mission, 'events' | 'tasks'>, events = mission.events) {
+  return events.findLast(event => event.kind === 'settled' && event.detail === 'verified' ||
+    event.kind === 'recovered' && event.detail === 'original_source_inspection_reconciled' && mission.tasks.some(task => {
+      const attempt = task.attempts.at(-1), receipt = attempt?.backendInspection;
+      return !!attempt && task.state === 'verified' && task.id === event.taskId && attempt.id === event.attemptId &&
+        attempt.outcome === 'verified' && receipt?.contract === 'aerynth.backend-inspection-terminal@1' &&
+        receipt.reconciledRevision === event.seq && receipt.evidenceId === attempt.evidence?.id &&
+        attempt.verification?.passed && attempt.verification.evidenceIds.includes(receipt.evidenceId);
+    }));
+}
+
 const lifecycleBatch = 64;
 
 /** Stores only journal coordinates. The mission journal remains the source of evidence. */
@@ -44,13 +56,12 @@ export class MissionPublication {
 
     if (mission.disposition === 'cancelled' ||
         !mission.tasks.length || !mission.tasks.every(task => task.state === 'verified')) return;
-    const settled = events.findLast(event => event.kind === 'settled' && event.detail === 'verified');
+    const settled = lastMissionVerificationEvent(mission, events);
     if (settled && mission.originConversationId) this.db.prepare(`INSERT INTO vela_mission_report_outbox VALUES(?,?)
       ON CONFLICT(mission_id) DO UPDATE SET seq=excluded.seq WHERE excluded.seq > vela_mission_report_outbox.seq`)
       .run(mission.id, settled.seq);
     const conversation = mission.workroom?.missionConversationResourceId && (settled ??
-      (events.some(event => event.kind === 'workroom') && mission.events.findLast(event =>
-        event.kind === 'settled' && event.detail === 'verified')));
+      (events.some(event => event.kind === 'workroom') && lastMissionVerificationEvent(mission)));
     if (conversation) this.db.prepare(`INSERT INTO vela_mission_conversation_outbox VALUES(?,?)
       ON CONFLICT(mission_id) DO UPDATE SET seq=excluded.seq WHERE excluded.seq > vela_mission_conversation_outbox.seq`)
       .run(mission.id, conversation.seq);

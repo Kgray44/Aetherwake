@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {mkdirSync,mkdtempSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve,relative,isAbsolute} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
@@ -8,18 +8,66 @@ import {Backend} from '../src/service.mts';
 import type {NativeDocumentTextServices} from '../src/document-text-host.mts';
 import {extractDocumentText} from '../../visual-experience/cinematic-v3/src/document-text-worker.ts';
 import {pdfFixture,docxFixture} from '../../block-library/tests/media-fixtures.mts';
+import { createRequire } from 'node:module';
 
-function fixture(){const dir=mkdtempSync(join(tmpdir(),'aerynth-selected-doc-'));let reads=0,release:(()=>void)|undefined,entered:(()=>void)|undefined,hold=false;
+const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+
+function fixture(privateProfile=false){const dir=mkdtempSync(join(tmpdir(),'aerynth-selected-doc-'));let reads=0,release:(()=>void)|undefined,entered:(()=>void)|undefined,hold=false;
+  const profile=privateProfile?join(dir,'profile'):dir;
+  if(privateProfile)mkdirSync(profile);
   let backend:Backend;const documents:NativeDocumentTextServices={extract:async(input,signal)=>{reads++;const description=await backend.call('mediaDescribe',{resourceId:input.resourceId});const metadata=description.metadata;assert.equal(metadata.source,'file');if(metadata.source!=='file')throw Error();
     const bytes=new Uint8Array(metadata.byteLength);for(let offset=0;offset<bytes.length;offset+=1024*1024){signal.throwIfAborted();const length=Math.min(1024*1024,bytes.length-offset),chunk=await backend.call('mediaReadChunk',{resourceId:input.resourceId,expectedVersion:input.expectedVersion,sourceRevision:input.sourceRevision,offset,length});bytes.set(Buffer.from(chunk.base64,'base64'),offset);}
     try{const result=await extractDocumentText(bytes,input.format,input.maxTextBytes,signal);if(hold)await new Promise<void>(resolve=>{release=resolve;entered?.();signal.addEventListener('abort',()=>resolve(),{once:true});});signal.throwIfAborted();if(result.state==='complete')return {...result,jobId:input.jobId,sourceRevision:input.sourceRevision,textDigest:createHash('sha256').update(result.text).digest('hex')};return {...result,jobId:input.jobId,sourceRevision:input.sourceRevision};}finally{bytes.fill(0);}}};
-  backend=new Backend({path:join(dir,'canonical.sqlite'),provider:'fixture',contentPolicy:'synthetic-only',nativeMedia:true},{documents,secrets:{available:async()=>false,seal:async()=>{throw Error();},open:async()=>{throw Error();}}});
-  return {dir,get reads(){return reads;},backend,
+  const open=()=>new Backend({path:join(profile,'canonical.sqlite'),provider:privateProfile?'codex':'fixture',contentPolicy:privateProfile?'local-private':'synthetic-only',...(privateProfile?{privateRoot:profile}:{}),nativeMedia:true},{documents,secrets:{available:async()=>false,seal:async()=>{throw Error();},open:async()=>{throw Error();}}});
+  backend=open();
+  return {dir,get reads(){return reads;},get backend(){return backend;},
+    async reopen(){await backend.close();backend=open();},
     async pick(name:string,bytes:Uint8Array){const path=join(dir,name);writeFileSync(path,bytes);const selected=await backend.call('mediaImportTrusted',{commandId:randomUUID(),kind:'file',selection:{kind:'file',path}});return {path,ref:selected.resource};},
     async preview(ids:string[]){return backend.call('velaRequestPreview',{intent:'Explain the explicitly selected document.',resourceIds:ids});},
     hold(){hold=true;return new Promise<void>(resolve=>{entered=resolve;});},release(){release?.();},
     async close(){release?.();await backend.close();const part=relative(resolve(tmpdir()),resolve(dir));assert.ok(part.startsWith('aerynth-selected-doc-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
+
+test('Vela picker broker imports one canonical PDF and its exact source can be reviewed after restart',async()=>{
+  const f=fixture(true);
+  try {
+    const path=join(f.dir,'Synthetic brief.pdf');
+    writeFileSync(path,pdfFixture());
+    const win={isDestroyed:()=>false,webContents:{isDestroyed:()=>false}};
+    const pick=(canceled:boolean)=>velaCommand({
+      win,input:{name:'pickSources',input:{kind:'files',destination:'context'}},
+      dialog:{showOpenDialog:async (_owner:unknown,options:{properties:string[]})=>{
+        assert.ok(options.properties.includes('openFile'));
+        return {canceled,filePaths:canceled?[]:[path]};
+      }},
+      call:(name:Parameters<Backend['call']>[0],input:never)=>f.backend.call(name,input),
+    });
+    assert.deepEqual(await pick(true),{resources:[]});
+    const before=await f.backend.call('desktop',{type:'snapshot'});
+    const picked=await pick(false);
+    assert.equal(picked.resources.length,1);
+    const source=picked.resources[0];
+    assert.equal(source.title,'Synthetic brief.pdf');
+    assert.equal(source.kind,'file');
+    assert.equal(f.reads,0);
+    assert.ok(!JSON.stringify(picked).includes(f.dir));
+    await f.reopen();
+    const reopened=await f.backend.call('desktop',{type:'snapshot'});
+    assert.equal(reopened.resources.length,before.resources.length+1);
+    assert.equal(reopened.blocks.length,before.blocks.length);
+    assert.equal(reopened.resources.find(item=>item.id===source.id)?.version,source.version);
+    const repicked=await pick(false);
+    assert.deepEqual(repicked.resources,[source]);
+    assert.equal(repicked.desktop.resources.length,reopened.resources.length);
+    assert.equal(f.reads,0);
+    const preview=await f.preview([source.id]);
+    assert.equal(preview.context.included.length,1);
+    assert.equal(preview.context.included[0].id,source.id);
+    assert.match(preview.context.included[0].content,/Searchable second page/);
+    assert.equal(f.reads,1);
+    assert.equal((await f.backend.call('providerActivity',{})).providerRequests,0);
+  } finally { await f.close(); }
+});
 test('actual Core plus both private worker hops extract real PDF all-page text and DOCX body text only after explicit Send preparation',async()=>{
   const f=fixture();try{for(const [name,bytes,expected] of [['fixture.pdf',pdfFixture(),'Searchable second page'],['fixture.docx',docxFixture(),'Table cell']] as const){const selected=await f.pick(name,bytes);assert.equal(f.reads,name.endsWith('.pdf')?0:1,'Picking never extracts document contents');
       const preview=await f.preview([selected.ref.id]);assert.equal(preview.context.included.length,1);const included=preview.context.included[0];assert.match(included.content,new RegExp(expected));assert.equal(included.trust,'untrusted-source-data');assert.ok(!included.source.includes(f.dir));assert.equal(included.id,selected.ref.id);assert.match(included.content,name.endsWith('.pdf')?/Extractable PDF text from all 2 pages/:/Extracted DOCX body text/);assert.doesNotMatch(included.content,/whole original|complete document transcription/);

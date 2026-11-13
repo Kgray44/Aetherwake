@@ -64,6 +64,9 @@ test('restoring requires original PASS/close and exact helper/source/build/canon
  const source = { hashes: { source: 'a'.repeat(64) }, buildAssets: { 'app.js': 'b'.repeat(64) } }, projection = canonical(fixture()), checkpoint = { contract: 'aerynth.chat-motion-checkpoint@1', source, moduleHashes: { helper: 'c'.repeat(64) }, canonical: projection }, receipt = { contract: 'aerynth.chat-motion-integration@1', passed: true, restore: false, nativeCloseConfirmed: true, source, moduleHashes: checkpoint.moduleHashes, canonical: projection }; helper.passingCheckpoint(checkpoint, receipt);
  for (const change of [r => r.passed = false, r => r.nativeCloseConfirmed = false, r => r.restore = true, r => r.source.buildAssets['app.js'] = 'd'.repeat(64), r => r.canonical.draft.version++, r => r.canonical.messages.items[0].id = 'replacement']) { const r = structuredClone(receipt); change(r); assert.throws(() => helper.passingCheckpoint(checkpoint, r)); }
  const recorded = { ...receipt, recording: { requested: true, status: 'complete' }, video: videoAck() }; helper.passingCheckpoint(checkpoint, recorded);
+ const readingScope = 'resize-search-and-reading';
+ helper.passingCheckpoint({ ...checkpoint, scope: readingScope }, { ...receipt, scope: readingScope });
+ assert.throws(() => helper.passingCheckpoint({ ...checkpoint, scope: 'full-chat-motion' }, { ...receipt, scope: readingScope }), /original_chat_motion_scope_required/);
  assert.throws(() => helper.passingCheckpoint(checkpoint, { ...recorded, recording: { requested: true, status: 'incomplete' } }), /recording_ack_required/);
  assert.throws(() => helper.passingCheckpoint(checkpoint, { ...recorded, video: { file: 'chat-motion.webm' } }), /video_ack_invalid/);
 });
