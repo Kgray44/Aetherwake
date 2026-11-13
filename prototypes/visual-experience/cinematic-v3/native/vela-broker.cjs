@@ -309,6 +309,7 @@ exports.velaCommand = async ({
     const previewInput = {
         intent: request.intent,
         resourceIds: request.resourceIds,
+        ...(value.semanticContext && request.resourceRefs !== undefined ? { resourceRefs: request.resourceRefs } : {}),
         ...(providerId === undefined ? {} : { providerId }),
         ...(directMessageSend ? { adaptive: true, model, reasoningEffort, mode, budgetLimit, allowEscalation, includeRecentHistory, overrideDefaults } : {}),
         ...(value.semanticContext ? { semanticContext: true } : {}),
@@ -379,12 +380,19 @@ exports.velaCommand = async ({
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    const direct = directMessageSend && preview.sendDisposition === "routine" &&
+    const standingEvidence = preview.sendDisposition === "standing-selected-evidence" &&
+      preview.providerId === "openai-api-vela" && preview.semanticContext === true &&
+      review.semanticContext === true && !review.handoff && !review.routingAgent &&
+      !review.projectEvidence && !review.workspaceState && !review.missionCheckpoint && !review.history &&
+      Array.isArray(request.resourceRefs) && request.resourceRefs.length === review.context.included.length &&
+      request.resourceRefs.every(ref => review.context.included.some(source =>
+        source.id === ref?.id && source.version === ref.version));
+    const direct = directMessageSend && (standingEvidence || (preview.sendDisposition === "routine" &&
       (preview.providerId === "chatgpt-plan-responses" && (!preview.route || preview.route.kind === "conversational") ||
         preview.providerId === "openai-api-vela" && ['conversational', 'app-planning'].includes(preview.route?.kind)) &&
       !preview.route?.nativeMetric && !preview.route?.nativeLog &&
       preview.resourceIds?.length === 0 &&
-      !review.context.included.length && !review.handoff && !review.routingAgent;
+      !review.context.included.length && !review.handoff && !review.routingAgent));
     const approved = direct || await reviewProvider({
       parent: win,
       review,
