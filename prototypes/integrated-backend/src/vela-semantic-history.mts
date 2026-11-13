@@ -249,7 +249,10 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
               } catch { /* Ignore malformed references in reviewed text. */ }
             }
           }
-          const bodies = approvedAnchors.map(anchor => ' ' + referenceText(anchor.text) + ' ');
+          // Native links are resolved above. Their labels must not become a
+          // second, unversioned reference when the link fails its revision check.
+          const bodies = approvedAnchors.map(anchor => ' ' + referenceText(
+            anchor.text.replace(/\[[^\]\r\n]*\]\(aerynth:\/\/resource\/[^)\r\n]*\)/g, ' ')) + ' ');
           const titles = discovery.sources.map(source => ({ source, title: referenceText(source.title) }));
           const uniqueTitles = new Map<string, number>();
           for (const { title } of titles) uniqueTitles.set(title, (uniqueTitles.get(title) ?? 0) + 1);

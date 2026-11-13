@@ -96,11 +96,12 @@ test('reviewed project assessment finds fourth-ranked evidence without inventing
   assert.deepEqual(result.coverage[0].passages, [{ sourceId: 'd', title: 'Harbor inspection', quote: decisive }]);
 });
 
-for (const reference of ['title', 'link', 'stale link'] as const) {
+for (const reference of ['title', 'link', 'stale link', 'stale named link'] as const) {
   test(`a cited note follows a reviewed ${reference} reference outside the lexical results`, async () => {
     const receipt = { model: 'synthetic-model' };
     const anchor = reference === 'title' ? 'See the Equipment Handoff for the responsible party.'
-      : 'See [the handoff](aerynth://resource/d?version=' + (reference === 'link' ? '1' : '0') +
+      : 'See [' + (reference === 'stale named link' ? 'Equipment Handoff' : 'the handoff') +
+        '](aerynth://resource/d?version=' + (reference === 'link' ? '1' : '0') +
         ') or [another record](aerynth://resource/out-of-scope).';
     const decisive = 'The duty engineer signs.';
     const sources = [
@@ -127,8 +128,9 @@ for (const reference of ['title', 'link', 'stale link'] as const) {
     } as unknown as VelaApiRuntime;
     const result = await investigateReviewedVelaEvidence(api, 'Who signs the harbor inspection?', [], 1, 'synthetic-model', () => {},
       new AbortController().signal, undefined, { sources, partial: false });
-    assert.equal(result.coverage[0].status, reference === 'stale link' ? 'partial' : 'supported');
-    assert.deepEqual(result.coverage[0].passages.map(passage => passage.sourceId), reference === 'stale link' ? ['c'] : ['c', 'd']);
+    const stale = reference === 'stale link' || reference === 'stale named link';
+    assert.equal(result.coverage[0].status, stale ? 'partial' : 'supported');
+    assert.deepEqual(result.coverage[0].passages.map(passage => passage.sourceId), stale ? ['c'] : ['c', 'd']);
   });
 }
 
