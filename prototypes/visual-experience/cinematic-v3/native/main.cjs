@@ -6,6 +6,15 @@ const {
   nativeTheme,
 } = require("electron");
 const { installDesktopTestAdmission } = require("./native-test-admission.cjs");
+const verifyMode = process.argv.includes("--verify");
+const relationshipOnly = verifyMode && process.argv.includes("--verify-relationship-only");
+const recordMode = process.argv.includes("--record");
+const previewMode = process.argv.includes("--preview");
+const soakMode = process.argv.includes("--soak");
+const renderWhileVisible = verifyMode || recordMode || previewMode || soakMode;
+const { check: checkDesktopTest, BrowserWindow } = renderWhileVisible
+  ? installDesktopTestAdmission({ app, BrowserWindow: ElectronBrowserWindow })
+  : { check: () => {}, BrowserWindow: ElectronBrowserWindow };
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const { createHash, randomBytes } = require("node:crypto");
@@ -51,16 +60,7 @@ try {
   /* Source hashes still identify a local export without Git. */
 }
 const runtime = path.join(root, ".runtime");
-const verifyMode = process.argv.includes("--verify");
-const relationshipOnly = verifyMode && process.argv.includes("--verify-relationship-only");
-const recordMode = process.argv.includes("--record");
-const previewMode = process.argv.includes("--preview");
-const soakMode = process.argv.includes("--soak");
 const recordingTitle = `Aerynth · V3.5 capture · ${Date.now()}`;
-const renderWhileVisible = verifyMode || recordMode || previewMode || soakMode;
-const { check: checkDesktopTest, BrowserWindow } = renderWhileVisible
-  ? installDesktopTestAdmission({ app, BrowserWindow: ElectronBrowserWindow })
-  : { check: () => {}, BrowserWindow: ElectronBrowserWindow };
 app.setPath(
   "userData",
   path.join(
