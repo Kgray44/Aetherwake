@@ -262,6 +262,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   routeHistory.type = 'checkbox';
   const semanticContext = el('input');
   semanticContext.type = 'checkbox';
+  const selectedEvidenceOption = label('Investigate selected notes or files with Vela API', semanticContext);
   const workspaceState = el('input');
   workspaceState.type = 'checkbox';
   const projectEvidence = el('input');
@@ -300,8 +301,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const apiUnavailable = !current?.planningProviders || chosenProviderId !== 'openai-api-vela';
     const sourceCount = selected.size + Number(!!handoffSelection?.reviewedEvidence);
     const ineligible = !selected.size || sourceCount > 4 || incompatibleSource;
-    semanticContext.disabled = apiUnavailable || ineligible;
-    if (semanticContext.disabled) semanticContext.checked = false;
+    selectedEvidenceOption.hidden = ineligible;
+    semanticContext.disabled = ineligible || !current?.planningProviders?.some(route =>
+      route.providerId === 'openai-api-vela' && route.available);
+    if (semanticContext.disabled || chosenProviderId !== 'openai-api-vela') semanticContext.checked = false;
     workspaceState.disabled = apiUnavailable || incompatibleSource || sourceCount + Number(projectEvidence.checked) > 3 || !current?.applicationContext?.currentWorkspaceId;
     if (workspaceState.disabled) workspaceState.checked = false;
     projectEvidence.disabled = apiUnavailable || incompatibleSource || sourceCount + Number(workspaceState.checked) > 3 || !current?.applicationContext?.currentProjectId;
@@ -369,7 +372,13 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   if (client.routingOptions) providerRoutes.append(label('Routing mode', routeMode), refreshModels, label('Model', routeModel),
     label('Reasoning effort', routeEffort), label('Allow one deeper attempt if Auto hits an output limit', routeEscalation));
   providerRoutes.append(label('Start fresh for this send', routeHistory));
-  providerRoutes.append(label('Investigate selected notes or files', semanticContext));
+  semanticContext.addEventListener('change', () => {
+    if (!semanticContext.checked || semanticContext.disabled) return;
+    if (chosenProviderId !== 'openai-api-vela') clearModelOptions();
+    chosenProviderId = 'openai-api-vela';
+    if (routeMode.value === 'codex') routeMode.value = 'auto';
+    renderProviderChoice();
+  });
   providerRoutes.append(label('Review current workspace state', workspaceState));
   const savedRoutes = disclosure('Saved routing defaults', 'vela-core-routing-defaults');
   const scopeChoice = el('select', 'vela-core-input');
@@ -490,7 +499,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   if (options.voice) composeActions.append(voiceControl);
   composeActions.append(stop, send);
   connection.body.append(providerChoice);
-  form.append(intent, selection, composeActions);
+  form.append(intent, selection, selectedEvidenceOption, composeActions);
   intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
   form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return;

@@ -432,6 +432,38 @@ test('terminal status survives request completion and refresh; connection probe 
   panel.dispose(); assert.equal(root.children.length, 0);
 });
 
+test('the composer can explicitly investigate an attached file without opening provider settings', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const file = { id: 'file:brief', kind: 'file' as const, title: 'Brief.docx', version: 3, projectId: null };
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    pickSources: async () => ({ resources: [file] }),
+    request: async input => { turns.push(input); return request(); },
+  }));
+  try {
+    await panel.open();
+    const option = root.find(node => node.tagName === 'label' && node.textContent === 'Investigate selected notes or files with Vela API')!;
+    assert.equal(option.hidden, true);
+    named(root, 'Choose files…').fire('click');
+    await settles(() => !option.hidden);
+    const checkbox = option.querySelector('input')!;
+    assert.equal(checkbox.checked, false);
+    checkbox.checked = true;
+    checkbox.fire('change');
+    assert.deepEqual(turns, []);
+    const composer = root.find(node => node.tagName === 'textarea')!;
+    composer.value = 'What does this file say about the schedule?';
+    composer.fire('input');
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => turns.length === 1);
+    assert.equal(turns[0].providerId, 'openai-api-vela');
+    assert.equal(turns[0].semanticContext, true);
+    assert.deepEqual(turns[0].resourceRefs, [{ ...file, kind: 'resource', resourceKind: 'file' }]);
+    assert.equal(checkbox.checked, false);
+  } finally { panel.dispose(); }
+});
+
 test('workspace evidence is an explicit dedicated API composer choice', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
