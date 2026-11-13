@@ -138,6 +138,7 @@ lines.on("line", async (line) => {
         "personalMemoryCaptureCommitNative",
         "personalMemoryCaptureCancelNative",
         "personalMemoryPolicyNative",
+        "personalMemoryManagementNative",
         "authorizeConversationSend",
         "conversationSend",
         "vela",
