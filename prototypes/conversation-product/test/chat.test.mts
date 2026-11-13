@@ -30,6 +30,51 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('confirmed submission stays accepted when the host refresh fails', async () => {
+ const f = fixture();
+ let chat;
+ try {
+  chat = mountConversationChat(f.view.root, {
+   port: f.port, resourceId: f.draft.resourceId,
+   onChanged: async () => { throw Error('synthetic_refresh_failure'); },
+  });
+  await chat.ready;
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  f.accept();
+  await chat.whenSubmissionSettled();
+  assert.equal(f.draft.content, '');
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, /Message accepted\. The chat could not refresh/);
+  const editor = f.view.root.querySelector('textarea');
+  editor.value = 'Next question';
+  editor.fire('input');
+  assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled, false);
+  assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+test('a competing draft save after delivery keeps the confirmed message and offers draft recovery', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ let chat;
+ try {
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId });
+  await chat.ready;
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  f.external('Draft written by the other view');
+  f.accept(true);
+  await chat.whenSubmissionSettled();
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, /Message accepted\. Check draft recovery/);
+  assert.equal(f.view.root.querySelector('.cp-draft-status').dataset.phase, 'conflict');
+  assert.equal(f.draft.content, 'Draft written by the other view');
+  assert.equal(f.detail.messages.items.at(-1)?.content, 'Saved unsent text');
+  named(f.view.root, 'Use the stored draft').fire('click');
+  await until(() => f.view.root.querySelector('.cp-draft-status').dataset.phase === 'clean');
+  assert.equal(f.view.root.querySelector('textarea').value, f.draft.content);
+  assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
 test('a reopened chat ignores active observations older than its canonical turn', async () => {
  const f=fixture('chatgpt-plan-responses'), resourceId=f.draft.resourceId;
  const latest={id:'execution:latest',resourceId,providerId:'chatgpt-plan-responses',commandId:'send:latest',
