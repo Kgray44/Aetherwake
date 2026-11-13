@@ -113,10 +113,16 @@ test('ordinary document draft survives restart without persisting file contents 
  try {
   const path = join(f.dir, 'Synthetic draft brief.txt');
   writeFileSync(path, 'Synthetic private file body');
+  const project = f.owner.kernel.createProject('Synthetic chat project');
+  const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+  const { resourceId } = chat;
+  await f.core.command('conversation', { name: 'organize', input: {
+   type: 'associateProject', resourceId, projectId: project.id, expectedVersion: 1,
+  } });
   const { resource } = await f.core.command('mediaImportTrusted', {
-   kind: 'file', variant: 'document', commandId: randomUUID(), selection: { kind: 'file', path },
+   kind: 'file', variant: 'document', projectId: project.id, commandId: randomUUID(), selection: { kind: 'file', path },
   });
-  const { resourceId } = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+  assert.equal(resource.project_id, project.id);
   const ref = { id: resource.id, version: resource.version };
   const otherProject = f.owner.kernel.createProject('Synthetic other project');
   const other = await f.core.command('mediaImportTrusted', {
