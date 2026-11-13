@@ -24,7 +24,14 @@ test('actual Vela request bridge reaches the selected-file native API path befor
 
 test('actual Main native review gate serializes review presentation and releases ownership after rejection',async()=>{
   const source=readFileSync(new URL('../native/desktop-main.cjs',import.meta.url),'utf8'),start=source.indexOf('let nativeReviewBusy=false;'),end=source.indexOf('const reviewProvider=',start);
-  assert.ok(start>0&&end>start);const gate=Function(source.slice(start,end)+'return nativeReviewGate;')();let release;const held=new Promise(resolve=>{release=resolve;});
+  assert.ok(start>0&&end>start);
+  let admitted = false;
+  const gate = Function('checkDesktopTest', source.slice(start,end)+'return nativeReviewGate;')(() => {
+    if (!admitted) throw Error('synthetic desktop admission denied');
+  });
+  await assert.rejects(gate(() => assert.fail('review opened without admission')), /synthetic desktop admission denied/);
+  admitted = true;
+  let release;const held=new Promise(resolve=>{release=resolve;});
   const first=gate(()=>held);await assert.rejects(gate(()=>Promise.resolve()),/native_review_busy/);release();await first;
   await assert.rejects(gate(()=>Promise.reject(Error('synthetic failed review'))),/synthetic failed review/);assert.equal(await gate(()=>Promise.resolve('ready')),'ready');
 });
