@@ -74,7 +74,7 @@ export interface ConversationChatOptions {
   onMessageAction?: (event: ConversationMessageAction) => void | Promise<void>;
   saveReplyNote?: (input: CaptureConversationReply) => Promise<{ noteId: string }>;
   openReplyNote?: (noteId: string) => void | Promise<void>;
-  chooseDocument?: () => Promise<{ id: string; version: number; title: string } | null>;
+  chooseDocument?: (projectId: string | null) => Promise<{ id: string; version: number; title: string } | null>;
   listDocuments?: (conversationId: string) => readonly DraftDocument[];
   openDocument?: (document: DraftDocument) => Promise<'opened' | 'unavailable' | 'superseded'>;
   askVelaAboutDocument?: (document: DraftDocument, isCurrent: () => boolean) => Promise<void | 'unavailable'>;
@@ -237,13 +237,15 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     }), documentStatus, continueDocuments);
   }
   async function chooseAttachment(replacing?: DraftDocument) {
-    if (choosingDocument || retiring || !options.chooseDocument) return;
+    if (choosingDocument || retiring || !current || !options.chooseDocument) return;
+    const projectId = current.conversation.projectId;
     const inScope = options.captureDocumentHandoffScope?.();
     choosingDocument = true;
     renderDraft();
     try {
-      const document = await options.chooseDocument();
-      if (!document || retiring || disposed || inScope?.() === false || !canStageDocuments()) return;
+      const document = await options.chooseDocument(projectId);
+      if (!document || retiring || disposed || inScope?.() === false ||
+          current?.conversation.projectId !== projectId || !canStageDocuments()) return;
       const { documents, phase } = session.snapshot();
       if (['loading', 'conflict', 'error'].includes(phase)) return;
       if (replacing) {

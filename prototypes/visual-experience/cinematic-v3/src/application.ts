@@ -2554,8 +2554,8 @@ export function installApplication(hooks: Hooks) {
     });
     await controller.ready;
   }
-  async function chooseChatDocument() {
-    const picked = await mediaClient.chooseMediaForAdd({ kind: "file", variant: "document" });
+  async function chooseChatDocument(projectId: string | null) {
+    const picked = await mediaClient.chooseMediaForAdd({ kind: "file", variant: "document", projectId });
     if (!picked) return null;
     const { id, version, title } = picked.resource;
     return { id, version, title };

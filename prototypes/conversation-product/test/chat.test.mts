@@ -1556,14 +1556,17 @@ test('local chat can stage an offline attachment without sending or changing pro
  let chat;
  try {
   const selected = {id:'file:offline',version:2,title:'Offline brief.txt'};
+  f.detail.conversation.projectId='project:chat';
+  const pickerProjects: (string|null)[] = [];
   chat = mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
-   chooseDocument:async()=>selected});
+   chooseDocument:async projectId=>{pickerProjects.push(projectId);return selected;}});
   await chat.ready;
   const attach = named(f.view.root,'Attach document');
   assert.equal(attach.hidden,false);
   attach.fire('click');
   await until(()=>!!named(f.view.root,'Offline brief.txt ×'));
   await chat.flush();
+  assert.deepEqual(pickerProjects,['project:chat']);
   assert.deepEqual(f.draft.documents,[selected]);
   assert.equal(f.draft.content,'Saved unsent text');
   assert.match(f.view.root.querySelector('.cp-composer-documents').textContent,/Switch to ChatGPT/);
