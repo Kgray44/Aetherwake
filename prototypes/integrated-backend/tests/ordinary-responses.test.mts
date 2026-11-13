@@ -191,11 +191,32 @@ for (const format of ['txt', 'pdf', 'docx'] as const) test('ordinary document se
    !message.inherited && message.role === 'user' && message.content === input.input.content));
   assert(f.requests[0].input.some((message: { content: string }) => message.content.includes(content)));
   const revised = { ...input, input: { ...input.input, expectedRevision: chat.revision + 2, commandId: randomUUID() } };
+  const replacementText = 'Changed synthetic document text: the sample now weighs twenty grams.';
   await assert.rejects(conversationCommand({ call, input: revised, reviewSources: async () => {
-   writeFileSync(path, 'Changed synthetic document text');
+   writeFileSync(path, replacementText);
    return true;
   } }), /document_text_unavailable|source_changed/);
   assert.equal(f.requests.length, 1);
+  if (format === 'txt') {
+   const { resource: replacement } = await f.core.command('mediaImportTrusted', {
+    kind: 'file', variant: 'document', commandId: randomUUID(), selection: { kind: 'file', path },
+   });
+   assert.notEqual(replacement.id, resource.id);
+   const current = await f.core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as import('../../conversation-product/src/contracts.ts').Detail;
+   const retry = { ...revised, input: { ...revised.input, commandId: randomUUID(), expectedRevision: current.conversation.revision,
+    documents: [{ id: replacement.id, version: replacement.version }] } };
+   f.responses.push(() => complete('resp-document-replacement', 'Twenty grams.'));
+   const recovered = await conversationCommand({ call, input: retry, reviewSources: async ({ review }: any) => {
+    assert.deepEqual(review.context.included.map(({ id, content }: { id: string; content: string }) => ({ id, content })),
+     [{ id: replacement.id, content: replacementText }]);
+    return true;
+   } });
+   assert.equal(recovered.state, 'provider_completed');
+   assert.equal(f.requests.length, 2);
+   const sent = JSON.stringify(f.requests[1].input);
+   assert.ok(sent.includes(replacementText));
+   assert.ok(!sent.includes(content) && !sent.includes(path));
+  }
  } finally { await f.close(); }
 });
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}

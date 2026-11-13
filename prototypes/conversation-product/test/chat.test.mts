@@ -1998,6 +1998,7 @@ test('an ordinary chat sends only the selected document identity and retains it 
   const attach = named(f.view.root,'Attach document');
   assert.equal(attach.hidden,false);
   assert.equal(attach.disabled,false);
+  assert.equal(attach.getAttribute('aria-description'),'Attach a PDF, Word document or text file');
   attach.fire('click');
   await new Promise(resolve=>setImmediate(resolve));
   assert.ok(named(f.view.root,'Brief.pdf ×'),f.view.root.querySelector('.cp-chat-status').textContent);
@@ -2014,6 +2015,12 @@ test('an ordinary chat sends only the selected document identity and retains it 
   f.pending!.reject(Error('authorization_cancelled'));
   await chat.whenSubmissionSettled();
   assert.ok(named(f.view.root,'Brief.pdf ×'));
+  assert.equal(f.draft.content,'Saved unsent text');
+  f.view.root.querySelector('form').fire('submit');
+  await until(()=>!!f.pending);
+  f.pending!.reject(Error('unsupported_document_attachment'));
+  await chat.whenSubmissionSettled();
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Chat can send PDFs, Word documents and text files/);
   assert.equal(f.draft.content,'Saved unsent text');
   named(f.view.root,'Brief.pdf ×').fire('click');
   assert.equal(!!named(f.view.root,'Brief.pdf ×'),false);
