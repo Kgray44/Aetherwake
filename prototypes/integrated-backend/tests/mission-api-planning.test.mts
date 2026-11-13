@@ -11,9 +11,8 @@ import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
 import { nativeMissionDiagnostics } from './fixtures/native-mission-diagnostics.mts';
 import { projectMissionExecution, type MissionExecutionProfile } from '../src/execution-profiler.mts';
-import { nativeMissionExecutors, nativeMissionPlan, missionResultAvailable } from '../src/mission-native.mts';
-import { composeReviewedArtifactMission } from '../src/mission-reviewed-composition.mts';
-import type { MissionExecutor,MissionPlan,MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
+import { nativeMissionExecutors, missionResultAvailable } from '../src/mission-native.mts';
+import type { MissionExecutor,MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
 import type { ProviderPort, VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
 import { createMissionProjectCheck } from '../src/mission-project-check.mts';
@@ -34,7 +33,7 @@ function response(content:string,model:string,terminal:string|null=content, frag
     usage:{input_tokens:100,output_tokens:40,total_tokens:140}}}].map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
 }
 function fixture(velaHistoryContext = false, nativeMedia = false, documents?: NativeDocumentTextServices, liveCredential?: string,
-  artifactFixture = false, alternateRootCase = false) {
+  artifactFixture = false, alternateRootCase = false, codexCwd?: string) {
   const base=resolve(tmpdir()),directory=mkdtempSync(join(base,'aerynth-mission-api-')),path=join(alternateRootCase ? directory.toUpperCase() : directory,'canonical.sqlite'),key=randomBytes(32),requests:any[]=[],replies:((body:any)=>Response|Promise<Response>)[]=[];
   let catalogModels = ['gpt-6-luna', 'gpt-6.1-sol'];
   let beforeCredentialOpen: (() => Promise<void>) | undefined;
@@ -47,7 +46,8 @@ function fixture(velaHistoryContext = false, nativeMedia = false, documents?: Na
       artifactFixture && String(url) === 'https://api.openai.com/v1/images/generations');
     assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
     const body=JSON.parse(String(init?.body));requests.push(body);const next=replies.shift();assert.ok(next,'unexpected API inference');return next(body);}) as typeof fetch};
-  const create=()=>new BackendCore({path,provider:'fixture',contentPolicy:liveCredential ? 'local-private' : 'synthetic-only',
+  const create=()=>new BackendCore({path,provider:codexCwd ? 'codex' : 'fixture',...(codexCwd ? { cwd: codexCwd } : {}),
+    contentPolicy:liveCredential ? 'local-private' : 'synthetic-only',
     ...(liveCredential || artifactFixture ? { privateRoot: alternateRootCase ? directory.toUpperCase() : directory } : {}), velaHistoryContext,nativeMedia},()=>{},native,undefined,liveCredential ? undefined : api);let core=create();
   const preview=async(text=objective)=>await core.command('missions',{name:'preview',input:{objective:text}}) as MissionPlanningOffer;
   const plan=async(offer:MissionPlanningOffer,requestId=randomUUID())=>await core.command('missionPlanReviewed',{objective:offer.objective,fingerprint:offer.fingerprint,requestId}) as MissionPreview;
@@ -304,17 +304,17 @@ test('composed artifact mission retains verified files when a native branch fail
     await f.ready();
     const illustration = 'Run a mission to generate an illustration: A simple abstract geometric illustration. Any colors.';
     const artifact = await f.core.command('missions', { name: 'preview', input: { objective: illustration } }) as MissionPreview;
-    const work = nativeMissionPlan('Investigate Aerynth backend performance using workspace notes', artifact.plan.scope)!;
-    const goal = 'Investigate Aerynth backend performance using workspace notes and generate an abstract geometric illustration';
-    const plan = composeReviewedArtifactMission(goal, work, artifact.plan);
-    const proposalId = randomUUID();
-    // Inject a host-owned proposal in this harness until Core composition wiring lands.
-    const proposals = (f.core as unknown as { missionProposals: Map<string, { plan: MissionPlan; expires: number }> }).missionProposals;
-    proposals.set(proposalId, { plan, expires: Date.now() + 150_000 });
-    const preview = await f.core.command('missions', { name: 'preview', input: { objective: goal, proposalId } }) as MissionPreview;
+    const goal = 'Run a mission to investigate Aerynth backend performance using workspace notes; generate an illustration: A simple abstract geometric illustration. Any colors.';
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective: goal } }) as MissionPreview;
+    const plan = preview.plan;
     assert.equal(preview.artifactReview?.digest, artifact.artifactReview?.digest);
-    const input = { objective: goal, proposalId, fingerprint: preview.fingerprint, requestId: proposalId };
+    assert.ok(plan.tasks.find(task => task.id === 'report')?.dependencies.includes('illustration'));
+    const input = { objective: goal, fingerprint: preview.fingerprint, requestId: randomUUID() };
     await assert.rejects(f.core.command('missions', { name: 'start', input }), /mission_artifact_review_required/);
+    await assert.rejects(f.core.command('missionStartReviewed', { ...input, approvedArtifactDigest: '0'.repeat(64) }),
+      /mission_artifact_review_required/);
+    await assert.rejects(f.core.command('missions', { name: 'preview', input: { objective: goal, noteIds: [] } }),
+      /mission_artifact_context_unsupported/);
     if (!live) f.replies.push(() => Response.json({ data: [{ b64_json: illustrationFixture().toString('base64') }] }));
     const usage = await f.core.command('velaApiUsageStatus', {});
     const timingStarted = performance.now(), cpuStarted = process.cpuUsage();
@@ -324,7 +324,7 @@ test('composed artifact mission retains verified files when a native branch fail
     // control in the same host turn before the scheduler microtask runs.
     if (serial) {
       const db = (f.core as unknown as { db: import('node:sqlite').DatabaseSync }).db;
-      const row = db.prepare('SELECT id, json FROM vela_missions WHERE request_id=?').get(proposalId);
+      const row = db.prepare('SELECT id, json FROM vela_missions WHERE request_id=?').get(input.requestId);
       assert.ok(row && typeof row.id === 'string' && typeof row.json === 'string');
       const control = f.core.command('missions', { name: 'control', input: { id: row.id, revision: JSON.parse(row.json).revision,
         control: { type: 'concurrency', concurrency: 1 } } }) as Promise<MissionProjection>;
@@ -398,8 +398,6 @@ test('composed artifact mission retains verified files when a native branch fail
     assert.equal(restored.conversation?.messages.find(message => message.missionReport?.missionId === id)?.id, report?.id);
     const retained = { png: readFileSync(join(f.directory, 'mission-artifacts', id, 'illustration.png')),
       notes: readFileSync(join(f.directory, 'mission-artifacts', id, 'illustration-notes.txt')), report: report.content };
-    const reopenedProposals = (f.core as unknown as { missionProposals: typeof proposals }).missionProposals;
-    reopenedProposals.set(proposalId, { plan, expires: Date.now() + 150_000 });
     assert.equal((await f.core.command('missionStartReviewed', approval) as MissionProjection).id, id);
     assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, usage.usedToday + 1);
     writeFileSync(join(f.directory, 'mission-artifacts', id, 'illustration-notes.txt'), 'Changed after verification.');
@@ -413,6 +411,169 @@ test('composed artifact mission retains verified files when a native branch fail
     t.diagnostic(JSON.stringify({ live, serial, id, verified: true, overlapMs: trace.work.overlapMs, imageNativeOverlapMs,
       criticalPathMs: trace.work.criticalPath.durationMs, elapsedMs, processCpu,
       reportRestored: true, imageRequests: 1, nativeRetries: 1, costCoverage: trace.economics.costCoverage }));
+  } finally { await f.close(); }
+});
+
+test('reviewed mixed mission sends the work clause to specialists and the prompt only to the image route', { timeout: 145_000 }, async t => {
+  const live = process.env.AERYNTH_VERIFY_LIVE_CODEX_ARTIFACT === '1';
+  const serial = live && process.env.AERYNTH_MIXED_ARTIFACT_SEQUENTIAL === '1';
+  const recover = live && process.env.AERYNTH_MIXED_ARTIFACT_RECOVER_NOTES === '1';
+  const destination = live ? process.env.AERYNTH_MIXED_ARTIFACT_EVIDENCE_DIR : undefined;
+  if (destination) preflightArtifactEvidence(destination);
+  const testPath = live ? process.env.AERYNTH_MIXED_CODEX_TEST : undefined;
+  const credential = live ? process.env.OPENAI_API_KEY : undefined;
+  if (live) {
+    assert.ok(process.platform === 'win32' && credential && testPath && isAbsolute(testPath));
+    delete process.env.OPENAI_API_KEY;
+  }
+  const f = fixture(false, true, undefined, credential, true, false, testPath ? resolve(testPath, '..') : undefined);
+  try {
+    f.setCatalogModels(['gpt-6.1-sol', missionImageModel]);
+    await f.ready();
+    await f.pin({ providerId: 'openai-api-vela', model: 'gpt-6.1-sol' });
+    const work = testPath ? `Run selected Node tests and measure CPU and RAM${recover ? ' using workspace notes' : ''} with two independent specialists` :
+      'Measure CPU and RAM with two independent specialists';
+    const imagePrompt = 'A private illustrative detail: draw a blue square';
+    const objective = `Run a mission to ${work}; generate an illustration: ${imagePrompt}`;
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    assert.equal(preview.externalReview?.objective, work);
+    assert.equal(preview.externalReview?.calls, 2);
+    assert.equal(preview.artifactReview?.prompt, imagePrompt);
+    const answer = JSON.stringify({ observations: ['Compare repeated observations', 'Record ambient load'] });
+    if (!live) f.replies.push(...Array.from({ length: 3 }, () => (body: any) => body.model === missionImageModel
+      ? Response.json({ data: [{ b64_json: illustrationFixture().toString('base64') }] })
+      : response(answer, body.model)));
+    const input = { objective, fingerprint: preview.fingerprint, requestId: randomUUID() };
+    const approval = { ...input, approvedArtifactDigest: preview.artifactReview!.digest };
+    const usageBefore = await f.core.command('velaApiUsageStatus', {});
+    let started = performance.now(), cpuStarted = process.cpuUsage();
+    let replayStart: (() => Promise<MissionProjection>) | undefined;
+    const { id, revision } = testPath ? await (async () => {
+      assert.equal(preview.localReview?.kind, 'node-test');
+      await assert.rejects(f.core.command('missionStartReviewed', approval), /mission_project_check_review_required/);
+      const { startReviewedMission } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/mission-start-broker.cjs');
+      const localURL = 'file:///synthetic-aerynth/index.html', mainFrame = { url: localURL };
+      const webContents = { mainFrame, isDestroyed: () => false, getURL: () => localURL };
+      const win = { webContents, isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => true };
+      const reviews: string[] = [];
+      const start = (hold: boolean) => startReviewedMission({ win, localURL, event: { sender: webContents, senderFrame: mainFrame },
+        input: { name: 'start', input }, storage: { allowWrite: async () => true },
+        call: (...args: Parameters<typeof f.core.command>) => {
+          const command = f.core.command(...args);
+          if (hold && args[0] === 'missionStartReviewed') void f.core.command('missionHostSignal', { storageAdmitted: false });
+          return command;
+        },
+        dialog: {
+          showOpenDialog: async () => ({ canceled: false, filePaths: [testPath] }),
+          showMessageBox: async (_window: unknown, review: { title: string; detail: string }) => {
+            reviews.push(review.title);
+            if (review.title === 'Review specialist mission') {
+              assert.ok(review.detail.includes(work));
+              assert.ok(!review.detail.includes(imagePrompt));
+            }
+            if (review.title === 'Review read-only project tests' && !replayStart) {
+              started = performance.now();
+              cpuStarted = process.cpuUsage();
+            }
+            return { response: 1 };
+          },
+        },
+      }) as Promise<MissionProjection>;
+      const result = await start(serial);
+      assert.deepEqual(reviews, ['Review illustration mission', 'Review specialist mission', 'Review read-only project tests']);
+      replayStart = () => start(false);
+      return result;
+    })() : await f.core.command('missionStartReviewed', approval) as MissionProjection;
+    if (serial) {
+      const controlled = await f.core.command('missions', { name: 'control', input: { id, revision,
+        control: { type: 'concurrency', concurrency: 1 } } }) as MissionProjection;
+      assert.ok(controlled.tasks.every(task => task.attempts.length === 0));
+      await f.core.command('missionHostSignal', { storageAdmitted: true });
+    }
+    const settle = async () => {
+      const deadline = performance.now() + (live ? 125_000 : 7000);
+      do {
+        const result = await f.core.command('missions', { name: 'read', input: { id } }) as MissionProjection;
+        if (!['queued', 'running'].includes(result.outcome)) return result;
+        await delay(25);
+      } while (performance.now() < deadline);
+      throw Error('reviewed_mixed_mission_deadline');
+    };
+    let result = await settle();
+    if (recover) {
+      const failed = result;
+      assert.equal(failed.outcome, 'failed');
+      assert.deepEqual(failed.tasks.filter(task => task.state !== 'verified').map(task => task.id).sort(), ['notes', 'report']);
+      assert.deepEqual(failed.tasks.find(task => task.id === 'notes')?.attempts.map(attempt => attempt.outcome), ['failed']);
+      const { resources } = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: work,
+        workspaceId: failed.scope.workspaceId });
+      const note = resources.find(resource => resource.title === work)!;
+      await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version,
+        content: 'Synthetic Node test and CPU and RAM measurements. Record repeated samples and test exit status.' });
+      await f.core.command('missions', { name: 'control', input: { id, revision: failed.revision,
+        control: { type: 'retry', taskId: 'notes' } } });
+      result = await settle();
+      assert.deepEqual(result.tasks.find(task => task.id === 'notes')?.attempts.map(attempt => attempt.outcome), ['failed', 'verified']);
+      for (const prior of failed.tasks.filter(task => task.state === 'verified'))
+        assert.deepEqual(result.tasks.find(task => task.id === prior.id)?.attempts, prior.attempts);
+    }
+    const elapsedMs = performance.now() - started, processCpu = process.cpuUsage(cpuStarted);
+    const processPeakRssKiB = process.resourceUsage().maxRSS;
+    assert.equal(result.outcome, 'verified', JSON.stringify(result.tasks.map(task => [task.id, task.state, task.detail])));
+    if (live) {
+      const check = result.tasks.find(task => task.executor === 'codex.project-check')?.attempts[0];
+      assert.equal(check?.resourceLease?.kind, 'build');
+      assert.equal(check?.evidence?.source, 'codex-app-server:read-only-command');
+      assert.equal((check?.evidence?.value as { testCount?: number })?.testCount, 1);
+      const trace = await f.core.command('missions', { name: 'execution-profile', input: { id } }) as MissionExecutionProfile;
+      assert.equal(trace.economics.providerCalls, 3);
+      if (serial) {
+        assert.equal(trace.work.peakWorkers, 1);
+        assert.equal(trace.work.overlapMs, 0);
+      } else assert.ok(trace.work.overlapMs && trace.work.overlapMs > 0);
+      assert.ok(trace.work.criticalPath);
+      const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
+      const report = state.conversation?.messages.find(message => message.missionReport?.missionId === id);
+      assert.ok(report);
+      assert.match(report.content, /1 test passed/);
+      assert.match(report.content, /illustration\.png.*illustration-notes\.txt/u);
+      assert.match(report.content, /Specialist reported:/u);
+      if (recover) assert.match(report.content, /Found 1 relevant note\./u);
+      const image = result.tasks.find(task => task.id === 'illustration');
+      const artifacts = (image?.attempts[0]?.evidence?.value as { artifacts: { name: string; resourceId: string }[] }).artifacts;
+      assert.deepEqual(artifacts.map(file => file.name), ['illustration.png', 'illustration-notes.txt']);
+      const desktop = await f.core.command('desktop', { type: 'snapshot' });
+      assert.ok(artifacts.every(file => desktop.resources.some(resource => resource.id === file.resourceId)));
+      const root = join(f.directory, 'mission-artifacts', id);
+      const png = readFileSync(join(root, 'illustration.png')), notes = readFileSync(join(root, 'illustration-notes.txt'));
+      await f.reopen();
+      const reportAfterRestart = async () => ((await f.core.command('vela', { name: 'state', input: {} })) as VelaBackendState)
+        .conversation?.messages.find(message => message.missionReport?.missionId === id);
+      assert.deepEqual(await reportAfterRestart(), report);
+      assert.equal((await f.core.command('missions', { name: 'read', input: { id } }) as MissionProjection).outcome, 'verified');
+      assert.equal((await replayStart?.())?.id, id);
+      const usage = await f.core.command('velaApiUsageStatus', {});
+      assert.equal(usage.usedToday - usageBefore.usedToday, 3);
+      writeFileSync(join(root, 'illustration-notes.txt'), 'Changed after verification.');
+      assert.equal((await f.core.command('missions', { name: 'read', input: { id } }) as MissionProjection).outcome, 'blocked');
+      const stale = await reportAfterRestart();
+      assert.equal(stale?.id, report.id);
+      assert.equal(stale?.missionReport?.stale, true);
+      if (destination) retainArtifactEvidence(destination, {
+        png, notes, report: report.content, provider: 'real-openai-api', objective, missionId: id, reportId: report.id,
+        verifiedInferenceRequests: 3,
+      });
+      t.diagnostic(JSON.stringify({ id, serial, recover, elapsedMs, processCpu, processPeakRssKiB, providerCalls: 3, codexTests: 1,
+        peakWorkers: trace.work.peakWorkers, overlapMs: trace.work.overlapMs, criticalPathMs: trace.work.criticalPath.durationMs,
+        reportedTokens: trace.economics.reportedTotalTokens, costCoverage: trace.economics.costCoverage }));
+      return;
+    }
+    assert.equal(f.requests.length, 3);
+    assert.deepEqual(f.requests.filter(body => body.model === missionImageModel).map(body => body.prompt), [imagePrompt]);
+    for (const request of f.requests.filter(body => body.model !== missionImageModel)) {
+      assert.ok(JSON.stringify(request).includes(work));
+      assert.ok(!JSON.stringify(request).includes(imagePrompt));
+    }
   } finally { await f.close(); }
 });
 
