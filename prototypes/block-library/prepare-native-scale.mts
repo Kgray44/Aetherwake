@@ -30,7 +30,12 @@ const kinds = [
 
 /** Fresh, private synthetic profile for one short native scale trial. This runs
  * real Core/kernel/library/engine code, and never starts Electron or a provider. */
-export async function prepareNativeScale(profile: string, count: number) {
+export async function prepareNativeScale(
+  profile: string,
+  count: number,
+  { savedPin = false } = {},
+) {
+  assert.ok(!savedPin || count > 0, "A saved pin requires a placed resource");
   assert.ok(
     SCALE_COUNTS.includes(count as any),
     "Use a required count: 0, 1, 3, 10, 25 or 50",
@@ -225,6 +230,22 @@ export async function prepareNativeScale(profile: string, count: number) {
       expected: scaleState(desktop),
       configurations,
     };
+    if (savedPin) {
+      const key = "resource:" + primaryBlockId;
+      const anchor = { x: 50, y: 100, spatial: { x: 18000, y: 1800, z: -14000 }, pinned: true };
+      await core.command("viewState", {
+        state: {
+          schema: "aerynth.constellation@1",
+          anchors: { [key]: anchor },
+          bookmarks: {},
+          history: [],
+          future: [],
+          savedViews: [],
+          location: { kind: "workspace", workspaceId },
+        },
+      });
+      writeFileSync(join(profile, "offscreen-scale-pin.json"), JSON.stringify({ key, anchor }), { flag: "wx" });
+    }
     await core.command("close", {});
     closed = true;
     writeFileSync(
@@ -263,7 +284,9 @@ if (
     profile && count !== undefined && count !== "",
     "Pass --profile=<new absolute path> --block-count=<0|1|3|10|25|50>",
   );
-  const seed = await prepareNativeScale(profile, Number(count));
+  const seed = await prepareNativeScale(profile, Number(count), {
+    savedPin: process.argv.includes("--offscreen-saved-pin"),
+  });
   console.log(
     JSON.stringify({
       profile: resolve(profile),
