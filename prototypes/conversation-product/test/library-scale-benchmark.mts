@@ -3,6 +3,7 @@
  * provider qualification, Electron input/paint measurement or user-data tool.
  * Commit this file and the released canonical read API before running:
  *   node test/library-scale-benchmark.mts --candidate=<HEAD> --datasets=small
+ * Add --search-only to measure Switch chat on the same fixture.
  * --describe is read-only. No npm installs, external providers or GUI are used.
  */
 import assert from 'node:assert/strict';
@@ -76,14 +77,14 @@ function page(value:unknown):{items:Record<string,unknown>[];total?:number}{
  return value as {items:Record<string,unknown>[];total?:number};
 }
 
-async function worker(dataset:Dataset,session:string,candidate:string){
+async function worker(dataset:Dataset,session:string,candidate:string,searchOnly:boolean){
  const started=performance.now(),binding=sourceBinding(candidate);readApiReleased();
  const custody=relative(OUTPUT_ROOT,resolve(session));assert(custody&&!isAbsolute(custody)&&!custody.startsWith('..')&&/^library-scale-\d+-[a-f0-9]{8}$/.test(custody),'unowned_session_location');
  const marker=JSON.parse(readFileSync(join(session,'owner.json'),'utf8'));
- assert(marker.contract==='aerynth.library-scale-owner@1'&&marker.candidate===candidate,'unowned_session');
+ assert(marker.contract==='aerynth.library-scale-owner@1'&&marker.candidate===candidate&&marker.searchOnly===searchOnly,'unowned_session');
  const profile=join(session,dataset);assert(!readdirSync(session).includes(dataset),'fresh_profile_required');mkdirSync(profile);
  const file=join(profile,'canonical.sqlite'),requested=DATASETS[dataset];let core:BackendCore|undefined,providerCalls=0;
- const receipt:Record<string,unknown>={contract:'aerynth.library-scale@1',synthetic:true,binding,dataset:{name:dataset,requested},passed:false,
+ const receipt:Record<string,unknown>={contract:'aerynth.library-scale@1',synthetic:true,binding,searchOnly,dataset:{name:dataset,requested},passed:false,
   tiers:{structural:'instrumented canonical reads; excluded from timing',timing:'in-process Core/conversation service only; excludes Electron/IPC/render/presentation'},
   bounds:{ownedDiskBytes:DISK_BOUND,databaseBytes:DB_BOUND,canonicalStateBytes:STATE_BOUND,deadlineMs:MAX_DATASET_MS,sampledRssBytes:RSS_CHECKPOINT_BOUND,workerHeapFlags:WORKER_HEAP_FLAGS},
   limitations:['Fresh synthetic local messages, not model output or account history.','Old-heap flag and RSS checkpoints are not an OS total-memory quota.','Counts/data sizes and work are measured separately from timing.','No native input/paint/presentation latency, accessibility or artistic acceptance.']};
@@ -169,9 +170,60 @@ async function worker(dataset:Dataset,session:string,candidate:string){
   ];
   if(fanout.length)operations.push({id:'denied-inherited-source',name:'detail',input:{resourceId:fanout[0].resourceId,limit:50},check:value=>{const detail=value as {messages:{items:{resourceId:string;id:string}[]}};assert(detail.messages.items.every(m=>m.resourceId!==entries[3].resourceId));assert(detail.messages.items.some(m=>m.id===fanout[0].messageIds[0]));}});
   if(chain.length)operations.push({id:'deep-chain-detail',name:'detail',input:{resourceId:chain.at(-1)!.resourceId,aroundMessageId:chain.at(-1)!.messageIds[0],limit:50},check:value=>{const detail=value as {messages:{items:{id:string}[]}};assert(detail.messages.items.some(m=>m.id===chain.at(-1)!.messageIds[0]));assert(!detail.messages.items.some(m=>m.id===entries[0].messageIds[1]));assert(detail.messages.items.length<=50);}});
+  let selectedOperations=operations;
+  if(searchOnly){
+   // The reference enumerates this synthetic fixture outside the timed path.
+   // Check each result against the expected branch/message pair, including
+   // inherited hits, and exclude denied or revoked source messages.
+   const revoked=new Set(graph.unavailableMessageIds);
+   const sourceResources=new Map(active.map(e=>[e.graphId,e.resourceId]));
+   const rareInput={...rareSearch,searchMode:'chat-history' as const};
+   const commonInput={...commonSearch,searchMode:'chat-history' as const};
+   const expectedCommon=new Set<string>();
+   for(const entry of active)for(const message of owner.graph.visibleMessages(entry.graphId)){
+    const source=sourceResources.get(message.conversationId);
+    if(source&&!revoked.has(message.id)&&message.content.includes(commonInput.text)){
+     expectedCommon.add(entry.resourceId+'/'+message.id);
+    }
+   }
+   const validateCommon=(value:unknown,offset:number)=>{
+    const p=page(value),keys=p.items.map(row=>{
+     assert.equal(row.kind,'message');
+     assert(typeof row.excerpt==='string'&&row.excerpt.includes(commonInput.text));
+     return row.resourceId+'/'+String(row.messageId);
+    });
+    assert.equal(p.total,expectedCommon.size);
+    assert.equal(p.items.length,Math.min(commonInput.limit,Math.max(0,expectedCommon.size-offset)));
+    assert.equal(new Set(keys).size,keys.length);
+    for(const key of keys)assert(expectedCommon.has(key));
+    return keys;
+   };
+   const firstPage=new Set(validateCommon(await invoke({id:'initial-common-page',name:'search',input:commonInput,check:()=>{}}),0));
+   selectedOperations=[
+    {id:'switch-chat-rare',name:'search',input:rareInput,check:value=>{
+     const p=page(value);
+     assert.equal(p.total,1);
+     assert.equal(p.items.length,1);
+     assert.equal(p.items[0].kind,'message');
+     assert.equal(p.items[0].resourceId,rare.resourceId);
+     assert.equal(p.items[0].messageId,rare.messageIds[0]);
+    }},
+    {id:'switch-chat-common',name:'search',input:commonInput,check:value=>{
+     assert.deepEqual(validateCommon(value,0),[...firstPage]);
+    }},
+    {id:'switch-chat-common-second-page',name:'search',input:{...commonInput,offset:commonInput.limit},check:value=>{
+     for(const key of validateCommon(value,commonInput.limit))assert(!firstPage.has(key));
+    }},
+    {id:'switch-chat-absent',name:'search',input:{text:'SYNTHETIC_NEVER_PRESENT_098765',searchMode:'chat-history',limit:50},check:value=>{
+     const p=page(value);
+     assert.equal(p.total,0);
+     assert.equal(p.items.length,0);
+    }},
+   ];
+  }
   const observations:unknown[]=[];receipt.operations=observations;
   owner.save=originalSave;
-  for(const operation of operations){
+  for(const operation of selectedOperations){
    fixtureFence(session,profile,started);
    const work={graphSnapshotCalls:0,visibleMessageCalls:0,visibleRows:0,bodyContentGetterReads:0,kernelNoteBodiesReturned:0,responseBytes:0,sqliteChanges:0,providerCalls:0};
    const originalSnapshot=owner.graph.snapshot.bind(owner.graph),originalVisible=owner.graph.visibleMessages.bind(owner.graph),restores:(()=>void)[]=[];
@@ -185,7 +237,7 @@ async function worker(dataset:Dataset,session:string,candidate:string){
    try{value=await invoke(operation);operation.check(value);work.responseBytes=jsonBytes(value);}
    finally{restores.forEach(restore=>restore());owner.graph.snapshot=originalSnapshot;owner.graph.visibleMessages=originalVisible;owner.kernel.getResource=originalResource;}
    work.sqliteChanges=Number(db.prepare('SELECT total_changes() AS n').get()!.n)-before;work.providerCalls=providerCalls;assert.equal(work.sqliteChanges,0);assert.equal(providerCalls,0);
-   const actual=operation.name==='detail'?(value as {messages:{items:{id:string}[]}}).messages.items.map(row=>row.id):page(value).items.map(row=>String(row.resourceId));
+   const actual=operation.name==='detail'?(value as {messages:{items:{id:string}[]}}).messages.items.map(row=>row.id):page(value).items.map(row=>row.kind==='message'?String(row.resourceId)+'/'+String(row.messageId):String(row.resourceId));
    const observation:Record<string,unknown>={id:operation.id,kind:operation.name,queryClass:operation.id,limit:50,work,instrumentationCoverage:['same canonical graph/state message content getters','graph snapshot/visibleMessages entry points','kernel.getResource note-return counter; direct SQL note reads not counted'],correctness:{passed:true,resultIdentityDigest:digestIds(actual)},timing:{tier:'in-process-Core-CP-read',warmups:0,samplesMs:[]}};observations.push(observation);
    const samples:number[]=[],timing=observation.timing as {tier:string;warmups:number;samplesMs:number[];medianMs?:number;p95Ms?:number;complete?:boolean;stopped?:string};
    for(let n=0;n<25;n++){
@@ -195,31 +247,33 @@ async function worker(dataset:Dataset,session:string,candidate:string){
    }
    timing.samplesMs=samples;timing.complete=samples.length===20;if(samples.length){const sorted=[...samples].sort((a,b)=>a-b);timing.medianMs=sorted[Math.floor((sorted.length-1)/2)];timing.p95Ms=sorted[Math.ceil(sorted.length*.95)-1];}
   }
-  assert.equal(providerCalls,0);receipt.providerCalls=providerCalls;receipt.passed=true;
-  receipt.timingComplete=observations.every(value=>(value as {timing:{complete?:boolean}}).timing.complete===true);receipt.presentationPerformanceQualified=false;
+  assert.equal(providerCalls,0);receipt.providerCalls=providerCalls;
+  receipt.timingComplete=observations.every(value=>(value as {timing:{complete?:boolean}}).timing.complete===true);
+  receipt.passed=!searchOnly||receipt.timingComplete;receipt.presentationPerformanceQualified=false;
  }catch(error){receipt.error=serializeError(error);}
  finally{if(core)await core.command('close',{});receipt.elapsedMs=performance.now()-started;receipt.processMemory=process.memoryUsage();receipt.ownedDiskBytes=directoryBytes(session);writeReceipt(join(session,dataset+'.json'),receipt);}
  return receipt;
 }
 
 async function main(){
- const allowed=new Set(['candidate','datasets','describe','worker','session','dataset']);for(const key of parsed.keys())assert(allowed.has(key),'unknown_argument');
- if(parsed.has('describe')){console.log(JSON.stringify({contract:'aerynth.library-scale-plan@1',datasets:DATASETS,bounds:{disk:DISK_BOUND,db:DB_BOUND,state:STATE_BOUND,receipt:OUTPUT_BOUND,perDatasetMs:MAX_DATASET_MS},providerCalls:0,qualification:'No benchmark performed by --describe'}));return;}
+ const allowed=new Set(['candidate','datasets','describe','worker','session','dataset','search-only']);for(const key of parsed.keys())assert(allowed.has(key),'unknown_argument');
+ const searchOnly=parsed.has('search-only');
+ if(parsed.has('describe')){console.log(JSON.stringify({contract:'aerynth.library-scale-plan@1',datasets:DATASETS,modes:['full-library','search-only'],bounds:{disk:DISK_BOUND,db:DB_BOUND,state:STATE_BOUND,receipt:OUTPUT_BOUND,perDatasetMs:MAX_DATASET_MS},providerCalls:0,qualification:'No benchmark performed by --describe'}));return;}
  const candidate=parsed.get('candidate');assert(candidate,'explicit_candidate_required');
- if(parsed.has('worker')){assert(parsed.get('session')&&parsed.get('dataset'));const dataset=parsed.get('dataset') as Dataset;assert(Object.hasOwn(DATASETS,dataset));const result=await worker(dataset,parsed.get('session')!,candidate);process.exitCode=result.passed?0:1;return;}
+ if(parsed.has('worker')){assert(parsed.get('session')&&parsed.get('dataset'));const dataset=parsed.get('dataset') as Dataset;assert(Object.hasOwn(DATASETS,dataset));const result=await worker(dataset,parsed.get('session')!,candidate,searchOnly);process.exitCode=result.passed?0:1;return;}
  const names=(parsed.get('datasets')??'small').split(',') as Dataset[];assert(names.length>=1&&names.length<=3&&new Set(names).size===names.length&&names.every(n=>Object.hasOwn(DATASETS,n)),'invalid_datasets');
- const binding=sourceBinding(candidate);readApiReleased();const reserve=guard(),session=join(OUTPUT_ROOT,'library-scale-'+Date.now()+'-'+randomUUID().slice(0,8));mkdirSync(session,{recursive:true});writeReceipt(join(session,'owner.json'),{contract:'aerynth.library-scale-owner@1',candidate,binding,reserve});
+ const binding=sourceBinding(candidate);readApiReleased();const reserve=guard(),session=join(OUTPUT_ROOT,'library-scale-'+Date.now()+'-'+randomUUID().slice(0,8));mkdirSync(session,{recursive:true});writeReceipt(join(session,'owner.json'),{contract:'aerynth.library-scale-owner@1',candidate,binding,reserve,searchOnly});
  const stages:unknown[]=[];
  for(const dataset of names){
   guard();assert(directoryBytes(session)<DISK_BOUND-DB_BOUND*2-OUTPUT_BOUND,'insufficient_owned_envelope');
   const result=await new Promise<{dataset:string;code:number|null;signal:string|null;deadline:boolean}>((done,reject)=>{
    const options={cwd:REPO,execArgv:WORKER_HEAP_FLAGS,env:{...process.env,NODE_DISABLE_COMPILE_CACHE:'1'},silent:true,windowsHide:true};
-   const child=fork(HERE,['--worker','--candidate='+candidate,'--session='+session,'--dataset='+dataset],options);let deadline=false,output=0;
+   const child=fork(HERE,['--worker','--candidate='+candidate,'--session='+session,'--dataset='+dataset,...(searchOnly?['--search-only']:[])],options);let deadline=false,output=0;
    const timer=setTimeout(()=>{deadline=true;child.kill();},MAX_DATASET_MS+3000);
    for(const stream of [child.stdout,child.stderr])stream?.on('data',(data:Buffer)=>{output+=data.length;if(output>65536){deadline=true;child.kill();}});
    child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',(code,signal)=>{clearTimeout(timer);done({dataset,code,signal,deadline});});
   });stages.push(result);if(result.code!==0||result.deadline)break;
  }
- const passed=stages.length===names.length&&stages.every(stage=>(stage as {code:number|null}).code===0);writeReceipt(join(session,'summary.json'),{contract:'aerynth.library-scale-runner@1',binding,passed,stages,ownedDiskBytes:directoryBytes(session),limits:['Headless in-process only.','No real UI/account/provider activity.','Old heap is bounded; total RSS is checked at operation boundaries, not hard OS quota.','Synthetic fixture retained; never clean up another profile.']});console.log(JSON.stringify({passed,session,stages}));process.exitCode=passed?0:1;
+ const passed=stages.length===names.length&&stages.every(stage=>(stage as {code:number|null}).code===0);writeReceipt(join(session,'summary.json'),{contract:'aerynth.library-scale-runner@1',binding,searchOnly,passed,stages,ownedDiskBytes:directoryBytes(session),limits:['Headless in-process only.','No real UI/account/provider activity.','Old heap is bounded; total RSS is checked at operation boundaries, not hard OS quota.','Synthetic fixture retained; never clean up another profile.']});console.log(JSON.stringify({passed,session,stages}));process.exitCode=passed?0:1;
 }
 if(process.argv[1]&&resolve(process.argv[1])===HERE)void main().catch(error=>{console.error(JSON.stringify({passed:false,error:serializeError(error)}));process.exitCode=1;});
