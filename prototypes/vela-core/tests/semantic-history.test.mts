@@ -457,3 +457,28 @@ test('distinguishes cancelling a reviewed assessment from an invalid model respo
   assert.equal(result.failure, 'cancelled');
   assert.deepEqual(result.coverage, []);
 });
+
+test('cancellation during synchronous discovery prevents further source reads and assessment', async () => {
+  const controller = new AbortController();
+  let searches = 0;
+  let admissions = 0;
+  let assessments = 0;
+  const result = await investigateSemanticHistory(request, {
+    search: () => {
+      searches++;
+      controller.abort();
+      return { sources: [candidate], scan: 'bounded' };
+    },
+    recent: () => { searches++; return { sources: [], scan: 'bounded' }; },
+    isCurrent: () => { admissions++; return true; },
+    disclose: async call => {
+      if (call.stage === 'interpret') return { ...proposal, needs: [evidence, { ...evidence, key: 's2', query: 'other source' }] };
+      assessments++;
+      return answer;
+    },
+  }, controller.signal);
+  assert.equal(result.failure, 'cancelled');
+  assert.equal(searches, 1);
+  assert.equal(admissions, 0);
+  assert.equal(assessments, 0);
+});

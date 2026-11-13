@@ -249,10 +249,12 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       if (searchCoverage === null || searchCoverage === 'bounded' || scan === 'unavailable') searchCoverage = scan;
     };
     const addCandidates = ({ sources, scan }: SemanticHistoryCandidates<T>, limit = candidateLimit) => {
+      signal.throwIfAborted();
       recordScan(scan);
       if (sources.length && owner.isSnapshotCurrent?.() === false) { partial(); return; }
       if (sources.length > 2 * maxCandidates) partial();
       for (const source of sources.slice(0, 2 * maxCandidates)) {
+        signal.throwIfAborted();
         if (observed.has(source.sourceId)) continue;
         const textLimit = source.sourceKind === 'file' ? maxReviewedFileBytes :
           source.sourceKind === 'mission-checkpoint' || source.sourceKind === 'workspace-state' || source.sourceKind === 'conversation-exchange'
@@ -282,6 +284,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     if (owner.selected) addCandidates(owner.selected());
 
     while (rounds < maxRounds) {
+      signal.throwIfAborted();
       rounds++;
       const priorCount = evidence.size;
       const priorDisputes = priorAssessment?.rows.filter(row => row.status === 'contradicted').map(row => ({
@@ -299,6 +302,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       const refinementResults = new Map<string, readonly T[]>();
       const previouslyObserved = widen.length ? new Set(observed) : undefined;
       for (const query of next) {
+        signal.throwIfAborted();
         const digest = canonicalRetrievalQuery(query)!.digest;
         if (queries.has(digest)) continue;
         if (evidence.size >= limit) { partial(); break; }
@@ -320,16 +324,23 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       const remainingPages = widen.filter(({ refinement }) => !refinement ||
         !refinementResults.get(refinement)?.some(source => !previouslyObserved?.has(source.sourceId) && observed.has(source.sourceId)));
       if (owner.recent && !anchorsRead && ((rounds === 1 && evidence.size === priorCount) || investigateAnchors)) {
+        signal.throwIfAborted();
         anchorsRead = true;
         addCandidates(owner.recent(), limit);
       }
-      if (owner.related && related.length && evidence.size < limit) addCandidates(owner.related(related), limit);
+      if (owner.related && related.length && evidence.size < limit) {
+        signal.throwIfAborted();
+        addCandidates(owner.related(related), limit);
+      }
       // Keep the existing refinement and recent-evidence priorities.
       if (owner.widen && remainingPages.length) {
         if (evidence.size >= limit) partial();
         else {
           const pages = remainingPages.filter(({ digest }) => truncatedQueries.delete(digest))
-            .map(({ query }) => owner.widen!(query));
+            .map(({ query }) => {
+              signal.throwIfAborted();
+              return owner.widen!(query);
+            });
           for (const page of pages) {
             recordScan(page.scan);
             if (page.sources.length > 2 * maxCandidates) partial();
@@ -342,6 +353,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
           }
         }
       }
+      signal.throwIfAborted();
       if (priorAssessment && evidence.size === priorCount) {
         if (owner.isSnapshotCurrent?.() === false || ![...evidence.values()].every(owner.isCurrent)) return empty('stale', 'source-changed');
         return assessed(priorAssessment);
