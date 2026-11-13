@@ -93,6 +93,21 @@ function setup(command) {
   };
 }
 
+test("ordinary execution observations preserve the authorized input message anchor", async () => {
+  const f = setup(() => [execution({
+    providerId: "chatgpt-plan-responses",
+    state: "provider_completed",
+    inputMessageId: "message:accepted",
+  })]);
+  const received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  try {
+    await f.port.refresh();
+    assert.ok(received.some(value => value.execution?.inputMessageId === "message:accepted"));
+    assert.equal(JSON.stringify(received).includes("private-native-id"), false);
+  } finally { off(); f.port.dispose(); }
+});
+
 test("native chat observations strip private bindings and only forward exact reported assistant deltas, including metadata sharing the same event ID", async () => {
   const f = setup(),
     received = [];
@@ -179,6 +194,41 @@ test("one shared visible-view poll stops after the last subscriber and cancellat
   f.port.dispose();
 });
 
+test("Stop waits for a fresh authorized activity read after a disconnect", async () => {
+  let disconnected = false;
+  const f = setup(async (name) => {
+    if (name === "interrupt") return { requested: true, confirmed: false };
+    if (disconnected) throw Error("backend_disconnected");
+    return [execution()];
+  });
+  const off = f.port.observe("r", () => {});
+  try {
+    await f.port.refresh();
+    disconnected = true;
+    await assert.rejects(f.port.cancel("e"), /No observed active/);
+    assert.equal(f.calls.filter(call => call.name === "interrupt").length, 0);
+    disconnected = false;
+    await f.port.cancel("e");
+    assert.equal(f.calls.filter(call => call.name === "interrupt").length, 1);
+  } finally { off(); f.port.dispose(); }
+});
+
+test("Stop cannot dispatch after the desktop hides during activity readback", async () => {
+  let pending;
+  const f = setup(async (name) => name === "interrupt" ? { requested: true } : pending ?? [execution()]);
+  const off = f.port.observe("r", () => {});
+  try {
+    await f.port.refresh();
+    const readback = Promise.withResolvers();
+    pending = readback.promise;
+    const stopping = f.port.cancel("e");
+    f.setVisible(false);
+    readback.resolve([execution()]);
+    await assert.rejects(stopping, /No observed active/);
+    assert.equal(f.calls.filter(call => call.name === "interrupt").length, 0);
+  } finally { off(); f.port.dispose(); }
+});
+
 test("known backend disconnection fences a pending old read without inventing an execution outcome", async () => {
   let resolveStatus;
   const status = new Promise((resolve) => {
@@ -197,6 +247,60 @@ test("known backend disconnection fences a pending old read without inventing an
   );
   off();
   f.port.dispose();
+});
+
+test("an unchanged active preview is delivered again after an activity read fails", async () => {
+  const preview = {
+    resourceId: "r",
+    executionId: "e",
+    providerId: "codex-app-server",
+    cursor: 4,
+    text: "Observed reply before a temporary disconnect",
+    classification: "reported",
+  };
+  let fail = false;
+  const f = setup((_name, { resourceIds }) => {
+    if (fail) throw Error("temporary activity read failure");
+    return activity(resourceIds, [execution()], preview);
+  });
+  const received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  try {
+    await f.port.refresh();
+    assert.equal(received.at(-1).preview.text, preview.text);
+    fail = true;
+    await f.port.refresh();
+    assert.deepEqual(received.at(-1), { connection: "unavailable" });
+    fail = false;
+    const reconnectStart = received.length;
+    await f.port.refresh();
+    assert.equal(received.length, reconnectStart + 1);
+    assert.equal(received[reconnectStart].resourceAvailable, true);
+    assert.equal(received.at(-1).connection, "available");
+    assert.equal(received.at(-1).preview?.text, preview.text);
+    assert.equal(received.at(-1).execution.state, "running");
+    assert.ok(f.calls.every(call => call.name === "conversationActivity"));
+  } finally {
+    off();
+    f.port.dispose();
+  }
+});
+
+test("a successful activity read explicitly retires an execution absent from the snapshot", async () => {
+  let rows = [execution()];
+  const f = setup((_name, { resourceIds }) => activity(resourceIds, rows));
+  const received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  try {
+    await f.port.refresh();
+    assert.equal(received.at(-1).execution.id, "e");
+    rows = [];
+    await f.port.refresh();
+    assert.deepEqual(received.at(-1), { resourceAvailable: true, connection: "available", execution: null, preview: null });
+  } finally {
+    off();
+    f.port.dispose();
+  }
 });
 
 test("reopening and returning from a hidden view read the full existing backend preview without replaying a provider request", async () => {

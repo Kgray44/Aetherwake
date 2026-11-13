@@ -55,3 +55,10 @@ test('modern glide source preserves guard boundaries and refuses invalid startup
   }
  }finally{process.argv=argv;}
 });
+
+test('drag asset verification accepts Vite JavaScript modules without admitting other paths', () => {
+ for (const name of ['index-a1.js','index-b2.css','pdf.worker-BFJULut3.mjs'])
+  assert.equal(helper.isBuildAssetName(name),true);
+ for (const name of ['../pdf.worker-a.mjs','dir/pdf.worker-a.mjs','dir\\pdf.worker-a.mjs','worker.mjs.map','worker.mjs?x','worker.exe'])
+  assert.equal(helper.isBuildAssetName(name),false);
+});

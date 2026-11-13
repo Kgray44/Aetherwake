@@ -15,6 +15,11 @@ export interface DirectResourceView {
   hasUnsavedChanges?(): boolean;
 }
 
+export function supportsDocumentQuestion(resource: Resource): boolean {
+  return resource.kind === "file" && resource.media?.source === "file" &&
+    ["pdf", "docx", "text"].includes(resource.media.format);
+}
+
 /** Retains the actual focused editor DOM across closes. Only view state lives
  * here: content, drafts and mutations stay with the canonical component ports. */
 export function createResourceSurface(options: {
@@ -25,6 +30,8 @@ export function createResourceSurface(options: {
   mount(root: HTMLElement, resource: Resource): DirectResourceView;
   anchor(): SurfaceAnchor;
   failed(error: unknown): void;
+  placeNote?(resource: Resource): (() => Promise<void>) | undefined;
+  askAboutDocument?(resource: Resource): void;
 }) {
   const entries = new Map<
     string,
@@ -36,6 +43,8 @@ export function createResourceSurface(options: {
       authorized: boolean;
       active: boolean;
       request: ContextualSurfaceRequest;
+      updatePlacement?: (resource: Resource) => void;
+      updateDocumentAction?: (resource: Resource) => void;
       width?: number;
       height?: number;
     }
@@ -73,12 +82,78 @@ export function createResourceSurface(options: {
         const root = document.createElement("section");
         root.className = "application-direct-resource";
         root.dataset.resourceId = resource.id;
-        const view = options.mount(root, resource);
+        const placementEnabled = resource.kind === "note" && options.placeNote;
+        const documentAction = resource.kind === "file" && options.askAboutDocument;
+        const editor = placementEnabled || documentAction ? document.createElement("div") : root;
+        if (editor !== root) root.append(editor);
+        const view = options.mount(editor, resource);
+        let updateDocumentAction: ((resource: Resource) => void) | undefined;
+        if (documentAction) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "aw-document-question";
+          button.textContent = "Ask Vela about this file";
+          button.dataset.aerynthMotionControl = "true";
+          let current = resource;
+          updateDocumentAction = (next) => {
+            current = next;
+            button.hidden = !supportsDocumentQuestion(next);
+          };
+          button.addEventListener("click", () => {
+            const entry = entries.get(resource.id);
+            if (!entry?.authorized || entry.updateDocumentAction !== updateDocumentAction || !entry.active || button.hidden) return;
+            try {
+              documentAction(current);
+            } catch (error) {
+              options.failed(error);
+            }
+          });
+          updateDocumentAction(resource);
+          root.prepend(button);
+        }
+        let updatePlacement: ((resource: Resource) => void) | undefined;
+        if (resource.kind === "note" && options.placeNote) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "aw-note-placement";
+          button.textContent = "Add note to this workspace";
+          button.dataset.aerynthMotionControl = "true";
+          let current = resource;
+          let pending = false;
+          const refresh = () => {
+            button.hidden = !options.placeNote?.(current);
+            button.disabled = pending;
+          };
+          updatePlacement = (next) => {
+            current = next;
+            refresh();
+          };
+          button.addEventListener("click", async () => {
+            const entry = entries.get(resource.id);
+            if (!entry?.authorized || !entry.active || pending) return;
+            const place = options.placeNote?.(current);
+            if (!place) return;
+            pending = true;
+            refresh();
+            try {
+              await place();
+            } catch (error) {
+              options.failed(error);
+            } finally {
+              pending = false;
+              refresh();
+            }
+          });
+          root.prepend(button);
+          refresh();
+        }
         const created = {
           resourceId: resource.id,
           kind: resource.kind,
           root,
           view,
+          updatePlacement,
+          updateDocumentAction,
           active: false,
           authorized: true,
           request: undefined as unknown as ContextualSurfaceRequest,
@@ -120,6 +195,8 @@ export function createResourceSurface(options: {
         previous.view.setActive(false);
       }
       entry.view.update(resource);
+      entry.updatePlacement?.(resource);
+      entry.updateDocumentAction?.(resource);
       entry.request.label = resource.title;
       if (anchor) entry.request.anchor = anchor;
       // The existing surface manager moves this same content node and reverses
@@ -151,7 +228,11 @@ export function createResourceSurface(options: {
           resource.state === "archived"
         )
           release(id);
-        else entry.view.update(resource);
+        else {
+          entry.view.update(resource);
+          entry.updatePlacement?.(resource);
+          entry.updateDocumentAction?.(resource);
+        }
       }
     },
     unavailable(resourceId: string) {

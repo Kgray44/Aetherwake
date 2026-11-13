@@ -144,9 +144,17 @@ function validateReview(preview, review) {
 }
 /** Presentation only. Each trusted native caller validates its own exact DTO,
  * body digest, source policy and capacity before opening this read-only pane. */
-function presentation(experience) {
-  if (!["vela", "ordinary", "codex", "file-edit"].includes(experience))
+function presentation(experience, analysisLimits) {
+  if (experience === "memory-capture") return { title: "Aerynth · Review memory", htmlBytes: 196608 };
+  if (!["vela", "ordinary", "codex", "file-edit", "vela-initiated-analysis"].includes(experience))
     throw Error("invalid_native_review_experience");
+  if (experience === "vela-initiated-analysis") return {
+    title: "Vela · Authorize selected-source analysis",
+    subtitle: "Allow one run on this profile using the selected source versions below. Approval expires after 90 seconds. Vela can analyze and reply, with no file changes or other tools." +
+      (Number.isSafeInteger(analysisLimits?.requestsPerDay) && Number.isSafeInteger(analysisLimits?.maxOutputTokens)
+        ? ` Existing limits are ${analysisLimits.requestsPerDay} API requests per day and ${analysisLimits.maxOutputTokens} output tokens per request.` : " Existing provider limits apply."),
+    historyLabel: "Previous messages", emptyHistory: "No prior messages included.", htmlBytes: 524288,
+  };
   if (experience === "file-edit")
     return { title: "Vela · Review file changes", htmlBytes: 524288 };
   if (experience === "codex")
@@ -174,9 +182,29 @@ function presentation(experience) {
         htmlBytes: 524288,
       };
 }
-function reviewPage(review, intent = "", experience = "vela", workflow, decisionMode) {
+function reviewPage(review, intent = "", experience = "vela", workflow, decisionMode, analysisLimits) {
   if(decisionMode!==undefined&&(decisionMode!=='three-way'||experience!=='file-edit'))throw Error('invalid_native_review_decision_mode');
-  const view = presentation(experience);
+  const view = presentation(experience, analysisLimits);
+  if (experience === "memory-capture") {
+    const draft = review?.draft;
+    const scope = draft?.scope;
+    if (typeof review?.sourceText !== "string" || Buffer.byteLength(review.sourceText) > 16384 ||
+        typeof draft?.text !== "string" || !draft.text.trim() || draft.text.length > 4096 ||
+        !["preferences", "projects", "technical", "decisions"].includes(draft.category) ||
+        !["project", "conversation"].includes(scope?.kind) || typeof scope?.id !== "string" ||
+        !scope.id.trim() || scope.id.length > 200 || typeof review.enableStorage !== "boolean" ||
+        !Array.isArray(draft.keywords) || !draft.keywords.length || draft.keywords.length > 16 ||
+        draft.keywords.some(keyword => typeof keyword !== "string" || !keyword.trim() || keyword.length > 64))
+      throw Error("invalid_native_memory_review");
+    const styleHash = createHash("sha256").update(css).digest("base64");
+    const scopeName = scope.kind === "project" ? "Project" : "Conversation";
+    const categoryName = { preferences: "Preference", projects: "Project detail", technical: "Technical fact", decisions: "Decision" }[draft.category];
+    const storage = review.enableStorage ? "<p>Enable local memory storage and save this fact. Provider sharing settings stay as they are.</p>"
+      : "<p>Save this fact to local memory.</p>";
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">Save this memory?</h1>${storage}</header><div class="content" tabindex="0" aria-label="Review memory and source"><article><h2>Memory to save</h2><small>${categoryName} · ${scopeName} ${escape(scope.id)}</small><pre>${escape(draft.text)}</pre><p>Search terms: ${escape(draft.keywords.join(", "))}</p></article><article><h2>Original message</h2><pre>${escape(review.sourceText)}</pre></article></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">Save memory</button></footer></main></body></html>`;
+    if (Buffer.byteLength(html) > view.htmlBytes) throw Error("invalid_native_memory_review");
+    return html;
+  }
   if (experience === "file-edit") {
     const styleHash = createHash("sha256").update(css).digest("base64");
     const fileEvidence = (body, sha) => {
@@ -238,10 +266,17 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
     )
       resources.push(source);
   const sources = resources
-    .map(
-      (source) =>
-        `<article><h2>${escape(source.title ?? source.id ?? "Selected resource")}</h2><small>${source.kind === "resource" && source.id === review.context.activeResourceId ? "Selected card · " : ""}${included.has(sourceKey(source)) ? "Selected excerpt" : "Metadata only"}</small>${included.has(sourceKey(source)) ? `<pre>${escape(included.get(sourceKey(source)).content)}</pre>` : ""}</article>`,
-    )
+    .map((source) => {
+      const excerpt = included.get(sourceKey(source));
+      let label = excerpt ? "Selected excerpt" : "Metadata only";
+      if (Number.isSafeInteger(excerpt?.version)) {
+        if (experience === "vela-initiated-analysis") label = "Selected source · version " + excerpt.version;
+        if (excerpt.attachmentType === "note") label = "Saved note · version " + excerpt.version;
+        if (excerpt.attachmentType === "document") label = "Document · version " + excerpt.version;
+      }
+      const selected = source.kind === "resource" && source.id === review.context.activeResourceId ? "Selected card · " : "";
+      return `<article><h2>${escape(source.title ?? source.id ?? "Selected resource")}</h2><small>${selected}${label}</small>${excerpt ? `<pre>${escape(excerpt.content)}</pre>` : ""}</article>`;
+    })
     .join("");
   const history = (review.history?.messages ?? [])
     .map(
@@ -293,16 +328,20 @@ function ownerCanReview(parent) {
 }
 /** A finite, parent-owned native approval surface. It has no application bridge,
  * scripts, network access, credentials, grant, canonical writes or provider port. */
-async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela", workflow, decisionMode }) {
+async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela", workflow, decisionMode, analysisLimits, isCurrent }) {
   if(decisionMode!==undefined&&(decisionMode!=='three-way'||experience!=='file-edit'))throw Error('invalid_native_review_decision_mode');
   const cancelled=decisionMode==='three-way'?'cancel':false;
+  const scopedAnalysis = experience === "vela-initiated-analysis";
+  const scopeCurrent = () => {
+    try { return !scopedAnalysis || isCurrent?.() === true; } catch { return false; }
+  };
   const view = presentation(experience);
-  if (!ownerCanReview(parent)) return cancelled;
+  if (!ownerCanReview(parent) || !scopeCurrent()) return cancelled;
   const remaining = Date.parse(expiresAt) - Date.now();
   if (!Number.isFinite(remaining) || remaining <= 0) return cancelled;
   const url =
     "data:text/html;charset=utf-8," +
-    encodeURIComponent(reviewPage(review, intent, experience, workflow, decisionMode));
+    encodeURIComponent(reviewPage(review, intent, experience, workflow, decisionMode, analysisLimits));
   const { BrowserWindow, ipcMain, session } = runtime ?? require("electron");
   const token = randomUUID(),
     channel = "vela-review-decision",
@@ -357,6 +396,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
       done = true;
       ownedReviews.delete(child);
       clearTimeout(timer);
+      clearInterval(scopeTimer);
       for (const [emitter, name, handler] of listeners)
         emitter.removeListener(name, handler);
       try {
@@ -368,6 +408,8 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
     };
     const timer = setTimeout(() => finish(false), Math.min(remaining, 180000));
     timer.unref?.();
+    const scopeTimer = scopedAnalysis ? setInterval(() => { if (!scopeCurrent()) finish(false); }, 250) : undefined;
+    scopeTimer?.unref?.();
     listen(parent, "closed", () => finish(false));
     listen(child, "closed", () => finish(false));
     listen(child, "blur", () => finish(false));
@@ -386,7 +428,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
     const focusedChild=()=>{try{return ownerAlive(child)&&child.isFocused()===true;}catch{return false;}};
     const showWhenReady = () => {
       if (done || ownership.shown || !painted || !ownership.ready) return;
-      if (!ownerCanReview(parent))
+      if (!ownerCanReview(parent) || !scopeCurrent())
         return finish(false);
       ownership.shown = true;
       try {
@@ -409,15 +451,15 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
         Object.keys(value).sort().join(',')!=='decision,token'
       )
         return;
-      if(decisionMode==='three-way'&&value.decision!=='cancel'){
+      if((decisionMode==='three-way'||scopedAnalysis)&&value.decision!=='cancel'){
         if(decisionChecking)return;decisionChecking=true;
         let active=false;
         try{active=focusedChild()&&await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()',false)===true;}catch{}
         if(!validChildEvent(event,value)||!ownership.ready||!ownership.shown||!ownerAlive(parent)||
-          !active||!focusedChild()||Date.now()>=Date.parse(expiresAt))return finish(false);
+          !active||!focusedChild()||!scopeCurrent()||Date.now()>=Date.parse(expiresAt))return finish(false);
       }
       finish(
-        ownerAlive(parent) && Date.now() < Date.parse(expiresAt)
+        ownerAlive(parent) && scopeCurrent() && Date.now() < Date.parse(expiresAt)
           ? value.decision==='reject'?'no':value.decision==='approve'
           : false,
       );

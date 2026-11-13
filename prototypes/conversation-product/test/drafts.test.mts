@@ -25,11 +25,11 @@ test('v1 migration preserves canonical IDs and metadata; unknown versions never 
   const share=await f.product.command('publish',{sourceResourceId:c.resourceId,sourceMessageId:m.id,evidence:'excerpt'}),before=await f.core.command('snapshot',{});
   // Exact v1 table layout: later draft/view tables are absent, all v1 records survive.
   f.db.exec('DROP TABLE cp_view_selection; DROP TABLE cp_views; DROP TABLE cp_drafts; UPDATE cp_schema SET version=1 WHERE id=1');
-  const upgraded=new ConversationProduct(f.db,f.host);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,3);
+  const upgraded=new ConversationProduct(f.db,f.host);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,4);
   assert.deepEqual(await upgraded.command('readDraft',{resourceId:c.resourceId}),{resourceId:c.resourceId,version:0,content:'',updatedAt:null});
   assert.equal((await upgraded.command('detail',{resourceId:c.resourceId})).conversation.favorite,true);assert.equal((await upgraded.command('detail',{resourceId:c.resourceId})).shares[0].id,share.id);assert.deepEqual((await f.core.command('snapshot',{})).graph,before.graph);
   const draft=await upgraded.command('saveDraft',{resourceId:c.resourceId,expectedVersion:0,content:'Synthetic retained draft'});
-  f.db.prepare('UPDATE cp_schema SET version=99').run();assert.throws(()=>new ConversationProduct(f.db,f.host),/unsupported_conversation_product_schema/);assert.equal(f.db.prepare('SELECT content FROM cp_drafts WHERE resource_id=?').get(c.resourceId)!.content,draft.content);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,99);f.db.prepare('UPDATE cp_schema SET version=3').run();
+  f.db.prepare('UPDATE cp_schema SET version=99').run();assert.throws(()=>new ConversationProduct(f.db,f.host),/unsupported_conversation_product_schema/);assert.equal(f.db.prepare('SELECT content FROM cp_drafts WHERE resource_id=?').get(c.resourceId)!.content,draft.content);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,99);f.db.prepare('UPDATE cp_schema SET version=4').run();
   assert.deepEqual(await new ConversationProduct(f.db,f.host).command('readDraft',{resourceId:c.resourceId}),draft);
  }finally{await f.close();cleanup(f.dir);}
 });
@@ -79,7 +79,7 @@ test('draft row retention is bounded without tombstone eviction',async()=>{
  const f=fixture();try{
   const candidate=await f.create();
   // Canonical resource references plus empty metadata model a full retained store.
-  f.kernel.withTransaction(db=>{const insert=db.prepare('INSERT INTO cp_drafts VALUES(?,1,\'\',0,?)');for(let i=0;i<limits.records;i++){const resource=f.kernel.createConversationRef('Synthetic retained empty draft '+i,null);insert.run(resource.id,new Date().toISOString());}});
+  f.kernel.withTransaction(db=>{const insert=db.prepare('INSERT INTO cp_drafts(resource_id,version,content,content_bytes,updated_at) VALUES(?,1,\'\',0,?)');for(let i=0;i<limits.records;i++){const resource=f.kernel.createConversationRef('Synthetic retained empty draft '+i,null);insert.run(resource.id,new Date().toISOString());}});
   await assert.rejects(f.product.command('saveDraft',{resourceId:candidate.resourceId,expectedVersion:0,content:''}),/draft_capacity_exceeded/);assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM cp_drafts').get()!.n,limits.records);assert.equal((await f.product.command('readDraft',{resourceId:candidate.resourceId})).version,0);
  }finally{await f.close();cleanup(f.dir);}
 });

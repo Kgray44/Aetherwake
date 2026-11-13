@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const { spawn, execFileSync } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
 const { createHash } = require('node:crypto');
+const { checkNativeTestLaunch } = require('./launch-native-test.cjs');
 const MAX_LOG = 2 * 1024 * 1024, MAX_LINE = 65536;
 const inside = (root, file) => { const part = path.relative(root, file); return !!part && !part.startsWith('..') && !path.isAbsolute(part); };
 const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -75,6 +76,7 @@ function readNativeReceipt(terminal, cwd) {
 }
 async function main() {
   assert.equal(process.platform, 'win32', 'Application verification requires the Windows reserve and native desktop host'); assert(!process.versions.electron, 'Run this launcher with actual Node'); assert.equal(process.argv.length, 2, 'This offline runner accepts no forwarded native/provider flags');
+  checkNativeTestLaunch();
   const cwd = fs.realpathSync(path.resolve(__dirname, '..')), repo = fs.realpathSync(path.resolve(cwd, '../../..')), local = process.env.LOCALAPPDATA; assert(local && path.isAbsolute(local), 'LOCALAPPDATA must be an absolute existing directory');
   const parent = path.join(local, 'Aerynth'), profile = path.join(parent, 'review-expanded-application-' + Date.now()), logs = profile + '.runner-logs'; assert(profile !== repo && !inside(repo, profile), 'Private profile must be external to the checkout'); assert(!fs.existsSync(profile) && !fs.existsSync(logs), 'Fresh profile/log path already exists; preserve it');
   reserveGuard(local, profile, cwd); fs.mkdirSync(parent, { recursive: true }); fs.mkdirSync(logs);
@@ -82,12 +84,20 @@ async function main() {
   const cancel = () => controller.abort(); process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
   try {
     const tsc = require.resolve('typescript/bin/tsc', { paths: [cwd] }), vite = path.join(path.dirname(require.resolve('vite/package.json', { paths: [cwd] })), 'bin/vite.js'), electron = require(require.resolve('electron', { paths: [cwd] })); assert(typeof electron === 'string' && path.isAbsolute(electron), 'Installed Electron executable unavailable');
-    const stages = buildStages({ cwd, repo, profile, node: process.execPath, tsc, vite, electron }), env = { ...process.env, AERYNTH_NODE_BIN: process.execPath }; let originalSource;
+    const stages = buildStages({ cwd, repo, profile, node: process.execPath, tsc, vite, electron });
+    const nativeEnv = { ...process.env, AERYNTH_NODE_BIN: process.execPath };
+    delete nativeEnv.ELECTRON_RUN_AS_NODE;
+    const setupEnv = { ...nativeEnv };
+    delete setupEnv.AERYNTH_NATIVE_TEST_SLOT;
+    let originalSource;
     for (const stage of stages) {
       assert(!controller.signal.aborted, 'application_check_cancelled'); reserveGuard(local, profile, cwd);
       if (stage.name === 'prepare') assert(!fs.existsSync(profile), 'Preparation must create the fresh profile itself');
       if (stage.name === 'restore') verifySource(originalSource, repo, cwd);
       const log = path.join(logs, stage.name + '.log'); fs.writeFileSync(log, '', { flag: 'wx' }); let result;
+      const nativeStage = stage.file === electron;
+      const env = nativeStage ? nativeEnv : setupEnv;
+      if (nativeStage) checkNativeTestLaunch(env);
       try { result = await runStage(stage, { env, signal: controller.signal, write: buffer => fs.appendFileSync(log, buffer) }); } catch (error) { if (error.stage) receipt.stages.push({ ...error.stage, log }); throw error; }
       receipt.stages.push({ ...result, log });
       if (stage.name === 'prepare') assert.equal(path.resolve(result.terminal.profile), profile, 'Preparation returned a different profile');

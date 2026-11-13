@@ -19,6 +19,7 @@ export function mountBlockChat(
     disposed = false,
     listener: ((value: ConversationExecutionObservation) => void) | undefined,
     unsubscribe: (() => void) | undefined;
+  let handoffGeneration = 0;
   const observe = () => {
     if (active && !disposed && !unsubscribe && listener && options.execution)
       unsubscribe = options.execution.observe(options.resourceId, (value) => {
@@ -63,6 +64,13 @@ export function mountBlockChat(
     ...options,
     execution,
     layoutHost: root.closest<HTMLElement>(".folio") ?? options.layoutHost,
+    captureDocumentHandoffScope() {
+      const generation = handoffGeneration;
+      const startedActive = active;
+      const inScope = options.captureDocumentHandoffScope?.();
+      return () => startedActive && active && generation === handoffGeneration &&
+        (inScope?.() ?? true);
+    },
   });
   void chat.ready.catch(options.failed);
   return {
@@ -75,6 +83,7 @@ export function mountBlockChat(
       if (active === value || disposed) return;
       active = value;
       if (!active) {
+        handoffGeneration++;
         unsubscribe?.();
         unsubscribe = undefined;
       } else {
@@ -86,6 +95,7 @@ export function mountBlockChat(
     async dispose() {
       if (disposed) return;
       active = false;
+      handoffGeneration++;
       unsubscribe?.();
       unsubscribe = undefined;
       await chat.dispose();

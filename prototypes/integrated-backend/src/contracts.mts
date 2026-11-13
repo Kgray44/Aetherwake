@@ -62,8 +62,10 @@ export type ConversationProductRequest = { [K in keyof ProductCommandMap]: { nam
 export type ConversationProductOutput = ProductCommandMap[keyof ProductCommandMap]['output'];
 export type ConversationSendInput = ProductCommandMap['send']['input'];
 export interface ConversationSendPreview {
+  draftVersion?: number;
  id: string; commandId: string; resourceId: string; providerId: string; expectedRevision: number;
  prompt: string; model?: string; context: AttachedContext[];
+ documents?: { id: string; version: number; source: string; sourceRevision: string; content: string; digest: string; kind?: 'note' }[];
  handoff?: { id:string; fingerprint:string; sourceResourceId:string; items:ContextPackage['items'];continued?:true };
  executionText: string; fingerprint: string; expiresAt: string;
  /** Exact stateless Responses egress, without credentials or account identifiers. */
@@ -114,6 +116,7 @@ export interface Execution extends PublicConversationExecution {
   /** Canonical admission counted once per AIR provider stage, including unknown outcomes. */
   velaAdmission?: { projectId: string | null; utcDay: string };
   connectionVersion?:number;inputMessageId?:string;outputMessageId?:string;
+  draftCheckpoint?: { version: number; documentsDigest: string };
   requestedModel?:string;requestBodyDigest?:string;contextDigest?:string;instructionVersion?:string;
   requestedReasoningEffort?:TurnInput['reasoningEffort'];
   cancellation?:{requested:boolean;serverConfirmed:false};
@@ -263,6 +266,19 @@ export interface Options {
   syntheticTimerClock?: TimerClockReading;
 }
 export interface CommandMap {
+  personalMemoryRevokeSourceNative: { input: { conversationId: string; messageId: string; expectedRevision: number }; output: { revision: number; erasedFacts: number } };
+  personalMemoryCapturePreviewNative: { input: import('./personal-memory-review.mts').CaptureRequest; output: import('./personal-memory-review.mts').CaptureReview };
+  personalMemoryCaptureCommitNative: { input: import('./personal-memory-review.mts').CaptureReview; output: { id: string } };
+  personalMemoryCaptureCancelNative: { input: { id: string }; output: null };
+  personalMemoryPolicyNative: { input: { assistant?: 'ordinary' | 'vela'; enable?: boolean; pauseStorage?: true; expectedVersion?: number }; output: import('../../personal-context/src/contracts.ts').PersonalPolicy };
+  personalMemoryManagementNative: {
+    input: { type: 'list'; after: string | null } | { type: 'read'; id: string }
+      | { type: 'previewSourceRevocation'; id: string; version: number }
+      | { type: 'preview'; request: import('./personal-memory-review.mts').ManagementRequest }
+      | { type: 'commit'; review: import('./personal-memory-review.mts').ManagementReview }
+      | { type: 'cancel'; ticket: string };
+    output: unknown;
+  };
   hostOperationReviewNative:{input:{operationId:string;selection?:{kind:'codex-directory';directory:string}};output:import('../../application-contract/vela-host-operations.ts').VelaHostReviewBinding};
   hostOperationDispatchNative:{input:{binding:import('../../application-contract/vela-host-operations.ts').VelaHostReviewBinding;identityDigest:string;approvalDigest:string};output:import('../../application-contract/windows-maintenance.ts').WindowsMaintenanceDispatchClaim};
   hostOperationResultNative:{input:import('../../application-contract/vela-host-operations.ts').VelaHostOperationNativeResult;output:import('../../application-contract/vela-tools.ts').VelaHostOperationView};
@@ -307,6 +323,8 @@ export interface CommandMap {
   missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true } |
     import('./resource-signals.mts').ResourceSignal; output: null };
   /** Owned desktop command, excluded from renderer and model routes. */
+  aepExperimentNative: { input: import('./aep-native-host.mts').AepNativeRequest;
+    output: Awaited<ReturnType<ReturnType<typeof import('./aep-native-host.mts').createAepNativeHost>['command']>> };
   resourcePolicyNative: { input: import('./resource-policy.mts').ResourcePolicyNativeRequest;
     output: import('./resource-policy.mts').ResourcePolicyNativeView };
   /** Fixed GPU diagnostic, accessible only through the native desktop review. */

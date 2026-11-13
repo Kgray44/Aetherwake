@@ -59,6 +59,32 @@ async function settles(check: () => boolean) { for (let i = 0; i < 50 && !check(
 const named = (root: Node, text: string) => root.find(node => node.tagName === 'button' && (node.getAttribute('aria-label') === text || node.textContent === text))!;
 function displayed(node: Node) { for (let parent: Node | null = node; parent; parent = parent.parent) { if (parent.hidden) return false; if (parent.tagName === 'details' && !parent.open && !parent.children[0]?.contains(node)) return false; } return true; }
 
+test('a document opened from the viewer enters Vela’s existing draft and waits for Send', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => { turns.push(input); return request(); },
+  }));
+  try {
+    await panel.open();
+    const form = root.find(node => node.className === 'vela-core-compose')!;
+    const editor = form.querySelector('textarea')!;
+    editor.value = 'Explain the findings in this document.';
+    editor.fire('input');
+    const ref = { id: 'file:brief', kind: 'resource' as const, resourceKind: 'file', title: 'Brief.pdf', version: 3 };
+    panel.addDocumentSource(ref);
+    panel.addDocumentSource(ref);
+    assert.equal(doc.activeElement, editor);
+    assert.equal(editor.value, 'Explain the findings in this document.');
+    assert.equal(root.querySelectorAll('button').filter(node => node.getAttribute('aria-label') === 'Remove source Brief.pdf').length, 1);
+    assert.equal(turns.length, 0);
+    form.fire('submit');
+    await settles(() => turns.length === 1);
+    assert.deepEqual(turns[0].resourceIds, [ref.id]);
+    assert.deepEqual(turns[0].resourceRefs, [ref]);
+  } finally { panel.dispose(); }
+});
+
 test('a verified result is concise, counts only this request and opens its canonical plan and workspace', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(), opened: unknown[] = [];
   const plan: VelaPlan = { id: 'plan:result', requestId: 'request:synthetic', version: 1, fingerprint: 'synthetic',
@@ -430,6 +456,96 @@ test('terminal status survives request completion and refresh; connection probe 
   form.fire('submit'); await settles(() => status.dataset.actionState === 'failed' && status.dataset.requestState === 'unknown');
   await panel.refresh(); assert.match(status.textContent, /outcome is unknown/); assert.equal(status.dataset.actionState, undefined);
   panel.dispose(); assert.equal(root.children.length, 0);
+});
+
+test('the composer can explicitly investigate an attached file without opening provider settings', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const file = { id: 'file:brief', kind: 'file' as const, title: 'Brief.docx', version: 3, projectId: null };
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    pickSources: async () => ({ resources: [file] }),
+    request: async input => { turns.push(input); return request(); },
+  }));
+  try {
+    await panel.open();
+    const option = root.find(node => node.tagName === 'label' && node.textContent === 'Investigate selected notes or files with Vela API')!;
+    assert.equal(option.hidden, true);
+    named(root, 'Choose files…').fire('click');
+    await settles(() => !option.hidden);
+    const checkbox = option.querySelector('input')!;
+    assert.equal(checkbox.checked, false);
+    checkbox.checked = true;
+    checkbox.fire('change');
+    assert.equal(turns.length, 0);
+    const composer = root.find(node => node.tagName === 'textarea')!;
+    composer.value = 'What does this file say about the schedule?';
+    composer.fire('input');
+    const connected = canonical.planningProviders;
+    canonical.planningProviders = undefined;
+    await panel.refresh();
+    composer.fire('keydown', { key: 'Enter' });
+    assert.equal(turns.length, 0);
+    assert.equal(checkbox.checked, true);
+    assert.equal(composer.value, 'What does this file say about the schedule?');
+    assert.match(root.find(node => node.className === 'vela-core-status')!.textContent, /Reconnect/);
+    canonical.planningProviders = connected;
+    await panel.refresh();
+    assert.equal(turns.length, 0);
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => turns.length === 1);
+    assert.equal(turns[0].providerId, 'openai-api-vela');
+    assert.equal(turns[0].semanticContext, true);
+    assert.deepEqual(turns[0].resourceRefs, [{ ...file, kind: 'resource', resourceKind: 'file' }]);
+    assert.equal(checkbox.checked, false);
+  } finally { panel.dispose(); }
+});
+
+test('selected-source analysis uses an explicit activation submitter', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }, { providerId: 'codex-app-server', available: true }];
+  canonical.applicationContext = { currentProjectId: 'project:synthetic', currentWorkspaceId: 'workspace:synthetic', references: [] };
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => { turns.push(input); return request(); },
+    routingOptions: async () => [],
+  }));
+  try {
+    await panel.open();
+    const ref = { id: 'note:synthetic', kind: 'resource' as const, resourceKind: 'note', title: 'Brief', version: 3 };
+    panel.addDocumentSource(ref);
+    const form = root.find(node => node.className === 'vela-core-compose')!;
+    const activation = named(form, 'Authorize one analysis');
+    assert.equal(activation.hidden, true);
+    const option = root.find(node => node.tagName === 'label' && node.textContent === 'Investigate selected notes or files with Vela API')!;
+    const checkbox = option.querySelector('input')!;
+    checkbox.checked = true; checkbox.fire('change');
+    const editor = form.querySelector('textarea')!;
+    editor.value = 'What does the brief say?'; editor.fire('input');
+    assert.equal(activation.hidden, false);
+    for (const title of ['Find evidence in this project', 'Review current workspace state', 'Start fresh for this send']) {
+      const conflict = root.find(node => node.tagName === 'label' && node.textContent === title)!.querySelector('input')!;
+      conflict.checked = true; conflict.fire('change');
+      assert.equal(activation.hidden, true, title);
+      form.fire('submit', { submitter: activation });
+      conflict.checked = false; conflict.fire('change');
+      assert.equal(activation.hidden, false, title);
+    }
+    const model = root.find(node => node.tagName === 'label' && node.textContent.includes('Automatic model'))!.querySelector('select')!;
+    model.value = 'synthetic-model'; model.fire('change');
+    assert.equal(activation.hidden, true);
+    model.value = ''; model.fire('change');
+    assert.equal(activation.hidden, false);
+    named(root, 'Codex').fire('click');
+    assert.equal(activation.hidden, true);
+    checkbox.checked = true; checkbox.fire('change');
+    assert.equal(activation.hidden, false);
+    assert.equal(turns.length, 0);
+    form.fire('submit', { submitter: activation });
+    await settles(() => turns.length === 1);
+    assert.deepEqual(turns[0], { intent: editor.value, resourceIds: [ref.id], resourceRefs: [ref],
+      authorizeProvider: true, providerId: 'openai-api-vela', semanticContext: true, runSelectedAnalysis: true });
+  } finally { panel.dispose(); }
 });
 
 test('workspace evidence is an explicit dedicated API composer choice', async () => {
