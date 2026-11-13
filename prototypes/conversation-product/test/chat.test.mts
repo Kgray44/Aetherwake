@@ -388,7 +388,7 @@ for(const retryWithButton of [false,true])test('Switch chat retries a failed que
  } finally {await manager?.dispose();f.restore();}
 });
 
-test('Switch chat refreshes its exact query when the history project changes', async () => {
+for (const focusResult of [false,true]) test('Switch chat refreshes its exact query when the history project changes (result focused: '+focusResult+')', async () => {
  const f=fixture(), resourceId=f.draft.resourceId;
  const scopes:(string|null|undefined)[]=[], opened:string[]=[];
  const firstSearch=Promise.withResolvers<void>();
@@ -415,8 +415,11 @@ test('Switch chat refreshes its exact query when the history project changes', a
   await firstSearch.promise;
   await until(()=>results.querySelector('button')?.textContent==='First project chat');
   const stale=results.querySelector('button');
+   const focused=focusResult?stale:project;
+   focused.focus();
   project.value='project:second';project.fire('change');
   assert.equal(!!results.querySelector('button'),false);
+   assert.ok(f.view.doc.activeElement===(focusResult?input:focused),'Only a removed result should return focus to the query');
   stale.fire('click');
   await until(()=>scopes.length===2);
   assert.deepEqual(scopes,['project:first','project:second']);

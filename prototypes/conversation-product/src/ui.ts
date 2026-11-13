@@ -179,6 +179,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const invalidateSwitcher=()=>{
   clearTimeout(switchTimer);
   switchTimer=undefined;
+  if(switcher.node.open&&switchResults.contains(document.activeElement))switchQuery.focus();
   switchResults.replaceChildren();
   switchStatus.textContent='Finding conversations…';
   return ++switchGeneration;
