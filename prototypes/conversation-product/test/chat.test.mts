@@ -1354,8 +1354,9 @@ test('Enter submits once; Shift+Enter and IME do not submit; draft draining is i
   }finally{await chat?.dispose();f.restore();}
 });
 
-for (const interruption of ['revoked','restored','disconnected']) test('a send checkpoint retains the draft without dispatch when '+interruption,async()=>{
+for (const interruption of ['revoked','restored','disconnected','research-disconnected']) test('a send checkpoint retains the draft without dispatch when '+interruption,async()=>{
   const f=fixture('chatgpt-plan-responses');
+  const disconnected = interruption.endsWith('disconnected');
   const checkpoint=Promise.withResolvers<void>();
   let chat, started=false, observe!:(value:ConversationExecutionObservation)=>void;
   const port={async command(name:string,input:any){
@@ -1364,18 +1365,26 @@ for (const interruption of ['revoked','restored','disconnected']) test('a send c
     return (f.port.command as any)(name,input);
   }} as ConversationProductPort;
   try {
+    if (interruption==='research-disconnected') {
+      f.detail.providers[0].modelOptions=[{id:'gpt-6.1-sol',label:'Synthetic Sol',eligibleTools:['web_search']}];
+      f.detail.conversation.execution={id:'execution:prior',resourceId:f.draft.resourceId,commandId:'prior-turn',
+        providerId:'chatgpt-plan-responses',state:'provider_completed',startedAt:'2026-11-02T01:00:00Z',endedAt:'2026-11-02T01:01:00Z',taskVerified:false};
+    }
     chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,execution:{
       observe(_id,listener){observe=listener;return()=>{};},async cancel(){},
     }});
     await chat.ready;
+    if (interruption==='research-disconnected') observe({connection:'available',execution:f.detail.conversation.execution});
     if (interruption==='disconnected') {
       observe({connection:'unavailable'});
       observe({connection:'available'});
       assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/^Connection restored\.$/);
     }
-    f.view.root.querySelector('form').fire('submit');
+    const form=f.view.root.querySelector('form');
+    if (interruption==='research-disconnected') form.fire('submit',{submitter:named(form,'Search web')});
+    else form.fire('submit');
     await until(()=>started);
-    if (interruption==='disconnected') observe({connection:'unavailable'});
+    if (disconnected) observe({connection:'unavailable'});
     else observe({resourceAvailable:false});
     if (interruption==='restored') await chat.refresh();
     checkpoint.resolve();
@@ -1383,14 +1392,19 @@ for (const interruption of ['revoked','restored','disconnected']) test('a send c
     assert.equal(f.calls.filter(call=>call.name==='send').length,0);
     assert.equal(f.draft.content,'Saved unsent text');
     assert.match(f.view.root.querySelector('.cp-chat-status').textContent,
-      interruption==='disconnected'?/reconnect.*send again/i:interruption==='restored'?/access changed.*send again/i:/no longer available/);
-    if (interruption==='disconnected') {
+      interruption==='research-disconnected'?/reconnect.*search web again/i:disconnected?/reconnect.*send again/i:interruption==='restored'?/access changed.*send again/i:/no longer available/);
+    if (disconnected) {
       const send=f.view.root.querySelector('[data-cp-control="send"]');
       assert.equal(send.disabled,true);
       observe({connection:'unavailable'});
       observe({connection:'available'});
       assert.equal(send.disabled,false);
-      assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/connection restored.*press send/i);
+      const restored=interruption==='research-disconnected'?/connection restored.*search web/i:/connection restored.*press send/i;
+      assert.match(f.view.root.querySelector('.cp-chat-status').textContent,restored);
+      if (interruption==='research-disconnected') {
+        observe({connection:'available',execution:f.detail.conversation.execution});
+        assert.match(f.view.root.querySelector('.cp-chat-status').textContent,restored);
+      }
       assert.equal(f.calls.filter(call=>call.name==='send').length,0);
     }
   } finally {checkpoint.resolve();await chat?.dispose();f.restore();}

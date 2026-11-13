@@ -439,7 +439,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   }
   const session = options.draftSession ?? new ConversationDraftSession({ resourceId, port, ...(options.initialDraft === undefined ? {} : { initialContent: options.initialDraft }) });
   const copy = options.copy ?? (text => navigator.clipboard.writeText(text));
-  const report = (text: string,kind:'notice'|'send-accepted'|'connection-unavailable'|'send-held-offline'='notice') => {
+  const report = (text: string,kind:'notice'|'send-accepted'|'connection-unavailable'|'send-held-offline'|'research-held-offline'='notice') => {
     if (disposed) return;
     if (status.textContent !== text) status.textContent = statusDetail.textContent = text;
     else if (status.dataset.statusKind === kind) return;
@@ -875,7 +875,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         return;
       }
       if (connection === 'unavailable') {
-        report('Your draft is saved. Reconnect, then press Send again.', 'send-held-offline');
+        report(webSearch?'Your draft is saved. Reconnect, then choose Search web again.':'Your draft is saved. Reconnect, then press Send again.',
+          webSearch?'research-held-offline':'send-held-offline');
         return;
       }
       if (model) {
@@ -1043,20 +1044,30 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     // An activity signal cannot grant access. Only a later successful canonical detail read restores it.
     if(accessRevoked)return;
     if(observation.connection)connection=observation.connection;
+    const statusKind=status.dataset.statusKind;
+    const heldOffline=statusKind==='send-held-offline'||statusKind==='research-held-offline';
+    const research=statusKind==='research-held-offline';
+    const next=observation.execution??execution;
+    const keepHeldNotice=heldOffline&&(!next||next.id===execution?.id&&next.state===execution.state&&
+      !['dispatching','running','unknown'].includes(next.state));
     if(connection==='unavailable'){
       streamText.textContent='';stream.hidden=true;lastCursor=-1;seenEvents.clear();streamLimited=false;liveFollow=false;
-      if(execution||status.dataset.statusKind!=='send-held-offline') {
+      if(keepHeldNotice) {
+        report(research?'Your draft is saved. Reconnect, then choose Search web again.':'Your draft is saved. Reconnect, then press Send again.',statusKind);
+      } else {
         report('Connection unavailable. '+(execution?'Last observed: '+execution.state+'. Outcome unconfirmed.':'Execution state is unavailable.'), 'connection-unavailable');
       }
       renderDraft();
     }
-    const next=observation.execution??execution;
+    if(keepHeldNotice&&observation.connection==='available'){
+      renderDraft();
+      const action=research?'Choose Search web to retry.':'Press Send to submit your saved draft.';
+      report((research?web:send).disabled?'Connection restored. Your draft is saved.':'Connection restored. '+action,statusKind);
+    }
     if(!next){
-      if(observation.connection==='available'){
+      if(observation.connection==='available'&&!keepHeldNotice){
         renderDraft();
-        if(status.dataset.statusKind==='send-held-offline') {
-          report(send.disabled?'Connection restored. Your draft is saved.':'Connection restored. Press Send to submit your saved draft.');
-        } else if(status.dataset.statusKind==='connection-unavailable') report('Connection restored.');
+        if(statusKind==='connection-unavailable') report('Connection restored.');
       }
       return;
     }
@@ -1089,7 +1100,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(streamText.textContent!==previousPreview&&wasFollowing&&!feedbackOpen&&!stream.hidden){presentationAnchor=null;liveFollow=true;options.motion?.wake();}
     const label=current?.providers.find(p=>p.id===next.providerId)?.label??next.providerId;
     const researchRunning=webSearchCommandId===next.commandId&&next.providerId==='chatgpt-plan-responses'&&next.state==='running';
-    report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':stopRequestedFor?stopStatus:researchRunning?(streamText.textContent?.trim()?'Writing the research reply…':'Web research is running.'):next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
+    if(!keepHeldNotice) report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':stopRequestedFor?stopStatus:researchRunning?(streamText.textContent?.trim()?'Writing the research reply…':'Web research is running.'):next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));
+    renderDraft();
     if(recoveredStop)report('Reply stopped. Your draft is still here.');
     if(recoveredFailure)report(recoveredFailure);
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
