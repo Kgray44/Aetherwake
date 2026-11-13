@@ -52,7 +52,8 @@ export function readBlindInputs(bytes: Buffer): readonly BlindCase[] {
  * No fallback inference, retries, fabricated predictions, credential reader or promotion. */
 export async function runBlindCie(bytes: Buffer, candidate: Candidate,
   run: (input: Readonly<BlindPayload>, signal: AbortSignal) => Promise<unknown>, signal: AbortSignal,
-  options: { maxCases?: number; resume?: BlindCheckpoint; journal?: BlindJournal } = {}): Promise<BlindCheckpoint> {
+  options: { maxCases?: number; resume?: BlindCheckpoint; journal?: BlindJournal;
+    canStartCase?: (signal: AbortSignal) => Promise<boolean> } = {}): Promise<BlindCheckpoint> {
   if (![candidate.commit, candidate.tree].every(value => /^[a-f0-9]{40}$/.test(value))) throw new Error('candidate_identity');
   const inputs = readBlindInputs(bytes);
   const maxCases = options.maxCases ?? inputs.length;
@@ -88,6 +89,8 @@ export async function runBlindCie(bytes: Buffer, candidate: Candidate,
     journalState = next;
   };
   for (const input of inputs.slice(results.length, results.length + maxCases)) {
+    if (signal.aborted) { stopped = { caseId: input.id, kind: 'cancelled' }; break; }
+    if (options.canStartCase && !await options.canStartCase(signal)) break;
     if (signal.aborted) { stopped = { caseId: input.id, kind: 'cancelled' }; break; }
     if (journal) await persist(input.id);
     // The host must include qualification/preparation inside this callback. No labels exist here.

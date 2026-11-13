@@ -63,6 +63,8 @@ For host-managed restart protection, supply `journal` in place of `resume`. Its 
 
 `openBlindJournal(path)` provides a SQLite implementation for a dedicated file in the host's evaluation evidence directory. It uses synchronous commits and conditional updates, and limits each JSON checkpoint to 2 MiB. The host retains the file across batches and closes the connection when finished. Use a separate file per evaluation arm. Live dispatch still depends on a host that can reconcile in-flight cases against canonical execution receipts and enforce the daily call budget.
 
+Before claiming each case, the runner can call the host's `canStartCase` gate. The provided `canStartReviewedCieCase` helper reads the native `velaApiUsageStatus` projection and requires room for all six calls disclosed by native review. A budget stop leaves the next case unclaimed for a later batch. This is a preflight check. The canonical runtime still enforces its daily limit at dispatch.
+
 The AEP report groups reported model executions by exact reported model. Dispatch totals and unknown states are distinct. Token sums cover only dispatched executions with consistent usage receipts, with sample coverage shown. These totals describe observed dispatch and usage and do not establish what was billed.
 
 ### Independent lexical holdout baseline

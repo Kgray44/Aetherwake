@@ -4,8 +4,34 @@ import { mkdtempSync, readFileSync, rmSync, rmdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openBlindJournal } from './blind-journal.mts';
+import { canStartReviewedCieCase } from './native-budget.mts';
 import { readBlindInputs, runBlindCie } from './blind-runner.mts';
 const bytes = readFileSync(new URL('./cases.public.json', import.meta.url));
+
+test('a daily budget stop leaves a resumable prefix without claiming the next case', async () => {
+  const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const journal = openBlindJournal(':memory:');
+  let usedToday = 58;
+  const seen: string[] = [];
+  const signal = new AbortController().signal;
+  const run = () => runBlindCie(bytes, identity, async input => {
+    seen.push(input.id);
+    usedToday += 6;
+    return { status: 'synthetic' };
+  }, signal, { journal, maxCases: 2, canStartCase: signal => canStartReviewedCieCase(async () => ({
+    enabled: true, configurationVersion: 1, maxOutputTokens: 2048, requestsPerDay: 64, usedToday,
+  }), signal) });
+  try {
+    const stopped = await run();
+    assert.equal(stopped.stopped, null);
+    assert.equal((await journal.read())?.inFlight, null);
+    assert.deepEqual(seen, ['blind-001']);
+    usedToday = 0;
+    const resumed = await run();
+    assert.deepEqual(seen, ['blind-001', 'blind-002', 'blind-003']);
+    assert.deepEqual(resumed.results.slice(0, 1), stopped.results);
+  } finally { journal.close(); }
+});
 
 test('SQLite journal survives reopen and refuses a stale claim from another connection', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'aerynth-cie-journal-'));
