@@ -55,6 +55,8 @@ A later full-request run at runtime revision `77ffef48` passed all 24 canonical 
 
 With alternating order and an untimed warmup on each profile, the same project fixture at runtime revision `47655d35` passed 36 canonical answer checks, including 12 warmups. Over 12 pairs, cold qualification measured 9,348 ms p50 and 14,276 ms p95. Reused qualification measured 6,855 ms p50 and 10,559 ms p95. The paired cold-minus-warm median was 1,270 ms. The two arms made five and three simulated calls respectively. The consent reset can affect state beyond the qualification receipts, and these local timings do not measure live provider variability.
 
+A separate synthetic native test holds both independent qualification calls in flight through the existing runtime. Each passes its own stage review and produces a different contract receipt. Canonical usage counts both calls and the runtime rejects a third dispatch while both slots are occupied. The production path still runs the probes sequentially. Parallel scheduling would need to account for available slots, the remaining call budget, and the effect of a failure in either probe.
+
 ## Independent blind corpus
 
 `cases.public.json` is the independently authored, frozen input-only 48-case corpus (six examples in each of eight categories). Its exact SHA-256 is pinned in `blind-runner.mts`. Labels and adjudication rationales are deliberately not checked in and have not been consulted by the implementer. The fixture file expands semantic evaluation inputs sixfold over the original eight-case set; **that is corpus expansion, not a claimed measured accuracy gain**.

@@ -4,7 +4,7 @@ import {createHash,createCipheriv,createDecipheriv,randomBytes} from 'node:crypt
 import {DatabaseSync} from 'node:sqlite';
 import {VelaApiConnection} from '../src/vela-api-connection.mts';
 import {VelaApiRuntime} from '../src/vela-api-runtime.mts';
-import { investigateReviewedVelaEvidence } from '../src/vela-semantic-history.mts';
+import { investigateReviewedVelaEvidence, qualifyVelaHistoryModelWithApi } from '../src/vela-semantic-history.mts';
 import {createCapabilityCatalog} from '../../vela-core/src/capability-catalog.mts';
 import {CAPABILITIES} from '../../vela-core/src/capabilities.ts';
 
@@ -98,6 +98,49 @@ test('reviewed notes refresh catalog membership without repeating current semant
     assert.equal(f.bodies.length, 14);
     assert.equal(f.gets, 3);
   } finally {
+    await f.close();
+  }
+});
+
+test('independent CIE qualification probes can overlap under native admission', { timeout: 10_000 }, async () => {
+  const f = fixture();
+  let markArrived!: () => void;
+  let release!: () => void;
+  const arrived = new Promise<void>(resolve => { markArrived = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  const signal = AbortSignal.any([f.controller.signal, AbortSignal.timeout(8_000)]);
+  const probe = (stage: 'interpret' | 'assess') => qualifyVelaHistoryModelWithApi(f.runtime,
+    { configurationVersion: 1, model: 'gpt-6-luna', authorize: review => review.call.stage === stage && review.sources.length === 0 },
+    signal, undefined, [stage]);
+  const responseFor = async () => {
+    const { stage } = JSON.parse(f.bodies.at(-1).input[0].content);
+    if (f.bodies.length === 2) markArrived();
+    await released;
+    const value = stage === 'interpret' ? { version: 2, objective: 'Find the weekday', clarification: '',
+      perception: { kind: 'recall', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: [], verification: [] },
+      needs: [{ key: 'day', question: 'Which weekday?', query: 'pump inspection weekday' }] } :
+      { version: 3, clarification: '', assessment: [{ key: 'day', status: 'supported', query: '',
+        passages: [{ source: 'e1', quote: 'The pump inspection is on Tuesday.' }] }] };
+    return f.reply(false, JSON.stringify(value));
+  };
+  let running: ReturnType<typeof probe>[] = [];
+  try {
+    await f.ready();
+    f.replies.push(responseFor, responseFor);
+    running = [probe('interpret'), probe('assess')];
+    const results = Promise.all(running);
+    await Promise.race([arrived, results]);
+    assert.equal(f.bodies.length, 2);
+    assert.equal(f.runtime.usageStatus().usedToday, 2);
+    await assert.rejects(probe('interpret'), /vela_api_busy/);
+    assert.equal(f.bodies.length, 2);
+    release();
+    const receipts = await results;
+    assert.deepEqual(receipts.map(([receipt]) => receipt.stage), ['interpret', 'assess']);
+    assert.notEqual(receipts[0][0].contractDigest, receipts[1][0].contractDigest);
+  } finally {
+    release();
+    await Promise.allSettled(running);
     await f.close();
   }
 });
