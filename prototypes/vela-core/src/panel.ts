@@ -1248,7 +1248,18 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     if (chosen && !Array.from(nativeProject.options).some(option => option.value === chosen)) { const unavailable = el('option', undefined, 'Previously selected project · unavailable'); unavailable.value = chosen; unavailable.disabled = true; nativeProject.append(unavailable); } nativeProject.value = chosen; updateWorkspaceAvailability();
     renderConversation(state); contextBody.replaceChildren();
     if (state.conversation) contextBody.append(el('p', 'vela-core-meta', 'Conversation ' + state.conversation.resourceId + ' · revision ' + state.conversation.revision));
-    for (const request of state.requests.slice(-6).reverse()) { const item = disclosure(request.intent, 'vela-core-request-details'); item.body.append(el('p', undefined, velaPanelStatus({ requests: [request], plans: state.plans, receipts: state.receipts }).message), el('p', 'vela-core-meta', 'Included sources: ' + (request.context.included.map(ref => ref.title).join(', ') || 'none')), el('pre', undefined, JSON.stringify({ state: request.state, error: request.errorCode, manifest: request.context, invalidProposal: request.invalidProposal }, null, 2))); contextBody.append(item.node); }
+    for (const request of state.requests.slice(-6).reverse()) {
+      const item = disclosure(request.intent, 'vela-core-request-details');
+      item.body.append(
+        el('p', undefined, velaPanelStatus({ requests: [request], plans: state.plans, receipts: state.receipts }).message),
+        el('p', 'vela-core-meta', 'Included sources: ' + (request.context.included.map(ref => ref.title).join(', ') || 'none')),
+      );
+      if (request.memoryDisclosure) item.body.append(el('p', 'vela-core-meta', request.memoryDisclosure.state === 'simulated'
+        ? 'Simulated saved-memory delivery.' : 'Provider acknowledged the reviewed request with saved memory.'));
+      item.body.append(el('pre', undefined, JSON.stringify({ state: request.state, error: request.errorCode,
+        manifest: request.context, invalidProposal: request.invalidProposal }, null, 2)));
+      contextBody.append(item.node);
+    }
     mode.value = state.preferences.mode; monitor.checked = state.preferences.monitoringEnabled; delegation.checked = state.preferences.delegationEnabled; eventTypes.value = state.preferences.allowedEventTypes.join(', '); severity.value = state.preferences.minimumSeverity; budget.value = String(state.preferences.maxInterruptionsPerHour); renderAdaptation(state);
     const pending = state.attention.filter(item => !item.reviewedAt && !item.dismissedAt); attentionPanel.summary.textContent = pending.length ? pending.length + (pending.length === 1 ? ' update to review' : ' updates to review') : state.preferences.monitoringEnabled ? 'No new updates in your digest' : 'Attention digest is paused'; attention.replaceChildren();
     attentionControl.dataset.pendingCount = String(pending.length); attentionControl.setAttribute('aria-label', pending.length ? 'Attention, ' + pending.length + (pending.length === 1 ? ' update' : ' updates') : 'Attention');

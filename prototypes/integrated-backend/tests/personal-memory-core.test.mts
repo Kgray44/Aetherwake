@@ -1,3 +1,5 @@
+import type { VelaRequest, VelaState } from '../../vela-core/src/contracts.ts';
+import type { Execution } from '../src/contracts.mts';
 import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -284,6 +286,38 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     await assert.rejects(core.command('vela', { name: 'request', input: { ...revocationBinding,
       intent: beforeRevocation.intent, resourceIds: [], authorizeProvider: true, grantId } }), /stale_personal_context|personal_record_unavailable/);
     await assert.rejects(reviewRecall(beforeRevocation.intent), /personal_memory_no_eligible_context/);
+  } finally {
+    await core.command('close', {});
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Vela projects memory acknowledgement only for the matching readable request input', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aerynth-memory-projection-'));
+  const core = new BackendCore({ path: join(root, 'profile.sqlite'), provider: 'fixture', contentPolicy: 'synthetic-only' });
+  try {
+    const opened = await core.command('vela', { name: 'open', input: {} }) as VelaState;
+    const conversationId = opened.conversation!.resourceId;
+    const message = await core.command('addMessage', { resourceId: conversationId, role: 'user',
+      content: 'Synthetic reviewed request', expectedRevision: opened.conversation!.revision });
+    const owner = core as unknown as { vela: { state(): VelaState }; state: { executions: Record<string, Execution> } };
+    const actual = owner.vela.state.bind(owner.vela);
+    const request = { id: 'memory-request', conversationId, inputMessageId: message.id, reviewedMemory: true } as VelaRequest;
+    owner.vela.state = () => ({ ...actual(), requests: [{ ...request }] });
+    const receipt = { state: 'simulated' as const, manifestDigest: 'a'.repeat(64) };
+    const execution = { id: 'memory-execution', resourceId: conversationId, providerId: 'openai-api-vela',
+      commandId: 'vela-api:' + request.id, inputMessageId: message.id, memoryDisclosure: receipt } as Execution;
+    const projected = async () => ((await core.command('vela', { name: 'state', input: {} })) as VelaState).requests[0].memoryDisclosure;
+    assert.equal(await projected(), undefined);
+    owner.state.executions[execution.id] = execution;
+    assert.equal(await projected(), undefined);
+    execution.responseId = 'synthetic-provider-response';
+    assert.deepEqual(await projected(), receipt);
+    execution.inputMessageId = 'foreign-message';
+    assert.equal(await projected(), undefined);
+    execution.inputMessageId = message.id;
+    request.conversationId = 'foreign-conversation';
+    assert.equal(await projected(), undefined);
   } finally {
     await core.command('close', {});
     rmSync(root, { recursive: true, force: true });
