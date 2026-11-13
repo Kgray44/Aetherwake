@@ -22,12 +22,13 @@ export function createVelaClient(options: {
     const response = options.command("vela", { name: "request", input, submissionId }) as Promise<VelaRequest>;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const readReceipt = () => options.command("vela", {
+      name: "submissionStatus",
+      input: { submissionId },
+    }).catch(() => null) as Promise<VelaRequest | null>;
     const recovered = new Promise<VelaRequest>((resolve) => {
       async function check() {
-        const recorded = await options.command("vela", {
-          name: "submissionStatus",
-          input: { submissionId },
-        }).catch(() => null) as VelaRequest | null;
+        const recorded = await readReceipt();
         if (settled) return;
         if (recorded?.id) resolve(recorded);
         else timer = setTimeout(check, 750);
@@ -36,6 +37,14 @@ export function createVelaClient(options: {
     });
     try {
       return await Promise.race([response, recovered]);
+    } catch (error) {
+      if (error instanceof Error && /(?:^|: )backend_disconnected$/.test(error.message)) {
+        settled = true;
+        clearTimeout(timer);
+        const recorded = await readReceipt();
+        if (recorded?.id) return recorded;
+      }
+      throw error;
     } finally {
       settled = true;
       clearTimeout(timer);

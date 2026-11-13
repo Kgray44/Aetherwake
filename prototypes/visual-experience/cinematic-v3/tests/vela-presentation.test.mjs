@@ -48,6 +48,33 @@ test("a completed Vela submission survives a lost reply without sending again", 
   assert.deepEqual(changed, [{ name: "request", result: recorded }]);
 });
 
+for (const reason of ["backend_disconnected", "missing receipt", "authorization_cancelled"]) test("Vela handles a rejected submission with " + reason, async () => {
+  const recorded = { id: "canonical-request", state: "responded" };
+  const calls = [];
+  const client = createVelaClient({
+    command: async (_name, input) => {
+      calls.push(input);
+      if (input.name === "request") throw Error(reason === "missing receipt" ? "backend_disconnected" : reason);
+      assert.equal(input.name, "submissionStatus");
+      assert.equal(input.input.submissionId, calls[0].submissionId);
+      return reason === "missing receipt" ? null : recorded;
+    },
+    changed: async () => {},
+    observed() {},
+  });
+  const pending = client.request({ intent: "Check status", resourceIds: [], authorizeProvider: false });
+  if (reason === "backend_disconnected") {
+    assert.deepEqual(await pending, recorded);
+    assert.deepEqual(calls.map(call => call.name), ["request", "submissionStatus"]);
+  } else if (reason === "missing receipt") {
+    await assert.rejects(pending, /backend_disconnected/);
+    assert.deepEqual(calls.map(call => call.name), ["request", "submissionStatus"]);
+  } else {
+    await assert.rejects(pending, /authorization_cancelled/);
+    assert.deepEqual(calls.map(call => call.name), ["request"]);
+  }
+});
+
 test("a confirmed Vela response survives a failed workspace refresh", async () => {
   const recorded = { id: "canonical-request", state: "responded" };
   const operations = [];
