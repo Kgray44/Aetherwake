@@ -1032,7 +1032,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       else if (code === 'unsupported_model') report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');
       else if (code === 'unsupported_reasoning_effort') report('This model cannot use the requested thinking level. Your draft is still here.');
       else if (code === 'unsupported_web_search_model') report('This model cannot use web search. Your draft is still here.');
-      else if (attachments && ['document_text_unavailable','unsupported_document_attachment','source_selection_unavailable','source_selection_changed','source_changed','media_source_unavailable','document_extraction_busy'].includes(code)) {
+      else if (attachments && code === 'document_extraction_busy') {
+        if (!disposed && !accessRevoked) report('Another document is being prepared. Your draft is saved. Wait a moment, then press Send again.');
+      }
+      else if (attachments && ['document_text_unavailable','unsupported_document_attachment','source_selection_unavailable','source_selection_changed','source_changed','media_source_unavailable'].includes(code)) {
         if (!disposed && !accessRevoked && ['source_selection_unavailable','source_selection_changed','source_changed','media_source_unavailable'].includes(code)) {
           // Refresh the canonical projection of the saved versions without replacing them.
           await session.reload().catch(() => {});
