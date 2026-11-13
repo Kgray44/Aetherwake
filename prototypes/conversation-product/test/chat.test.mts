@@ -1453,6 +1453,31 @@ test('a disconnected ChatGPT plan keeps the draft editable and enables an explic
  }finally{await chat?.dispose();f.restore();}
 });
 
+test('local chat can stage an offline attachment without sending or changing provider', async () => {
+ const f = fixture('local');
+ let chat;
+ try {
+  const selected = {id:'file:offline',version:2,title:'Offline brief.txt'};
+  chat = mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   chooseDocument:async()=>selected});
+  await chat.ready;
+  const attach = named(f.view.root,'Attach document');
+  assert.equal(attach.hidden,false);
+  attach.fire('click');
+  await until(()=>!!named(f.view.root,'Offline brief.txt ×'));
+  await chat.flush();
+  assert.deepEqual(f.draft.documents,[selected]);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.match(f.view.root.querySelector('.cp-composer-documents').textContent,/Switch to ChatGPT/);
+  const composer = f.view.root.querySelector('form');
+  composer.fire('submit');
+  assert.equal(f.calls.some(call=>call.name==='send'||call.name==='selectProvider'),false);
+  named(f.view.root,'Offline brief.txt ×').fire('click');
+  await chat.flush();
+  assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,false);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
 test('a recovered unavailable document can be removed without losing the draft or sending', async () => {
  const f = fixture('chatgpt-plan-responses');
  let chat;

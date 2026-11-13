@@ -203,7 +203,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     renderDraft();
     try {
       const document = await options.chooseDocument();
-      if (!document || disposed || accessRevoked || !ordinaryPlan()) return;
+      if (!document || disposed || !canStageDocuments()) return;
       const { documents, phase } = session.snapshot();
       if (['loading', 'conflict', 'error'].includes(phase)) return;
       if (replacing) {
@@ -290,7 +290,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       },
       onSelect(value) {
         const { documents, phase } = session.snapshot();
-        if (disposed || accessRevoked || !ordinaryPlan() || sending || choosingDocument ||
+        if (disposed || !canStageDocuments() || sending || choosingDocument ||
             documents.length >= 4 || ['loading', 'conflict', 'error'].includes(phase)) return;
         const selected = list().find(item => key(item) === value);
         if (!selected) { report('This document is no longer available.'); return; }
@@ -304,6 +304,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const ordinaryPlan = () => current?.conversation.providerId === 'chatgpt-plan-responses'
     ? current.providers.find(item => item.id === 'chatgpt-plan-responses')
     : undefined;
+  const canStageDocuments = () => !accessRevoked && current?.conversation.state === 'active' &&
+    ['chatgpt-plan-responses','local'].includes(current.conversation.providerId);
   const effectiveModel = () => {
     const catalog = ordinaryPlan()?.modelOptions ?? [];
     const selected = options.models?.selections.get(resourceId);
@@ -429,6 +431,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   function renderDraft(snapshot: DraftSessionSnapshot = session.snapshot()) {
     if (disposed) return;
     const plan = ordinaryPlan();
+    const mayStageDocuments = canStageDocuments();
     const documents = accessRevoked ? [] : snapshot.documents;
     const documentsUnsupported = documents.length > 0 && !plan;
     const unavailableDocuments = documents.some(item => item.unavailable);
@@ -486,19 +489,21 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     checkOutcome.disabled = recovering;
     send.disabled = choosingDocument || planDisconnected || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
     web.hidden = !plan?.execute || !webSearchModel();
-    send.title = unavailableDocuments ? documentStatus.textContent ?? '' : planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : documentsUnsupported ? 'Switch to ChatGPT or remove the documents to send.' : '';
+    documentStatus.textContent = unavailableDocuments ? 'Remove or replace the unavailable documents to send.'
+      : documentsUnsupported ? 'Switch to ChatGPT or remove the documents to send.' : '';
+    send.title = documentStatus.textContent || (planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : '');
     web.disabled = send.disabled || web.hidden || !plan?.available || documents.length > 0;
-    attachDocument.hidden = !plan || !options.chooseDocument;
-    attachDocument.disabled = choosingDocument || sending || draftNeedsAttention || documents.length >= 4;
+    attachDocument.hidden = !mayStageDocuments || !options.chooseDocument;
+    attachDocument.disabled = !mayStageDocuments || choosingDocument || sending || draftNeedsAttention || documents.length >= 4;
     if (documentPicker) {
-      documentPicker.element.hidden = !plan;
-      documentPicker.update({ items: [], value: '', disabled: !plan || attachDocument.disabled });
+      documentPicker.element.hidden = !mayStageDocuments;
+      documentPicker.update({ items: [], value: '', disabled: attachDocument.disabled });
     }
     renderDocuments(documents);
     documentList.hidden = !documents.length;
-    documentStatus.hidden = !unavailableDocuments;
+    documentStatus.hidden = !documentStatus.textContent;
     for (const button of documentList.querySelectorAll('button'))
-      button.disabled = sending || choosingDocument || draftNeedsAttention || (button.dataset.replaceDocument === 'true' && !plan);
+      button.disabled = sending || choosingDocument || draftNeedsAttention || (button.dataset.replaceDocument === 'true' && !mayStageDocuments);
     send.dataset.state=needsSendReview()?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=stopRequestedFor?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = !!stopRequestedFor || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
   }
