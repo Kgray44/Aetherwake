@@ -25,9 +25,13 @@ test('API connection view is passive until a click, opens native setup without a
     button('usage').onclick(); await until(() => button('usage').textContent === 'Disable Vela API usage');
     assert.deepEqual(calls.at(-1),{type:'authorizeUsage',expectedVersion:1,enabled:true});
     assert.ok(dom.root.textContent.includes('API charges apply'));
+    assert.ok(dom.root.textContent.includes('without asking again'));
+    assert.ok(dom.root.textContent.includes('new sources or permissions still require review'));
     button('catalog').onclick(); await until(() => dom.root.textContent.includes('1 model listed'));
     assert.deepEqual(calls.slice(-3), [{ type: 'catalog', expectedVersion: 1 }, { type: 'status' }, {type:'usageStatus'}]);
     assert.ok(dom.root.textContent.includes('Access varies by model')); assert.equal(JSON.stringify(calls).includes('apiKey'), false);
+    button('usage').onclick(); await until(() => button('usage').textContent === 'Enable Vela API usage');
+    assert.deepEqual(calls.at(-1), {type:'authorizeUsage',expectedVersion:1,enabled:false});
   } finally { view.dispose(); restore(); }
 });
 
