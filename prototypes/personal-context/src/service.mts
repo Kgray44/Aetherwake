@@ -465,6 +465,7 @@ export class PersonalContextService {
       const candidates: { value: ReviewedFact; score: number; primary: boolean; anchored: boolean; proofs: ScopeProof[]; needs: number[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
       // On a miss or an uncovered evidence query, continue through a bounded older window.
       // Explicit scan limits are strict and a recent match needs no extra decryption.
+      const evidenceQueryCount = queries.length - 1;
       const matchedNeeds = new Set<number>();
       const recentScanLimit = input.maxScan ?? 128;
       const missScanLimit = input.maxScan ?? 512;
@@ -475,7 +476,7 @@ export class PersonalContextService {
         if (!this.inScope(head.scope!, input)) { omit('outside-scope'); continue; }
         if (head.scope!.kind === 'user.shared' && (!policy.sharingEnabled || !input.sharedFactIds.includes(head.id))) { omit('not-shared'); continue; }
         if (head.state !== 'active') { omit('inactive'); continue; }
-        if (scanned === recentScanLimit && (!candidates.length || matchedNeeds.size < queries.length - 1))
+        if (scanned === recentScanLimit && (!candidates.length || matchedNeeds.size < evidenceQueryCount))
           scanLimit = missScanLimit;
         if (scanned >= scanLimit) { omit('scan-limit'); continue; }
         scanned++;
@@ -513,9 +514,11 @@ export class PersonalContextService {
         const oldScopes = scopes.length; for (const proof of candidate.proofs) if (!scopes.some(value => same(value, proof))) scopes.push(proof);
         items.push(this.item(candidate.value));
         const reserved = new Map(omissions); reserved.set('byte-budget', candidateCount); reserved.set('item-budget', candidateCount);
+        if (evidenceQueryCount) reserved.set('unmatched-evidence-query', evidenceQueryCount);
         if (base(reserved).encodedBytes > input.maxBytes) { items.pop(); scopes.splice(oldScopes); omit('byte-budget'); }
         else for (const need of candidate.needs) packedNeeds.add(need);
       }
+      if (packedNeeds.size < evidenceQueryCount) omit('unmatched-evidence-query', evidenceQueryCount - packedNeeds.size);
       const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return structuredClone(result);
     });
   }
