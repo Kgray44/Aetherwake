@@ -2369,11 +2369,16 @@ export class BackendCore {
     if(!this.state.vela!.conversationId)this.state.vela!.conversationId=this.create('Vela','local').resourceId;
     const id=this.state.vela!.conversationId;this.requireVelaConversation(id);return id;
   }
+  private isMemoryDerivedOutput(messageId: string): boolean {
+    const evidence = this.state.messageEvidence[messageId];
+    const execution = evidence && this.state.executions[evidence.executionId];
+    return !!(execution?.reviewedMemory || execution?.memoryDisclosure);
+  }
   private async voiceContext(conversationId:string,purpose:Parameters<CanonicalVelaRuntimePort['context']>[0]['purpose']):Promise<LiveCanonicalContext> {
     return this.kernel.withTransaction(()=>{
       this.requireVelaConversation(conversationId);
       const interactive = purpose === 'conversation' || purpose === 'delegation';
-      const selected = interactive ? this.readVelaConversation(conversationId).messages.slice(-32).flatMap(({ id, role, content }) =>
+      const selected = interactive ? this.readVelaConversation(conversationId).messages.filter(message => !this.isMemoryDerivedOutput(message.id)).slice(-32).flatMap(({ id, role, content }) =>
         role === 'user' || role === 'assistant' ? [{ id, turn: { role, content } }] : []) : [];
       let history = selected.map(message => message.turn);
       while (Buffer.byteLength(JSON.stringify(history)) > 8192) {
@@ -2403,7 +2408,7 @@ export class BackendCore {
     const entry=this.voiceContexts.get(ref);ensure(entry&&entry.value.contextDigest===digest&&entry.expires>Date.now()&&entry.scopeStamp===this.velaScopeStamp(),'live_context_changed');
     this.requireVelaConversation(entry.value.conversationId);
     for (const source of entry.sources) {
-      ensure(this.conversationAccess.access(entry.value.conversationId, source.id), 'live_context_changed');
+      ensure(this.conversationAccess.access(entry.value.conversationId, source.id) && !this.isMemoryDerivedOutput(source.id), 'live_context_changed');
       const message = this.state.graph.messages.find(message => message.id === source.id);
       ensure(message && planningDigest(message.content) === source.digest, 'live_context_changed');
     }
@@ -2732,7 +2737,7 @@ export class BackendCore {
     const hostOptions: Parameters<typeof createCanonicalVelaHost>[0] = {db:this.db,transaction:work=>this.atomic(()=>work(this.db)),readTransaction:work=>this.kernel.withTransaction(work),metadata:purpose=>this.velaMetadata(purpose),currentContext:()=>this.velaContext(),
       permissions:{attentionPreferences:(_intent,c)=>c.principalId==='local-owner'&&c.policyVersion==='aerynth.local-owner@1',scope:(c,m)=>this.velaScope(c,m),metadata:(ref,_c,m)=>ref.kind==='resource'?!!m.resources.find(r=>r.id===ref.id&&r.visible!==false):ref.kind==='workspace'?m.workspaces.some(w=>w.id===ref.id):ref.kind==='collection'?!!m.collections?.some(c=>c.id===ref.id)&&this.conversationAccess.collection(ref.id,'read',ref.state==='archived'):m.projects.some(p=>p.id===ref.id),content:ref=>ref.kind==='resource'&&!!this.conversationAccess.resource(ref.id),authorize:request=>this.authorizeVelaPolicy(request),restoreCollection:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'organize',true),inspectCollectionArchiveReceipt:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'read',true)},
       revisions:{attentionPreferences:()=>this.vela.attentionPreferenceVersion(),conversation:id=>this.state.revisions[id]??null,workspace:id=>this.velaNative?.workspaceRevision?.(id)??Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0),collection:id=>Number(this.db.prepare('SELECT version FROM cp_collection_rules WHERE collection_id=?').get(id)?.version??0)},
-      conversations:{ensure:()=>this.ensureVelaConversation(),read:id=>this.readVelaConversation(id),append:(id,message)=>this.appendVelaMessage(id,message)},dispatch:{native:input=>this.applyVelaNative(input),prepareNative:{supports:action=>action.type==='readLocalFact'&&action.capabilityId==='system.battery'||action.type==='adjustWorkspace'||action.type==='recoverCreation'||action.type==='clockTimer'||action.type==='repairWorkspace'||action.type==='constructWorkspace'||action.type==='readWeather'||action.type==='createTimeline'&&action.source.kind==='github-commits',prepare:(input,signal)=>this.prepareVelaNative(input,signal)},delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
+      conversations:{ensure:()=>this.ensureVelaConversation(),read:id=>this.readVelaConversation(id),canIncludeInContext:id=>!this.isMemoryDerivedOutput(id),append:(id,message)=>this.appendVelaMessage(id,message)},dispatch:{native:input=>this.applyVelaNative(input),prepareNative:{supports:action=>action.type==='readLocalFact'&&action.capabilityId==='system.battery'||action.type==='adjustWorkspace'||action.type==='recoverCreation'||action.type==='clockTimer'||action.type==='repairWorkspace'||action.type==='constructWorkspace'||action.type==='readWeather'||action.type==='createTimeline'&&action.source.kind==='github-commits',prepare:(input,signal)=>this.prepareVelaNative(input,signal)},delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
         ensure(this.velaNative?.applyPreference,'vela_preference_capability_unavailable');this.requireVelaPolicyGrant(input.authorizationRef,undefined,'adaptation');return this.velaNative.applyPreference(input);
       }}};
     this.velaHost=createCanonicalVelaHost(hostOptions);
@@ -3136,7 +3141,7 @@ export class BackendCore {
           commandId: 'vela-api:' + input.requestId, state: 'dispatching', binding: null, turnId: null, startedAt: now(), endedAt: null,
           taskVerified: false, connectionVersion: preview.connectionVersion, requestedModel: preview.route!.model,
           requestBodyDigest: review.bodyDigest, contextDigest: review.contextDigest, instructionVersion: VELA_IDENTITY_VERSION,
-          inputMessageId: preview.acceptedAppend?.messageId };
+          inputMessageId: preview.acceptedAppend?.messageId, ...(preview.memoryRecall ? { reviewedMemory: true } : {}) };
         this.admitVelaAttempt(execution);
         this.state.executions[executionId] = execution;
         this.record('execution/dispatching', 'observed', undefined, randomUUID(), { providerId: VELA_API_PROVIDER,
@@ -6101,7 +6106,7 @@ export class BackendCore {
       // The clock writes both messages atomically. Keep past device-local turns out of automatic egress.
       if (message.provenance === 'device_clock' || (message.role === 'user' && ownMessages.get(conversation.ownMessageIds[index + 1])?.provenance === 'device_clock')) continue;
       const evidence = this.state.messageEvidence[id];
-      if (evidence && this.state.executions[evidence.executionId]?.reviewedMemory) continue;
+      if (this.isMemoryDerivedOutput(id)) continue;
       if (evidence?.outputState === 'partial' || unavailable.has(id) || !this.conversationReadAccess(input.resourceId, id)) continue;
       ensure(message.role === 'user' || message.role === 'assistant', 'ordinary_history_role_unsupported');
       const item = { role: message.role, content: message.content };
