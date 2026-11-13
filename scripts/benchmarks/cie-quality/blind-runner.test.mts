@@ -1,8 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, rmdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { openBlindJournal } from './blind-journal.mts';
 import { readBlindInputs, runBlindCie } from './blind-runner.mts';
 const bytes = readFileSync(new URL('./cases.public.json', import.meta.url));
+
+test('SQLite journal survives reopen and refuses a stale claim from another connection', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'aerynth-cie-journal-'));
+  const path = join(directory, 'evaluation.sqlite');
+  const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const signal = new AbortController().signal;
+  let calls = 0;
+  const host = async () => { calls++; return { status: 'synthetic' }; };
+  try {
+    const writer = openBlindJournal(path);
+    try {
+      const competitor = openBlindJournal(path);
+      try {
+        const checkpoint = await runBlindCie(bytes, identity, host, signal, { journal: writer, maxCases: 1 });
+        assert.equal(await competitor.compareAndSet(null, { checkpoint, inFlight: 'blind-001' }), false);
+        const previous = await writer.read();
+        assert.equal(await writer.compareAndSet(previous, { checkpoint, inFlight: 'blind-002' }), true);
+        assert.equal(await competitor.compareAndSet(previous, { checkpoint, inFlight: null }), false);
+      } finally { competitor.close(); }
+    } finally { writer.close(); }
+    const reopened = openBlindJournal(path);
+    try {
+      await assert.rejects(runBlindCie(bytes, identity, host, signal, { journal: reopened }), /blind_case_unreconciled/);
+      assert.equal(calls, 1);
+      assert.equal((await reopened.read())?.inFlight, 'blind-002');
+    } finally { reopened.close(); }
+  } finally {
+    rmSync(path, { force: true });
+    rmSync(path + '-journal', { force: true });
+    rmdirSync(directory);
+  }
+});
 test('independently frozen 48-case inputs contain no labels or rationales', () => {
   const cases = readBlindInputs(bytes);
   assert.equal(cases.length, 48);

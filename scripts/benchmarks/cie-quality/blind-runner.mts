@@ -18,7 +18,7 @@ interface BlindJournalState {
   checkpoint: BlindCheckpoint;
   inFlight: string | null;
 }
-interface BlindJournal {
+export interface BlindJournal {
   read(): Promise<BlindJournalState | null>;
   /** Atomically compare durable state and commit the next state before resolving. */
   compareAndSet(expected: BlindJournalState | null, next: BlindJournalState): Promise<boolean>;

@@ -61,6 +61,8 @@ For a controlled multi-day run, pass a host-approved `maxCases` and persist each
 
 For host-managed restart protection, supply `journal` in place of `resume`. Its compare-and-set must atomically compare the stored state and durably persist the replacement. The runner claims each case before calling the host and clears the claim after storing a completed prediction. A lost receipt leaves a claim that blocks replay until the host reconciles it with canonical execution evidence. A completed journal returns its existing predictions without dispatching. The journal interface tracks evaluation progress. Provider timing and usage stay in canonical AEP receipts.
 
+`openBlindJournal(path)` provides a SQLite implementation for a dedicated file in the host's evaluation evidence directory. It uses synchronous commits and conditional updates, and limits each JSON checkpoint to 2 MiB. The host retains the file across batches and closes the connection when finished. Use a separate file per evaluation arm. Live dispatch still depends on a host that can reconcile in-flight cases against canonical execution receipts and enforce the daily call budget.
+
 The AEP report groups reported model executions by exact reported model. Dispatch totals and unknown states are distinct. Token sums cover only dispatched executions with consistent usage receipts, with sample coverage shown. These totals describe observed dispatch and usage and do not establish what was billed.
 
 ### Independent lexical holdout baseline
