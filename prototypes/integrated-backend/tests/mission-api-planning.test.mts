@@ -333,16 +333,23 @@ test('composed artifact mission retains verified files when a native branch fail
     }
     const { id } = await start;
     const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
-    const settle = async () => {
+    const settle = async (phase: 'initial' | 'retry') => {
       const deadline = performance.now() + (live ? 125_000 : 7_000);
+      let mission: MissionProjection;
       do {
-        const mission = await read();
+        mission = await read();
         if (!['running', 'queued'].includes(mission.outcome)) return mission;
         await delay(30);
       } while (performance.now() < deadline);
-      throw Error('composed_artifact_mission_deadline');
+      throw Error(`composed_artifact_mission_deadline ${JSON.stringify({
+        phase,
+        outcome: mission.outcome,
+        waits: mission.waits,
+        admission: mission.admission?.reasons,
+        tasks: JSON.parse(nativeMissionDiagnostics(mission)),
+      })}`);
     };
-    const first = await settle();
+    const first = await settle('initial');
     assert.equal(first.outcome, 'failed', JSON.stringify(first.tasks.map(task => [task.id, task.state, task.detail])));
     const image = first.tasks.find(task => task.id === 'illustration')!;
     const notes = first.tasks.find(task => task.id === 'notes')!;
@@ -356,7 +363,7 @@ test('composed artifact mission retains verified files when a native branch fail
     await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version,
       content: 'Aerynth backend performance observation: collect repeated native timer and memory samples before attributing a slowdown.' });
     await f.core.command('missions', { name: 'control', input: { id, revision: first.revision, control: { type: 'retry', taskId: notes.id } } });
-    const result = await settle();
+    const result = await settle('retry');
     const elapsedMs = performance.now() - timingStarted, processCpu = process.cpuUsage(cpuStarted);
     assert.equal(result.outcome, 'verified', JSON.stringify(result.tasks.map(task => [task.id, task.state, task.detail])));
     assert.deepEqual(result.tasks.find(task => task.id === image.id)?.attempts, image.attempts);
