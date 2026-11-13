@@ -59,13 +59,18 @@ test('conversation timing joins only a preview that finished in the same clock d
 function fixture() {
   const base = resolve(tmpdir()), dir = mkdtempSync(join(base,'aerynth-api-runtime-')), path = join(dir,'canonical.sqlite'), requests: any[] = [], events: StreamEvent[] = [], replies: ((body:any)=>Response|Promise<Response>)[] = [];
   const encryptionKey = randomBytes(32);
+  let catalogRequests=0, catalogGate:Promise<void>|undefined;
   const nativeHost: NativeHostServices = { secrets: {
     available: async () => true,
     seal: async text => { const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm',encryptionKey,iv); return Buffer.concat([iv,cipher.update(text),cipher.final(),cipher.getAuthTag()]); },
     open: async bytes => { const data = Buffer.from(bytes), cipher = createDecipheriv('aes-256-gcm',encryptionKey,data.subarray(0,12)); cipher.setAuthTag(data.subarray(-16)); return Buffer.concat([cipher.update(data.subarray(12,-16)),cipher.final()]).toString(); },
   } };
   const api = { fetch: (async (url,init) => {
-    if (url === 'https://api.openai.com/v1/models') return Response.json({data:[{id:'gpt-6-luna'},{id:'gpt-6.1-sol'}]});
+    if (url === 'https://api.openai.com/v1/models') {
+      catalogRequests++;
+      await catalogGate;
+      return Response.json({data:[{id:'gpt-6-luna'},{id:'gpt-6.1-sol'}]});
+    }
     assert.equal(url,'https://api.openai.com/v1/responses');
     assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
     const body = JSON.parse(String(init?.body)); requests.push(body); const reply = replies.shift(); assert.ok(reply,'unexpected API inference'); return reply(body);
@@ -74,6 +79,8 @@ function fixture() {
   const create = () => new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only'},event=>events.push(event),nativeHost,undefined,api);
   core = create();
   return { get core() { return core; }, requests, replies, events,
+    get catalogRequests(){return catalogRequests;},
+    holdCatalog(gate:Promise<void>){catalogGate=gate;},
     async configure() { return core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:marker},expectedVersion:null}); },
     async authorize() { return core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true}); },
     async send(intent: string, extra: Record<string,unknown> = {}): Promise<VelaRequest> {
@@ -86,6 +93,145 @@ function fixture() {
     async close() { if(!(core as any).closed) await core.command('close',{}); const part=relative(base,resolve(dir)); assert.ok(part.startsWith('aerynth-api-runtime-')&&!part.startsWith('..')&&!isAbsolute(part)); rmSync(dir,{recursive:true,force:true}); },
   };
 }
+
+test('private ledger reads preserve profile identity and refuse incomplete or unknown receipt sets after restart', async () => {
+  const f = fixture(), other = fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const runtime = () => (f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+    const profile = runtime().readLedgerProfile()!;
+    assert.match(profile.profileId,/^[0-9a-f-]{36}$/);
+    assert.notEqual((other.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime.readLedgerProfile()?.profileId,profile.profileId);
+    f.replies.push(()=>response('Synthetic completed answer.'));
+    const request = await f.send('Explain ocean currents.');
+    assert.equal(request.state,'responded');
+    const admitted=runtime().receiptsForRequest(request.id);
+    assert.equal(admitted.length,1);
+    const expected=[{requestId:request.id,executionId:admitted[0].executionId}];
+    const scope = {profileId:profile.profileId,configurationVersion:1,expected};
+    const result = runtime().readLedgerReceipts(scope);
+    assert.equal(result.state,'terminal-receipts');
+    if(result.state==='terminal-receipts'){
+      assert.equal(result.receipts.length,1);
+      assert.equal(result.receipts[0].requestId,request.id);
+      assert.equal(result.receipts[0].totalTokens,28);
+      assert.equal(result.receipts[0].outcome,'completed');
+    }
+    const db=(f.core as unknown as {db:DatabaseSync}).db;
+    db.prepare(`INSERT INTO vela_api_runs(execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state)
+      VALUES('synthetic-interrupted','synthetic-interrupted',1,?,'body','context','dispatching')`).run(new Date().toISOString().slice(0,10));
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,expected:[
+      ...expected,{requestId:request.id,executionId:'missing-next-stage'},
+    ]}),{state:'unresolved'});
+    await f.reopen();
+    const reopenedDb=(f.core as unknown as {db:DatabaseSync}).db;
+    const changes=()=>reopenedDb.prepare('SELECT total_changes() AS n').get()?.n;
+    const before=changes();
+    assert.equal(runtime().readLedgerProfile()?.profileId,profile.profileId);
+    assert.deepEqual(runtime().readLedgerReceipts(scope),result);
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,expected:[
+      ...expected,{requestId:'synthetic-interrupted',executionId:'synthetic-interrupted'},
+    ]}),{state:'unresolved'});
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,expected:[{requestId:request.id,executionId:'missing'}]}),{state:'unresolved'});
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,configurationVersion:2}),{state:'unresolved'});
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,profileId:'other'}),{state:'unresolved'});
+    assert.equal(changes(),before);
+    assert.equal(f.requests.length,1);
+  } finally { await f.close(); await other.close(); }
+});
+
+test('CIE preflight refuses a stale catalog without dispatching or joining an in-flight refresh', async () => {
+  const f=fixture();
+  let release!:()=>void, refreshing:Promise<string[]>|undefined;
+  try {
+    await f.configure();
+    await f.authorize();
+    const runtime=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+    const profile=runtime.readLedgerProfile()!;
+    await assert.rejects(runtime.modelsFromCurrentCatalog(1),/api_catalog_stale/);
+    assert.equal(f.catalogRequests,0);
+    f.holdCatalog(new Promise<void>(resolve=>{release=resolve;}));
+    refreshing=runtime.models(1);
+    for(let i=0;i<50&&f.catalogRequests===0;i++)await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(f.catalogRequests,1);
+    const unresolved=runtime.readLedgerReceipts({profileId:profile.profileId,configurationVersion:1,
+      expected:[{requestId:'synthetic-preflight-interrupted',executionId:'synthetic-preflight-interrupted'}]});
+    assert.deepEqual(unresolved,{state:'unresolved'});
+    await assert.rejects(runtime.modelsFromCurrentCatalog(1),/api_catalog_stale/);
+    assert.equal(f.requests.length,0);
+    assert.equal(runtime.readLedgerProfile()?.usage.usedToday,0);
+    release();
+    await refreshing;
+    assert.deepEqual(await runtime.modelsFromCurrentCatalog(1),['gpt-6-luna','gpt-6.1-sol']);
+    assert.equal(f.catalogRequests,1);
+  } finally {
+    release?.();
+    await refreshing?.catch(()=>{});
+    await f.close();
+  }
+});
+
+test('CIE dispatch refuses a catalog that expired after preflight without refreshing it', async () => {
+  const f=fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const {velaApiRuntime:runtime,velaApiConnection:connection}=f.core as unknown as {
+      velaApiRuntime:VelaApiRuntime;velaApiConnection:import('../src/vela-api-connection.mts').VelaApiConnection;
+    };
+    await runtime.models(1);
+    await runtime.modelsFromCurrentCatalog(1);
+    // Simulate expiration at the existing cache boundary without changing the
+    // global clock or the catalog rules used by other tests.
+    connection.resolveCatalog=async()=>{throw Object.assign(new Error('api_catalog_stale'),{code:'api_catalog_stale'});};
+    const requestId='synthetic-expired-cie-catalog';
+    const {result}=await runtime.run({
+      requestId,version:1,model:'gpt-6-luna',prompt:'Synthetic reviewed question',contextDigest:'a'.repeat(64),
+      currentCatalogOnly:true,validate(){},
+    },new AbortController().signal);
+    assert.equal(result.outcome,'failed');
+    assert.equal(result.dispatched,false);
+    assert.equal(f.catalogRequests,1);
+    assert.equal(f.requests.length,0);
+    assert.equal(runtime.receiptsForRequest(requestId)[0]?.state,'failed');
+  } finally {await f.close();}
+});
+
+test('CIE claim binds admitted stages atomically and survives restart without permitting replay', async () => {
+  const f=fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const runtime=()=> (f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+    const claim={profileId:runtime().readLedgerProfile()!.profileId,configurationVersion:1,
+      claimToken:'a'.repeat(64),bindingDigest:'b'.repeat(64)};
+    runtime().beginEvaluationClaim(claim);
+    assert.deepEqual(runtime().readEvaluationAdmissions(claim),[]);
+    assert.throws(()=>runtime().beginEvaluationClaim(claim),/vela_evaluation_claim_exists/);
+    await runtime().models(1);
+    const input={requestId:'synthetic-claim-stage',version:1,model:'gpt-6-luna',prompt:'Synthetic stage',
+      contextDigest:'c'.repeat(64),currentCatalogOnly:true as const,evaluationClaim:claim,validate(){}};
+    const signal=new AbortController().signal;
+    const rollback=await runtime().run({...input,stage(){throw Error('synthetic stage transaction failure');}},signal);
+    assert.equal(rollback.result.dispatched,false);
+    assert.deepEqual(runtime().readEvaluationAdmissions(claim),[]);
+    f.replies.push(()=>response('Synthetic stage answer.'));
+    const admitted=await runtime().run(input,signal);
+    assert.equal(admitted.result.outcome,'completed');
+    const expected=[{requestId:input.requestId,executionId:admitted.executionId}];
+    assert.deepEqual(runtime().readEvaluationAdmissions(claim),expected);
+    assert.equal(runtime().readEvaluationAdmissions({...claim,bindingDigest:'d'.repeat(64)}),null);
+    const duplicate=await runtime().run(input,signal);
+    assert.equal(duplicate.result.dispatched,false);
+    await f.reopen();
+    assert.deepEqual(runtime().readEvaluationAdmissions(claim),expected);
+    assert.equal(runtime().readLedgerReceipts({...claim,expected}).state,'terminal-receipts');
+    await assert.rejects(runtime().run({...input,requestId:'synthetic-new-stage-after-restart'},signal),/vela_evaluation_claim_invalid/);
+    assert.equal(f.requests.length,1);
+    assert.equal(runtime().readLedgerProfile()?.usage.usedToday,1);
+  } finally {await f.close();}
+});
 
 const weatherQuery:WeatherQuery={startDate:null,endDate:null,period:'tomorrow',metrics:['temperature','humidity'],aggregation:'range'};
 const weatherCall=(query:unknown=weatherQuery,id='resp-weather',callId='call-weather')=>response('',id,[{type:'function_call',id:'fc-'+callId,call_id:callId,name:WEATHER_TOOL_NAME,arguments:JSON.stringify(query),status:'completed'}] as any);

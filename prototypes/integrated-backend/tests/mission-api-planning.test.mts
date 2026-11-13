@@ -24,6 +24,10 @@ import { docxFixture } from '../../block-library/tests/media-fixtures.mts';
 import { missionDraftImageModel, missionImageModel } from '../../openai-provider/images.mts';
 import { writeMissionArtifacts } from '../src/mission-artifacts.mts';
 import { preflightArtifactEvidence, retainArtifactEvidence, verifyArtifactEvidence } from './helpers/artifact-evidence.mts';
+import { runBlindCie, type BlindPayload } from '../../../scripts/benchmarks/cie-quality/blind-runner.mts';
+import { openBlindJournal } from '../../../scripts/benchmarks/cie-quality/blind-journal.mts';
+import { canStartReviewedCieCase } from '../../../scripts/benchmarks/cie-quality/native-budget.mts';
+import { runNativeCieBatch, type NativeCieClaim } from '../../../scripts/benchmarks/cie-quality/native-batch.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
 const marker='SYNTHETIC_ONLY_MISSION_API_KEY';
 const graph={tasks:[{capability:'cpu',after:[]},{capability:'ram',after:[]},{capability:'backend',after:['cpu','ram']}],unsupported:['Server tick timings and logs are unavailable.']};
@@ -1551,6 +1555,358 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
   } finally { await f.close(); }
 });
 
+type BlindObservedRequest = { input?: { content?: string }[]; instructions?: string };
+function collectBlindEvidenceAudit(requests: readonly BlindObservedRequest[], request: string,
+  sources: readonly { fixtureId: string; sourceId: string; title: string; text: string; canary?: string }[]) {
+  const assessments: { round: number; excerpts: { handle: string; title?: string; text: string }[] }[] = [];
+  const compositions: Awaited<ReturnType<typeof import('../src/vela-semantic-history.mts').investigateReviewedVelaEvidence>>[] = [];
+  const inputText = (value: unknown): string[] => {
+    if (typeof value === 'string') return [value];
+    if (Array.isArray(value)) return value.flatMap(inputText);
+    return value && typeof value === 'object' ? Object.values(value).flatMap(inputText) : [];
+  };
+  const outbound = requests.map(body => {
+    const inputs = [body.instructions, ...(body.input ?? []).map(item => item.content)];
+    const parsed = inputs.map(input => {
+      try { return typeof input === 'string' ? JSON.parse(input) : null; } catch { return null; }
+    });
+    const payload = parsed[1];
+    const decoded = [...inputs, ...parsed.flatMap(inputText)];
+    const includes = (value: string | undefined) => !!value && decoded.some(input => input?.includes(value));
+    const textSourceIds = sources.filter(source => includes(source.text)).map(source => source.fixtureId);
+    const sourceSignals = sources.flatMap(({ fixtureId, sourceId, title, canary }) => {
+      const fields = Object.entries({ id: sourceId, title, canary }).filter(([, value]) => includes(value)).map(([key]) => key);
+      return fields.length ? [{ fixtureId, fields }] : [];
+    });
+    const inputDigest = createHash('sha256').update(JSON.stringify({ input: body.input, instructions: body.instructions })).digest('hex');
+    const signals = { inputDigest, textSourceIds, sourceSignals };
+    if (payload?.stage === 'assess' && payload.request === request) {
+      assessments.push({ round: payload.round, excerpts: payload.excerpts });
+      return { ...signals, stage: 'assess' };
+    }
+    if (Array.isArray(payload?.evidence?.coverage)) {
+      compositions.push(payload.evidence);
+      return { ...signals, stage: 'compose' };
+    }
+    return { ...signals, stage: 'other' };
+  });
+  const sourceBindings = sources.map(({ fixtureId, sourceId, title }) => ({ fixtureId, sourceId, title }));
+  return { outbound, sourceBindings, assessments, compositions };
+}
+
+async function verifySealedReviewedCie(live?: { credential: string; model: string; commit: string; tree: string; journalPath: string;
+  requests: BlindObservedRequest[] }) {
+  const f = fixture(true, true, undefined, live?.credential);
+  const journalPath = live?.journalPath ?? join(f.directory, 'blind-evaluation.sqlite');
+  const bytes = readFileSync(new URL('../../../scripts/benchmarks/cie-quality/cases.public.json', import.meta.url));
+  const identity = live ? { commit: live.commit, tree: live.tree } : { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+  const signal = new AbortController().signal;
+  const usage = () => f.core.command('velaApiUsageStatus', {});
+  const interpret = (question: string, query: string) => ({ version: 2, objective: question, clarification: '',
+    perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+    needs: [{ key: 'fact', question, query }] });
+  const assess = (key: string, quote: string) => ({ version: 3, clarification: '',
+    assessment: [{ key, status: 'supported', query: '', passages: [{ source: 'e1', quote }] }] });
+  const reply = (value: unknown) => (body: { model: string }) => response(JSON.stringify(value), body.model);
+  const predictions = [];
+  const route = { provider: 'openai-api-vela', model: live?.model ?? 'gpt-6-luna',
+    transport: live ? 'live' as const : 'synthetic' as const };
+  try {
+    await f.ready();
+    for (const expectedCase of live ? ['blind-001'] : ['blind-001', 'blind-002']) {
+      {
+        let hostError: unknown;
+        const runCase = async (input: Readonly<BlindPayload>, _signal: AbortSignal, claim?: NativeCieClaim) => {
+          try {
+            assert.equal(input.id, expectedCase);
+            const project = await f.core.command('desktop', { type: 'createProject', title: input.id });
+            const projectId = project.projects.find(item => item.title === input.id)!.id;
+            const workspace = await f.core.command('desktop', { type: 'createWorkspace', title: input.id, projectId });
+            const resourceIds: string[] = [];
+            for (const source of input.sources) {
+              const created = await f.core.command('desktop', { type: 'createResource', kind: 'note',
+                title: source.title, workspaceId: workspace.activeWorkspaceId });
+              const note = created.resources.find(item => item.title === source.title)!;
+              await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: source.text });
+              resourceIds.push(note.id);
+            }
+            const quote = input.sources[0].text;
+            const requests = live?.requests ?? f.requests;
+            const requestStart = requests.length;
+            const eventCursor = (await f.core.command('replay', { limit: 1 })).latest;
+            const before = await usage();
+            if (!live) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
+              reply(assess('day', 'The pump inspection is on Tuesday.')));
+            if (!live) f.replies.push(reply(interpret(input.request, input.sources[0].title)), reply(assess('fact', quote)),
+              body => {
+                const packet = JSON.parse(body.input[0].content);
+                assert.deepEqual(packet.evidence.coverage[0].passages, [
+                  { sourceId: resourceIds[0], title: input.sources[0].title, quote },
+                ]);
+                for (const source of input.sources.slice(1)) assert.ok(!JSON.stringify(packet).includes(source.text));
+                return response(quote, body.model);
+              });
+            const result = await velaCommand({
+              win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+              directMessageSend: true, routeNative: true, dialog: {},
+              call: (name: string, input: any) => claim && name === 'velaRequestPreview'
+                ? f.core.previewVelaEvaluation(input, claim) : (f.core.command as any)(name, input),
+              reviewProvider: async ({ review }: { review: VelaNativeReview }) => {
+                assert.equal(review.semanticContext, true);
+                return true;
+              },
+              input: { name: 'request', input: { intent: input.request, resourceIds, authorizeProvider: true,
+                providerId: 'openai-api-vela', model: live?.model ?? 'gpt-6-luna', semanticContext: true } },
+            }) as VelaRequest;
+            assert.equal(result.state, 'responded', result.errorCode);
+            const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
+            const answer = state.conversation?.messages.find(message => message.id === result.response?.messageId)?.content;
+            assert.ok(answer?.trim());
+            if (!live) assert.equal(answer, quote);
+            assert.equal(f.replies.length, 0);
+            const calls = (await usage()).usedToday - before.usedToday;
+            if (live) assert.ok(calls >= 3 && calls <= 6);
+            else assert.equal(calls, 5);
+            const replay = await f.core.command('replay', { after: eventCursor, limit: 500 });
+            assert.equal(replay.truncated, false);
+            const classification = live ? 'reported' : 'simulated';
+            const settlements = replay.events.filter(event =>
+              event.providerId === 'openai-api-vela' && event.classification === classification &&
+              (event.type === 'vela.api/scoped-completed' || event.type === 'execution/provider_completed'))
+              .map(event => ({
+                eventId: event.eventId,
+                executionId: event.payload.api?.executionId ?? event.executionId,
+                stage: event.type === 'vela.api/scoped-completed' ? 'structured' : 'answer',
+                elapsedMs: event.payload.api?.elapsedMs ?? null,
+                usage: event.payload.usage ?? null,
+                // A completed reviewed turn has passed the exact reported-model
+                // check on every bound proposal and on the canonical answer.
+                reportedModel: live?.model ?? 'gpt-6-luna',
+              }));
+            assert.equal(settlements.length, calls);
+            assert.ok(settlements.every(receipt => receipt.executionId));
+            assert.equal(new Set(settlements.map(receipt => receipt.executionId)).size, calls);
+            assert.equal(settlements.filter(receipt => receipt.stage === 'answer').length, 1);
+            const tokenSamples = settlements.flatMap(receipt => receipt.usage?.totalTokens ?? []);
+            const totalTokens = tokenSamples.length === calls ? tokenSamples.reduce((total, value) => total + value, 0) : null;
+            if (!live) assert.equal(totalTokens, calls * 140);
+            const sources = input.sources.map((source, index) => ({ fixtureId: source.id, sourceId: resourceIds[index],
+              title: source.title, text: source.text }));
+            const evidenceAudit = collectBlindEvidenceAudit(requests.slice(requestStart), input.request, sources);
+            assert.equal(evidenceAudit.outbound.length, calls);
+            if (!live) {
+              assert.ok(settlements.every(receipt => receipt.reportedModel === 'gpt-6-luna'));
+              assert.equal(evidenceAudit.assessments.length, 1);
+              assert.ok(evidenceAudit.assessments[0].excerpts.some(excerpt => excerpt.text === quote));
+              assert.deepEqual(evidenceAudit.compositions[0].coverage[0].passages,
+                [{ sourceId: resourceIds[0], title: input.sources[0].title, quote }]);
+              assert.deepEqual(evidenceAudit.outbound.at(-1)?.textSourceIds, [input.sources[0].id]);
+            }
+            const admissions = claim ? f.core.readVelaEvaluationAdmissions(claim) : undefined;
+            if (claim) assert.deepEqual(admissions?.map(row => row.executionId), settlements.map(row => row.executionId));
+            return { answer, requestId: result.id, messageId: result.response!.messageId, calls, totalTokens,
+              tokenSamples: tokenSamples.length, settlements, ...(admissions ? { admissions } : {}), requestedModel: live?.model ?? 'gpt-6-luna',
+              transport: live ? 'live' : 'synthetic', evidenceAudit };
+          } catch (error) { hostError = error; throw error; }
+        };
+        let checkpoint;
+        if (live) {
+          const journal = openBlindJournal(journalPath);
+          try {
+            checkpoint = await runBlindCie(bytes, identity, (input, abort) => runCase(input, abort), signal,
+              { journal, maxCases: 1, route, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
+          } finally { journal.close(); }
+        } else {
+          const profile = f.core.readVelaEvaluationProfile();
+          assert.ok(profile && profile.configurationVersion !== null);
+          await f.core.command('vela', { name: 'routingOptions', input: { providerId: 'openai-api-vela' } });
+          let interruptPromotion = expectedCase === 'blind-001';
+          const runBatch = () => runNativeCieBatch(bytes, identity, {
+            profileId: profile.profileId, configurationVersion: profile.configurationVersion!, route,
+            readUsage: usage, runReviewedCase: runCase,
+            async verifyRetainedCase(claim, value) {
+              const retained = value as Awaited<ReturnType<typeof runCase>>;
+              if (!retained?.admissions || !Array.isArray(retained.settlements) || retained.admissions.length !== retained.settlements.length ||
+                retained.evidenceAudit?.outbound?.length !== retained.admissions.length || !retained.evidenceAudit?.assessments?.length ||
+                !retained.evidenceAudit?.compositions?.some(packet => packet.coverage.some(row => row.passages.length))) return false;
+              const checked = f.core.readVelaEvaluationResult(claim, retained.admissions);
+              const verified = checked.state === 'verified-answer' && checked.answer === retained.answer &&
+                checked.requestId === retained.requestId && checked.messageId === retained.messageId &&
+                checked.receipts.every((receipt, index) => receipt.executionId === retained.settlements[index].executionId);
+              if (verified && interruptPromotion) { interruptPromotion = false; throw new Error('fixture interrupted before checkpoint CAS'); }
+              return verified;
+            },
+          }, journalPath, 1, signal);
+          if (interruptPromotion) {
+            await assert.rejects(runBatch(), /fixture interrupted before checkpoint CAS/);
+            const journal = openBlindJournal(journalPath, { profileId: profile.profileId });
+            let staged;
+            try { staged = (await journal.read())?.pending; } finally { journal.close(); }
+            assert.ok(staged);
+            const before = await usage();
+            const callsBefore = f.requests.length;
+            await f.reopen();
+            assert.equal(f.core.readVelaEvaluationProfile()?.profileId, profile.profileId);
+            assert.equal((await usage()).usedToday, before.usedToday);
+            checkpoint = await runBatch();
+            assert.deepEqual(checkpoint.results.at(-1), staged);
+            assert.equal(f.requests.length, callsBefore);
+          } else checkpoint = await runBatch();
+        }
+        if (hostError) throw hostError;
+        assert.equal(checkpoint.stopped, null);
+        assert.equal(checkpoint.results.at(-1)?.id, expectedCase);
+        predictions.push(checkpoint);
+      }
+    }
+    if (!live) assert.equal((await usage()).usedToday, 10);
+    return predictions.at(-1)!;
+  } finally { await f.close(); }
+}
+
+test('the CIE evaluation audit detects a source identifier, title or partial body in outbound inputs', () => {
+  const source = { fixtureId: 'denied', sourceId: 'resource:foreign-831', title: 'PRIVATE-TITLE-831',
+    text: 'First sentence. PRIVATE-BODY-831 appears in a separate sentence.', canary: 'PRIVATE-BODY-831' };
+  const input = [
+    { input: [{ content: JSON.stringify({ reviewedSourceTitles: [source.title] }) }] },
+    { input: [{ content: JSON.stringify({ evidence: { sourceId: source.sourceId } }) }] },
+    { input: [{ content: 'Find the release date.' }, { content: JSON.stringify({ text: source.canary }) }] },
+    { input: [{ content: 'No fixture evidence was sent.' }] },
+  ];
+  const audit = collectBlindEvidenceAudit(input, 'Find the release date.', [source]);
+  assert.deepEqual(audit.outbound.map(call => call.sourceSignals), [
+    [{ fixtureId: 'denied', fields: ['title'] }],
+    [{ fixtureId: 'denied', fields: ['id'] }],
+    [{ fixtureId: 'denied', fields: ['canary'] }],
+    [],
+  ]);
+  assert.ok(audit.outbound.every(call => call.textSourceIds.length === 0));
+});
+
+test('sealed CIE cases resume through native review and canonical usage accounting', async () => {
+  await verifySealedReviewedCie();
+});
+
+test('authorized live CIE smoke returns a sealed native prediction', {
+  skip: process.env.AERYNTH_VERIFY_LIVE_CIE !== '1', timeout: 120_000,
+}, async t => {
+  const credential = process.env.OPENAI_API_KEY;
+  const model = process.env.AERYNTH_CIE_LIVE_MODEL;
+  const journalPath = process.env.AERYNTH_CIE_LIVE_JOURNAL;
+  assert.ok(process.platform === 'win32' && credential && model && journalPath && isAbsolute(journalPath),
+    'Live CIE smoke requires Windows, an authorized OPENAI_API_KEY, AERYNTH_CIE_LIVE_MODEL and an absolute AERYNTH_CIE_LIVE_JOURNAL path');
+  assert.equal(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim(), '');
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const tree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim();
+  delete process.env.OPENAI_API_KEY;
+  writeFileSync(journalPath, '', { flag: 'wx' });
+  const requests: BlindObservedRequest[] = [];
+  const fetchProvider = globalThis.fetch;
+  t.mock.method(globalThis, 'fetch', (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (String(url) === 'https://api.openai.com/v1/responses' && typeof init?.body === 'string') {
+      const { input, instructions } = JSON.parse(init.body);
+      requests.push({ input, instructions });
+    }
+    return fetchProvider(url, init);
+  });
+  const prediction = await verifySealedReviewedCie({ credential, model, commit, tree, journalPath, requests });
+  t.diagnostic(JSON.stringify({ predictionSha256: prediction.predictionSha256, cases: prediction.results.length }));
+});
+
+test('benchmark native reviewed CIE from request through canonical answer readback', {
+  skip: process.env.AERYNTH_BENCHMARK_SYNTHETIC_CIE !== '1', timeout: 600_000,
+}, async () => {
+  const require = createRequire(import.meta.url);
+  const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+  const intent = 'When can the west lift return to service?';
+  const text = 'The west lift returns to service after an inspection.';
+  const model = 'gpt-6-luna';
+  const perception = { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [],
+    capabilityHints: [], deliverables: ['text'], verification: [] };
+  const interpret = (question: string, query: string) => ({
+    version: 2, objective: question, clarification: '', perception, needs: [{ key: 'fact', question, query }],
+  });
+  const assess = (quote: string, key = 'fact') => ({
+    version: 3, clarification: '', assessment: [{ key, status: 'supported',
+      passages: [{ source: 'e1', quote }], query: '' }],
+  });
+  const reply = (value: unknown) => (body: { model: string }) => response(JSON.stringify(value), body.model);
+  const samples: Record<'cold' | 'warm', number[]> = { cold: [], warm: [] };
+  const pairedDifferences: number[] = [];
+  const projectEvidence = process.env.AERYNTH_BENCHMARK_SYNTHETIC_CIE_PROJECT === '1';
+  for (let pair = 0; pair < 12; pair++) {
+    const f = fixture(true);
+    try {
+      await f.ready();
+      const workspace = await f.core.command('desktop', { type: 'snapshot' });
+      let workspaceId = workspace.activeWorkspaceId;
+      if (projectEvidence) {
+        const project = await f.core.command('desktop', { type: 'createProject', title: 'Lift service' });
+        const projectId = project.projects.find(item => item.title === 'Lift service')!.id;
+        const createdWorkspace = await f.core.command('desktop', { type: 'createWorkspace', title: 'Lift service', projectId });
+        workspaceId = createdWorkspace.activeWorkspaceId;
+        for (const title of ['Lift inspection history', 'Lift inspection procedure', 'Lift inspection equipment']) {
+          const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title, workspaceId });
+          const resource = created.resources.find(item => item.title === title)!;
+          await f.core.command('desktop', { type: 'content', resourceId: resource.id, expectedVersion: resource.version,
+            content: 'The west lift inspection concerns a separate maintenance record.' });
+        }
+      }
+      const created = await f.core.command('desktop', { type: 'createResource', kind: 'note',
+        title: 'Lift inspection', workspaceId });
+      const note = created.resources.find(item => item.title === 'Lift inspection')!;
+      await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: text });
+      const measure = async (qualificationRequired: boolean) => {
+        if (qualificationRequired) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
+          reply(assess('The pump inspection is on Tuesday.', 'day')));
+        f.replies.push(reply(interpret(intent, 'west lift inspection')), body => {
+          if (projectEvidence) assert.equal(JSON.parse(body.input[0].content).excerpts.length, 4);
+          return reply(assess(text))(body);
+        }, body => response(text, body.model));
+        const priorCalls = f.requests.length;
+        const started = performance.now();
+        const result = await velaCommand({
+          win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+          directMessageSend: true, routeNative: true, dialog: {}, call: f.core.command.bind(f.core),
+          reviewProvider: async ({ review }: { review: VelaNativeReview }) => {
+            assert.equal(review.semanticContext, true);
+            return true;
+          },
+          input: { name: 'request', input: { intent, resourceIds: [note.id], authorizeProvider: true,
+            providerId: 'openai-api-vela', model, semanticContext: true, ...(projectEvidence ? { projectEvidence: true } : {}) } },
+        }) as VelaRequest;
+        assert.equal(result.state, 'responded', `${result.errorCode}; calls: ${f.requests.length - priorCalls}`);
+        const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
+        assert.equal(state.conversation?.messages.find(message => message.id === result.response?.messageId)?.content, text);
+        const elapsedMs = performance.now() - started;
+        assert.equal(f.requests.length - priorCalls, qualificationRequired ? 5 : 3);
+        assert.equal(f.replies.length, 0);
+        return elapsedMs;
+      };
+      await measure(true);
+      const order = pair % 2 === 0 ? ['cold', 'warm'] as const : ['warm', 'cold'] as const;
+      for (const arm of order) {
+        if (arm === 'cold') {
+          await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
+          await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: true });
+        }
+        samples[arm].push(await measure(arm === 'cold'));
+      }
+      pairedDifferences.push(samples.cold[pair] - samples.warm[pair]);
+    } finally { await f.close(); }
+  }
+  const distribution = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return { samples: sorted.length, p50Ms: sorted[Math.ceil(sorted.length * .5) - 1],
+      p95Ms: sorted[Math.ceil(sorted.length * .95) - 1] };
+  };
+  console.log(JSON.stringify({ benchmark: 'native-reviewed-cie', projectEvidence, transport: 'synthetic', paidCalls: 0,
+    through: 'canonical answer readback', design: 'warmed-profile-counterbalanced', pairedColdMinusWarmMs: distribution(pairedDifferences),
+    cold: { ...distribution(samples.cold), simulatedCallsPerRequest: 5 },
+    warm: { ...distribution(samples.warm), simulatedCallsPerRequest: 3 } }));
+});
+
 test('native adaptive CIE requires qualified stages and reviews the resolved model', async t => {
   const f = fixture(true);
   try {
@@ -1810,7 +2166,8 @@ test('reviewed project evidence expands a model-proposed search and fences corre
       return resource.id;
     }
     const other = await project('Other project');
-    await note('Private decision', 'FOREIGN-TEXT-459', other.workspaceId);
+    const foreignText = 'FOREIGN-TEXT-459 applies to an unrelated release.';
+    const foreign = await note('Private decision', foreignText, other.workspaceId);
     const current = await project('Current project');
     const history = await note('Launch proposal', 'The launch proposal was superseded by the harbor decision.', current.workspaceId);
     const correction = 'The harbor decision assigns release approval to the duty engineer.';
@@ -1870,6 +2227,16 @@ test('reviewed project evidence expands a model-proposed search and fences corre
       });
     assert.equal((await send(true)).state, 'responded');
     assert.equal(f.requests.length, 6);
+    const audit = collectBlindEvidenceAudit(f.requests, intent, [
+      { fixtureId: 'foreign', sourceId: foreign, title: 'Private decision', text: foreignText, canary: 'FOREIGN-TEXT-459' },
+      { fixtureId: 'correction', sourceId: selected, title: 'Harbor decision', text: correction },
+    ]);
+    assert.ok(audit.outbound.every(call => !call.textSourceIds.includes('foreign')));
+    assert.ok(audit.outbound.every(call => !call.sourceSignals.some(signal => signal.fixtureId === 'foreign')));
+    assert.ok(audit.outbound.some(call => call.stage === 'assess' && call.textSourceIds.includes('correction')));
+    assert.deepEqual(audit.assessments.map(assessment => assessment.round), [1, 2]);
+    assert.ok(audit.compositions.every(packet => packet.coverage.every(row =>
+      row.passages.every(passage => passage.sourceId !== foreign))));
     f.replies.push(reply(firstQuery), async body => {
       const snapshot = await f.core.command('desktop', { type: 'snapshot' });
       const source = snapshot.resources.find(resource => resource.id === selected)!;
@@ -1989,16 +2356,21 @@ test('project evidence supplies a mission plan across workspaces and remains bou
     }) as Promise<VelaRequest>;
     await assert.rejects(send(false), /authorization_cancelled/);
     assert.equal(f.requests.length, 6);
+    const now = Date.now.bind(Date);
+    let catalogClockOffsetMs = 0;
+    t.mock.method(Date, 'now', () => now() + catalogClockOffsetMs);
     f.replies.push(body => {
       const packet = JSON.parse(body.input[0].content);
       assert.equal(packet.reviewedMissionGap, 'The host counters do not certify readiness.');
-      const now = Date.now.bind(Date);
-      t.mock.method(Date, 'now', () => now() + 61_000);
+      catalogClockOffsetMs = 61_000;
       return reply(perceive('signoff', 'release duty engineer signed handoff'))(body);
     }, body => {
       const packet = JSON.parse(body.input[0].content);
       const source = packet.excerpts.find((item: { title: string }) => item.title === 'Duty review record');
       assert.ok(source);
+      // The catalog refresh happened before this dispatch. Keep the simulated
+      // catalog age out of the native grant check during answer composition.
+      catalogClockOffsetMs = 0;
       return reply({ version: 3, clarification: '', assessment: [
         { key: 'signoff', status: 'supported', passages: [{ source: source.handle, quote: signoffText }], query: '' },
       ] })(body);
@@ -2009,7 +2381,7 @@ test('project evidence supplies a mission plan across workspaces and remains bou
       return response('The duty review record reports sign-off at 16:20.', body.model);
     });
     const followup = await send(true);
-    assert.equal(followup.state, 'responded');
+    assert.equal(followup.state, 'responded', `${followup.errorCode ?? 'no error code'}; provider calls: ${f.requests.length}`);
     assert.equal(followup.missionGapEvidence?.checkpoint.selection.gapIndex, 0);
     assert.ok(followup.missionGapEvidence?.project.sourceIds.includes(signoff.id));
     assert.equal((await read()).revision, recorded.revision, 'investigation does not revise the mission');
@@ -2229,7 +2601,10 @@ for (const outcome of ['failure', 'cancel', 'revoke']) test('standing selected e
   }
 });
 
-for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke'] as const) test('standing selected DOCX broker analysis: '+scenario, {timeout:15_000}, async () => {
+for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation interrupt', 'provider failure', 'interrupt', 'revoke'] as const) test('selected evidence broker analysis: '+scenario, {timeout:15_000}, async () => {
+  const evaluation = scenario.startsWith('evaluation');
+  const noteCase = scenario === 'evaluation note';
+  const interrupted = scenario === 'interrupt' || scenario === 'evaluation interrupt';
   const bytes = docxFixture();
   let bodyText: string;
   const f = fixture(true, true, { extract: async (input, signal) => {
@@ -2244,22 +2619,41 @@ for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke'] a
     await f.ready();
     const path = join(f.directory, 'Synthetic table.docx');
     writeFileSync(path, bytes);
-    const { resource } = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file', selection: { kind: 'file', path } });
+    let resource;
+    if (noteCase) {
+      const created = await f.core.command('desktop',{type:'createResource',kind:'note',title:'Synthetic table note',workspaceId:null});
+      const note = created.resources.find(item=>item.title==='Synthetic table note')!;
+      bodyText = 'The extracted body contains Table cell.';
+      const updated = await f.core.command('desktop',{type:'content',resourceId:note.id,expectedVersion:note.version,content:bodyText});
+      resource = updated.resources.find(item=>item.id===note.id)!;
+    } else {
+      ({ resource } = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file', selection: { kind: 'file', path } }));
+    }
     const intent = 'Which text was extracted from the table?';
     const resourceIds = [resource.id];
-    const resourceRefs = [{ id: resource.id, kind: 'resource' as const, resourceKind: 'file',
+    const sourceKind = noteCase ? 'note' as const : 'file' as const;
+    const resourceRefs = [{ id: resource.id, kind: 'resource' as const, resourceKind: sourceKind,
       title: resource.title, version: resource.version }];
+    const runtime=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+    const evaluationProfile=f.core.readVelaEvaluationProfile()!;
+    assert.equal(evaluationProfile.configurationVersion,1);
+    const claim={profileId:evaluationProfile.profileId,configurationVersion:1,
+      claimToken:'a'.repeat(64),bindingDigest:'b'.repeat(64)};
     const preview = await f.core.command('velaRequestPreview', { intent, resourceIds, adaptive: true, providerId: 'openai-api-vela',
       model: 'gpt-6-luna', semanticContext: true, resourceRefs });
     assert.equal(preview.sendDisposition, 'standing-selected-evidence');
     const review = await f.core.command('velaNativeReview', { previewId: preview.id, signature: preview.signature });
-    assert.match(review.context.included[0].content, /Extracted DOCX body text/);
+    assert.match(review.context.included[0].content, noteCase ? /Table cell/ : /Extracted DOCX body text/);
     const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
     const send = () => velaCommand({
       win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
       directMessageSend: true, routeNative: true, dialog: {},
-      call: f.core.command.bind(f.core),
-      reviewProvider: async () => assert.fail('standing file analysis opened the sharing modal'),
+      call: (name: string,input: any) => evaluation&&name==='velaRequestPreview'
+        ? f.core.previewVelaEvaluation(input,claim) : (f.core.command as any)(name,input),
+      reviewProvider: async () => {
+        assert.ok(evaluation,'standing file analysis opened the sharing modal');
+        return true;
+      },
       input: { name: 'request', input: { intent, resourceIds, resourceRefs, authorizeProvider: true,
         providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
     }) as Promise<VelaRequest>;
@@ -2277,24 +2671,24 @@ for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke'] a
     f.replies.push(reply(proposal('day')), reply(assessment('day', 'The pump inspection is on Tuesday.')), reply(proposal('table')),
       body => {
         assert.deepEqual(JSON.parse(body.input[0].content).excerpts, [
-          { handle: 'e1', sourceKind: 'file', title: resource.title, text: bodyText, partial: true },
+          { handle: 'e1', sourceKind, title: resource.title, text: bodyText, ...(!noteCase?{partial:true}:{}) },
         ]);
         return reply(assessment('table', 'Table cell'))(body);
       }, async body => {
-        assert.equal(JSON.parse(body.input[0].content).evidence.searchCoverage, 'partial');
+        if (!noteCase) assert.equal(JSON.parse(body.input[0].content).evidence.searchCoverage, 'partial');
         assert.doesNotMatch(JSON.stringify(body.input), /Extracted DOCX body text/);
         signalFinalDispatch();
         if (scenario === 'provider failure') return new Response(null,{status:400});
-        if (scenario === 'interrupt' || scenario === 'revoke') await providerReleased;
+        if (interrupted || scenario === 'revoke') await providerReleased;
         return response('The extracted body contains “Table cell.”', body.model);
       });
     const pending = send();
-    if (scenario === 'interrupt' || scenario === 'revoke') {
+    if (interrupted || scenario === 'revoke') {
       try {
         await Promise.race([finalDispatch,pending.then(()=>assert.fail('request settled before final dispatch'))]);
         const running = Object.values((await f.core.command('snapshot',{})).executions).find(execution=>execution.state==='dispatching' && execution.commandId.startsWith('vela-api:'));
         assert.ok(running);
-        if (scenario === 'interrupt') {
+        if (interrupted) {
           assert.deepEqual(await f.core.command('interrupt',{executionId:running.id}),{requested:true,confirmed:false});
         } else {
           assert.equal((await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:false})).enabled,false);
@@ -2304,12 +2698,18 @@ for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke'] a
       }
     }
     const result = await pending;
-    if (scenario === 'provider failure' || scenario === 'interrupt' || scenario === 'revoke') {
+    if (scenario === 'provider failure' || interrupted || scenario === 'revoke') {
       const outcome = scenario === 'provider failure' ? 'failed' : 'unknown';
       assert.equal(result.state,outcome);
       assert.equal(result.response,undefined);
       assert.equal(f.requests.length,5);
       assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,5);
+      const admissions = evaluation ? f.core.readVelaEvaluationAdmissions(claim) : null;
+      if (evaluation) {
+        assert.equal(admissions?.length,5);
+        assert.equal(admissions?.at(-1)?.requestId,result.id);
+        assert.deepEqual(f.core.readVelaEvaluationResult(claim,admissions!),{state:'unresolved'});
+      }
       await f.reopen();
       const restoredExecution = Object.values((await f.core.command('snapshot',{})).executions)
         .find(execution=>execution.commandId==='vela-api:'+result.id);
@@ -2318,12 +2718,45 @@ for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke'] a
       const restored = (state as {requests:VelaRequest[]}).requests.find(request=>request.id===result.id);
       assert.equal(restored?.state,result.state);
       assert.equal(restored?.response,undefined);
+      if (evaluation) {
+        assert.equal(f.core.readVelaEvaluationProfile()?.profileId,claim.profileId);
+        assert.deepEqual(f.core.readVelaEvaluationAdmissions(claim),admissions);
+        assert.deepEqual(f.core.readVelaEvaluationResult(claim,admissions!),{state:'unresolved'});
+      }
       assert.equal(f.requests.length,5);
       return;
     }
     assert.equal(result.state, 'responded');
     assert.equal(f.requests.length, 5);
     assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 5);
+    if(evaluation){
+      const expected=f.core.readVelaEvaluationAdmissions(claim)!;
+      assert.equal(expected.length,5);
+      assert.ok(expected.some(stage=>stage.requestId===result.id));
+      assert.equal(runtime.readLedgerReceipts({...claim,expected}).state,'terminal-receipts');
+      await f.reopen();
+      const reopened=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+      assert.equal(f.core.readVelaEvaluationProfile()?.profileId,claim.profileId);
+      assert.deepEqual(f.core.readVelaEvaluationAdmissions(claim),expected);
+      assert.equal(f.core.readVelaEvaluationAdmissions({...claim,configurationVersion:2}),null);
+      assert.equal(reopened.readLedgerReceipts({...claim,expected}).state,'terminal-receipts');
+      const recovered=f.core.readVelaEvaluationResult(claim,expected);
+      assert.equal(recovered.state,'verified-answer');
+      assert.equal(recovered.requestId,result.id);
+      assert.equal(recovered.messageId,result.response!.messageId);
+      assert.equal(recovered.answer,'The extracted body contains “Table cell.”');
+      assert.equal(recovered.answerDigest,result.response!.contentDigest);
+      assert.deepEqual(f.core.readVelaEvaluationResult(claim,expected.slice(1)),{state:'unresolved'});
+      assert.deepEqual(f.core.readVelaEvaluationResult({...claim,bindingDigest:'c'.repeat(64)},expected),{state:'unresolved'});
+      if (noteCase) {
+        await f.core.command('desktop',{type:'content',resourceId:resource.id,expectedVersion:resource.version,content:'Corrected table entry.'});
+      } else {
+        writeFileSync(path, 'Replaced synthetic source');
+      }
+      assert.deepEqual(f.core.readVelaEvaluationResult(claim,expected),{state:'unresolved'});
+      assert.equal(f.requests.length,5);
+      return;
+    }
     writeFileSync(path, 'Replaced synthetic source');
     await assert.rejects(send(), /source_changed|stale_vela_preview/);
     assert.equal(f.requests.length, 5);

@@ -31,3 +31,31 @@ test('missing end-to-end and simulated provider remain visible instead of zero',
   assert.equal(result.arms[0].endToEndMs.p95, null);
   assert.deepEqual(result.rows[0].issues, ['end-to-end-unavailable', 'simulated-provider']);
 });
+
+test('prices cache writes separately and rejects unknown write pricing and overlapping counts', () => {
+  const rate = { model: 'test-model', currency: 'USD', source: 'synthetic-fixture', effectiveAt: '2026-11-12',
+    inputPerMillion: 2, cachedInputPerMillion: 1, outputPerMillion: 8 };
+  const withWrites = { ...run, usage: { ...run.usage!, cacheWriteInputTokens: 10 } };
+  const call = (usage: typeof withWrites, rateWithWrites: typeof rate & { cacheWriteInputPerMillion?: number }) =>
+    reportCognitiveRepetitions([repetition('r1', 10, [usage])], [rateWithWrites]).rows[0].calls[0];
+  assert.equal(call(withWrites, rate).cost, null);
+  assert.equal(call(withWrites, { ...rate, cacheWriteInputPerMillion: 3 }).cost?.amount, .00051);
+  assert.equal(reportCognitiveRepetitions([repetition('r1', 10)],
+    [{ ...rate, cacheWriteInputPerMillion: 3 }]).rows[0].calls[0].cost, null);
+  const overlap = { ...withWrites, usage: { ...withWrites.usage, cacheWriteInputTokens: 90 } };
+  assert.equal(call(overlap, { ...rate, cacheWriteInputPerMillion: 3 }).cost, null);
+});
+
+test('groups settled reported calls by exact model and preserves unknown dispatch and usage', () => {
+  const result = reportCognitiveRepetitions([repetition('r1', 400, [
+    run, { ...run, executionId: 'e2', elapsedMs: 30, dispatched: null, usage: null },
+    { ...run, executionId: 'e3', reportedModel: 'other-model' },
+    { ...run, executionId: 'e4', providerEvidence: 'simulated' },
+  ])]);
+  const model = result.arms[0].providers.find(provider => provider.model === 'test-model')!;
+  assert.equal(model.reportedDispatched, 1);
+  assert.equal(model.dispatchUnknown, 1);
+  assert.deepEqual(model.usage, { samples: 1, inputTokens: 100, outputTokens: 40, totalTokens: 140 });
+  assert.deepEqual(model.providerLatencyMs, { samples: 1, p50: 10, p95: 10 });
+  assert.equal(result.arms[0].providers.length, 2);
+});
