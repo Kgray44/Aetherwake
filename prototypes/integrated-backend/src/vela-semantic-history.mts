@@ -172,7 +172,9 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
   const perceptionSchema = semanticHistoryFormats.interpret.schema;
   const perception = api.qualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret) ??
     await api.resolveQualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret, signal);
-  const assessment = api.qualifiedStructuredRoute(configurationVersion, [model], semanticHistoryFormats.assess.schema, instructions.assess);
+  const assessmentSchema = semanticHistoryFormats.assess.schema;
+  const assessment = api.qualifiedStructuredRoute(configurationVersion, [model], assessmentSchema, instructions.assess) ??
+    await api.resolveQualifiedStructuredRoute(configurationVersion, [model], assessmentSchema, instructions.assess, signal);
   // Reuse only the existing runtime's exact, current contract receipts. A missing
   // assessment does not invalidate an independently qualified perception contract.
   const missingStages: SemanticHistoryCall['stage'][] = [];

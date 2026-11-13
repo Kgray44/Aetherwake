@@ -167,3 +167,36 @@ test('a reviewed snapshot is revalidated at disclosure boundaries regardless of 
   assert.equal(await investigate(4), await investigate(1));
   await investigate(4, true);
 });
+
+test('a refreshable assessment receipt survives a cold interpretation route', async () => {
+  const { semanticHistoryFormats } = await import('../../vela-core/src/semantic-history.mts');
+  const receipt = { model: 'synthetic-model' };
+  const probes: string[] = [];
+  let catalogFresh = false;
+  let interpretationQualified = false;
+  const isAssessment = (schema: unknown) => schema === semanticHistoryFormats.assess.schema;
+  const api = {
+    qualifiedStructuredRoute(_version: number, _models: string[], schema: unknown) {
+      return catalogFresh && (isAssessment(schema) || interpretationQualified) ? receipt : undefined;
+    },
+    async resolveQualifiedStructuredRoute(_version: number, _models: string[], schema: unknown) {
+      if (!isAssessment(schema) && !interpretationQualified) return undefined;
+      catalogFresh = true;
+      return receipt;
+    },
+    async qualifyStructuredRoute(input: any) {
+      probes.push(input.payload.stage);
+      input.validate();
+      interpretationQualified = true;
+      return receipt;
+    },
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal(input: any) {
+      input.validate();
+      return { version: 2, objective: 'No evidence needed', clarification: '', needs: [],
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] } };
+    },
+  } as unknown as VelaApiRuntime;
+  await investigateReviewedVelaEvidence(api, 'Synthetic request', [], 1, 'synthetic-model', () => {}, new AbortController().signal);
+  assert.deepEqual(probes, ['interpret']);
+});
