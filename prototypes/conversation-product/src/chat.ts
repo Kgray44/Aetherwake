@@ -396,8 +396,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         const source = sources[index], button = el('button', String(index + 1), 'cp-web-citation');
         button.type = 'button'; button.title = source.title; button.setAttribute('aria-label', 'Open source ' + (index + 1) + ', ' + source.title);
         button.dataset.aerynthMotionControl = 'true';
-        button.addEventListener('click', () => {
-          void port.command('openCitation', { resourceId, messageId: message.id, index }).catch(error => report(errorText(error)));
+        button.addEventListener('click', async () => {
+          if (button.disabled || disposed || accessRevoked || !root.contains(button)) return;
+          button.disabled = true;
+          try {
+            await port.command('openCitation', { resourceId: message.resourceId, messageId: message.id, index });
+            if (!accessRevoked) report('Browser open requested for this source.');
+          } catch {
+            if (!accessRevoked) report('This source could not be opened.');
+          } finally {
+            button.disabled = false;
+          }
         });
         return button;
       },
