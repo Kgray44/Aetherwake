@@ -8,12 +8,14 @@ import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import {checkNativeTestLaunch} from '../native/launch-native-test.cjs';
 
 // Explicit engineering lease only. This test creates a hidden, inaudible, offline
 // owned fixture; it is not a provider speech or human-audibility qualification.
 test('actual hidden output-only DOM owns disabled synthetic tracks without any microphone permission',{
   skip:process.platform!=='win32'||process.env.AERYNTH_OUTPUT_ONLY_DOM_QA!=='1',timeout:25000,
 },async t=>{
+  checkNativeTestLaunch();
   const root=fileURLToPath(new URL('..',import.meta.url)),source=path.join(root,'src/gpt-live-media.ts');
   const digest=async()=>createHash('sha256').update(await readFile(source)).digest('hex'),before=await digest();
   const folder=await mkdtemp(path.join(tmpdir(),'aerynth-output-only-dom-'));
@@ -44,7 +46,9 @@ addEventListener('DOMContentLoaded',()=>{void(async()=>{
 `},bundle:true,platform:'browser',format:'cjs',target:'chrome120',external:['electron'],write:false,logLevel:'silent'});
     assert(compiled.outputFiles[0].contents.byteLength<1024*1024);await writeFile(preload,compiled.outputFiles[0].contents);
     await writeFile(html,"<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'none'; connect-src 'none'; media-src 'self' blob:\"><title>Owned output-only media fixture</title>");
-    await writeFile(main,`const {app,BrowserWindow,ipcMain}=require('electron');const {pathToFileURL}=require('node:url');
+    await writeFile(main,`const {app,BrowserWindow:ElectronBrowserWindow,ipcMain}=require('electron');const {pathToFileURL}=require('node:url');
+const {installDesktopTestAdmission}=require(${JSON.stringify(path.join(root,'native/native-test-admission.cjs'))});
+const {BrowserWindow}=installDesktopTestAdmission({app,BrowserWindow:ElectronBrowserWindow});
 app.setPath('userData',${JSON.stringify(path.join(folder,'profile'))});app.disableHardwareAcceleration();let win,permissionRequests=0,permissionChecks=0,deniedPermissionChecks=0;const checkedPermissions=[];
 const deadline=setTimeout(()=>app.exit(2),15000);
 app.whenReady().then(async()=>{const url=pathToFileURL(${JSON.stringify(html)}).href;
@@ -59,6 +63,7 @@ app.whenReady().then(async()=>{const url=pathToFileURL(${JSON.stringify(html)}).
  });await win.loadURL(url);
 }).catch(()=>app.exit(4));`);
     const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
+    checkNativeTestLaunch(env);
     const result=await promisify(execFile)(path.join(root,'node_modules/electron/dist/electron.exe'),[main],{windowsHide:true,timeout:20000,maxBuffer:65536,env});
     const line=result.stdout.match(/OUTPUT_ONLY_DOM_RECEIPT=(\{[^\r\n]+\})/u);assert(line,'owned fixture emitted no receipt');
     const receipt=JSON.parse(line[1]);t.diagnostic(JSON.stringify({sourceSha256:before,...receipt}));assert.equal(receipt.error,undefined);assert.equal(receipt.microphoneCalls,0);assert.equal(receipt.enumerationCalls,0);
