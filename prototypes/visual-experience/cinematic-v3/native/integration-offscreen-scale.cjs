@@ -192,6 +192,17 @@ exports.verify = async ({
       assert.equal((await snapshot()).navigation.kind, "constellation");
       await wait("document.querySelector('#stage').inert === true");
       await sample("universe");
+      if (process.argv.includes("--offscreen-repeat-spatial-recovery")) {
+        const spatialActive = "window.__aerynth.snapshot().gpu?.spatialLayer?.active === true";
+        await wait(spatialActive);
+        for (let cycle = 0; cycle < 2; cycle++) {
+          await js("window.__aerynth.simulateContextLoss()");
+          await wait("window.__aerynth.snapshot().gpu?.contextLost === true");
+          await js("window.__aerynth.restoreContext()");
+          await wait(spatialActive);
+        }
+        receipt.spatialRecoveryCycles = 2;
+      }
       await timed("openEmptyWorkspace", () => navigate({ kind: "workspace", workspaceId: seed.alternateWorkspaceId }));
       await wait("document.querySelectorAll('[data-block]').length === 0");
       await timed("returnToWorkspace", () => navigate({ kind: "workspace", workspaceId: seed.workspaceId }));
