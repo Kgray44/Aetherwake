@@ -7,6 +7,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { NativePersonalMemory } from './personal-memory.mts';
+import { createPersonalMemoryReview } from './personal-memory-review.mts';
 import { createPersonalMemorySourceReader } from './personal-memory-sources.mts';
 import { createIntelligenceJournalProjection, missionStreamFields, streamScopeMatches } from './intelligence-journal-projection.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
@@ -257,6 +258,7 @@ export class BackendCore {
   private conversations!: ConversationProduct;
   private nativeHostServices?:NativeHostServices;
   private personalMemory?: NativePersonalMemory;
+  private personalMemoryReview?: ReturnType<typeof createPersonalMemoryReview>;
   private weatherPermissions?:WeatherPermissionStore;
   private weatherRequest:AbortController|null=null;
   private ordinaryConnections!:OrdinaryConnectionPort;
@@ -445,14 +447,20 @@ export class BackendCore {
       this.initializeConversations();
       this.initializeLibrary();
       if (this.privateMode && nativeHostServices) {
+        const readOwnMessage = (id: string, messageId: string) => {
+          const graphId = this.state.resources[id];
+          return graphId ? this.graph.readOwnMessage(graphId, messageId) : null;
+        };
         const sources = createPersonalMemorySourceReader({
           db: this.db,
           projectAccess: id => !this.closed && this.libraryAuthorized({ kind: 'project', id }),
           conversationAccess: (id, messageId) => !this.closed && this.productResourceAccess(id, messageId),
-          readOwnMessage: (id, messageId) => {
-            const graphId = this.state.resources[id];
-            return graphId ? this.graph.readOwnMessage(graphId, messageId) : null;
-          },
+          readOwnMessage,
+        });
+        const review = this.personalMemoryReview = createPersonalMemoryReview({
+          ...sources, open: () => this.personalMemory!.open(),
+          transaction: work => this.kernel.withTransaction(work),
+          readSourceText: ({ conversationId, messageId }) => readOwnMessage(conversationId, messageId)?.content ?? null,
         });
         this.personalMemory = new NativePersonalMemory({
           kernel: this.kernel,
@@ -460,8 +468,9 @@ export class BackendCore {
           host: {
             ...sources,
             identity: () => ({ userId: 'local-owner', policyVersion: 'aerynth.local-owner@1' }),
-            // Native consent and provider dispatch entry points supply authorization in a separate slice.
-            authorize: () => ({ decision: 'deny' }),
+            authorize: input => review.authorize(input)
+              ? { decision: 'allow', policyVersion: 'aerynth.local-owner@1', authorizationRef: 'native-memory-review' }
+              : { decision: 'deny' },
           },
         });
       }
@@ -6623,6 +6632,19 @@ export class BackendCore {
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
+    if (name === 'personalMemoryCapturePreviewNative' || name === 'personalMemoryCaptureCommitNative' || name === 'personalMemoryCaptureCancelNative') {
+      const review = this.personalMemoryReview;
+      ensure(review && !this.closed, 'personal_memory_native_required');
+      if (name === 'personalMemoryCaptureCancelNative') {
+        review.cancelCapture((input as CommandMap['personalMemoryCaptureCancelNative']['input']).id);
+        return null as CommandMap[K]['output'];
+      }
+      ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
+      if (name === 'personalMemoryCapturePreviewNative')
+        return await review.previewCapture(input as CommandMap['personalMemoryCapturePreviewNative']['input']) as CommandMap[K]['output'];
+      const saved = await review.commitCapture(input as CommandMap['personalMemoryCaptureCommitNative']['input']);
+      return { id: saved.id } as CommandMap[K]['output'];
+    }
     if(['missionFileEditPrepareNative','missionFileEditRunNative','missionFileEditReviewNative','missionFileEditChoiceNative','missionFileEditApplyNative','missionFileEditCheckReviewNative','missionFileEditCheckRunNative','missionFileEditRead'].includes(name)){
       ensure(!this.closed&&this.nativeMedia&&this.nativeHostServices?.secrets&&(this.privateMode||this.velaApiTest)&&input&&typeof input==='object'&&!Array.isArray(input),'mission_edit_native_required');
       ensure(this.missionStorageAdmitted,'storage_reserve_admission_denied');const p=input as any;
@@ -7110,6 +7132,7 @@ export class BackendCore {
       case 'rendererEventPage': return this.intelligenceJournal.rendererPage(a) as CommandMap[K]['output'];
       case 'replay': return this.intelligenceJournal.replay(a) as CommandMap[K]['output'];
       case 'close': {
+        this.personalMemoryReview?.close();
         this.personalMemory?.close();
         this.velaVoiceRuntime.closeSpeechAdmission();
         let cleanupError: unknown, cleanupFailed = false;
