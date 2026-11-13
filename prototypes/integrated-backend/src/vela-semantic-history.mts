@@ -168,6 +168,7 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
   validate: () => void, signal: AbortSignal, observations?: MissionCognitionObservations,
   discovery?: { sources: readonly ReviewedEvidenceSource[]; partial: boolean; missionGap?: string }) {
   const authorize = () => { validate(); return !signal.aborted; };
+  signal.throwIfAborted();
   validate();
   const perceptionSchema = semanticHistoryFormats.interpret.schema;
   const perception = api.qualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret) ??
@@ -181,10 +182,9 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
   if (!perception) missingStages.push('interpret');
   if (!assessment) missingStages.push('assess');
   if (missingStages.length) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize }, signal, observations, missingStages);
+  signal.throwIfAborted();
+  validate();
   const candidates = new Map(discovery?.sources.map(source => [source.sourceId, source]));
-  const searchable = [...candidates.values()].map(source => ({
-    id: source.sourceId, identities: [source.sourceId], text: source.title + '\n' + source.text,
-  }));
   const approved = new Set([...sources, ...candidates.values()]);
   const scan = discovery?.partial ? 'partial' as const : 'bounded' as const;
   const reviewedSourceTitles = discovery?.sources.map(source => source.title);
@@ -200,7 +200,10 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
         if (!parsed) return [];
         const existing = rankedQueries.get(parsed.digest);
         if (existing) return existing;
-        const matches = (rank ??= createCanonicalRetrievalRanker(searchable))(parsed).ids;
+        rank ??= createCanonicalRetrievalRanker([...candidates.values()].map(source => ({
+          id: source.sourceId, identities: [source.sourceId], text: source.title + '\n' + source.text,
+        })));
+        const matches = rank(parsed).ids;
         rankedQueries.set(parsed.digest, matches);
         return matches;
       };

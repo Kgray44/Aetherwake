@@ -260,3 +260,22 @@ test('reviewed discovery resolves an exact source ID even when only a distractor
   assert.equal(result.state, 'assessed');
   assert.equal(result.coverage[0].passages[0].sourceId, sourceId);
 });
+
+test('reviewed discovery checks revocation after catalog refresh and before touching source content', async () => {
+  let revoked = false;
+  let reads = 0;
+  const source = { sourceId: 'note', revision: '1', proofDigest: 'note', sourceKind: 'note' as const,
+    title: 'Reviewed note', get text() { reads++; return 'Reviewed content'; } };
+  const api = {
+    qualifiedStructuredRoute: () => undefined,
+    async resolveQualifiedStructuredRoute() {
+      revoked = true;
+      return { model: 'synthetic-model' };
+    },
+    structuredProposal: () => assert.fail('revoked review must stop before interpretation'),
+  } as unknown as VelaApiRuntime;
+  await assert.rejects(investigateReviewedVelaEvidence(api, 'Find the note', [], 1, 'synthetic-model', () => {
+    if (revoked) throw new Error('review revoked');
+  }, new AbortController().signal, undefined, { sources: [source], partial: false }), /review revoked/);
+  assert.equal(reads, 0);
+});
