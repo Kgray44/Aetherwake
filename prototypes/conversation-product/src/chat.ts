@@ -1,3 +1,4 @@
+import { CONVERSATION_DRAFT_LIMITS } from './contracts.ts';
 import type { ConversationProductPort, ConversationView, ConversationViewPosition, Detail, MessageView } from './contracts.ts';
 import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-session.ts';
@@ -419,8 +420,14 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       const quoted=message.content.replace(/\r\n?/g,'\n').split('\n').map(line=>'> '+line).join('\n');
       const prefix=before+(before&&!before.endsWith('\n\n')?(before.endsWith('\n')?'\n':'\n\n'):'')+
         quoted+(after&&!after.startsWith('\n')?'\n\n':'\n');
+      const content=prefix+after;
+      if(content.length>CONVERSATION_DRAFT_LIMITS.contentUnits||
+          new TextEncoder().encode(content).byteLength>CONVERSATION_DRAFT_LIMITS.contentBytes){
+        report('This reply is too long to fit in the draft.');
+        return;
+      }
       markViewIntent();
-      session.update(prefix+after);
+      session.update(content);
       actions.open=false;
       textarea.focus();
       textarea.setSelectionRange(prefix.length,prefix.length);
