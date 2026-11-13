@@ -38,7 +38,7 @@ export type CanonicalOrganizationCommand =
  | { type: 'renameConversation'; resourceId: string; title: string; expectedRevision: number; expectedVersion: number }
  | { type: 'associateProject'; resourceId: string; projectId: string | null; expectedVersion: number };
 export interface ProductCommandMap {
- list: { input: SearchQuery; output: Page<ConversationSummary> };
+ list: { input: SearchQuery & { runningOnly?: boolean }; output: Page<ConversationSummary> };
  search: { input: SearchQuery; output: Page<SearchHit> };
  detail: { input: { resourceId: string; offset?: number; limit?: number; aroundMessageId?: string }; output: Detail };
  readDraft: { input: { resourceId: string }; output: ConversationDraft };

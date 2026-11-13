@@ -317,22 +317,26 @@ export class ConversationProduct implements ConversationProductPort {
   const result:ConversationSummary={ resourceId, conversationId: g.id, title: r.title, providerId: c.providerId, revision: c.revision, version: r.version, projectId: r.project_id ?? null, projectIds:[...this.projectIds(v,resourceId)], state: r.state ?? 'active', createdAt: g.createdAt,lastActivityAt,historyMetadataStatus,...(execution?{execution}:{}),favorite:v.indices.flags!.has(resourceId),messageCount,collectionIds:[...(v.indices.memberships!.get(resourceId)??[])] };
   v.projection?.summaries.set(key,result);return result;
  }
- private candidates(v:View,q:SearchQuery,ignoreCollection=false) {
+ private candidates(v:View,q:ProductCommandMap['list']['input'],ignoreCollection=false) {
   this.validateQuery(q);
   const family = q.familyOf ? this.family(v, q.familyOf) : null;
   const collection = !ignoreCollection && q.collectionId ? this.collections(v).find(c => c.id === q.collectionId) : null;
   if (q.collectionId && !ignoreCollection) check(collection, 'collection_missing');
   if(q.favorite)this.summaryMetadata(v);
   return v.conversations.filter(c=>{
+   if(q.runningOnly){
+    const state=v.indices.executions.get(c.resourceId)?.state;
+    if(state!=='dispatching'&&state!=='running')return false;
+   }
    const r=v.indices.resources.get(c.resourceId),g=v.indices.headers.get(v.resourceMap[c.resourceId]);
    return !!r&&!!g&&(q.archived?r.state==='archived':(r.state??'active')==='active')&&(!q.providerId||c.providerId===q.providerId)&&(!family||family.has(c.resourceId))&&(!collection||collection.memberIds.includes(c.resourceId))&&(q.projectId===undefined||(q.projectId===null?this.projectIds(v,c.resourceId).length===0:this.projectIds(v,c.resourceId).includes(q.projectId)))&&(!q.favorite||v.indices.flags!.has(c.resourceId))&&(!q.after||g.createdAt>=q.after)&&(!q.before||g.createdAt<=q.before)&&this.readable(v,c.resourceId,undefined,!!q.archived);
   });
  }
- private summaries(v: View, q: SearchQuery = {}, ignoreCollection = false): ConversationSummary[] {
+ private summaries(v: View, q: ProductCommandMap['list']['input'] = {}, ignoreCollection = false): ConversationSummary[] {
   const candidates = this.matchingCandidates(v, q, ignoreCollection);
   return this.sortSummaries(candidates.map(c=>this.summary(v,c.resourceId,!!q.archived)), q);
  }
- private matchingCandidates(v: View, q: SearchQuery, ignoreCollection = false) {
+ private matchingCandidates(v: View, q: ProductCommandMap['list']['input'], ignoreCollection = false) {
   const candidates = this.candidates(v, q, ignoreCollection);
   if (!q.text) return candidates;
   const needle = q.text.toLocaleLowerCase();
@@ -372,8 +376,12 @@ export class ConversationProduct implements ConversationProductPort {
   });
   if(v.projection)v.projection.collections=result;return result;
  }
- private readProjection(v:View,name:'list'|'search'|'collections',a:SearchQuery):unknown {
-  if(name==='list')return page(this.summaries(v,a),a);
+ private readProjection(v:View,name:'list'|'search'|'collections',a:ProductCommandMap['list']['input']):unknown {
+  if(name==='list'){
+   check(a.runningOnly===undefined||typeof a.runningOnly==='boolean','invalid_running_filter');
+   return page(this.summaries(v,a),a);
+  }
+  check(a.runningOnly===undefined,'invalid_running_filter');
   if(name==='collections')return this.collections(v);
   const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','chat-history','resources','all'].includes(mode),'invalid_search_mode');
   const titlesAndMessages = mode === 'all' || mode === 'chat-history';

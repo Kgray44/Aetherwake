@@ -36,6 +36,33 @@ async function record(f:ReturnType<typeof fixture>,id:string,content:string){con
 async function create(f:ReturnType<typeof fixture>,title='Synthetic conversation'){return f.product.command('create',{title,commandId:crypto.randomUUID()});}
 async function branch(f:ReturnType<typeof fixture>,resourceId:string,messageId:string){const d=await f.product.command('detail',{resourceId});return f.product.command('branch',{resourceId,messageId,includeMessageIds:[messageId],providerId:d.conversation.providerId,title:'Synthetic sibling',commandId:crypto.randomUUID(),tokenBudget:32768,expectedRevision:d.conversation.revision});}
 
+test('running chats count only authorized active executions before pagination',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-running-chats-')),f=fixture(join(dir,'canonical.sqlite'));
+ try {
+  const running=await create(f,'Running'),starting=await create(f,'Starting');
+  const finished=await create(f,'Finished'),denied=await create(f,'Denied'),idle=await create(f,'Idle');
+  f.denied.add(denied.resourceId);
+  f.setTransform(snapshot=>{
+   const rows=[[running,'running'],[starting,'dispatching'],[finished,'provider_completed'],[denied,'running']] as const;
+   return {...snapshot,executions:Object.fromEntries(rows.map(([chat,state],i)=>{
+    const id='execution:synthetic-'+i;
+    return [id,{id,resourceId:chat.resourceId,providerId:chat.providerId,state,commandId:id,startedAt:'2026-11-02T00:00:00Z',
+     endedAt:null,taskVerified:false as const,binding:null,turnId:null}];
+   }))};
+  });
+  const scope={runningOnly:true,sort:'active' as const,limit:1};
+  const first=await f.product.command('list',scope),second=await f.product.command('list',{...scope,offset:1});
+  assert.equal(first.total,2);
+  assert.equal(first.hasMore,true);
+  assert.equal(second.hasMore,false);
+  assert.deepEqual(new Set([...first.items,...second.items].map(chat=>chat.resourceId)),new Set([running.resourceId,starting.resourceId]));
+  assert.equal((await f.product.command('list',{...scope,text:'Finished'})).total,0);
+  await assert.rejects(f.product.command('list',{runningOnly:'yes' as never}),/invalid_running_filter/);
+  const history=await f.product.command('list',{sort:'active'});
+  assert.deepEqual(new Set(history.items.map(chat=>chat.resourceId)),new Set([running.resourceId,starting.resourceId,finished.resourceId,idle.resourceId]));
+ } finally {await f.close();removeFixture(dir);}
+});
+
 test('canonical IDs, multiple canonical collections, favorites and migrations survive restart',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'aerynth-conversation-product-')),path=join(dir,'canonical.sqlite');let f=fixture(path);
  try{

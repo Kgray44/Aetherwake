@@ -206,13 +206,12 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   const scope:SearchQuery={projectId:state.query.projectId,...(mode==='favorite'?{favorite:true}:{}),sort:mode==='running'?'active':'activity',limit:12};
   switchLoading=true;
   try{
-   // The Running group uses the canonical execution summary from the list projection.
    const exact=!!text&&mode!=='running';
-   const page=exact?await call('search',{...scope,text,searchMode:'chat-history'}):await call('list',{...scope,...(text?{text}:{})});
+   const page=exact?await call('search',{...scope,text,searchMode:'chat-history'}):
+    await call('list',{...scope,...(text?{text}:{}),...(mode==='running'?{runningOnly:true}:{})});
    if(!stillCurrent())return;
    const hits:SearchHit[]=(page.items as (SearchHit|ConversationSummary)[]).flatMap(item=>{
     if('kind' in item)return item.kind==='resource'?[]:[item];
-    if(mode==='running'&&item.execution?.state!=='dispatching'&&item.execution?.state!=='running')return [];
     return [{kind:'conversation',resourceId:item.resourceId,title:item.title,excerpt:'',summary:item,providerId:item.providerId}];
    });
    let opening=false;
@@ -255,7 +254,8 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
     else rows[Math.min(rows.length-1,index+(event.key==='ArrowDown'?1:-1))].focus();
    });
    switchResults.replaceChildren(...rows);
-   switchStatus.textContent=rows.length?`${rows.length} ${exact?'matches':'conversations'}${page.hasMore?' · more in history':''}`:text?'No matches in this group.':'No conversations in this group.';
+   const resultLabel=exact?(rows.length===1?'match':'matches'):(rows.length===1?'conversation':'conversations');
+   switchStatus.textContent=rows.length?`${rows.length} ${resultLabel}${page.hasMore?' · more in history':''}`:text?'No matches in this group.':'No conversations in this group.';
    if(switchOpen?.generation===generation&&switchOpen.intent===openIntent)rows[0]?.click();
    else focusResult(rows[0]);
   }catch{

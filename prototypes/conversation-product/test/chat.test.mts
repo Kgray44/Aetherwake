@@ -741,6 +741,27 @@ for (const focusResult of [false,true]) test('Switch chat refreshes its exact qu
  } finally {await manager?.dispose();f.restore();}
 });
 
+test('Switch chat uses the canonical running-only page and its pagination status', async () => {
+ const f=fixture();let manager;
+ const running={...f.detail.conversation,title:'Running synthetic chat',execution:{state:'running'}};
+ const port={async command(name:string,input:any){
+  if(name==='list'&&input.sort==='active'){
+   assert.equal(input.runningOnly,true);
+   return {items:[running],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try{
+  manager=mountConversationManager(f.view.root,port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'),group=switcher.querySelector('select');
+  group.value='running';group.fire('change');
+  await until(()=>!!named(switcher,'Running synthetic chat'));
+  assert.equal(switcher.querySelector('.cp-switcher-status').textContent,'1 conversation');
+ }finally{await manager?.dispose();f.restore();}
+});
+
 for (const action of ['focus result','focus filter','change from open to focus','leave query after Enter','return to query after Enter','held Enter after focus returns']) test('Switch chat handles a pending keyboard action ('+action+')', async () => {
  const f=fixture(), resourceId=f.draft.resourceId;
  const started=Promise.withResolvers<void>(), response=Promise.withResolvers<void>();
