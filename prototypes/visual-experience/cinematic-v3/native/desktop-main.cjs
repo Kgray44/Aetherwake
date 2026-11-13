@@ -1,6 +1,6 @@
 const {
   app,
-  BrowserWindow,
+  BrowserWindow: ElectronBrowserWindow,
   ipcMain,
   session,
   protocol,
@@ -14,6 +14,10 @@ const {
   MenuItem,
   screen,
 } = require("electron");
+const { installDesktopTestAdmission, verificationLaunch } = require("./native-test-admission.cjs");
+const { check: checkDesktopTest, BrowserWindow } = verificationLaunch(process.argv)
+  ? installDesktopTestAdmission({ app, BrowserWindow: ElectronBrowserWindow, terminate: stopDesktopTest })
+  : { check: () => {}, BrowserWindow: ElectronBrowserWindow };
 const { createMediaPlayback, scheme: mediaScheme } = require("./media-playback.cjs");
 protocol.registerSchemesAsPrivileged([
   { scheme: mediaScheme, privileges: { standard: true, secure: true, stream: true } },
@@ -40,6 +44,7 @@ const {
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
 const {showVelaReview,projectEvidenceMatches}=require('./vela-review.cjs');
+const {capturePersonalMemory}=require('./personal-memory-capture.cjs');
 const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
@@ -155,7 +160,7 @@ if (
   (verify || !profileArg || !path.isAbsolute(profileArg.slice(10)))
 )
   throw Error("explicit_normal_profile_required_for_catalog_check");
-if (verify && (!profileArg || !path.isAbsolute(profileArg.slice(10)))) {
+if ((verify || process.argv.includes("--native-test")) && (!profileArg || !path.isAbsolute(profileArg.slice(10)))) {
   console.error("absolute_verification_profile_required");
   process.exit(2);
 }
@@ -229,6 +234,10 @@ let win,
   child,
   serial = 0,
   closing = false;
+function stopDesktopTest() {
+  if (child && !child.killed) child.kill();
+  app.exit(2);
+}
 const deadlineArgument = process.argv.find((argument) =>
   argument.startsWith("--verification-deadline-ms="),
 );
@@ -374,6 +383,7 @@ function sendMissionHostSignal(missionHostSignal) {
   }
 }
 app.whenReady().then(async () => {
+  checkDesktopTest();
   nativeTheme.themeSource = "dark";
   const localURL = pathToFileURL(path.join(root, "dist/index.html")).href;
   child = spawn(
@@ -472,6 +482,7 @@ app.whenReady().then(async () => {
     (_wc, _permission, callback) => callback(false),
   );
   session.defaultSession.setPermissionCheckHandler(() => false);
+  checkDesktopTest();
   win = new BrowserWindow({
     width: 1600,
     height: 1000,
@@ -613,8 +624,8 @@ app.whenReady().then(async () => {
     !win.isMinimized() &&
     win.isFocused();
   let nativeReviewBusy=false;
-  const nativeReviewGate=async work=>{if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
-  const reviewProvider=args=>nativeReviewGate(()=>showVelaReview(args));
+  const nativeReviewGate=async work=>{checkDesktopTest();if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
+  const reviewProvider=args=>nativeReviewGate(()=>showVelaReview({ ...args, runtime: args.runtime ?? { BrowserWindow, ipcMain, session } }));
   const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
   const policyReady = () => !closing && !backendFailed && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
   const { reviewMode, reviewRollback, ...performanceMenu } = require("./resource-policy-menu.cjs").resourcePolicyMenu({
@@ -679,6 +690,8 @@ app.whenReady().then(async () => {
   win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
+      if (typeof command === "string" && command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture")
+        throw Error("unauthorized_private_command");
       if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative'].includes(command))throw Error('unauthorized_private_command');
       if (
         event.sender !== win.webContents ||
@@ -799,7 +812,20 @@ app.whenReady().then(async () => {
           event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
         throw new Error("unauthorized_sender");
       let result;
-      if (command === "desktop") result = await call("desktop", input);
+      if (command === "personalMemoryCapture") {
+        result = await capturePersonalMemory({
+          input,
+          trustedFrame: () => !closing && !backendFailed && trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized(),
+          observeGesture: () => trustedActiveFrame(event) &&
+            event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false),
+          allowWrite: () => storage.allowWrite(),
+          preview: value => call("personalMemoryCapturePreviewNative", value),
+          showReview: review => reviewProvider({ parent: win, review, experience: "memory-capture", expiresAt: review.expiresAt }),
+          commit: review => call("personalMemoryCaptureCommitNative", review),
+          cancel: id => call("personalMemoryCaptureCancelNative", { id }),
+        });
+      }
+      else if (command === "desktop") result = await call("desktop", input);
       else if (command === "openResource")
         result = await call("openResource", input);
       else if (command === "providerConnection")
@@ -1114,6 +1140,7 @@ app.whenReady().then(async () => {
     win.once("closed", () => clearInterval(sessionTimer));
     void maintainSession();
   }
+  checkDesktopTest();
   win.show();
   win.focus();
   active();
@@ -1482,6 +1509,7 @@ app.on("before-quit", (event) => {
         ["running", "dispatching"].includes(e.state),
       );
       if (active.length) {
+        checkDesktopTest();
         const choice = await dialog.showMessageBox(win, {
           type: "question",
           message: active.every(
@@ -1516,6 +1544,7 @@ app.on("before-quit", (event) => {
       app.quit();
     })
     .catch(async () => {
+      checkDesktopTest();
       const choice = await dialog.showMessageBox(win, {
         type: "warning",
         message: "Your latest edits could not be saved.",

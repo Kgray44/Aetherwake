@@ -1,0 +1,94 @@
+name: Aerynth platform integration
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+      timeout:
+        required: true
+        type: number
+      windows-shard:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    timeout-minutes: ${{ inputs.timeout }}
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.18.0'
+          cache: npm
+          cache-dependency-path: |
+            prototypes/codex-bridge/package-lock.json
+            prototypes/integrated-backend/package-lock.json
+            prototypes/openai-provider/package-lock.json
+            prototypes/block-library/package-lock.json
+            prototypes/constellation/package-lock.json
+            prototypes/visual-experience/cinematic-v3/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: prototypes/integrated-backend
+      - run: npm ci --ignore-scripts --no-audit --no-fund --cache .runtime/npm-cache
+        working-directory: prototypes/openai-provider
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: prototypes/block-library
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: prototypes/constellation
+      - name: Install desktop test dependencies on Linux
+        if: runner.os == 'Linux'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: prototypes/visual-experience/cinematic-v3
+      - name: Install desktop dependencies for Windows native contract tests
+        if: runner.os == 'Windows'
+        run: npm ci --no-audit --no-fund
+        working-directory: prototypes/visual-experience/cinematic-v3
+      - name: Typecheck the backend
+        if: inputs.windows-shard != '1'
+        run: npm run typecheck
+        working-directory: prototypes/integrated-backend
+      - name: Typecheck Vela Core
+        if: inputs.windows-shard != '1'
+        run: node prototypes/integrated-backend/node_modules/typescript/bin/tsc --project prototypes/vela-core/tsconfig.json --typeRoots prototypes/integrated-backend/node_modules/@types
+      - name: Typecheck the desktop application
+        if: runner.os != 'Windows'
+        run: npm run typecheck
+        working-directory: prototypes/visual-experience/cinematic-v3
+      - name: Build the desktop application and Windows native helpers
+        if: runner.os == 'Windows' && inputs.windows-shard != '1'
+        run: npm run build
+        working-directory: prototypes/visual-experience/cinematic-v3
+      - name: Test the review build and runtime source contracts
+        if: inputs.windows-shard != '1'
+        run: node --test "scripts/review-*.test.mjs"
+      - name: Test verification tooling and architecture boundaries
+        if: runner.os == 'Linux'
+        run: node --test scripts/aerynth-ci.test.mjs scripts/aerynth-boundaries.test.mjs scripts/aerynth-backend-shards.test.mjs
+      - name: Test the Windows shard runner
+        if: inputs.windows-shard == '0'
+        run: node --test scripts/aerynth-backend-shards.test.mjs
+      - name: Check native journey script syntax
+        if: inputs.windows-shard != '1'
+        run: node --check scripts/verify-living-instruments-native.mjs
+      - name: Exercise the cross-package acceptance fixtures
+        id: acceptance
+        env:
+          AERYNTH_ACCEPTANCE_OUTPUT: ${{ runner.temp }}/aerynth-acceptance
+          AERYNTH_WINDOWS_SHARD: ${{ inputs.windows-shard }}
+        run: node scripts/run-aerynth-acceptance.mts
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: aerynth-acceptance-${{ inputs.runner }}${{ inputs.windows-shard != '' && format('-shard-{0}', inputs.windows-shard) || '' }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aerynth-acceptance/acceptance.json
+          if-no-files-found: ${{ steps.acceptance.outcome == 'success' && 'error' || 'warn' }}
+          retention-days: 14

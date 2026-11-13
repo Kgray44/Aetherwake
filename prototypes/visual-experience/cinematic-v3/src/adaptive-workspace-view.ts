@@ -3,13 +3,13 @@ import { intelligenceZones, projectIntelligence, type IntelligenceBinding, type 
 import { mountResourcePolicy, type ResourcePolicyPort } from './resource-policy-view.ts';
 import type { MissionProjection } from '../../../integrated-backend/src/mission-contracts.mts';
 
-/** Accessible read-only inspection inside the existing spatial workroom. No camera or task ownership. */
+/** Accessible inspection and reviewed resource controls inside the existing spatial workroom. */
 export function mountIntelligenceInspection(root: HTMLElement, viewId: string, readProfile?: (id: string) => Promise<MissionExecutionProfile | null>, resourcePolicy?: ResourcePolicyPort) {
   const doc = root.ownerDocument, details = doc.createElement('details'), summary = doc.createElement('summary');
   details.className = 'aw-mission-workroom-controls aw-intelligence-inspection';
   details.dataset.noCardDrag = 'true';
   details.hidden = true;
-  summary.textContent = 'Inspect intelligence · read only';
+  summary.textContent = 'Inspect intelligence';
   const status = doc.createElement('p'), tabs = doc.createElement('div'), panel = doc.createElement('section');
   status.setAttribute('role', 'status');
   tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Intelligence regions');

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { DatabaseSync } from 'node:sqlite';
+import { lastMissionVerificationEvent } from './mission-publication.mts';
+import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import type { MissionProjection } from './mission-contracts.mts';
 import { missionCompletion, missionResultAvailable } from './mission-native.mts';
 
@@ -22,6 +23,7 @@ function evidenceDigest(mission: MissionProjection): string {
 /** An attributed handoff in one canonical local chat, independent of Vela's global history. */
 export class MissionConversationReceipts {
   private readonly host: ReceiptHost;
+  private readonly receiptByMessage: StatementSync;
   private readonly checking = new Set<string>();
 
   constructor(host: ReceiptHost) {
@@ -33,6 +35,7 @@ export class MissionConversationReceipts {
       message_id TEXT NOT NULL UNIQUE,
       UNIQUE(mission_id,evidence_digest)
     ) STRICT;`);
+    this.receiptByMessage = host.db.prepare('SELECT mission_id, evidence_digest, resource_id FROM vela_mission_conversation_receipts WHERE message_id=?');
   }
 
   publish(mission: MissionProjection, acknowledge: () => void): boolean {
@@ -43,7 +46,9 @@ export class MissionConversationReceipts {
         WHERE mission_id=? AND evidence_digest=?`).get(mission.id, digest);
       if (!previous) {
         const evidence = mission.tasks.map(task => ({ taskId: task.id, evidence: task.attempts.at(-1)?.evidence }));
-        const recordedAt = mission.events.findLast(event => event.kind === 'settled' && event.detail === 'verified')!.time;
+        const verified = lastMissionVerificationEvent(mission);
+        if (!verified) throw Error('mission_verification_event_unavailable');
+        const recordedAt = verified.time;
         const content = [`Mission ${mission.id} · plan ${mission.planRevision}`, `Objective: ${mission.objective}`,
           `${mission.coverage?'Partial evidence':'Verified result'} recorded at ${recordedAt}`, missionCompletion(mission).content,
           ...evidence.flatMap(({ taskId, evidence: item }) => item ?
@@ -62,7 +67,7 @@ export class MissionConversationReceipts {
 
   /** Every source read, including inherited branch messages and future sends, rechecks authority. */
   sourceAllowed(messageId: string): boolean {
-    const row = this.host.db.prepare('SELECT * FROM vela_mission_conversation_receipts WHERE message_id=?').get(messageId);
+    const row = this.receiptByMessage.get(messageId);
     if (!row) return true;
     const id = String(row.mission_id);
     if (this.checking.has(id)) return false;
