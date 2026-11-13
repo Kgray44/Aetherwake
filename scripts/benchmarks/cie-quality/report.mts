@@ -48,6 +48,20 @@ export function distribution(values: number[]) {
   return { samples: values.length, p50: values[Math.ceil(values.length * .5) - 1], p95: values[Math.ceil(values.length * .95) - 1] };
 }
 
+export function summarizeTokenUsage(observations: readonly unknown[]) {
+  const usage = { samples: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  for (const value of observations) {
+    if (value === null || typeof value !== 'object') continue;
+    const { inputTokens, outputTokens, totalTokens } = value as Record<string, unknown>;
+    if (!tokens(inputTokens) || !tokens(outputTokens) || !tokens(totalTokens) || inputTokens + outputTokens !== totalTokens) continue;
+    usage.samples++;
+    usage.inputTokens += inputTokens;
+    usage.outputTokens += outputTokens;
+    usage.totalTokens += totalTokens;
+  }
+  return usage;
+}
+
 function summarizeReportedCalls(calls: readonly Run[]) {
   const byModel = new Map<string | null, Run[]>();
   for (const call of calls) {
@@ -59,17 +73,7 @@ function summarizeReportedCalls(calls: readonly Run[]) {
   }
   return [...byModel].map(([model, group]) => {
     const dispatched = group.filter(call => call.dispatched === true);
-    const usage = { samples: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-    for (const call of dispatched) {
-      const input = call.usage?.inputTokens;
-      const output = call.usage?.outputTokens;
-      const total = call.usage?.totalTokens;
-      if (!tokens(input) || !tokens(output) || !tokens(total) || input + output !== total) continue;
-      usage.samples++;
-      usage.inputTokens += input;
-      usage.outputTokens += output;
-      usage.totalTokens += total;
-    }
+    const usage = summarizeTokenUsage(dispatched.map(call => call.usage));
     return { model, reportedDispatched: dispatched.length, dispatchUnknown: group.filter(call => call.dispatched === null).length,
       providerLatencyMs: distribution(dispatched.flatMap(call => nonnegative(call.elapsedMs) ? [call.elapsedMs] : [])), usage };
   });

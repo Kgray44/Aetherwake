@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { BLIND_INPUT_SHA256, readBlindInputs, type BlindCheckpoint } from './blind-runner.mts';
-import { distribution } from './report.mts';
+import { distribution, summarizeTokenUsage } from './report.mts';
 
 /** Scores are supplied by the independent evaluator after predictions are frozen. */
 export interface BlindCaseGrade {
@@ -9,6 +9,39 @@ export interface BlindCaseGrade {
   disclosure?: { invalid: number };
   contradiction?: boolean;
   answer?: boolean;
+}
+
+function summarizeSettlements(prediction: BlindCheckpoint) {
+  const seen = new Set<string>();
+  const groups = new Map<string, { transport: string; requestedModel: string; settledCalls: number; times: number[]; usage: unknown[] }>();
+  let casesWithReceipts = 0;
+  for (const { result } of prediction.results) {
+    if (!result || typeof result !== 'object' || !Object.hasOwn(result, 'settlements')) continue;
+    const { transport, requestedModel, calls, settlements } = result as Record<string, unknown>;
+    if ((transport !== 'live' && transport !== 'synthetic') || typeof requestedModel !== 'string' || !requestedModel.trim() ||
+      !Array.isArray(settlements) || calls !== settlements.length ||
+      (prediction.route && (transport !== prediction.route.transport || requestedModel !== prediction.route.model))) {
+      throw new Error('blind_settlement_binding');
+    }
+    const key = JSON.stringify([transport, requestedModel]);
+    const group = groups.get(key) ?? { transport, requestedModel, settledCalls: 0, times: [], usage: [] };
+    for (const receipt of settlements) {
+      if (typeof receipt?.executionId !== 'string' || !receipt.executionId.trim() || seen.has(receipt.executionId)) {
+        throw new Error('blind_settlement_execution');
+      }
+      seen.add(receipt.executionId);
+      if (typeof receipt.elapsedMs === 'number' && Number.isFinite(receipt.elapsedMs) && receipt.elapsedMs >= 0) {
+        group.times.push(receipt.elapsedMs);
+      }
+      group.usage.push(receipt.usage);
+    }
+    casesWithReceipts++;
+    group.settledCalls += settlements.length;
+    groups.set(key, group);
+  }
+  return { casesWithReceipts, groups: [...groups.values()].map(({ times, usage, ...group }) => ({
+    ...group, latencyMs: distribution(times), usage: summarizeTokenUsage(usage),
+  })) };
 }
 
 export function reportBlindQuality(input: Buffer, prediction: BlindCheckpoint, evaluation: {
@@ -71,6 +104,7 @@ export function reportBlindQuality(input: Buffer, prediction: BlindCheckpoint, e
     expectedCases: expected.length, predictedCases: predicted.size, casesWithGrades: scored.size,
     stopped: payload.stopped,
     endToEndMs: distribution(payload.results.map(result => result.endToEndMs)),
+    providerObservations: summarizeSettlements(prediction),
     candidates: { ...candidates, recall: candidates.relevant ? candidates.hits / candidates.relevant : null,
       precision: candidates.returned ? candidates.hits / candidates.returned : null },
     disclosure, contradiction, answer,

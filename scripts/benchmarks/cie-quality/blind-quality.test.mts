@@ -41,3 +41,32 @@ test('request latency includes completed cases awaiting independent grades', () 
   assert.equal(report.casesWithGrades, 0);
   assert.equal(report.endToEndMs.samples, 2);
 });
+
+test('blind reports distinguish settled live and synthetic calls and retain missing usage', async () => {
+  const native = await runBlindCie(input, prediction.candidate, async ({ id }) => ({
+    transport: id === 'blind-001' ? 'live' : 'synthetic', requestedModel: 'test-model', calls: 2,
+    settlements: [
+      { executionId: id + ':1', elapsedMs: 30, usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } },
+      { executionId: id + ':2', elapsedMs: null, usage: null },
+    ],
+  }), new AbortController().signal, { maxCases: 2 });
+  const report = reportBlindQuality(input, native, { ...evaluation, predictionSha256: native.predictionSha256, grades: [] });
+  assert.equal(report.providerObservations.casesWithReceipts, 2);
+  assert.deepEqual(report.providerObservations.groups, ['live', 'synthetic'].map(transport => ({
+    transport, requestedModel: 'test-model', settledCalls: 2,
+    latencyMs: { samples: 1, p50: 30, p95: 30 },
+    usage: { samples: 1, inputTokens: 5, outputTokens: 2, totalTokens: 7 },
+  })));
+});
+
+test('blind reports reject duplicate executions and receipt groups inconsistent with the sealed route', async () => {
+  for (const transport of ['live', 'synthetic']) {
+    const native = await runBlindCie(input, prediction.candidate, async () => ({
+      transport, requestedModel: 'test-model', calls: 2,
+      settlements: [{ executionId: 'repeat' }, { executionId: 'repeat' }],
+    }), new AbortController().signal, { maxCases: 1,
+      route: { transport: 'live', provider: 'openai-api-vela', model: 'test-model' } });
+    assert.throws(() => reportBlindQuality(input, native, { ...evaluation, predictionSha256: native.predictionSha256, grades: [] }),
+      transport === 'live' ? /blind_settlement_execution/ : /blind_settlement_binding/);
+  }
+});
