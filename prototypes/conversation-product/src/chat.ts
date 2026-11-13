@@ -1012,13 +1012,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(recoveredStop||recoveredFailure){uncertain=false;submittedTurn=undefined;reconcileSubmittedTurn=undefined;}
     if(stopRequestedFor!==next.id||!active())stopRequestedFor=null;
     if(streamExecution!==next.id){streamExecution=next.id;streamText.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;liveFollow=false;}
-    const preview=observation.preview;
+    const preview=connection==='available'?observation.preview:undefined;
     if(preview===null){streamText.textContent='';lastCursor=-1;seenEvents.clear();streamLimited=false;liveFollow=false;}
     if(preview&&active()&&preview.executionId===next.id&&Number.isSafeInteger(preview.cursor)&&preview.cursor>=0&&preview.cursor>=lastCursor){
       // A complete snapshot supersedes only output through its cursor. Earlier/equal deltas are then covered.
       const text=preview.text.slice(0,1048576);if(streamText.textContent!==text)streamText.textContent=text;lastCursor=preview.cursor;seenEvents.clear();streamLimited=preview.text.length>1048576;
     }
-    const delta=observation.delta;
+    const delta=connection==='available'?observation.delta:undefined;
     if(delta&&!streamLimited&&Number.isSafeInteger(delta.cursor)&&delta.cursor>lastCursor&&!seenEvents.has(delta.eventId)){
       seenEvents.add(delta.eventId);lastCursor=delta.cursor;const text=(streamText.textContent??'')+delta.text;streamText.textContent=text.slice(0,1048576);streamLimited=text.length>1048576||seenEvents.size>=65536;
     }
