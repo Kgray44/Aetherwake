@@ -179,3 +179,23 @@ Baseline `5652223eba0c93df335e198289e80f3903d20a17` includes the journal read pr
 - [#101](https://github.com/Kgray44/Aetherwake/pull/101) is qualifying at `b680d0e2`. Private IPC and reviewed chat capture are staged at `1a62d244` and `2dd51ce0`. The capture-specific displayed source binding is being carried into that sequence by Mission 6.
 - The reconciled chat and renderer candidate `9d24352d` retains the current CI configuration. Focused tests cover capture source binding and discard late Ask Vela document handoffs from inactive blocks. Physical desktop and live provider acceptance are open.
 - [#61](https://github.com/Kgray44/Aetherwake/pull/61) is held after an acknowledgement recovery timeout during Windows worker restart. The offline workflow and phase diagnostics are staged at `1b3732ac` pending maintainer approval. The sealed input is unchanged. Fresh provider predictions and independent grading remain open.
+
+## Owner actions after reconnect on 2026-11-13
+
+Main is `55828ae9`. The native memory review window landed in #101. The rows name the current owners and the next evidence needed for each lane.
+
+| Owner | Next action and trigger | Acceptance gate |
+| --- | --- | --- |
+| Mission 1, Central integration | Own #267 and #107 qualification on this base. Use the existing #169 inventory PR and one shared desktop slot. | Exact aggregate and governance, current admitted desktop ownership, combined journey receipts, and applicable owner acceptance. |
+| Mission 2, Current State | Fold the existing `1ecc1412` inventory and #169 update into the next meaningful landed milestone. Central publishes. | Source audit, local reference verifier and exact-base documentation qualification. |
+| Mission 3, CI | Keep #267 at `2343264d` with Central as publisher. After landing, help carry existing restart and composed-artifact diagnostics into CIE qualification once. | Both Windows shards, Linux, security, aggregate and governance. Workflow changes outside the approved 14-file diff require their own review. |
+| Mission 4, CIE | Review the durable profile-bound host and journal at `2c54768a`. #61 resumes after the CI fix and any applicable workflow approval. | Original seal, canonical receipt recovery and exact-base CI, followed by fresh provider predictions and independent blind grading. |
+| Mission 5, BackendCore | Delivered extraction is landed. Central has the separate owner-verified startup patch staged at `48b90613`. Return to Mission 5 only for a specific Core regression or requested follow-up. | Any startup adoption retains rollback and corruption behavior and needs exact combined qualification. |
+| Mission 6, persistent memory | #107 at `89f096c1` qualifies first. Then use #110 stage `82a90518`, which carries `956a00d2` and the renderer-only `ed440fc1` change once. | Scope, source version and digest checks, then an admitted native save/reopen/revoke witness with #113/#166 and separately scoped live recall. |
+| Mission 7, FI-4 | Share `d92cbcef` with Mission 8 for #116/#159. Resume qualification after the CI owner clears the settlement diagnostic and Central selects the landing base. | Actual overlap, verified artifacts, failure and retry attribution, restart recovery, and packaged mixed-mission acceptance. |
+| Mission 8, FI-5 | Use the same `d92cbcef` MissionService baseline after FI-4 composition. Existing paired trials support scoped lifecycle evidence. | Combined-host timing, observed regression rollback and independent quality evidence before broader policy promotion. Physical tests require a Central slot. |
+| Mission 9, renderer | Own the AIW disconnect lifecycle fix on `48b90613`. Ask Vela deactivation fix `275d7f21` is already carried once through `9d24352d` to `48b90613`. | Headless disconnect and late-read denial first, then the admitted combined renderer/restart journey with accessibility and measured performance. |
+| Mission 10, chat and Vela | Implement the production scoped app initiator and autonomous no-file-deletion enforcement in existing #236 ownership. Keep the seeded `28ca5ba2` desktop witness paired. | Existing-account and selected-source scope, grant and revocation, no indirect deletion or unknown-outcome replay, audited cost and synthetic negatives. Live activation needs its supported action-time grant. |
+| Mission 11, AIW | Independently review Mission 9’s disconnect fix after delivery. Keep canonical workroom aliases and FI-5 evidence on the shared baseline. | Six-region native travel, anchored focus, keyboard/reduced motion, GPU overhead and owner visual acceptance in a later admitted slot. |
+
+The desktop slot requires current explicit availability and the shared admission record. An idle desktop or an available lease does not establish availability.
