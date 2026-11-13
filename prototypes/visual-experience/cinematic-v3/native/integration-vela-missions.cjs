@@ -7,6 +7,7 @@ const { randomUUID } = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { performance } = require("node:perf_hooks");
+const { startWindowRecording } = require("./application-recording.cjs");
 const { fillNative } = require("./integration-agents.cjs");
 const { assertOwnedApplicationProfile } = require("./integration-checklists.cjs");
 const { createSlot, sourceIdentity, targetScript, waitForCondition } = require("./integration-resource-opening.cjs");
@@ -153,9 +154,10 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     win.on("blur", blur); win.on("hide", blur); win.on("minimize", blur);
     win.webContents.on("before-input-event", escape); win.webContents.on("console-message", consoleError);
     listening = true;
+    const recordAiw = argv.includes("--missions-aiw-inspection") && argv.includes("--missions-aep-presentation-only");
     const guardFile = path.join(app.getPath("home"), "AppData", "Local", "AeroStorageWatch", "ReserveGuard.ps1");
     receipt.reserve = JSON.parse(execFileSync("powershell.exe", [
-      "-NoProfile", "-NonInteractive", "-File", guardFile, "-EstimatedCBytes", String((argv.includes('--missions-folders-only')?64:32) * MiB), "-EstimatedDBytes", "0",
+      "-NoProfile", "-NonInteractive", "-File", guardFile, "-EstimatedCBytes", String((recordAiw ? 128 : argv.includes('--missions-folders-only') ? 64 : 32) * MiB), "-EstimatedDBytes", "0",
     ], { windowsHide: true, timeout: 4000, maxBuffer: 8192, encoding: "utf8" }));
     assert.equal(receipt.reserve.allowed, true, "storage_reserve_denied");
     await fs.mkdir(out);
@@ -906,7 +908,77 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         stagingToReceiptMs: presentation.userDelivery.stagingToReceiptMs,
         intakeToReceiptMs: presentation.intakeToUserDeliveryMs,
         reportEventId: reportPublication.eventId, reportLatency, firstMeaningfulOutput: presentation.firstMeaningfulOutput, leases };
-      await capture("01-native-mission-report");
+      if (recordAiw) {
+        await click(reportLink);
+        await click(RECORD + ' [data-mission-focus="preview-workroom"]');
+        await click(RECORD + ' [data-mission-focus="apply-workroom"]');
+        const selector = '[data-mission-workroom-card="stream"] .aw-intelligence-inspection';
+        const workroom = await wait("Canonical workroom and stream placement", async () => {
+          const projection = await read(missionId);
+          const state = await desktop();
+          if (projection.workroom?.workspaceId !== state.activeWorkspaceId) return false;
+          const placement = state.blocks.find(item => item.workspace_id === state.activeWorkspaceId &&
+            item.resource_id === projection.workroom.missionCards.stream);
+          return placement && { workspaceId: state.activeWorkspaceId, x: placement.x, y: placement.y };
+        });
+        await js(`window.__aerynth.execute(${quote({ type: "setViewport", workspaceId: workroom.workspaceId,
+          viewport: { x: workroom.x - 60, y: workroom.y - 180, zoom: 1 } })})`);
+        await click(selector + ' > summary');
+        await click(selector + ' [data-intelligence-zone="profiler"]');
+        const profile = await rpc("missions", { name: "execution-profile", input: { id: missionId } });
+        const measuredAttempts = await wait("AIW renders the same scoped execution profile", () => js(`(() => {
+          const panel = document.querySelector(${quote(selector + ' [role="tabpanel"]')});
+          const metric = [...panel?.querySelectorAll('dt') ?? []].find(row => row.textContent === 'Measured attempts');
+          return metric?.nextElementSibling.firstChild.textContent;
+        })()`));
+        assert.equal(measuredAttempts, [profile.work.intervalCoverage.measured, profile.work.intervalCoverage.attempts].join(" / "));
+        receipt.workroomInspection = { missionId: profile.missionId, revision: profile.revision, measuredAttempts };
+        await capture("01-adaptive-intelligence-profiler");
+        receipt.workroomInspection.renderer = await js(`new Promise(resolve => {
+          requestAnimationFrame(start => {
+            let previous = start;
+            const intervals = [];
+            const tick = at => {
+              intervals.push(at - previous);
+              previous = at;
+              if (at - start < ${FRAME_WINDOW_MS} && intervals.length < ${FRAME_SAMPLE_LIMIT}) requestAnimationFrame(tick);
+              else resolve({ intervals, windowMs: at - start, hidden: document.hidden || !document.hasFocus(), discarded: 0 });
+            };
+            requestAnimationFrame(tick);
+          });
+        })`).then(summarizeFrames);
+        receipt.workroomInspection.graphicsBackend = await js("window.__aerynth.snapshot().gpu.backend");
+        const recorder = await operation(
+          () => startWindowRecording(win, win.webContents.session, win.webContents.getURL()),
+          "aiw_video_start_deadline",
+        );
+        try {
+          await click(selector + ' [data-intelligence-zone="resource"]');
+          const resource = await js(`[...document.querySelectorAll(${quote(selector + ' [data-intelligence-field^="Lease · "]')})]
+            .map(row => row.dataset.intelligenceSource).sort()`);
+          assert.deepEqual(resource, profile.attempts.flatMap(attempt => attempt.resourceLease ? [attempt.resourceLease.leaseId] : []).sort());
+          if (argv.includes("--missions-aiw-inspection")) {
+            const policy = await rpc("resourcePolicyNative", { name: "inspect" });
+            await wait("AIW reads the authoritative resource policy", () => js(`(() => {
+              const panel = document.querySelector(${quote(selector + ' [aria-label="Current resource policy"]')});
+              return panel && !panel.hidden && panel.textContent.includes(${quote(policy.epoch)}) &&
+                panel.textContent.includes("Configuration version") && panel.textContent.includes("Local CPU");
+            })()`));
+            const privateRouteDenied = await js(`window.aerynthHost.command("resourcePolicyNative", {name:"inspect"}).then(() => false, () => true)`);
+            assert.equal(privateRouteDenied, true);
+            receipt.workroomInspection.resourcePolicy = { epoch: policy.epoch, configVersion: policy.configVersion, privateRouteDenied };
+          }
+          await capture("02-adaptive-intelligence-resource");
+          await click(selector + ' > summary');
+        } finally {
+          receipt.workroomInspection.video = await operation(
+            () => recorder.stop(path.join(out, "adaptive-intelligence-inspection.webm")),
+            "aiw_video_stop_deadline",
+          );
+        }
+      } else {
+        await capture("01-native-mission-report");
+      }
       receipt.providerActivity = { before: providerBefore, after: await rpc("providerActivity", {}) };
       assert.equal(receipt.providerActivity.after.providerRequests, 0);
       assert.equal(receipt.providerActivity.after.codexConnections, 0);
