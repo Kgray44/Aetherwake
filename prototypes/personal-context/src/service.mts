@@ -68,10 +68,13 @@ function request(value: ContextRequest) {
 }
 const words = (v: string) => new Set(v.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu)?.filter(w => w.length >= 2).slice(0, 128) ?? []);
 
+const existingSchemaOnly = Symbol('existing personal context schema only');
+
 export class PersonalContextService {
   private opts: PersonalContextServiceOptions;
-  constructor(options: PersonalContextServiceOptions) {
+  constructor(options: PersonalContextServiceOptions, mode?: typeof existingSchemaOnly) {
     this.opts = options;
+    if (mode === existingSchemaOnly) return;
     this.tx(() => {
       options.db.exec('CREATE TABLE IF NOT EXISTS personal_context_schema(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL)');
       const row = options.db.prepare('SELECT version FROM personal_context_schema WHERE id=1').get();
@@ -83,6 +86,10 @@ export class PersonalContextService {
         CREATE INDEX IF NOT EXISTS personal_context_conversation_sources_by_fact ON personal_context_conversation_sources(owner,dependent);`);
       if (!row) options.db.prepare('INSERT INTO personal_context_schema VALUES(1,1)').run();
     });
+  }
+  /** Source-owner cleanup may run before the user has initialized memory. */
+  static eraseExistingConversationSource(options: PersonalContextServiceOptions, source: ConversationSourceRef) {
+    return new PersonalContextService(options, existingSchemaOnly).eraseConversationSource(source);
   }
   private tx<T>(work: () => T): T { return this.opts.transaction(db => { check(db === this.opts.db, 'canonical_database_connection_mismatch'); return work(); }); }
   private read<T>(work: () => T): T { return (this.opts.readTransaction ?? this.opts.transaction)(db => { check(db === this.opts.db, 'canonical_database_connection_mismatch'); return work(); }); }
@@ -247,11 +254,40 @@ export class PersonalContextService {
     return { ...fields, id: previous?.id ?? randomUUID(), version: previous ? previous.version + 1 : 1, state: 'active', createdAt: previous?.createdAt ?? now, updatedAt: now, reviewedAt: now, reviewedBy: this.identity().userId, provenance, supersededBy: null };
   }
   reviewFact(input: FactDraft): ReviewedFact { draft(input); return this.tx(() => { const value = this.reviewed(input); this.put('fact', value, value.scope, value.state, 0); return value; }); }
+  private activeFact(id: string, expectedVersion: number): ReviewedFact {
+    const value = this.readable<ReviewedFact>(this.required(id, 'fact', expectedVersion));
+    check(value.state === 'active', 'personal_fact_inactive');
+    return value;
+  }
   editFact(input: { id: string; expectedVersion: number; replacement: FactDraft }): ReviewedFact {
-    draft(input.replacement); return this.tx(() => { const head = this.required(input.id, 'fact', input.expectedVersion), old = this.readable<ReviewedFact>(head), value = this.reviewed(input.replacement, old); this.put('fact', value, value.scope, value.state, old.version); return value; });
+    draft(input.replacement);
+    return this.tx(() => {
+      const old = this.activeFact(input.id, input.expectedVersion);
+      const value = this.reviewed(input.replacement, old);
+      this.put('fact', value, value.scope, value.state, old.version);
+      return value;
+    });
   }
   correctFact(input: { id: string; expectedVersion: number; replacement: FactDraft }): { previous: ReviewedFact; replacement: ReviewedFact } {
-    draft(input.replacement); return this.tx(() => { const head = this.required(input.id, 'fact', input.expectedVersion), old = this.readable<ReviewedFact>(head); this.requireCurrentConversationSource(old); this.authorize('fact.review', old.scope, this.ref(head)); const replacement = this.reviewed(input.replacement), previous: ReviewedFact = { ...old, version: old.version + 1, state: 'superseded', supersededBy: replacement.id, updatedAt: this.now() }; this.put('fact', replacement, replacement.scope, replacement.state, 0); this.put('fact', previous, previous.scope, previous.state, old.version); return { previous, replacement }; });
+    draft(input.replacement);
+    return this.tx(() => {
+      const old = this.activeFact(input.id, input.expectedVersion);
+      this.requireCurrentConversationSource(old);
+      this.authorize('fact.review', old.scope, { id: old.id, version: old.version, kind: 'fact', scope: old.scope });
+      const replacement = this.reviewed(input.replacement);
+      const previous: ReviewedFact = { ...old, version: old.version + 1, state: 'superseded', supersededBy: replacement.id, updatedAt: this.now() };
+      this.put('fact', replacement, replacement.scope, replacement.state, 0);
+      this.put('fact', previous, previous.scope, previous.state, old.version);
+      const owner = this.identity().userId;
+      // Keep inherited erasure dependencies even when a correction cites new evidence.
+      this.opts.db.prepare(`INSERT OR IGNORE INTO personal_context_conversation_sources
+        SELECT owner,conversation_id,message_id,? FROM personal_context_conversation_sources WHERE owner=? AND dependent=?`)
+        .run(replacement.id, owner, old.id);
+      this.opts.db.prepare(`INSERT OR IGNORE INTO personal_context_dependencies
+        SELECT owner,?,source,source_version FROM personal_context_dependencies WHERE owner=? AND dependent=?`)
+        .run(replacement.id, owner, old.id);
+      return { previous, replacement };
+    });
   }
   revoke(input: { id: string; expectedVersion: number }): RecordRef {
     return this.tx(() => { const head = this.head(input.id); check(head && head.kind !== 'policy' && head.version === input.expectedVersion, 'stale_personal_context_version'); this.authorize('record.revoke', head.scope, this.ref(head)); const old = this.decode<OriginalImport | ReviewedFact>(head), value = { ...old, version: old.version + 1, state: 'revoked' as const, updatedAt: this.now() }; this.put(head.kind, value, value.scope, value.state, old.version); return { ...this.ref(head), version: value.version }; });
@@ -270,6 +306,10 @@ export class PersonalContextService {
     return this.tx(() => {
       const owner = this.identity().userId;
       this.authorize('source.erase', null, null, { conversationSource: source });
+      const schema = this.opts.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('personal_context_schema','personal_context_heads','personal_context_revisions','personal_context_dependencies','personal_context_conversation_sources')").all();
+      if (schema.length === 0) return { deleted: [] };
+      check(schema.length === 5 && this.opts.db.prepare('SELECT version FROM personal_context_schema WHERE id=1').get()?.version === 1,
+        'unsupported_personal_context_schema');
       const rows = this.opts.db.prepare('SELECT dependent FROM personal_context_conversation_sources WHERE owner=? AND conversation_id=? AND message_id=? ORDER BY dependent')
         .all(owner, source.conversationId, source.messageId);
       const heads = rows.map(row => this.required(String(row.dependent), 'fact'));
