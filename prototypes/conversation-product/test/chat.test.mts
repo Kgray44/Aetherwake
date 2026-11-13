@@ -1209,3 +1209,28 @@ test('research status distinguishes preparation, matching execution, and streame
   assert.equal(status.textContent,'Writing the research reply…');
  }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();f.restore();}
 });
+
+test('a disconnected ChatGPT plan keeps the draft editable and enables an explicit send after reconnect', async () => {
+ const f=fixture('chatgpt-plan-responses');
+ let chat;
+ try {
+  Object.assign(f.detail.providers[0],{available:false,record:false,execute:false,reason:'Connect an eligible ChatGPT account.'});
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});
+  await chat.ready;
+  const editor=f.view.root.querySelector('textarea'),composer=f.view.root.querySelector('.cp-composer');
+  const send=f.view.root.querySelector('[data-cp-control="send"]');
+  assert.equal(send.disabled,true);
+  assert.match(send.title,/disconnected/);
+  editor.value='Synthetic draft edited offline';
+  editor.fire('input');
+  composer.fire('submit');
+  await chat.flush();
+  assert.equal(f.draft.content,editor.value);
+  assert.equal(f.calls.filter(c=>c.name==='send').length,0);
+  Object.assign(f.detail.providers[0],{available:true,record:true,execute:true});
+  await chat.refresh();
+  assert.equal(send.disabled,false);
+  assert.equal(editor.value,'Synthetic draft edited offline');
+  assert.equal(f.calls.filter(c=>c.name==='send').length,0);
+ }finally{await chat?.dispose();f.restore();}
+});
