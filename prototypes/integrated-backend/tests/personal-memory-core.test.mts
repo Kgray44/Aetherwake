@@ -190,6 +190,14 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
     const input = { intent: 'Which quartz relay should I use?', resourceIds: [], adaptive: true,
       providerId: 'openai-api-vela', useMemory: true } as const;
+    const memory = memoryOwner(core)!;
+    const memoryService = await memory.open();
+    const originalPreviewContext = memoryService.previewContext.bind(memoryService);
+    memoryService.previewContext = request => ({ ...originalPreviewContext(request),
+      items: [], omissions: [{ reason: 'scan-limit', count: 1 }] });
+    try {
+      await assert.rejects(core.command('velaRequestPreview', { ...input, resourceIds: [] }), /personal_memory_search_incomplete/);
+    } finally { memoryService.previewContext = originalPreviewContext; }
     const globalPreview = await core.command('velaRequestPreview', { ...input, resourceIds: [], intent: 'Which amber enclosure?' });
     const globalReview = await core.command('velaNativeReview', { previewId: globalPreview.id, signature: globalPreview.signature });
     assert.match(globalReview.prompt, new RegExp(global.id));

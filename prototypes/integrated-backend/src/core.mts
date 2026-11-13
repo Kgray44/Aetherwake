@@ -5,7 +5,7 @@ import { dirname, relative, resolve, isAbsolute,sep,extname } from 'node:path';
 import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, type ApiFileProposalProvenance } from './mission-file-edits.mts';
 import { fileURLToPath } from 'node:url';
 import { defaultPersonalMemoryPolicy } from '../../personal-context/src/service.mts';
-import { createPersonalMemoryReview } from './personal-memory-review.mts';
+import { createPersonalMemoryReview, isPartialMemoryCoverage } from './personal-memory-review.mts';
 import { createPersonalMemorySourceReader } from './personal-memory-sources.mts';
 import { DesktopState } from './desktop.mts';
 import { NativePersonalMemory } from './personal-memory.mts';
@@ -4894,13 +4894,15 @@ export class BackendCore {
         !workflowScope && !context.included.length && !context.activeResourceId && conversationId, 'vela_memory_requires_conversation');
       const projectId = this.velaContext().currentProjectId;
       const sourceAnchors = this.personalMemorySourceAnchors(input.intent);
+      let partialMiss = false;
       const memoryRecall = await this.personalMemoryReview!.prepareVelaRecall({ conversationId,
-        projectId, requestId: preview.id, intent: input.intent, prompt: preview.prompt, sourceAnchors });
-      ensure(memoryRecall, 'personal_memory_no_eligible_context');
+        projectId, requestId: preview.id, intent: input.intent, prompt: preview.prompt, sourceAnchors }, undefined, () => { partialMiss = true; });
+      ensure(memoryRecall, partialMiss ? 'personal_memory_search_incomplete' : 'personal_memory_no_eligible_context');
       preview.memoryRecall = memoryRecall;
       preview.memoryBasePrompt = preview.prompt;
       preview.prompt = memoryRecall.prompt;
-      preview.memory = publicPreview.memory = { manifestDigest: memoryRecall.manifestDigest, promptDigest: memoryRecall.promptDigest };
+      preview.memory = publicPreview.memory = { manifestDigest: memoryRecall.manifestDigest, promptDigest: memoryRecall.promptDigest,
+        ...(memoryRecall.partialCoverage ? { partialCoverage: true } : {}) };
     }
     if (agent) {
       preview.agentRoutingDigest = agentRoutingDigest;
@@ -4960,7 +4962,8 @@ export class BackendCore {
     base.memoryRecall = memoryRecall;
     base.memoryBasePrompt = base.prompt;
     base.prompt = memoryRecall.prompt;
-    base.memory = { manifestDigest: memoryRecall.manifestDigest, promptDigest: memoryRecall.promptDigest };
+    base.memory = { manifestDigest: memoryRecall.manifestDigest, promptDigest: memoryRecall.promptDigest,
+        ...(memoryRecall.partialCoverage ? { partialCoverage: true } : {}) };
     base.sendDisposition = 'review-required';
     base.nativeReviewed = false;
     base.reviewDigest = undefined;
@@ -6116,13 +6119,14 @@ export class BackendCore {
     const messages = [...recent, ...required];
     const contextDigest = hash({history,context,handoff,clock,instructions,instructionVersion:packet.version});
     const baseTurn = { ...turn, messages, contextDigest };
+    let partialMiss = false;
     const memory = input.useMemory ? await this.personalMemoryReview?.prepareOrdinaryRecall(input.resourceId, baseTurn,
-      this.ordinaryMemorySourceAnchors(input.content, context, handoff)) : null;
-    if (input.useMemory) ensure(memory, 'personal_memory_no_eligible_context');
+      this.ordinaryMemorySourceAnchors(input.content, context, handoff), () => { partialMiss = true; }) : null;
+    if (input.useMemory) ensure(memory, partialMiss ? 'personal_memory_search_incomplete' : 'personal_memory_no_eligible_context');
     if (memory) captureMemory?.(memory);
     const exact = memory?.turn ?? baseTurn;
     const prepared = prepareResponsesTurn(exact);
-    return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions: exact.instructions, instructionVersion: packet.version, messages: exact.messages, history, contextDigest: exact.contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview: requiresSourceReview || !!memory, ...(memory ? { memoryDigest: memory.manifest.digest } : {}) };
+    return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions: exact.instructions, instructionVersion: packet.version, messages: exact.messages, history, contextDigest: exact.contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview: requiresSourceReview || !!memory, ...(memory ? { memoryDigest: memory.manifest.digest, ...(isPartialMemoryCoverage(memory.manifest) ? { memoryPartialCoverage: true as const } : {}) } : {}) };
   }
   private ordinaryMemorySourceAnchors(intent: string, context: AttachedContext[], handoff: ConversationSendPreview['handoff']) {
     const anchors = this.personalMemorySourceAnchors(intent);
