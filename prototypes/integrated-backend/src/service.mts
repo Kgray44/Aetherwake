@@ -1,4 +1,5 @@
 import { Worker } from 'node:worker_threads';
+import type { MemoryFixtureBootstrap } from './core.mts';
 import { CONTRACT, ServiceError, type Options, type StreamEvent, type CommandMap } from './contracts.mts';
 import {createNativeHostServer,type NativeHostServices} from './native-host.mts';
 import {createNativeLiveHostServer} from './live-media-host.mts';
@@ -26,15 +27,17 @@ export class Backend {
   private wakeServer:ReturnType<typeof createNativeWakeCaptureServer>;
   private maintenanceServer:ReturnType<typeof createWindowsMaintenanceServer>;
   private computerServer:ReturnType<typeof createWindowsComputerServer>;
-  constructor(options: Options, nativeHost?:NativeHostServices) {
-    this.worker = new Worker(new URL('./worker.mts', import.meta.url), { workerData: nativeHost?{nativeHostProtocol:1,nativeLiveHostProtocol:nativeHost.liveMedia?1:0,nativeSystemFactsProtocol:nativeHost.systemFacts?1:0,nativeWakeCaptureProtocol:nativeHost.wakeCapture?1:0,nativeDocumentTextProtocol:nativeHost.documents?1:0,nativeMaintenanceHostProtocol:nativeHost.maintenance?1:0,nativeComputerHostProtocol:nativeHost.computer?1:0,resourcePolicy:nativeHost.resourcePolicy,options}:options });
+  constructor(options: Options, nativeHost?:NativeHostServices,
+    memoryFixture?: { descriptor: MemoryFixtureBootstrap; protector: NativeHostServices['secrets'] }) {
+    if (memoryFixture && nativeHost) throw new ServiceError('memory_fixture_bootstrap_invalid');
+    this.worker = new Worker(new URL('./worker.mts', import.meta.url), { workerData: memoryFixture ? { memoryFixture: memoryFixture.descriptor, options } : nativeHost?{nativeHostProtocol:1,nativeLiveHostProtocol:nativeHost.liveMedia?1:0,nativeSystemFactsProtocol:nativeHost.systemFacts?1:0,nativeWakeCaptureProtocol:nativeHost.wakeCapture?1:0,nativeDocumentTextProtocol:nativeHost.documents?1:0,nativeMaintenanceHostProtocol:nativeHost.maintenance?1:0,nativeComputerHostProtocol:nativeHost.computer?1:0,resourcePolicy:nativeHost.resourcePolicy,options}:options });
     this.maintenanceServer=createWindowsMaintenanceServer(nativeHost?.maintenance,message=>this.worker.postMessage(message));
     this.computerServer=createWindowsComputerServer(nativeHost?.computer,message=>this.worker.postMessage(message));
     this.wakeServer=createNativeWakeCaptureServer(nativeHost?.wakeCapture,message=>this.worker.postMessage(message));
     this.systemServer=createSystemFactsServer(nativeHost?.systemFacts,message=>this.worker.postMessage(message));
     this.documentServer=createDocumentTextServer(nativeHost?.documents,message=>this.worker.postMessage(message));
     this.liveServer=createNativeLiveHostServer(nativeHost?.liveMedia,message=>this.worker.postMessage(message));
-    this.nativeServer=createNativeHostServer(nativeHost,message=>this.worker.postMessage(message));
+    this.nativeServer=createNativeHostServer(memoryFixture ? { secrets: memoryFixture.protector } : nativeHost,message=>this.worker.postMessage(message));
     this.ready = new Promise((resolve, reject) => {
       this.worker.on('message', message => {
         if(this.maintenanceServer.handle(message))return;

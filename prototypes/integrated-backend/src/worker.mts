@@ -9,8 +9,9 @@ import {createNativeWakeCaptureClient,isNativeWakeCaptureMessage} from './wake-c
 import {createWindowsMaintenanceClient,isWindowsMaintenanceEnvelope} from './windows-maintenance-host.mts';
 import {createWindowsComputerClient,isWindowsComputerEnvelope} from './windows-computer-host.mts';
 const port = parentPort!;
-const hosted=workerData?.nativeHostProtocol===1;
-const nativeClient=hosted?createNativeHostClient(message=>port.postMessage(message)):undefined;
+const fixture = workerData?.memoryFixture;
+const hosted=!fixture && workerData?.nativeHostProtocol===1;
+const nativeClient=hosted || fixture ? createNativeHostClient(message=>port.postMessage(message)):undefined;
 const liveClient=hosted&&workerData.nativeLiveHostProtocol===1?createNativeLiveHostClient(message=>port.postMessage(message)):undefined;
 const systemClient=hosted&&workerData.nativeSystemFactsProtocol===1?createSystemFactsClient(message=>port.postMessage(message)):undefined;
 const documentClient=hosted&&workerData.nativeDocumentTextProtocol===1?createDocumentTextClient(message=>port.postMessage(message)):undefined;
@@ -19,8 +20,10 @@ const maintenanceClient=hosted&&workerData.nativeMaintenanceHostProtocol===1?cre
 const computerClient=hosted&&workerData.nativeComputerHostProtocol===1?createWindowsComputerClient(message=>port.postMessage(message)):undefined;
 port.on('close',()=>{maintenanceClient?.close();computerClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();nativeClient?.close();});
 try {
-  const options=(hosted?workerData.options:workerData) as Options;
-  const core = new BackendCore(options, event => port.postMessage({ event }),nativeClient?{...nativeClient.services,resourcePolicy:workerData.resourcePolicy,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{}),...(maintenanceClient?{maintenance:maintenanceClient.services}:{}),...(computerClient?{computer:computerClient.services}:{})}:undefined);
+  if (fixture && Object.keys(workerData).some(key => !['memoryFixture', 'options'].includes(key))) throw Error('memory_fixture_bootstrap_invalid');
+  const options=(hosted || fixture ? workerData.options : workerData) as Options;
+  const core = new BackendCore(options, event => port.postMessage({ event }),hosted && nativeClient?{...nativeClient.services,resourcePolicy:workerData.resourcePolicy,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{}),...(maintenanceClient?{maintenance:maintenanceClient.services}:{}),...(computerClient?{computer:computerClient.services}:{})}:undefined,
+    undefined, undefined, fixture ? { descriptor: fixture, protector: nativeClient!.services.secrets } : undefined);
   port.on('message', async request => {
     if(isWindowsMaintenanceEnvelope(request)){maintenanceClient?.handle(request);return;}
     if(isWindowsComputerEnvelope(request)){computerClient?.handle(request);return;}
