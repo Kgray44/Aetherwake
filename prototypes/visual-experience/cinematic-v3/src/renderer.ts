@@ -422,7 +422,6 @@ export class Environment {
   >();
   private readonly folios: FolioVisual[] = [];
   private readonly folioById = new Map<string, FolioVisual>();
-  private readonly frameFolioIds = new Set<string>();
   private readonly frameSlabs = new Map<string, THREE.BufferGeometry>();
   private readonly surfaceProjection = new THREE.Matrix4();
   private readonly surfaceRotation = new THREE.Matrix4();
@@ -1259,7 +1258,6 @@ export class Environment {
       frame.sceneWeights?.living ?? (frame.study === "living" ? 1 : 0);
     this.instrumentStudy = study;
     this.frameSlabs.clear();
-    this.frameFolioIds.clear();
     this.surfaceOrder.length = 0;
     for (const visual of this.folios) {
       visual.root.visible = false;
@@ -1270,12 +1268,13 @@ export class Environment {
         this.canvas.dataset.materials = "opaque";
       return;
     }
+    const live = new Set<string>();
     for (const pose of surfaces) {
-      this.frameFolioIds.add(pose.id);
+      live.add(pose.id);
       this.surfaceOrder.push(pose);
     }
     for (const visual of this.folios)
-      if (visual.id && !this.frameFolioIds.has(visual.id)) {
+      if (visual.id && !live.has(visual.id)) {
         this.folioById.delete(visual.id);
         visual.id = null;
       }
