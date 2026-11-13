@@ -1,10 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import type {
   CanonicalNoteHost,
   NoteDocument,
   NoteDraft,
   SaveNoteDraft,
   CommitNote,
+  CaptureConversationReply,
+  ReplyNoteHost,
+  ReplyNoteReceipt,
 } from "./note-contracts.ts";
 import { check, identifier, text, version } from "./model.ts";
 const content = (value: unknown): string => {
@@ -43,6 +47,45 @@ export class NoteExperienceService {
         "CREATE TABLE IF NOT EXISTS block_note_drafts(resource_id TEXT PRIMARY KEY,version INTEGER NOT NULL,base_version INTEGER NOT NULL,content TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS block_note_draft_revisions(resource_id TEXT PRIMARY KEY,version INTEGER NOT NULL);INSERT OR IGNORE INTO block_note_draft_revisions SELECT resource_id,version FROM block_note_drafts;",
       ),
     );
+  }
+  /** Explicit copy. The note owns its editable text after capture. */
+  captureConversationReply(input: CaptureConversationReply, host: ReplyNoteHost): ReplyNoteReceipt {
+    fields(input, ["resourceId", "messageId", "commandId"]);
+    const resourceId = identifier(input.resourceId), messageId = identifier(input.messageId);
+    const commandId = identifier(input.commandId);
+    check(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,198}$/.test(commandId), "invalid_command_id");
+    return this.host.atomic(() => {
+      const reply = host.resolveReply(resourceId, messageId);
+      check(reply?.resourceId === resourceId && reply.messageId === messageId, "source_unavailable");
+      check(Number.isSafeInteger(reply.sequence) && reply.sequence >= 1, "source_unavailable");
+      const body = content(reply.content);
+      check(body.trim(), "empty_conversation_reply");
+      const digest = createHash("sha256").update(body).digest("hex");
+      const source = { resourceId, messageId, sequence: reply.sequence, digest };
+      this.db.exec(`CREATE TABLE IF NOT EXISTS note_reply_captures (
+        command_id TEXT PRIMARY KEY,
+        note_id TEXT NOT NULL UNIQUE REFERENCES resources(id) ON DELETE CASCADE,
+        source_resource_id TEXT NOT NULL,
+        source_message_id TEXT NOT NULL,
+        source_sequence INTEGER NOT NULL,
+        source_digest TEXT NOT NULL
+      ) STRICT`);
+      const prior = this.db.prepare("SELECT * FROM note_reply_captures WHERE command_id=?").get(commandId);
+      if (prior) {
+        check(prior.source_resource_id === resourceId && prior.source_message_id === messageId &&
+          prior.source_sequence === reply.sequence && prior.source_digest === digest, "reply_capture_command_conflict");
+        const noteId = String(prior.note_id);
+        this.resource(noteId);
+        return { noteId, source };
+      }
+      const noteId = identifier(host.createNote({ title: "Saved chat reply", content: body, projectId: reply.projectId }));
+      const saved = this.resource(noteId);
+      check(saved.kind === "note" && saved.content === body && saved.project_id === reply.projectId, "reply_note_creation_unconfirmed");
+      this.db.prepare(`INSERT INTO note_reply_captures
+        (command_id, note_id, source_resource_id, source_message_id, source_sequence, source_digest)
+        VALUES (?,?,?,?,?,?)`).run(commandId, noteId, resourceId, messageId, reply.sequence, digest);
+      return { noteId, source };
+    });
   }
   private resource(id: string) {
     const item = this.host.readResource(identifier(id));

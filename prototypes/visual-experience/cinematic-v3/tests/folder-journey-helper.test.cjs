@@ -5,6 +5,7 @@ const localAppData=path.resolve('C:/OwnedFixture/AppData/Local'),profile=path.jo
 const argv=['--integration-vela-missions','--missions-folders-only','--profile='+profile];
 test('folder journey refuses mixed/provider journeys and non-owned profiles before native input',()=>{
  assert.doesNotThrow(()=>assertFoldersJourney({argv,profile,localAppData}));
+ assert.doesNotThrow(()=>assertFoldersJourney({argv:[...argv,'--vela-composer-source-only'],profile,localAppData}));
  for(const extra of ['--bootstrap-vela-api','--missions-voice-live-only','--voice-synthetic-input'])assert.throws(()=>assertFoldersJourney({argv:[...argv,extra],profile,localAppData}),/offline_and_exclusive/);
  assert.throws(()=>assertFoldersJourney({argv,profile:path.join(localAppData,'real-user-profile'),localAppData}),/owned_folder_profile_required/);
  assert.throws(()=>assertFoldersJourney({argv:[...argv,'--profile='+profile],profile,localAppData}),/one_folder_profile_required/);
@@ -29,6 +30,7 @@ test('Windows PowerShell parses the owned source dialog script',{
 });
 test('dialog failure receipts keep only allowlisted structured codes, never raw stderr or paths',()=>{
  assert.equal(safeDialogFailure('FullyQualifiedErrorId : source_dialog_exact_filename_control_unavailable_x000D_'),'source_dialog_exact_filename_control_unavailable');
+ assert.equal(safeDialogFailure('<S S="Error">source_dialog_exact_filename_control_unavailable [{"automationId":"private"}]</S>'),'source_dialog_exact_filename_control_unavailable');
  assert.equal(safeDialogFailure('private path and arbitrary raw diagnostic'),'source_dialog_unclassified_failure');
  assert.equal(safeDialogFailure('FullyQualifiedErrorId : source_dialog_private_user_value'),'source_dialog_unclassified_failure');
 });

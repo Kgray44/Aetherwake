@@ -1,3 +1,4 @@
+import { createAepNativeHost } from './aep-native-host.mts';
 import { resolveAepEvaluationReference } from './aep-evaluation-reference.mts';
 import { randomUUID, createHash } from 'node:crypto';
 import { realpathSync,openSync,closeSync,lstatSync,fstatSync } from 'node:fs';
@@ -5,6 +6,10 @@ import { dirname, relative, resolve, isAbsolute,sep,extname } from 'node:path';
 import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, type ApiFileProposalProvenance } from './mission-file-edits.mts';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
+import { NativePersonalMemory } from './personal-memory.mts';
+import { createPersonalMemoryReview } from './personal-memory-review.mts';
+import { createPersonalMemorySourceReader } from './personal-memory-sources.mts';
+import { createIntelligenceJournalProjection, missionStreamFields, streamScopeMatches } from './intelligence-journal-projection.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
 import { compareNativeSamples, observeConversationProvider, observeProviderStream, projectMissionExecution, resolveMissionHypothesis, type ProviderStreamObserver, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
 import { missionExecutiveSchema, missionObjectiveAssessmentSchema, projectExecutiveCheckpoint, proposeMissionExecutiveRevision, type ExecutivePacket } from './mission-executive.mts';
@@ -19,6 +24,7 @@ import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS, MISSION_PROPOSAL
 import { describeMissionObjectiveReview, provisionalObjectiveCoverage, reviewableMissionObjective } from './mission-objective-review.mts';
 import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, reassignMissionSpecialist, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
 import { MissionTeams } from './mission-teams.mts';
+import { parseReviewedArtifactMission, resolveReviewedArtifactMission } from './mission-reviewed-composition.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
 import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningEvidenceSelection, MissionPlanningOffer, MissionPlanningSourceRef, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import { ARTIFACT_MISSION_PREFIX, EXPLICIT_MISSION_PREFIX, MISSION_LIMITS } from './mission-contracts.mts';
@@ -27,7 +33,7 @@ import { missionArtifactFiles, missionArtifactPath, missionArtifactSource, readM
 import { createMissionAdmission } from './mission-admission.mts';
 import { createResourcePolicyStore } from './resource-policy-store.mts';
 import { isResourceSignal } from './resource-signals.mts';
-import { MissionPublication } from './mission-publication.mts';
+import { MissionPublication, lastMissionVerificationEvent } from './mission-publication.mts';
 import { MissionConversationReceipts } from './mission-conversation.mts';
 import { WorkspaceRecoveryService } from './workspace-recovery.mts';
 import { VelaWorkspaceConstruction, matchWorkspaceConstruction } from './vela-workspace-construction.mts';
@@ -153,6 +159,7 @@ function ordinaryTurnClock(): OrdinaryResponsesPreview['clock'] {
   return { utc: instant.toISOString(), local: local + (offset < 0 ? '-' : '+') + hours + ':' + minutes };
 }
 type OrdinarySendBinding = Pick<OrdinaryResponsesPreview, 'executionId' | 'clock' | 'purpose'>;
+type OrdinaryMemoryRecall = NonNullable<Awaited<ReturnType<ReturnType<typeof createPersonalMemoryReview>['prepareOrdinaryRecall']>>>;
 type PendingVelaWorkflow = {
   analysis: PrivateVelaPreview;
   codex: PrivateVelaPreview;
@@ -223,6 +230,7 @@ export class BackendCore {
   private storedJson: string | null = null;
   private mutationDepth = 0;
   private pendingEventDelivery: StreamEvent[] = [];
+  private readonly intelligenceJournal: ReturnType<typeof createIntelligenceJournalProjection>;
   private deliveringRecordedEvents = false;
   private missionConversations?: MissionConversationReceipts;
   private workspaceRecovery!: WorkspaceRecoveryService;
@@ -251,6 +259,8 @@ export class BackendCore {
   private readonly privateRoot?: string;
   private conversations!: ConversationProduct;
   private nativeHostServices?:NativeHostServices;
+  private personalMemory?: NativePersonalMemory;
+  private personalMemoryReview?: ReturnType<typeof createPersonalMemoryReview>;
   private weatherPermissions?:WeatherPermissionStore;
   private weatherRequest:AbortController|null=null;
   private ordinaryConnections!:OrdinaryConnectionPort;
@@ -285,7 +295,7 @@ export class BackendCore {
   private conversationBatch:{active:boolean;access:Map<string,boolean>}|null=null;
   private conversationAccess!: ReturnType<typeof createCanonicalAccessHelper>;
   private capabilityCache = createObservedCapabilityCache();
-  private sendPreviews = new Map<string,{input:ConversationSendInput;preview:ConversationSendPreview}>();
+  private sendPreviews = new Map<string,{input:ConversationSendInput;preview:ConversationSendPreview;memory?:OrdinaryMemoryRecall}>();
   private sendGrants = new Map<string,{previewId:string;fingerprint:string;commandId:string;expiresAt:string;consumed:boolean}>();
   private vela!: VelaService;
   private velaHost!: CanonicalVelaHost;
@@ -302,6 +312,7 @@ export class BackendCore {
   private velaWorkflows = new Map<string, PendingVelaWorkflow>();
   private velaWorkflowClaims = new Set<string>();
   private missions: MissionService;
+  private readonly aepNative?: ReturnType<typeof createAepNativeHost>;
   private missionAdmission: ReturnType<typeof createMissionAdmission>;
   private readonly missionCpuPool = createMissionCpuPool(MISSION_LIMITS.workers);
   private gpuReadback: ReturnType<typeof createGpuReadbackAdapter>;
@@ -426,10 +437,45 @@ export class BackendCore {
         }
         this.save();
       });
+      this.intelligenceJournal = createIntelligenceJournalProjection({
+        db: this.db,
+        withReadSnapshot: read => this.kernel.withTransaction(read),
+        rendererScope: () => this.rendererEventScope(),
+        missionScope: () => this.missionStreamScope(),
+        resourceAllowed: event => this.rendererEventResourceAllowed(event),
+      });
       this.stopEvents = this.port.onEvent(e => this.ingest(e));
       this.desktop = new DesktopState(this.kernel, this.db,{allowSubjectAttachment:(subject,workspaceId)=>this.librarySubjectAllowed(subject,workspaceId)});
       this.initializeConversations();
       this.initializeLibrary();
+      if (this.privateMode && nativeHostServices) {
+        const readOwnMessage = (id: string, messageId: string) => {
+          const graphId = this.state.resources[id];
+          return graphId ? this.graph.readOwnMessage(graphId, messageId) : null;
+        };
+        const sources = createPersonalMemorySourceReader({
+          db: this.db,
+          projectAccess: id => !this.closed && this.libraryAuthorized({ kind: 'project', id }),
+          conversationAccess: (id, messageId) => !this.closed && this.productResourceAccess(id, messageId),
+          readOwnMessage,
+        });
+        const review = this.personalMemoryReview = createPersonalMemoryReview({
+          ...sources, open: () => this.personalMemory!.open(),
+          transaction: work => this.kernel.withTransaction(work),
+          readSourceText: ({ conversationId, messageId }) => readOwnMessage(conversationId, messageId)?.content ?? null,
+        });
+        this.personalMemory = new NativePersonalMemory({
+          kernel: this.kernel,
+          secrets: nativeHostServices.secrets,
+          host: {
+            ...sources,
+            identity: () => ({ userId: 'local-owner', policyVersion: 'aerynth.local-owner@1' }),
+            authorize: input => review.authorize(input)
+              ? { decision: 'allow', policyVersion: 'aerynth.local-owner@1', authorizationRef: 'native-memory-review' }
+              : { decision: 'deny' },
+          },
+        });
+      }
       ensure(!options.velaPlanningPort||!this.privateMode,'synthetic_vela_planner_forbidden');
       this.initializeVela(options.velaPlanningPort);
       this.ordinaryConnections=ordinaryTest?.connection??new OpenAIConnections({db:this.db,transaction:work=>this.kernel.withTransaction(()=>work(this.db)),nativeHost:this.nativeHostServices,localEligibility:{kind:'local-personal-project',scope:'current-owner-local-installation',decisionRef:'aerynth.owner-local-personal-inference'}});
@@ -592,6 +638,19 @@ export class BackendCore {
         stagePublication: (mission, from) => this.missionPublication.stage(mission, from),
         observe: () => {this.flushMissionPublication();this.queueToolOwnerJobResults();},
       });
+      if (this.privateMode && this.nativeHostServices) {
+        this.aepNative = createAepNativeHost(this.db, this.missions, {
+          atomic: operation => this.kernel.withTransaction(operation),
+          authorized: scope => this.missionScopeAllowed(scope),
+          governorVersion: () => this.missionAdmission.inspectPolicy().configVersion,
+          admit: scope => {
+            ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
+            const context = this.velaContext();
+            ensure(context.currentWorkspaceId === scope.workspaceId && context.currentProjectId === scope.projectId &&
+              this.missionScopeAllowed(scope), 'aep_scope_denied');
+          },
+        });
+      }
       this.missionConversations = new MissionConversationReceipts({
         db: this.db, atomic: work => this.atomic(work),
         read: id => {
@@ -656,7 +715,7 @@ export class BackendCore {
       if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='timer_documents'").get() &&
           this.db.prepare('SELECT 1 FROM timer_documents LIMIT 1').get())
         void this.ensureTimerDomain().ready.catch(() => {});
-    } catch (error) { this.kernel.close(); throw error; }
+    } catch (error) { this.personalMemory?.close(); this.kernel.close(); throw error; }
   }
   private missionScopeAllowed(scope: MissionScope): boolean {
     if (this.closed || !this.libraryAuthorized({ kind: 'workspace', id: scope.workspaceId })) return false;
@@ -765,7 +824,7 @@ export class BackendCore {
   private projectMissionReport(missionId: string, seq: number, acknowledge: () => void): boolean {
     const { mission, event } = this.missions.publicationEvent(missionId, seq);
     const origin = mission.originConversationId;
-    if (!origin || event.kind !== 'settled' || event.detail !== 'verified' || !this.missionScopeAllowed(mission.scope) ||
+    if (!origin || lastMissionVerificationEvent(mission, [event]) !== event || !this.missionScopeAllowed(mission.scope) ||
       mission.disposition === 'cancelled' || !mission.tasks.every(task => task.state === 'verified')) return false;
     const verified = this.missions.read(mission.id, mission.scope);
     if (!missionResultAvailable(verified)) return false;
@@ -1366,7 +1425,8 @@ export class BackendCore {
           (agentProfileId === undefined || identifier(agentProfileId)) &&
           (teamId === undefined || identifier(teamId) && agentProfileId === undefined && proposalId === undefined), 'invalid_mission_command');
         const artifactRequest = typeof objective === 'string' ? ARTIFACT_MISSION_PREFIX.exec(objective.trim()) : null;
-        if (artifactRequest) ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
+        const mixedArtifact = artifactRequest ? null : parseReviewedArtifactMission(objective);
+        if (artifactRequest || mixedArtifact) ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
           noteIds === undefined && fileIds === undefined && projectEvidence === undefined, 'mission_artifact_context_unsupported');
         if (noteIds !== undefined || fileIds !== undefined || projectEvidence !== undefined) {
           ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
@@ -1381,10 +1441,13 @@ export class BackendCore {
         if (stored) ensure(this.missionPlanningContextCurrent(stored.plan), 'mission_planning_context_changed');
         const artifactPlan = artifactRequest ? this.missionArtifactPlan(objective, scope,
           objective.trim().slice(artifactRequest[0].length), artifactRequest[1]?.trim()) : undefined;
+        const mixedPlan = mixedArtifact ? resolveReviewedArtifactMission(objective,
+          work => nativeMissionPlan(work, scope) ?? specialistMissionPlan(work, scope, this.missionSpecialistSelection(scope)),
+          (prompt, options) => this.missionArtifactPlan(objective, scope, prompt, options), mixedArtifact) : undefined;
         const plan = teamId !== undefined ? teamMissionPlan(objective, scope, this.missionTeams.read(teamId, scope), id => {
           const profile = this.missionAgentProfile(scope, id);
           return profile ? { title: profile.resource.title, selection: this.missionSpecialistSelection(scope, id) } : undefined;
-        }) : (stored ? structuredClone(stored.plan) : undefined) ?? artifactPlan ??
+        }) : (stored ? structuredClone(stored.plan) : undefined) ?? artifactPlan ?? mixedPlan ??
           (agentProfileId === undefined ? nativeMissionPlan(objective, scope) : null) ??
           specialistMissionPlan(objective, scope, this.missionSpecialistSelection(scope),
             agentProfileId === undefined ? undefined : { selection: this.missionSpecialistSelection(scope, agentProfileId) });
@@ -1414,7 +1477,8 @@ export class BackendCore {
             ...artifactImage.settings, width: missionImageSize, height: missionImageSize,
             rates: missionImageRates, files: missionArtifactFiles } } : {}),
           ...(remote.length ? { externalReview: { provider: [...new Set(remote.map(task => task.specialist?.provider === VELA_API_PROVIDER ? 'Vela dedicated API' : 'ChatGPT plan'))].join(' + '), model: selected?.model ?? 'Unavailable',
-            effort: selected?.effort, calls: remote.length } } : {}) };
+            effort: selected?.effort, calls: remote.length,
+            ...(mixedArtifact ? { objective: mixedArtifact.workObjective } : {}) } } : {}) };
         ensure(request.input.fingerprint === fingerprint, 'mission_preview_changed');
         if (approvedObjectiveDigest !== undefined)
           ensure(reviewed && objectiveReview && approvedObjectiveDigest === objectiveReview.digest, 'mission_objective_review_changed');
@@ -1456,7 +1520,7 @@ export class BackendCore {
         if (card?.dashboard?.kind !== 'stream') return card;
         const mission = this.missions.read(card.missionId, scope);
         const { kind, missionId, outcome, revision } = card;
-        return { kind, missionId, outcome, revision, dashboard: { kind: 'stream', events: this.readWorkroomStream(mission),
+        return { kind, missionId, outcome, revision, dashboard: { kind: 'stream', events: this.intelligenceJournal.readWorkroomStream(mission),
           ...(this.missionPublication.hasLifecycle(missionId) ? { publicationPending: true } : {}) } };
       }
       case 'list':
@@ -1485,12 +1549,25 @@ export class BackendCore {
         const observed = resolveMissionHypothesis(this.missions.read(id, scope), hypothesisId, expectedRevision);
         return observed ? this.missionAdmission.previewWorkerBudgetExperiment(observed, cpuSlots) : null;
       }
+      case 'experience-list': {
+        ensure(Object.keys(request.input).length === 0, 'invalid_mission_command');
+        return this.aepNative?.list(scope) ?? null;
+      }
+      case 'experience-evidence': {
+        ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
+        return this.aepNative?.evidence(scope, request.input.id) ?? null;
+      }
+      case 'experience-finding': {
+        const { id, cohort } = request.input;
+        ensure(Object.keys(request.input).length === 2 && identifier(id) && identifier(cohort), 'invalid_mission_command');
+        return this.aepNative?.finding(scope, id, cohort) ?? null;
+      }
       case 'evaluation-reference': return resolveAepEvaluationReference(request.input, this.missions, scope);
       case 'execution-profile': {
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
         const mission = this.missions.read(request.input.id, scope, { includeReadyQueue: true });
         let publication: ReportPublication | null = null, delivery: ReportDelivery | null = null;
-        if (this.streamScopeMatches(scope, mission.scope)) {
+        if (streamScopeMatches(scope, mission.scope)) {
           publication = this.missionReportPublication(mission.id);
           const link = this.db.prepare('SELECT message_id FROM vela_mission_report_links WHERE mission_id=?').get(mission.id);
           const messageId = link?.message_id;
@@ -5902,7 +5979,7 @@ export class BackendCore {
       return { id: message.id, resourceId: input.resourceId, role: 'user', content: message.content, revision: this.state.revisions[input.resourceId], deviceClockMessageId: reply.id };
     }));
   }
-  private async ordinaryEgress(input:ConversationSendInput,revisionOffset:number,binding: OrdinarySendBinding, context:AttachedContext[],handoff:ConversationSendPreview['handoff']):Promise<OrdinaryResponsesPreview> {
+  private async ordinaryEgress(input:ConversationSendInput,revisionOffset:number,binding: OrdinarySendBinding, context:AttachedContext[],handoff:ConversationSendPreview['handoff'], captureMemory?: (memory: OrdinaryMemoryRecall) => void):Promise<OrdinaryResponsesPreview> {
     await this.refreshOrdinaryStatus();if(!this.ordinaryAvailable())await this.checkOrdinaryModels();
     const catalog=this.ordinaryCatalog!,model=input.model??catalog.models[0].id;ensure(catalog.models.some(m=>m.id===model),'unsupported_model');
     const { executionId, clock, purpose } = binding;
@@ -5936,7 +6013,8 @@ export class BackendCore {
       ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),
       ...(input.webSearch ? { webSearch: true } : {}),
     };
-    let remaining = RESPONSES_REQUEST_BYTES - prepareResponsesTurn(turn).review.bodyBytes;
+    // Leave room for the bounded memory manifest and JSON escaping.
+    let remaining = RESPONSES_REQUEST_BYTES - prepareResponsesTurn(turn).review.bodyBytes - (input.useMemory ? 32768 : 0);
     const history: OrdinaryResponsesPreview['history'] = [];
     const recent: TurnInput['messages'][number][] = [];
     const ownMessages = input.webSearch ? new Map<string, GraphData['messages'][number]>() : new Map(this.state.graph.messages.filter(message => message.conversationId === gid).map(message => [message.id, message]));
@@ -5954,7 +6032,7 @@ export class BackendCore {
       ensure(message.role === 'user' || message.role === 'assistant', 'ordinary_history_role_unsupported');
       const item = { role: message.role, content: message.content };
       const bytes = Buffer.byteLength(JSON.stringify(item)) + 1;
-      if (bytes > remaining || recent.length + required.length === RESPONSES_MESSAGE_LIMIT) { truncated = true; break; }
+      if (bytes > remaining || recent.length + required.length + (input.useMemory ? 1 : 0) >= RESPONSES_MESSAGE_LIMIT) { truncated = true; break; }
       remaining -= bytes;
       recent.push(item);
       history.push({ resourceId: input.resourceId, messageId: id, digest: createHash('sha256').update(message.content).digest('hex'), ...(evidence ? { providerId: evidence.providerId } : {}) });
@@ -5966,10 +6044,15 @@ export class BackendCore {
     const requiresSourceReview = !!context.length || !!handoff || recent.some((item, index) => item.role === 'assistant' && history[index].providerId !== CHATGPT_PLAN_PROVIDER);
     const messages = [...recent, ...required];
     const contextDigest = hash({history,context,handoff,clock,instructions,instructionVersion:packet.version});
-    const prepared = prepareResponsesTurn({ ...turn, messages, contextDigest });
-    return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions, instructionVersion: packet.version, messages, history, contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview };
+    const baseTurn = { ...turn, messages, contextDigest };
+    const memory = input.useMemory ? await this.personalMemoryReview?.prepareOrdinaryRecall(input.resourceId, baseTurn) : null;
+    if (input.useMemory) ensure(memory, 'personal_memory_no_eligible_context');
+    if (memory) captureMemory?.(memory);
+    const exact = memory?.turn ?? baseTurn;
+    const prepared = prepareResponsesTurn(exact);
+    return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions, instructionVersion: packet.version, messages: exact.messages, history, contextDigest: exact.contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview: requiresSourceReview || !!memory, ...(memory ? { memoryDigest: memory.manifest.digest } : {}) };
   }
-  private async prepareConversationSend(input:ConversationSendInput,revisionOffset=0,dispatchingHandoffId?:string,ordinaryBinding?: OrdinarySendBinding):Promise<Omit<ConversationSendPreview,'id'|'expiresAt'>> {
+  private async prepareConversationSend(input:ConversationSendInput,revisionOffset=0,dispatchingHandoffId?:string,ordinaryBinding?: OrdinarySendBinding,captureMemory?: (memory: OrdinaryMemoryRecall) => void):Promise<Omit<ConversationSendPreview,'id'|'expiresAt'>> {
     ensure(input&&typeof input.content==='string'&&input.content.trim()&&Buffer.byteLength(input.content)<=16384,'invalid_prompt');
     ensure(typeof input.commandId==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,198}$/.test(input.commandId),'invalid_command_id');
     ensure(Number.isSafeInteger(input.expectedRevision)&&input.expectedRevision>0,'invalid_expected_version');
@@ -5981,6 +6064,8 @@ export class BackendCore {
     ensure(input.reasoningEffort === undefined || c.providerId === CHATGPT_PLAN_PROVIDER &&
       input.model !== undefined && supportsOrdinaryReasoning(input.model, input.reasoningEffort), 'unsupported_reasoning_effort');
     ensure(input.webSearch === undefined || input.webSearch === true && c.providerId === CHATGPT_PLAN_PROVIDER, 'invalid_web_search_scope');
+    ensure(input.useMemory === undefined || input.useMemory === true && !input.webSearch && !ordinaryBinding?.purpose &&
+      c.providerId === CHATGPT_PLAN_PROVIDER && this.personalMemoryReview, 'invalid_memory_scope');
     if(c.providerId===CHATGPT_PLAN_PROVIDER&&!ordinaryBinding)
       await this.maintainOrdinarySession();
     // A public lookup sends only the draft submitted for search.
@@ -6003,19 +6088,25 @@ export class BackendCore {
     ensure(Buffer.byteLength(executionText)<=65536,'context_budget_exceeded');
     if(handoff)ensure(Buffer.byteLength(executionText)<=this.package(handoff.id).tokenBudget,'context_budget_exceeded');
     const exact={commandId:input.commandId,resourceId:input.resourceId,providerId:c.providerId,expectedRevision:input.expectedRevision,prompt:input.content,...(input.model?{model:input.model}:{}),context,...(handoff?{handoff}:{}),executionText};
-    if(c.providerId===CHATGPT_PLAN_PROVIDER){const responses=await this.ordinaryEgress(input,revisionOffset,ordinaryBinding ?? { executionId: randomUUID(), clock: ordinaryTurnClock() },context,handoff),ordinary={...exact,model:responses.model,responses};return {...ordinary,fingerprint:hash({contract:'aerynth.conversation-send@1',...ordinary,boundaryDigest:this.ordinaryCatalog!.boundaryDigest})};}
+    if(c.providerId===CHATGPT_PLAN_PROVIDER){const responses=await this.ordinaryEgress(input,revisionOffset,ordinaryBinding ?? { executionId: randomUUID(), clock: ordinaryTurnClock() },context,handoff,captureMemory),ordinary={...exact,model:responses.model,responses};return {...ordinary,fingerprint:hash({contract:'aerynth.conversation-send@1',...ordinary,boundaryDigest:this.ordinaryCatalog!.boundaryDigest})};}
     return {...exact,fingerprint:hash({contract:'aerynth.conversation-send@1',...exact,instanceId:this.port.instanceId,accountScope:this.port.accountScope})};
   }
   private async previewConversationSend(input:ConversationSendInput):Promise<ConversationSendPreview> {
-    this.pruneSendApprovals();ensure(this.sendPreviews.size<64,'approval_backpressure');const prepared=await this.prepareConversationSend(input);
+    this.pruneSendApprovals();ensure(this.sendPreviews.size<64,'approval_backpressure');
+    let memory: OrdinaryMemoryRecall | undefined;
+    const prepared=await this.prepareConversationSend(input,0,undefined,undefined,value => { memory=value; });
     ensure(this.sendPreviews.size<64,'approval_backpressure');
     const preview={...prepared,id:randomUUID(),expiresAt:new Date(Date.now()+300000).toISOString()};
-    this.sendPreviews.set(preview.id,{input:structuredClone(input),preview});return structuredClone(preview);
+    this.sendPreviews.set(preview.id,{input:structuredClone(input),preview,memory});return structuredClone(preview);
   }
   private async authorizeConversationSend(input:CommandMap['authorizeConversationSend']['input']) {
     this.pruneSendApprovals();ensure(!this.active,'execution_busy');const entry=this.sendPreviews.get(input.previewId);ensure(entry,'send_preview_expired');
     ensure(entry.preview.fingerprint===input.fingerprint&&entry.input.commandId===input.commandId,'approval_scope_mismatch');
     const current=await this.prepareConversationSend(entry.input,0,undefined,entry.preview.responses);ensure(current.fingerprint===input.fingerprint,'stale_send_preview');ensure(this.sendGrants.size<64,'approval_backpressure');
+    if (entry.memory) {
+      ensure(input.reviewedBodyDigest === entry.memory.bodyDigest, 'personal_memory_disclosure_review_required');
+      entry.memory.approve(input.reviewedBodyDigest);
+    }
     const grantId=randomUUID(),expiresAt=new Date(Math.min(Date.now()+60000,Date.parse(entry.preview.expiresAt))).toISOString();
     this.sendGrants.set(grantId,{previewId:input.previewId,fingerprint:input.fingerprint,commandId:input.commandId,expiresAt,consumed:false});return {grantId,expiresAt};
   }
@@ -6030,7 +6121,7 @@ export class BackendCore {
     ensure(this.sendGrants.get(input.grantId) === grant && Date.parse(grant.expiresAt) > Date.now(), 'native_send_grant_expired');
     ensure(this.sendPreviews.get(input.previewId) === entry && Date.parse(entry.preview.expiresAt) > Date.now(), 'send_preview_expired');
     grant.consumed = true;
-    if(current.responses){const task=this.runOrdinary(entry.input,current);this.ordinaryTask=task;try{return await task;}finally{if(this.ordinaryTask===task)this.ordinaryTask=null;}}
+    if(current.responses){const task=this.runOrdinary(entry.input,current,undefined,entry.memory);this.ordinaryTask=task;try{return await task;}finally{entry.memory?.revoke();if(this.ordinaryTask===task)this.ordinaryTask=null;}}
     return this.runExecution({resourceId:entry.input.resourceId,prompt:entry.input.content,commandId:entry.input.commandId,expectedRevision:entry.input.expectedRevision,authorized:true,...(entry.input.model?{model:entry.input.model}:{}),...(current.handoff?{handoffId:current.handoff.id}:{})},{input:entry.input,preview:current});
   }
   private createGraph(imported?: GraphData): ConversationGraph {
@@ -6140,9 +6231,6 @@ export class BackendCore {
     const { principalId, policyVersion, currentProjectId, currentWorkspaceId } = this.velaContext();
     return JSON.stringify([principalId, policyVersion, currentProjectId, currentWorkspaceId]);
   }
-  private journalLatest() {
-    return Number(this.db.prepare('SELECT latest FROM integration_meta WHERE id=1').get()!.latest);
-  }
   private rendererEventResourceAllowed(event: StreamEvent) {
     const execution = event.executionId ? this.state.executions[event.executionId] : undefined;
     if (event.executionId && !execution) return false;
@@ -6158,99 +6246,20 @@ export class BackendCore {
     }
     return true;
   }
-  private rendererEventPage(input: CommandMap['rendererEventPage']['input']): CommandMap['rendererEventPage']['output'] {
-    ensure(input && typeof input === 'object' && !Array.isArray(input) &&
-      Object.keys(input).every(key => ['after', 'limit', 'recent'].includes(key)), 'invalid_cursor');
-    const { recent = false, after = 0, limit = 250 } = input;
-    ensure(typeof recent === 'boolean' && (!recent || input.after === undefined) &&
-      Number.isSafeInteger(after) && after >= 0 && Number.isInteger(limit) && limit >= 1 && limit <= 250, 'invalid_cursor');
-    return this.kernel.withTransaction(() => {
-      // Read bounds, rows, and current access in one SQLite read snapshot. Raw rows determine
-      // coverage, including rows that the current policy excludes from delivery.
-      const scope = this.rendererEventScope();
-      const missionScope = this.missionStreamScope(), legacyMissions = new Map<string, Mission | null>();
-      const latest = this.journalLatest();
-      const earliest = this.db.prepare('SELECT min(cursor) AS value FROM intelligence_events').get()!.value as number | null;
-      const select = "SELECT cursor,dedupe,json_remove(json,'$.externalEvidence','$.externalCoverage','$.payload.delta') AS json FROM intelligence_events";
-      const rows = recent
-        ? this.db.prepare(select + ' ORDER BY cursor DESC LIMIT ?').all(limit).reverse()
-        : this.db.prepare(select + ' WHERE cursor > ? ORDER BY cursor LIMIT ?').all(after, limit);
-      const events = rows.flatMap(row => {
-        const event = JSON.parse(String(row.json)) as StreamEvent;
-        if (!this.rendererEventResourceAllowed(event)) return [];
-        if (!event.type.startsWith('vela.mission/')) return [event];
-        const projected = this.projectReplayedMissionEvent(event, String(row.dedupe), missionScope, legacyMissions);
-        return projected ? [projected] : [];
-      });
-      const scannedThrough = recent || rows.length < limit ? latest : Number(rows.at(-1)!.cursor);
-      const truncated = earliest !== null && (recent ? earliest > 1 || Number(rows[0]?.cursor) > earliest : after < earliest - 1);
-      return { events, earliest, latest, scannedThrough, truncated, scope };
-    });
-  }
-  private missionStreamFields(mission: Mission, event: MissionEvent): Pick<StreamEvent, 'mission' | 'status' | 'payload'> {
-    const executor = (mission.tasks.find(task => task.id === event.taskId) ??
-      mission.retiredTasks?.find(task => task.id === event.taskId))?.executor;
-    let status: string | null = event.kind === 'created' ? 'queued' : event.kind === 'started' ? 'running' : null;
-    if (event.kind === 'settled' || event.kind === 'recovered') {
-      if (event.detail && ['verified', 'failed', 'blocked', 'cancelled', 'uncertain'].includes(event.detail)) status = event.detail;
-      else if (event.detail === 'paused_on_restart') status = 'paused';
-      else if (event.kind === 'settled' && !event.attemptId) status = 'blocked';
-    }
-    return { mission: { id: mission.id, scope: mission.scope, kind: event.kind, seq: event.seq, occurredAt: event.time,
-      ...(event.taskId ? { taskId: event.taskId } : {}), ...(event.attemptId ? { attemptId: event.attemptId } : {}),
-      ...(executor ? { executor } : {}) }, status, payload: { redacted: true, ...(event.taskId ? { taskId: event.taskId } : {}) } };
-  }
   private recordMissionStreamEvent(mission: Mission, event: MissionEvent, acknowledge: () => void) {
     this.record('vela.mission/' + event.kind, 'observed', undefined, `mission:${mission.id}:${event.seq}`, {
       providerId: 'aerynth-native', detached: true, correlationId: mission.id, nativeEventId: event.attemptId,
-      ...this.missionStreamFields(mission, event),
+      ...missionStreamFields(mission, event),
     }, acknowledge);
-  }
-  private readWorkroomStream(mission: Mission) {
-    const legacy = new Map([[mission.id, mission]]);
-    return this.db.prepare(`SELECT dedupe,json FROM intelligence_events
-      WHERE json_extract(json,'$.correlationId')=? AND json_extract(json,'$.type') GLOB 'vela.mission/*'
-      ORDER BY cursor DESC LIMIT 128`).all(mission.id).reverse().flatMap(row => {
-      const stored = JSON.parse(String(row.json)) as StreamEvent;
-      const event = this.projectReplayedMissionEvent(stored, String(row.dedupe), mission.scope, legacy);
-      if (event?.mission?.id !== mission.id) return [];
-      const { eventId, cursor, receivedAt, type, status, classification } = event;
-      const { taskId, executor, occurredAt } = event.mission;
-      return [{ eventId, cursor, receivedAt, type, status, classification,
-        ...(occurredAt ? { occurredAt } : {}),
-        ...(taskId ? { taskId } : {}), ...(executor ? { executor } : {}) }];
-    });
-  }
-  private streamScopeMatches(scope: MissionScope | null, origin: MissionScope | undefined) {
-    return !!scope && scope.workspaceId === origin?.workspaceId && scope.projectId === origin.projectId;
   }
   private missionLiveScopeAllowed(event: StreamEvent) {
     const scope = this.missionStreamScope(), mission = event.mission;
-    if (this.streamScopeMatches(scope, mission?.scope)) return true;
+    if (streamScopeMatches(scope, mission?.scope)) return true;
     // Linked workroom views need a refresh when the originating mission changes.
     // General stream replay remains scoped to the originating workspace.
     return !!scope && !!mission && scope.projectId === mission.scope.projectId && this.missionScopeAllowed(mission.scope) &&
       !!this.db.prepare(`SELECT 1 FROM vela_missions WHERE id=? AND json_extract(json,'$.workroom.workspaceId')=?`)
         .get(mission.id, scope.workspaceId);
-  }
-  private projectReplayedMissionEvent(event: StreamEvent, dedupe: string, scope: MissionScope | null,
-    legacyMissions: Map<string, Mission | null>): StreamEvent | undefined {
-    if (event.mission) return this.streamScopeMatches(scope, event.mission.scope) ? event : undefined;
-    // Older rows have only a correlation ID. Bind them to the exact durable lifecycle event before disclosure.
-    const id = event.correlationId;
-    if (!scope || !id || event.providerId !== 'aerynth-native' || event.classification !== 'observed') return;
-    if (!legacyMissions.has(id)) {
-      const row = this.db.prepare('SELECT json FROM vela_missions WHERE id=?').get(id);
-      legacyMissions.set(id, row ? JSON.parse(String(row.json)) as Mission : null);
-    }
-    const mission = legacyMissions.get(id);
-    if (!mission || mission.id !== id || !this.streamScopeMatches(scope, mission.scope)) return;
-    if (event.type === 'vela.mission/report-posted' && dedupe === 'mission:report:' + id &&
-      this.db.prepare('SELECT 1 FROM vela_mission_report_links WHERE mission_id=?').get(id)) {
-      return { ...event, mission: { id, scope: mission.scope, kind: 'report-posted' }, status: 'posted', payload: { redacted: true } };
-    }
-    const observed = mission.events.find(entry => event.type === 'vela.mission/' + entry.kind && dedupe === `mission:${id}:${entry.seq}`);
-    if (observed) return { ...event, ...this.missionStreamFields(mission, observed) };
   }
   private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;execution?:Execution;detached?:boolean;resourceId?:string;correlationId?:string;payload?:StreamEvent['payload'];nativeEventId?:string;providerTime?:number;providerTimeSource?:string;externalEvidence?:GitHubCommitEvidence;externalCoverage?:TimelineSourceCoverage;mission?:StreamEvent['mission'];status?:string|null}, acknowledge?: () => void) {
     const execution = override?.execution ?? this.active;
@@ -6377,10 +6386,13 @@ export class BackendCore {
     }
     this.conversations.nativeAuthorizeContextSources(input.resourceId,sources);
   }
-  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer'];requestId?:string;preview?:{id:string;clock?:VelaRouteTiming['previewClock']}}):Promise<Execution> {
+  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer'];requestId?:string;preview?:{id:string;clock?:VelaRouteTiming['previewClock']}}, memory?:OrdinaryMemoryRecall):Promise<Execution> {
     const started = performance.now();
     const measuredStart = authority?.measure ? started : undefined;
     const p=preview.responses;ensure(p&&preview.providerId===CHATGPT_PLAN_PROVIDER&&!this.active&&!this.velaApiTask&&this.missionSpecialistsInFlight<2,'ordinary_execution_unavailable');
+    ensure(!!memory === !!p.memoryDigest, 'personal_memory_disclosure_review_required');
+    const turn: TurnInput = { executionId:p.executionId,requestId:input.commandId,configurationId:p.configurationId,providerId:CHATGPT_PLAN_PROVIDER,assistant:'ordinary',model:p.model,instructions:p.instructions,messages:p.messages,contextDigest:p.contextDigest,...(p.reasoningEffort === undefined ? {} : { reasoningEffort: p.reasoningEffort }),...(p.webSearch?{webSearch:true}:{}) };
+    memory?.validate(turn);
     ensure(this.conv(input.resourceId).providerId===CHATGPT_PLAN_PROVIDER&&!this.state.bindings[input.resourceId]?.length,'invalid_cross_provider_reference');
     ensure(this.state.revisions[input.resourceId]===input.expectedRevision,'stale_resource_version');
     const fingerprint=hash({type:'ordinary-responses',...input}),prior=this.state.receipts[input.commandId];
@@ -6394,9 +6406,9 @@ export class BackendCore {
     this.atomic(()=>{if(authority?.countVelaAttempt)this.admitVelaAttempt(e);e.inputMessageId=this.graph.addMessage(this.gid(e.resourceId),'user',input.content,{provenance:'user'}).id;this.state.revisions[e.resourceId]++;this.state.executions[e.id]=e;this.state.receipts[input.commandId]={fingerprint,result:e.id};if(handoff)handoff.state='dispatching';});
     this.active=e;this.assistantText='';this.assistantCursor=0;this.ordinaryController=controller;
     this.liveVelaAnswer = authority?.liveVelaAnswer;
-    this.activeSourceFence = () => { this.finalOrdinaryFence(input, preview); authority?.validate(); };
+    this.activeSourceFence = () => { this.finalOrdinaryFence(input, preview); memory?.validate(turn); authority?.validate(); };
     const catalog=this.ordinaryCatalog!,classification=this.ordinaryTest?'simulated' as const:'reported' as const;
-    const fence=async()=>{authority?.validate();ensure(this.active?.id===e.id&&this.conversationAccess.resource(e.resourceId),'source_unavailable');const current=await this.prepareConversationSend(input,1,preview.handoff?.id,p);ensure(current.fingerprint===preview.fingerprint,'stale_send_preview');await this.ordinaryConnections.revalidateCredential(p.connectionVersion,catalog.boundaryDigest);this.finalOrdinaryFence(input,preview);authority?.validate();};
+    const fence=async()=>{authority?.validate();ensure(this.active?.id===e.id&&this.conversationAccess.resource(e.resourceId),'source_unavailable');const current=await this.prepareConversationSend(input,1,preview.handoff?.id,p);ensure(current.fingerprint===preview.fingerprint,'stale_send_preview');await this.ordinaryConnections.revalidateCredential(p.connectionVersion,catalog.boundaryDigest);this.finalOrdinaryFence(input,preview);memory?.validate(turn);authority?.validate();};
     const supply=async(responseId:string)=>{
       this.atomic(()=>{e.responseId=responseId;e.state='running';this.state.contextSupplies![e.id]={resourceId:e.resourceId,responseId,suppliedAt:now(),items:preview.context.map(i=>({shareId:i.shareId,digest:i.digest,sourceResourceId:i.sourceResourceId,sourceMessageId:i.sourceMessageId}))};});
       for(const item of preview.context)await this.conversations.confirmSupplied(e.resourceId,item.shareId,e.id);
@@ -6437,12 +6449,12 @@ export class BackendCore {
         revalidate:async(review,boundary)=>{ensure(review.bodyDigest===p.bodyDigest&&boundary===catalog.boundaryDigest,'approval_scope_mismatch');await fence();},
       }});
       this.providerActivity.providerRequests=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.providerRequests+1);
-      result=await transport.turn({executionId:e.id,requestId:input.commandId,configurationId:p.configurationId,providerId:CHATGPT_PLAN_PROVIDER,assistant:'ordinary',model:p.model,instructions:p.instructions,messages:p.messages,contextDigest:p.contextDigest,...(p.reasoningEffort === undefined ? {} : { reasoningEffort: p.reasoningEffort }),...(p.webSearch?{webSearch:true}:{})},controller.signal);
+      result=await transport.turn(turn,controller.signal);
       timing.observeResult();
       let valid=true;try{await fence();}catch{valid=false;}
       if (result.responseId && !e.responseId && valid) {
         await supply(result.responseId);
-        try { this.finalOrdinaryFence(input, preview); authority?.validate(); } catch { valid = false; }
+        try { this.finalOrdinaryFence(input, preview); memory?.validate(turn); authority?.validate(); } catch { valid = false; }
       }
       this.atomic(()=>{
         e.responseOutcome=result!.outcome;e.cancellation=result!.cancellation;if(result!.incompleteReason)e.incompleteReason=result!.incompleteReason;if(result!.httpDiagnostic)e.httpDiagnostic=projectTurnHttpDiagnostic(result!.httpDiagnostic);if(result!.responseId)e.responseId=result!.responseId;if(result!.usage)e.usage=result!.usage;if(result!.reportedModel)e.reportedModel=result!.reportedModel;
@@ -6644,6 +6656,29 @@ export class BackendCore {
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
+    if (name === 'personalMemoryPolicyNative') {
+      const review = this.personalMemoryReview;
+      ensure(review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+      const policy = input as CommandMap['personalMemoryPolicyNative']['input'];
+      if (policy.enable === true) {
+        ensure(Number.isSafeInteger(policy.expectedVersion), 'invalid_privacy_policy');
+        return await review.setProviderUse('ordinary', true, policy.expectedVersion!) as CommandMap[K]['output'];
+      }
+      return (await review.inspect({ after: null, limit: 1 })).policy as CommandMap[K]['output'];
+    }
+    if (name === 'personalMemoryCapturePreviewNative' || name === 'personalMemoryCaptureCommitNative' || name === 'personalMemoryCaptureCancelNative') {
+      const review = this.personalMemoryReview;
+      ensure(review && !this.closed, 'personal_memory_native_required');
+      if (name === 'personalMemoryCaptureCancelNative') {
+        review.cancelCapture((input as CommandMap['personalMemoryCaptureCancelNative']['input']).id);
+        return null as CommandMap[K]['output'];
+      }
+      ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
+      if (name === 'personalMemoryCapturePreviewNative')
+        return await review.previewCapture(input as CommandMap['personalMemoryCapturePreviewNative']['input']) as CommandMap[K]['output'];
+      const saved = await review.commitCapture(input as CommandMap['personalMemoryCaptureCommitNative']['input']);
+      return { id: saved.id } as CommandMap[K]['output'];
+    }
     if(['missionFileEditPrepareNative','missionFileEditRunNative','missionFileEditReviewNative','missionFileEditChoiceNative','missionFileEditApplyNative','missionFileEditCheckReviewNative','missionFileEditCheckRunNative','missionFileEditRead'].includes(name)){
       ensure(!this.closed&&this.nativeMedia&&this.nativeHostServices?.secrets&&(this.privateMode||this.velaApiTest)&&input&&typeof input==='object'&&!Array.isArray(input),'mission_edit_native_required');
       ensure(this.missionStorageAdmitted,'storage_reserve_admission_denied');const p=input as any;
@@ -6819,6 +6854,13 @@ export class BackendCore {
       const mission = this.missions.create(review.id, { ...plan, originConversationId: this.vela.ensureMissionConversation() });
       this.gpuReadbackReview = undefined;
       return { kind: 'started', missionId: mission.id } as CommandMap[K]['output'];
+    }
+    if (name === 'aepExperimentNative') {
+      ensure(this.aepNative && !this.closed, 'native_aep_experiment_required');
+      const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
+      ensure(workspaceId, 'mission_workspace_required');
+      return await this.aepNative.command({ workspaceId, projectId },
+        input as CommandMap['aepExperimentNative']['input']) as CommandMap[K]['output'];
     }
     if (name === 'resourcePolicyNative') {
       ensure(!this.closed && this.privateMode && this.nativeHostServices, 'native_resource_policy_required');
@@ -7041,7 +7083,7 @@ export class BackendCore {
           if (authorized.length) snapshot.missionWorkroomCardIds = authorized;
         }
         if (this.rendererEventTransport) {
-          snapshot.eventCursor = this.journalLatest();
+          snapshot.eventCursor = this.intelligenceJournal.latestCursor();
           snapshot.eventScope = this.rendererEventScope();
         }
         return snapshot as any;
@@ -7121,27 +7163,11 @@ export class BackendCore {
         } catch { this.record('stream/provider-thread-unavailable', 'inferred'); return { resourceId: a.resourceId, providerThreadAvailable: false, executionOutcome: 'unchanged' } as any; }
       }
       case 'snapshot': return { contract: CONTRACT, schemaVersion: 1, conversations: Object.keys(this.state.resources).map(id => this.conv(id)), graph: this.graph.snapshot(), resourceMap: structuredClone(this.state.resources), bindings: structuredClone(this.state.bindings), handoffs: structuredClone(this.state.reviews), executions: structuredClone(this.state.executions), messageEvidence: structuredClone(this.state.messageEvidence), resources: Object.keys(this.state.resources).map(id => this.kernel.getResource(id)), relationships: Object.keys(this.state.resources).flatMap(id => this.kernel.listRelationships(id)) } as any;
-      case 'rendererEventPage': return this.rendererEventPage(a) as CommandMap[K]['output'];
-      case 'replay': {
-        const after = a.after ?? 0, limit = a.limit ?? 100;
-        ensure(Number.isSafeInteger(after) && after >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 1000, 'invalid_cursor');
-        const scope = this.missionStreamScope(), legacyMissions = new Map<string, Mission | null>();
-        const rows = this.db.prepare(`SELECT e.dedupe, json_remove(e.json,'$.externalEvidence','$.externalCoverage') AS json
-          FROM intelligence_events e WHERE e.cursor>? AND (json_extract(e.json,'$.type') NOT GLOB 'vela.mission/*'
-            OR EXISTS (SELECT 1 FROM vela_missions m WHERE m.id=json_extract(e.json,'$.correlationId')
-              AND json_extract(m.json,'$.scope.workspaceId')=? AND json_extract(m.json,'$.scope.projectId') IS ?))
-          ORDER BY e.cursor LIMIT ?`).all(after, scope?.workspaceId ?? null, scope?.projectId ?? null, limit);
-        const events = rows.flatMap(row => {
-          const event = JSON.parse(String(row.json)) as StreamEvent;
-          if (!event.type.startsWith('vela.mission/')) return [event];
-          const projected = this.projectReplayedMissionEvent(event, String(row.dedupe), scope, legacyMissions);
-          return projected ? [projected] : [];
-        });
-        const earliest = this.db.prepare('SELECT min(cursor) AS value FROM intelligence_events').get()!.value as number | null;
-        const latest = Number(this.db.prepare('SELECT latest FROM integration_meta WHERE id=1').get()!.latest);
-        return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
-      }
+      case 'rendererEventPage': return this.intelligenceJournal.rendererPage(a) as CommandMap[K]['output'];
+      case 'replay': return this.intelligenceJournal.replay(a) as CommandMap[K]['output'];
       case 'close': {
+        this.personalMemoryReview?.close();
+        this.personalMemory?.close();
         this.velaVoiceRuntime.closeSpeechAdmission();
         let cleanupError: unknown, cleanupFailed = false;
         const cleanup = async (work: () => unknown | Promise<unknown>) => {
