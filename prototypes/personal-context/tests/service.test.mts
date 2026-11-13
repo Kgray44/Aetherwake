@@ -200,6 +200,22 @@ test('scope denial skips the original body; shared reviewed knowledge never gran
   const f = fixture(); try { f.enable(); const source = f.service.importOriginal(original()), value = f.service.reviewFact(fact(source, { scope: shared })); const before = f.calls.decrypted; f.denied.add(JSON.stringify(ordinary)); const context = f.service.previewContext(request({ assistant: 'vela', sharedFactIds: [value.id] })); assert.equal(context.items.length, 0); assert(context.omissions.some(item => item.reason === 'unavailable')); assert.equal(f.calls.decrypted - before, 2, 'only privacy policy and selected fact, never denied original body'); } finally { f.close(); }
 });
 
+test('a current project decision gets scanned before old facts regardless of its ID', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const scope = { kind: 'project', id: 'p1' } as const;
+    const records = Array.from({ length: 12 }, () => f.service.reviewFact(fact(undefined, { scope })));
+    const laterId = records.sort((a, b) => a.id.localeCompare(b.id)).at(-1)!;
+    const updated = f.service.editFact({ id: laterId.id, expectedVersion: laterId.version,
+      replacement: fact(undefined, { scope, text: 'Current synthetic project decision.', keywords: ['quartz'] }) });
+    f.restart();
+    const preview = f.service.previewContext(request({ projectId: 'p1', query: 'Which quartz?', maxScan: 1 }));
+    assert.deepEqual(preview.items.map(item => [item.factId, item.version]), [[updated.id, updated.version]]);
+    assert.deepEqual(preview.omissions, [{ reason: 'scan-limit', count: 11 }]);
+  } finally { f.close(); }
+});
+
 test('exact source anchors recall a project fact without keyword overlap and cannot cross scope', () => {
   const f = fixture();
   try {
