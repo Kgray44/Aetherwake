@@ -1301,19 +1301,23 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
     const require = createRequire(import.meta.url);
     const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
     const { reviewPage } = require('../../visual-experience/cinematic-v3/native/vela-review.cjs');
-    const send = (allow: boolean) => velaCommand({
+    const send = (allow: boolean, selectedVersion?: number) => velaCommand({
       win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
       directMessageSend: true, routeNative: true, dialog: {},
       call: f.core.command.bind(f.core),
       reviewProvider: async (reviewed: { review: typeof review }) => {
+        assert.equal(selectedVersion, undefined, 'standing selected evidence must not open the sharing modal');
         assert.equal(reviewed.review.semanticContext, true);
         assert.match(reviewPage(reviewed.review, intent), /up to six API calls/);
         return allow;
       },
       input: { name: 'request', input: { intent, resourceIds: [note.id], authorizeProvider: true,
-        providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
+        providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true,
+        ...(selectedVersion === undefined ? {} : { resourceRefs: [{ id: note.id, kind: 'resource', resourceKind: 'note', version: selectedVersion }] }) } },
     });
     await assert.rejects(send(false), /authorization_cancelled/);
+    assert.equal(f.requests.length, 0);
+    await assert.rejects(send(true, note.version), /source_selection_changed/);
     assert.equal(f.requests.length, 0);
     const interpreted = { version: 2, objective: 'Find the return condition', clarification: '', perception: {
       kind: 'answer', explicitGoals: ['Find the condition'], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [],
@@ -1342,7 +1346,23 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
         assert.doesNotMatch(JSON.stringify(body), /Unrelated serial/);
         return response('The west lift can return after inspection.', body.model);
       });
-    const result = await send(true) as VelaRequest;
+    const current = (await f.core.command('desktop', { type: 'snapshot' })).resources.find(item => item.id === note.id)!;
+    const selectedPreview = await f.core.command('velaRequestPreview', { intent, resourceIds: [note.id],
+      resourceRefs: [{ id: note.id, kind: 'resource', version: current.version, title: current.title }],
+      providerId: 'openai-api-vela', model: 'gpt-6-luna', adaptive: true, semanticContext: true });
+    assert.equal(selectedPreview.sendDisposition, 'standing-selected-evidence');
+    const selectedReview = await f.core.command('velaNativeReview', { previewId: selectedPreview.id, signature: selectedPreview.signature });
+    const admission = { previewId: selectedPreview.id, signature: selectedPreview.signature,
+      reviewDigest: selectedReview.reviewDigest, directSend: true as const };
+    await assert.rejects(f.core.command('authorizeVelaRequest', { ...admission, reviewDigest: '0'.repeat(64) }), /vela_native_review_required/);
+    const grant = await f.core.command('authorizeVelaRequest', admission);
+    await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
+    await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: true });
+    await assert.rejects(f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds: [note.id], authorizeProvider: true, previewId: selectedPreview.id, grantId: grant.grantId,
+    } }), /native_vela_grant_expired|vela_preview_expired/);
+    assert.equal(f.requests.length, 0);
+    const result = await send(true, current.version) as VelaRequest;
     assert.equal(result.state, 'responded');
     assert.equal(f.requests.length, 5);
     const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
