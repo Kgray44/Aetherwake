@@ -432,14 +432,14 @@ test('terminal status survives request completion and refresh; connection probe 
   panel.dispose(); assert.equal(root.children.length, 0);
 });
 
-test('the composer can explicitly investigate an attached file without opening provider settings', async () => {
+for (const outcome of ['responded', 'provider-unavailable', 'cancelled', 'unknown'] as const) test('the selected file composer preserves explicit Send and handles '+outcome, async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
   const turns: Parameters<VelaClient['request']>[0][] = [];
   const file = { id: 'file:brief', kind: 'file' as const, title: 'Brief.docx', version: 3, projectId: null };
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
     pickSources: async () => ({ resources: [file] }),
-    request: async input => { turns.push(input); return request(); },
+    request: async input => { turns.push(input); return request({state:outcome}); },
   }));
   try {
     await panel.open();
@@ -471,6 +471,9 @@ test('the composer can explicitly investigate an attached file without opening p
     assert.equal(turns[0].providerId, 'openai-api-vela');
     assert.equal(turns[0].semanticContext, true);
     assert.deepEqual(turns[0].resourceRefs, [{ ...file, kind: 'resource', resourceKind: 'file' }]);
+    await settles(() => composer.closest('form')?.getAttribute('aria-busy') === 'false');
+    assert.equal(composer.value, outcome === 'responded' ? '' : 'What does this file say about the schedule?');
+    assert.equal(turns.length, 1);
     assert.equal(checkbox.checked, false);
   } finally { panel.dispose(); }
 });

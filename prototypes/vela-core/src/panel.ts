@@ -577,17 +577,16 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       try {
         const recorded = await client.request(submitted);
         if (disposed) return;
-        if (recorded.handoff?.sourceRequestId === handoffSelection?.requestId && recorded.handoff &&
-            !['provider-unavailable', 'failed', 'invalid-plan', 'unknown', 'cancelled'].includes(recorded.state)) {
+        const keepDraft = ['provider-unavailable', 'failed', 'invalid-plan', 'unknown', 'cancelled'].includes(recorded.state);
+        if (!keepDraft && recorded.handoff && recorded.handoff.sourceRequestId === handoffSelection?.requestId) {
           handoffSelection = null;
           renderSelection();
         }
-        if (recorded.routingAgent?.resourceId === routingAgentSelection?.id && recorded.routingAgent &&
-            !['provider-unavailable', 'failed', 'invalid-plan', 'unknown', 'cancelled'].includes(recorded.state)) {
+        if (!keepDraft && recorded.routingAgent && recorded.routingAgent.resourceId === routingAgentSelection?.id) {
           routingAgentSelection = null;
           renderSelection();
         }
-        if (!['provider-unavailable','failed','invalid-plan','unknown'].includes(recorded.state) && draftRevision === revision && intent.value === submitted.intent) intent.value = '';
+        if (!keepDraft && draftRevision === revision && intent.value === submitted.intent) intent.value = '';
         observeLiveAnswer(undefined);
         await settleSubmittedView(submittedView);
       }
