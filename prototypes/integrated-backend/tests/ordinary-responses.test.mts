@@ -71,11 +71,16 @@ test('ordinary document draft survives restart without persisting file contents 
   });
   const { resourceId } = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
   const ref = { id: resource.id, version: resource.version };
+  const otherProject = f.owner.kernel.createProject('Synthetic other project');
+  const other = await f.core.command('mediaImportTrusted', {
+   kind: 'file', variant: 'document', projectId: otherProject.id, commandId: randomUUID(), selection: { kind: 'file', path },
+  });
   const read = () => f.core.command('conversation', { name: 'readDraft', input: { resourceId } });
   const save = (expectedVersion: number, documents?: typeof ref[]) => f.core.command('conversation', {
    name: 'saveDraft', input: { resourceId, expectedVersion, content: 'Summarize this', documents },
   }) as Promise<import('../../conversation-product/src/contracts.ts').ConversationDraft>;
   await assert.rejects(save(0, [{ ...ref, version: ref.version + 1 }]), /source_unavailable/);
+  await assert.rejects(save(0, [{ id: other.resource.id, version: other.resource.version }]), /source_unavailable/);
   const saved = await save(0, [ref]);
   assert.deepEqual(saved.documents, [{ ...ref, title: resource.title }]);
   const row = f.owner.db.prepare('SELECT documents_json FROM cp_drafts WHERE resource_id=?').get(resourceId);
@@ -88,6 +93,9 @@ test('ordinary document draft survives restart without persisting file contents 
   await f.core.command('desktop', { type: 'archiveSubject', kind: 'resource', id: ref.id, expectedVersion: ref.version + 1, archived: false });
   const textOnlySave = await save(saved.version);
   assert.deepEqual(textOnlySave.documents, [{ ...ref, title: resource.title, unavailable: 'changed' }]);
+  f.owner.kernel.assignResourceProject(ref.id, otherProject.id, ref.version + 2);
+  const moved = await read() as Awaited<ReturnType<typeof save>>;
+  assert.deepEqual(moved.documents, [{ ...ref, title: 'Unavailable document', unavailable: 'inaccessible' }]);
   await assert.rejects(save(saved.version, []), /stale_draft_version/);
   assert.equal((await save(textOnlySave.version, [])).documents, undefined);
   assert.equal(f.requests.length, 0);
