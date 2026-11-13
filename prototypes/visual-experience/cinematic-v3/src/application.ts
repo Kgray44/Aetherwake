@@ -1,11 +1,4 @@
-import type {
-  GraphActions,
-  SpatialRenderLayer,
-} from "../../../constellation/spatial-types.ts";
-import {
-  mountConstellation,
-  type ConstellationViewOptions,
-} from "../../../constellation/view.ts";
+import { createApplicationNavigation } from "./application-navigation.ts";
 import "../../../constellation/style.css";
 import type { Policy } from "../../../constellation/types.ts";
 import type { MotionCoordinator } from "./motion";
@@ -33,7 +26,6 @@ import "../../../block-library/direct-manipulation.css";
 import {
   sculptureRegion,
   overviewPresence,
-  overviewChromeBottom,
   presenceTravelOccludes,
 } from "./presence-layout";
 import {
@@ -795,7 +787,6 @@ export function installApplication(hooks: Hooks) {
   let conversationDisposing: Promise<void> | null = null;
   let connectionsView: ReturnType<typeof mountProviderConnections> | null =
     null;
-  let constellation: ReturnType<typeof mountConstellation> | null = null;
   const directResources = createResourceSurface({
     surfaces,
     anchor: () => ({
@@ -896,7 +887,7 @@ export function installApplication(hooks: Hooks) {
               : [...state.resources, resource],
           };
       },
-      project: (nodeKey) => constellation?.layer.screenBodyProjection?.(nodeKey),
+      project: (nodeKey) => navigation.view?.layer.screenBodyProjection?.(nodeKey),
       enqueue: enqueueResult,
       navigate: (workspaceId) => command({
         type: "navigate",
@@ -980,7 +971,6 @@ export function installApplication(hooks: Hooks) {
     moved: boolean;
   } | null = null;
   let suppressPresenceClick = false;
-  let overviewBarBottom = 201;
   function camera() {
     const viewport = optimizationReview ? undefined : workspacePreview.current?.viewport;
     return viewport
@@ -996,7 +986,7 @@ export function installApplication(hooks: Hooks) {
   function presenceTarget() {
     if (state?.navigation.kind === "constellation")
       return {
-        ...overviewPresence(innerWidth, innerHeight, overviewBarBottom),
+        ...overviewPresence(innerWidth, innerHeight, navigation.overviewBarBottom),
         lift: 0,
         yaw: 0,
         opacity: 1,
@@ -1070,6 +1060,80 @@ export function installApplication(hooks: Hooks) {
   }
   const shell = mountApplicationShell(document);
   const { dialog, universe } = shell;
+  const navigation = createApplicationNavigation(universe, hooks.wake, {
+    motion: hooks.motion,
+    onNavigationIntent: () => resourceOpener.cancel(),
+    navigate: (target) =>
+      enqueueResult(async () => {
+        await flush();
+        return command({ type: "navigate", target });
+      }),
+    openResource: (target) => resourceOpener.open(target),
+    persistence: {
+      load: () => host.command!("viewState", {}),
+      save: async (state) => {
+        await host.command!("viewState", { state });
+      },
+    },
+    graphAction: async (action) => {
+      const knownWorkspaces = new Set(
+        state?.workspaces.map((workspace) => workspace.id),
+      );
+      await tail;
+      await flush();
+      const next = (await host.command!("graphAction", {
+        ...action,
+        bounds: viewBounds(),
+      })) as DesktopSnapshot;
+      apply(next);
+      const framed =
+        action.type === "createWorkspace" &&
+        next.activeWorkspaceId &&
+        !knownWorkspaces.has(next.activeWorkspaceId)
+          ? await command({
+              type: "bringAllIntoView",
+              workspaceId: next.activeWorkspaceId,
+            })
+          : next;
+      return {
+        ...framed,
+        blocks: framed.navigationBlocks ?? framed.blocks,
+      };
+    },
+    capabilities: {
+      createProject: true,
+      createWorkspace: true,
+      createResource: true,
+      archive: true,
+      detach: true,
+      attach: true,
+      relate: true,
+      unrelate: true,
+      branch: true,
+    },
+    onTransition: (transition) => {
+      if (
+        !["workspace", "surface"].includes(transition.to.kind) ||
+        ["workspace", "surface"].includes(transition.from.kind)
+      )
+        return;
+      const bounds = (
+          universe.querySelector(".aw-spatial-field") ?? universe
+        ).getBoundingClientRect(),
+        c = transition.camera;
+      const origin = transition.screenOrigin ?? {
+        x:
+          bounds.left +
+          bounds.width / 2 +
+          (transition.origin.x - c.x) * c.zoom,
+        y:
+          bounds.top +
+          bounds.height / 2 +
+          (transition.origin.y - c.y) * c.zoom,
+      };
+      workspaceStage.approach(origin, navigation.view?.controller.policy.quiet ?? false);
+    },
+  });
   const layoutControls = mountWorkspaceLayoutControls(shell.place, {
     mode: () => state?.organization?.mode ?? "fluid",
     change: async (mode) => {
@@ -1382,110 +1446,11 @@ export function installApplication(hooks: Hooks) {
       leaving: leavingWorkspace,
       arriving: arrivingWorkspace,
       navigated,
-      quiet: constellation?.controller.policy.quiet ?? false,
+      quiet: navigation.view?.controller.policy.quiet ?? false,
       center: { x: innerWidth / 2, y: innerHeight / 2 },
       velaOccludes: presence && (() => !!velaCrossesWorkspace(presence)),
     });
-    const navigationSnapshot = {
-      ...next,
-      blocks: next.navigationBlocks ?? next.blocks,
-    };
-    if (!constellation) {
-      const options: ConstellationViewOptions & GraphActions = {
-        hostUiElements: () =>
-          [
-            ...document.querySelectorAll<HTMLElement>(
-              ".topbar,.brand,.place,.aw-workspace-layout,.scene-navigation,#settings-button,.dock,.canvas-tools,#status,.keys,.provenance,.window-drag,#vela",
-            ),
-          ].slice(0, 32),
-        snapshot: navigationSnapshot,
-        motion: hooks.motion,
-        onNavigationIntent: () => resourceOpener.cancel(),
-        navigate: (target) =>
-          enqueueResult(async () => {
-            await flush();
-            return command({ type: "navigate", target });
-          }),
-        openResource: (target) => resourceOpener.open(target),
-        persistence: {
-          load: () => host.command!("viewState", {}),
-          save: async (state) => {
-            await host.command!("viewState", { state });
-          },
-        },
-        graphAction: async (action) => {
-          const knownWorkspaces = new Set(
-            state?.workspaces.map((workspace) => workspace.id),
-          );
-          await tail;
-          await flush();
-          const next = (await host.command!("graphAction", {
-            ...action,
-            bounds: viewBounds(),
-          })) as DesktopSnapshot;
-          apply(next);
-          const framed =
-            action.type === "createWorkspace" &&
-            next.activeWorkspaceId &&
-            !knownWorkspaces.has(next.activeWorkspaceId)
-              ? await command({
-                  type: "bringAllIntoView",
-                  workspaceId: next.activeWorkspaceId,
-                })
-              : next;
-          return {
-            ...framed,
-            blocks: framed.navigationBlocks ?? framed.blocks,
-          };
-        },
-        capabilities: {
-          createProject: true,
-          createWorkspace: true,
-          createResource: true,
-          archive: true,
-          detach: true,
-          attach: true,
-          relate: true,
-          unrelate: true,
-          branch: true,
-        },
-        onDirty: hooks.wake,
-        onTransition: (transition) => {
-          if (
-            !["workspace", "surface"].includes(transition.to.kind) ||
-            ["workspace", "surface"].includes(transition.from.kind)
-          )
-            return;
-          const bounds = (
-              universe.querySelector(".aw-spatial-field") ?? universe
-            ).getBoundingClientRect(),
-            c = transition.camera;
-          const origin = transition.screenOrigin ?? {
-            x:
-              bounds.left +
-              bounds.width / 2 +
-              (transition.origin.x - c.x) * c.zoom,
-            y:
-              bounds.top +
-              bounds.height / 2 +
-              (transition.origin.y - c.y) * c.zoom,
-          };
-          workspaceStage.approach(origin, constellation?.controller.policy.quiet ?? false);
-        },
-      };
-      constellation = mountConstellation(universe, options);
-      const bar = universe.querySelector<HTMLElement>(".aw-constellation-bar")!;
-      const updateOverviewChrome = () => {
-        const r = bar.getBoundingClientRect();
-        if (r.height > 0) {
-          overviewBarBottom = overviewChromeBottom(innerWidth, innerHeight, r);
-          hooks.wake();
-        }
-      };
-      new ResizeObserver(updateOverviewChrome).observe(bar);
-      addEventListener("resize", updateOverviewChrome);
-      void constellation.ready.then(hooks.wake);
-    } else constellation.update(navigationSnapshot);
+    navigation.update(next);
     for (const block of next.blocks)
       decorate(el(`[data-block="${block.id}"]`), block.id);
     hooks.layout();
@@ -3278,7 +3243,7 @@ export function installApplication(hooks: Hooks) {
         picker();
       },
       constellation: async () => {
-        await constellation?.controller.zoomOut();
+        await navigation.view?.controller.zoomOut();
         surfaces.close("workspace-actions");
       },
       stream: async () => {
@@ -4853,17 +4818,17 @@ export function installApplication(hooks: Hooks) {
   el("#resource-picker").onclick = () => picker();
   el("#layout-manager").onclick = () => layouts();
   el("#zoom-out").onclick = () => {
-    if (constellation) void constellation.controller.zoomOut().catch(report);
+    if (navigation.view) void navigation.view.controller.zoomOut().catch(report);
   };
   el("#nav-back").onclick = () => {
-    if (constellation?.controller.state.history.length)
-      void constellation.controller.back().catch(report);
+    if (navigation.view?.controller.state.history.length)
+      void navigation.view.controller.back().catch(report);
     else void run({ type: "back" });
   };
   el("#app").addEventListener(
     "wheel",
     (event) => {
-      if (!constellation) return;
+      if (!navigation.view) return;
       const target = event.target;
       const active = document.activeElement;
       const factor = workspaceWheelFactor(event, {
@@ -4889,7 +4854,7 @@ export function installApplication(hooks: Hooks) {
       if (factor === null) return;
       event.preventDefault();
       try {
-        void Promise.resolve(constellation.controller.zoom(factor)).catch(
+        void Promise.resolve(navigation.view.controller.zoom(factor)).catch(
           report,
         );
       } catch (error) {
@@ -4972,7 +4937,7 @@ export function installApplication(hooks: Hooks) {
   });
   const ready = command({ type: "snapshot" })
     .then(async () => {
-      await constellation?.ready;
+      await navigation.view?.ready;
       await refreshEvents();
       await tail;
       document.body.dataset.applicationHydrated = "true";
@@ -5207,13 +5172,13 @@ export function installApplication(hooks: Hooks) {
       const key = JSON.stringify(policy);
       if (key !== policyKey) {
         policyKey = key;
-        constellation?.setPolicy(policy);
+        navigation.view?.setPolicy(policy);
       }
       workspaceStage.frame(
         state?.navigation.kind === "constellation",
         policy.reduced || policy.quiet || policy.hidden,
       );
-      constellation?.frame(now);
+      navigation.view?.frame(now);
     },
     ready,
     completeWorkspaceArrival: (unclipped: (pose: ReturnType<MotionCoordinator["pose"]>) => boolean) => {
@@ -5227,25 +5192,18 @@ export function installApplication(hooks: Hooks) {
     workspaceSurfacesVisible: () =>
       workspaceStage.surfacesVisible(state?.navigation.kind === "constellation"),
     surfaceView: workspaceStage.view,
-    spatialLayer: () =>
-      (
-        constellation as
-          | (ReturnType<typeof mountConstellation> & {
-              layer?: SpatialRenderLayer;
-            })
-          | null
-      )?.layer ?? null,
-    spatialPointerBodyAt: (x: number, y: number) => constellation?.pointerBodyAt(x, y) ?? null,
-    spatialActiveDragKey: () => constellation?.activeDragKey() ?? null,
+    spatialLayer: () => navigation.view?.layer ?? null,
+    spatialPointerBodyAt: (x: number, y: number) => navigation.view?.pointerBodyAt(x, y) ?? null,
+    spatialActiveDragKey: () => navigation.view?.activeDragKey() ?? null,
     spatialDiagnostics: () => ({
-      location: constellation?.controller.location,
-      selected: constellation?.controller.selected,
-      anchors: constellation?.controller.state.anchors,
-      camera: constellation?.controller.spatial?.camera,
-      bookmark: constellation?.controller.spatial?.bookmark(),
-      renderer: constellation?.layer.diagnostics,
-      uiExclusions: constellation?.uiExclusions(),
-      policy: constellation?.controller.policy,
+      location: navigation.view?.controller.location,
+      selected: navigation.view?.controller.selected,
+      anchors: navigation.view?.controller.state.anchors,
+      camera: navigation.view?.controller.spatial?.camera,
+      bookmark: navigation.view?.controller.spatial?.bookmark(),
+      renderer: navigation.view?.layer.diagnostics,
+      uiExclusions: navigation.view?.uiExclusions(),
+      policy: navigation.view?.controller.policy,
     }),
     manifestationAfterRender: velaManifestation.afterRender,
     manifestationDiagnostics: velaManifestation.diagnostics,
@@ -5295,7 +5253,7 @@ export function installApplication(hooks: Hooks) {
         );
       await tail;
       await flush();
-      await constellation?.controller.persist();
+      await navigation.view?.controller.persist();
       await flush();
     },
     manager,
