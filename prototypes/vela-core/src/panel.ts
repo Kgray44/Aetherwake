@@ -641,7 +641,6 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         if (recorded) {
           throw Error(recorded.state === 'responded' ? 'vela_response_refresh_failed' : 'vela_request_refresh_failed');
         }
-        busy = false;
         try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; }
         if (error instanceof Error && /(?:^|: )backend_disconnected$/.test(error.message)) {
           throw Error('vela_submission_unconfirmed', { cause: error });

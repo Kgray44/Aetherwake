@@ -633,8 +633,13 @@ for (const outcome of ['responded', 'provider-unavailable', 'cancelled', 'unknow
 test('an unconfirmed disconnect warns before another send and preserves newer text', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   let rejectSend!: (error: Error) => void;
+  let finishRefresh: (() => void) | undefined;
+  let delayRefresh = false;
   let submissions = 0;
-  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => {
+    if (delayRefresh) await new Promise<void>(resolve => { finishRefresh = resolve; });
+    return canonical;
+  }, {
     request: () => {
       submissions++;
       return new Promise((_, reject) => { rejectSend = reject; });
@@ -649,13 +654,18 @@ test('an unconfirmed disconnect warns before another send and preserves newer te
     await settles(() => submissions === 1);
     composer.value = 'What changed since last week?';
     composer.fire('input');
+    delayRefresh = true;
     rejectSend(Error('Error invoking remote method: Error: backend_disconnected'));
+    await settles(() => !!finishRefresh);
+    composer.fire('keydown', { key: 'Enter' });
+    assert.equal(submissions, 1);
+    finishRefresh?.();
     const notice = root.find(node => node.className === 'vela-core-error')!;
     await settles(() => !notice.hidden);
     assert.match(notice.textContent, /couldn’t confirm.*Check Vela history before sending again/i);
     assert.equal(composer.value, 'What changed since last week?');
     assert.equal(submissions, 1);
-  } finally { panel.dispose(); }
+  } finally { finishRefresh?.(); panel.dispose(); }
 });
 
 test('workspace evidence is an explicit dedicated API composer choice', async () => {
