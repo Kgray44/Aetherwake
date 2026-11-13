@@ -209,10 +209,10 @@ export function nativeMissionPlan(intent: string, scope: MissionScope): MissionP
   const explicit = EXPLICIT_MISSION_PREFIX.test(normalized);
   const text = normalized.replace(EXPLICIT_MISSION_PREFIX, '').replace(/[.!?]+$/u, '');
   let ids: string[];
-  const check = /^run (?:the )?selected node(?:\.js)? tests and (?:measure|sample|check) cpu and ram(?: in parallel)?$/u.test(text);
+  const check = /^run (?:the )?selected node(?:\.js)? tests and (?:measure|sample|check) cpu and ram(?: in parallel)?( using workspace notes)?$/u.exec(text);
   if (/^(?:investigate|profile|measure) (?:the )?aerynth backend(?:'s)? performance(?: using workspace notes)?$/u.test(text))
     ids = ['backend', 'cpu', 'ram', 'code', ...(text.endsWith('using workspace notes') ? ['notes'] : [])];
-  else if (check) ids = ['cpu', 'ram'];
+  else if (check) ids = ['cpu', 'ram', ...(check[1] ? ['notes'] : [])];
   else {
     const match = /^(?:measure|sample|check) (?:the )?(?:host |system )?((?:cpu|gpu|ram|memory)(?:(?:,\s*(?:and\s+)?|\s+and\s+)(?:cpu|gpu|ram|memory)){0,2})(?: (?:utilization|usage))?(?: in parallel)?$/u.exec(text);
     if (!match) return null;
