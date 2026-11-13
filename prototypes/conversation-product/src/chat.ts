@@ -214,7 +214,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     });
   }
   let sendTask: Promise<void>|null = null, stopRequestedFor: string|null = null, streamLimited = false, accessRevoked = false;
-  let submittedTurn: { commandId: string; providerId: string } | undefined;
+  let submittedTurn: { commandId: string; providerId: string; webSearch: boolean } | undefined;
   let reconcileSubmittedTurn: ((observed: ConversationExecution) => Promise<void>) | undefined;
   let reviewedExecutionId: string | undefined;
   const unresolvedOrdinaryExecution = () => {
@@ -229,9 +229,15 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const unresolved = unresolvedOrdinaryExecution();
     return uncertain || (unresolved !== undefined && unresolved.id !== reviewedExecutionId);
   };
-  const observedSubmittedStop = () => !!submittedTurn && execution?.state === 'interrupted' &&
-    execution.resourceId === resourceId && execution.commandId === submittedTurn.commandId &&
-    execution.providerId === submittedTurn.providerId;
+  const observedSubmittedTurn = () => submittedTurn && execution?.resourceId === resourceId &&
+    execution.commandId === submittedTurn.commandId && execution.providerId === submittedTurn.providerId ? execution : undefined;
+  const observedSubmittedStop = () => observedSubmittedTurn()?.state === 'interrupted';
+  const failedSendNotice = (webSearch: boolean, errorCode: unknown) => {
+    const reason = errorCode === 'subscription_sharing_unsupported_capability'
+      ? webSearch ? 'This ChatGPT plan or model could not use web search.' : 'This ChatGPT plan or model could not complete the request.'
+      : webSearch ? 'Web search failed.' : 'The provider ended the reply with an error.';
+    return reason + ' Your draft is still here.';
+  };
   let pendingFollow:{messageId?:string}|null=null;
   let followingLatest=false;
   let pendingAnchor:NonNullable<ConversationViewPosition['anchor']>|null=null,viewIntent=0,viewWanted=false,userScroll=false,preferredViewAnchor:string|undefined,persistenceIntent:number|undefined;
@@ -733,7 +739,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       ? selectedModel?.id
       : plan && options.models?.selections.get(resourceId)?.id;
     sending = true;
-    submittedTurn = { commandId, providerId: before.conversation.providerId };
+    submittedTurn = { commandId, providerId: before.conversation.providerId, webSearch };
     renderDraft();
     webSearchCommandId=webSearch?commandId:undefined;
     report(webSearch?'Preparing web search. Your draft remains saved.':providerCopy(before.conversation.providerId).pending);
@@ -819,11 +825,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       } else if (interrupted) {
         report('Reply stopped. Your draft is still here.');
       } else if (failed) {
-        const unavailable = receipt?.errorCode === 'subscription_sharing_unsupported_capability';
-        const reason = unavailable
-          ? webSearch ? 'This ChatGPT plan or model could not use web search.' : 'This ChatGPT plan or model could not complete the request.'
-          : webSearch ? 'Web search failed.' : 'The provider ended the reply with an error.';
-        report(reason + ' Your draft is still here.');
+        report(failedSendNotice(webSearch, receipt?.errorCode));
       } else { uncertain=true;report('Send acceptance is not confirmed. Inspect the chat before retrying.'); }
       if(!disposed){
         await refresh({latest:true,...(followMessageId?{followMessageId}:{})}).catch(error => { if (!failed&&!interrupted) throw error; });
@@ -831,11 +833,14 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       }
     })().catch(error=>{
       const code = errorText(error);
+      const observed = observedSubmittedTurn();
       if (acceptedNotice) {
         if (!accessRevoked) report(acceptedNotice + ' The chat could not refresh.');
       }
       else if (!sendStarted) report('Message held until the draft can be saved: '+code);
       else if (observedSubmittedStop()) report('Reply stopped. Your draft is still here.');
+      else if (!accessRevoked && connection === 'available' && observed?.providerId === 'chatgpt-plan-responses' && observed.state === 'failed')
+        report(failedSendNotice(webSearch, observed.errorCode));
       else if (code === 'authorization_cancelled') report('Send cancelled. Your saved draft was retained.');
       else if (code === 'unsupported_model') report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');
       else if (code === 'unsupported_reasoning_effort') report('This model cannot use the requested thinking level. Your draft is still here.');
@@ -899,7 +904,9 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(execution?.id===next.id&&!['dispatching','running'].includes(execution.state)&&['dispatching','running'].includes(next.state))return;
     execution=next;
     const recoveredStop = uncertain && observedSubmittedStop();
-    if(recoveredStop){uncertain=false;submittedTurn=undefined;reconcileSubmittedTurn=undefined;}
+    const recoveredFailure = uncertain && connection === 'available' && next.providerId === 'chatgpt-plan-responses' &&
+      next.state === 'failed' && observedSubmittedTurn() === next ? failedSendNotice(!!submittedTurn?.webSearch, next.errorCode) : undefined;
+    if(recoveredStop||recoveredFailure){uncertain=false;submittedTurn=undefined;reconcileSubmittedTurn=undefined;}
     if(stopRequestedFor!==next.id||!active())stopRequestedFor=null;
     if(streamExecution!==next.id){streamExecution=next.id;streamText.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;liveFollow=false;}
     const preview=observation.preview;
@@ -919,6 +926,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const researchRunning=webSearchCommandId===next.commandId&&next.providerId==='chatgpt-plan-responses'&&next.state==='running';
     report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':stopRequestedFor?stopStatus:researchRunning?(streamText.textContent?.trim()?'Writing the research reply…':'Web research is running.'):next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
     if(recoveredStop)report('Reply stopped. Your draft is still here.');
+    if(recoveredFailure)report(recoveredFailure);
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
     if(reconcileLateCompletion(next))return;
     if(!active())void refresh({latest:true}).catch(error=>report(errorText(error)));

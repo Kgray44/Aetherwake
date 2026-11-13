@@ -152,6 +152,41 @@ for (const scenario of ['no edits', 'later edits', 'reconnect']) test('late comp
  } finally { await chat?.dispose(); f.restore(); }
 });
 
+for (const arrivesBeforeRejection of [false, true]) test('a confirmed provider failure releases a lost send for explicit retry (early: '+arrivesBeforeRejection+')', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ let chat, observe!: (observation: ConversationExecutionObservation) => void;
+ try {
+  const resourceId = f.draft.resourceId;
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId, execution: {
+   observe(_id, listener) { observe = listener; return () => {}; },
+   async cancel() {},
+  } });
+  await chat.ready;
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  const execution = {
+   id: 'execution:rejected', resourceId, commandId: f.pending!.input.commandId,
+   providerId: 'chatgpt-plan-responses', state: 'failed' as const,
+   startedAt: '2026-11-02T00:00:00Z', endedAt: '2026-11-02T00:00:01Z', taskVerified: false as const,
+  };
+  const send = f.view.root.querySelector('[data-cp-control="send"]');
+  if (arrivesBeforeRejection) observe({ execution });
+  f.pending!.reject(Error('synthetic response lost'));
+  await chat.whenSubmissionSettled();
+  if (!arrivesBeforeRejection) {
+   observe({ execution: { ...execution, commandId: 'unrelated-command' } });
+   assert.equal(send.disabled, true);
+   observe({ execution: { ...execution, state: 'unknown' } });
+   assert.equal(send.disabled, true);
+   observe({ execution });
+  }
+  assert.equal(f.draft.content, 'Saved unsent text');
+  assert.equal(send.disabled, false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, /provider ended the reply with an error.*draft is still here/i);
+  assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
 test('a competing draft save after delivery keeps the confirmed message and offers draft recovery', async () => {
  const f = fixture('chatgpt-plan-responses');
  let chat;
