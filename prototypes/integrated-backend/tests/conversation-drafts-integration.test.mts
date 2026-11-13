@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { Backend } from '../src/service.mts';
 import { BackendCore } from '../src/core.mts';
+import { ConversationDraftSession, type ConversationDraftPort } from '../../conversation-product/src/draft-session.ts';
 import type { Detail, Page, SearchHit } from '../../conversation-product/src/contracts.ts';
 const { conversationCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/conversation-broker.cjs');
 
@@ -50,6 +51,51 @@ test('canonical draft recovery remains available under the explicit synthetic bu
     const snapshot = await core.command('snapshot', {});
     assert.equal(snapshot.graph.messages.filter(message => message.conversationId === snapshot.resourceMap[chat.resourceId]).length, 0);
   } finally { (core as any).active = undefined; await core.command('close', {}); temp.cleanup(); }
+});
+
+test('an accepted local send and later draft survive worker restart after a lost draft-clear receipt', async () => {
+  const temp = temporary(), options = { path: temp.path, provider: 'fixture' as const, contentPolicy: 'synthetic-only' as const };
+  let backend = new Backend(options), loseClearReceipt = false;
+  try {
+    const chat = await backend.call('createConversation', { title: 'Synthetic accepted local send', providerId: 'local', commandId: randomUUID() });
+    const writes: number[] = [];
+    const port: ConversationDraftPort = { async command(name, input) {
+      const record = await conversationCommand({ call: backend.call.bind(backend), input: { name, input } });
+      if ('expectedVersion' in input) {
+        writes.push(input.expectedVersion);
+        if (loseClearReceipt) {
+          loseClearReceipt = false;
+          assert.equal(record.content, '');
+          assert.equal(record.version, input.expectedVersion + 1);
+          throw new Error('backend_disconnected');
+        }
+      }
+      return record;
+    } };
+    const session = new ConversationDraftSession({ resourceId: chat.resourceId, port });
+    await session.ready;
+    session.update('Synthetic message already accepted');
+    const checkpoint = await session.checkpoint();
+    const accepted = await conversationCommand({ call: backend.call.bind(backend), input: { name: 'send', input: {
+      resourceId: chat.resourceId, expectedRevision: 1, commandId: randomUUID(),
+      content: checkpoint.record.content, draftVersion: checkpoint.record.version,
+    } } });
+    assert.equal(accepted.content, checkpoint.record.content);
+    loseClearReceipt = true;
+    await assert.rejects(session.acknowledgeSent(checkpoint), /backend_disconnected/);
+    session.update('Synthetic next question stays unsent');
+    await backend.close();
+    backend = new Backend(options);
+    await session.reload();
+    await session.dispose();
+    const restored = await port.command('readDraft', { resourceId: chat.resourceId });
+    assert.equal(restored.content, 'Synthetic next question stays unsent');
+    assert.equal(restored.version, checkpoint.record.version + 2);
+    assert.deepEqual(writes, [0, 1, 2]);
+    const snapshot = await backend.call('snapshot', {});
+    assert.deepEqual(snapshot.graph.messages.map(message => message.content), [checkpoint.record.content]);
+    assert.equal(Object.keys(snapshot.executions).length, 0);
+  } finally { await backend.close().catch(() => {}); temp.cleanup(); }
 });
 
 test('the desktop broker and backend worker restore an offline document draft without sending', async () => {
