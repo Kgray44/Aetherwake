@@ -156,6 +156,13 @@ test('native source erasure joins the canonical transaction even when OS custody
     async seal() { throw Error('unexpected seal'); }, async open() { throw Error('unexpected open'); },
   } });
   try {
+    const tables = () => transaction(db => db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'personal_context_%' ORDER BY name").all());
+    assert.throws(() => locked.eraseConversationSource(source), /personal_context_not_authorized/);
+    eraseAllowed = true;
+    assert.deepEqual(locked.eraseConversationSource(source).deleted, []);
+    assert.deepEqual(tables(), []);
+    assert.equal(credentialCalls, 0);
+    eraseAllowed = false;
     const service = await writer.open();
     service.setPolicy({ expectedVersion: 0, patch: { storageEnabled: true } });
     const draft = { scope, purpose: 'knowledge', category: 'preferences', text: 'Synthetic relay', keywords: ['relay'],
@@ -174,6 +181,9 @@ test('native source erasure joins the canonical transaction even when OS custody
     assert.equal(service.readFact(independent.id).id, independent.id);
     assert.deepEqual(locked.eraseConversationSource(source).deleted, []);
     assert.equal(credentialCalls, 0);
+    transaction(db => db.exec('DROP TABLE personal_context_conversation_sources'));
+    assert.throws(() => locked.eraseConversationSource(source), /unsupported_personal_context_schema/);
+    assert(!tables().some(table => table.name === 'personal_context_conversation_sources'));
   } finally {
     locked.close();
     writer.close();
