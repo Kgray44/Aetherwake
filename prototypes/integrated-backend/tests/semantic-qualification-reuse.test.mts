@@ -205,6 +205,34 @@ test('a refreshable assessment receipt survives a cold interpretation route', as
   assert.deepEqual(probes, ['interpret']);
 });
 
+test('both qualification lookups start before either lookup must finish', async () => {
+  const started: unknown[] = [];
+  const receipt = { model: 'synthetic-model' };
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const api = {
+    qualifiedStructuredRoute: () => undefined,
+    async resolveQualifiedStructuredRoute(_version: number, _models: string[], schema: unknown) {
+      started.push(schema);
+      await gate;
+      return receipt;
+    },
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal() {
+      return { version: 2, objective: 'No evidence needed', clarification: '', needs: [],
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] } };
+    },
+  } as unknown as VelaApiRuntime;
+  const result = investigateReviewedVelaEvidence(api, 'Synthetic request', [], 1, receipt.model, () => {}, new AbortController().signal);
+  try {
+    assert.equal(started.length, 2);
+    assert.notEqual(started[0], started[1]);
+  } finally {
+    release();
+    await result;
+  }
+});
+
 test('a citation uses the admitted revision when a discovery record has the same source ID', async () => {
   const receipt = { model: 'synthetic-model' };
   const quote = 'Inspection is Tuesday.';

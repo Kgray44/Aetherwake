@@ -170,12 +170,16 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
   const authorize = () => { validate(); return !signal.aborted; };
   signal.throwIfAborted();
   validate();
-  const perceptionSchema = semanticHistoryFormats.interpret.schema;
-  const perception = api.qualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret) ??
-    await api.resolveQualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret, signal);
-  const assessmentSchema = semanticHistoryFormats.assess.schema;
-  const assessment = api.qualifiedStructuredRoute(configurationVersion, [model], assessmentSchema, instructions.assess) ??
-    await api.resolveQualifiedStructuredRoute(configurationVersion, [model], assessmentSchema, instructions.assess, signal);
+  const lookup = (stage: SemanticHistoryCall['stage']) => {
+    const schema = semanticHistoryFormats[stage].schema;
+    const instruction = instructions[stage];
+    return api.qualifiedStructuredRoute(configurationVersion, [model], schema, instruction) ??
+      api.resolveQualifiedStructuredRoute(configurationVersion, [model], schema, instruction, signal);
+  };
+  // Both lookups are read-only. The runtime coalesces concurrent catalog refreshes.
+  const [perception, assessment] = await Promise.all([lookup('interpret'), lookup('assess')]);
+  signal.throwIfAborted();
+  validate();
   // Reuse only the existing runtime's exact, current contract receipts. A missing
   // assessment does not invalidate an independently qualified perception contract.
   const missingStages: SemanticHistoryCall['stage'][] = [];
