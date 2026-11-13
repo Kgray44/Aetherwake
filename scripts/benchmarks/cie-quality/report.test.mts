@@ -31,3 +31,17 @@ test('missing end-to-end and simulated provider remain visible instead of zero',
   assert.equal(result.arms[0].endToEndMs.p95, null);
   assert.deepEqual(result.rows[0].issues, ['end-to-end-unavailable', 'simulated-provider']);
 });
+
+test('groups settled reported calls by exact model and preserves unknown dispatch and usage', () => {
+  const result = reportCognitiveRepetitions([repetition('r1', 400, [
+    run, { ...run, executionId: 'e2', elapsedMs: 30, dispatched: null, usage: null },
+    { ...run, executionId: 'e3', reportedModel: 'other-model' },
+    { ...run, executionId: 'e4', providerEvidence: 'simulated' },
+  ])]);
+  const model = result.arms[0].providers.find(provider => provider.model === 'test-model')!;
+  assert.equal(model.reportedDispatched, 1);
+  assert.equal(model.dispatchUnknown, 1);
+  assert.deepEqual(model.usage, { samples: 1, inputTokens: 100, outputTokens: 40, totalTokens: 140 });
+  assert.deepEqual(model.providerLatencyMs, { samples: 1, p50: 10, p95: 10 });
+  assert.equal(result.arms[0].providers.length, 2);
+});
