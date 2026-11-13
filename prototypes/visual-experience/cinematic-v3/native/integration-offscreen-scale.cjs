@@ -253,8 +253,19 @@ exports.verify = async ({
           shape: block.shape,
         }));
         const resized = (await snapshot()).blocks.find((item) => item.id === block.id);
-        assert.equal(resized.width, block.width + 32);
-        assert.equal(resized.height, block.height + 24);
+        const expectedSize = { width: block.width + 32, height: block.height + 24 };
+        const observedSize = resized ? { width: resized.width, height: resized.height } : null;
+        if (observedSize?.width !== expectedSize.width || observedSize?.height !== expectedSize.height) {
+          // The UI command settles after reporting an error through its status region.
+          receipt.resizeMismatch = {
+            expectedSize,
+            observedSize,
+            expectedVersion: block.version,
+            observedVersion: resized?.version ?? null,
+            status: await js('document.querySelector("#status")?.textContent?.slice(0, 240) ?? ""'),
+          };
+        }
+        assert.deepEqual(observedSize, expectedSize, "committed offscreen resize");
       }
       await visibleWorkspace();
       await sample("working-workspace");
