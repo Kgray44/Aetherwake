@@ -74,6 +74,7 @@ export interface ConversationChatOptions {
   saveReplyNote?: (input: CaptureConversationReply) => Promise<{ noteId: string }>;
   openReplyNote?: (noteId: string) => void | Promise<void>;
   chooseDocument?: () => Promise<{ id: string; version: number; title: string } | null>;
+  listDocuments?: (conversationId: string) => readonly DraftDocument[];
   onViewState?: (state: { resourceId: string; content: string; scroll: number; offset: number; view?:ConversationViewCapture }) => void;
 }
 export interface ConversationChat {
@@ -252,6 +253,32 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let providerPicker: ConversationPicker | null = null;
   let modelPicker: ConversationPicker | null = null;
   let thinkingPicker: ConversationPicker | null = null;
+  let documentPicker: ConversationPicker | null = null;
+  if (options.motion && options.listDocuments) {
+    const slot = el('span');
+    tools.insertBefore(slot, hint);
+    const list = () => options.listDocuments!(resourceId);
+    const key = (item: DraftDocument) => item.id + ':' + item.version;
+    documentPicker = mountConversationPicker(slot, {
+      motion: options.motion, viewId: options.viewId! + ':saved-document',
+      label: 'Attach saved document', identity: 'source',
+      itemsOnOpen: () => {
+        const attached = session.snapshot().documents;
+        return list().map(item => ({
+          value: key(item), label: item.title, disabled: attached.some(ref => key(ref) === key(item)),
+        }));
+      },
+      onSelect(value) {
+        const { documents, phase } = session.snapshot();
+        if (disposed || accessRevoked || !ordinaryPlan() || sending || choosingDocument ||
+            documents.length >= 4 || ['loading', 'conflict', 'error'].includes(phase)) return;
+        const selected = list().find(item => key(item) === value);
+        if (!selected) { report('This document is no longer available.'); return; }
+        session.updateDocuments([...documents.filter(item => item.id !== selected.id), selected]);
+        textarea.focus();
+      },
+    });
+  }
   let thinking: { modelId: string; effort: ReasoningEffort } | undefined;
   let loadingModels = false;
   const ordinaryPlan = () => current?.conversation.providerId === 'chatgpt-plan-responses'
@@ -442,6 +469,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     web.disabled = send.disabled || web.hidden || !plan?.available || documents.length > 0;
     attachDocument.hidden = !plan || !options.chooseDocument;
     attachDocument.disabled = choosingDocument || sending || draftNeedsAttention || documents.length >= 4;
+    if (documentPicker) {
+      documentPicker.element.hidden = !plan;
+      documentPicker.update({ items: [], value: '', disabled: !plan || attachDocument.disabled });
+    }
     renderDocuments(documents);
     documentList.hidden = !documents.length;
     documentStatus.hidden = !unavailableDocuments;
@@ -836,7 +867,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       if (presentationAnchor && !pendingFollow && !pendingAnchor)
         alignReadingAnchor(presentationAnchor);
     }
-    providerPicker?.frame();modelPicker?.frame();thinkingPicker?.frame();disclosures?.frame();controlStates?.frame();reconcileFeedback();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
+    providerPicker?.frame();modelPicker?.frame();thinkingPicker?.frame();documentPicker?.frame();disclosures?.frame();controlStates?.frame();reconcileFeedback();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
     drainAnchor();
     if(inspectionFollow&&feedbackOpen&&messages.clientHeight>0){const box=messages.getBoundingClientRect(),body=feedbackBody.getBoundingClientRect(),scale=box.height/(messages.offsetHeight||messages.clientHeight);if(Number.isFinite(scale)&&scale>0&&body.height>0){const next=Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(body.top-box.top)/scale));setScroll(next);if(settled)inspectionFollow=false;}}
     if(liveFollow&&!feedbackOpen&&!stream.hidden&&messages.clientHeight>0){const next=Math.max(0,messages.scrollHeight-messages.clientHeight);setScroll(next);liveFollow=false;}
@@ -853,7 +884,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const scroll=messages.scrollTop;
     resize();if(!presentationAnchor)setScroll(scroll);drainPendingFollow();drainAnchor();
   },flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
-    if(disposed)return;await flush();disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();modelPicker?.dispose();thinkingPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
+    if(disposed)return;await flush();disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();modelPicker?.dispose();thinkingPicker?.dispose();documentPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){
       if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}
       else await session.dispose();

@@ -1358,3 +1358,30 @@ test('replace at the attachment limit preserves the old selection on cancellatio
   await chat.whenSubmissionSettled();
  } finally { f.pending?.reject(Error('synthetic cleanup')); await chat?.dispose(); f.restore(); }
 });
+
+test('saved document picker reuses an exact current resource without importing or sending it', async () => {
+ const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
+ let chat;
+ try {
+  const saved = { id: 'file:saved', version: 1, title: 'Saved brief.pdf' };
+  let available = [saved];
+  chat = mountConversationChat(f.view.root, {
+   port: f.port, resourceId: f.draft.resourceId, motion: motion.motion, viewId: 'chat:saved-document',
+   listDocuments: id => { assert.equal(id, f.draft.resourceId); return available; },
+   chooseDocument: async () => { throw Error('Saved selection must not use the file picker'); },
+  });
+  await chat.ready;
+  const picker = f.view.root.querySelector('[data-cp-picker-for="Attach saved document"]');
+  picker.fire('click');
+  available = [{ ...saved, version: 2 }];
+  f.view.root.querySelector('[data-cp-option-value="file:saved:1"]').fire('click');
+  assert.equal(f.draft.documents, undefined);
+  picker.fire('click');
+  f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').fire('click');
+  await chat.flush();
+  assert.deepEqual(f.draft.documents, available);
+  assert.equal(f.calls.some(call => call.name === 'send'), false);
+  picker.fire('click');
+  assert.equal(f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').disabled, true);
+ } finally { await chat?.dispose(); assert.equal(motion.poses.size, 0); f.restore(); }
+});
