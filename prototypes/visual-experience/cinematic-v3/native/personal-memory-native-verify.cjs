@@ -1,16 +1,18 @@
 const assert = require('node:assert/strict');
-const { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } = require('node:fs');
+const { mkdirSync, readFileSync, readdirSync, writeFileSync } = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const { join } = require('node:path');
 const { setTimeout: pause } = require('node:timers/promises');
-const { createMemoryReviewGuard, memoryWitnessDeadline } = require('./personal-memory-review-guard.cjs');
+const { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot } = require('./personal-memory-review-guard.cjs');
 
 const mode = process.argv[3];
 assert(['save', 'restore'].includes(mode));
-let deadline;
+let deadline, root;
 try {
   // The supervising process supplies the allocation, after central handoff.
-  deadline = memoryWitnessDeadline(JSON.parse(process.env.AERYNTH_MEMORY_WITNESS_ADMISSION ?? 'null'), mode);
+  const admission = JSON.parse(process.env.AERYNTH_MEMORY_WITNESS_ADMISSION ?? 'null');
+  deadline = memoryWitnessDeadline(admission, mode);
+  root = memoryWitnessRoot(admission, process.argv[2]);
 } catch {
   console.error(JSON.stringify({ result: 'fail', mode, error: 'native_memory_admission_required' }));
   process.exitCode = 1;
@@ -20,7 +22,6 @@ const { app, BrowserWindow, safeStorage } = require('electron');
 const { createProtectedStorageBroker } = require('./protected-storage.cjs');
 const { capturePersonalMemory } = require('./personal-memory-capture.cjs');
 const { showVelaReview, isOwnedVelaReviewWindow } = require('./vela-review.cjs');
-const root = realpathSync(process.argv[2]);
 const drive = root[0].toUpperCase();
 assert(['C', 'D'].includes(drive));
 function allowWrite() {

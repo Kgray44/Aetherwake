@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const { realpathSync } = require('node:fs');
+const { basename, isAbsolute, resolve } = require('node:path');
 
 function createMemoryReviewGuard({ parent, focusedWindow, isOwned, deadline, now = () => performance.now() }) {
   assert(Number.isFinite(deadline) && deadline > now(), 'native_memory_deadline_required');
@@ -26,4 +28,13 @@ function memoryWitnessDeadline(admission, mode, wallNow = Date.now(), monotonicN
   return monotonicNow + admission.expiresAt - wallNow;
 }
 
-module.exports = { createMemoryReviewGuard, memoryWitnessDeadline };
+function memoryWitnessRoot(admission, requested, canonical = realpathSync) {
+  assert(typeof requested === 'string' && typeof admission?.profileRoot === 'string' &&
+    isAbsolute(requested) && isAbsolute(admission.profileRoot), 'native_memory_profile_required');
+  const root = canonical(requested);
+  assert(root === resolve(requested) && root === resolve(admission.profileRoot) &&
+    /^memory-witness-[a-z0-9-]+$/u.test(basename(root)), 'native_memory_profile_mismatch');
+  return root;
+}
+
+module.exports = { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot };

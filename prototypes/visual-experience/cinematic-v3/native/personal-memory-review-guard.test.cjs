@@ -1,8 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
-const { join } = require('node:path');
-const { createMemoryReviewGuard, memoryWitnessDeadline } = require('./personal-memory-review-guard.cjs');
+const { join, resolve } = require('node:path');
+const { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot } = require('./personal-memory-review-guard.cjs');
 
 test('memory approval accepts only the current authenticated review child', () => {
   const parent = {}, review = {}, foreign = {};
@@ -61,4 +61,17 @@ test('the unadmitted witness exits before importing Electron or touching the pro
   assert.deepEqual(JSON.parse(result.stderr), {
     result: 'fail', mode: 'save', error: 'native_memory_admission_required',
   });
+});
+
+test('witness profile must be the admitted canonical synthetic directory', () => {
+  const root = resolve('memory-witness-example');
+  const other = resolve('memory-witness-other');
+  const admission = { profileRoot: root };
+  assert.equal(memoryWitnessRoot(admission, root, () => root), root);
+  assert.throws(() => memoryWitnessRoot(admission, other, () => other), /native_memory_profile_mismatch/);
+  assert.throws(() => memoryWitnessRoot(admission, root, () => other), /native_memory_profile_mismatch/);
+  assert.throws(() => memoryWitnessRoot(admission, 'relative', () => root), /native_memory_profile_required/);
+  const regularProfile = resolve('Aerynth');
+  assert.throws(() => memoryWitnessRoot({ profileRoot: regularProfile }, regularProfile, () => regularProfile),
+    /native_memory_profile_mismatch/);
 });
