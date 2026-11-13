@@ -3184,8 +3184,10 @@ export class BackendCore {
         this.vela.checkpointToolRequest(input.requestId,tools.workflowId,workflow.phase,workflow.reason);
         if(['awaiting-review','waiting-job','budget-exhausted','blocked','clarification','unknown'].includes(workflow.phase))return undefined;
       }
+      // Retain an uncertain dispatch outcome even when interruption also invalidated the preview.
+      if (result.outcome === 'unknown') throw new VelaError(result.errorCode ?? 'vela_api_unknown','unknown');
       validate();
-      if (result.outcome !== 'completed') throw new VelaError(result.errorCode ?? 'vela_api_' + result.outcome, result.outcome === 'unknown' ? 'unknown' : undefined);
+      if (result.outcome !== 'completed') throw new VelaError(result.errorCode ?? 'vela_api_' + result.outcome);
       ensure(result.responseId && this.state.executions[executionId]?.state === 'provider_completed', 'planning_output_provenance_mismatch');
       if (preview.semanticContext) {
         const [message, ...extra] = result.api?.outputItems.filter(item => item.type !== 'reasoning') ?? [];
