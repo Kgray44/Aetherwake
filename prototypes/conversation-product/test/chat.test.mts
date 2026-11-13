@@ -1572,11 +1572,13 @@ test('saved document picker reuses an exact current resource without importing o
   const saved = { id: 'file:saved', version: 1, title: 'Saved brief.pdf' };
   let available = [saved];
   const opened: typeof available = [];
+  const staged: typeof available = [];
   let opening: 'opened' | 'unavailable' = 'opened';
   chat = mountConversationChat(f.view.root, {
    port: f.port, resourceId: f.draft.resourceId, motion: motion.motion, viewId: 'chat:saved-document',
    listDocuments: id => { assert.equal(id, f.draft.resourceId); return available; },
    openDocument: async document => { opened.push(document); return opening; },
+   askVelaAboutDocument: async document => { staged.push(document); },
    chooseDocument: async () => { throw Error('Saved selection must not use the file picker'); },
   });
   await chat.ready;
@@ -1595,6 +1597,11 @@ test('saved document picker reuses an exact current resource without importing o
   assert.equal(openAttachment.getAttribute('aria-label'),'Open attachment Saved brief.pdf');
   openAttachment.fire('click');
   assert.deepEqual(opened,available);
+  const askVela = named(f.view.root,'Ask Vela');
+  assert.equal(askVela.getAttribute('aria-label'),'Ask Vela about Saved brief.pdf');
+  askVela.fire('click');askVela.fire('click');
+  await until(()=>staged.length===1&&!askVela.disabled);
+  assert.deepEqual(staged,available);
   assert.deepEqual(f.draft,draft);
   assert.equal(f.calls.some(call => call.name === 'send'), false);
   picker.fire('click');

@@ -77,6 +77,7 @@ export interface ConversationChatOptions {
   chooseDocument?: () => Promise<{ id: string; version: number; title: string } | null>;
   listDocuments?: (conversationId: string) => readonly DraftDocument[];
   openDocument?: (document: DraftDocument) => Promise<'opened' | 'unavailable' | 'superseded'>;
+  askVelaAboutDocument?: (document: DraftDocument, isCurrent: () => boolean) => Promise<void>;
   onViewState?: (state: { resourceId: string; content: string; scroll: number; offset: number; view?:ConversationViewCapture }) => void;
 }
 export interface ConversationChat {
@@ -157,6 +158,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   composer.insertBefore(documentList, tools);
   const attachDocument = el('button', 'Attach document');
   let choosingDocument = false;
+  let stagingForVela = false;
   let renderedDocuments: readonly DraftDocument[] | undefined;
   function renderDocuments(documents: readonly DraftDocument[]) {
     if (documents === renderedDocuments) return;
@@ -187,7 +189,24 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           } catch (error) { report(errorText(error)); }
         });
         remove.textContent = '×';
-        return [open, remove];
+        const askVela = options.askVelaAboutDocument && el('button', 'Ask Vela');
+        if (!askVela) return [open, remove];
+        askVela.type = 'button';
+        decorateConversationControl(askVela,{identity:'source',emphasis:'secondary'});
+        askVela.setAttribute('aria-label','Ask Vela about ' + label);
+        askVela.addEventListener('click', async () => {
+          if (askVela.disabled || stagingForVela || disposed || accessRevoked) return;
+          stagingForVela = true;
+          renderDraft();
+          try {
+            await session.flush();
+            const isCurrent = () => !disposed && !accessRevoked && root.contains(askVela) &&
+              session.snapshot().documents.some(item => item.id === document.id && item.version === document.version && !item.unavailable);
+            if (isCurrent()) await options.askVelaAboutDocument!(document,isCurrent);
+          } catch (error) { report(errorText(error)); }
+          finally { stagingForVela = false; renderDraft(); }
+        });
+        return [open, askVela, remove];
       }
       if (!document.unavailable || !options.chooseDocument) return [remove];
       const replace = el('button', 'Replace');
@@ -512,14 +531,14 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const codexOutcomeUnknown = execution?.providerId === 'codex-app-server' && execution.state === 'unknown';
     checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
     checkOutcome.disabled = recovering;
-    send.disabled = choosingDocument || changingProvider || planDisconnected || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
+    send.disabled = choosingDocument || stagingForVela || changingProvider || planDisconnected || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
     web.hidden = !plan?.execute || !webSearchModel();
     documentStatus.textContent = unavailableDocuments ? 'Remove or replace the unavailable documents to send.'
       : documentsUnsupported ? 'Switch to ChatGPT or remove the documents to send.' : '';
     send.title = documentStatus.textContent || (planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : '');
     web.disabled = send.disabled || web.hidden || !plan?.available || documents.length > 0;
     attachDocument.hidden = !mayStageDocuments || !options.chooseDocument;
-    attachDocument.disabled = !mayStageDocuments || choosingDocument || sending || changingProvider || draftNeedsAttention || documents.length >= 4;
+    attachDocument.disabled = !mayStageDocuments || choosingDocument || stagingForVela || sending || changingProvider || draftNeedsAttention || documents.length >= 4;
     if (documentPicker) {
       documentPicker.element.hidden = !mayStageDocuments;
       documentPicker.update({ items: [], value: '', disabled: attachDocument.disabled });
@@ -528,10 +547,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     documentList.hidden = !documents.length;
     documentStatus.hidden = !documentStatus.textContent;
     for (const button of documentList.querySelectorAll('button'))
-      button.disabled = sending || changingProvider || choosingDocument || draftNeedsAttention || (button.dataset.replaceDocument === 'true' && !mayStageDocuments);
+      button.disabled = sending || stagingForVela || changingProvider || choosingDocument || draftNeedsAttention || (button.dataset.replaceDocument === 'true' && !mayStageDocuments);
     continueDocuments.hidden = !documentsUnsupported || unavailableDocuments || !options.onProviderChange ||
       !current?.providers.some(item=>item.id==='chatgpt-plan-responses'&&item.available&&item.record);
-    continueDocuments.disabled = sending || changingProvider || choosingDocument || draftNeedsAttention || !!active() || needsSendReview();
+    continueDocuments.disabled = sending || stagingForVela || changingProvider || choosingDocument || draftNeedsAttention || !!active() || needsSendReview();
     send.dataset.state=needsSendReview()?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=stopRequestedFor?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = !!stopRequestedFor || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
   }
