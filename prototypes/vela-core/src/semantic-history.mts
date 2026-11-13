@@ -295,8 +295,6 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
           return { source, start, end: start + quote.length };
         }),
       }));
-      const followup = priorDisputes?.length ? { priorDisputes } : {};
-      if (priorDisputes?.length) assessmentBytes += Buffer.byteLength(JSON.stringify(followup)) - 1;
       // Preserve selected evidence and leave discovery slots for refined queries.
       const limit = rounds < maxRounds ? Math.max(priorCount, candidateLimit - 2) : candidateLimit;
       const matches: T[][] = [];
@@ -371,6 +369,10 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       if (pendingClarification && !evidence.size) return { ...empty('assessed'), proposal, clarification: pendingClarification };
       const sources = [...evidence.values()];
       if (owner.isSnapshotCurrent?.() === false || !sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
+      const disputePointers = priorDisputes?.length ? { priorDisputes } : {};
+      const pointerBytes = priorDisputes?.length ? Buffer.byteLength(JSON.stringify(disputePointers)) - 1 : 0;
+      // Prefer the actual evidence. The host still retains prior dispute citations.
+      const followup = assessmentBytes + pointerBytes <= assessmentLimit ? disputePointers : {};
       const reviewed = await disclose(structuredClone({ ...assessmentInput, round: rounds, excerpts, ...followup }), sources);
       if (owner.isSnapshotCurrent?.() === false || !sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
       if (reviewed == null) return empty('unavailable', 'no-provider-result');

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { investigateSemanticHistory } from '../src/semantic-history.mts';
+import { investigateSemanticHistory, maxSemanticAssessmentBytes } from '../src/semantic-history.mts';
 
 const request = 'Which safeguard stopped the batch from being applied twice?';
 const evidence = { key: 's1', question: 'What was the duplication safeguard?', query: 'duplicate operation' };
@@ -458,6 +458,34 @@ test('an unresolved follow-up retains earlier conflicting passages alongside new
   });
   assert.equal(result.coverage[0].status, 'contradicted');
   assert.deepEqual(result.coverage[0].passages, accounts.map(({ sourceId, text }) => ({ sourceId, quote: text })));
+});
+
+test('dispute pointers yield to newly retrieved evidence when the follow-up payload is full', async () => {
+  const accounts = ['Inspection is Monday.', 'Inspection is Tuesday.', 'Correction: the inspection is Wednesday.']
+    .map((text, index) => ({ ...candidate, sourceId: String(index), text }));
+  let firstPayloadBytes = 0;
+  const metadataBytes = 32_360;
+  const result = await investigateSemanticHistory(request, {
+    assessmentMetadataBytes: metadataBytes,
+    search: query => ({ sources: query === evidence.query ? accounts.slice(0, 2) : accounts.slice(2), scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      const bytes = Buffer.byteLength(JSON.stringify(call));
+      assert.ok(bytes + metadataBytes <= maxSemanticAssessmentBytes);
+      if (call.round === 1) {
+        firstPayloadBytes = bytes;
+        return { version: 3, clarification: '', assessment: [{ key: 's1', status: 'contradicted', query: 'inspection correction',
+          passages: accounts.slice(0, 2).map((source, index) => ({ source: 'e' + (index + 1), quote: source.text })) }] };
+      }
+      assert.ok(bytes > firstPayloadBytes);
+      assert.equal(call.excerpts[2].text, accounts[2].text);
+      return { version: 3, clarification: '', assessment: [{ key: 's1', status: 'supported', query: '',
+        passages: [{ source: 'e3', quote: accounts[2].text }] }] };
+    },
+  });
+  assert.equal(result.coverage[0].status, 'supported');
+  assert.deepEqual(result.coverage[0].sources, accounts.slice(2));
 });
 
 test('the contradiction passage limit preserves distinct accounts before additional quotes', async () => {
