@@ -216,3 +216,29 @@ test('a recovery claim precedes preflight and an altered pending timing prevents
     recovery: { ...options.recovery, verify: async () => assert.fail('altered prediction reached the host verifier') } }), /blind_case_unreconciled/);
   assert.equal(calls, 1);
 });
+
+test('a host result returned after cancellation never enters the gradeable prefix', async () => {
+  const journal = openBlindJournal(':memory:', { profileId: 'synthetic-profile' });
+  const controller = new AbortController();
+  const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const verified: unknown[] = [];
+  const options = { journal, maxCases: 2, route: { provider: 'openai-api-vela', model: 'fixture', transport: 'synthetic' as const },
+    recovery: { binding: 'synthetic-profile:1', verify: async (_claim: unknown, result: unknown) => { verified.push(result); return true; } } };
+  let calls = 0;
+  try {
+    const checkpoint = await runBlindCie(bytes, identity, async input => {
+      if (++calls === 2) controller.abort();
+      return { answer: input.id };
+    }, controller.signal, options);
+    assert.deepEqual(checkpoint.results.map(row => row.id), ['blind-001']);
+    assert.deepEqual(verified, [{ answer: 'blind-001' }]);
+    assert.deepEqual(checkpoint.stopped, { caseId: 'blind-002', kind: 'cancelled' });
+    const persisted = await journal.read();
+    assert.deepEqual(persisted?.checkpoint, checkpoint);
+    assert.equal(persisted?.inFlight, 'blind-002');
+    assert.ok(persisted?.claim);
+    assert.equal(persisted.pending, undefined);
+    await assert.rejects(runBlindCie(bytes, identity, async () => assert.fail('cancelled case replayed'),
+      new AbortController().signal, options), /blind_case_unreconciled/);
+  } finally { journal.close(); }
+});

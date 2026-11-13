@@ -149,7 +149,7 @@ export async function runBlindCie(bytes: Buffer, candidate: Candidate,
       if (!await recovery!.verify(structuredClone(claim), structuredClone(prediction.result), signal)) throw new Error('blind_case_unreconciled');
       signal.throwIfAborted();
     }
-    if (prediction) results.push(prediction);
+    if (prediction && !stopped) results.push(prediction);
     if (journal) await persist(stopped ? input.id : null, stopped ? claim : undefined);
     if (stopped) break;
   }
