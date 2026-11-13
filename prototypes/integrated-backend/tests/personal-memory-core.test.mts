@@ -124,6 +124,11 @@ test('Core native capture persists a canonical user message across a private pro
       /stale_personal_context_version/);
     const paused = await core.command('personalMemoryPolicyNative', { pauseStorage: true, expectedVersion: both.version });
     assert.deepEqual(paused, { ...both, version: both.version + 1, storageEnabled: false, ordinaryEnabled: false, velaEnabled: false });
+    for (const assistant of ['ordinary', 'vela'] as const) {
+      await assert.rejects(core.command('personalMemoryPolicyNative', { assistant, enable: true, expectedVersion: paused.version }),
+        /personal_storage_disabled/);
+    }
+    assert.deepEqual(await core.command('personalMemoryPolicyNative', {}), paused);
     assert.equal((await inspection.read(saved.id)).text, content);
     await core.command('close', {});
     core = undefined;

@@ -106,8 +106,12 @@ export function createPersonalMemoryReview(options: Options) {
       const service = await options.open();
       requireOpen();
       const patch = assistant === 'ordinary' ? { ordinaryEnabled: enabled } : { velaEnabled: enabled };
-      return withPermission(input => input.operation === 'policy.write',
-        () => service.setPolicy({ expectedVersion, patch }));
+      return options.transaction(() => withPermission(input => input.operation === 'policy.read' || input.operation === 'policy.write', () => {
+        const current = service.policy();
+        if (current.version !== expectedVersion) throw new PersonalContextError('stale_personal_context_version');
+        if (enabled && !current.storageEnabled) throw new PersonalContextError('personal_storage_disabled');
+        return service.setPolicy({ expectedVersion, patch });
+      }));
     },
     async pauseStorage(expectedVersion: number) {
       requireOpen();
