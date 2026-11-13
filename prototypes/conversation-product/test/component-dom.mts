@@ -23,6 +23,7 @@ export function componentDocument() {
     focus(){doc.activeElement=this;} setSelectionRange(start:number,end:number,direction='none'){this.selectionStart=start;this.selectionEnd=end;this.selectionDirection=direction;} scrollIntoView(){}
     getBoundingClientRect(){return {x:0,y:0,top:0,left:0,bottom:this.clientHeight,right:400,width:400,height:this.clientHeight,toJSON(){return {};}};}
     requestSubmit(){return this.fire('submit');}
+    click(){if(!this.disabled)this.fire('click');}
     fire(type:string,extra:Record<string,unknown>={}){const event={type,target:this,key:'',shiftKey:false,isComposing:false,altKey:false,ctrlKey:false,metaKey:false,defaultPrevented:false,stopped:false,preventDefault(){this.defaultPrevented=true;},stopPropagation(){this.stopped=true;},...extra};for(let node:any=this;node;node=node.parentElement){for(const listener of node.listeners.get(type)??[])listener(event);if(event.stopped)break;}return event;}
   }
   doc.createElement=(tag:string)=>new Element(tag);doc.createTextNode=(text:string)=>{const node=new Element('#text');node.textContent=text;return node;};

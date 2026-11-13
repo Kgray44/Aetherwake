@@ -365,3 +365,21 @@ test('readonly orientation and detail remain temporary while Save stays denied a
   assert.equal(button(s.dom.root,'Save view').disabled,true);button(s.dom.root,'Save view').onclick();
   assert.equal(s.f.service.read(s.f.created.resourceId).resource.version,version);assert.equal(Object.hasOwn(s.f.service.read(s.f.created.resourceId).view,'presentation'),false);
 });
+
+test('timeline reflow is safe while planning loads after the history window', async t => {
+  const entered = deferred<void>(), release = deferred<void>();
+  const s = await setup(t, f => ({ port: { ...f.port, planning: async request => {
+    entered.resolve();
+    await release.promise;
+    return f.service.planning(request);
+  } } }));
+  await entered.promise;
+  try {
+    s.controller.setPresentation('focused');
+    s.controller.reflow();
+    assert.equal(s.dom.root.querySelectorAll('.aw-timeline-dot').length, 1);
+  } finally {
+    release.resolve();
+  }
+  await s.ready();
+});

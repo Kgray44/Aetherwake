@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {VelaApiRuntime} from '../src/vela-api-runtime.mts';
@@ -17,6 +18,7 @@ import { BackendCore } from '../src/core.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
 import type { VelaRequest, VelaState } from '../../vela-core/src/contracts.ts';
 import type { StreamEvent } from '../src/contracts.mts';
+const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
 const marker = 'SYNTHETIC_ONLY_VELA_API_RUNTIME_CREDENTIAL';
 const message = (content: string) => ({ type: 'message', id: 'msg-fixture', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: content, annotations: [] }] });
 function response(content: string, id = 'resp-fixture', output = [message(content)], outcome = 'completed',
@@ -175,6 +177,42 @@ test('diagnostic projection uses fixed enums, strips raw fields, and never invok
  const diagnostic={contract:'aerynth.turn-http-diagnostic@1',httpStatus:200,contentType:'event-stream',hasBody:true,serverRequestId:'not a safe ID',bodyShape:'unavailable',remoteCode:'SYNTHETIC_PRIVATE_ACCOUNT',body:'SYNTHETIC_PRIVATE_BODY',headers:{authorization:marker}};
  const result=apiRunDiagnostics({errorCode:'synthetic_private_account',httpDiagnostic:diagnostic});assert.equal(result.errorCode,'provider_failed');assert.equal(result.httpDiagnostic?.serverRequestId,null);assert.equal(result.httpDiagnostic?.remoteCode,null);assert(!JSON.stringify(result).includes('SYNTHETIC_PRIVATE'));assert(!JSON.stringify(result).includes(marker));assert.deepEqual(apiRunDiagnostics(Object.defineProperty({},'httpDiagnostic',{get(){throw Error('getter invoked');}})),{});
  assert.deepEqual(apiRunDiagnostics({httpDiagnostic:{...diagnostic,contentType:{toString(){throw Error('coercion invoked');}}}}),{});
+});
+
+test('the desktop broker sends consecutive eligible requests under the existing account grant', async () => {
+  const f = fixture();
+  const reviews: unknown[] = [];
+  const calls: string[] = [];
+  const send = (intent: string) => velaCommand({
+    win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+    dialog: {},
+    directMessageSend: true,
+    routeNative: true,
+    input: { name: 'request', input: { intent, resourceIds: [], authorizeProvider: true, providerId: 'openai-api-vela' } },
+    call: (name: any, input: any) => {
+      calls.push(name);
+      if (name === 'authorizeVelaRequest') assert.equal(input.directSend, true);
+      return f.core.command(name, input);
+    },
+    reviewProvider: async (review: unknown) => { reviews.push(review); return false; },
+  });
+  try {
+    await f.configure();
+    await f.authorize();
+    f.replies.push(() => response('Four.', 'resp-standing-one'));
+    f.replies.push(() => response('Six.', 'resp-standing-two'));
+    assert.equal((await send('What is two plus two?')).state, 'responded');
+    assert.equal((await send('What is three plus three?')).state, 'responded');
+    assert.equal(reviews.length, 0);
+    assert.equal(calls.filter(name => name === 'authorizeVelaRequest').length, 2);
+    assert.equal(f.requests.length, 2);
+    assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 2);
+    await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
+    await assert.rejects(send('What is four plus four?'), /vela_api_usage_authorization_required/);
+    assert.equal(f.requests.length, 2);
+  } finally {
+    await f.close();
+  }
 });
 
 test('actual Core routine API Send uses durable explicit usage consent, shared identity, one canonical transcript and history proof', async () => {

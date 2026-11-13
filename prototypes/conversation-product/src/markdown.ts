@@ -1,5 +1,33 @@
 /** Deliberately small Markdown subset. HTML and remote media are always literal text. */
-export type MarkdownBlock = { kind: 'paragraph' | 'heading' | 'quote' | 'list' | 'code'; text: string; level?: number; language?: string; ordered?: boolean; start?: number; items?: string[] };
+type TableAlignment = 'start' | 'center' | 'end';
+type MarkdownTable = { kind: 'table'; headers: string[]; alignments: TableAlignment[]; rows: string[][] };
+export type MarkdownBlock = MarkdownTable | { kind: 'paragraph' | 'heading' | 'quote' | 'list' | 'code'; text: string; level?: number; language?: string; ordered?: boolean; start?: number; items?: string[] };
+
+function tableCells(line: string): string[] | null {
+  const cells: string[] = [];
+  let start = 0, backslashes = 0;
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    if (char === '|' && backslashes % 2 === 0) {
+      cells.push(line.slice(start, index).trim());
+      start = index + 1;
+    }
+    backslashes = char === '\\' ? backslashes + 1 : 0;
+  }
+  if (!cells.length) return null;
+  cells.push(line.slice(start).trim());
+  if (line.trimStart().startsWith('|')) cells.shift();
+  if (cells.at(-1) === '' && !line.slice(start).trim()) cells.pop();
+  return cells.map(cell => cell.replace(/\\\|/g, '|'));
+}
+
+function tableHeader(line: string, delimiter: string | undefined): MarkdownTable | null {
+  if (!delimiter || !/^[\s|:\-]+$/.test(delimiter)) return null;
+  const headers = tableCells(line), rules = tableCells(delimiter);
+  if (!headers?.length || rules?.length !== headers.length || !rules.every(rule => /^:?-{3,}:?$/.test(rule))) return null;
+  const alignments = rules.map((rule): TableAlignment => rule.endsWith(':') ? rule.startsWith(':') ? 'center' : 'end' : 'start');
+  return { kind: 'table', headers, alignments, rows: [] };
+}
 export function markdownBlocks(source: string): MarkdownBlock[] {
   const lines = source.replaceAll('\r\n', '\n').split('\n'), blocks: MarkdownBlock[] = [];
   let i = 0;
@@ -27,7 +55,19 @@ export function markdownBlocks(source: string): MarkdownBlock[] {
       while (i < lines.length) { const match = pattern.exec(lines[i]); if (!match) break; items.push(match[1]); i++; }
       blocks.push({ kind: 'list', text: '', ordered, ...(ordered?{start}:{}), items }); continue;
     }
-    const body = [line]; while (i < lines.length && !special(lines[i])) body.push(lines[i++]);
+    const table = tableHeader(line, lines[i]);
+    if (table) {
+      i++;
+      while (i < lines.length && !special(lines[i]) && !tableHeader(lines[i], lines[i + 1])) {
+        const cells = tableCells(lines[i]);
+        if (!cells || cells.length !== table.headers.length) break;
+        table.rows.push(cells);
+        i++;
+      }
+      blocks.push(table);
+      continue;
+    }
+    const body = [line]; while (i < lines.length && !special(lines[i]) && !tableHeader(lines[i], lines[i + 1])) body.push(lines[i++]);
     blocks.push({ kind: 'paragraph', text: body.join('\n') });
   }
   return blocks;
@@ -93,6 +133,27 @@ export function renderMarkdown(source: string, copy: (text: string) => Promise<v
       button.dataset.nativeCopyControl='true';
       button.addEventListener('click', () => { void copy(clean(block.text)).then(() => report('Code copied'), error => report(String(error))); });
       code.textContent = clean(block.text); pre.append(code); header.append(language, button); section.append(header, pre); root.append(section);
+    } else if (block.kind === 'table') {
+      const wrapper = document.createElement('div'), table = document.createElement('table');
+      wrapper.className = 'cp-markdown-table';
+      wrapper.tabIndex = 0;
+      wrapper.setAttribute('role', 'region');
+      wrapper.setAttribute('aria-label', 'Table in response');
+      const head = document.createElement('thead'), body = document.createElement('tbody');
+      for (const [index, cells] of [block.headers, ...block.rows].entries()) {
+        const row = document.createElement('tr'), header = index === 0;
+        cells.forEach((value, column) => {
+          const cell = document.createElement(header ? 'th' : 'td');
+          if (header) cell.setAttribute('scope', 'col');
+          cell.style.textAlign = block.alignments[column];
+          appendInlineMarkdown(cell, value, marker);
+          row.append(cell);
+        });
+        (header ? head : body).append(row);
+      }
+      table.append(head, body);
+      wrapper.append(table);
+      root.append(wrapper);
     } else if (block.kind === 'list') {
       const list = document.createElement(block.ordered ? 'ol' : 'ul');
       if(block.ordered)list.setAttribute('start',String(block.start));
