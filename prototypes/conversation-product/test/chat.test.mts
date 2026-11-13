@@ -30,6 +30,81 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('a matching confirmed interruption keeps the draft and allows an explicit next send',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;
+  const form=f.view.root.querySelector('.cp-composer'),send=named(form,'Send'),editor=form.querySelector('textarea');
+  form.fire('submit');await until(()=>!!f.pending);
+  editor.value='New draft after stopping';editor.fire('input');
+  f.pending!.resolve({id:'execution:stopped',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:f.pending!.input.commandId,state:'interrupted'});
+  await chat.whenSubmissionSettled();await chat.flush();
+  assert.equal(send.disabled,false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Reply stopped/);
+  assert.equal(f.draft.content,'New draft after stopping');
+  assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+  form.fire('submit');await until(()=>!!f.pending);
+  assert.equal(f.pending!.input.content,'New draft after stopping');
+  f.accept(true);await chat.whenSubmissionSettled();
+ }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.dispose();f.restore();}
+});
+
+test('Stop follows the observed turn through acknowledgment, settlement and a subsequent turn',async()=>{
+  for(const settleBeforeAck of [true,false]){
+    const f=fixture('chatgpt-plan-responses');
+    let chat, observe:(value:ConversationExecutionObservation)=>void;
+    let acknowledge!:()=>void, requests=0;
+    const pending=new Promise<void>(resolve=>{acknowledge=resolve;});
+    const turn={id:'execution:first',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:'command:first',state:'running' as const,startedAt:'2026-11-02T00:00:02Z',endedAt:null,taskVerified:false};
+    try{
+      chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+        observe(_id,listener){observe=listener;return()=>{};},
+        cancel(id){assert.equal(id,turn.id);requests++;return pending;},
+      }});
+      await chat.ready;
+      const stop=named(f.view.root,'Stop'),status=f.view.root.querySelector('.cp-chat-status');
+      observe!({execution:turn});
+      stop.fire('click');
+      assert.equal(stop.disabled,true);
+      const settle=()=>observe!({execution:{...turn,state:'interrupted',endedAt:'2026-11-02T00:00:03Z'}});
+      if(settleBeforeAck)settle();
+      acknowledge();
+      await new Promise<void>(resolve=>setImmediate(resolve));
+      if(!settleBeforeAck){
+        observe!({execution:turn});
+        assert.equal(stop.disabled,true,'Acknowledgment and later activity must not re-enable Stop');
+        assert.match(status.textContent,/Stop requested/);
+        stop.fire('click');
+        settle();
+      }
+      assert.equal(requests,1);
+      assert.match(status.textContent,/confirmed the turn stopped/);
+      observe!({execution:{...turn,id:'execution:second',startedAt:'2026-11-02T00:00:04Z'}});
+      assert.equal(stop.disabled,false);
+      assert.match(status.textContent,/is running/);
+    }finally{acknowledge();await chat?.dispose();f.restore();}
+  }
+});
+
+test('Remember message is limited to an eligible own user message and opens native review on submit', async () => {
+  const f = fixture();
+  const requests: unknown[] = [];
+  const chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.detail.conversation.resourceId,
+    async onRememberMessage(request) { requests.push(request); return true; } });
+  try {
+    await chat.ready;
+    const actions = f.view.root.querySelectorAll('.cp-message-actions');
+    assert.equal(actions.length, 2);
+    assert.equal(named(actions[1], 'Remember message'), undefined);
+    named(actions[0], 'Remember message').fire('click');
+    assert.deepEqual(requests, []);
+    actions[0].querySelector('.cp-memory-editor').fire('submit');
+    await until(() => requests.length === 1);
+    assert.deepEqual(requests[0], { conversationId: f.detail.conversation.resourceId, messageId: 'message:user',
+      text: 'A user message', scope: 'conversation', category: 'technical', keywords: ['user', 'message'] });
+  } finally { await chat.dispose(); f.restore(); }
+});
+
 function viewPort(f:ReturnType<typeof fixture>){
  const time='2026-11-03T00:00:00Z',resourceId=f.draft.resourceId,trace:{name:string;input:any}[]=[];let selected:ConversationViewSelected={version:2,resourceId,updatedAt:time},view:ConversationView={resourceId,version:4,position:{conversationRevision:2,anchor:{messageId:'message:user',offsetY:-20}},selection:{draftVersion:f.draft.version,start:2,end:6,direction:'backward'},positionStatus:'current',selectionStatus:'current',updatedAt:time};
  let before:((name:string,input:any)=>void|Promise<void>)|undefined;
@@ -464,12 +539,15 @@ test('the animated model picker refreshes explicitly and sends the selected cata
 test('the mounted chat submits an explicit web lookup and opens only canonical citation references',async()=>{
  const f=fixture('chatgpt-plan-responses');let chat;
  try{
-  f.detail.providers[0].modelOptions=[{id:'gpt-6.1-sol',label:'Synthetic Sol catalog entry',eligibleTools:['web_search']}];
+  f.detail.providers[0].modelOptions=[{id:'ordinary-only',label:'Synthetic text-only model'},{id:'gpt-6.1-sol',label:'Synthetic Sol catalog entry',eligibleTools:['web_search']}];
   const message=f.detail.messages.items[1];
   message.webSearch={completed:true,citations:[{url:'https://science.example.org/moon',title:'Moon facts',start:0,end:1},{url:'https://science.example.org/second',title:'Second source',start:1,end:message.content.length-1}]};
   const port={command:async(name:string,input:any)=>name==='openCitation'?(f.calls.push({name,input}),{requested:true}):(f.port.command as any)(name,input)} as ConversationProductPort;
-  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId});await chat.ready;
+  const selections=new Map([[f.draft.resourceId,{id:'ordinary-only',label:'Synthetic text-only model'}]]);
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,models:{selections,async refresh(){}}});await chat.ready;
   const form=f.view.root.querySelector('form'),web=named(form,'Search web'),refs=f.view.root.querySelectorAll('.cp-web-citation');
+  assert.equal(web.hidden,true,'An explicitly selected model must be respected');
+  selections.clear();await chat.refresh();
   assert(web && !web.hidden && !web.disabled);
   assert.equal(refs.length,2);
   assert.equal(refs[0].parentNode?.tagName,'P','ordinary annotated text has an inline source');
@@ -918,4 +996,39 @@ test('a detached send rejection is caught and leaves exact durable recovery with
 
 test('composer keyboard policy keeps newline and composition distinct from submit',()=>{
   const event={key:'Enter',shiftKey:false,isComposing:false,altKey:false,ctrlKey:false,metaKey:false};assert.equal(composerShouldSubmit(event),true);for(const field of ['shiftKey','isComposing','altKey']as const)assert.equal(composerShouldSubmit({...event,[field]:true}),false);assert.equal(composerShouldSubmit({...event,key:'Escape'}),false);
+});
+
+test('Save reply as note sends exact IDs, recovers the same command and preserves the draft',async()=>{
+ const f=fixture(),attempts:unknown[]=[],opened:string[]=[];
+ let chat,complete!:(receipt:{noteId:string})=>void,reject!:(error:Error)=>void;
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   async saveReplyNote(input){attempts.push(input);return new Promise((resolve,fail)=>{complete=resolve;reject=fail;});},
+   openReplyNote(id){opened.push(id);},
+  });
+  await chat.ready;
+  const user=f.view.root.querySelector('.cp-message-user'),assistant=f.view.root.querySelector('.cp-message-assistant');
+  assert.equal(!!named(user,'Save reply as note'),false);
+  const save=named(assistant,'Save reply as note');
+  assert.ok(save);
+  save.fire('click');save.fire('click');
+  assert.equal(attempts.length,1);
+  const request=attempts[0] as Record<string,string>;
+  assert.deepEqual(Object.keys(request).sort(),['commandId','messageId','resourceId']);
+  assert.equal(request.resourceId,f.draft.resourceId);
+  assert.equal(request.messageId,'message:assistant');
+  reject(Error('connection lost'));
+  await until(()=>!save.disabled);
+  save.fire('click');
+  assert.deepEqual(attempts,[request,request]);
+  f.detail.messages.items[1].outputState='complete';
+  await chat.refresh();
+  const refreshed=f.view.root.querySelector('.cp-message-assistant');
+  assert.equal(named(refreshed,'Saving reply…').disabled,true);
+  complete({noteId:'note:saved'});
+  await until(()=>!!named(refreshed,'Open saved note'));
+  named(refreshed,'Open saved note').fire('click');
+  assert.deepEqual(opened,['note:saved']);
+  assert.equal(f.draft.content,'Saved unsent text');
+ }finally{await chat?.dispose();f.restore();}
 });

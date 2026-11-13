@@ -150,18 +150,36 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const planProposalView = createVelaProposalView(doc,{accept:choice=>choosePlan(choice,true),decline:choice=>choosePlan(choice,false),changed:()=>present()});
   const contextualClose = icon('Close Vela controls', '×', 'close', () => closeContext()); contextualClose.className += ' vela-core-contextual-close';
   const sourcePanel = disclosure('Find and add sources', 'vela-core-source-panel');
-  const localFilesPanel=disclosure('Add files or folders','vela-core-local-files');
-  const pickLocalSources=async(kind:'files'|'folder')=>{
-    if(!client.pickSources)throw Error('source_picker_unavailable');
-    const picked=await client.pickSources({kind,destination:'context'});
-    for(const source of picked.resources){
-      const version=source.version;
-      if(!Number.isSafeInteger(version)||!version||version<1)throw Error('source_version_unavailable');
-      selected.set(source.id,{id:source.id,kind:'resource',resourceKind:source.kind,title:source.title,version,projectId:source.projectId});
+  let pickingSources = false;
+  const pickLocalSources = async (kind: 'files' | 'folder') => {
+    if (!client.pickSources || pickingSources || busy || disposed) return;
+    pickingSources = true;
+    updateComposerControls();
+    try {
+      const picked = await client.pickSources({ kind, destination: 'context' });
+      if (disposed || !picked.resources.length) return;
+      const refs = picked.resources.map((source): ResourceRef => {
+        const version = source.version;
+        if (!Number.isSafeInteger(version) || !version || version < 1) throw Error('source_version_unavailable');
+        return { id: source.id, kind: 'resource', resourceKind: source.kind, title: source.title, version, projectId: source.projectId };
+      });
+      for (const ref of refs) {
+        selected.set(ref.id, ref);
+        const checkbox = sourceControls.get(ref.id);
+        if (checkbox) checkbox.checked = true;
+      }
+      renderSelection();
+      if (observing) {
+        if (activeContext === 'sources') closeContext(false);
+        intent.focus();
+      }
+    } finally {
+      pickingSources = false;
+      if (!disposed) updateComposerControls();
     }
-    renderSelection();
   };
-  localFilesPanel.body.append(button('Choose files…',()=>pickLocalSources('files')),button('Choose a folder…',()=>pickLocalSources('folder')));
+  const folderControl = button('Choose a folder…', () => pickLocalSources('folder'));
+  if (client.pickSources) sourcePanel.body.append(folderControl);
   const searchForm = el('form', 'vela-core-search'), search = el('input'), searchButton = el('button', 'vela-core-button', 'Search');
   search.type = 'search'; search.placeholder = 'Find a note, chat, task, or workspace'; search.maxLength = 200; search.setAttribute('aria-label', 'Search your work'); searchButton.type = 'submit';
   const searchResults = el('div', 'vela-core-results'); searchResults.setAttribute('aria-live', 'polite'); searchForm.append(search, searchButton);
@@ -241,7 +259,6 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const preferencesPanel = disclosure('Preferences', 'vela-core-preferences'); preferencesPanel.body.append(settings.node, adaptationPanel.node, contextPanel.node);
   if (options.permissions) preferencesPanel.body.append(options.permissions.element);
   more.append(contextualClose, resultPanel.node, sourcePanel.node, native.node, preferencesPanel.node, connection.node, attentionPanel.node);
-  if(client.pickSources)more.append(localFilesPanel.node);
   if (options.missions) more.append(missionsPanel.node);
   if (options.voice) more.append(voicePanel.node);
   flow.append(manifestation, history, more);
@@ -463,12 +480,17 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   allowProvider.addEventListener('change', () => { chosenProviderId = allowProvider.checked ? current?.planner.providerId ?? null : null; renderProviderChoice(); });
   const selection = el('div', 'vela-core-selection'); selection.setAttribute('aria-label', 'Selected sources'); selection.hidden = true;
   const send = markIcon(el('button', 'vela-core-button vela-core-primary'), 'Send to Vela', '↑', 'send'); send.type = 'submit'; send.disabled = true;
+  const updateComposerControls = () => {
+    const pending = busy || pickingSources;
+    folderControl.disabled = localFilesControl.disabled = pending;
+    send.disabled = pending || !intent.value.trim();
+  };
   const stop = icon('Stop', '■', 'stop', async () => { const state = await client.state(), pending = state.requests.findLast(request => request.state === 'planning' || state.plans.some(plan => plan.requestId === request.id && plan.state === 'applying')); if (pending) { await client.cancel(pending.id); await refresh(); } else { status.textContent = 'No request is running.'; } }); stop.hidden = true;
   const sourcesControl = icon('Add sources', '+', 'sources', () => reveal('sources', search)), toolsControl = icon('Local tools', '⋯', 'tools', () => reveal('tools', nativeTitle)), preferencesControl = icon('Vela preferences', '⚙', 'preferences', () => reveal('preferences')), providerControl = icon('Provider', '◇', 'provider', () => reveal('provider', providerRoutes.hidden ? allowProvider : providerRoutes.querySelector('button') ?? undefined)), attentionControl = icon('Attention', '·', 'attention', () => reveal('attention'));
   const historyControl = icon('History', '↶', 'history', () => setView(view() === 'history' ? 'current' : 'history')); historyControl.setAttribute('aria-expanded', 'false'); historyControl.setAttribute('aria-controls', history.id);
   const missionsControl = icon('Missions', '▤', 'missions', () => reveal('missions'));
   const voiceControl = icon('Voice', '♩', 'voice', () => reveal('voice'));
-  const localFilesControl=icon('Add files or folders','▤','files',()=>reveal('files'));
+  const localFilesControl=icon('Attach files','▤','files',()=>pickLocalSources('files'));
   const releaseVoice = options.voice?.subscribe?.(value => {
     replySpeech=value.speech;
     voiceControl.dataset.voiceActive = String(value.active); voiceControl.setAttribute('aria-pressed', String(value.active));
@@ -482,7 +504,6 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   ]);
   if (options.missions) contextPanels.set('missions', { panel: missionsPanel, trigger: missionsControl });
   if (options.voice) contextPanels.set('voice', { panel: voicePanel, trigger: voiceControl });
-  if(client.pickSources)contextPanels.set('files',{panel:localFilesPanel,trigger:localFilesControl});
   for (const [key, entry] of contextPanels) { entry.panel.node.hidden = true; entry.panel.node.id = instanceId + '-' + key; entry.trigger.setAttribute('aria-controls', entry.panel.node.id); entry.trigger.setAttribute('aria-expanded', 'false'); entry.panel.node.addEventListener('toggle', () => { if (activeContext === key && !entry.panel.node.open) closeContext(); }); }
   const composeActions = el('div', 'vela-core-compose-actions'); composeActions.append(sourcesControl, toolsControl, preferencesControl, providerControl, attentionControl, historyControl);
   if(client.pickSources)composeActions.prepend(localFilesControl);
@@ -491,9 +512,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   composeActions.append(stop, send);
   connection.body.append(providerChoice);
   form.append(intent, selection, composeActions);
-  intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
-  intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
-  form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return;
+  intent.addEventListener('input', () => { draftRevision++; updateComposerControls(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
+  intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!send.disabled) form.requestSubmit(); } });
+  form.addEventListener('submit', event => { event.preventDefault(); if (busy || pickingSources || !intent.value.trim() || composing) return;
     const missions = options.missions;
     if (missions && EXPLICIT_MISSION_PREFIX.test(intent.value.normalize('NFKC').trim())) {
       const objective = intent.value, revision = draftRevision, sources = [...selected.values()];
@@ -502,7 +523,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         const noteIds = sources.filter(ref => ref.resourceKind === 'note').map(ref => ref.id);
         const fileIds = sources.filter(ref => ref.resourceKind === 'file').map(ref => ref.id);
         if (noteIds.length + fileIds.length !== sources.length) throw Error('mission_composer_evidence_unsupported');
-        busy = true; send.disabled = true; errorBox.hidden = true;
+        busy = true; updateComposerControls(); errorBox.hidden = true;
         form.setAttribute('aria-busy', 'true');
         try {
           const evidence: MissionPlanningEvidenceSelection = {
@@ -527,7 +548,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
             missions.openReport?.(missionId);
           });
         } finally {
-          busy = false; send.disabled = !intent.value.trim();
+          busy = false; updateComposerControls();
           form.setAttribute('aria-busy', 'false'); updateSemanticContext(); present();
         }
       });
@@ -557,7 +578,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     ...(connected && (useAutomaticOnce || handoffSelection && !routingAgentSelection) ? { overrideDefaults: true as const } : {}),
   }, revision = draftRevision, submittedView = ++viewRevision;
     transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; projectEvidence.checked = workspaceState.checked = semanticContext.checked = routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
-    void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
+    void run(async () => { busy = true; updateComposerControls(); stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
       try {
         const recorded = await client.request(submitted);
         if (disposed) return;
@@ -576,7 +597,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         await settleSubmittedView(submittedView);
       }
       catch (error) { observeLiveAnswer(undefined); busy = false; try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; } throw error; }
-      finally { busy = false; send.disabled = !intent.value.trim(); form.setAttribute('aria-busy', 'false'); stop.hidden = !current?.requests.some(request => request.state === 'planning'); if (!disposed) renderReading(); present(); }
+      finally { busy = false; updateComposerControls(); form.setAttribute('aria-busy', 'false'); stop.hidden = !current?.requests.some(request => request.state === 'planning'); if (!disposed) renderReading(); present(); }
     });
   });
   shell.append(flow, errorBox, status, form); root.append(shell);
