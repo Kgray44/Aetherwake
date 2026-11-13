@@ -26,14 +26,28 @@ export function createPersonalMemoryView(command: Command): HTMLElement {
   };
   let next: string | null = null;
   let selection = 0;
+  let currentPolicy: PersonalPolicy | undefined;
+  const disableChatGPT = button('Turn off ChatGPT memory', async () => {
+    if (!currentPolicy?.ordinaryEnabled) return;
+    const version = currentPolicy.version;
+    const updated = await command({ type: 'disableChatGPT', version }) as PersonalPolicy;
+    if (!currentPolicy || updated.version >= currentPolicy.version) renderPolicy(updated);
+    status.textContent = 'ChatGPT memory is off. Your saved memories are still available here.';
+  });
+  disableChatGPT.hidden = true;
+  function renderPolicy(value: PersonalPolicy) {
+    currentPolicy = value;
+    policy.textContent = 'ChatGPT memory: ' + (value.ordinaryEnabled ? 'Enabled for reviewed sends' : 'Off')
+      + ' · Vela memory: ' + (value.velaEnabled ? 'Enabled' : 'Off');
+    disableChatGPT.hidden = !value.ordinaryEnabled;
+  }
   async function load(after: string | null) {
     const intent = ++selection;
     const page = await command({ type: 'list', after }) as Page;
     if (intent !== selection) return;
     detail.replaceChildren();
     if (after === null) list.replaceChildren();
-    policy.textContent = 'ChatGPT memory: ' + (page.policy.ordinaryEnabled ? 'Enabled for reviewed sends' : 'Off')
-      + ' · Vela memory: ' + (page.policy.velaEnabled ? 'Enabled' : 'Off');
+    if (!currentPolicy || page.policy.version >= currentPolicy.version) renderPolicy(page.policy);
     for (const record of page.records) {
       const row = document.createElement('li');
       row.append(button(`Memory ${record.id} · ${record.scope.kind} · ${record.state}`, () => inspect(record)));
@@ -81,6 +95,6 @@ export function createPersonalMemoryView(command: Command): HTMLElement {
   }
   const more = button('More memories', async () => { if (next !== null) await load(next); });
   more.hidden = true;
-  section.append(button('Load saved memories', () => load(null)), policy, status, list, more, detail);
+  section.append(button('Load saved memories', () => load(null)), policy, disableChatGPT, status, list, more, detail);
   return section;
 }
