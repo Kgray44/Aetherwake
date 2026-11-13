@@ -24,7 +24,7 @@ import { docxFixture } from '../../block-library/tests/media-fixtures.mts';
 import { missionDraftImageModel, missionImageModel } from '../../openai-provider/images.mts';
 import { writeMissionArtifacts } from '../src/mission-artifacts.mts';
 import { preflightArtifactEvidence, retainArtifactEvidence, verifyArtifactEvidence } from './helpers/artifact-evidence.mts';
-import { runBlindCie, type BlindPayload } from '../../../scripts/benchmarks/cie-quality/blind-runner.mts';
+import { readBlindInputs, runBlindCie, type BlindPayload } from '../../../scripts/benchmarks/cie-quality/blind-runner.mts';
 import { openBlindJournal } from '../../../scripts/benchmarks/cie-quality/blind-journal.mts';
 import { canStartReviewedCieCase } from '../../../scripts/benchmarks/cie-quality/native-budget.mts';
 import { runNativeCieBatch, type NativeCieClaim } from '../../../scripts/benchmarks/cie-quality/native-batch.mts';
@@ -1397,7 +1397,7 @@ type BlindObservedRequest = { input?: { content?: string }[]; instructions?: str
 function collectBlindEvidenceAudit(requests: readonly BlindObservedRequest[], request: string,
   sources: readonly { fixtureId: string; sourceId: string; title: string; text: string; canary?: string }[]) {
   const assessments: { round: number; excerpts: { handle: string; title?: string; text: string }[] }[] = [];
-  const compositions: Awaited<ReturnType<typeof import('../src/vela-semantic-history.mts').investigateReviewedVelaEvidence>>[] = [];
+  const compositions: Pick<Awaited<ReturnType<typeof import('../src/vela-semantic-history.mts').investigateReviewedVelaEvidence>>, 'coverage'>[] = [];
   const inputText = (value: unknown): string[] => {
     if (typeof value === 'string') return [value];
     if (Array.isArray(value)) return value.flatMap(inputText);
@@ -1422,6 +1422,10 @@ function collectBlindEvidenceAudit(requests: readonly BlindObservedRequest[], re
       assessments.push({ round: payload.round, excerpts: payload.excerpts });
       return { ...signals, stage: 'assess' };
     }
+    if (payload?.request === request && Array.isArray(payload.evidence) && payload.evidence.length === 0) {
+      compositions.push({ coverage: [] });
+      return { ...signals, stage: 'compose' };
+    }
     if (Array.isArray(payload?.evidence?.coverage)) {
       compositions.push(payload.evidence);
       return { ...signals, stage: 'compose' };
@@ -1433,7 +1437,7 @@ function collectBlindEvidenceAudit(requests: readonly BlindObservedRequest[], re
 }
 
 async function verifySealedReviewedCie(live?: { credential: string; model: string; commit: string; tree: string; journalPath: string;
-  requests: BlindObservedRequest[] }) {
+  requests: BlindObservedRequest[] }, emptyOnly = false) {
   const f = fixture(true, true, undefined, live?.credential);
   const journalPath = live?.journalPath ?? join(f.directory, 'blind-evaluation.sqlite');
   const bytes = readFileSync(new URL('../../../scripts/benchmarks/cie-quality/cases.public.json', import.meta.url));
@@ -1452,7 +1456,17 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
     transport: live ? 'live' as const : 'synthetic' as const };
   try {
     await f.ready();
-    for (const expectedCase of live ? ['blind-001'] : ['blind-001', 'blind-002']) {
+    const cases = readBlindInputs(bytes);
+    const emptyIndex = cases.findIndex(item => item.sources.length === 0);
+    if (emptyOnly && emptyIndex > 0) {
+      const profile = f.core.readVelaEvaluationProfile()!;
+      const journal = openBlindJournal(journalPath, { profileId: profile.profileId });
+      try {
+        await runBlindCie(bytes, identity, async () => ({ fixturePrefix: true }), signal,
+          { journal, route, maxCases: emptyIndex });
+      } finally { journal.close(); }
+    }
+    for (const expectedCase of emptyOnly ? [cases[emptyIndex].id] : live ? ['blind-001'] : ['blind-001', 'blind-002']) {
       {
         let hostError: unknown;
         const runCase = async (input: Readonly<BlindPayload>, _signal: AbortSignal, claim?: NativeCieClaim) => {
@@ -1469,14 +1483,21 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
               await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: source.text });
               resourceIds.push(note.id);
             }
-            const quote = input.sources[0].text;
+            const empty = input.sources.length === 0;
+            const quote = input.sources[0]?.text ?? 'No sources were supplied. I cannot establish the requested fact.';
             const requests = live?.requests ?? f.requests;
             const requestStart = requests.length;
             const eventCursor = (await f.core.command('replay', { limit: 1 })).latest;
             const before = await usage();
-            if (!live) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
+            if (empty) f.replies.push(body => {
+              assert.deepEqual(JSON.parse(body.input[0].content), { request: input.request, evidence: [] });
+              assert.deepEqual(body.tools ?? [], []);
+              assert.equal(body.store, false);
+              return response(quote, body.model);
+            });
+            if (!live && !empty) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
               reply(assess('day', 'The pump inspection is on Tuesday.')));
-            if (!live) f.replies.push(reply(interpret(input.request, input.sources[0].title)), reply(assess('fact', quote)),
+            if (!live && !empty) f.replies.push(reply(interpret(input.request, input.sources[0].title)), reply(assess('fact', quote)),
               body => {
                 const packet = JSON.parse(body.input[0].content);
                 assert.deepEqual(packet.evidence.coverage[0].passages, [
@@ -1485,7 +1506,19 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
                 for (const source of input.sources.slice(1)) assert.ok(!JSON.stringify(packet).includes(source.text));
                 return response(quote, body.model);
               });
-            const result = await velaCommand({
+            const sendEmpty = async () => {
+              assert.ok(claim);
+              const preview = await f.core.previewVelaEvaluation({ intent: input.request, resourceIds: [], resourceRefs: [],
+                adaptive: true, providerId: 'openai-api-vela', model: route.model, semanticContext: true }, claim);
+              assert.equal(preview.sendDisposition, 'review-required');
+              const binding = { previewId: preview.id, signature: preview.signature };
+              const review = await f.core.command('velaNativeReview', binding);
+              assert.deepEqual(review.context.included, []);
+              const grant = await f.core.command('authorizeVelaRequest', { ...binding, reviewDigest: review.reviewDigest });
+              return f.core.command('vela', { name: 'request', input: { intent: input.request, resourceIds: [],
+                authorizeProvider: true, previewId: preview.id, grantId: grant.grantId } });
+            };
+            const result = (empty ? await sendEmpty() : await velaCommand({
               win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
               directMessageSend: true, routeNative: true, dialog: {},
               call: (name: string, input: any) => claim && name === 'velaRequestPreview'
@@ -1496,7 +1529,7 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
               },
               input: { name: 'request', input: { intent: input.request, resourceIds, authorizeProvider: true,
                 providerId: 'openai-api-vela', model: live?.model ?? 'gpt-6-luna', semanticContext: true } },
-            }) as VelaRequest;
+            })) as VelaRequest;
             assert.equal(result.state, 'responded', result.errorCode);
             const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
             const answer = state.conversation?.messages.find(message => message.id === result.response?.messageId)?.content;
@@ -1505,7 +1538,7 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
             assert.equal(f.replies.length, 0);
             const calls = (await usage()).usedToday - before.usedToday;
             if (live) assert.ok(calls >= 3 && calls <= 6);
-            else assert.equal(calls, 5);
+            else assert.equal(calls, empty ? 1 : 5);
             const replay = await f.core.command('replay', { after: eventCursor, limit: 500 });
             assert.equal(replay.truncated, false);
             const classification = live ? 'reported' : 'simulated';
@@ -1533,7 +1566,10 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
               title: source.title, text: source.text }));
             const evidenceAudit = collectBlindEvidenceAudit(requests.slice(requestStart), input.request, sources);
             assert.equal(evidenceAudit.outbound.length, calls);
-            if (!live) {
+            if (empty) {
+              assert.deepEqual(evidenceAudit.assessments, []);
+              assert.deepEqual(evidenceAudit.compositions, [{ coverage: [] }]);
+            } else if (!live) {
               assert.ok(settlements.every(receipt => receipt.reportedModel === 'gpt-6-luna'));
               assert.equal(evidenceAudit.assessments.length, 1);
               assert.ok(evidenceAudit.assessments[0].excerpts.some(excerpt => excerpt.text === quote));
@@ -1543,7 +1579,7 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
             }
             const admissions = claim ? f.core.readVelaEvaluationAdmissions(claim) : undefined;
             if (claim) assert.deepEqual(admissions?.map(row => row.executionId), settlements.map(row => row.executionId));
-            return { answer, requestId: result.id, messageId: result.response!.messageId, calls, totalTokens,
+            return { ...(empty ? { outcome: 'no-evidence' as const } : {}), answer, requestId: result.id, messageId: result.response!.messageId, calls, totalTokens,
               tokenSamples: tokenSamples.length, settlements, ...(admissions ? { admissions } : {}), requestedModel: live?.model ?? 'gpt-6-luna',
               transport: live ? 'live' : 'synthetic', evidenceAudit };
           } catch (error) { hostError = error; throw error; }
@@ -1559,19 +1595,21 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
           const profile = f.core.readVelaEvaluationProfile();
           assert.ok(profile && profile.configurationVersion !== null);
           await f.core.command('vela', { name: 'routingOptions', input: { providerId: 'openai-api-vela' } });
-          let interruptPromotion = expectedCase === 'blind-001';
+          let interruptPromotion = emptyOnly || expectedCase === 'blind-001';
           const runBatch = () => runNativeCieBatch(bytes, identity, {
             profileId: profile.profileId, configurationVersion: profile.configurationVersion!, route,
             readUsage: usage, runReviewedCase: runCase,
             async verifyRetainedCase(claim, value) {
               const retained = value as Awaited<ReturnType<typeof runCase>>;
               if (!retained?.admissions || !Array.isArray(retained.settlements) || retained.admissions.length !== retained.settlements.length ||
-                retained.evidenceAudit?.outbound?.length !== retained.admissions.length || !retained.evidenceAudit?.assessments?.length ||
-                !retained.evidenceAudit?.compositions?.some(packet => packet.coverage.some(row => row.passages.length))) return false;
+                retained.evidenceAudit?.outbound?.length !== retained.admissions.length) return false;
+              if (retained.outcome !== 'no-evidence' && (!retained.evidenceAudit?.assessments?.length ||
+                !retained.evidenceAudit?.compositions?.some(packet => packet.coverage.some(row => row.passages.length)))) return false;
               const checked = f.core.readVelaEvaluationResult(claim, retained.admissions);
               const verified = checked.state === 'verified-answer' && checked.answer === retained.answer &&
                 checked.requestId === retained.requestId && checked.messageId === retained.messageId &&
-                checked.receipts.every((receipt, index) => receipt.executionId === retained.settlements[index].executionId);
+                checked.receipts.every((receipt, index) => receipt.executionId === retained.settlements[index].executionId &&
+                  receipt.totalTokens === (retained.settlements[index].usage?.totalTokens ?? null));
               if (verified && interruptPromotion) { interruptPromotion = false; throw new Error('fixture interrupted before checkpoint CAS'); }
               return verified;
             },
@@ -1598,7 +1636,7 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
         predictions.push(checkpoint);
       }
     }
-    if (!live) assert.equal((await usage()).usedToday, 10);
+    if (!live) assert.equal((await usage()).usedToday, emptyOnly ? 1 : 10);
     return predictions.at(-1)!;
   } finally { await f.close(); }
 }
@@ -1624,6 +1662,10 @@ test('the CIE evaluation audit detects a source identifier, title or partial bod
 
 test('sealed CIE cases resume through native review and canonical usage accounting', async () => {
   await verifySealedReviewedCie();
+});
+
+test('the frozen empty-source CIE case recovers one canonical answer without replay', async () => {
+  await verifySealedReviewedCie(undefined, true);
 });
 
 test('authorized live CIE smoke returns a sealed native prediction', {
@@ -2372,7 +2414,8 @@ test('private CIE evaluation binds an explicit empty selection to one canonical 
   const f = fixture(true, true);
   try {
     await f.ready();
-    const profile = f.core.readVelaEvaluationProfile()!;
+    const profile = f.core.readVelaEvaluationProfile();
+    assert.ok(profile && profile.configurationVersion !== null);
     const claim = { profileId: profile.profileId, configurationVersion: profile.configurationVersion,
       claimToken: 'a'.repeat(64), bindingDigest: 'b'.repeat(64) };
     const intent = 'Which date is supported by the supplied evidence?';
