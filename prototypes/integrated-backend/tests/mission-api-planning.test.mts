@@ -1252,7 +1252,7 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
 
 type BlindObservedRequest = { input?: { content?: string }[]; instructions?: string };
 function collectBlindEvidenceAudit(requests: readonly BlindObservedRequest[], request: string,
-  sources: readonly { fixtureId: string; sourceId: string; title: string; text: string }[]) {
+  sources: readonly { fixtureId: string; sourceId: string; title: string; text: string; canary?: string }[]) {
   const assessments: { round: number; excerpts: { handle: string; title?: string; text: string }[] }[] = [];
   const compositions: Awaited<ReturnType<typeof import('../src/vela-semantic-history.mts').investigateReviewedVelaEvidence>>[] = [];
   const inputText = (value: unknown): string[] => {
@@ -1262,22 +1262,28 @@ function collectBlindEvidenceAudit(requests: readonly BlindObservedRequest[], re
   };
   const outbound = requests.map(body => {
     const inputs = [body.instructions, ...(body.input ?? []).map(item => item.content)];
-    const content = body.input?.[0]?.content;
-    let payload;
-    try { payload = typeof content === 'string' ? JSON.parse(content) : null; } catch { payload = null; }
-    const decoded = [...inputs, ...inputText(payload)];
-    const textSourceIds = sources.filter(source => decoded.some(input => input?.includes(source.text))).map(source => source.fixtureId);
+    const parsed = inputs.map(input => {
+      try { return typeof input === 'string' ? JSON.parse(input) : null; } catch { return null; }
+    });
+    const payload = parsed[1];
+    const decoded = [...inputs, ...parsed.flatMap(inputText)];
+    const includes = (value: string | undefined) => !!value && decoded.some(input => input?.includes(value));
+    const textSourceIds = sources.filter(source => includes(source.text)).map(source => source.fixtureId);
+    const sourceSignals = sources.flatMap(({ fixtureId, sourceId, title, canary }) => {
+      const fields = Object.entries({ id: sourceId, title, canary }).filter(([, value]) => includes(value)).map(([key]) => key);
+      return fields.length ? [{ fixtureId, fields }] : [];
+    });
     const inputDigest = createHash('sha256').update(JSON.stringify({ input: body.input, instructions: body.instructions })).digest('hex');
-    if (!payload) return { inputDigest, textSourceIds, stage: 'other' };
-    if (payload.stage === 'assess' && payload.request === request) {
+    const signals = { inputDigest, textSourceIds, sourceSignals };
+    if (payload?.stage === 'assess' && payload.request === request) {
       assessments.push({ round: payload.round, excerpts: payload.excerpts });
-      return { inputDigest, textSourceIds, stage: 'assess' };
+      return { ...signals, stage: 'assess' };
     }
-    if (Array.isArray(payload.evidence?.coverage)) {
+    if (Array.isArray(payload?.evidence?.coverage)) {
       compositions.push(payload.evidence);
-      return { inputDigest, textSourceIds, stage: 'compose' };
+      return { ...signals, stage: 'compose' };
     }
-    return { inputDigest, textSourceIds, stage: 'other' };
+    return { ...signals, stage: 'other' };
   });
   const sourceBindings = sources.map(({ fixtureId, sourceId, title }) => ({ fixtureId, sourceId, title }));
   return { outbound, sourceBindings, assessments, compositions };
@@ -1400,6 +1406,25 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
     return predictions.at(-1)!;
   } finally { await f.close(); }
 }
+
+test('the CIE evaluation audit detects a source identifier, title or partial body in outbound inputs', () => {
+  const source = { fixtureId: 'denied', sourceId: 'resource:foreign-831', title: 'PRIVATE-TITLE-831',
+    text: 'First sentence. PRIVATE-BODY-831 appears in a separate sentence.', canary: 'PRIVATE-BODY-831' };
+  const input = [
+    { input: [{ content: JSON.stringify({ reviewedSourceTitles: [source.title] }) }] },
+    { input: [{ content: JSON.stringify({ evidence: { sourceId: source.sourceId } }) }] },
+    { input: [{ content: 'Find the release date.' }, { content: JSON.stringify({ text: source.canary }) }] },
+    { input: [{ content: 'No fixture evidence was sent.' }] },
+  ];
+  const audit = collectBlindEvidenceAudit(input, 'Find the release date.', [source]);
+  assert.deepEqual(audit.outbound.map(call => call.sourceSignals), [
+    [{ fixtureId: 'denied', fields: ['title'] }],
+    [{ fixtureId: 'denied', fields: ['id'] }],
+    [{ fixtureId: 'denied', fields: ['canary'] }],
+    [],
+  ]);
+  assert.ok(audit.outbound.every(call => call.textSourceIds.length === 0));
+});
 
 test('sealed CIE cases resume through native review and canonical usage accounting', async () => {
   await verifySealedReviewedCie();
@@ -1766,7 +1791,8 @@ test('reviewed project evidence expands a model-proposed search and fences corre
       return resource.id;
     }
     const other = await project('Other project');
-    const foreign = await note('Private decision', 'FOREIGN-TEXT-459', other.workspaceId);
+    const foreignText = 'FOREIGN-TEXT-459 applies to an unrelated release.';
+    const foreign = await note('Private decision', foreignText, other.workspaceId);
     const current = await project('Current project');
     const history = await note('Launch proposal', 'The launch proposal was superseded by the harbor decision.', current.workspaceId);
     const correction = 'The harbor decision assigns release approval to the duty engineer.';
@@ -1827,10 +1853,11 @@ test('reviewed project evidence expands a model-proposed search and fences corre
     assert.equal((await send(true)).state, 'responded');
     assert.equal(f.requests.length, 6);
     const audit = collectBlindEvidenceAudit(f.requests, intent, [
-      { fixtureId: 'foreign', sourceId: foreign, title: 'Private decision', text: 'FOREIGN-TEXT-459' },
+      { fixtureId: 'foreign', sourceId: foreign, title: 'Private decision', text: foreignText, canary: 'FOREIGN-TEXT-459' },
       { fixtureId: 'correction', sourceId: selected, title: 'Harbor decision', text: correction },
     ]);
     assert.ok(audit.outbound.every(call => !call.textSourceIds.includes('foreign')));
+    assert.ok(audit.outbound.every(call => !call.sourceSignals.some(signal => signal.fixtureId === 'foreign')));
     assert.ok(audit.outbound.some(call => call.stage === 'assess' && call.textSourceIds.includes('correction')));
     assert.deepEqual(audit.assessments.map(assessment => assessment.round), [1, 2]);
     assert.ok(audit.compositions.every(packet => packet.coverage.every(row =>
