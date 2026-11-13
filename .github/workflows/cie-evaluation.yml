@@ -3,6 +3,7 @@ name: CIE evaluation fixtures
 on:
   pull_request:
     paths:
+      - '.gitattributes'
       - '.github/workflows/cie-evaluation.yml'
       - 'scripts/benchmarks/cie-quality/**'
       - 'prototypes/vela-core/src/history-retrieval.mts'
