@@ -27,6 +27,22 @@ export type CommitNote = {
   expectedDraftVersion: number;
   content: string;
 };
+export type CaptureConversationReply = {
+  resourceId: string;
+  messageId: string;
+  commandId: string;
+};
+export type ReplyNoteReceipt = {
+  noteId: string;
+  source: { resourceId: string; messageId: string; sequence: number; digest: string };
+};
+/** Trusted adapters called synchronously inside the owning note transaction. */
+export interface ReplyNoteHost {
+  resolveReply(resourceId: string, messageId: string):
+    | (Omit<ReplyNoteReceipt["source"], "digest"> & { content: string; projectId: string | null })
+    | null;
+  createNote(input: { title: string; content: string; projectId: string | null }): string;
+}
 export interface NoteExperiencePort {
   readNote(resourceId: string): Promise<NoteDocument>;
   saveNoteDraft(input: SaveNoteDraft): Promise<NoteDraft>;
