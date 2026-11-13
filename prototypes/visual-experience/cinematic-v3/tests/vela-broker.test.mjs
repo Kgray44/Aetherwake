@@ -43,6 +43,19 @@ test("renderer cannot call private Vela analysis or supply its own approval", as
     providerId:"openai-api-vela", authorizeProvider:true, grantId:"forged",
   }}}), /vela_app_request_scope_required/);
 });
+
+test("a prepared Vela analysis expires before source preview and cannot be replayed", async t => {
+  t.mock.timers.enable({ apis:["Date"], now: 1_000 });
+  const run = prepareVelaInitiatedAnalysis({
+    initiatorId:"synthetic-monitor", configurationVersion:1, expiresAt:2_000,
+    intent:"Read the selected note", isAuthorized:()=>true,
+    resourceRefs:[{id:"selected", kind:"resource", resourceKind:"note", version:3, title:"Synthetic"}],
+    call:()=>assert.fail("Expired analysis must make no backend calls"),
+  });
+  t.mock.timers.tick(1_000);
+  await assert.rejects(run(), /vela_app_request_owner_unavailable/);
+  await assert.rejects(run(), /vela_app_request_consumed/);
+});
 function fixture(choice = 1) {
   const calls = [],
     dialogs = [],

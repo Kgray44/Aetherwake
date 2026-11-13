@@ -269,8 +269,18 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   workspaceState.type = 'checkbox';
   const projectEvidence = el('input');
   projectEvidence.type = 'checkbox';
+  const runAnalysis = el('button', 'vela-core-button');
+  runAnalysis.type = 'submit'; runAnalysis.textContent = 'Authorize one analysis'; runAnalysis.hidden = true;
+  function syncAnalysisActivation() {
+    runAnalysis.hidden = !semanticContext.checked || semanticContext.disabled || !evidenceApiAvailable() ||
+      chosenProviderId !== 'openai-api-vela' || workspaceState.checked || projectEvidence.checked ||
+      !!handoffSelection || !!routingAgentSelection || !!routeModel.value || !!routeEffort.value ||
+      routeEscalation.checked || routeHistory.checked || useAutomaticOnce || (!!routeMode.value && routeMode.value !== 'auto');
+    runAnalysis.disabled = busy || !intent.value.trim();
+  }
   workspaceState.addEventListener('change', updateSemanticContext);
   projectEvidence.addEventListener('change', updateSemanticContext);
+  for (const control of [routeEffort, routeEscalation, routeHistory]) control.addEventListener('change', syncAnalysisActivation);
   let preparingEvidencePlan = false;
   const planWithEvidence: HTMLButtonElement | undefined = options.missions && button('Plan mission with reviewed evidence', async () => {
     const missions = options.missions!;
@@ -312,6 +322,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     if (projectEvidence.disabled) projectEvidence.checked = false;
     if (planWithEvidence) planWithEvidence.disabled = (ineligible && !projectEvidence.checked) ||
       !!handoffSelection || workspaceState.checked || busy || preparingEvidencePlan || !intent.value.trim();
+    syncAnalysisActivation();
   }
   updateSemanticContext();
   const modes = [['auto', 'Auto'], ['fast', 'Fast'], ['deep', 'Deep'], ['codex', 'Codex'], ['custom', 'Custom']] as const;
@@ -328,6 +339,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const efforts = modelOptions.find(model => model.id === routeModel.value)?.reasoningEfforts ?? [];
     setOptions(routeEffort, [['', 'Provider default'], ...efforts.map(effort => [effort, effort] as const)]);
     routeEffort.disabled = efforts.length === 0;
+    syncAnalysisActivation();
   };
   const clearModelOptions = () => {
     modelOptions = [];
@@ -374,7 +386,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     label('Reasoning effort', routeEffort), label('Allow one deeper attempt if Auto hits an output limit', routeEscalation));
   providerRoutes.append(label('Start fresh for this send', routeHistory));
   semanticContext.addEventListener('change', () => {
-    if (!semanticContext.checked || semanticContext.disabled) return;
+    if (!semanticContext.checked || semanticContext.disabled) { syncAnalysisActivation(); return; }
     if (chosenProviderId !== 'openai-api-vela') clearModelOptions();
     chosenProviderId = 'openai-api-vela';
     if (routeMode.value === 'codex') routeMode.value = 'auto';
@@ -473,8 +485,6 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   allowProvider.addEventListener('change', () => { chosenProviderId = allowProvider.checked ? current?.planner.providerId ?? null : null; renderProviderChoice(); });
   const selection = el('div', 'vela-core-selection'); selection.setAttribute('aria-label', 'Selected sources'); selection.hidden = true;
   const send = markIcon(el('button', 'vela-core-button vela-core-primary'), 'Send to Vela', '↑', 'send'); send.type = 'submit'; send.disabled = true;
-  const runAnalysis = el('button', 'vela-core-button');
-  runAnalysis.type = 'submit'; runAnalysis.textContent = 'Authorize one analysis'; runAnalysis.hidden = true;
   const stop = icon('Stop', '■', 'stop', async () => { const state = await client.state(), pending = state.requests.findLast(request => request.state === 'planning' || state.plans.some(plan => plan.requestId === request.id && plan.state === 'applying')); if (pending) { await client.cancel(pending.id); await refresh(); } else { status.textContent = 'No request is running.'; } }); stop.hidden = true;
   const sourcesControl = icon('Add sources', '+', 'sources', () => reveal('sources', search)), toolsControl = icon('Local tools', '⋯', 'tools', () => reveal('tools', nativeTitle)), preferencesControl = icon('Vela preferences', '⚙', 'preferences', () => reveal('preferences')), providerControl = icon('Provider', '◇', 'provider', () => reveal('provider', providerRoutes.hidden ? allowProvider : providerRoutes.querySelector('button') ?? undefined)), attentionControl = icon('Attention', '·', 'attention', () => reveal('attention'));
   const historyControl = icon('History', '↶', 'history', () => setView(view() === 'history' ? 'current' : 'history')); historyControl.setAttribute('aria-expanded', 'false'); historyControl.setAttribute('aria-controls', history.id);
@@ -507,6 +517,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
   form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return;
     const runSelectedAnalysis = event.submitter === runAnalysis;
+    if (runSelectedAnalysis) syncAnalysisActivation();
     if (runSelectedAnalysis && (runAnalysis.hidden || runAnalysis.disabled)) return;
     if (semanticContext.checked && !evidenceApiAvailable()) {
       status.hidden = false;
@@ -935,11 +946,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   }
   function present() {
     if (disposed) return;
-    runAnalysis.hidden = !semanticContext.checked || semanticContext.disabled || !evidenceApiAvailable() ||
-      workspaceState.checked || projectEvidence.checked || !!handoffSelection || !!routingAgentSelection ||
-      !!routeModel.value || !!routeEffort.value || routeEscalation.checked || useAutomaticOnce ||
-      (!!routeMode.value && routeMode.value !== 'auto');
-    runAnalysis.disabled = busy || !intent.value.trim();
+    syncAnalysisActivation();
     const latest = current?.requests.at(-1), pendingAttention = current?.attention.some(item => !item.reviewedAt && !item.dismissedAt);
     let phase: VelaPanelPresentation['phase'] = 'idle';
     if (!errorBox.hidden) phase = 'error';

@@ -503,10 +503,12 @@ test('the composer can explicitly investigate an attached file without opening p
 
 test('selected-source analysis uses an explicit activation submitter', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
-  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }, { providerId: 'codex-app-server', available: true }];
+  canonical.applicationContext = { currentProjectId: 'project:synthetic', currentWorkspaceId: 'workspace:synthetic', references: [] };
   const turns: Parameters<VelaClient['request']>[0][] = [];
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
     request: async input => { turns.push(input); return request(); },
+    routingOptions: async () => [],
   }));
   try {
     await panel.open();
@@ -520,6 +522,23 @@ test('selected-source analysis uses an explicit activation submitter', async () 
     checkbox.checked = true; checkbox.fire('change');
     const editor = form.querySelector('textarea')!;
     editor.value = 'What does the brief say?'; editor.fire('input');
+    assert.equal(activation.hidden, false);
+    for (const title of ['Find evidence in this project', 'Review current workspace state', 'Start fresh for this send']) {
+      const conflict = root.find(node => node.tagName === 'label' && node.textContent === title)!.querySelector('input')!;
+      conflict.checked = true; conflict.fire('change');
+      assert.equal(activation.hidden, true, title);
+      form.fire('submit', { submitter: activation });
+      conflict.checked = false; conflict.fire('change');
+      assert.equal(activation.hidden, false, title);
+    }
+    const model = root.find(node => node.tagName === 'label' && node.textContent.includes('Automatic model'))!.querySelector('select')!;
+    model.value = 'synthetic-model'; model.fire('change');
+    assert.equal(activation.hidden, true);
+    model.value = ''; model.fire('change');
+    assert.equal(activation.hidden, false);
+    named(root, 'Codex').fire('click');
+    assert.equal(activation.hidden, true);
+    checkbox.checked = true; checkbox.fire('change');
     assert.equal(activation.hidden, false);
     assert.equal(turns.length, 0);
     form.fire('submit', { submitter: activation });

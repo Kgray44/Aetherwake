@@ -155,7 +155,8 @@ function isStandingSelectedEvidence(preview, review, refs) {
     Array.isArray(refs) && refs.length === review.context.included.length &&
     refs.every(ref => ref?.kind === "resource" && review.context.included.some(source =>
       source.kind === ref.kind && source.id === ref.id && source.version === ref.version &&
-      (ref.resourceKind === undefined || source.resourceKind === ref.resourceKind)));
+      (ref.resourceKind === undefined || source.resourceKind === ref.resourceKind) &&
+      (ref.projectId === undefined || source.projectId === ref.projectId)));
 }
 
 async function dispatchReviewedVelaRequest({ call, stage, preview, review, request, direct, checkOwner }) {
@@ -217,11 +218,12 @@ exports.prepareVelaInitiatedAnalysis = ({ call, isAuthorized, initiatorId, confi
       typeof intent !== "string" || !intent.trim() || !Array.isArray(resourceRefs) || !resourceRefs.length || resourceRefs.length > 4 ||
       !resourceRefs.every(ref => ref?.kind === "resource" && ["file", "note"].includes(ref.resourceKind) &&
         typeof ref.id === "string" && ref.id.length && typeof ref.title === "string" &&
+        (ref.projectId === undefined || ref.projectId === null || typeof ref.projectId === "string" && ref.projectId.length) &&
         Number.isSafeInteger(ref.version) && ref.version > 0)) {
     throw Error("vela_app_request_scope_required");
   }
-  const refs = Object.freeze(resourceRefs.map(({ kind, resourceKind, id, version, title }) =>
-    Object.freeze({ kind, resourceKind, id, version, title })));
+  const refs = Object.freeze(resourceRefs.map(({ kind, resourceKind, id, version, title, projectId }) =>
+    Object.freeze({ kind, resourceKind, id, version, title, ...(projectId === undefined ? {} : { projectId }) })));
   const ids = Object.freeze(refs.map(ref => ref.id));
   if (new Set(ids).size !== ids.length) throw Error("vela_app_request_scope_required");
   const scope = Object.freeze({ initiatorId, configurationVersion, expiresAt, intent, resourceRefs: refs,

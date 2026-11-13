@@ -954,7 +954,8 @@ app.whenReady().then(async () => {
             call,
             input: brokerInput,
             reviewProvider,
-            analysisOwnerCurrent: () => !closing && backendWritable() && child === analysisBackend && trustedApplicationFrame(event) &&
+            analysisOwnerCurrent: () => !closing && backendWritable() && child === analysisBackend &&
+              !!submission && velaSubmissions.get(frame) === submission && trustedApplicationFrame(event) &&
               win.isVisible() && !win.isMinimized(),
             analysisStorageAllowed: () => storage.allowWrite(),
             missionFileEditRequest:request=>missionFileEditBroker.prepare(event,request),

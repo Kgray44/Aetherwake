@@ -2611,7 +2611,7 @@ for (const outcome of ['failure', 'cancel', 'revoke']) test('standing selected e
 for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation interrupt', 'provider failure', 'interrupt', 'revoke', 'app-owned', 'app-owned stale',
   'app-owned revoked', 'app-owned revoked after grant', 'app-owned rotated after grant', 'app-owned wrong scope', 'app-owned wrong version',
   'app-owned interrupted', 'app-owned retired', 'native activation', 'native activation declined', 'native activation revoked',
-  'native activation owner closed', 'native activation interrupted'] as const) test('selected evidence broker analysis: '+scenario, {timeout:15_000}, async () => {
+  'native activation owner closed', 'native activation interrupted', 'native activation wrong project'] as const) test('selected evidence broker analysis: '+scenario, {timeout:15_000}, async () => {
   const evaluation = scenario.startsWith('evaluation');
   const noteCase = scenario === 'evaluation note';
   const interrupted = scenario === 'interrupt' || scenario === 'evaluation interrupt' || scenario === 'app-owned interrupted' || scenario === 'native activation interrupted';
@@ -2643,7 +2643,7 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
     const resourceIds = [resource.id];
     const sourceKind = noteCase ? 'note' as const : 'file' as const;
     const resourceRefs = [{ id: resource.id, kind: 'resource' as const, resourceKind: sourceKind,
-      title: resource.title, version: resource.version }];
+      title: resource.title, version: resource.version, projectId: resource.project_id }];
     const runtime=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
     const evaluationProfile=f.core.readVelaEvaluationProfile()!;
     assert.equal(evaluationProfile.configurationVersion,1);
@@ -2695,10 +2695,19 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
         assert.ok(evaluation,'standing file analysis opened the sharing modal');
         return true;
       },
-      input: { name: 'request', input: { intent, resourceIds, resourceRefs, authorizeProvider: true,
+      input: { name: 'request', input: { intent, resourceIds,
+        resourceRefs: scenario === 'native activation wrong project' ? resourceRefs.map(ref => ({...ref, projectId:'project:wrong'})) : resourceRefs,
+        authorizeProvider: true,
         providerId: 'openai-api-vela', semanticContext: true,
         ...(nativeActivation ? { runSelectedAnalysis: true } : { model: 'gpt-6-luna' }) } },
     }) as Promise<VelaRequest>;
+    if (scenario === 'native activation wrong project') {
+      await assert.rejects(send(), /source_selection_changed/);
+      assert.equal(approvals, 0);
+      assert.equal(f.requests.length, 0);
+      assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 0);
+      return;
+    }
     if (scenario === 'native activation declined' || scenario === 'native activation revoked' || scenario === 'native activation owner closed') {
       await assert.rejects(send(), scenario === 'native activation revoked' ? /vela_app_request_provider_authority_changed/ : /authorization_cancelled/);
       assert.equal(approvals, 1);
