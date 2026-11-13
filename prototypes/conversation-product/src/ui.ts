@@ -133,10 +133,18 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   const canOpen=()=>!disposed&&!closing&&(intent===undefined||intent===openIntent)&&(stillRequested?.()??true);
   await flush();
   if(!canOpen())return;
+  const previousResourceId=state.selectedResourceId,previousMessageId=selectedMessageId;
   state.selectedResourceId=resourceId;selectedMessageId=messageId;
-  root.classList.remove('cp-history-open');historyToggle.setAttribute('aria-expanded','false');
-  await bindChat(resourceId,messageId);
+  try{await bindChat(resourceId,messageId);}catch(error){
+   if(!disposed&&!closing&&(intent===undefined||intent===openIntent)&&previousResourceId!==resourceId){
+    state.selectedResourceId=previousResourceId;selectedMessageId=previousMessageId;
+    if(previousResourceId)await bindChat(previousResourceId,previousMessageId).catch(()=>{});
+    else await detachChat();
+   }
+   throw error;
+  }
   if(!canOpen())return;
+  root.classList.remove('cp-history-open');historyToggle.setAttribute('aria-expanded','false');
   if(current?.conversation.resourceId===resourceId&&current.conversation.state==='active')await saveSelection(resourceId);
   if(canOpen())options.onResource?.(resourceId,messageId);
  };
@@ -199,11 +207,17 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
      const pending=requestOpen(hit.resourceId,hit.messageId,stillCurrent),intent=openIntent;
      try{
       await pending;
-      if(stillCurrent()&&intent===openIntent)switcher.node.open=false;
-     }catch{
       if(stillCurrent()&&intent===openIntent){
-       switchStatus.textContent='Couldn’t open the conversation. Choose a result to try again.';
+       const returnFocus=switcher.node.contains(document.activeElement);
+       switcher.node.open=false;
+       if(returnFocus)switcher.summary.focus();
+      }
+     }catch(error){
+      if(stillCurrent()&&intent===openIntent){
        if(switcher.node.contains(document.activeElement))switchQuery.focus();
+       const code=error instanceof Error?error.message:String(error);
+       if(/(?:^|: )(?:message_unavailable|message_missing|source_unavailable|source_revoked|access_denied|conversation_missing|conversation_not_found)$/.test(code))await loadSwitcher();
+       else switchStatus.textContent='Couldn’t open the conversation. Choose a result to try again.';
       }
      }finally{opening=false;}
     },{identity:'history-result'});

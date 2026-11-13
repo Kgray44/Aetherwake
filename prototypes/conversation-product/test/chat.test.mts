@@ -185,9 +185,11 @@ test('quick search Enter submits pending text immediately and opens the first ex
   input.value='exact phrase ';
   input.fire('input');
   input.fire('keydown',{key:'Enter'});
-  await until(()=>opened.length===1);
+  const switcher=f.view.root.querySelector('.cp-switcher');
+  await until(()=>opened.length===1&&!switcher.open);
   assert.deepEqual(opened,[[resourceId,messageId]]);
   assert.equal(searches,1);
+  assert.equal(f.view.doc.activeElement===switcher.querySelector('summary'),true);
  } finally {await manager?.dispose();f.restore();}
 });
 
@@ -219,13 +221,39 @@ test('Switch chat Escape cancels a result still waiting for the draft to save', 
  } finally {release();await manager?.dispose();f.restore();}
 });
 
-test('Switch chat keeps an exact result available when opening it fails', async () => {
+test('Switch chat keeps the previous draft available after a different chat fails to open', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId, target='chat:missing';
+ let manager;
+ const port={async command(name:string,input:any){
+  if(name==='search')return {items:[{kind:'conversation',resourceId:target,title:'Other chat',excerpt:''}],total:1,offset:0,limit:12,hasMore:false};
+  if(name==='readDraft'&&input.resourceId===target)return {resourceId:target,version:0,content:'',updatedAt:null};
+  if(name==='detail'&&input.resourceId===target)throw Error('temporary detail failure');
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId});
+  await manager.ready;
+  await manager.openSwitcher();
+  const input=f.view.root.querySelector('.cp-switcher').querySelector('input');
+  input.value='Other chat';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await until(()=>f.view.root.querySelector('.cp-switcher-status').textContent.includes('Couldn’t open'));
+  assert.equal(manager.state.selectedResourceId,resourceId);
+  assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
+ } finally {await manager?.dispose();f.restore();}
+});
+
+for (const failure of ['temporary detail failure','message_unavailable','conversation_missing']) test('Switch chat recovers a failed result open ('+failure+')', async () => {
+ const unavailable=failure!=='temporary detail failure';
  const f=fixture(),resourceId=f.draft.resourceId,messageId=f.detail.messages.items[0].id;
  const opened:string[]=[];
- let manager,failed=false;
+ let manager,failed=false,searches=0;
  const port={async command(name:string,input:any){
-  if(name==='search')return {items:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:'exact phrase'}],total:1,offset:0,limit:12,hasMore:false};
-  if(name==='detail'&&input.aroundMessageId===messageId&&!failed){failed=true;throw Error('temporary detail failure');}
+  if(name==='search'){
+   searches++;
+   const items=unavailable&&failed?[]:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:'exact phrase'}];
+   return {items,total:items.length,offset:0,limit:12,hasMore:false};
+  }
+  if(name==='detail'&&input.aroundMessageId===messageId&&!failed){failed=true;throw Error(failure);}
   return (f.port.command as any)(name,input);
  }} as ConversationProductPort;
  try {
@@ -237,6 +265,12 @@ test('Switch chat keeps an exact result available when opening it fails', async 
   await until(()=>failed&&!f.view.root.querySelector('.cp-manager').getAttribute('aria-busy'));
   assert.equal(switcher.open,true);
   assert.equal(input.value,'exact phrase');
+  if(unavailable){
+   await until(()=>searches===2&&switcher.querySelector('.cp-switcher-status').textContent.includes('No matches'));
+   assert.equal(switcher.querySelector('[data-message-id]'),null);
+   assert.deepEqual(opened,[]);
+   return;
+  }
   assert.match(switcher.querySelector('.cp-switcher-status').textContent,/Couldn’t open/);
   input.fire('keydown',{key:'Enter'});
   await until(()=>opened.length===1&&!switcher.open);
