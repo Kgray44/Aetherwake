@@ -5431,6 +5431,7 @@ export class BackendCore {
       snapshot:()=>this.command('snapshot',{}),desktop:()=>this.command('desktop',{type:'snapshot'}),command:(name,input)=>this.command(name,input),
       canonicalReadView:async()=>this.conversationReadView(),
       canonicalReadBatch:read=>this.canonicalConversationReadBatch(read),
+      canShareMessage: id => !this.isMemoryDerivedOutput(id),
       organize,access:(id,messageId)=>this.conversationReadAccess(id,messageId),capabilitySnapshot:this.capabilityCache.snapshot,providerRegistrySnapshot:()=>this.ordinaryRegistry(),
       sendWithContext:async()=>{throw new ServiceError('native_send_approval_required');},
       commitShareRevocation: revoke => this.withEventTransaction(() => {
@@ -6471,7 +6472,8 @@ export class BackendCore {
       this.conversationAccess.resource(r.sourceResourceId, 'read'), 'source_unavailable');
     ensure(this.state.revisions[r.sourceResourceId] === r.sourceRevision, 'stale_source_revision');
     const h = this.graph.inspectHandoff(r.id);
-    ensure(h.items.every(item => this.conversationAccess.access(this.publicId(item.sourceConversationId), item.sourceMessageId)), 'source_unavailable');
+    ensure(h.items.every(item => this.conversationAccess.access(this.publicId(item.sourceConversationId), item.sourceMessageId) &&
+      !this.isMemoryDerivedOutput(item.sourceMessageId)), 'source_unavailable');
     ensure(h.staleMessageIds.length === 0, 'stale_context');
     ensure(h.items.every(i => !['sensitive','restricted'].includes((i as any).sensitivity)), 'sensitive_content_excluded');
     ensure(r.estimatedTokens <= r.tokenBudget, 'context_budget_exceeded');
@@ -7365,6 +7367,7 @@ export class BackendCore {
         ensure(Number.isInteger(a.tokenBudget) && a.tokenBudget > 0 && a.tokenBudget <= 32768, 'invalid_token_budget');
         ensure(Array.isArray(a.includeMessageIds) && a.includeMessageIds.length > 0 && a.includeMessageIds.length <= 100, 'explicit_source_selection_required');
         ensure([a.messageId, ...a.includeMessageIds].every(id => this.conversationAccess.access(a.resourceId, id)), 'source_unavailable');
+        ensure(a.includeMessageIds.every((id: string) => !this.isMemoryDerivedOutput(id)), 'source_unavailable');
         const sourceId = this.gid(a.resourceId);
         const result = this.graph.branch({ sourceConversationId: sourceId, sourceMessageId: a.messageId, targetKind: ['local','mock-ordinary',CHATGPT_PLAN_PROVIDER].includes(a.providerId) ? 'ordinary' : 'codex', targetProviderId: a.providerId, title: a.title, includeMessageIds: a.includeMessageIds });
         const resource = this.kernel.createConversationRef(a.title, this.kernel.getResource(a.resourceId).resource.project_id);
@@ -7380,7 +7383,8 @@ export class BackendCore {
         return { conversation: this.conv(resource.id), handoff: review, context: result.handoff, mode: 'application_continuation' };
       }, () => {
         ensure(this.conversationAccess.resource(a.resourceId, 'read') &&
-          [a.messageId, ...a.includeMessageIds].every(id => this.conversationAccess.access(a.resourceId, id)), 'source_unavailable');
+          [a.messageId, ...a.includeMessageIds].every(id => this.conversationAccess.access(a.resourceId, id)) &&
+          a.includeMessageIds.every((id: string) => !this.isMemoryDerivedOutput(id)), 'source_unavailable');
       })) as any;
       case 'review': return this.atomic(() => { const r = this.package(a.handoffId); ensure(r.state === 'prepared' || r.state === 'approved', 'handoff_not_reviewable'); ensure(r.fingerprint === a.fingerprint, 'approval_scope_mismatch'); if(a.approve === true)this.validateReview(r); r.state = a.approve === true ? 'approved' : 'rejected'; r.approvedAt = now(); return structuredClone(r); }) as any;
       case 'selectProvider': return this.atomic(() => {
