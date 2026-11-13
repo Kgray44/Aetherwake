@@ -214,6 +214,11 @@ for(const retryWithButton of [false,true])test('Switch chat retries a failed que
   if(retryWithButton){
    const retry=named(switcher,'Retry search');
    assert.ok(retry);
+   input.fire('keydown',{key:'ArrowDown'});
+   assert.equal(f.view.doc.activeElement,retry);
+   assert.equal(retry.fire('keydown',{key:'ArrowUp'}).defaultPrevented,true);
+   assert.equal(f.view.doc.activeElement,input);
+   retry.fire('click');
    retry.fire('click');
    const results=switcher.querySelector('.cp-switcher-results');
    await until(()=>results.querySelector('[data-message-id]')!==null);

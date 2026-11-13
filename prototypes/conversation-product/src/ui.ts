@@ -210,11 +210,17 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    if(stillCurrent()){
     switchFailedGeneration=generation;
     switchStatus.textContent='Couldn’t load conversations. Press Enter to retry.';
-    switchResults.append(button('Retry search',()=>{
+    const retry=button('Retry search',()=>{
      if(!stillCurrent()||switchFailedGeneration!==generation)return;
      switchQuery.focus();
      return loadSwitcher();
-    }));
+    });
+    retry.addEventListener('keydown',event=>{
+     if(event.key!=='ArrowUp'||!stillCurrent())return;
+     event.preventDefault();
+     switchQuery.focus();
+    });
+    switchResults.append(retry);
    }
   }
   finally{if(generation===switchGeneration)switchLoading=false;}
