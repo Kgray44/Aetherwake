@@ -714,10 +714,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     event.preventDefault();
     const webSearch = event.submitter === web;
     if (send.disabled || !current || webSearch && web.disabled) return;
-    const before = current, content = textarea.value, commandId = crypto.randomUUID();
+    const before = current, commandId = crypto.randomUUID();
     const plan = ordinaryPlan(), selectedModel = webSearch ? webSearchModel() : effectiveModel();
     let attachments: { id: string; version: number }[] | undefined;
     let sendStarted = false;
+    let acceptedNotice: string | undefined;
     if (webSearch && !selectedModel) return;
     const reasoningEffort = plan ? thinking?.effort : undefined;
     if (reasoningEffort !== undefined && (selectedModel?.id !== thinking?.modelId ||
@@ -735,6 +736,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     report(webSearch?'Preparing web search. Your draft remains saved.':providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
+      const content = checkpoint.record.content;
       if (checkpoint.record.documents?.some(item => item.unavailable)) {
         report('A selected document is unavailable or has changed. Remove or reattach it before sending.');
         return;
@@ -751,14 +753,20 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       const interrupted = (matchingReceipt && receipt.state === 'interrupted') || observedSubmittedStop();
       if(!failed&&!interrupted&&!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
       let followMessageId:string|undefined;
-      if (receipt && acceptedConversationSubmission(input, result, evidence)) {
+      if (receipt && !failed && !interrupted && acceptedConversationSubmission(input, result, evidence)) {
         const clockMessageId = typeof receipt.deviceClockMessageId === 'string' ? receipt.deviceClockMessageId : undefined;
         followMessageId = clockMessageId ?? (receipt.role === 'user' ? String(receipt.id) :
           evidence?.messages.items.find(m => m.resourceId === resourceId && !m.inherited &&
             m.role === 'user' && m.content === content && !input.priorMessageIds.includes(m.id))?.id);
-        const cleared = await session.acknowledgeSent(checkpoint);
         const accepted = clockMessageId ? 'Answered from this device’s clock.' : 'Message accepted.';
-        report(cleared ? accepted : accepted + ' Later draft edits were retained.', 'send-accepted');
+        acceptedNotice = accepted;
+        try {
+          const cleared = await session.acknowledgeSent(checkpoint);
+          acceptedNotice = cleared ? accepted : accepted + ' Later draft edits were retained.';
+        } catch {
+          acceptedNotice = accepted + ' Check draft recovery before sending again.';
+        }
+        report(acceptedNotice, 'send-accepted');
       } else if (interrupted) {
         report('Reply stopped. Your draft is still here.');
       } else if (failed) {
@@ -774,7 +782,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       }
     })().catch(error=>{
       const code = errorText(error);
-      if (!sendStarted) report('Message held until the draft can be saved: '+code);
+      if (acceptedNotice) {
+        if (!accessRevoked) report(acceptedNotice + ' The chat could not refresh.');
+      }
+      else if (!sendStarted) report('Message held until the draft can be saved: '+code);
       else if (observedSubmittedStop()) report('Reply stopped. Your draft is still here.');
       else if (code === 'authorization_cancelled') report('Send cancelled. Your saved draft was retained.');
       else if (code === 'unsupported_model') report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');

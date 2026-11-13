@@ -240,25 +240,41 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   const carry=el('input');
   carry.type='checkbox';
   carry.setAttribute('aria-label','Copy unsent draft to the new branch');
+  const carryDocuments=el('input');
+  carryDocuments.type='checkbox';
+  carryDocuments.setAttribute('aria-label','Copy selected documents to the new branch draft');
+  const displayedDocuments=draftSessions.get(d.conversation.resourceId)?.snapshot().documents.filter(document=>!document.unavailable)??[];
   decorateConversationControl(create,{identity:'branch',emphasis:'primary'});
   selection.dataset.cpGroup='branch-source-review';
   form.append(field('Title',title),field('Provider',providers),selection);
   if(offerDraftCopy&&draftSessions.get(d.conversation.resourceId)?.snapshot().content)
    form.append(field('Copy unsent draft to the new branch',carry));
+  if(offerDraftCopy&&targetProviderId==='chatgpt-plan-responses'&&displayedDocuments.length){
+   form.append(field('Copy selected documents to the new branch draft',carryDocuments),
+    el('p',displayedDocuments.map(document=>document.title).join(' · ')),
+    el('p','Sending these documents from the new draft requires source review.'));
+  }
   form.append(note,create);
   form.addEventListener('submit',event=>{
    event.preventDefault();
    if(create.disabled)return;
    create.disabled=true;
    const copyDraft=carry.checked;
+   const copyDocuments=carryDocuments.checked&&providers.value==='chatgpt-plan-responses';
    const input={resourceId:d.conversation.resourceId,messageId,includeMessageIds:[...chosen],providerId:providers.value,
     title:title.value,commandId:crypto.randomUUID(),tokenBudget:32768,expectedRevision:d.conversation.revision};
    void run(async()=>{
     if(sourceIntent!==openIntent||closing||disposed)return;
     if(state.selectedResourceId!==input.resourceId)throw new Error('The selected conversation changed.');
-    if(copyDraft)await flush();
+    if(copyDraft||copyDocuments)await flush();
     if(sourceIntent!==openIntent||closing||disposed)return;
-    const draft=copyDraft?draftSessions.get(input.resourceId)?.snapshot().content:undefined;
+    const sourceDraft=draftSessions.get(input.resourceId)?.snapshot();
+    const draft=copyDraft?sourceDraft?.content:undefined;
+    const documents=copyDocuments?displayedDocuments.map(({id,version})=>({id,version})):[];
+    const sameSelection=(current:typeof sourceDraft|ProductCommandMap['readDraft']['output'])=>
+     documents.every(ref=>current?.documents?.some(document=>document.id===ref.id&&document.version===ref.version&&!document.unavailable));
+    if(!sameSelection(sourceDraft))
+     throw new Error('The selected documents changed. Reopen the continuation to review them.');
     const b=await call('branch',input);
     if(sourceIntent!==openIntent||closing||disposed)return;
     let reviewed=false;
@@ -269,8 +285,16 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
       await call('reviewBranch',{handoffId:b.handoffId,fingerprint:b.fingerprint,approve});
       reviewed=true;
       let copyFailed=false;
-      if(draft){
-       try { await call('saveDraft',{resourceId:b.resourceId,expectedVersion:0,content:draft}); }
+      if(draft||documents.length){
+       try {
+        if(documents.length){
+         const latest=await call('readDraft',{resourceId:input.resourceId});
+         if(intent!==openIntent||closing||disposed)return;
+         if(!sameSelection(latest)||!sameSelection(draftSessions.get(input.resourceId)?.snapshot()))
+          throw new Error('The selected documents changed.');
+        }
+        await call('saveDraft',{resourceId:b.resourceId,expectedVersion:0,content:draft??'',...(documents.length?{documents}:{})});
+       }
        catch { copyFailed=true; }
       }
       if(intent!==openIntent||closing||disposed)return;

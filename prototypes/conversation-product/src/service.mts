@@ -173,12 +173,20 @@ export class ConversationProduct implements ConversationProductPort {
   const content=String(row.content),version=Number(row.version),updatedAt=String(row.updated_at);
   check(Number.isSafeInteger(version)&&version>=1&&content.length<=CONVERSATION_DRAFT_LIMITS.contentUnits&&Buffer.byteLength(content,'utf8')===row.content_bytes&&Number(row.content_bytes)<=CONVERSATION_DRAFT_LIMITS.contentBytes&&!Number.isNaN(Date.parse(updatedAt)),'corrupt_conversation_draft');
   const documents = this.draftDocumentRefs(JSON.parse(String(row.documents_json))).map(ref => {
-   const file = this.db.prepare("SELECT r.title,r.version FROM resources r JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=? AND d.kind='file' AND r.state='active'").get(ref.id);
-   if (!file || this.host.access?.(ref.id) !== true)
+   const file = this.draftDocument(id, ref.id);
+   if (!file)
     return { ...ref, title: 'Unavailable document', unavailable: 'inaccessible' as const };
    return { ...ref, title: String(file.title), ...(file.version !== ref.version ? { unavailable: 'changed' as const } : {}) };
   });
   return {resourceId:id,version,content,updatedAt,...(documents.length?{documents}:{})};
+ }
+ private draftDocument(conversationId: string, sourceId: string) {
+  const file = this.db.prepare(`SELECT r.title,r.version
+   FROM resources r JOIN desktop_resources d ON d.resource_id=r.id
+   JOIN resources chat ON chat.id=?
+   WHERE r.id=? AND d.kind='file' AND r.state='active'
+     AND (r.project_id IS NULL OR r.project_id=chat.project_id)`).get(conversationId,sourceId);
+  return file && this.host.access?.(sourceId) === true ? file : undefined;
  }
  private draftDocumentRefs(value: unknown): { id: string; version: number }[] {
   check(Array.isArray(value) && value.length<=4 && value.every(ref=>ref && typeof ref.id==='string' &&
@@ -200,8 +208,8 @@ export class ConversationProduct implements ConversationProductPort {
    const documents = this.draftDocumentRefs(input.documents ?? previous.documents ?? []);
    for (const ref of documents) {
     if (previous.documents?.some(prior=>prior.id===ref.id && prior.version===ref.version)) continue;
-    const source = this.resource(v, ref.id);
-    check(source.kind==='file' && source.version===ref.version && this.host.access?.(ref.id)===true,'source_unavailable');
+    this.resource(v, ref.id);
+    check(this.draftDocument(input.resourceId, ref.id)?.version===ref.version,'source_unavailable');
    }
    const result=this.db.prepare('INSERT INTO cp_drafts(resource_id,version,content,content_bytes,updated_at,documents_json) VALUES(?,?,?,?,?,?) ON CONFLICT(resource_id) DO UPDATE SET version=excluded.version,content=excluded.content,content_bytes=excluded.content_bytes,updated_at=excluded.updated_at,documents_json=excluded.documents_json WHERE cp_drafts.version=?').run(input.resourceId,version,input.content,encoded.length,updatedAt,JSON.stringify(documents),input.expectedVersion);
    check(Number(result.changes)===1,'stale_draft_version');return this.draft(input.resourceId);
