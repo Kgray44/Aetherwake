@@ -30,6 +30,40 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('Remember message is limited to an eligible own user message and opens native review on submit', async () => {
+  const f = fixture();
+  const requests: unknown[] = [];
+  const chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.detail.conversation.resourceId,
+    async onRememberMessage(request) { requests.push(request); return true; } });
+  try {
+    await chat.ready;
+    const actions = f.view.root.querySelectorAll('.cp-message-actions');
+    assert.equal(actions.length, 2);
+    assert.equal(named(actions[1], 'Remember message'), undefined);
+    named(actions[0], 'Remember message').fire('click');
+    assert.deepEqual(requests, []);
+    actions[0].querySelector('.cp-memory-editor').fire('submit');
+    await until(() => requests.length === 1);
+    assert.deepEqual(requests[0], { conversationId: f.detail.conversation.resourceId, messageId: 'message:user',
+      expectedProjectId: null, expectedSourceText: 'A user message',
+      text: 'A user message', scope: 'conversation', category: 'technical', keywords: ['user', 'message'] });
+    f.detail.conversation.projectId = 'project:synthetic';
+    f.detail.conversation.projectIds = ['project:synthetic'];
+    f.detail.conversation.revision++;
+    await until(() => !actions[0].querySelector('.cp-memory-editor'));
+    await chat.refresh();
+    const [projectMessageActions] = f.view.root.querySelectorAll('.cp-message-actions');
+    named(projectMessageActions, 'Remember message').fire('click');
+    const editor = projectMessageActions.querySelector('.cp-memory-editor');
+    editor.querySelector('select').value = 'project';
+    editor.fire('submit');
+    await until(() => requests.length === 2);
+    assert.deepEqual(requests[1], { conversationId: f.detail.conversation.resourceId, messageId: 'message:user',
+      expectedProjectId: 'project:synthetic', expectedSourceText: 'A user message',
+      text: 'A user message', scope: 'project', category: 'technical', keywords: ['user', 'message'] });
+  } finally { await chat.dispose(); f.restore(); }
+});
+
 function viewPort(f:ReturnType<typeof fixture>){
  const time='2026-11-03T00:00:00Z',resourceId=f.draft.resourceId,trace:{name:string;input:any}[]=[];let selected:ConversationViewSelected={version:2,resourceId,updatedAt:time},view:ConversationView={resourceId,version:4,position:{conversationRevision:2,anchor:{messageId:'message:user',offsetY:-20}},selection:{draftVersion:f.draft.version,start:2,end:6,direction:'backward'},positionStatus:'current',selectionStatus:'current',updatedAt:time};
  let before:((name:string,input:any)=>void|Promise<void>)|undefined;

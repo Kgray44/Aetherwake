@@ -1,0 +1,321 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { qualifyVelaHistoryModelWithApi, investigateReviewedVelaEvidence } from '../src/vela-semantic-history.mts';
+import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
+
+test('targeted qualification dispatches only the missing contract and retains its authorization fence', async () => {
+  const stages: string[] = [];
+  let authorized = 0;
+  const api = { async qualifyStructuredRoute(input: any) {
+    input.validate(); stages.push(input.payload.stage);
+    return { evidence: 'simulated' };
+  } } as unknown as VelaApiRuntime;
+  const result = await qualifyVelaHistoryModelWithApi(api,
+    { configurationVersion: 1, model: 'synthetic-model', authorize: () => { authorized++; return true; } },
+    new AbortController().signal, undefined, ['assess']);
+  assert.deepEqual(stages, ['assess']);
+  assert.equal(authorized, 1);
+  assert.deepEqual(result.map(row => row.stage), ['assess']);
+});
+
+test('explicit qualification still probes both contracts and denied admission dispatches neither', async () => {
+  const stages: string[] = [];
+  const api = { async qualifyStructuredRoute(input: any) {
+    input.validate(); stages.push(input.payload.stage); return { evidence: 'simulated' };
+  } } as unknown as VelaApiRuntime;
+  const admission = { configurationVersion: 1, model: 'synthetic-model', authorize: () => true };
+  await qualifyVelaHistoryModelWithApi(api, admission, new AbortController().signal);
+  assert.deepEqual(stages, ['interpret', 'assess']);
+  stages.length = 0;
+  await assert.rejects(qualifyVelaHistoryModelWithApi(api, { ...admission, authorize: () => false },
+    new AbortController().signal, undefined, ['assess']), /semantic_history_disclosure_denied/);
+  assert.deepEqual(stages, []);
+});
+
+for (const cached of [[], ['interpret'], ['assess'], ['interpret', 'assess']] as const) {
+  test(`reviewed evidence qualifies only missing stages with ${cached.join('+') || 'cold'} receipts`, async () => {
+    const { semanticHistoryFormats } = await import('../../vela-core/src/semantic-history.mts');
+    const receipts = new Map<string, any>(cached.map(stage => [stage, { model: 'synthetic-model', stage }]));
+    const stageFor = (schema: unknown) => schema === semanticHistoryFormats.interpret.schema ? 'interpret' : 'assess';
+    const probes: string[] = [];
+    const evaluationClaim = { profileId: 'fixture-profile', configurationVersion: 1,
+      claimToken: 'a'.repeat(64), bindingDigest: 'b'.repeat(64) };
+    const api = {
+      qualifiedStructuredRoute(_version: number, _models: string[], schema: unknown) { return receipts.get(stageFor(schema)); },
+      async resolveQualifiedStructuredRoute(_version: number, _models: string[], schema: unknown, _instruction: string,
+        _signal: AbortSignal, currentCatalogOnly: boolean) {
+        assert.equal(currentCatalogOnly, true);
+        return receipts.get(stageFor(schema));
+      },
+      isStructuredQualificationCurrent(receipt: any) { return receipts.get(receipt.stage) === receipt; },
+      async qualifyStructuredRoute(input: any) {
+        input.validate();
+        assert.equal(input.currentCatalogOnly, true);
+        assert.deepEqual(input.evaluationClaim, evaluationClaim);
+        const stage = input.payload.stage;
+        probes.push(stage);
+        const receipt = { model: 'synthetic-model', stage };
+        receipts.set(stage, receipt);
+        return receipt;
+      },
+      async structuredProposal(input: any) {
+        input.validate();
+        assert.equal(input.currentCatalogOnly, true);
+        assert.deepEqual(input.evaluationClaim, evaluationClaim);
+        return { version: 2, objective: 'No historical evidence needed', clarification: '', needs: [],
+          perception: { kind: 'recall', explicitGoals: [], inferredGoals: [], constraints: [],
+            capabilityHints: [], deliverables: ['text'], verification: [] } };
+      },
+    } as unknown as VelaApiRuntime;
+    const result = await investigateReviewedVelaEvidence(api, 'Synthetic request', [], 1, 'synthetic-model', () => {},
+      new AbortController().signal, undefined, undefined, evaluationClaim);
+    assert.equal(result.state, 'assessed');
+    assert.deepEqual(probes, ['interpret', 'assess'].filter(stage => !(cached as readonly string[]).includes(stage)));
+  });
+}
+
+test('reviewed project assessment finds fourth-ranked evidence without inventing another query', async () => {
+  const receipt = { model: 'synthetic-model' };
+  const rounds: number[] = [];
+  const request = 'Who signs the harbor inspection?';
+  const decisive = 'The duty engineer signs.';
+  const sources = ['a', 'b', 'c', 'd'].map(id => ({
+    sourceId: id, revision: '1', proofDigest: id, sourceKind: 'note' as const,
+    title: 'Harbor inspection', text: id === 'd' ? decisive : 'Discussed schedule only.',
+  }));
+  const api = {
+    qualifiedStructuredRoute: () => receipt,
+    resolveQualifiedStructuredRoute: async () => receipt,
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal(input: any) {
+      input.validate();
+      if (input.payload.stage === 'interpret') return {
+        version: 2, objective: request, clarification: '',
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+        needs: [{ key: 'signer', question: request, query: 'harbor inspection' }],
+      };
+      rounds.push(input.payload.round);
+      const match = input.payload.excerpts.find((excerpt: { text: string }) => excerpt.text === decisive);
+      return { version: 3, clarification: '', assessment: [{ key: 'signer', status: match ? 'supported' : 'missing',
+        passages: match ? [{ source: match.handle, quote: decisive }] : [], query: '' }] };
+    },
+  } as unknown as VelaApiRuntime;
+  const result = await investigateReviewedVelaEvidence(api, request, [], 1, 'synthetic-model', () => {},
+    new AbortController().signal, undefined, { sources, partial: false });
+  assert.deepEqual(rounds, [1, 2]);
+  assert.deepEqual(result.coverage[0].passages, [{ sourceId: 'd', title: 'Harbor inspection', quote: decisive }]);
+});
+
+for (const reference of ['title', 'link', 'stale link', 'stale named link'] as const) {
+  test(`a cited note follows a reviewed ${reference} reference outside the lexical results`, async () => {
+    const receipt = { model: 'synthetic-model' };
+    const anchor = reference === 'title' ? 'See the Equipment Handoff for the responsible party.'
+      : 'See [' + (reference === 'stale named link' ? 'Equipment Handoff' : 'the handoff') +
+        '](aerynth://resource/d?version=' + (reference === 'link' ? '1' : '0') +
+        ') or [another record](aerynth://resource/out-of-scope).';
+    const decisive = 'The duty engineer signs.';
+    const sources = [
+      ['a', reference === 'link' ? 'Equipment Handoff' : 'Schedule', 'A separate schedule.'],
+      ['b', 'Inventory', 'A separate inventory.'],
+      ['c', 'Harbor inspection', anchor],
+      ['d', 'Equipment Handoff', decisive],
+    ].map(([sourceId, title, text]) => ({ sourceId, title, text, revision: '1', proofDigest: sourceId, sourceKind: 'note' as const }));
+    const api = {
+      qualifiedStructuredRoute: () => receipt,
+      resolveQualifiedStructuredRoute: async () => receipt,
+      isStructuredQualificationCurrent: () => true,
+      async structuredProposal(input: any) {
+        input.validate();
+        const call = input.payload;
+        if (call.stage === 'interpret') return { version: 2, objective: 'Find the signer', clarification: '',
+          perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+          needs: [{ key: 'signer', question: 'Who signs?', query: 'harbor inspection' }] };
+        const found = call.excerpts.find((excerpt: { text: string }) => excerpt.text === decisive);
+        if (call.round === 1) assert.equal(found, undefined);
+        return { version: 3, clarification: '', assessment: [{ key: 'signer', status: found ? 'supported' : 'partial', query: '',
+          passages: [{ source: 'e1', quote: anchor }, ...(found ? [{ source: found.handle, quote: decisive }] : [])] }] };
+      },
+    } as unknown as VelaApiRuntime;
+    const result = await investigateReviewedVelaEvidence(api, 'Who signs the harbor inspection?', [], 1, 'synthetic-model', () => {},
+      new AbortController().signal, undefined, { sources, partial: false });
+    const stale = reference === 'stale link' || reference === 'stale named link';
+    assert.equal(result.coverage[0].status, stale ? 'partial' : 'supported');
+    assert.deepEqual(result.coverage[0].passages.map(passage => passage.sourceId), stale ? ['c'] : ['c', 'd']);
+  });
+}
+
+test('a reviewed snapshot is revalidated at disclosure boundaries regardless of excerpt count', async () => {
+  const receipt = { model: 'synthetic-model' };
+  const request = 'Who signs the inspection?';
+  const quote = 'The duty engineer signs.';
+  const api = {
+    qualifiedStructuredRoute: () => receipt,
+    resolveQualifiedStructuredRoute: async () => receipt,
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal(input: any) {
+      input.validate();
+      if (input.payload.stage === 'interpret') return { version: 2, objective: request, clarification: '',
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+        needs: [{ key: 'signer', question: request, query: 'inspection' }] };
+      return { version: 3, clarification: '', assessment: [{ key: 'signer', status: 'supported', query: '',
+        passages: [{ source: 'e1', quote }] }] };
+    },
+  } as unknown as VelaApiRuntime;
+  async function investigate(count: number, revokeAtAssessment = false) {
+    let validations = 0;
+    let revoked = false;
+    const sources = Array.from({ length: count }, (_, index) => ({
+      sourceId: String(index), title: 'Reviewed note', text: quote, revision: '1', proofDigest: String(index), sourceKind: 'note' as const,
+    }));
+    const runtime = revokeAtAssessment ? { ...api, async structuredProposal(input: Parameters<VelaApiRuntime['structuredProposal']>[0]) {
+      const result = await api.structuredProposal(input, new AbortController().signal);
+      if ((input.payload as { stage: string }).stage === 'assess') revoked = true;
+      return result;
+    } } as unknown as VelaApiRuntime : api;
+    const run = investigateReviewedVelaEvidence(runtime, request, sources, 1, 'synthetic-model', () => {
+      validations++;
+      if (revoked) throw new Error('review revoked');
+    }, new AbortController().signal);
+    if (revokeAtAssessment) await assert.rejects(run, /review revoked/);
+    else assert.equal((await run).coverage[0].status, 'supported');
+    return validations;
+  }
+  assert.equal(await investigate(4), await investigate(1));
+  await investigate(4, true);
+});
+
+test('a refreshable assessment receipt survives a cold interpretation route', async () => {
+  const { semanticHistoryFormats } = await import('../../vela-core/src/semantic-history.mts');
+  const receipt = { model: 'synthetic-model' };
+  const probes: string[] = [];
+  let catalogFresh = false;
+  let interpretationQualified = false;
+  const isAssessment = (schema: unknown) => schema === semanticHistoryFormats.assess.schema;
+  const api = {
+    qualifiedStructuredRoute(_version: number, _models: string[], schema: unknown) {
+      return catalogFresh && (isAssessment(schema) || interpretationQualified) ? receipt : undefined;
+    },
+    async resolveQualifiedStructuredRoute(_version: number, _models: string[], schema: unknown) {
+      if (!isAssessment(schema) && !interpretationQualified) return undefined;
+      catalogFresh = true;
+      return receipt;
+    },
+    async qualifyStructuredRoute(input: any) {
+      probes.push(input.payload.stage);
+      input.validate();
+      interpretationQualified = true;
+      return receipt;
+    },
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal(input: any) {
+      input.validate();
+      return { version: 2, objective: 'No evidence needed', clarification: '', needs: [],
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] } };
+    },
+  } as unknown as VelaApiRuntime;
+  await investigateReviewedVelaEvidence(api, 'Synthetic request', [], 1, 'synthetic-model', () => {}, new AbortController().signal);
+  assert.deepEqual(probes, ['interpret']);
+});
+
+test('both qualification lookups start before either lookup must finish', async () => {
+  const started: unknown[] = [];
+  const receipt = { model: 'synthetic-model' };
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const api = {
+    qualifiedStructuredRoute: () => undefined,
+    async resolveQualifiedStructuredRoute(_version: number, _models: string[], schema: unknown) {
+      started.push(schema);
+      await gate;
+      return receipt;
+    },
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal() {
+      return { version: 2, objective: 'No evidence needed', clarification: '', needs: [],
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] } };
+    },
+  } as unknown as VelaApiRuntime;
+  const result = investigateReviewedVelaEvidence(api, 'Synthetic request', [], 1, receipt.model, () => {}, new AbortController().signal);
+  try {
+    assert.equal(started.length, 2);
+    assert.notEqual(started[0], started[1]);
+  } finally {
+    release();
+    await result;
+  }
+});
+
+test('a citation uses the admitted revision when a discovery record has the same source ID', async () => {
+  const receipt = { model: 'synthetic-model' };
+  const quote = 'Inspection is Tuesday.';
+  const selected = { sourceId: 'inspection', title: 'Selected inspection', text: quote,
+    revision: '2', proofDigest: 'reviewed-selected', sourceKind: 'note' as const };
+  const discovery = { ...selected, title: 'Discovery inspection', text: 'The draft said: ' + quote,
+    revision: '1', proofDigest: 'reviewed-discovery' };
+  const api = {
+    qualifiedStructuredRoute: () => receipt,
+    resolveQualifiedStructuredRoute: async () => receipt,
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal(input: any) {
+      input.validate();
+      if (input.payload.stage === 'interpret') return { version: 2, objective: 'Find the date', clarification: '',
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+        needs: [{ key: 'date', question: 'Which day?', query: 'inspection' }] };
+      assert.equal(input.payload.excerpts.length, 1);
+      assert.equal(input.payload.excerpts[0].text, quote);
+      return { version: 3, clarification: '', assessment: [{ key: 'date', status: 'supported', query: '',
+        passages: [{ source: 'e1', quote }] }] };
+    },
+  } as unknown as VelaApiRuntime;
+  const result = await investigateReviewedVelaEvidence(api, 'When is the inspection?', [selected], 1, receipt.model, () => {},
+    new AbortController().signal, undefined, { sources: [discovery], partial: false });
+  assert.deepEqual(result.coverage[0].passages, [{ sourceId: selected.sourceId, title: selected.title, quote }]);
+});
+
+test('reviewed discovery resolves an exact source ID even when only a distractor mentions it', async () => {
+  const receipt = { model: 'synthetic-model' };
+  const sourceId = 'inspection-record-481';
+  const quote = 'The north gate opens at noon.';
+  const sources = [
+    { sourceId: 'distractor', title: 'Archived draft', text: 'See ' + sourceId + ' for the current record.' },
+    { sourceId, title: 'Access schedule', text: quote },
+  ].map(source => ({ ...source, revision: '1', proofDigest: source.sourceId, sourceKind: 'note' as const }));
+  const api = {
+    qualifiedStructuredRoute: () => receipt,
+    resolveQualifiedStructuredRoute: async () => receipt,
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal(input: any) {
+      input.validate();
+      if (input.payload.stage === 'interpret') return { version: 2, objective: 'Find the schedule', clarification: '',
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+        needs: [{ key: 'schedule', question: 'When does the gate open?', query: sourceId }] };
+      assert.equal(input.payload.round, 1);
+      assert.equal(input.payload.excerpts[0].text, quote);
+      return { version: 3, clarification: '', assessment: [{ key: 'schedule', status: 'supported', query: '',
+        passages: [{ source: 'e1', quote }] }] };
+    },
+  } as unknown as VelaApiRuntime;
+  const result = await investigateReviewedVelaEvidence(api, 'Find the gate schedule in ' + sourceId, [], 1, receipt.model, () => {},
+    new AbortController().signal, undefined, { sources, partial: false });
+  assert.equal(result.state, 'assessed');
+  assert.equal(result.coverage[0].passages[0].sourceId, sourceId);
+});
+
+test('reviewed discovery checks revocation after catalog refresh and before touching source content', async () => {
+  let revoked = false;
+  let reads = 0;
+  const source = { sourceId: 'note', revision: '1', proofDigest: 'note', sourceKind: 'note' as const,
+    title: 'Reviewed note', get text() { reads++; return 'Reviewed content'; } };
+  const api = {
+    qualifiedStructuredRoute: () => undefined,
+    async resolveQualifiedStructuredRoute() {
+      revoked = true;
+      return { model: 'synthetic-model' };
+    },
+    structuredProposal: () => assert.fail('revoked review must stop before interpretation'),
+  } as unknown as VelaApiRuntime;
+  await assert.rejects(investigateReviewedVelaEvidence(api, 'Find the note', [], 1, 'synthetic-model', () => {
+    if (revoked) throw new Error('review revoked');
+  }, new AbortController().signal, undefined, { sources: [source], partial: false }), /review revoked/);
+  assert.equal(reads, 0);
+});
