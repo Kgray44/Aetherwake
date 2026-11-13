@@ -244,11 +244,32 @@ export class PersonalContextService {
     return { ...fields, id: previous?.id ?? randomUUID(), version: previous ? previous.version + 1 : 1, state: 'active', createdAt: previous?.createdAt ?? now, updatedAt: now, reviewedAt: now, reviewedBy: this.identity().userId, provenance, supersededBy: null };
   }
   reviewFact(input: FactDraft): ReviewedFact { draft(input); return this.tx(() => { const value = this.reviewed(input); this.put('fact', value, value.scope, value.state, 0); return value; }); }
+  private activeFact(id: string, expectedVersion: number): ReviewedFact {
+    const value = this.readable<ReviewedFact>(this.required(id, 'fact', expectedVersion));
+    check(value.state === 'active', 'personal_fact_inactive');
+    return value;
+  }
   editFact(input: { id: string; expectedVersion: number; replacement: FactDraft }): ReviewedFact {
-    draft(input.replacement); return this.tx(() => { const head = this.required(input.id, 'fact', input.expectedVersion), old = this.readable<ReviewedFact>(head), value = this.reviewed(input.replacement, old); this.put('fact', value, value.scope, value.state, old.version); return value; });
+    draft(input.replacement);
+    return this.tx(() => {
+      const old = this.activeFact(input.id, input.expectedVersion);
+      const value = this.reviewed(input.replacement, old);
+      this.put('fact', value, value.scope, value.state, old.version);
+      return value;
+    });
   }
   correctFact(input: { id: string; expectedVersion: number; replacement: FactDraft }): { previous: ReviewedFact; replacement: ReviewedFact } {
-    draft(input.replacement); return this.tx(() => { const head = this.required(input.id, 'fact', input.expectedVersion), old = this.readable<ReviewedFact>(head); this.requireCurrentConversationSource(old); this.authorize('fact.review', old.scope, this.ref(head)); const replacement = this.reviewed(input.replacement), previous: ReviewedFact = { ...old, version: old.version + 1, state: 'superseded', supersededBy: replacement.id, updatedAt: this.now() }; this.put('fact', replacement, replacement.scope, replacement.state, 0); this.put('fact', previous, previous.scope, previous.state, old.version); return { previous, replacement }; });
+    draft(input.replacement);
+    return this.tx(() => {
+      const old = this.activeFact(input.id, input.expectedVersion);
+      this.requireCurrentConversationSource(old);
+      this.authorize('fact.review', old.scope, { id: old.id, version: old.version, kind: 'fact', scope: old.scope });
+      const replacement = this.reviewed(input.replacement);
+      const previous: ReviewedFact = { ...old, version: old.version + 1, state: 'superseded', supersededBy: replacement.id, updatedAt: this.now() };
+      this.put('fact', replacement, replacement.scope, replacement.state, 0);
+      this.put('fact', previous, previous.scope, previous.state, old.version);
+      return { previous, replacement };
+    });
   }
   revoke(input: { id: string; expectedVersion: number }): RecordRef {
     return this.tx(() => { const head = this.head(input.id); check(head && head.kind !== 'policy' && head.version === input.expectedVersion, 'stale_personal_context_version'); this.authorize('record.revoke', head.scope, this.ref(head)); const old = this.decode<OriginalImport | ReviewedFact>(head), value = { ...old, version: old.version + 1, state: 'revoked' as const, updatedAt: this.now() }; this.put(head.kind, value, value.scope, value.state, old.version); return { ...this.ref(head), version: value.version }; });
