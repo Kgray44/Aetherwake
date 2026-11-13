@@ -124,12 +124,12 @@ export class ConversationGraph {
   }
   private conversation(id: string): Conversation {
     const value = this.conversationsById.get(id);
-    assert(value, 'conversation missing: ' + id);
+    if (!value) throw new Error('conversation missing: ' + id);
     return value;
   }
   private message(id: string): Message {
     const value = this.messagesById.get(id);
-    assert(value, 'message missing: ' + id);
+    if (!value) throw new Error('message missing: ' + id);
     return value;
   }
   private once(key: string | undefined): string | undefined {
@@ -204,17 +204,31 @@ export class ConversationGraph {
     return !!message && message.conversationId === conversationId && this.conversationsById.get(conversationId)?.ownMessageIds[message.sequence - 1] === messageId;
   }
   private visibleMessageRecords(conversationId:string,budget?:{remaining:number}):Message[] {
-    const c = this.conversation(conversationId);
-    if(budget){const count=1+c.ownMessageIds.length;if(count>budget.remaining)throw new MetadataScanLimit();budget.remaining-=count;}
-    const edge = this.edgesByChild.get(c.id);
-    let inherited: Message[] = [];
-    if (edge) {
-      const parent = this.visibleMessageRecords(edge.parentId,budget);
-      const index = parent.findIndex(m => m.id === edge.sourceMessageId);
-      assert(index >= 0, 'fork point absent');
-      inherited = parent.slice(0, index + 1);
+    const lineage: Conversation[] = [];
+    for (let c = this.conversation(conversationId); ; ) {
+      if (budget) {
+        const count = 1 + c.ownMessageIds.length;
+        if (count > budget.remaining) throw new MetadataScanLimit();
+        budget.remaining -= count;
+      }
+      lineage.push(c);
+      const edge = this.edgesByChild.get(c.id);
+      if (!edge) break;
+      c = this.conversation(edge.parentId);
     }
-    return [...inherited, ...c.ownMessageIds.map(id => this.message(id))];
+
+    // Reuse one array as each fork trims the parent view to its anchor.
+    const records: Message[] = [];
+    for (const c of lineage.reverse()) {
+      const edge = this.edgesByChild.get(c.id);
+      if (edge) {
+        const index = records.findIndex(message => message.id === edge.sourceMessageId);
+        assert(index >= 0, 'fork point absent');
+        records.length = index + 1;
+      }
+      for (const id of c.ownMessageIds) records.push(this.message(id));
+    }
+    return records;
   }
   visibleMessages(conversationId: string): Message[] {return this.visibleMessageRecords(conversationId).map(copy);}
   pageVisibleMessages(
