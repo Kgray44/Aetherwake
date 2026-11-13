@@ -92,6 +92,13 @@ test('a captured chat reply retains the edited note, workspace placement and sav
   assert.deepEqual(desktop.resources.filter(resource=>resource.kind==='note').map(resource=>resource.id),[receipt.noteId]);
   assert.deepEqual(desktop.blocks.filter(block=>block.resource_id===receipt.noteId).map(block=>[block.id,block.workspace_id]),
     [[placement.placementId,workspaceId]]);
+  f.owner.atomic(() => f.owner.graph.markUnavailable(reply.id));
+  await f.reopen();
+  const results = await f.core.command('conversation', { name: 'search', input: {
+    text: reply.content, searchMode: 'chat-history',
+  } }) as { total: number };
+  assert.equal(results.total, 0);
+  await assert.rejects(capture(input), /source_unavailable/);
  } finally {await f.close();}
 });
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}

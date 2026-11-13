@@ -6905,8 +6905,7 @@ export class BackendCore {
                 const row = this.db.prepare("SELECT project_id FROM resources WHERE id=? AND state='active'").get(id);
                 return row ? { graphId, projectId: row.project_id === null ? null : String(row.project_id) } : null;
               },
-              readOwnMessage: (graphId, sourceId) =>
-                this.state.graph.messages.find(message => message.id === sourceId && message.conversationId === graphId) ?? null,
+              readOwnMessage: (graphId, sourceId) => this.graph.readOwnMessage(graphId, sourceId),
             }, resourceId, messageId),
             createNote: ({ title, content, projectId }) => this.kernel.createNote(title, content, projectId).id,
           }) as any;
