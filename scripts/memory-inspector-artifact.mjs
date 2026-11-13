@@ -11,7 +11,7 @@ const { paths } = artifact;
 // exact source inventory and selected Node binary, as for the review build.
 export async function planMemoryInspectorArtifact({ sourceRoot, tracked, rendererDirectory, nodePath }) {
   const closure = await nodeClosure(sourceRoot, tracked, [
-    paths.adapter, paths.startup, paths.preload, paths.host, paths.worker, paths.protector, paths.wire,
+    paths.executable, paths.adapter, paths.startup, paths.preload, paths.host, paths.worker, paths.protector, paths.wire,
   ]);
   if (closure.excludedVerificationImports.length) throw Error("memory_fixture_unbound_runtime_import");
   const files = [

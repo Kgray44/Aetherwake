@@ -7,6 +7,7 @@ const paths = Object.freeze({
   renderer: "renderer/memory-inspector.html",
   bundle: "renderer/memory-inspector.js",
   adapter: "prototypes/visual-experience/cinematic-v3/native/memory-inspector-electron-adapter.cjs",
+  executable: "prototypes/visual-experience/cinematic-v3/native/memory-inspector-executable.cjs",
   startup: "prototypes/visual-experience/cinematic-v3/native/memory-inspector-fixture-startup.cjs",
   preload: "prototypes/visual-experience/cinematic-v3/native/desktop-preload.cjs",
   host: "prototypes/integrated-backend/src/desktop-host.mts",
@@ -67,6 +68,7 @@ function resolveMemoryInspectorArtifact({ artifactPath, artifactSha256, profileR
   if (inventory.size) invalid();
   return {
     rendererURL: pathToFileURL(resolve(root, paths.renderer)).href,
+    entryPath: resolve(root, paths.executable),
     preloadPath: resolve(root, paths.preload),
     hostPath: resolve(root, paths.host),
     nodePath: resolve(root, paths.node),
