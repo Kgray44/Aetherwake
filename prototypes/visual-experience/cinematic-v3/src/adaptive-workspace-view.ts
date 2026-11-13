@@ -5,11 +5,13 @@ import { mountResourcePolicy, type ResourcePolicyPort } from './resource-policy-
 import type { MissionProjection } from '../../../integrated-backend/src/mission-contracts.mts';
 
 /** Accessible read-only inspection inside the existing spatial workroom. No camera or task ownership. */
-export function mountIntelligenceInspection(root: HTMLElement, viewId: string, readProfile?: (id: string) => Promise<MissionExecutionProfile | null>, resourcePolicy?: ResourcePolicyPort) {
+export function mountIntelligenceInspection(root: HTMLElement, viewId: string, readProfile?: (id: string) => Promise<MissionExecutionProfile | null>, resourcePolicy?: ResourcePolicyPort, expanded = false) {
   const doc = root.ownerDocument, details = doc.createElement('details'), summary = doc.createElement('summary');
   details.className = 'aw-mission-workroom-controls aw-intelligence-inspection';
   details.dataset.noCardDrag = 'true';
   details.hidden = true;
+  details.open = expanded;
+  summary.hidden = expanded;
   summary.textContent = 'Inspect intelligence · read only';
   const status = doc.createElement('p'), tabs = doc.createElement('div'), panel = doc.createElement('section');
   status.setAttribute('role', 'status');
@@ -63,7 +65,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
     }
   }
   details.onkeydown = event => {
-    if (event.key !== 'Escape' || !details.open) return;
+    if (expanded || event.key !== 'Escape' || !details.open) return;
     event.preventDefault(); event.stopPropagation(); details.open = false; policy?.setVisible(false); summary.focus({ preventScroll: true });
   };
   function invalidate(message: string, close = false) {
@@ -72,8 +74,8 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
     profileEpoch++; requestProfile = undefined; regions = []; status.textContent = message;
     if (close) {
       const ownsFocus = details.contains(doc.activeElement);
-      details.open = false; binding = null; selected = 0;
-      if (ownsFocus && !details.hidden) summary.focus({ preventScroll: true });
+      details.open = expanded; binding = null; selected = 0;
+      if (!expanded && ownsFocus && !details.hidden) summary.focus({ preventScroll: true });
     }
     render();
   }

@@ -1176,3 +1176,17 @@ body.application-ready
   background: #8de0cf;
 }
 .aw-execution-trace [data-critical-path="true"] .aw-execution-trace-track > span { background: #edc598; }
+
+.aw-adaptive-workspace-entry {
+  border: 1px solid #aa98cd60;
+  border-radius: .5rem;
+  padding: .35rem .55rem;
+  color: #f3eafb;
+  background: #402e61;
+  white-space: nowrap;
+  font-size: .75rem;
+}
+.aw-adaptive-workspace > label { display: grid; gap: .4rem; color: #ded0f2; }
+.aw-adaptive-workspace select { width: 100%; }
+.aw-adaptive-workspace > [role="status"] { color: #d9cee8; font-size: .83rem; }
+.aw-adaptive-workspace .aw-intelligence-inspection [role="tabpanel"] { max-block-size: 32rem; }
