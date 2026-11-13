@@ -179,6 +179,27 @@ test("illustration preview discloses a billable image request and managed worksp
   } finally { f.view.setVisible(false); }
 });
 
+test("mixed mission preview discloses the image, specialist calls, and local review together", async () => {
+  const f = await fixture(() => assert.fail("preview must not dispatch"));
+  try {
+    f.view.review({
+      fingerprint: "mixed-plan",
+      plan: initial(),
+      executors: [],
+      localReview: { kind: "node-test", maxFiles: 4 },
+      externalReview: { provider: "Vela dedicated API", calls: 2, model: "gpt-6.1-sol", effort: "high" },
+      artifactReview: {
+        prompt: "Illustrate a sailboat", digest: "artifact-digest", model: "gpt-image-2.6-sunburst", quality: "medium",
+        width: 1024, height: 1024, files: ["illustration.png", "illustration-notes.txt"],
+      },
+    }, () => {});
+    const preview = f.dom.root.textContent;
+    assert.match(preview, /one billable image request/);
+    assert.match(preview, /2 separate requests to Vela dedicated API/);
+    assert.match(preview, /tracked Node tests/);
+  } finally { f.view.setVisible(false); }
+});
+
 test("completed host evidence keeps the investigation blocked and offers an attributable partial report", async () => {
   const f=await fixture(async request=>{assert.equal(request.name,'post-report');return {kind:'mission-report',missionId:'mission-a',messageId:'partial-report'};});
   try{
@@ -189,4 +210,57 @@ test("completed host evidence keeps the investigation blocked and offers an attr
     f.control('post-report').fire('click');await until(()=>f.requests.some(request=>request.name==='post-report'));
     assert.equal(f.state.projection.outcome,'blocked');assert.equal(f.requests.some(request=>request.name==='start'),false);
   }finally{f.view.setVisible(false);}
+});
+
+
+const sourceReceiptCandidate = () => ({
+  ...task("cpu", "inspect.backend-source", "Inspect shipped source"), state: "uncertain", maxAttempts: 1,
+  attempts: [{ id: "original-source", backendInspection: { contract: "aerynth.backend-inspection-terminal@1",
+    missionId: "mission-a", taskId: "cpu", attemptId: "original-source" } }],
+});
+
+test("original source receipt offers recovery despite uncertainty and exhausted attempts, without granting execution", () => {
+  const mission = { ...initial(), outcome: "uncertain", disposition: "active" }, worker = sourceReceiptCandidate();
+  assert.equal(missionTaskControls(mission, worker).retry, true);
+  assert.equal(missionTaskControls(mission, worker).reconcile, true);
+  assert.equal(worker.state, "uncertain");
+  assert.equal(worker.attempts.length, 1);
+  assert.equal(missionTaskControls(mission, { ...worker, state: "failed" }).reconcile, true);
+  assert.equal(missionTaskControls({ ...mission, disposition: "cancelled" }, worker).retry, false);
+  assert.equal(missionTaskControls(mission, { ...worker, state: "running" }).retry, false);
+  for (const executor of ["api.specialist", "chatgpt.specialist", "sample.cpu"]) {
+    assert.equal(missionTaskControls(mission, { ...worker, executor }).reconcile, false);
+    assert.equal(missionTaskControls(mission, { ...worker, executor }).retry, false);
+  }
+  for (const field of ["missionId", "taskId", "attemptId", "contract"]) {
+    const invalid = structuredClone(worker);
+    invalid.attempts[0].backendInspection[field] = "unrelated";
+    assert.equal(missionTaskControls(mission, invalid).reconcile, false);
+    assert.equal(missionTaskControls(mission, invalid).retry, false);
+  }
+  const missing = structuredClone(worker); delete missing.attempts[0].backendInspection;
+  assert.equal(missionTaskControls(mission, missing).retry, false);
+});
+
+test("the existing control labels source readback and sends the same backend-validated Retry request", async () => {
+  const f = await fixture(async (request, state) => {
+    assert.equal(request.name, "control");
+    assert.deepEqual(request.input.control, { type: "retry", taskId: "cpu" });
+    state.projection = { ...state.projection, revision: state.projection.revision + 1, outcome: "verified",
+      tasks: [{ ...state.projection.tasks[0], state: "verified" }] };
+    return state.projection;
+  });
+  try {
+    // The shared CPU-only DOM omits this standard browser property; supply it only for this fixture.
+    Object.defineProperty(Object.getPrototypeOf(f.dom.root), "childElementCount", {
+      get() { return this.children.filter(child => child.tagName !== "#TEXT").length; },
+    });
+    f.state.projection = { ...f.state.projection, outcome: "uncertain", disposition: "active", tasks: [sourceReceiptCandidate()] };
+    f.view.observe();
+    await until(() => f.control("cpu-retry")?.textContent === "Recover original result");
+    f.control("cpu-retry").fire("click");
+    await until(() => f.requests.some(request => request.name === "control"));
+    assert.equal(f.requests.filter(request => request.name === "control").length, 1);
+    assert.equal(f.requests.some(request => request.name === "start"), false);
+  } finally { f.view.setVisible(false); }
 });
