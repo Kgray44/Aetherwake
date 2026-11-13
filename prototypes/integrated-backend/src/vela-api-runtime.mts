@@ -30,6 +30,7 @@ export interface VelaApiUsageStatus { enabled: boolean; configurationVersion: nu
 export interface VelaApiRunReceipt extends ApiRunDiagnostics {executionId:string;bodyDigest:string;contextDigest:string;state:TurnResult['outcome']|'dispatching';responseId:string|null;elapsedMs:number|null}
 export type VelaApiLedgerProfile = {profileId:string;configurationVersion:number|null;usage:VelaApiUsageStatus};
 type LedgerExecutionRef = {requestId:string;executionId:string};
+export type VelaEvaluationClaim = {profileId:string;configurationVersion:number;claimToken:string;bindingDigest:string};
 type LedgerReceipt = LedgerExecutionRef & {
   outcome:'completed'|'incomplete'|'failed'|'cancelled-before-dispatch';
   elapsedMs:number|null;totalTokens:number|null;
@@ -85,6 +86,7 @@ export interface VelaApiRun {
   requestId: string; version: number; model: string; prompt: string; instruction?: string; contextDigest: string;
   /** Private evaluation callers require an already qualified catalog throughout. */
   currentCatalogOnly?: true;
+  evaluationClaim?: Readonly<VelaEvaluationClaim>;
   reasoningEffort?: ReasoningEffort;
   missionCognition?: VelaMissionCognitionAttribution;
   catalog?: CapabilityCatalogSnapshot; outputSchema?: ApiJsonSchema;
@@ -137,6 +139,7 @@ export class VelaApiRuntime {
   private readonly options: VelaApiRuntimeOptions;
   private readonly lifetime = new AbortController();
   private readonly running = new Map<string, VelaApiRun['lane']>();
+  private readonly activeEvaluationClaims = new Set<string>();
   private knownCatalog?: { version: number; expiresAt: number; models: string[] };
   private catalogFlight?: { version: number; promise: Promise<string[]> };
   constructor(options: VelaApiRuntimeOptions) { this.options = options; }
@@ -144,6 +147,7 @@ export class VelaApiRuntime {
     check(db.isTransaction, 'api_storage_unavailable');
     db.exec(`CREATE TABLE IF NOT EXISTS vela_api_usage(id INTEGER PRIMARY KEY CHECK(id=1),configuration_version INTEGER NOT NULL,enabled INTEGER NOT NULL CHECK(enabled IN(0,1)),observed_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS vela_api_ledger_identity(id INTEGER PRIMARY KEY CHECK(id=1),profile_id TEXT NOT NULL) STRICT;
+      CREATE TABLE IF NOT EXISTS vela_api_evaluation_claims(claim_token TEXT PRIMARY KEY,configuration_version INTEGER NOT NULL,binding_digest TEXT NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS vela_api_runs(execution_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,configuration_version INTEGER NOT NULL,utc_day TEXT NOT NULL,body_digest TEXT NOT NULL,context_digest TEXT NOT NULL,state TEXT NOT NULL,result_digest TEXT,response_id TEXT,usage_json TEXT,elapsed_ms INTEGER,error_code TEXT,http_diagnostic_json TEXT);
       CREATE INDEX IF NOT EXISTS vela_api_runs_day ON vela_api_runs(utc_day);
       CREATE INDEX IF NOT EXISTS vela_api_runs_request ON vela_api_runs(request_id);
@@ -155,6 +159,8 @@ export class VelaApiRuntime {
     if(!columns.has('http_diagnostic_json'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN http_diagnostic_json TEXT');
     if(!columns.has('cognition_owner'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN cognition_owner TEXT');
     if(!columns.has('cognition_json'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN cognition_json TEXT');
+    if(!columns.has('evaluation_claim'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN evaluation_claim TEXT REFERENCES vela_api_evaluation_claims(claim_token)');
+    db.exec('CREATE INDEX IF NOT EXISTS vela_api_runs_evaluation_claim ON vela_api_runs(evaluation_claim) WHERE evaluation_claim IS NOT NULL');
     db.exec('CREATE INDEX IF NOT EXISTS vela_api_runs_cognition_owner ON vela_api_runs(cognition_owner) WHERE cognition_owner IS NOT NULL');
     const toolColumns=new Set(db.prepare('PRAGMA table_info(vela_api_tool_receipts)').all().map(row=>row.name));
     for(const column of ['workflow_id','continuation_json','continuation_digest','continuation_state'])if(!toolColumns.has(column))db.exec('ALTER TABLE vela_api_tool_receipts ADD COLUMN '+column+' TEXT');
@@ -179,6 +185,39 @@ export class VelaApiRuntime {
       if (typeof row?.profile_id !== 'string' || !/^[0-9a-f-]{36}$/.test(row.profile_id)) return null;
       const usage = this.usageStatus();
       return {profileId:row.profile_id,configurationVersion:usage.configurationVersion,usage};
+    });
+  }
+  /** Trusted host only. Record the attempt before entering provider-capable preflight. */
+  beginEvaluationClaim(claim: Readonly<VelaEvaluationClaim>): void {
+    check(/^[a-f0-9]{64}$/.test(claim.claimToken) && /^[a-f0-9]{64}$/.test(claim.bindingDigest),
+      'vela_evaluation_claim_invalid');
+    this.options.transaction(() => {
+      this.validate(claim.configurationVersion);
+      const db = this.options.db;
+      check(db.prepare('SELECT profile_id FROM vela_api_ledger_identity WHERE id=1').get()?.profile_id === claim.profileId,
+        'vela_evaluation_profile_mismatch');
+      const written = db.prepare('INSERT OR IGNORE INTO vela_api_evaluation_claims VALUES(?,?,?)')
+        .run(claim.claimToken,claim.configurationVersion,claim.bindingDigest);
+      check(written.changes === 1,'vela_evaluation_claim_exists');
+    });
+    this.activeEvaluationClaims.add(claim.claimToken);
+  }
+  endEvaluationClaim(claim: Readonly<VelaEvaluationClaim>): void {
+    if (this.hasEvaluationClaim(claim)) this.activeEvaluationClaims.delete(claim.claimToken);
+  }
+  private hasEvaluationClaim(claim: Readonly<VelaEvaluationClaim>): boolean {
+    return !!this.options.db.prepare(`SELECT 1 FROM vela_api_evaluation_claims c, vela_api_ledger_identity p
+      WHERE p.id=1 AND p.profile_id=? AND c.claim_token=? AND c.configuration_version=? AND c.binding_digest=?`)
+      .get(claim.profileId,claim.claimToken,claim.configurationVersion,claim.bindingDigest);
+  }
+  /** Admitted stages only. A partial list never proves completion or non-dispatch. */
+  readEvaluationAdmissions(claim: Readonly<VelaEvaluationClaim>): LedgerExecutionRef[] | null {
+    return this.options.transaction(() => {
+      if (!this.hasEvaluationClaim(claim)) return null;
+      const rows = this.options.db.prepare(`SELECT request_id,execution_id FROM vela_api_runs
+        WHERE evaluation_claim=? AND configuration_version=? ORDER BY rowid LIMIT 13`)
+        .all(claim.claimToken,claim.configurationVersion);
+      return rows.length <= 12 ? rows.map(row=>({requestId:String(row.request_id),executionId:String(row.execution_id)})) : null;
     });
   }
   /** The host must supply the complete, canonically bound execution set. Terminal
@@ -350,6 +389,11 @@ export class VelaApiRuntime {
     check(row&&typeof row.continuation_json==='string'&&row.continuation_digest===ref.digest&&digest(row.continuation_json)===ref.digest,'vela_tool_continuation_replayed');const value=parseVelaToolJson(row.continuation_json,VELA_TOOL_LIMITS.continuationBytes) as unknown as VelaApiToolContinuation;check(value.contract==='aerynth.vela.tool-continuation@1'&&value.workflowId===workflowId,'vela_tool_continuation_invalid');return value;
   }
   async run(input: VelaApiRun, signal: AbortSignal):Promise<VelaApiRunResult> {
+    const evaluationClaim = input.evaluationClaim && Object.freeze({...input.evaluationClaim});
+    if (evaluationClaim) check(input.currentCatalogOnly && evaluationClaim.configurationVersion === input.version &&
+      this.activeEvaluationClaims.has(evaluationClaim.claimToken) &&
+      !input.tools && !input.catalog && !input.weatherTool && !input.resume && this.hasEvaluationClaim(evaluationClaim),
+      'vela_evaluation_claim_invalid');
     check(!input.missionCognition || input.outputSchema && !input.tools && !input.weatherTool, 'vela_mission_cognition_requires_structured_output');
     const attribution = input.missionCognition && structuredClone(input.missionCognition);
     const owner = attribution?.owner;
@@ -468,10 +512,19 @@ export class VelaApiRuntime {
               try {
                 afterCommit = commitExecution(() => {
                   fence(); check(this.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay, 'vela_api_daily_limit_reached');
+                  if(evaluationClaim){
+                    check(this.activeEvaluationClaims.has(evaluationClaim.claimToken) && this.hasEvaluationClaim(evaluationClaim),
+                      'vela_evaluation_claim_invalid');
+                    check(!this.options.db.prepare(
+                      'SELECT 1 FROM vela_api_runs WHERE evaluation_claim=? AND request_id=?'
+                    ).get(evaluationClaim.claimToken,input.requestId),'vela_evaluation_stage_already_admitted');
+                    check(!this.options.db.prepare('SELECT 1 FROM vela_api_runs WHERE evaluation_claim=? LIMIT 1 OFFSET 11')
+                      .get(evaluationClaim.claimToken),'vela_evaluation_stage_limit');
+                  }
                   if(semantic){check(semantic.budget.providerRequests<semantic.budget.maxProviderRequests,'vela_workflow_budget_exhausted');semantic.budget.providerRequests++;fence();checkpoint('running');}
-                  this.options.db.prepare('INSERT INTO vela_api_runs(execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state,cognition_owner,cognition_json) VALUES(?,?,?,?,?,?,?,?,?)')
+                  this.options.db.prepare('INSERT INTO vela_api_runs(execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state,cognition_owner,cognition_json,evaluation_claim) VALUES(?,?,?,?,?,?,?,?,?,?)')
                     .run(executionId,input.requestId,input.version,new Date().toISOString().slice(0,10),review.bodyDigest,currentContext,'dispatching',
-                      cognitionOwner, cognition ? JSON.stringify(cognition) : null);
+                      cognitionOwner, cognition ? JSON.stringify(cognition) : null,evaluationClaim?.claimToken??null);
                   return input.stage ? input.stage(executionId, review) : this.options.observe?.stage(executionId, input.requestId, review);
                 });
               } catch (error) {
@@ -659,6 +712,7 @@ export class VelaApiRuntime {
 
   async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;
     currentCatalogOnly?: true;
+    evaluationClaim?: Readonly<VelaEvaluationClaim>;
     bufferedText?: true;
     missionCognition?: VelaMissionCognitionAttribution;
     /** Native binding for a reviewed cognitive payload and its current source provenance. */
@@ -679,6 +733,7 @@ export class VelaApiRuntime {
     const reasoningEffort = input.reasoningEffort ?? (binding ? undefined : 'low');
     const { result } = await this.run({ requestId: input.requestId, version, model, prompt,
       currentCatalogOnly: input.currentCatalogOnly,
+      evaluationClaim: input.evaluationClaim,
       instruction: input.instruction, ...(reasoningEffort ? { reasoningEffort } : {}),
       contextDigest: binding?.contextDigest ?? digest(prompt), ...(binding ? { oneUse: true as const } : {}),
       missionCognition: input.missionCognition, bufferedText: input.bufferedText,

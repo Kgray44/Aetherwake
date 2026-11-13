@@ -198,6 +198,41 @@ test('CIE dispatch refuses a catalog that expired after preflight without refres
   } finally {await f.close();}
 });
 
+test('CIE claim binds admitted stages atomically and survives restart without permitting replay', async () => {
+  const f=fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const runtime=()=> (f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+    const claim={profileId:runtime().readLedgerProfile()!.profileId,configurationVersion:1,
+      claimToken:'a'.repeat(64),bindingDigest:'b'.repeat(64)};
+    runtime().beginEvaluationClaim(claim);
+    assert.deepEqual(runtime().readEvaluationAdmissions(claim),[]);
+    assert.throws(()=>runtime().beginEvaluationClaim(claim),/vela_evaluation_claim_exists/);
+    await runtime().models(1);
+    const input={requestId:'synthetic-claim-stage',version:1,model:'gpt-6-luna',prompt:'Synthetic stage',
+      contextDigest:'c'.repeat(64),currentCatalogOnly:true as const,evaluationClaim:claim,validate(){}};
+    const signal=new AbortController().signal;
+    const rollback=await runtime().run({...input,stage(){throw Error('synthetic stage transaction failure');}},signal);
+    assert.equal(rollback.result.dispatched,false);
+    assert.deepEqual(runtime().readEvaluationAdmissions(claim),[]);
+    f.replies.push(()=>response('Synthetic stage answer.'));
+    const admitted=await runtime().run(input,signal);
+    assert.equal(admitted.result.outcome,'completed');
+    const expected=[{requestId:input.requestId,executionId:admitted.executionId}];
+    assert.deepEqual(runtime().readEvaluationAdmissions(claim),expected);
+    assert.equal(runtime().readEvaluationAdmissions({...claim,bindingDigest:'d'.repeat(64)}),null);
+    const duplicate=await runtime().run(input,signal);
+    assert.equal(duplicate.result.dispatched,false);
+    await f.reopen();
+    assert.deepEqual(runtime().readEvaluationAdmissions(claim),expected);
+    assert.equal(runtime().readLedgerReceipts({...claim,expected}).state,'terminal-receipts');
+    await assert.rejects(runtime().run({...input,requestId:'synthetic-new-stage-after-restart'},signal),/vela_evaluation_claim_invalid/);
+    assert.equal(f.requests.length,1);
+    assert.equal(runtime().readLedgerProfile()?.usage.usedToday,1);
+  } finally {await f.close();}
+});
+
 const weatherQuery:WeatherQuery={startDate:null,endDate:null,period:'tomorrow',metrics:['temperature','humidity'],aggregation:'range'};
 const weatherCall=(query:unknown=weatherQuery,id='resp-weather',callId='call-weather')=>response('',id,[{type:'function_call',id:'fc-'+callId,call_id:callId,name:WEATHER_TOOL_NAME,arguments:JSON.stringify(query),status:'completed'}] as any);
 const unavailableWeather=()=>readWeatherData(weatherQuery,new AbortController().signal,{authorize(){throw Error('location_os_denied');},locate:async()=>{throw Error('unexpected_location');},fetch:async()=>{throw Error('unexpected_weather_network');}});
