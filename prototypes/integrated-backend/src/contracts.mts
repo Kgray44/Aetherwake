@@ -322,6 +322,8 @@ export interface CommandMap {
   missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true } |
     import('./resource-signals.mts').ResourceSignal; output: null };
   /** Owned desktop command, excluded from renderer and model routes. */
+  aepExperimentNative: { input: import('./aep-native-host.mts').AepNativeRequest;
+    output: Awaited<ReturnType<ReturnType<typeof import('./aep-native-host.mts').createAepNativeHost>['command']>> };
   resourcePolicyNative: { input: import('./resource-policy.mts').ResourcePolicyNativeRequest;
     output: import('./resource-policy.mts').ResourcePolicyNativeView };
   /** Fixed GPU diagnostic, accessible only through the native desktop review. */
