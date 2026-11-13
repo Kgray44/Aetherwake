@@ -111,6 +111,12 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     velaRecall.approve(velaRecall.promptDigest);
     assert.doesNotThrow(() => velaRecall.validate(velaRecall.prompt));
     assert.throws(() => velaRecall.validate(velaRecall.prompt + ' altered'), /personal_memory_body_changed/);
+    const followup = { ...velaInput, requestId: 'anchored-vela-recall', intent: 'What did we settle on?' };
+    assert.equal(await review.prepareVelaRecall(followup), null);
+    const anchored = await review.prepareVelaRecall({ ...followup,
+      sourceAnchors: [{ kind: 'conversation-message', conversationId: input.conversationId, messageId: input.messageId }] });
+    assert.ok(anchored);
+    assert.match(anchored.prompt, /synthetic relay/);
     await assert.rejects(review.prepareVelaRecall({ ...velaInput, projectId: 'foreign-project' }), /canonical_scope_unavailable/);
     activeVelaProject = null;
     assert.throws(() => velaRecall.validate(velaRecall.prompt), /stale_personal_context/);
