@@ -407,6 +407,7 @@ export class VelaService {
       return structuredClone({ id: r.id, conversationId: r.conversationId, state: r.state, providerId: r.providerId,
         ...(r.handoff?.taskId ? { taskId: r.handoff.taskId } : {}),
         ...(r.origin ? { origin: r.origin } : {}), ...(r.inputMessageId ? { inputMessageId: r.inputMessageId } : {}), ...(r.inputContentDigest ? { inputContentDigest: r.inputContentDigest } : {}),
+        ...(r.reviewedMemory ? { reviewedMemory: true as const } : {}),
         ...(r.response ? { response: r.response } : {}), ...(r.provenance ? { provenance: r.provenance } : {}),...(r.nativeSourceObservation?{nativeSourceObservation:r.nativeSourceObservation}:{}), sourcePolicyVersion: r.context.policyVersion, sourceDependencies });
     });
   }
@@ -791,6 +792,7 @@ export class VelaService {
       const r: VelaRequest = { id: requestId, conversationId, intent: input.intent,
         state: 'planning', createdAt: this.now(), updatedAt: this.now(), providerId: planner?.providerId ?? null,
         context: storedContext, origin: this.historyOrigin(scope), inputContentDigest: historyDigest(input.intent),
+        ...(frozen?.requestId ? { reviewedMemory: true as const } : {}),
         ...(operations ? { operationContext: { contract: operations.contract, digest: operations.digest,
           receiptIds: operations.operations.map(operation => operation.receiptId) } } : {}),
         ...(routed ? structuredClone(routed) : {}),

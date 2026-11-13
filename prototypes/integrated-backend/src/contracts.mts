@@ -116,6 +116,7 @@ export interface Execution extends PublicConversationExecution {
   velaAdmission?: { projectId: string | null; utcDay: string };
   connectionVersion?:number;inputMessageId?:string;outputMessageId?:string;
   requestedModel?:string;requestBodyDigest?:string;contextDigest?:string;instructionVersion?:string;
+  reviewedMemory?: true;
   requestedReasoningEffort?:TurnInput['reasoningEffort'];
   cancellation?:{requested:boolean;serverConfirmed:false};
   /** Fixed bodyless transport facts, separate from provider completion. */

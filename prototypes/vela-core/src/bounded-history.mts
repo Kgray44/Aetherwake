@@ -9,6 +9,7 @@ export type { HistoryOrigin, HistoryResourceDependency, HistoryMessageDependency
 export const HISTORY_LIMITS = Object.freeze({ maxMessages: 4, maxEncodedBytes: 4096, lookbackMessages: 12, maxDependencies: 64, maxValidationBytes: 131072 });
 /** Metadata projection of an actual persisted request; no history/source content is copied into this projection. */
 export interface HistoryRequestRecord extends Pick<VelaRequest, 'id' | 'conversationId' | 'state' | 'providerId'> {
+  reviewedMemory?: true;
   taskId?: string;
   origin?: HistoryOrigin; inputMessageId?: string; inputContentDigest?: string;
   response?: { kind: ProviderReplyKind; messageId: string; contentDigest?: string };
@@ -137,6 +138,7 @@ function containsDependency(actual: HistoryDependency, expected: HistoryDependen
 const nativeObservation=(request:HistoryRequestRecord)=>request.providerId===null&&request.nativeSourceObservation?.kind==='folder-metadata';
 function proveRequest(request: HistoryRequestRecord | null, id: string, origin: HistoryOrigin, conversationId: string, state: 'responded' | 'planning' = 'responded'): HistoryRequestRecord {
   requireValue(request && request.id === id, 'unproven-request'); requireOrigin(request.origin, origin);
+  requireValue(state !== 'responded' || !request.reviewedMemory, 'non-conversational');
   requireValue(request.conversationId === conversationId && request.state === state && (identifier(request.providerId)||state==='responded'&&nativeObservation(request)) && identifier(request.inputMessageId) && hash(request.inputContentDigest) && request.provenance?.schemaVersion === 1 && request.sourcePolicyVersion === request.origin!.policyVersion, 'unproven-request');
   if(nativeObservation(request)){const observed=request.nativeSourceObservation!;requireValue(identifier(observed.resourceId)&&integer(observed.version)&&hash(observed.bindingDigest)&&hash(observed.sourceRevision)&&Number.isFinite(Date.parse(observed.observedAt))&&request.sourceDependencies.some(dep=>dep.kind==='resource'&&dep.ref.id===observed.resourceId&&dep.ref.version===observed.version&&dep.ref.resourceKind==='folder'),'unproven-request');}
   if (state === 'responded') requireValue(request.response && identifier(request.response.messageId) && hash(request.response.contentDigest) && ['answer', 'clarification', 'inability'].includes(request.response.kind), 'unproven-request');

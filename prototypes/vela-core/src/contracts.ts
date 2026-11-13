@@ -209,6 +209,7 @@ export interface VelaRequest {
   routingSettings?: Pick<import('./routing-settings.ts').VelaRoutingSettingsView, 'effective' | 'origins'>;
   /** Schema-3 provenance is absent on legacy requests; unavailable origin is never inferred as known-null. */
   origin?: HistoryOrigin; inputMessageId?: string; inputContentDigest?: string; provenance?: HistoryProvenance;
+  reviewedMemory?: true;
   /** References/proofs only; actual history text remains in the canonical conversation. */
   history?: { schemaVersion: 1; fenceDigest: string; historyDigest: string; messages: readonly HistoryMessageDependency[] };
   operationContext?: { contract: 'aerynth.vela-operations@1'; digest: string; receiptIds: string[] };

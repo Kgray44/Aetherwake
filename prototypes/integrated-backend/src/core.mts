@@ -6060,6 +6060,7 @@ export class BackendCore {
       // The clock writes both messages atomically. Keep past device-local turns out of automatic egress.
       if (message.provenance === 'device_clock' || (message.role === 'user' && ownMessages.get(conversation.ownMessageIds[index + 1])?.provenance === 'device_clock')) continue;
       const evidence = this.state.messageEvidence[id];
+      if (evidence && this.state.executions[evidence.executionId]?.reviewedMemory) continue;
       if (evidence?.outputState === 'partial' || unavailable.has(id) || !this.conversationReadAccess(input.resourceId, id)) continue;
       ensure(message.role === 'user' || message.role === 'assistant', 'ordinary_history_role_unsupported');
       const item = { role: message.role, content: message.content };
@@ -6432,6 +6433,7 @@ export class BackendCore {
     const timing = observeConversationProvider('ordinary-adapter-entry', !!this.ordinaryTest, authority?.requestId ?? null, started,
       authority?.preview && { domain: this.missions.fullProfilingClock(), preview: authority.preview });
     const e:Execution={id:p.executionId,resourceId:input.resourceId,providerId:CHATGPT_PLAN_PROVIDER,commandId:input.commandId,state:'dispatching',binding:null,turnId:null,startedAt:now(),endedAt:null,taskVerified:false,connectionVersion:p.connectionVersion,requestedModel:p.model,requestBodyDigest:p.bodyDigest,contextDigest:p.contextDigest,instructionVersion:p.instructionVersion};
+    if (memory) e.reviewedMemory = true;
     if (p.reasoningEffort !== undefined) e.requestedReasoningEffort = p.reasoningEffort;
     const handoff=preview.handoff&&!preview.handoff.continued?this.package(preview.handoff.id):null,controller=new AbortController();
     const cancel = () => controller.abort();

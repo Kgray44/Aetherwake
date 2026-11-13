@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import type { createPersonalMemoryReview } from '../src/personal-memory-review.mts';
 import { BackendCore } from '../src/core.mts';
 import type { NativePersonalMemory } from '../src/personal-memory.mts';
+import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
 
 function memoryOwner(core: BackendCore) {
   return (core as unknown as { personalMemory?: NativePersonalMemory }).personalMemory;
@@ -75,6 +76,77 @@ test('Core native capture persists a canonical user message across a private pro
     assert.equal((await inspection.inspect({ after: null, limit: 8 })).policy.ordinaryEnabled, false);
   } finally {
     await core?.command('close', {});
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Vela prepares reviewed project memory from the real private-profile owner after restart', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aerynth-memory-vela-restart-'));
+  const envelopes = new Map<string, string>();
+  const secrets = {
+    available: async () => true,
+    async seal(value: string) {
+      const wrapped = randomBytes(64);
+      envelopes.set(wrapped.toString('hex'), value);
+      return wrapped;
+    },
+    async open(wrapped: Uint8Array) {
+      const value = envelopes.get(Buffer.from(wrapped).toString('hex'));
+      assert.ok(value);
+      return value;
+    },
+  };
+  const open = () => {
+    const core = new BackendCore({ path: join(root, 'profile.sqlite'), privateRoot: root,
+      provider: 'fixture', contentPolicy: 'local-private' }, undefined, { secrets });
+    const { velaApiRuntime } = core as unknown as { velaApiRuntime: VelaApiRuntime };
+    // Only catalog availability is simulated. Preview uses canonical access and never runs the provider.
+    velaApiRuntime.models = async () => ['gpt-6-luna'];
+    velaApiRuntime.run = async () => { throw Error('unexpected_provider_dispatch'); };
+    return core;
+  };
+  let core = open();
+  try {
+    const project = (await core.command('desktop', { type: 'createProject', title: 'Synthetic memory project' })).projects[0];
+    const workspace = (await core.command('desktop', { type: 'createWorkspace', title: 'Synthetic memory workspace', projectId: project.id })).workspaces[0];
+    const chat = await core.command('createConversation', { title: 'Synthetic source', commandId: 'chat' });
+    await core.command('conversation', { name: 'organize', input: {
+      type: 'associateProject', resourceId: chat.resourceId, projectId: project.id, expectedVersion: 1,
+    } });
+    const detail = await core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as { conversation: { revision: number } };
+    const content = 'The synthetic quartz relay is the approved part.';
+    const message = await core.command('addMessage', { resourceId: chat.resourceId, role: 'user',
+      content, expectedRevision: detail.conversation.revision, commandId: 'message' });
+    const saved = await core.command('personalMemoryCaptureCommitNative', await core.command('personalMemoryCapturePreviewNative', {
+      conversationId: chat.resourceId, messageId: message.id, scope: 'project', category: 'decisions', text: content, keywords: ['quartz'],
+    }));
+    const policy = await core.command('personalMemoryPolicyNative', {});
+    assert.equal(policy.velaEnabled, false);
+    await core.command('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: policy.version });
+    await core.command('velaApiConfigure', { credential: { configurationId: 'vela-primary', apiKey: 'synthetic-restart-credential' }, expectedVersion: null });
+    await core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: true });
+    await core.command('close', {});
+    core = open();
+    const state = await core.command('vela', { name: 'open', input: {} }) as import('../../vela-core/src/contracts.ts').VelaState;
+    assert.equal(state.reviewedMemoryAvailable, true);
+    assert.notEqual(state.conversation?.resourceId, chat.resourceId);
+    await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
+    const input = { intent: 'Which quartz relay should I use?', resourceIds: [], adaptive: true,
+      providerId: 'openai-api-vela', useMemory: true } as const;
+    const recall = () => core.command('velaRequestPreview', { ...input, resourceIds: [] });
+    const preview = await recall();
+    assert.equal(preview.sendDisposition, 'review-required');
+    const binding = { previewId: preview.id, signature: preview.signature };
+    const reviewed = await core.command('velaNativeReview', binding);
+    assert.match(reviewed.prompt, /synthetic quartz relay is the approved part/);
+    assert.match(reviewed.prompt, new RegExp(saved.id));
+    const other = (await core.command('desktop', { type: 'createProject', title: 'Synthetic unrelated project' })).projects.find(item => item.id !== project.id)!;
+    const otherWorkspace = (await core.command('desktop', { type: 'createWorkspace', title: 'Synthetic unrelated workspace', projectId: other.id })).workspaces.find(item => item.id !== workspace.id)!;
+    await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: otherWorkspace.id } });
+    await assert.rejects(core.command('authorizeVelaRequest', { ...binding, reviewDigest: reviewed.reviewDigest }), /stale_vela_preview/);
+    await assert.rejects(recall(), /personal_memory_no_eligible_context/);
+  } finally {
+    await core.command('close', {});
     rmSync(root, { recursive: true, force: true });
   }
 });

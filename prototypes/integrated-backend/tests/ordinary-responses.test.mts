@@ -84,10 +84,13 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     const binding = { previewId: preview.id, fingerprint: preview.fingerprint, commandId: preview.commandId };
     await assert.rejects(f.core.command('authorizeConversationSend', binding), /personal_memory_disclosure_review_required/);
     const approval = await f.core.command('authorizeConversationSend', { ...binding, reviewedBodyDigest: preview.responses.bodyDigest });
-    f.responses.push(() => complete('memory-turn'));
+    f.responses.push(() => complete('memory-turn', 'Synthetic memory-derived reply'));
     assert.equal((await f.core.command('conversationSend', { ...binding, grantId: approval.grantId })).state, 'provider_completed');
     assert.deepEqual(f.requests[0].input, preview.responses.messages);
     const detail = await f.core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as any;
+    const followup = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
+      content: 'Can you explain?', expectedRevision: detail.conversation.revision, commandId: randomUUID() });
+    assert.doesNotMatch(JSON.stringify(followup.responses?.messages), /Synthetic memory-derived reply/);
     const next = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
       content: 'Which quartz part?', expectedRevision: detail.conversation.revision, commandId: randomUUID(), useMemory: true });
     assert(next.responses?.memoryDigest);
@@ -96,6 +99,10 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     sourceAvailable = false;
     await assert.rejects(f.core.command('conversationSend', { ...nextBinding, grantId: nextApproval.grantId }), /personal_memory_no_eligible_context|stale_send_preview/);
     assert.equal(f.requests.length, 1);
+    await f.reopen();
+    const restored = await prepare(f, chat.resourceId, 'Can you explain after restart?');
+    assert.ok(restored.preview.responses);
+    assert.doesNotMatch(JSON.stringify(restored.preview.responses.messages), /Synthetic memory-derived reply/);
   } finally { await f.close(); }
 });
 

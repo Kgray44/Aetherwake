@@ -137,6 +137,10 @@ test('Vela Core binds approved memory to its canonical request and exact transpo
     const result = await f.core.command('vela', { name: 'request', input: { intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId: grant.grantId } }) as VelaRequest;
     assert.equal(result.id, preview.id);
     assert.equal(result.state, 'responded');
+    const followup = await f.core.command('velaRequestPreview', { intent: 'Could you explain that?', resourceIds: [], adaptive: true,
+      providerId: 'openai-api-vela', includeRecentHistory: true });
+    const followupReview = await f.core.command('velaNativeReview', { previewId: followup.id, signature: followup.signature });
+    assert.doesNotMatch(followupReview.prompt, /Synthetic relay answer/);
     const pending = await f.core.command('velaRequestPreview', { intent, resourceIds: [], adaptive: true, providerId: 'openai-api-vela', useMemory: true });
     const pendingBinding = { previewId: pending.id, signature: pending.signature };
     const pendingReview = await f.core.command('velaNativeReview', pendingBinding);
