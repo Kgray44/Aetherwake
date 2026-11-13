@@ -1,6 +1,6 @@
 const {
   app,
-  BrowserWindow,
+  BrowserWindow: ElectronBrowserWindow,
   ipcMain,
   session,
   protocol,
@@ -15,9 +15,9 @@ const {
   screen,
 } = require("electron");
 const { installDesktopTestAdmission, verificationLaunch } = require("./native-test-admission.cjs");
-const checkDesktopTest = verificationLaunch(process.argv)
-  ? installDesktopTestAdmission({ app, BrowserWindow, terminate: stopDesktopTest })
-  : () => {};
+const { check: checkDesktopTest, BrowserWindow } = verificationLaunch(process.argv)
+  ? installDesktopTestAdmission({ app, BrowserWindow: ElectronBrowserWindow, terminate: stopDesktopTest })
+  : { check: () => {}, BrowserWindow: ElectronBrowserWindow };
 const { createMediaPlayback, scheme: mediaScheme } = require("./media-playback.cjs");
 protocol.registerSchemesAsPrivileged([
   { scheme: mediaScheme, privileges: { standard: true, secure: true, stream: true } },
@@ -624,7 +624,7 @@ app.whenReady().then(async () => {
     win.isFocused();
   let nativeReviewBusy=false;
   const nativeReviewGate=async work=>{checkDesktopTest();if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
-  const reviewProvider=args=>nativeReviewGate(()=>showVelaReview(args));
+  const reviewProvider=args=>nativeReviewGate(()=>showVelaReview({ ...args, runtime: args.runtime ?? { BrowserWindow, ipcMain, session } }));
   const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
   if (!verify) {
     const menu = Menu.getApplicationMenu() ?? new Menu();

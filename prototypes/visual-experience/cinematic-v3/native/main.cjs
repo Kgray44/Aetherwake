@@ -1,6 +1,6 @@
 const {
   app,
-  BrowserWindow,
+  BrowserWindow: ElectronBrowserWindow,
   session,
   screen,
   nativeTheme,
@@ -57,9 +57,9 @@ const previewMode = process.argv.includes("--preview");
 const soakMode = process.argv.includes("--soak");
 const recordingTitle = `Aerynth · V3.5 capture · ${Date.now()}`;
 const renderWhileVisible = verifyMode || recordMode || previewMode || soakMode;
-const checkDesktopTest = renderWhileVisible
-  ? installDesktopTestAdmission({ app, BrowserWindow })
-  : () => {};
+const { check: checkDesktopTest, BrowserWindow } = renderWhileVisible
+  ? installDesktopTestAdmission({ app, BrowserWindow: ElectronBrowserWindow })
+  : { check: () => {}, BrowserWindow: ElectronBrowserWindow };
 app.setPath(
   "userData",
   path.join(

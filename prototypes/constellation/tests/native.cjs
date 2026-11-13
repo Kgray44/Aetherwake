@@ -1,7 +1,7 @@
 /** Native integration harness. Runs only the synthetic loopback fixture. */
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow: ElectronBrowserWindow } = require("electron");
 const { installDesktopTestAdmission } = require("../../visual-experience/cinematic-v3/native/native-test-admission.cjs");
-const checkDesktopTest = installDesktopTestAdmission({ app, BrowserWindow });
+const { check: checkDesktopTest, BrowserWindow } = installDesktopTestAdmission({ app, BrowserWindow: ElectronBrowserWindow });
 const { spawn } = require("node:child_process");
 const {
   mkdtempSync,

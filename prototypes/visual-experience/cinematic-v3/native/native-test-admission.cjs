@@ -5,6 +5,8 @@ const { randomUUID } = require("node:crypto");
 const permitName = "permit.json";
 const leaseName = "lease.json";
 const pauseName = "gaming.json";
+const availabilityName = "availability.json";
+const availabilityMs = 120 * 60_000;
 
 function refuse(code) {
   throw Object.assign(new Error(code), { code });
@@ -43,6 +45,7 @@ function createAdmission(directory, now = Date.now) {
     const lease = read(leaseName);
     return {
       gaming: read(pauseName) !== null,
+      confirmedAt: read(availabilityName)?.confirmedAt ?? null,
       permit: permit && { owner: permit.owner, expiresAt: permit.expiresAt, expired: permit.expiresAt <= now() },
       lease: lease && { owner: lease.owner, pid: lease.pid },
     };
@@ -54,21 +57,26 @@ function createAdmission(directory, now = Date.now) {
       refuse("native_test_desktop_owner_or_duration_invalid");
     }
     fs.mkdirSync(directory, { recursive: true });
-    if (read(pauseName)) refuse("native_test_desktop_gaming");
+    const availability = checkAvailability();
     if (read(leaseName)) refuse("native_test_desktop_slot_busy");
-    const permit = { owner, expiresAt: now() + minutes * 60_000, token: randomUUID() };
+    const permit = {
+      owner, token: randomUUID(), availabilityId: availability.id,
+      expiresAt: Math.min(now() + minutes * 60_000, availability.confirmedAt + availabilityMs),
+    };
     create(permitName, permit);
     checkPermit(permit.token);
     return permit;
   }
 
-  function close() {
+  function remove(name) {
     try {
-      fs.unlinkSync(path.join(directory, permitName));
+      fs.unlinkSync(path.join(directory, name));
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
   }
+
+  function close() { remove(permitName); }
 
   function pause() {
     fs.mkdirSync(directory, { recursive: true });
@@ -77,22 +85,40 @@ function createAdmission(directory, now = Date.now) {
     } catch (error) {
       if (error.code !== "native_test_desktop_slot_busy") throw error;
     }
+    remove(availabilityName);
     close();
   }
 
-  function resume() {
-    close();
-    try {
-      fs.unlinkSync(path.join(directory, pauseName));
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
+  function resume(confirmedAt) {
+    const gaming = read(pauseName);
+    if (!Number.isSafeInteger(confirmedAt) || confirmedAt > now() ||
+        confirmedAt + availabilityMs <= now() ||
+        (gaming && (!Number.isSafeInteger(gaming.startedAt) || confirmedAt <= gaming.startedAt))) {
+      refuse("native_test_desktop_confirmation_invalid");
     }
+    fs.mkdirSync(directory, { recursive: true });
+    close();
+    remove(availabilityName);
+    create(availabilityName, { confirmedAt, id: randomUUID() });
+    remove(pauseName);
+  }
+
+  function checkAvailability() {
+    if (read(pauseName)) refuse("native_test_desktop_gaming");
+    const availability = read(availabilityName);
+    if (!availability || typeof availability.id !== "string" ||
+        !Number.isSafeInteger(availability.confirmedAt) || availability.confirmedAt > now() ||
+        availability.confirmedAt + availabilityMs <= now()) {
+      refuse("native_test_desktop_availability_unconfirmed");
+    }
+    return availability;
   }
 
   function checkPermit(token) {
-    if (read(pauseName)) refuse("native_test_desktop_gaming");
+    const availability = checkAvailability();
     const permit = read(permitName);
     if (!permit || typeof token !== "string" || token.length === 0 || permit.token !== token ||
+        permit.availabilityId !== availability.id ||
         !Number.isSafeInteger(permit.expiresAt) || permit.expiresAt <= now()) {
       refuse("native_test_desktop_slot_closed");
     }
@@ -135,7 +161,7 @@ function installDesktopTestAdmission({ app, BrowserWindow, terminate = () => app
   let lease;
   try {
     directory = desktopDirectory();
-    if (!directory) return () => {};
+    if (!directory) return { check: () => {}, BrowserWindow };
     lease = createAdmission(directory).claim(process.env.AERYNTH_NATIVE_TEST_SLOT, process.pid);
   } catch (error) {
     // Throwing from Electron's main module can display its startup error dialog.
@@ -202,7 +228,15 @@ function installDesktopTestAdmission({ app, BrowserWindow, terminate = () => app
     try { check(); } catch { /* Revocation already stopped this verifier. */ }
   }, 200);
   watcher.unref();
-  return check;
+  return {
+    check,
+    BrowserWindow: new Proxy(BrowserWindow, {
+      construct(target, args, newTarget) {
+        check();
+        return Reflect.construct(target, args, newTarget);
+      },
+    }),
+  };
 }
 
 module.exports = { createAdmission, desktopDirectory, installDesktopTestAdmission, verificationLaunch };

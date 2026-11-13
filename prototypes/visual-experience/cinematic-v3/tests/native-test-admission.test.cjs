@@ -12,7 +12,7 @@ function fixture(t) {
   const root = mkdtempSync(path.join(tmpdir(), "aerynth-native-admission-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   let clock = 1000;
-  return { root, admission: createAdmission(root, () => clock), advance: () => { clock += 60_000; } };
+  return { root, admission: createAdmission(root, () => clock), now: () => clock, advance: () => { clock += 60_000; } };
 }
 
 test("native test classification covers expanded, offscreen, catalog and CDP launches", () => {
@@ -29,7 +29,10 @@ test("native test classification covers expanded, offscreen, catalog and CDP lau
 });
 
 test("a permit names one owner, expires, and never silently replaces a lease", t => {
-  const { admission, advance } = fixture(t);
+  const { admission, advance, now } = fixture(t);
+  assert.throws(() => admission.open("mission-9", 1), { code: "native_test_desktop_availability_unconfirmed" });
+  assert.throws(() => admission.resume(), { code: "native_test_desktop_confirmation_invalid" });
+  admission.resume(now());
   assert.throws(() => admission.claim(undefined, 1), { code: "native_test_desktop_slot_closed" });
   const { token } = admission.open("mission-9", 1);
   assert.throws(() => admission.open("mission-10", 1), { code: "native_test_desktop_slot_busy" });
@@ -51,7 +54,8 @@ test("a permit names one owner, expires, and never silently replaces a lease", t
 });
 
 test("gaming revokes a running verifier and prevents opening or reusing a permit", t => {
-  const { admission } = fixture(t);
+  const { admission, now, advance } = fixture(t);
+  admission.resume(now());
   const { token } = admission.open("mission-9", 10);
   const lease = admission.claim(token, 1);
   admission.pause();
@@ -61,16 +65,19 @@ test("gaming revokes a running verifier and prevents opening or reusing a permit
   assert.throws(() => admission.open("mission-10", 1), { code: "native_test_desktop_gaming" });
   assert.throws(() => admission.claim(token, 2), { code: "native_test_desktop_gaming" });
   lease.release();
-  admission.resume();
-  assert.deepEqual(admission.status(), { gaming: false, permit: null, lease: null });
+  assert.throws(() => admission.resume(now()), { code: "native_test_desktop_confirmation_invalid" });
+  advance();
+  admission.resume(now());
+  assert.deepEqual(admission.status(), { gaming: false, confirmedAt: now(), permit: null, lease: null });
   assert.throws(() => admission.claim(token, 2), { code: "native_test_desktop_slot_closed" });
 });
 
 test("unreadable state and abandoned ownership fail closed", t => {
-  const { root, admission } = fixture(t);
+  const { root, admission, now } = fixture(t);
   writeFileSync(path.join(root, "gaming.json"), "null");
   assert.throws(() => admission.open("mission-9", 1), { code: "native_test_desktop_state_unreadable" });
-  admission.resume();
+  rmSync(path.join(root, "gaming.json"));
+  admission.resume(now());
   writeFileSync(path.join(root, "lease.json"), "{}");
   assert.throws(() => admission.open("mission-9", 1), { code: "native_test_desktop_slot_busy" });
 });
@@ -78,6 +85,7 @@ test("unreadable state and abandoned ownership fail closed", t => {
 test("independent processes contending for the same Windows slot produce one winner", async t => {
   const { root } = fixture(t);
   const admission = createAdmission(root);
+  admission.resume(Date.now());
   const { token } = admission.open("mission-9", 1);
   const code = `
     const { createAdmission } = require(process.argv[1]);
@@ -115,14 +123,22 @@ test("Windows denial exits without reaching window code and revocation fences vi
       hide: () => hidden++,
       webContents: { sendInputEvent: () => inputs++ },
     };
-    const check = installDesktopTestAdmission({
-      app, BrowserWindow: { getAllWindows: () => [win] }, terminate: () => terminated++,
+    let created = 0;
+    class FakeWindow {
+      static getAllWindows() { return [win]; }
+      constructor() { created++; }
+    }
+    const { check, BrowserWindow } = installDesktopTestAdmission({
+      app, BrowserWindow: FakeWindow, terminate: () => terminated++,
     });
+    new BrowserWindow();
     app.emit("browser-window-created", {}, win);
     win.show();
     win.webContents.sendInputEvent({});
     console.log("ready");
     process.stdin.once("data", () => {
+      assert.throws(() => new BrowserWindow(), { code: "native_test_desktop_gaming" });
+      assert.equal(created, 1);
       assert.throws(() => win.show(), { code: "native_test_desktop_gaming" });
       assert.throws(() => win.webContents.sendInputEvent({}), { code: "native_test_desktop_gaming" });
       assert.throws(check, { code: "native_test_desktop_gaming" });
@@ -133,7 +149,8 @@ test("Windows denial exits without reaching window code and revocation fences vi
   const env = { ...process.env, LOCALAPPDATA: root, AERYNTH_NATIVE_TEST_SLOT: "" };
   await assert.rejects(promisify(execFile)(process.execPath, ["-e", code, admissionPath], {
     windowsHide: true, env,
-  }), error => error.code === 2 && error.stdout === "" && /slot_closed/.test(error.stderr));
+  }), error => error.code === 2 && error.stdout === "" && /availability_unconfirmed/.test(error.stderr));
+  admission.resume(Date.now());
   const { token } = admission.open("mission-9", 1);
   const child = spawn(process.execPath, ["-e", code, admissionPath], {
     windowsHide: true, env: { ...env, AERYNTH_NATIVE_TEST_SLOT: token },

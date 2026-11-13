@@ -12,13 +12,16 @@ try {
   } else if (action === "close" && owner === undefined) {
     admission.close();
     console.log(JSON.stringify(admission.status()));
-  } else if (["pause", "resume"].includes(action) && owner === undefined) {
-    admission[action]();
+  } else if (action === "pause" && owner === undefined) {
+    admission.pause();
+    console.log(JSON.stringify(admission.status()));
+  } else if (action === "resume" && owner === "--user-confirmed-available" && duration?.endsWith("Z") && rest.length === 0) {
+    admission.resume(Date.parse(duration));
     console.log(JSON.stringify(admission.status()));
   } else if (action === "status" && owner === undefined) {
     console.log(JSON.stringify(admission.status()));
   } else {
-    throw Error("Usage: native-test-slot.cjs open OWNER MINUTES | close | pause | resume | status");
+    throw Error("Usage: native-test-slot.cjs open OWNER MINUTES | close | pause | resume --user-confirmed-available UTC_TIMESTAMP | status");
   }
 } catch (error) {
   console.error(error.code ?? error.message);
