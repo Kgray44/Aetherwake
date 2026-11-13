@@ -1618,8 +1618,13 @@ test('explicit web search sends only the submitted draft and restores verified c
       providerId: 'local', title: 'Synthetic research follow-up', commandId: randomUUID(),
       tokenBudget: 32768, expectedRevision: source.revision,
     });
+    const search = () => f.core.command('conversation', { name: 'search', input: {
+      text: answer, searchMode: 'chat-history',
+    } }) as Promise<import('../../conversation-product/src/contracts.ts').Page<import('../../conversation-product/src/contracts.ts').SearchHit>>;
+    const hit = (await search()).items.find(item => item.resourceId === child.conversation.resourceId && item.messageId === response.id);
+    assert(hit?.messageId);
     const childDetail = await f.core.command('conversation', {
-      name: 'detail', input: { resourceId: child.conversation.resourceId },
+      name: 'detail', input: { resourceId: hit.resourceId, aroundMessageId: hit.messageId, limit: 1 },
     }) as Awaited<ReturnType<typeof detail>>;
     const inherited = childDetail.messages.items.find(message => message.id === response.id);
     assert(inherited?.inherited);
@@ -1631,6 +1636,8 @@ test('explicit web search sends only the submitted draft and restores verified c
     assert.deepEqual(await conversationCommand({ call, openExternal, input: inheritedOpen }), { requested: true });
     assert.deepEqual(launched, [safe.url, safe.url]);
     f.owner.atomic(() => f.owner.graph.markUnavailable(response.id));
+    await f.reopen();
+    assert.equal((await search()).items.some(item => item.messageId === response.id), false);
     await assert.rejects(conversationCommand({ call, openExternal, input: inheritedOpen }), /source_unavailable/);
     assert.deepEqual(launched, [safe.url, safe.url]);
     assert.equal(f.requests.length, 1);
