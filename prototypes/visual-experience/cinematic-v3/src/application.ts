@@ -2513,6 +2513,7 @@ export function installApplication(hooks: Hooks) {
       models: ordinaryModelControls,
       chooseDocument: chooseChatDocument,
       listDocuments: listChatDocuments,
+      openDocument: openChatDocument,
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
@@ -2567,6 +2568,14 @@ export function installApplication(hooks: Hooks) {
           ["pdf", "docx", "text"].includes(resource.media.format)))
       .map(({ id, version, title }) => ({ id, version, title }))
       .sort((left, right) => left.title.localeCompare(right.title));
+  }
+  async function openChatDocument(document: {id: string; version: number}) {
+    await resourceOpener.open({
+      resourceId: document.id,
+      expectedVersion: document.version,
+      preferredPresentation: "direct",
+      origin: { source: "application" },
+    });
   }
   function openVela() {
     if (velaOpen) {
@@ -4382,6 +4391,7 @@ export function installApplication(hooks: Hooks) {
           models: ordinaryModelControls,
           chooseDocument: chooseChatDocument,
           listDocuments: listChatDocuments,
+          openDocument: openChatDocument,
           viewPersistence: chatViewPersistence,
           onProviderChange: async (change) => {
             if (change.mode === "continuation") {

@@ -1476,9 +1476,11 @@ test('saved document picker reuses an exact current resource without importing o
  try {
   const saved = { id: 'file:saved', version: 1, title: 'Saved brief.pdf' };
   let available = [saved];
+  const opened: typeof available = [];
   chat = mountConversationChat(f.view.root, {
    port: f.port, resourceId: f.draft.resourceId, motion: motion.motion, viewId: 'chat:saved-document',
    listDocuments: id => { assert.equal(id, f.draft.resourceId); return available; },
+   openDocument: async document => { opened.push(document); },
    chooseDocument: async () => { throw Error('Saved selection must not use the file picker'); },
   });
   await chat.ready;
@@ -1492,6 +1494,12 @@ test('saved document picker reuses an exact current resource without importing o
   f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').fire('click');
   await chat.flush();
   assert.deepEqual(f.draft.documents, available);
+  const draft = f.draft;
+  const openAttachment = named(f.view.root,'Saved brief.pdf');
+  assert.equal(openAttachment.getAttribute('aria-label'),'Open attachment Saved brief.pdf');
+  openAttachment.fire('click');
+  assert.deepEqual(opened,available);
+  assert.deepEqual(f.draft,draft);
   assert.equal(f.calls.some(call => call.name === 'send'), false);
   picker.fire('click');
   assert.equal(f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').disabled, true);
