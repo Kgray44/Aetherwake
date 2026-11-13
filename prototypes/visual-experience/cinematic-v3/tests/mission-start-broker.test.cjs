@@ -61,6 +61,46 @@ test('Start reviews a preselected project check without reopening the file picke
   assert.deepEqual(starts(f)[0].payload,f.input.input);
 });
 
+function mixedReview() {
+  const f = fixture({ external: true, local: true });
+  f.preview.artifactReview = {
+    prompt: 'Draw a blue square', digest: 'c'.repeat(64), model: 'gpt-image-2.6-sunburst',
+    quality: 'medium', width: 1024, height: 1024, files: ['illustration.png', 'illustration-notes.txt'],
+    rates: { textInput: 5, imageInput: 8, imageOutput: 30 },
+  };
+  return f;
+}
+
+test('a mixed mission requires independent native review of image, specialists and exact local test', async () => {
+  const f = mixedReview();
+  await f.run();
+  assert.deepEqual(f.dialogs.map(dialog => dialog.args[1].title), [
+    'Review illustration mission', 'Review specialist mission', 'Choose tracked Node test files in one Git checkout',
+    'Review read-only project tests',
+  ]);
+  assert.match(f.dialogs[0].args[1].detail, /Draw a blue square/);
+  assert.match(f.dialogs[1].args[1].detail, /Synthetic instructions/);
+  assert.match(f.dialogs[3].args[1].detail, /\["node","--test","test\.mjs"\]/);
+  assert.deepEqual(starts(f), [{ name: 'missionStartReviewed', payload: {
+    ...f.input.input, approvedArtifactDigest: 'c'.repeat(64),
+    approvedProjectCheck: { paths: ['C:\\Synthetic\\test.mjs'], digest: 'b'.repeat(64) },
+  } }]);
+});
+
+test('declining any review in a mixed mission prevents all execution', async () => {
+  for (const declined of [1, 2, 3]) {
+    const f = mixedReview();
+    let reviews = 0;
+    f.onDialog(async type => {
+      if (type === 'message' && ++reviews === declined) f.response(0);
+    });
+    await assert.rejects(f.run(), /mission_review_declined/);
+    assert.equal(reviews, declined);
+    assert.equal(starts(f).length, 0);
+    assert.ok(!f.log.includes('beforeStart'));
+  }
+});
+
 test('upfront owner, focus and visibility guards prevent even preview dispatch',async()=>{
   for(const fault of ['focus','visible','minimized','destroyed','sender','frame','frame-url','document-url']){
     const f=fixture({external:true});if(fault==='focus')f.focus(false);if(fault==='visible')f.visible(false);if(fault==='minimized')f.minimized(true);if(fault==='destroyed')f.alive(false);
