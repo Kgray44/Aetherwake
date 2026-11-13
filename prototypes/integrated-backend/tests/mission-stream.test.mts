@@ -284,15 +284,18 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
         assert.deepEqual(pending(first.id), beforeLoss);
       }
 
-      stage = 'worker termination and restart';
-      await backend.terminate();
+      stage = 'terminate original worker';
+      await trace('worker termination', () => backend.terminate());
+      stage = 'open SQLite and remove publication fault';
       const maintenance = new DatabaseSync(options.path);
       try { maintenance.exec('DROP TRIGGER test_mission_publication_fault'); }
       finally { maintenance.close(); }
+      stage = 'construct replacement worker';
       backend = new Backend(options);
       // The first ordinary request only waits for worker startup. Inspect SQLite
       // before asking either projection to prove recovery happened at startup.
-      await backend.call('providerActivity', {});
+      stage = 'replacement worker startup and first RPC';
+      await trace('providerActivity', () => backend.call('providerActivity', {}));
       stage = 'restored outbox and receipt assertions';
       assert.deepEqual(pending(first.id), { lifecycle: 0, report: 0 });
       const repaired = await stream(first.id);
