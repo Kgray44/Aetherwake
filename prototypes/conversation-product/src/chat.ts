@@ -1,3 +1,4 @@
+import { CONVERSATION_DRAFT_LIMITS } from './contracts.ts';
 import type { ConversationProductPort, ConversationView, ConversationViewPosition, Detail, MessageView } from './contracts.ts';
 import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-session.ts';
@@ -430,7 +431,28 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     decorateConversationDisclosure(actions,summary,'message-actions',panel);
     const action = (label:string, work:()=>void|Promise<void>,identity:ConversationControlIdentity='action') => { const b = el('button',label); b.type='button';decorateConversationControl(b,{identity}); b.addEventListener('click',()=>{if(!b.disabled)Promise.resolve(work()).catch(error=>report(errorText(error)));});panel.append(b);return b; };
     action('Copy',async()=>{await copy(message.content);report('Copied');actions.open=false;},'copy');
-    action('Quote',()=>{session.update(session.snapshot().content+(session.snapshot().content?'\n\n':'')+`> ${message.content.replaceAll('\n','\n> ')}\n`);actions.open=false;textarea.focus();},'quote');
+    action('Quote',()=>{
+      if(disposed||accessRevoked||composing||current?.conversation.state!=='active')return;
+      const draft=session.snapshot();
+      if(draft.phase==='loading'||textarea.value!==draft.content)return;
+      const before=draft.content.slice(0,textarea.selectionStart);
+      const after=draft.content.slice(textarea.selectionEnd);
+      const quoted=message.content.replace(/\r\n?/g,'\n').split('\n').map(line=>'> '+line).join('\n');
+      const prefix=before+(before&&!before.endsWith('\n\n')?(before.endsWith('\n')?'\n':'\n\n'):'')+
+        quoted+(after&&!after.startsWith('\n')?'\n\n':'\n');
+      const content=prefix+after;
+      if(content.length>CONVERSATION_DRAFT_LIMITS.contentUnits||
+          new TextEncoder().encode(content).byteLength>CONVERSATION_DRAFT_LIMITS.contentBytes){
+        report('This reply is too long to fit in the draft.');
+        return;
+      }
+      markViewIntent();
+      session.update(content);
+      actions.open=false;
+      textarea.focus();
+      textarea.setSelectionRange(prefix.length,prefix.length);
+      viewState();
+    },'quote');
     if (options.onMessageAction) {
       action('Source',()=>doAction({action:'source',message}),'source'); action('Branch from here',()=>{actions.open=false;doAction({action:'branch',message});},'branch');
       const source = el('pre',message.content,'cp-message-raw'), note = el('p','Select an exact source passage below to publish an excerpt. Markdown source offsets are preserved.','cp-selection-note');
