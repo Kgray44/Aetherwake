@@ -3158,7 +3158,12 @@ export class BackendCore {
       event: event => {
         const execution = this.state.executions[event.executionId]; ensure(execution && this.active === execution, 'invalid_provider_response');
         if (trace?.executionId === event.executionId) trace.timing.observe(event);
-        if (event.type === 'provider/response-created') this.atomic(() => { execution.responseId = event.responseId; execution.state = 'running'; });
+        if (event.type === 'provider/response-created') this.atomic(() => {
+          execution.responseId = event.responseId; execution.state = 'running';
+          if (preview.memoryRecall) execution.memoryDisclosure = {
+            state: this.velaApiTest ? 'simulated' : 'acknowledged', manifestDigest: preview.memoryRecall.manifestDigest,
+          };
+        });
         else if (event.type === 'provider/usage') {
           this.atomic(() => { execution.usage = event.usage; });
           this.record(event.type,this.velaApiTest?'simulated':'reported',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,payload:{redacted:true,usage:event.usage}});
@@ -5996,6 +6001,8 @@ export class BackendCore {
     const resources=input.resourceIds.map(resourceId=>({resourceId,available:!!this.state.resources[resourceId]&&this.conversationAccess.access(resourceId)}));
     const allowed=new Set(resources.filter(item=>item.available).map(item=>item.resourceId));
     const publicExecution=(execution:Execution):PublicConversationExecution=>({id:execution.id,resourceId:execution.resourceId,providerId:execution.providerId,commandId:execution.commandId,state:execution.state,startedAt:execution.startedAt,endedAt:execution.endedAt,taskVerified:false,...(this.recoverableCodexTurn(execution)?{recoveryAvailable:true as const}:{}),...(execution.errorCode?{errorCode:execution.errorCode}:{}),...(execution.httpDiagnostic?{httpDiagnostic:projectTurnHttpDiagnostic(execution.httpDiagnostic)}:{}),
+      ...(execution.memoryDisclosure && this.conversationAccess.resource(execution.resourceId, 'read') ?
+        { memoryDisclosure: structuredClone(execution.memoryDisclosure) } : {}),
       ...(execution.outputTiming && this.conversationReadAccess(execution.resourceId, execution.outputTiming.messageId) ?
         { outputTiming: structuredClone(execution.outputTiming) } : {})});
     const current=this.active?this.state.executions[this.active.id]:null;
@@ -6493,8 +6500,12 @@ export class BackendCore {
     this.activeSourceFence = () => { this.finalOrdinaryFence(input, preview); memory?.validate(turn); authority?.validate(); };
     const catalog=this.ordinaryCatalog!,classification=this.ordinaryTest?'simulated' as const:'reported' as const;
     const fence=async()=>{authority?.validate();ensure(this.active?.id===e.id&&this.conversationAccess.resource(e.resourceId),'source_unavailable');const current=await this.prepareConversationSend(input,1,preview.handoff?.id,p);ensure(current.fingerprint===preview.fingerprint,'stale_send_preview');await this.ordinaryConnections.revalidateCredential(p.connectionVersion,catalog.boundaryDigest);this.finalOrdinaryFence(input,preview);memory?.validate(turn);authority?.validate();};
-    const supply=async(responseId:string)=>{
-      this.atomic(()=>{e.responseId=responseId;e.state='running';this.state.contextSupplies![e.id]={resourceId:e.resourceId,responseId,suppliedAt:now(),items:preview.context.map(i=>({shareId:i.shareId,digest:i.digest,sourceResourceId:i.sourceResourceId,sourceMessageId:i.sourceMessageId}))};});
+    const supply=async(responseId:string, acknowledged: boolean)=>{
+      this.atomic(()=>{e.responseId=responseId;e.state='running';
+        if (memory && acknowledged) e.memoryDisclosure = {
+          state: this.ordinaryTest ? 'simulated' : 'acknowledged', manifestDigest: memory.manifest.digest,
+        };
+        this.state.contextSupplies![e.id]={resourceId:e.resourceId,responseId,suppliedAt:now(),items:preview.context.map(i=>({shareId:i.shareId,digest:i.digest,sourceResourceId:i.sourceResourceId,sourceMessageId:i.sourceMessageId}))};});
       for(const item of preview.context)await this.conversations.confirmSupplied(e.resourceId,item.shareId,e.id);
     };
     const ownsTurn = () => this.active === e && this.ordinaryController === controller;
@@ -6504,7 +6515,7 @@ export class BackendCore {
       if(!this.conversationAccess.resource(e.resourceId)){controller.abort();throw new ServiceError('source_unavailable');}
       timing.observe(event);
       if (event.type === 'provider/response-created') {
-        await supply(event.responseId);
+        await supply(event.responseId, true);
         // A cancelled transport can stop waiting for this callback.
         if (!ownsTurn() || controller.signal.aborted || e.state !== 'running') return;
         this.record(event.type, 'observed', undefined, randomUUID(), { providerId: CHATGPT_PLAN_PROVIDER,
@@ -6537,7 +6548,7 @@ export class BackendCore {
       timing.observeResult();
       let valid=true;try{await fence();}catch{valid=false;}
       if (result.responseId && !e.responseId && valid) {
-        await supply(result.responseId);
+        await supply(result.responseId, false);
         try { this.finalOrdinaryFence(input, preview); memory?.validate(turn); authority?.validate(); } catch { valid = false; }
       }
       this.atomic(()=>{
