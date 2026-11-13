@@ -1463,7 +1463,11 @@ test('Vela answers from an explicitly reviewed mission checkpoint and rechecks i
       await new Promise(done => setTimeout(done, 10));
       settled = await f.core.command('missions', { name: 'read', input: { id: started.id } }) as MissionProjection;
     }
-    assert.equal(settled.outcome, 'verified');
+    assert.equal(settled.outcome, 'verified', JSON.stringify({
+      waits: settled.waits,
+      admission: settled.admission?.reasons,
+      tasks: JSON.parse(nativeMissionDiagnostics(settled)),
+    }));
     const checkpoint = { id: started.id, revision: settled.revision, triggerSeq: settled.events.findLast(event => event.kind === 'settled')!.seq };
     const intent = 'Did the checks in this checkpoint verify successfully?';
     const input = { intent, resourceIds: [], authorizeProvider: true, providerId: 'openai-api-vela',
