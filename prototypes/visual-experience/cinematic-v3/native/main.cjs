@@ -1,10 +1,11 @@
 const {
   app,
-  BrowserWindow,
+  BrowserWindow: ElectronBrowserWindow,
   session,
   screen,
   nativeTheme,
 } = require("electron");
+const { installDesktopTestAdmission } = require("./native-test-admission.cjs");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const { createHash, randomBytes } = require("node:crypto");
@@ -51,11 +52,15 @@ try {
 }
 const runtime = path.join(root, ".runtime");
 const verifyMode = process.argv.includes("--verify");
+const relationshipOnly = verifyMode && process.argv.includes("--verify-relationship-only");
 const recordMode = process.argv.includes("--record");
 const previewMode = process.argv.includes("--preview");
 const soakMode = process.argv.includes("--soak");
 const recordingTitle = `Aerynth · V3.5 capture · ${Date.now()}`;
 const renderWhileVisible = verifyMode || recordMode || previewMode || soakMode;
+const { check: checkDesktopTest, BrowserWindow } = renderWhileVisible
+  ? installDesktopTestAdmission({ app, BrowserWindow: ElectronBrowserWindow })
+  : { check: () => {}, BrowserWindow: ElectronBrowserWindow };
 app.setPath(
   "userData",
   path.join(
@@ -66,7 +71,7 @@ app.setPath(
       : recordMode
         ? "recording-profile"
         : verifyMode
-          ? "verification-profile"
+          ? relationshipOnly ? `relationship-profile-${Date.now()}` : "verification-profile"
           : previewMode
             ? "ambient-review-profile"
             : "profile",
@@ -102,6 +107,7 @@ app
       { urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] },
       (_details, callback) => callback({ cancel: true }),
     );
+    checkDesktopTest();
     win = new BrowserWindow({
       show: !verifyMode && !soakMode,
       width: 1600,
@@ -152,8 +158,9 @@ app
     win.webContents.on("render-process-gone", (_event, detail) =>
       errors.push(`Renderer gone: ${detail.reason}`),
     );
-    win.webContents.on("console-message", (details) => {
-      if (details.level === "error") errors.push(details.message);
+    win.webContents.on("console-message", (_event, details, legacyMessage) => {
+      if (details?.level === "error") errors.push(details.message);
+      else if (details === 3) errors.push(legacyMessage);
     });
     let suspended = false;
     const active = () =>
@@ -241,6 +248,16 @@ app
       }
       return;
     }
+    if (relationshipOnly) {
+      try {
+        await verifyRelationship();
+        app.exit(0);
+      } catch (error) {
+        console.error(error);
+        app.exit(1);
+      }
+      return;
+    }
     if (verifyMode) {
       try {
         await verify();
@@ -274,6 +291,54 @@ app.on("window-all-closed", () => app.quit());
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evaluate = (code) => win.webContents.executeJavaScript(code, true);
+async function verifyRelationship() {
+  admitStorage(64 * 1024 * 1024);
+  const out = path.join(runtime, `relationship-witness-${Date.now()}`);
+  const receipt = {
+    sourceRevisionAtLaunch, sourceHashesAtLaunch, buildAssetHashesAtLaunch,
+    syntheticStudy: true, passed: false,
+  };
+  const read = () => evaluate(`(() => {
+    const path = document.querySelector("#relationships path");
+    const snapshot = window.__aerynth?.snapshot();
+    return { path: path.getAttribute("d"), opacity: Number(path.style.opacity),
+      draws: snapshot?.metrics.draws, errors: snapshot?.metrics.errors,
+      target: document.body.dataset.related };
+  })()`);
+  async function waitFor(predicate) {
+    const end = performance.now() + 6000;
+    do {
+      const value = await read();
+      if (predicate(value)) return value;
+      await delay(50);
+    } while (performance.now() < end);
+    throw new Error("Relationship study did not reach its expected state");
+  }
+  await fs.mkdir(out, { recursive: true });
+  try {
+    const before = await waitFor((value) => value.draws > 0);
+    await evaluate("window.__aerynth.demo()");
+    receipt.visible = await waitFor((value) =>
+      value.target && value.opacity > 0 && /^M.+ C/.test(value.path) && value.draws > before.draws);
+    if (!win.isVisible() || win.isMinimized()) throw new Error("Native study window is not visible");
+    const png = (await win.webContents.capturePage()).toPNG();
+    if (png.length === 0 || png.length > 8 * 1024 * 1024) throw new Error("Invalid native capture size");
+    await fs.writeFile(path.join(out, "relationship.png"), png, { flag: "wx" });
+    receipt.captureSha256 = createHash("sha256").update(png).digest("hex");
+    await evaluate("window.__aerynth.demo()");
+    receipt.hidden = await waitFor((value) => !value.target && value.opacity === 0);
+    if (errors.length || receipt.visible.errors?.length || receipt.hidden.errors?.length) {
+      throw new Error("Native relationship study reported renderer errors");
+    }
+    receipt.passed = true;
+  } catch (error) {
+    receipt.error = String(error.message);
+    throw error;
+  } finally {
+    await fs.writeFile(path.join(out, "relationship.json"), JSON.stringify(receipt, null, 2), { flag: "wx" });
+    console.log(JSON.stringify({ passed: receipt.passed, evidence: out }));
+  }
+}
 function admitStorage(estimatedCBytes) {
   const guard = path.join(
     process.env.LOCALAPPDATA,

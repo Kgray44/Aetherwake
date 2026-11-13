@@ -1,3 +1,5 @@
+import { mountRendererLifecycle } from "./renderer-lifecycle.ts";
+import { createRelationshipPaint } from "./relationship-paint.ts";
 import {
   registerResourceMaterial,
   targetResourceMaterial,
@@ -215,9 +217,7 @@ let pointer = { x: 0, y: 0 },
   lastInteraction = performance.now();
 let sceneState: ReturnType<typeof deriveSceneState> | null = null;
 let nativeActive = true,
-  running = true,
-  graphicsFailed = false;
-let environment: Environment | null = null;
+  running = true;
 let ambient = true,
   ambientStrength = 1,
   visualClock = 0,
@@ -1319,6 +1319,7 @@ function velaPlacementClip({ x, y, w, h }: Pick<ReturnType<typeof motion.pose>, 
 function velaPlacementUnclipped(pose: ReturnType<typeof motion.pose>) {
   return !velaPlacementClip(pose);
 }
+const paintRelationship = createRelationshipPaint($<SVGPathElement & HTMLElement>("#relationships path"));
 function renderDOM() {
   surfaceView = (
     application as (Application & { surfaceView?: () => SurfaceView }) | null
@@ -1492,22 +1493,10 @@ function renderDOM() {
     }
   }
   const target = document.body.dataset.related;
-  const visible =
-    !!target && elements.has(target) && !["idle", "unavailable"].includes(vela);
-  const path = $<SVGPathElement & HTMLElement>("#relationships path");
-  if (visible) {
-    const p = motion.pose(target!);
-    const start = {
-      x: innerWidth * (expanded ? 0.88 : 0.63),
-      y: innerHeight * (expanded ? 0.32 : 0.4),
-    };
-    const end = { x: p.x + p.w * 0.5, y: p.y + 8 };
-    path.setAttribute(
-      "d",
-      `M${start.x},${start.y} C${start.x},${end.y} ${end.x},${start.y} ${end.x},${end.y}`,
-    );
-    path.style.opacity = String(0.2 + attention * 0.55);
-  } else path.style.opacity = "0";
+  const relatedPose = target && elements.has(target) && vela !== "idle" && vela !== "unavailable"
+    ? motion.pose(target)
+    : undefined;
+  paintRelationship(relatedPose, innerWidth, innerHeight, !!expanded, attention);
   return { workspaceVisible, projected };
 }
 function tick(now: number) {
@@ -1517,6 +1506,8 @@ function tick(now: number) {
     resourceTiming?.reset();
     return;
   }
+  const environment = renderer.current;
+  const graphicsFailed = renderer.graphicsFailed;
   // Synchronous host/layer invalidation requests the next existing frame;
   // it cannot start a second RAF chain while the current frame is executing.
   frameRunning = true;
@@ -1605,17 +1596,7 @@ function tick(now: number) {
           height: innerHeight,
         });
         sceneState = scene;
-        environment.setSpatialLayer(
-          (
-            application as
-              | (Application & {
-                  spatialLayer?: () =>
-                    | import("../../../constellation/spatial-types.ts").SpatialRenderLayer
-                    | null;
-                })
-              | null
-          )?.spatialLayer?.() ?? null,
-        );
+        environment.setSpatialLayer(application?.spatialLayer?.() ?? null);
         environment.render({
           time: motion.reduced ? 0 : visualClock,
           focus: scene.focus,
@@ -1804,7 +1785,7 @@ function controller() {
       scene: sceneState,
       reduced: motion.reduced,
       active: nativeActive,
-      graphicsFailed,
+      graphicsFailed: renderer.graphicsFailed,
       resources: [...resources.values()].map((r) => ({
         id: r.id,
         text: r.text,
@@ -1820,7 +1801,7 @@ function controller() {
         order.map((id) => [id, resourceUnfold(motion, id)]),
       ),
       metrics: { ...metrics },
-      gpu: environment?.stats(),
+      gpu: renderer.current?.stats(),
       compositing: materialCompositor.diagnostics(),
       spatial: (
         application as
@@ -1871,7 +1852,7 @@ function controller() {
       wake();
     },
     setVelaVisualStateForReview: setVisualStudy,
-    presenceMaskForReview: () => environment?.capturePresenceMaskForReview(),
+    presenceMaskForReview: () => renderer.current?.capturePresenceMaskForReview(),
     execute: (command: DesktopCommand) => application?.run(command),
     flush: () => application?.flush(),
     select,
@@ -1932,10 +1913,10 @@ function controller() {
     demo: () => $("#demo").click(),
     stopDemo,
     simulateContextLoss: () => {
-      environment?.loseContextForTest();
+      renderer.current?.loseContextForTest();
     },
     restoreContext: () => {
-      environment?.restoreContextForTest();
+      renderer.current?.restoreContextForTest();
     },
   };
 }
@@ -1970,33 +1951,24 @@ if (desktopMode)
     },
     vela: setVela,
   });
-try {
-  environment = new Environment($<HTMLCanvasElement>("#world"), motion);
-} catch (error) {
-  graphicsFailed = true;
-  metrics.errors.push(String(error));
-  status(
-    "Graphics unavailable. The workspace remains usable in a simplified view.",
-  );
-  document.body.classList.add("graphics-fallback");
-}
-$("#world").addEventListener("webglcontextlost", (e) => {
-  e.preventDefault();
-  graphicsFailed = true;
-  document.body.classList.add("graphics-fallback");
-  status("Graphics interrupted. Your resources and drafts remain available.");
-});
-$("#world").addEventListener("webglcontextrestored", () => {
-  try {
-    environment?.dispose();
-    environment = new Environment($<HTMLCanvasElement>("#world"), motion);
-    graphicsFailed = false;
-    document.body.classList.remove("graphics-fallback");
-    status("Graphics restored. Workspace state retained.");
-    wake();
-  } catch (error) {
-    metrics.errors.push(String(error));
-  }
+const world = $<HTMLCanvasElement>("#world");
+const renderer = mountRendererLifecycle({
+  canvas: world,
+  page: window,
+  create: () => new Environment(world, motion),
+  failed: (error) => metrics.errors.push(String(error)),
+  changed: (change) => {
+    document.body.classList.toggle("graphics-fallback", change !== "restored");
+    if (change === "unavailable")
+      status("Graphics unavailable. The workspace remains usable in a simplified view.");
+    else if (change === "interrupted")
+      status("Graphics interrupted. Your resources and drafts remain available.");
+    else {
+      application?.spatialLayer?.()?.contextRestored?.();
+      status("Graphics restored. Workspace state retained.");
+      wake();
+    }
+  },
 });
 renderDOM();
 layout("initial");
