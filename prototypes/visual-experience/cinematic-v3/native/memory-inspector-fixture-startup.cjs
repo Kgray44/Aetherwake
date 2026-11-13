@@ -2,6 +2,7 @@ const { randomBytes } = require("node:crypto");
 const { join } = require("node:path");
 const { enterMemoryFixture } = require("./memory-fixture-entry.cjs");
 const { resolveMemoryInspectorArtifact } = require("./memory-inspector-artifact.cjs");
+const { prepareMemoryInspectorRestart } = require("./memory-inspector-restart.cjs");
 const { applicationFrameTrust, nativeReviewBoundary, createPersonalMemoryDesktopRoute } =
   require("./personal-memory-desktop-route.cjs");
 
@@ -12,7 +13,7 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
   const { backendDescriptor, release } = entered;
   let backend, protector, surface;
   let closed = false;
-  let starting = true, shutdownRequested = false;
+  let starting = true, shutdownRequested = false, restarting = false, restarted = false;
   let cleanup, earlyShutdown;
   const check = () => {
     entered.check();
@@ -63,17 +64,19 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
       });
     } finally { key.fill(0); }
     check();
-    backend = await runtime.startBackend({
+    const startBackend = ({ descriptor, mode, expected }) => runtime.startBackend({
       executable: assets.nodePath,
-      args: [assets.hostPath, "--memory-fixture-bootstrap-v1", JSON.stringify(backendDescriptor)],
+      args: [assets.hostPath, mode === "create" ? "--memory-fixture-bootstrap-v1" : "--memory-fixture-restart-v1",
+        JSON.stringify(descriptor)],
       env: {
         AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN: policyToken,
         AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN: detailToken,
-        AERYNTH_MEMORY_FIXTURE_SEED: "inspector-v1",
+        ...(mode === "create" ? { AERYNTH_MEMORY_FIXTURE_SEED: "inspector-v1" } : {}),
       },
-      protector, wirePath: assets.wirePath, check, close: requestClose,
+      protector, wirePath: assets.wirePath, check, close: requestClose, expected,
     });
-    await backend.waitUntilReady?.();
+    backend = await startBackend({ descriptor: backendDescriptor, mode: "create" });
+    const originalSeed = await backend.waitUntilReady?.();
     check();
     surface = await runtime.createSurface({
       profileRoot: backendDescriptor.profileRoot, preloadPath: assets.preloadPath, check, close: requestClose,
@@ -88,21 +91,22 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
     const { reviewDialogs } = nativeReviewBoundary({ dialog, checkDesktopTest: check });
     const call = (command, input) => {
       check();
-      if (closed) throw Error("memory_fixture_closed");
+      if (restarting) throw Error("memory_fixture_worker_not_ready");
       // Only the owned native memory adapter can reach this policy write.
       const approval = command === "personalMemoryPolicyNative" && typeof input.enable === "boolean";
       return backend.call({ command, input, ...(approval ? { fixturePolicyToken: policyToken } : {}) });
     };
     const route = createPersonalMemoryDesktopRoute({
       win, frames, backendIdentity: () => backend,
-      backendReady: () => { check(); return !closed && backend.ready(); },
+      backendReady: () => { check(); return !restarting && backend.ready(); },
       allowWrite: () => { check(); return allowWrite(); },
       call, reviewDialogs, writeExport: () => { throw Error("memory_fixture_export_denied"); },
     });
     const dispatch = async (event, command, input) => {
       try {
         check();
-        if (closed || !frames.trustedApplicationFrame(event)) throw Error("unauthorized_sender");
+        if (restarting || !frames.trustedApplicationFrame(event)) throw Error("unauthorized_sender");
+        const owner = backend;
         let result;
         if (command === "personalMemory" &&
             ["list", "read", "enableProviderMemory", "disableProviderMemory", "revokeSource"].includes(input?.type))
@@ -111,7 +115,7 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
           result = await detail.dispatch(event, command, input);
         else throw Error("memory_fixture_command_denied");
         check();
-        if (closed || !frames.trustedApplicationFrame(event)) throw Error("unauthorized_sender");
+        if (restarting || owner !== backend || !frames.trustedApplicationFrame(event)) throw Error("unauthorized_sender");
         return { ok: true, result };
       } catch (error) {
         return { ok: false, error: /^[a-z][a-z0-9_]+$/u.test(error?.message) ? error.message : "memory_fixture_command_failed" };
@@ -120,7 +124,31 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
     await surface.mount({ rendererURL: assets.rendererURL, dispatch, check, invalidateDetail: detail.clear });
     check();
     starting = false;
-    return { close };
+    return {
+      close,
+      async restartWorker() {
+        check();
+        if (!originalSeed || restarted) throw Error("memory_fixture_restart_unavailable");
+        restarted = restarting = starting = true;
+        detail.clear();
+        let restart;
+        try {
+          restart = await prepareMemoryInspectorRestart({ check, worker: backend, protector });
+          const { descriptor } = restart;
+          protector = await restart.claim(descriptor);
+          check();
+          backend = await startBackend({ descriptor, mode: "reopen", expected: originalSeed });
+          await backend.waitUntilReady();
+          check();
+        } catch (error) {
+          await close();
+          throw error;
+        } finally {
+          restart?.close();
+          restarting = starting = false;
+        }
+      },
+    };
   } catch (error) {
     await close();
     throw error;

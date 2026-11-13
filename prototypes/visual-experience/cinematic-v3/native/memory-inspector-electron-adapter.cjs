@@ -27,7 +27,7 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
       const { createSyntheticMemoryProtector } = await importModule(pathToFileURL(modulePath).href);
       return createSyntheticMemoryProtector(options);
     },
-    async startBackend({ executable, args, env, protector, wirePath, check, close }) {
+    async startBackend({ executable, args, env, protector, wirePath, check, close, expected }) {
       const { createNativeHostServer } = await importModule(pathToFileURL(wirePath).href);
       check();
       let child;
@@ -38,7 +38,7 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
         });
       } catch (error) { wire.close(); throw error; }
       const pending = new Map();
-      let sequence = 0, active = true, stopping = false, buffer = "", seeded = false;
+      let sequence = 0, active = true, stopping = false, buffer = "", identity, shutdown;
       let cleanExit = false;
       const exited = new Promise(resolve => {
         child.once("close", (code, signal) => {
@@ -69,15 +69,17 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
           while ((split = buffer.indexOf("\n")) !== -1) {
             const message = JSON.parse(buffer.slice(0, split));
             buffer = buffer.slice(split + 1);
-            if (Object.hasOwn(message, "startupError")) throw Error("memory_fixture_seed_failed");
-            if (Object.hasOwn(message, "fixtureSeed")) {
-              const seed = message.fixtureSeed;
+            if (Object.hasOwn(message, "startupError"))
+              throw Error(expected ? "memory_fixture_restart_failed" : "memory_fixture_seed_failed");
+            if (Object.hasOwn(message, "fixtureSeed") || Object.hasOwn(message, "fixtureRestart")) {
+              const seed = expected ? message.fixtureRestart : message.fixtureSeed;
+              const contract = expected ? "aerynth.memory-fixture-restart-ready@1" : "aerynth.memory-fixture-seed@1";
               const validId = value => typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,256}$/u.test(value);
-              if (seeded || Object.keys(message).length !== 1 || !seed || Object.keys(seed).length !== 4 ||
-                  seed.contract !== "aerynth.memory-fixture-seed@1" ||
-                  ![seed.conversationId, seed.messageId, seed.factId].every(validId))
-                throw Error("memory_fixture_seed_invalid");
-              seeded = true;
+              const keys = ["conversationId", "messageId", "factId"];
+              if (identity || Object.keys(message).length !== 1 || !seed || Object.keys(seed).length !== 4 ||
+                  seed.contract !== contract || !keys.every(key => validId(seed[key]) && (!expected || seed[key] === expected[key])))
+                throw Error(expected ? "memory_fixture_restart_invalid" : "memory_fixture_seed_invalid");
+              identity = Object.freeze(Object.fromEntries(keys.map(key => [key, seed[key]])));
               continue;
             }
             if (wire?.handle(message) || message.event) continue;
@@ -88,7 +90,8 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
             else request.resolve(message.result);
           }
         } catch (error) {
-          fail(["memory_fixture_seed_failed", "memory_fixture_seed_invalid"].includes(error?.message) ? error : undefined);
+          fail(["memory_fixture_seed_failed", "memory_fixture_seed_invalid", "memory_fixture_restart_failed",
+            "memory_fixture_restart_invalid"].includes(error?.message) ? error : undefined);
         }
       });
       let ready = false;
@@ -108,22 +111,26 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
         },
         async waitUntilReady() {
           const reply = await bounded(worker.call({ command: "capabilities", input: {} }), readinessMs);
-          if (!active || !seeded || reply?.providerId !== "fixture-codex") throw Error("memory_fixture_worker_not_ready");
+          if (!active || !identity || reply?.providerId !== "fixture-codex") throw Error("memory_fixture_worker_not_ready");
           ready = true;
+          return identity;
         },
-        async close() {
-          stopping = true;
-          fail();
-          wire?.close();
-          child.stdin.end();
-          if (await bounded(exited.then(() => true), shutdownMs)) return;
-          try { child.kill(); } catch { /* Exit acknowledgement is authoritative. */ }
-          if (await bounded(exited.then(() => true), shutdownMs)) return;
-          writeFileSync(join(handoff.profileRoot, "synthetic-worker-unresolved.json"),
-            JSON.stringify({ workerPid: child.pid ?? null, ownerPid: process.pid }), { flag: "wx", mode: 0o600 });
-          throw Error("memory_fixture_worker_outcome_unresolved");
+        close() {
+          return shutdown ??= stopWorker();
         },
       };
+      async function stopWorker() {
+        stopping = true;
+        fail();
+        wire.close();
+        child.stdin.end();
+        if (await bounded(exited.then(() => true), shutdownMs)) return;
+        try { child.kill(); } catch { /* Exit acknowledgement is authoritative. */ }
+        if (await bounded(exited.then(() => true), shutdownMs)) return;
+        writeFileSync(join(handoff.profileRoot, "synthetic-worker-unresolved.json"),
+          JSON.stringify({ workerPid: child.pid ?? null, ownerPid: process.pid }), { flag: "wx", mode: 0o600 });
+        throw Error("memory_fixture_worker_outcome_unresolved");
+      }
       return worker;
     },
     async createSurface({ preloadPath, check, close }) {

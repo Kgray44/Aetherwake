@@ -40,7 +40,7 @@ test("acceptance artifact verifies exact inventory and refuses mutations, missin
   assert.throws(() => resolveMemoryInspectorArtifact(input), /artifact_unverified/);
 });
 
-for (const outcome of ["ready", "unresolved", "unready", "missing-seed", "invalid-seed", "duplicate-seed", "seed-failed"]) test(`isolated Electron adapter handles ${outcome} worker under a fixture permit`, async t => {
+for (const outcome of ["ready", "unresolved", "unready", "missing-seed", "invalid-seed", "duplicate-seed", "seed-failed", "restart", "wrong-restart"]) test(`isolated Electron adapter handles ${outcome} worker under a fixture permit`, async t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "memory-electron-stub-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const artifactRoot = join(root, "artifact");
@@ -108,34 +108,43 @@ for (const outcome of ["ready", "unresolved", "unready", "missing-seed", "invali
     show() { this.visible = true; }
     destroy() { this.destroyed = true; this.emit("closed"); }
   }
-  const child = new EventEmitter();
-  child.pid = 321;
-  let kills = 0;
-  child.kill = () => { kills++; };
-  child.stdout = new PassThrough();
-  child.stdin = new Writable({
-    write(bytes, _encoding, done) {
-      const request = JSON.parse(bytes);
-      if (request.command === "capabilities") {
-        const line = message => child.stdout.write(JSON.stringify(message) + "\n");
-        const seed = { fixtureSeed: { contract: "aerynth.memory-fixture-seed@1",
-          conversationId: "synthetic-chat", messageId: "synthetic-message", factId: "synthetic-fact" } };
-        if (["ready", "unresolved", "duplicate-seed"].includes(outcome)) line(seed);
-        if (outcome === "duplicate-seed") line(seed);
-        if (outcome === "invalid-seed") line({ ...seed, extra: true });
-        if (outcome === "seed-failed") line({ startupError: "memory_fixture_seed_failed" });
-        if (outcome !== "unready") child.stdout.write(JSON.stringify({
-          id: request.id, result: { providerId: "fixture-codex" },
-        }) + "\n");
+  let child;
+  let workers = 0;
+  function makeWorker(reopen) {
+    const child = new EventEmitter();
+    child.pid = 321;
+    let kills = 0;
+    child.kill = () => { kills++; };
+    child.stdout = new PassThrough();
+    child.stdin = new Writable({
+      write(bytes, _encoding, done) {
+        const request = JSON.parse(bytes);
+        if (request.command === "capabilities") {
+          const line = message => child.stdout.write(JSON.stringify(message) + "\n");
+          const seed = { fixtureSeed: { contract: "aerynth.memory-fixture-seed@1",
+            conversationId: "synthetic-chat", messageId: "synthetic-message", factId: "synthetic-fact" } };
+          if (reopen) line({ fixtureRestart: {
+            ...seed.fixtureSeed, contract: "aerynth.memory-fixture-restart-ready@1",
+            ...(outcome === "wrong-restart" ? { factId: "different-fact" } : {}),
+          } });
+          else if (["ready", "unresolved", "duplicate-seed", "restart", "wrong-restart"].includes(outcome)) line(seed);
+          if (outcome === "duplicate-seed") line(seed);
+          if (outcome === "invalid-seed") line({ ...seed, extra: true });
+          if (outcome === "seed-failed") line({ startupError: "memory_fixture_seed_failed" });
+          if (outcome !== "unready") child.stdout.write(JSON.stringify({
+            id: request.id, result: { providerId: "fixture-codex" },
+          }) + "\n");
+          done();
+          return;
+        }
+        assert.equal(request.command, "personalMemoryManagementNative");
+        child.stdout.write(JSON.stringify({ id: request.id, result: { records: [] } }) + "\n");
         done();
-        return;
-      }
-      assert.equal(request.command, "personalMemoryManagementNative");
-      child.stdout.write(JSON.stringify({ id: request.id, result: { records: [] } }) + "\n");
-      done();
-    },
-  });
-  if (outcome !== "unresolved") child.stdin.on("finish", () => child.emit("close", 0));
+      },
+    });
+    if (outcome !== "unresolved") child.stdin.on("finish", () => child.emit("close", 0));
+    return child;
+  }
   const config = {
     handoff, allowWrite: () => true, readinessMs: 20, shutdownMs: 20,
     electron: {
@@ -151,24 +160,38 @@ for (const outcome of ["ready", "unresolved", "unready", "missing-seed", "invali
       } },
     },
     spawnWorker(executable, args, options) {
+      const reopen = ++workers === 2;
       assert.equal(executable, join(artifactRoot, paths.node));
       assert.equal(args[0], join(artifactRoot, paths.host));
       assert.equal(options.cwd, storage);
+      assert.equal(args[1], reopen ? "--memory-fixture-restart-v1" : "--memory-fixture-bootstrap-v1");
+      assert.equal(options.env.AERYNTH_MEMORY_FIXTURE_SEED, reopen ? undefined : "inspector-v1");
       assert.deepEqual(Object.keys(options.env), [
-        "AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN", "AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN", "AERYNTH_MEMORY_FIXTURE_SEED",
+        "AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN", "AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN",
+        ...(!reopen ? ["AERYNTH_MEMORY_FIXTURE_SEED"] : []),
       ]);
-      assert.equal(options.env.AERYNTH_MEMORY_FIXTURE_SEED, "inspector-v1");
       effects.push("worker");
-      return child;
+      return child = makeWorker(reopen);
     },
     importModule: async url => url.endsWith("/synthetic-memory-protector.mts") ? {
-      createSyntheticMemoryProtector: () => ({ close: () => effects.push("protector closed") }),
+      createSyntheticMemoryProtector: () => ({
+        close: () => effects.push("protector closed"),
+        async prepareRestart({ check, assertWorkerExited }) {
+          check();
+          assertWorkerExited();
+          const descriptor = { contract: "aerynth.memory-fixture-restart@1", profileRoot, expiresAt: handoff.expiresAt };
+          return { descriptor, async claim(input) {
+            assert.equal(input, descriptor);
+            return { close: () => effects.push("reopened protector closed") };
+          }, close: () => effects.push("restart custody closed") };
+        },
+      }),
     } : { createNativeHostServer: () => ({ handle: () => false, close: () => effects.push("wire closed") }) },
   };
   await assert.rejects(startIsolatedMemoryInspector({ ...config, handoff: { ...handoff, token: "wrong" } }), /slot_closed/);
   assert.deepEqual(effects, []);
   assert.equal(win, undefined);
-  if (!["ready", "unresolved"].includes(outcome)) {
+  if (!["ready", "unresolved", "restart", "wrong-restart"].includes(outcome)) {
     await assert.rejects(startIsolatedMemoryInspector(config), {
       message: outcome === "seed-failed" ? "memory_fixture_seed_failed" :
         outcome === "invalid-seed" || outcome === "duplicate-seed" ? "memory_fixture_seed_invalid" : "memory_fixture_worker_not_ready",
@@ -187,6 +210,20 @@ for (const outcome of ["ready", "unresolved", "unready", "missing-seed", "invali
     { ok: false, error: "unauthorized_sender" });
   assert.deepEqual(await dispatch(event, "providerAuth", {}), { ok: false, error: "memory_fixture_command_denied" });
   assert.deepEqual(await dispatch(event, "personalMemory", { type: "list" }), { ok: true, result: { records: [] } });
+  if (outcome === "restart" || outcome === "wrong-restart") {
+    if (outcome === "wrong-restart") {
+      await assert.rejects(fixture.restartWorker(), /restart_invalid/u);
+      assert.equal(handlers.size, 0);
+    } else {
+      await fixture.restartWorker();
+      assert.deepEqual(await dispatch(event, "personalMemory", { type: "list" }), { ok: true, result: { records: [] } });
+      await assert.rejects(fixture.restartWorker(), /restart_unavailable/u);
+      await fixture.close();
+    }
+    assert.equal(workers, 2);
+    assert.equal(admission.status().lease, null);
+    return;
+  }
   if (outcome === "unresolved") {
     await assert.rejects(fixture.close(), /worker_outcome_unresolved/);
     assert.equal(kills, 1);
