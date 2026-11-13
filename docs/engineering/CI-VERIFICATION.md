@@ -33,6 +33,8 @@ The timing artifact measures verification wall time from the first job start to 
 
 Windows discovers the backend test files using the existing suite glob and allocates them to four serial lanes, two per job. Weights are rounded sums of case times from [Windows report 14016804955](https://github.com/Kgray44/Aetherwake/actions/runs/43378396003/artifacts/14016804955). Newly discovered files receive a 10-second weight. The aggregate independently recomputes the plan and checks the observed files, worker-loss receipt and desktop add-on receipt. Both Windows reports must come from the same current workflow run, attempt and revision. Use **Re-run all jobs** when retrying so both current-attempt artifacts are produced.
 
+The backend-only Windows job first runs `mission-stream.test.mts` and `native-worker-services.test.mts` serially with no peer test process. These files are excluded from the two parallel lanes on each job. The aggregate verifies the serial phase as the third lane in that job's backend report.
+
 The recorded run spent 31m16s in the Windows backend group. The four-lane model estimates 15m30s of backend work per Windows job at similar test speeds. The second job repeats checkout, Node setup and installs, about 41 seconds in the recorded run, and needs a second Windows runner. The full pre-acceptance path took 117 seconds. Using that larger setup allowance, the added runner can start about 20 minutes after the first and still finish before the prior Windows baseline. Linux queued for about 112 minutes on that run and controlled the overall completion time. These are model estimates pending hosted verification.
 
 ## Recovery evidence
