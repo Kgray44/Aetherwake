@@ -15,6 +15,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   let enabled = true;
   let sensitive = false;
   let openCount = 0;
+  let afterOpen: (() => void) | undefined;
   let sourceProject: string | null = 'project';
   let activeVelaProject: string | null = 'project';
   let projectReadable = true;
@@ -22,7 +23,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     scope.kind === 'project' && !projectReadable ? null : { scope, version: '1' };
   let nativeOpen: () => ReturnType<NativePersonalMemory['open']>;
   const review = createPersonalMemoryReview({
-    open: () => { openCount++; return nativeOpen(); }, transaction,
+    open: async () => { openCount++; const store = await nativeOpen(); afterOpen?.(); return store; }, transaction,
     readSourceText: () => sourceText,
     resolveVelaRecallTarget: () => ({ conversationId: 'vela-chat', projectId: activeVelaProject }),
     resolveRecallTarget: id => id === 'other-chat' ? { projectId: 'project' } :
@@ -49,6 +50,14 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.equal(openCount, 0);
     assert.equal(owner.hasStorage(), false);
     sensitive = false;
+    afterOpen = () => { sourceProject = 'other-project'; };
+    await assert.rejects(review.previewCapture(input), /stale_personal_memory_source/);
+    sourceProject = 'project';
+    afterOpen = () => { message.version = '2'; };
+    await assert.rejects(review.previewCapture(input), /stale_personal_memory_source/);
+    afterOpen = undefined;
+    message.version = '1';
+    assert.equal((await review.inspect({ after: null, limit: 8 })).policy.storageEnabled, false);
     const preview = await review.previewCapture(input);
     assert.equal(preview.sourceText, sourceText);
     assert.equal(preview.draft.text, input.text);

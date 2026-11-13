@@ -316,11 +316,13 @@ export function createPersonalMemoryReview(options: Options) {
         return source;
       };
       // Declining an ineligible source must not initialize protected storage.
-      options.transaction(eligibleSource);
+      const original = options.transaction(eligibleSource);
       const service = await options.open();
       requireOpen();
       return options.transaction(() => {
         const source = eligibleSource();
+        if (source.projectId !== original.projectId || source.version !== original.version || source.contentDigest !== original.contentDigest)
+          throw new PersonalContextError('stale_personal_memory_source');
         const requestedScope = assistantWide ? { kind: scope } as const :
           scope === 'conversation' ? { kind: scope, id: conversationId } as const :
           source.projectId ? { kind: scope, id: source.projectId } as const : null;
