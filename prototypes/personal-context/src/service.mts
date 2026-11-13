@@ -16,7 +16,7 @@ const same = (a: unknown, b: unknown) => encode(a) === encode(b);
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const exact = (v: Record<string, unknown>, keys: string[]) => Object.keys(v).sort().join(',') === keys.sort().join(',');
 const categories: Category[] = ['identity', 'preferences', 'projects', 'people', 'technical', 'decisions', 'temporary', 'conversation'];
-const certainties: Certainty[] = ['explicit-statement', 'user-preference', 'imported-summary', 'historical-observation', 'inference', 'conflicting', 'unknown'];
+const certainties: Certainty[] = ['explicit-statement', 'user-reviewed-summary', 'user-preference', 'imported-summary', 'historical-observation', 'inference', 'conflicting', 'unknown'];
 const LIMITS = Object.freeze({ imports: 64, facts: 4096, revisions: 16384, revisionsPerRecord: 128, cipherBytes: 16 * 1024 * 1024, importBytes: 256 * 1024, factBytes: 16384, contextBytes: 65536, exportBytes: 2 * 1024 * 1024 });
 export const PERSONAL_CONTEXT_LIMITS = LIMITS;
 export const defaultPersonalMemoryPolicy = (): PersonalPolicy => ({ version: 0, storageEnabled: false, ordinaryEnabled: false, velaEnabled: false, sharingEnabled: false, sensitiveEnabled: false });

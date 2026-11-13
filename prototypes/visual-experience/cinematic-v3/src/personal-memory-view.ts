@@ -8,7 +8,7 @@ const scopeLabels = {
 } as const;
 const stateLabels = { active: 'Saved', revoked: 'Revoked', superseded: 'Superseded' } as const;
 const certaintyLabels: Record<ReviewedFact['certainty'], string> = {
-  'explicit-statement': 'Explicit statement', 'user-preference': 'User preference', 'imported-summary': 'Imported summary',
+  'explicit-statement': 'Explicit statement', 'user-reviewed-summary': 'User-reviewed wording', 'user-preference': 'User preference', 'imported-summary': 'Imported summary',
   'historical-observation': 'Historical observation', inference: 'Inference', conflicting: 'Conflicting', unknown: 'Unknown',
 };
 
