@@ -750,7 +750,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
       const readAcceptedMessage = async (observed: ConversationExecution | null) => {
-        if (!observed || observed.providerId !== 'chatgpt-plan-responses' || observed.providerId !== input.providerId ||
+        if (connection === 'unavailable' || !observed || observed.providerId !== 'chatgpt-plan-responses' || observed.providerId !== input.providerId ||
             observed.state !== 'provider_completed' || observed.commandId !== commandId ||
             observed.resourceId !== resourceId || !observed.inputMessageId) return;
         let detail:Detail;
@@ -846,7 +846,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     }).finally(()=>{if(!uncertain){submittedTurn=undefined;reconcileSubmittedTurn=undefined;}sending=false;sendTask=null;webSearchCommandId=undefined;renderDraft();if(execution)reconcileLateCompletion(execution);});
   });
   function reconcileLateCompletion(next: ConversationExecution) {
-    if (disposed || accessRevoked || sending || !uncertain || !reconcileSubmittedTurn ||
+    if (disposed || accessRevoked || connection === 'unavailable' || sending || !uncertain || !reconcileSubmittedTurn ||
         next.commandId !== submittedTurn?.commandId || next.providerId !== submittedTurn.providerId ||
         next.state !== 'provider_completed' || !next.inputMessageId) return false;
     const reconcile = reconcileSubmittedTurn;
