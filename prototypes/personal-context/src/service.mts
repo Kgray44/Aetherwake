@@ -462,9 +462,10 @@ export class PersonalContextService {
       const anchors = this.sourceCandidates(input, who.userId);
       if (anchors.size) heads.sort((a, b) => Number(anchors.has(String(b.id))) - Number(anchors.has(String(a.id))));
       const queries = [input.query, ...(input.evidenceQueries ?? [])].map(words);
-      const candidates: { value: ReviewedFact; score: number; primary: boolean; anchored: boolean; proofs: ScopeProof[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
-      // On a miss, continue the same authorized scan through a bounded older window.
+      const candidates: { value: ReviewedFact; score: number; primary: boolean; anchored: boolean; proofs: ScopeProof[]; needs: number[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
+      // On a miss or an uncovered evidence query, continue through a bounded older window.
       // Explicit scan limits are strict and a recent match needs no extra decryption.
+      const matchedNeeds = new Set<number>();
       const recentScanLimit = input.maxScan ?? 128;
       const missScanLimit = input.maxScan ?? 512;
       let scanLimit = recentScanLimit;
@@ -474,7 +475,8 @@ export class PersonalContextService {
         if (!this.inScope(head.scope!, input)) { omit('outside-scope'); continue; }
         if (head.scope!.kind === 'user.shared' && (!policy.sharingEnabled || !input.sharedFactIds.includes(head.id))) { omit('not-shared'); continue; }
         if (head.state !== 'active') { omit('inactive'); continue; }
-        if (scanned === recentScanLimit && !candidates.length) scanLimit = missScanLimit;
+        if (scanned === recentScanLimit && (!candidates.length || matchedNeeds.size < queries.length - 1))
+          scanLimit = missScanLimit;
         if (scanned >= scanLimit) { omit('scan-limit'); continue; }
         scanned++;
         try {
@@ -493,17 +495,26 @@ export class PersonalContextService {
             anchor.conversationId === provenance.conversationId && anchor.messageId === provenance.messageId);
           if (!score && !anchored) { omit('irrelevant'); continue; }
           const proofs = [proof]; if (provenance.kind === 'import') proofs.push(this.proof(this.head(provenance.id)!.scope!));
-          candidates.push({ value, score, primary: scores[0] > 0, anchored, proofs });
+          const needs = scores.slice(1).flatMap((score, index) => score > 0 && value.purpose === 'knowledge' ? [index] : []);
+          for (const need of needs) matchedNeeds.add(need);
+          candidates.push({ value, score, primary: scores[0] > 0, anchored, proofs, needs });
         } catch (error) { if (error instanceof PersonalContextError && ['canonical_scope_unavailable', 'personal_context_not_authorized', 'private_content_unavailable'].includes(error.code)) { omit('unavailable'); continue; } throw error; }
       }
       // Reserve the bounded omission envelope before packing WHOLE reviewed facts; no text truncation.
       candidates.sort((a, b) => Number(b.anchored) - Number(a.anchored) || Number(b.primary) - Number(a.primary) || b.score - a.score || a.value.id.localeCompare(b.value.id));
-      for (const candidate of candidates) {
-        if (items.length >= input.maxItems) { omit('item-budget'); continue; }
+      const packedNeeds = new Set<number>();
+      const candidateCount = candidates.length;
+      while (candidates.length) {
+        if (items.length >= input.maxItems) { omit('item-budget', candidates.length); break; }
+        // Keep exact anchors first, then prefer a fact that covers a still-unrepresented query.
+        const covering = candidates[0].anchored || packedNeeds.size === matchedNeeds.size ? 0 : candidates.findIndex(candidate =>
+          candidate.needs.some(need => !packedNeeds.has(need)));
+        const [candidate] = candidates.splice(Math.max(0, covering), 1);
         const oldScopes = scopes.length; for (const proof of candidate.proofs) if (!scopes.some(value => same(value, proof))) scopes.push(proof);
         items.push(this.item(candidate.value));
-        const reserved = new Map(omissions); reserved.set('byte-budget', candidates.length); reserved.set('item-budget', candidates.length);
+        const reserved = new Map(omissions); reserved.set('byte-budget', candidateCount); reserved.set('item-budget', candidateCount);
         if (base(reserved).encodedBytes > input.maxBytes) { items.pop(); scopes.splice(oldScopes); omit('byte-budget'); }
+        else for (const need of candidate.needs) packedNeeds.add(need);
       }
       const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return structuredClone(result);
     });
