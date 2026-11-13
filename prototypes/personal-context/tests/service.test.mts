@@ -200,6 +200,31 @@ test('scope denial skips the original body; shared reviewed knowledge never gran
   const f = fixture(); try { f.enable(); const source = f.service.importOriginal(original()), value = f.service.reviewFact(fact(source, { scope: shared })); const before = f.calls.decrypted; f.denied.add(JSON.stringify(ordinary)); const context = f.service.previewContext(request({ assistant: 'vela', sharedFactIds: [value.id] })); assert.equal(context.items.length, 0); assert(context.omissions.some(item => item.reason === 'unavailable')); assert.equal(f.calls.decrypted - before, 2, 'only privacy policy and selected fact, never denied original body'); } finally { f.close(); }
 });
 
+test('exact source anchors recall a project fact without keyword overlap and cannot cross scope', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const anchor = { kind: 'conversation-message', conversationId: 'c1', messageId: 'm1' } as const;
+    const source = { ...anchor, version: '1', contentDigest: 'a'.repeat(64) };
+    const proof = { ...source, projectId: 'p1', role: 'user' as const, sensitive: false };
+    let present = true;
+    const service = new PersonalContextService({ ...f.options, host: { ...f.host, resolveConversationSource: () => present ? proof : null } });
+    const value = service.reviewFact(fact(undefined, { source, scope: { kind: 'project', id: 'p1' } }));
+    for (let index = 0; index < 16; index++) service.reviewFact(fact(undefined, { scope: { kind: 'project', id: 'p1' } }));
+    const input = request({ projectId: 'p1', query: 'What did we settle on?', maxScan: 1 });
+    assert.deepEqual(service.previewContext(input).items, []);
+    const anchored = { ...input, sourceAnchors: [anchor] };
+    const preview = service.previewContext(anchored);
+    assert.deepEqual(preview.items.map(item => item.factId), [value.id]);
+    assert.throws(() => service.validateContext(preview, input), /stale_personal_context/);
+    assert.throws(() => service.previewContext({ ...anchored, sourceAnchors: [anchor, anchor] }), /invalid_context_request/);
+    assert.deepEqual(service.previewContext({ ...anchored, projectId: 'p2' }).items, []);
+    present = false;
+    assert.throws(() => service.validateContext(preview, anchored), /stale_personal_context/);
+    assert.deepEqual(service.previewContext(anchored).items, []);
+  } finally { f.close(); }
+});
+
 test('reviewed conversation memory travels within its project and stops recalling a removed source', () => {
   const f = fixture();
   try {

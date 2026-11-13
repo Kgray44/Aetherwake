@@ -129,9 +129,11 @@ export function createPersonalMemoryReview(options: Options) {
       });
     },
     /** Trusted conversational Vela preview, for the separately authorized API destination. */
-    async prepareVelaRecall(input: { conversationId: string; projectId: string | null; requestId: string; intent: string; prompt: string }) {
+    async prepareVelaRecall(input: { conversationId: string; projectId: string | null; requestId: string; intent: string; prompt: string;
+      sourceAnchors?: readonly ConversationSourceRef[] }) {
       requireOpen();
       const { conversationId, projectId, requestId, intent, prompt: base } = input;
+      const sourceAnchors = input.sourceAnchors?.map(anchor => structuredClone(anchor));
       const service = await options.open();
       requireOpen();
       return options.transaction(() => {
@@ -143,6 +145,7 @@ export function createPersonalMemoryReview(options: Options) {
         const request: ContextRequest = {
           requestId, assistant: 'vela', providerId: 'openai-api-vela', query: intent, projectId, conversationId,
           sharedFactIds: [], includeBehavior: false, maxBytes: 4096, maxItems: 4,
+          ...(sourceAnchors?.length ? { sourceAnchors } : {}),
         };
         const disclosure = prepareDisclosure(service, request, targetCurrent);
         const { manifest } = disclosure;
