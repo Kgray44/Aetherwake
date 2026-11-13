@@ -1,5 +1,5 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { lstatSync, realpathSync } from 'node:fs';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { SecretProtector } from '../../openai-provider/native-storage.mts';
@@ -20,6 +20,46 @@ interface Options {
 function canonicalStat(path: string) {
   const stat = lstatSync(path, { bigint: true });
   if (stat.isSymbolicLink() || realpathSync(path) !== path)
+    throw Error('synthetic_memory_profile_mismatch');
+  return stat;
+}
+
+function sameFile(current: { dev: bigint; ino: bigint }, expected: { dev: bigint; ino: bigint }) {
+  return current.dev === expected.dev && current.ino === expected.ino;
+}
+
+function readDescriptor(path: string, profileRoot: string) {
+  const stat = canonicalStat(path);
+  if (!stat.isFile() || stat.nlink !== 1n || stat.size < 1n || stat.size > 8192n)
+    throw Error('synthetic_memory_profile_mismatch');
+  const fd = openSync(path, 'r');
+  try {
+    const before = fstatSync(fd, { bigint: true });
+    if (!sameFile(before, stat) || before.size !== stat.size || before.nlink !== 1n)
+      throw Error('synthetic_memory_profile_mismatch');
+    const buffer = Buffer.alloc(8193);
+    let count = 0;
+    while (count < buffer.length) {
+      const read = readSync(fd, buffer, count, buffer.length - count, null);
+      if (!read) break;
+      count += read;
+    }
+    const after = canonicalStat(path);
+    if (count !== Number(before.size) || !sameFile(after, before) || after.size !== before.size ||
+        after.nlink !== 1n || after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs)
+      throw Error('synthetic_memory_profile_mismatch');
+    const bytes = buffer.subarray(0, count);
+    const descriptor = JSON.parse(bytes.toString('utf8'));
+    if (descriptor?.contract !== 'aerynth.memory-fixture-descriptor@1' || descriptor.profileRoot !== profileRoot)
+      throw Error('synthetic_memory_profile_mismatch');
+    return { stat, digest: createHash('sha256').update(bytes).digest('hex') };
+  } catch { throw Error('synthetic_memory_profile_mismatch'); }
+  finally { closeSync(fd); }
+}
+
+function readConsumedMarker(path: string) {
+  const stat = canonicalStat(path);
+  if (!stat.isFile() || stat.nlink !== 1n || stat.size !== 0n)
     throw Error('synthetic_memory_profile_mismatch');
   return stat;
 }
@@ -52,9 +92,11 @@ export function createSyntheticMemoryProtector({ profileRoot, databasePath, fixt
     throw Error('synthetic_memory_profile_mismatch');
 
   const markerPath = join(profileRoot, 'synthetic-packaged.started');
-  const root = canonicalStat(profileRoot), marker = canonicalStat(markerPath);
-  if (!root.isDirectory() || !marker.isFile() || marker.size !== 0n || marker.nlink !== 1n)
-    throw Error('synthetic_memory_profile_mismatch');
+  const consumedPath = join(profileRoot, 'synthetic-packaged.consumed');
+  const root = canonicalStat(profileRoot);
+  if (!root.isDirectory()) throw Error('synthetic_memory_profile_mismatch');
+  const marker = readDescriptor(markerPath, profileRoot);
+  const consumed = readConsumedMarker(consumedPath);
   const readDatabase = () => {
     const stat = canonicalStat(databasePath);
     if (!stat.isFile() || stat.nlink !== 1n) throw Error('synthetic_memory_profile_mismatch');
@@ -74,17 +116,19 @@ export function createSyntheticMemoryProtector({ profileRoot, databasePath, fixt
     finally { db.close(); }
   }
   const aad = Buffer.from(JSON.stringify([format.toString(), profileRoot, databasePath, root.dev.toString(),
-    root.ino.toString(), marker.ino.toString()]));
+    root.ino.toString(), marker.stat.dev.toString(), marker.stat.ino.toString(), marker.digest,
+    consumed.dev.toString(), consumed.ino.toString()]));
   const key = Buffer.from(fixtureKey);
   let closed = false;
   let sealed: Buffer | undefined;
 
   function checkRoot() {
     if (closed) throw Error('synthetic_memory_custody_closed');
-    const currentRoot = canonicalStat(profileRoot), currentMarker = canonicalStat(markerPath);
-    if (!currentRoot.isDirectory() || currentRoot.dev !== root.dev || currentRoot.ino !== root.ino ||
-        !currentMarker.isFile() || currentMarker.dev !== marker.dev || currentMarker.ino !== marker.ino ||
-        currentMarker.nlink !== 1n || currentMarker.size !== 0n)
+    const currentRoot = canonicalStat(profileRoot);
+    const currentMarker = readDescriptor(markerPath, profileRoot);
+    if (!currentRoot.isDirectory() || !sameFile(currentRoot, root) ||
+        !sameFile(currentMarker.stat, marker.stat) || currentMarker.digest !== marker.digest ||
+        !sameFile(readConsumedMarker(consumedPath), consumed))
       throw Error('synthetic_memory_profile_mismatch');
   }
 
