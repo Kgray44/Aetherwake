@@ -143,5 +143,5 @@ export function createAepNativeHost(db: DatabaseSync, missions: MissionService, 
     return reverted;
   }
   return { command, finding, evidence: (scope: MissionScope, id: string) => ledger.evidence(scope, id),
-    list: (scope: MissionScope) => ledger.list(scope) };
+    list: (scope: MissionScope) => ({ kind: 'aep-experiment-list' as const, experiments: ledger.list(scope) }) };
 }

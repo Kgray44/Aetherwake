@@ -28,7 +28,7 @@ test('native authority rejects forged promotion, foreign scope, and changed gove
     const record = await host.command(scope, { name: 'propose', candidate: 'parallel' });
     assert.ok(record && 'experiment' in record);
     const { id, revision } = record.experiment;
-    assert.equal(createHost().list(scope)[0]?.id, id);
+    assert.equal(createHost().list(scope).experiments[0]?.id, id);
     assert.equal(host.finding(scope, id, nativeTrialProtocol), null);
     await assert.rejects(host.command(scope, { name: 'promote', id, revision, policyVersion: 1 }), /aep_promotion_unqualified/);
     await assert.rejects(host.command(scope, { name: 'promote', id, revision, policyVersion: 1, passed: true } as never),
