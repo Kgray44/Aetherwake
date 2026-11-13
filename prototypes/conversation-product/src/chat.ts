@@ -1,4 +1,5 @@
 import type { ConversationProductPort, ConversationView, ConversationViewPosition, Detail, MessageView } from './contracts.ts';
+import { createMemoryCaptureEditor, type MemoryCaptureRequest } from './memory-capture-editor.ts';
 import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-session.ts';
 import { renderMarkdown } from './markdown.ts';
@@ -52,6 +53,7 @@ export interface ConversationModelControls {
   selections: Map<string, { id: string; label: string }>;
 }
 export interface ConversationChatOptions {
+  onRememberMessage?: (request: MemoryCaptureRequest) => Promise<boolean>;
   port: ConversationProductPort; resourceId: string;
   presentation?: ConversationChatPresentation;
   /** Externally sized ancestor (for example the canonical folio), never an auto-sized chat/content node. */
@@ -125,6 +127,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   composer.dataset.aerynthMotionControl='true';
   textarea.setAttribute('aria-label', 'Message'); textarea.placeholder = 'Ask anything, or share an idea'; textarea.rows = 2;
   send.type = 'submit'; send.setAttribute('aria-label', 'Send message'); stop.type = 'button'; stop.hidden = true; web.type = 'submit'; web.hidden = true; web.title = 'Search the public web using only this message'; web.setAttribute('aria-label', web.title); tools.append(hint, stop, send, web); composer.append(textarea, tools);providerSlot.append(provider);provider.classList.add('cp-chat-provider-label');
+  const sendWithMemory = el('button', 'Send with memory');
+  sendWithMemory.type = 'submit';
+  sendWithMemory.hidden = true;
+  decorateConversationControl(sendWithMemory, { identity: 'action', emphasis: 'secondary' });
+  tools.append(sendWithMemory);
   decorateConversationControl(send,{identity:'send',emphasis:'primary'});decorateConversationControl(stop,{identity:'stop',emphasis:'secondary'});decorateConversationControl(web,{identity:'search',emphasis:'secondary'});tools.dataset.cpGroup='composer';tools.setAttribute('role','group');tools.setAttribute('aria-label','Message controls');
   const capabilityNote=el('p','','cp-capability-note'),contextNote=el('p','','cp-context-note'),draftStatus = el('p', '', 'cp-draft-status'), recovery = el('div', undefined, 'cp-draft-recovery'); draftStatus.setAttribute('role', 'status');
   const recoveryDetails = el('details', undefined, 'cp-draft-conflict'), recoverySummary = el('summary', 'Review draft conflict'), localText = el('pre'), storedText = el('pre');
@@ -341,6 +348,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     checkOutcome.disabled = recovering;
     send.disabled = sending || !!active() || codexOutcomeUnknown || uncertain || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
     web.hidden = !plan?.execute || !webSearchModel();
+    sendWithMemory.hidden = !options.onRememberMessage || !plan?.execute;
+    sendWithMemory.disabled = send.disabled;
     web.disabled = send.disabled || web.hidden || !plan?.available;
     send.dataset.state=uncertain?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=cancelPending?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = cancelPending || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
@@ -383,7 +392,14 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   messages.addEventListener('keydown',event=>{if(event.target===messages&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)){pendingFollow=pendingAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;beginTranscriptScroll();}});
   const doAction = (event: ConversationMessageAction) => { Promise.resolve(options.onMessageAction?.(event)).catch(error=>report(errorText(error))); };
   function messageNode(message: MessageView,clock:ReturnType<typeof canonicalClock>): HTMLElement {
-    const signature = JSON.stringify([message,clock]), cached = cache.get(message.id); if (cached?.signature === signature) return cached.node;
+    const remember = options.onRememberMessage;
+    const canRemember = remember && message.role === 'user' && message.provenance === 'user' &&
+      !message.inherited && message.resourceId === resourceId && ['internal', 'public'].includes(message.sensitivity) &&
+      message.content.length <= 4096 && !!message.content.trim();
+    const projectId = canRemember ? current?.conversation.projectId ?? null : null;
+    const signature = JSON.stringify([message, clock, projectId]);
+    const cached = cache.get(message.id);
+    if (cached?.signature === signature) return cached.node;
     const article = el('article', undefined, 'cp-message cp-message-'+message.role); article.dataset.messageId = message.id; article.dataset.sourceResourceId = message.resourceId;article.dataset.aerynthMotionControl='true';
     // MessageView has no per-message provider binding: never relabel old assistant output after a provider change.
     const attribution = message.role === 'user' ? 'You' : message.role === 'assistant' ? (message.provenance==='device_clock'?'Device clock':message.provenance==='mock_adapter'?'Assistant · simulated source':'Assistant') : message.role;
@@ -427,6 +443,18 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         publish.disabled=!selection;
       };
       source.addEventListener('mouseup',capture);source.addEventListener('keyup',capture);publish.addEventListener('pointerdown',capture);
+    }
+    if (canRemember) {
+      const button = action('Remember message', () => {
+        if (panel.querySelector('.cp-memory-editor')) return;
+        const editor = createMemoryCaptureEditor({
+          conversationId: resourceId, messageId: message.id, content: message.content,
+          projectAvailable: projectId !== null, expectedProjectId: projectId,
+          review: remember, report, returnFocus: () => button.focus(),
+        });
+        panel.append(editor);
+        editor.querySelector('textarea')?.focus();
+      });
     }
     article.append(by,content,actions); cache.set(message.id,{signature,node:article});return article;
   }
@@ -526,7 +554,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   composer.addEventListener('submit',event=>{
     event.preventDefault();
     const webSearch = event.submitter === web;
-    if (send.disabled || !current || webSearch && web.disabled) return;
+    const useMemory = event.submitter === sendWithMemory;
+    if (send.disabled || !current || webSearch && web.disabled || useMemory && sendWithMemory.hidden) return;
     const before = current, content = textarea.value, commandId = crypto.randomUUID();
     const plan = ordinaryPlan(), selectedModel = webSearch ? webSearchModel() : effectiveModel();
     if (webSearch && !selectedModel) return;
@@ -545,7 +574,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
       if (reasoningEffort !== undefined) thinking = undefined;
-      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{})});
+      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{}),...(useMemory?{useMemory:true}:{})});
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
       const receipt = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
@@ -574,6 +603,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     })().catch(error=>{
       const code = errorText(error);
       if (code === 'authorization_cancelled') report('Send cancelled. Your saved draft was retained.');
+      else if (code === 'personal_memory_search_incomplete') report('Memory search reached its limit. Try a more specific query or include the original message reference. Your draft is still here.');
       else if (code === 'unsupported_model') report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');
       else if (code === 'unsupported_reasoning_effort') report('This model cannot use the requested thinking level. Your draft is still here.');
       else if (code === 'unsupported_web_search_model') report('This model cannot use web search. Your draft is still here.');
@@ -613,6 +643,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(streamText.textContent!==previousPreview&&wasFollowing&&!feedbackOpen&&!stream.hidden){presentationAnchor=null;liveFollow=true;options.motion?.wake();}
     const label=current?.providers.find(p=>p.id===next.providerId)?.label??next.providerId;
     report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
+    if (next.memoryDisclosure) report(status.textContent + (next.memoryDisclosure.state === 'simulated'
+      ? ' · Simulated saved-memory delivery.' : ' · Provider acknowledged the reviewed request with saved memory.'));
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
     if(!active())void refresh({latest:true}).catch(error=>report(errorText(error)));
   });
