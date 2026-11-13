@@ -11,7 +11,10 @@ async function startWindowRecording(win, session, localURL) {
     !process.argv.includes("--integration-organization") &&
     !process.argv.includes("--integration-expanded") &&
     !process.argv.includes("--integration-product-ui") &&
-    !process.argv.includes("--integration-drag-glide")
+    !process.argv.includes("--integration-drag-glide") &&
+    !(process.argv.includes("--integration-vela-missions") &&
+      process.argv.includes("--missions-aep-presentation-only") &&
+      process.argv.includes("--missions-aiw-inspection"))
   )
     throw new Error("recording_mode_required");
   const maxBytes =
