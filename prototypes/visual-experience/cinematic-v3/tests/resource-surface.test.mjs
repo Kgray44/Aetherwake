@@ -15,7 +15,7 @@ const resource = (id, patch = {}) => ({
   ...patch,
 });
 
-function fixture() {
+function fixture(placeNote) {
   const dom = blockDocument(),
     restore = dom.install();
   const mounted = [],
@@ -37,6 +37,7 @@ function fixture() {
     },
     anchor: () => ({ x: 240, y: 160, width: 16, height: 16 }),
     failed: (error) => failed.push(error.message),
+    placeNote,
     mount(root, value) {
       const editor = document.createElement("textarea");
       editor.value = value.content;
@@ -139,6 +140,39 @@ test("failed canonical draft flush keeps the existing view available to recover"
     assert.equal(await f.request().beforeClose("close-button"), false);
     assert.deepEqual(f.failed, ["note_version_conflict"]);
     assert.deepEqual(f.disposed, []);
+    assert.equal(f.mounted[0].active, true);
+  } finally {
+    f.restore();
+  }
+});
+
+test("a focused note can place its canonical resource once while the editor stays open", async () => {
+  const calls = [];
+  let eligible = false;
+  let complete;
+  const f = fixture((note) => eligible ? () => new Promise((resolve) => {
+    calls.push(note);
+    complete = resolve;
+  }) : undefined);
+  try {
+    f.surface.show(resource("saved-note"));
+    const button = f.request().content.querySelector("button");
+    assert.ok(button);
+    assert.equal(button.hidden, true);
+    eligible = true;
+    const current = resource("saved-note", { version: 2 });
+    f.surface.reconcile([current]);
+    assert.equal(button.hidden, false);
+    button.fire("click");
+    button.fire("click");
+    assert.equal(button.disabled, true);
+    assert.deepEqual(calls, [current]);
+    eligible = false;
+    f.surface.reconcile([current]);
+    complete();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(button.hidden, true);
+    assert.equal(f.mounted.length, 1);
     assert.equal(f.mounted[0].active, true);
   } finally {
     f.restore();

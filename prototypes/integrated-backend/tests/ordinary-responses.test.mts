@@ -9,6 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { BackendCore } from '../src/core.mts';
+import type { NoteDocument } from '../../block-library/note-contracts.ts';
+import type { CreatedBlock } from '../../block-library/contracts.ts';
 import { createRequire } from 'node:module';
 const { conversationCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/conversation-broker.cjs');
 const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
@@ -45,6 +47,60 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', h
 }
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
+
+test('a captured chat reply retains the edited note, workspace placement and save receipt across restart', async () => {
+ const f=fixture();
+ try {
+  const chat=await f.core.command('createConversation',{providerId:'local',commandId:randomUUID()});
+  const user=await f.core.command('addMessage',{resourceId:chat.resourceId,role:'user',content:'Synthetic question',expectedRevision:chat.revision});
+  const reply=await f.core.command('addMessage',{resourceId:chat.resourceId,role:'assistant',content:'Synthetic complete reply',expectedRevision:user.revision});
+  const input={resourceId:chat.resourceId,messageId:reply.id,commandId:randomUUID()};
+  const capture=(request:typeof input)=>f.core.command('conversation',{name:'captureReplyNote',input:request}) as Promise<{noteId:string}>;
+  const receipt=await capture(input);
+  const opened=await f.core.command('openResource',{resourceId:receipt.noteId,origin:{source:'application'}});
+  assert.equal(opened.status,'ready');
+  const readNote=async()=>(await f.core.command('notes',{name:'readNote',input:receipt.noteId})).result as NoteDocument;
+  const note=await readNote();
+  assert.equal(note.resource.content,reply.content);
+  const edited='Synthetic edited reply note';
+  const updated=(await f.core.command('notes',{name:'commitNote',input:{
+    resourceId:receipt.noteId,expectedResourceVersion:note.resource.version,
+    expectedDraftVersion:note.draftRevision,content:edited,
+  }})).result as NoteDocument;
+  assert.equal(updated.resource.content,edited);
+  const workspace=await f.core.command('desktop',{type:'createWorkspace',title:'Synthetic saved reply workspace',projectId:null});
+  const workspaceId=workspace.activeWorkspaceId!;
+  const attachInput={commandId:randomUUID(),workspaceId,expectedLayoutVersion:workspace.layoutVersion,
+    resourceId:receipt.noteId,expectedResourceVersion:updated.resource.version,kind:'note' as const};
+  const place=async()=>(await f.core.command('library',{name:'attachBlock',input:attachInput})).result as CreatedBlock;
+  const placement=await place();
+  assert.equal(placement.resourceId,receipt.noteId);
+  assert.equal(placement.workspaceId,workspaceId);
+  await assert.rejects(capture({...input,messageId:user.id}),/source_unavailable/);
+  const unrelated=await f.core.command('createConversation',{providerId:'local',commandId:randomUUID()});
+  await assert.rejects(capture({...input,resourceId:unrelated.resourceId}),/source_unavailable/);
+  f.owner.state.messageEvidence[reply.id]={outputState:'partial'};
+  await assert.rejects(capture(input),/source_unavailable/);
+  delete f.owner.state.messageEvidence[reply.id];
+  await f.reopen();
+  assert.deepEqual(await capture(input),receipt);
+  assert.deepEqual(await place(),placement);
+  const restored=await readNote();
+  assert.equal(restored.resource.id,receipt.noteId);
+  assert.equal(restored.resource.content,edited);
+  const desktop=await f.core.command('desktop',{type:'snapshot'});
+  assert.deepEqual(desktop.resources.filter(resource=>resource.kind==='note').map(resource=>resource.id),[receipt.noteId]);
+  assert.deepEqual(desktop.blocks.filter(block=>block.resource_id===receipt.noteId).map(block=>[block.id,block.workspace_id]),
+    [[placement.placementId,workspaceId]]);
+  f.owner.atomic(() => f.owner.graph.markUnavailable(reply.id));
+  await f.reopen();
+  const results = await f.core.command('conversation', { name: 'search', input: {
+    text: reply.content, searchMode: 'chat-history',
+  } }) as { total: number };
+  assert.equal(results.total, 0);
+  await assert.rejects(capture(input), /source_unavailable/);
+ } finally {await f.close();}
+});
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
 
 test('a reviewed planning request compiles one graph and runs native dependencies and a specialist after review', async () => {
