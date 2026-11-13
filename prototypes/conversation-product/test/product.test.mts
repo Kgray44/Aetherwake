@@ -232,6 +232,17 @@ test('conversation-first browse, activity/created/title sorts and explicit searc
   assert.deepEqual((await f.product.command('search',{text:'exact message needle',searchMode:'conversations'})).items.map(hit=>[hit.kind,hit.resourceId]),[['conversation',older.resourceId]]);
   assert.deepEqual((await f.product.command('search',{text:'exact message needle',searchMode:'messages'})).items.map(hit=>[hit.kind,hit.messageId]),[['message',message.id]]);
   assert.deepEqual((await f.product.command('search',{text:'resource needle',searchMode:'resources'})).items.map(hit=>hit.resourceId),[note.id]);
+  assert.deepEqual((await f.product.command('search',{text:'newer',searchMode:'chat-history'})).items.map(hit=>[hit.kind,hit.resourceId]),[['conversation',newer.resourceId]]);
+  assert.deepEqual((await f.product.command('search',{text:'exact message needle',searchMode:'chat-history'})).items.map(hit=>[hit.kind,hit.messageId]),[['message',message.id]]);
+  const owner=f.core as unknown as {conversationReadView():ConversationReadView};
+  let resourceReads=0;
+  f.host.canonicalReadView=async()=>{const view=owner.conversationReadView();return {...view,resourceContent:id=>{resourceReads++;return view.resourceContent(id);}};};
+  try{
+   assert.equal((await f.product.command('search',{text:'resource needle',searchMode:'chat-history'})).total,0);
+   assert.equal(resourceReads,0);
+   assert.equal((await f.product.command('search',{text:'resource needle',searchMode:'all'})).items[0]?.resourceId,note.id);
+   assert.ok(resourceReads>0);
+  }finally{delete f.host.canonicalReadView;}
   f.denied.add(message.id);const denied=(await f.product.command('list',{})).items.find(c=>c.resourceId===older.resourceId)!;assert.equal(denied.messageCount,null);assert.equal(denied.lastActivityAt,null);assert.equal(denied.historyMetadataStatus,'unavailable');assert.equal((await f.product.command('search',{text:'exact message needle'})).total,0);f.denied.delete(message.id);
   const before=await f.product.command('list',{});await f.close();f=fixture(path);assert.deepEqual(await f.product.command('list',{}),before);assert.equal((await f.product.command('detail',{resourceId:older.resourceId,aroundMessageId:message.id})).messages.items[0].id,message.id);
   await assert.rejects(f.product.command('list',{sort:'guessed' as never}),/invalid_sort/);await assert.rejects(f.product.command('search',{searchMode:'guessed' as never}),/invalid_search_mode/);
@@ -252,4 +263,93 @@ test('trusted same-graph metadata browse avoids snapshot/transcript cloning and 
   Object.defineProperty(source,'content',{configurable:true,get(){bodyReads++;throw new Error('denied source body read');}});f.denied.add(parent.resourceId);
   const current=await f.product.command('list',{});assert.equal(current.items.some(c=>c.resourceId===parent.resourceId),false);const visibleChild=current.items.find(c=>c.resourceId===child.resourceId)!;assert.equal(visibleChild.messageCount,null);assert.equal(visibleChild.lastActivityAt,null);assert.equal(visibleChild.historyMetadataStatus,'unavailable');assert.equal(bodyReads,0);assert.equal(clones,0);
  }finally{restore();await f.close();removeFixture(dir);}
+});
+
+test('canonical chat search reads an inherited message once per query and rechecks source access on the next query', async () => {
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-search-read-work-')),f=fixture(join(dir,'canonical.sqlite'));
+ try {
+  const parent=await create(f,'Synthetic search parent');
+  const source=await record(f,parent.resourceId,'Synthetic inherited performance needle');
+  const child=await branch(f,parent.resourceId,source.id);
+  const afterFork=await record(f,parent.resourceId,'Synthetic parent-only performance needle');
+  await record(f,child.resourceId,'Synthetic child-only unrelated reply');
+  const graph=(f.core as unknown as {graph:ConversationGraph}).graph;
+  const records=(graph as unknown as {data:GraphData}).data;
+  const inherited=records.messages.find(message=>message.id===source.id)!;
+  const inheritedBody=inherited.content;
+  let inheritedReads=0;
+  Object.defineProperty(inherited,'content',{configurable:true,enumerable:true,get:()=>{
+   inheritedReads++;
+   return inheritedBody;
+  }});
+  const original=graph.visibleMessages.bind(graph);
+  let bodyCopies=0;
+  graph.visibleMessages=id=>{bodyCopies++;return original(id);};
+  const query={text:'performance needle',searchMode:'chat-history' as const};
+  const search=async()=>(await f.core.command('conversation',{name:'search',input:query})) as {items:{resourceId:string;messageId?:string}[]};
+  let hits=(await search()).items;
+  assert.equal(hits.length,3);
+  assert.ok(hits.some(hit=>hit.resourceId===child.resourceId&&hit.messageId===source.id));
+  assert.ok(hits.some(hit=>hit.resourceId===parent.resourceId&&hit.messageId===afterFork.id));
+  assert.ok(!hits.some(hit=>hit.resourceId===child.resourceId&&hit.messageId===afterFork.id));
+  assert.equal(bodyCopies,0,'chat search must avoid cloning complete visible transcripts');
+  assert.equal(inheritedReads,1,'both branches share one search of the authorized source');
+  for (const searchMode of ['all','chat-history','messages','conversations'] as const) {
+   const input={...query,searchMode,sort:'title' as const,limit:1,offset:1};
+   assert.deepEqual(await f.core.command('conversation',{name:'search',input}),
+    await f.product.command('search',input), 'optimized and compatibility queries preserve exact ordering and pages');
+  }
+  const matchMessages=graph.searchVisibleMessages.bind(graph);
+  let excerpts=0;
+  graph.searchVisibleMessages=(...args)=>{
+   const matches=matchMessages(...args);
+   for(const [id,items] of matches) matches.set(id,items.map(item=>({
+    id:item.id,createdAt:item.createdAt,get excerpt(){excerpts++;return item.excerpt;}
+   })));
+   return matches;
+  };
+  const input={...query,sort:'title' as const,limit:1,offset:1};
+  assert.deepEqual(await f.core.command('conversation',{name:'search',input}),await f.product.command('search',input));
+  assert.equal(excerpts,1,'only the requested page materializes message excerpts');
+  excerpts=0;
+  assert.deepEqual(await f.core.command('conversation',{name:'search',input:{...input,offset:5}}),
+   await f.product.command('search',{...input,offset:5}));
+  assert.equal(excerpts,0,'an empty page does not materialize any message excerpts');
+  graph.searchVisibleMessages=matchMessages;
+  graph.markUnavailable(source.id);
+  inheritedReads=0;
+  hits=(await search()).items;
+  assert.deepEqual(hits.map(hit=>[hit.resourceId,hit.messageId]),[[parent.resourceId,afterFork.id]]);
+  assert.equal(inheritedReads,0,'revoked content is excluded before reading its body');
+ } finally {await f.close();removeFixture(dir);}
+});
+
+test('canonical exact-hit detail reads only the requested page and preserves authorized lineage', async () => {
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-detail-read-work-')),f=fixture(join(dir,'canonical.sqlite'));
+ try {
+  const parent=await create(f,'Synthetic detail parent');
+  const earlier=await record(f,parent.resourceId,'Synthetic earlier message outside page');
+  const source=await record(f,parent.resourceId,'Synthetic exact inherited hit');
+  const child=await branch(f,parent.resourceId,source.id);
+  const later=await record(f,parent.resourceId,'Synthetic parent-only later message');
+  const query={resourceId:child.resourceId,aroundMessageId:source.id,limit:1};
+  const expected=await f.product.command('detail',query);
+  const graph=(f.core as unknown as {graph:ConversationGraph}).graph;
+  const records=(graph as unknown as {data:GraphData}).data;
+  let offPageReads=0;
+  for (const message of records.messages.filter(message=>message.id===earlier.id || message.id===later.id)) {
+   const body=message.content;
+   Object.defineProperty(message,'content',{configurable:true,enumerable:true,get:()=>{
+    offPageReads++;
+    return body;
+   }});
+  }
+  const detail=await f.core.command('conversation',{name:'detail',input:query}) as typeof expected;
+  assert.deepEqual(detail.messages,expected.messages);
+  assert.deepEqual(detail.lineage,expected.lineage);
+  assert.equal(detail.messages.items[0].id,source.id);
+  assert.equal(offPageReads,0);
+  graph.markUnavailable(source.id);
+  await assert.rejects(f.core.command('conversation',{name:'detail',input:query}),/message_unavailable/);
+ } finally {await f.close();removeFixture(dir);}
 });

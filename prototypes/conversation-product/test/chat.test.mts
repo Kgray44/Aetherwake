@@ -158,6 +158,7 @@ test('quick search opens the exact message from the keyboard and never activates
     }
     if(name==='search'&&input.text==='readable'){
       assert.equal(input.limit,12);
+      assert.equal(input.searchMode,'chat-history');
       return {items:[{kind:'message',resourceId,messageId,title:summary.title,excerpt:'A readable response.'}],total:1,offset:0,limit:12,hasMore:false};
     }
     return (f.port.command as any)(name,input);
@@ -174,8 +175,8 @@ test('quick search opens the exact message from the keyboard and never activates
     assert.equal(!!results.querySelector('button'),false);
     oldRow.fire('click');
     await searchStarted;
-    input.value='readable';input.fire('input');
     input.fire('keydown',{key:'Enter'});
+    input.value='readable';input.fire('input');
     assert.deepEqual(opened,[]);
     await new Promise(resolve=>setTimeout(resolve,160));
     assert.equal(results.querySelector('button').dataset.messageId,messageId);
@@ -192,6 +193,35 @@ test('quick search opens the exact message from the keyboard and never activates
     assert.equal(f.draft.content,'Unsent follow-up');
     assert.equal(switcher.open,false);
   }finally{release();await manager?.dispose();f.restore();}
+});
+
+test('quick search Enter submits pending text immediately and opens the first exact result once', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId, messageId=f.detail.messages.items[1].id;
+ const opened:string[][]=[];
+ let searches=0,manager;
+ const port={async command(name:string,input:any){
+  if(name==='search'&&input.text==='exact phrase'){
+   searches++;
+   return {items:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:'exact phrase'}],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(id,message)=>opened.push([id,message??''])});
+  await manager.ready;
+  await manager.openSwitcher();
+  const input=f.view.root.querySelector('.cp-switcher').querySelector('input');
+  input.value='exact phrase';
+  input.fire('input');
+  input.fire('keydown',{key:'Enter',isComposing:true});
+  assert.equal(searches,0);
+  input.fire('keydown',{key:'Enter'});
+  assert.equal(searches,1,'Enter bypasses the pending debounce');
+  input.fire('keydown',{key:'Enter'});
+  await until(()=>opened.length===1);
+  assert.deepEqual(opened,[[resourceId,messageId]]);
+  assert.equal(searches,1);
+ } finally {await manager?.dispose();f.restore();}
 });
 
 test('mounted manager menus, branch/context and canonical nested folders borrow the same frame lifecycle without replacing the live composer',async()=>{

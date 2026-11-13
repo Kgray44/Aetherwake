@@ -6,7 +6,7 @@ export type { FidelityStatus, NativeChatGPTAimId, NativeChatGPTAimAssessment, Na
 export type SharingMode = 'independent' | 'connected' | 'collaborative';
 export type Evidence = 'excerpt' | 'reported' | 'observed' | 'hypothesis' | 'decision' | 'disputed';
 export type ConversationSort = 'activity' | 'created' | 'title' | 'active';
-export type ConversationSearchMode = 'conversations' | 'messages' | 'resources' | 'all';
+export type ConversationSearchMode = 'conversations' | 'messages' | 'chat-history' | 'resources' | 'all';
 export type SearchQuery = { text?: string; projectId?: string | null; collectionId?: string; familyOf?: string; providerId?: string; favorite?: boolean; archived?: boolean; after?: string; before?: string; sort?: ConversationSort; searchMode?: ConversationSearchMode; offset?: number; limit?: number };
 export type ConversationSummary = { resourceId: string; conversationId: string; title: string; providerId: string; revision: number; version: number; projectId: string | null; projectIds: string[]; state: 'active' | 'archived'; createdAt: string; lastActivityAt?: string | null; historyMetadataStatus?: 'complete' | 'limited' | 'unavailable'; execution?: PublicConversationExecution; favorite: boolean; messageCount: number | null; collectionIds: string[] };
 export type MessageView = { id: string; resourceId: string; role: string; content: string; createdAt: string; provenance: string; inherited: boolean; sensitivity: string;executionId?:string;outputState?:'complete'|'partial'; webSearch?: import('../../openai-provider/contracts.mts').TurnResult['webSearch'] };
