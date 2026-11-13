@@ -343,3 +343,39 @@ test('Vela projects memory acknowledgement only for the matching readable reques
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Vela memory-derived replies remain readable locally and stay out of voice and attached conversation context', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aerynth-memory-derived-'));
+  const core = new BackendCore({ path: join(root, 'profile.sqlite'), provider: 'fixture', contentPolicy: 'synthetic-only' });
+  try {
+    const opened = await core.command('vela', { name: 'open', input: {} }) as VelaState;
+    const conversationId = opened.conversation!.resourceId;
+    const input = await core.command('addMessage', { resourceId: conversationId, role: 'user',
+      content: 'Synthetic reviewed question', expectedRevision: opened.conversation!.revision });
+    const reply = await core.command('addMessage', { resourceId: conversationId, role: 'assistant',
+      content: 'Synthetic reply containing a private memory', expectedRevision: input.revision });
+    const owner = core as unknown as {
+      state: { executions: Record<string, Execution>; messageEvidence: Record<string, { executionId: string }> };
+      velaHost: import('../../vela-core/src/canonical-host.mts').CanonicalVelaHost;
+      voiceContext(id: string, purpose: 'conversation'): Promise<{ contextRef: string; contextDigest: string; history: unknown[] }>;
+      validateVoiceContext(ref: string, digest: string): void;
+    };
+    const before = await owner.voiceContext(conversationId, 'conversation');
+    assert.match(JSON.stringify(before.history), /containing a private memory/);
+    owner.state.executions['memory-execution'] = { reviewedMemory: true } as Execution;
+    owner.state.messageEvidence[reply.id] = { executionId: 'memory-execution' };
+    assert.throws(() => owner.validateVoiceContext(before.contextRef, before.contextDigest), /live_context_changed/);
+    const after = await owner.voiceContext(conversationId, 'conversation');
+    assert.doesNotMatch(JSON.stringify(after.history), /containing a private memory/);
+    assert.match(JSON.stringify(after.history), /Synthetic reviewed question/);
+    const attached = owner.velaHost.readContent(conversationId, owner.velaHost.scope());
+    assert.ok(attached);
+    assert.doesNotMatch(attached.content, /containing a private memory/);
+    assert.match(attached.content, /Synthetic reviewed question/);
+    const local = await core.command('vela', { name: 'state', input: {} }) as VelaState;
+    assert(local.conversation?.messages.some(message => message.id === reply.id));
+  } finally {
+    await core.command('close', {});
+    rmSync(root, { recursive: true, force: true });
+  }
+});
