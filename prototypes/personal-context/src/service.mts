@@ -433,6 +433,9 @@ export class PersonalContextService {
     while (signed.encodedBytes !== previous) { previous = signed.encodedBytes; signed.encodedBytes = bytes({ ...signed, digest: '0'.repeat(64) }); }
     const { id: _id, createdAt: _time, digest: _digest, ...body } = signed; signed.digest = hash(body); return signed;
   }
+  private recallEnabled(input: ContextRequest, policy: PersonalPolicy): boolean {
+    return policy.storageEnabled && (input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled);
+  }
   private requestProofs(input: ContextRequest): ScopeProof[] {
     return [{ kind: 'assistant.' + input.assistant } as PersonalScope, ...(input.projectId ? [{ kind: 'project' as const, id: input.projectId }] : []), ...(input.conversationId ? [{ kind: 'conversation' as const, id: input.conversationId }] : [])].map(value => this.proof(value));
   }
@@ -452,7 +455,7 @@ export class PersonalContextService {
       const omit = (reason: OmissionReason, count = 1) => omissions.set(reason, (omissions.get(reason) ?? 0) + count);
       const base = (reasons = omissions) => this.seal({ contract: PERSONAL_CONTEXT_CONTRACT, id: manifestId, createdAt: created, ownerId: who.userId, hostPolicyVersion: who.policyVersion, policyVersion: policy.version, requestDigest: hash(input), trust: 'untrusted-personalization-data', scopes, items, omissions: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => a.reason.localeCompare(b.reason)) });
       const manifestId = randomUUID(), created = this.now();
-      if (!(input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled)) { omit('disabled'); const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return result; }
+      if (!this.recallEnabled(input, policy)) { omit('disabled'); const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return result; }
       // Current revision insertion order prioritizes new reviews within the scan budget.
       const heads = this.opts.db.prepare(`SELECT h.id,h.kind,h.version,h.scope,h.state
         FROM personal_context_heads h LEFT JOIN personal_context_revisions r
@@ -535,7 +538,7 @@ export class PersonalContextService {
       const expectedScopes = this.requestProofs(input), sourceCache = new Map<string, OriginalImport>();
       const references: RecordRef[] = []; const seen = new Set<string>();
       for (const item of manifest.items) {
-        check(!seen.has(item.factId), 'invalid_context_item'); seen.add(item.factId); check(input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled, 'personal_disclosure_disabled');
+        check(!seen.has(item.factId), 'invalid_context_item'); seen.add(item.factId); check(this.recallEnabled(input, policy), 'personal_disclosure_disabled');
         const head = this.required(item.factId, 'fact', item.version), itemProof = this.proof(head.scope!); this.authorize('record.read', head.scope, this.ref(head));
         const value = this.decode<ReviewedFact>(head); check(!this.usable(value, head, input, policy, sourceCache) && same(this.item(value), item), 'stale_personal_context'); references.push(this.ref(head));
         const required = [itemProof]; if (value.provenance.kind === 'import') { const source = this.required(value.provenance.id, 'import', value.provenance.version); references.push(this.ref(source)); required.push(this.proof(source.scope!)); }

@@ -221,6 +221,34 @@ test('scope denial skips the original body; shared reviewed knowledge never gran
   const f = fixture(); try { f.enable(); const source = f.service.importOriginal(original()), value = f.service.reviewFact(fact(source, { scope: shared })); const before = f.calls.decrypted; f.denied.add(JSON.stringify(ordinary)); const context = f.service.previewContext(request({ assistant: 'vela', sharedFactIds: [value.id] })); assert.equal(context.items.length, 0); assert(context.omissions.some(item => item.reason === 'unavailable')); assert.equal(f.calls.decrypted - before, 2, 'only privacy policy and selected fact, never denied original body'); } finally { f.close(); }
 });
 
+test('pausing storage prevents both assistants from recalling retained facts across restart', () => {
+  const f = fixture();
+  try {
+    const policy = f.enable();
+    const saved = f.service.reviewFact(fact(undefined, { scope: { kind: 'project', id: 'p1' } }));
+    const requests = [request({ projectId: 'p1' }), request({ projectId: 'p1', assistant: 'vela' })];
+    const previews = requests.map(input => f.service.previewContext(input));
+    for (const preview of previews) assert.deepEqual(preview.items.map(item => item.factId), [saved.id]);
+
+    const paused = f.service.setPolicy({ expectedVersion: policy.version, patch: { storageEnabled: false } });
+    f.restart();
+    for (const [index, input] of requests.entries()) {
+      const before = f.calls.decrypted;
+      const preview = f.service.previewContext(input);
+      assert.deepEqual(preview.items, []);
+      assert.deepEqual(preview.omissions, [{ reason: 'disabled', count: 1 }]);
+      assert.equal(f.calls.decrypted - before, 1, 'only the privacy policy is decrypted');
+      assert.throws(() => f.service.validateContext(previews[index], input), /stale_personal_context/);
+    }
+    assert.equal(f.service.readFact(saved.id).text, saved.text);
+    f.service.setPolicy({ expectedVersion: paused.version, patch: { storageEnabled: true } });
+    for (const [index, input] of requests.entries()) {
+      assert.deepEqual(f.service.previewContext(input).items.map(item => item.factId), [saved.id]);
+      assert.throws(() => f.service.validateContext(previews[index], input), /stale_personal_context/);
+    }
+  } finally { f.close(); }
+});
+
 test('a current project decision gets scanned before old facts regardless of its ID', () => {
   const f = fixture();
   try {
