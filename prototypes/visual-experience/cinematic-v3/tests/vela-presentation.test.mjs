@@ -75,6 +75,27 @@ for (const reason of ["backend_disconnected", "missing receipt", "authorization_
   }
 });
 
+test("a confirmed Vela response reaches the composer while workspace refresh is pending", async () => {
+  const recorded = { id: "canonical-request", state: "responded" };
+  let finishRefresh;
+  const refresh = new Promise(resolve => { finishRefresh = resolve; });
+  const client = createVelaClient({
+    command: async () => recorded,
+    changed: () => refresh,
+    observed() {},
+  });
+  try {
+    const pending = client.request({ intent: "Check status", resourceIds: [], authorizeProvider: false });
+    const waiting = Symbol("workspace refresh is still pending");
+    assert.deepEqual(await Promise.race([
+      pending,
+      new Promise(resolve => setImmediate(() => resolve(waiting))),
+    ]), recorded);
+  } finally {
+    finishRefresh();
+  }
+});
+
 test("a confirmed Vela response survives a failed workspace refresh", async () => {
   const recorded = { id: "canonical-request", state: "responded" };
   const operations = [];
@@ -91,6 +112,7 @@ test("a confirmed Vela response survives a failed workspace refresh", async () =
     observed() {},
   });
   assert.deepEqual(await client.request({ intent: "Check status", resourceIds: [], authorizeProvider: false }), recorded);
+  await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(operations, ["request"]);
   assert.equal(refreshFailures, 1);
 });

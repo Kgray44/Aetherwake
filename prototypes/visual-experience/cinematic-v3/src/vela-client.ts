@@ -67,6 +67,11 @@ export function createVelaClient(options: {
       if (current && !current()) throw Error("vela_observation_superseded");
       options.observed(result as VelaState);
     }
+    if (name === "request" && (result as VelaRequest).state === "responded") {
+      // A conversational reply can render independently of workspace hydration.
+      void Promise.resolve().then(() => options.changed(name, result, mayPresent)).catch(reportRequestRefreshFailure);
+      return result as T;
+    }
     if (
       [
         "native",
@@ -94,11 +99,14 @@ export function createVelaClient(options: {
       } catch (error) {
         if (name !== "request") throw error;
         // The native request receipt remains authoritative if presentation fails.
-        try { options.requestRefreshFailed?.(); } catch { /* Feedback cannot invalidate the receipt. */ }
+        reportRequestRefreshFailure();
       }
     }
     return result as T;
   };
+  function reportRequestRefreshFailure() {
+    try { options.requestRefreshFailed?.(); } catch { /* Feedback cannot invalidate the receipt. */ }
+  }
   return {
     hostOperation:input=>invoke('hostOperation',input),
     missionFileEdit:input=>invoke('missionFileEdit',input),
