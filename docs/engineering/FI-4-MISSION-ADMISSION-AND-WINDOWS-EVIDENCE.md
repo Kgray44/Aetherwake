@@ -21,7 +21,20 @@ Concurrent was faster in all six pairs. Paired savings ranged from 4.33 to 14.31
 
 The GPU-inclusive pilot observed 51 ms of CPU, GPU and provider overlap. A verified sequential pilot had 26.8 seconds of GPU admission wait. The repeat series encountered GPU admission deadlines and was stopped. A separate native product run verified eight staged buffers with a 256 MiB VRAM reservation. An owner-mode checkpoint held the lease while stopping and a separately reviewed replacement verified. These runs do not qualify matched GPU throughput or packaged foreground responsiveness.
 
-The Codex variant uses the same reviewed mission entry point with a tracked, explicitly selected Node test. Its read-only App Server sandbox returns a checked exit and test count. The run joins these results with native CPU/RAM and two attributed specialist reports. The reports undergo structural and attribution checks. A separate live planning test failed native note verification, retried only the native branch after a note was added, and preserved the original provider execution and report across restart. The illustration mission independently read back its real PNG and text, restored its report after restart, and withdrew verification after the text changed. These are separate journeys.
+The Codex variant uses the same reviewed mission entry point with a tracked, explicitly selected Node test. Its read-only App Server sandbox returns a checked exit and test count. The run joins these results with native CPU/RAM and two attributed specialist reports. The reports undergo structural and attribution checks.
+
+| Codex, native measurements and API workload | Concurrent | Sequential |
+| --- | ---: | ---: |
+| Verified trials | 6/6 | 6/6 |
+| Median wall time | 13.48 s | 23.78 s |
+| Wall time range | 11.79–17.47 s | 21.81–27.81 s |
+| Median process CPU | 1.87 s | 2.38 s |
+| Median reported tokens | 1,789 | 1,809.5 |
+| Median estimated token cost | $0.00971 | $0.00987 |
+
+All six pairs favored concurrent execution. Paired savings ranged from 4.38 to 15.92 seconds and concurrent specialist intervals overlapped by 7.37–9.17 seconds. All twelve trials verified the same single tracked test with exit code zero. The fixture made no Codex model requests.
+
+A separate live planning test failed native note verification, retried only the native branch after a note was added, and preserved the original provider execution and report across restart. The illustration mission independently read back its real PNG and text, restored its report after restart, and withdrew verification after the text changed. These are separate journeys.
 
 ## Reproduce
 
