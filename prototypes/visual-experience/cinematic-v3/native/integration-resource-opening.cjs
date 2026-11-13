@@ -131,7 +131,12 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const diagnose = () => js("(()=>{const a=window.__aerynth?.application?.(),s=window.__aerynth?.snapshot?.(),where=s?.spatial?.location??a?.navigation;return{status:(document.querySelector('#status')?.textContent??'').slice(0,240),location:where?{kind:where.kind,projectId:where.projectId,workspaceId:where.workspaceId,blockId:where.blockId}:null,anchors:[...document.querySelectorAll('.aw-anchor[data-key]')].slice(0,16).map(e=>({key:e.dataset.key.slice(0,160),label:(e.querySelector('strong')?.textContent??'').slice(0,80),visible:!!e.getClientRects().length&&!e.closest('[hidden],[inert]')&&getComputedStyle(e).visibility!=='hidden'}))}})()");
     const wait = async (label, check) => { receipt.phase = label; try { return await waitForCondition({ slot, label, check, diagnose }); } catch (error) { if (error.diagnostics) receipt.conditionFailure = { label, diagnostics: error.diagnostics }; throw error; } };
     const expression = (label, code) => wait(label, () => js(`(()=>{try{return (${code})}catch{return false}})()`));
-    const action = async (selector, kind = 'click', value) => { await wait('Visible renderer target ' + selector, async () => { const result = await js(targetScript(selector, 'inspect')); return result.ready; }); const result = await js(targetScript(selector, kind, value)); assert.equal(result.ready, true, 'renderer_target_changed'); receipt.actions.push({ method: 'renderer-DOM-' + kind, selector, ...(kind === 'input' ? { characters: value.length } : {}) }); };
+    const action = async (selector, kind = 'click', value) => {
+      await wait('Visible renderer target ' + selector, async () => {
+        const result = await js(targetScript(selector, kind, value));
+        assert(result && typeof result === 'object', 'renderer_action_outcome_unknown');
+        return result.ready === true;
+      }); receipt.actions.push({ method: 'renderer-DOM-' + kind, selector, ...(kind === 'input' ? { characters: value.length } : {}) }); };
     const application = async input => { receipt.actions.push({ method: 'application-capability-fixture', type: input.type }); return js(`window.__aerynth.execute(${JSON.stringify(input)})`); };
     const open = async (resourceId, extra = {}) => { receipt.actions.push({ method: 'application-openResource', resourceId, ...extra }); const result = await js(`window.__aerynth.openResource(${JSON.stringify({ resourceId, ...extra })})`); assert.equal(result.resourceId, resourceId); return result; };
     const flush = () => js('window.__aerynth.flush()');
@@ -144,7 +149,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const note = async resourceId => (await rpc('notes', { name: 'readNote', input: resourceId })).result;
     const directSelector = id => `.application-direct-resource[data-resource-id="${id}"]`;
     const waitNote = id => expression('Actual direct Note session', `(()=>{const r=document.querySelector(${JSON.stringify(directSelector(id))});return r?.querySelector('.aw-direct-editor')&&!r.querySelector('.aw-direct-editor').disabled&&['ready','saved','recovered'].includes(r.querySelector('[data-note-state]')?.dataset.noteState)})()`);
-    const close = async id => { const selector = `[data-surface-id="${id}"]`; await action(selector + ' .aw-contextual-dismiss'); await expression('Surface closes after actual flush', `!document.querySelector(${JSON.stringify(selector)})`); };
+    const close = async id => { const selector = `[data-surface-id="${id}"]`; const control = id === 'conversations' ? ' .cp-header-actions [data-cp-control="close"]' : ' .aw-contextual-dismiss'; await action(selector + control); await expression('Surface closes after actual flush', `!document.querySelector(${JSON.stringify(selector)})`); };
     const canonical = async () => {
       const d = await desktop(), core = await rpc('snapshot', {}), layouts = {};
       assert.equal(Object.keys(core.executions).length, 0, 'No provider execution authorized'); assert.equal(Object.keys(core.handoffs).length, 0, 'No delegated handoff authorized');
