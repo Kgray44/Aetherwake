@@ -153,11 +153,17 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
    let parent=entries[0],anchor=parent.messageIds[Math.floor(parent.messageIds.length/2)];
    for(let i=0;i<64;i++){const child=await makeBranch(parent,anchor,'chain '+i);chain.push(child);parent=child;anchor=child.messageIds[0];}
   }catch(error){if(String(error).includes('synthetic_state_capacity'))capped=true;else throw error;}
-  // Use the actual product's injected policy boundary, exactly as canonical
-  // permission fixtures do. This only DENIES the synthetic parent; no authority
-  // is granted and no real user's policy/provider/account is involved.
-  const denied=new Set([entries[3].resourceId]),host=(owner.conversations as unknown as {host:CanonicalConversationHost}).host,originalAccess=host.access;
-  host.access=(id,messageId)=>!denied.has(id)&&originalAccess?.(id,messageId)!==false;
+  const restrictedParent=entries[3];
+  const denied=new Set([restrictedParent.resourceId]);
+  if(measureWorker){
+   // Archive the parent after forking so its exclusion survives worker reopen.
+   const {resource}=owner.kernel.getResource(restrictedParent.resourceId);
+   owner.kernel.setResourceArchived(resource.id,true,resource.version);
+   restrictedParent.archived=true;
+  }else{
+   const host=(owner.conversations as unknown as {host:CanonicalConversationHost}).host,originalAccess=host.access;
+   host.access=(id,messageId)=>!denied.has(id)&&originalAccess?.(id,messageId)!==false;
+  }
   // Canonical source revocation also applies to every inherited reference.
   owner.atomic(()=>{owner.graph.markUnavailable(entries[0].messageIds[1]);owner.graph.markUnavailable(entries[0].messageIds.at(-1)!);});
   const manual=owner.kernel.createCollection('Synthetic manual collection',projects[1]),smart=owner.kernel.createCollection('Synthetic smart collection',null),nested=owner.kernel.createCollection('Synthetic nested collection',projects[1]);
