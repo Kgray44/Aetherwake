@@ -91,3 +91,49 @@ test('preference drafting leaves tentative, quoted, and formatted material for m
     }
   } finally { restore(); }
 });
+
+test('drafted search terms keep the distinctive term after a long conversational lead-in', () => {
+  const f = componentDocument(), restore = f.install();
+  try {
+    const editor = createMemoryCaptureEditor({
+      content: 'Remember: After all that we have said about what we should use, the quartz relay is the decision.',
+      conversationId: 'chat', messageId: 'message', projectAvailable: true,
+      async review() { throw Error('unexpected review'); }, report() {},
+    });
+    const terms = editor.querySelector('input')!.value.split(', ');
+    assert.ok(terms.includes('quartz'));
+    assert.ok(terms.includes('relay'));
+    assert.ok(!terms.includes('should'));
+  } finally { restore(); }
+});
+
+test('an explicitly marked decision drafts a verbatim candidate without expanding its scope', async () => {
+  const f = componentDocument(), restore = f.install();
+  const submitted: MemoryCaptureRequest[] = [];
+  try {
+    const draft = (content: string) => createMemoryCaptureEditor({
+      content, conversationId: 'chat', messageId: 'decision-source', projectAvailable: true, expectedProjectId: 'project',
+      async review(request) { submitted.push(request); return false; }, report() {},
+    });
+    const content = 'Earlier options are still in the transcript.\nRemember decision: Use quartz for the relay.';
+    const editor = draft(content);
+    assert.equal(editor.querySelector('textarea')!.value, 'Use quartz for the relay.');
+    assert.equal(editor.querySelectorAll('select')[0].value, 'conversation');
+    assert.equal(editor.querySelectorAll('select')[1].value, 'decisions');
+    assert.deepEqual(submitted, []);
+    (editor as any).fire('submit');
+    await until(() => submitted.length === 1);
+    assert.equal(submitted[0].messageId, 'decision-source');
+    assert.equal(submitted[0].category, 'decisions');
+    assert.equal(submitted[0].scope, 'conversation');
+    for (const ambiguous of [
+      '> Remember decision: Use quartz.', 'Remember decision: Maybe use quartz.',
+      'Remember decision: Use quartz.\nRemember: Keep slate.',
+      '~~~\nRemember decision: Use quartz.\n~~~',
+    ]) {
+      const manual = draft(ambiguous);
+      assert.equal(manual.querySelector('textarea')!.value, ambiguous);
+      assert.equal(manual.querySelectorAll('select')[1].value, 'technical');
+    }
+  } finally { restore(); }
+});

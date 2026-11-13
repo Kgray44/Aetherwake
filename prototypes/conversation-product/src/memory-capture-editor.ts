@@ -1,3 +1,4 @@
+import { personalMemorySearchTerms } from '../../application-contract/personal-memory.ts';
 import type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
 
 export type MemoryCaptureRequest = CaptureRequest;
@@ -14,18 +15,23 @@ interface EditorOptions {
 }
 
 /** Called only after the user chooses Remember message. Keep a single verbatim statement. */
-function explicitMemoryCandidate(content: string): { text: string; category?: 'preferences' } | undefined {
+function explicitMemoryCandidate(content: string): { text: string; category?: 'preferences' | 'decisions' } | undefined {
   // Leave formatted examples and ambiguous multi-statement messages to manual editing.
   if (/(?:`{3,}|~{3,})/u.test(content)) return;
+  const tentative = /\b(?:might|maybe|probably|if|unless|today|currently|for now)\b/iu;
   const marked = content.split(/\r?\n/u).flatMap(line => {
-    const match = /^Remember:[ \t]+(\S.*)$/iu.exec(line);
-    return match ? [match[1].trimEnd()] : [];
+    const match = /^Remember( decision)?:[ \t]+(\S.*)$/iu.exec(line);
+    return match ? [{ text: match[2].trimEnd(), decision: !!match[1] }] : [];
   });
-  if (marked.length === 1) return { text: marked[0] };
+  if (marked.length === 1) {
+    const { text, decision } = marked[0];
+    if (!decision) return { text };
+    if (!tentative.test(text) && /^[^.!?]+[.!]?$/u.test(text)) return { text, category: 'decisions' };
+  }
   if (marked.length) return;
   const statement = content.trim();
   if (/^I prefer [^.\n\r?!]+\.?$/iu.test(statement) &&
-      !/\b(?:might|maybe|probably|if|unless|today|currently|for now)\b/iu.test(statement))
+      !tentative.test(statement))
     return { text: statement, category: 'preferences' };
 }
 
@@ -68,7 +74,8 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     ['preferences', 'Preference'], ['projects', 'Project detail']]);
   if (candidate?.category) category.value = candidate.category;
   const keywords = document.createElement('input');
-  keywords.value = [...new Set(text.value.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]{2,64}/gu) ?? [])].filter(term => term !== 'prefer').slice(0, 8).join(', ');
+  const suggested = personalMemorySearchTerms(text.value).filter(term => term !== 'prefer' && term.length <= 64);
+  keywords.value = suggested.slice(0, 8).join(', ');
   keywords.maxLength = 1056;
   keywords.required = true;
   field('Search terms, separated by commas', keywords);
