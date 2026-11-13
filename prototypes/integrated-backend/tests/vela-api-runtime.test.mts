@@ -59,13 +59,18 @@ test('conversation timing joins only a preview that finished in the same clock d
 function fixture() {
   const base = resolve(tmpdir()), dir = mkdtempSync(join(base,'aerynth-api-runtime-')), path = join(dir,'canonical.sqlite'), requests: any[] = [], events: StreamEvent[] = [], replies: ((body:any)=>Response|Promise<Response>)[] = [];
   const encryptionKey = randomBytes(32);
+  let catalogRequests=0, catalogGate:Promise<void>|undefined;
   const nativeHost: NativeHostServices = { secrets: {
     available: async () => true,
     seal: async text => { const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm',encryptionKey,iv); return Buffer.concat([iv,cipher.update(text),cipher.final(),cipher.getAuthTag()]); },
     open: async bytes => { const data = Buffer.from(bytes), cipher = createDecipheriv('aes-256-gcm',encryptionKey,data.subarray(0,12)); cipher.setAuthTag(data.subarray(-16)); return Buffer.concat([cipher.update(data.subarray(12,-16)),cipher.final()]).toString(); },
   } };
   const api = { fetch: (async (url,init) => {
-    if (url === 'https://api.openai.com/v1/models') return Response.json({data:[{id:'gpt-6-luna'},{id:'gpt-6.1-sol'}]});
+    if (url === 'https://api.openai.com/v1/models') {
+      catalogRequests++;
+      await catalogGate;
+      return Response.json({data:[{id:'gpt-6-luna'},{id:'gpt-6.1-sol'}]});
+    }
     assert.equal(url,'https://api.openai.com/v1/responses');
     assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
     const body = JSON.parse(String(init?.body)); requests.push(body); const reply = replies.shift(); assert.ok(reply,'unexpected API inference'); return reply(body);
@@ -74,6 +79,8 @@ function fixture() {
   const create = () => new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only'},event=>events.push(event),nativeHost,undefined,api);
   core = create();
   return { get core() { return core; }, requests, replies, events,
+    get catalogRequests(){return catalogRequests;},
+    holdCatalog(gate:Promise<void>){catalogGate=gate;},
     async configure() { return core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:marker},expectedVersion:null}); },
     async authorize() { return core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:true}); },
     async send(intent: string, extra: Record<string,unknown> = {}): Promise<VelaRequest> {
@@ -124,6 +131,36 @@ test('private ledger reads preserve profile identity and refuse incomplete or un
     assert.equal(changes(),before);
     assert.equal(f.requests.length,1);
   } finally { await f.close(); await other.close(); }
+});
+
+test('CIE preflight refuses a stale catalog without dispatching or joining an in-flight refresh', async () => {
+  const f=fixture();
+  let release!:()=>void, refreshing:Promise<string[]>|undefined;
+  try {
+    await f.configure();
+    await f.authorize();
+    const runtime=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+    const profile=runtime.readLedgerProfile()!;
+    await assert.rejects(runtime.modelsFromCurrentCatalog(1),/api_catalog_stale/);
+    assert.equal(f.catalogRequests,0);
+    f.holdCatalog(new Promise<void>(resolve=>{release=resolve;}));
+    refreshing=runtime.models(1);
+    for(let i=0;i<50&&f.catalogRequests===0;i++)await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(f.catalogRequests,1);
+    const unresolved=runtime.readLedgerReceipts({profileId:profile.profileId,configurationVersion:1,requestIds:['synthetic-preflight-interrupted']});
+    assert.deepEqual(unresolved,{state:'unresolved'});
+    await assert.rejects(runtime.modelsFromCurrentCatalog(1),/api_catalog_stale/);
+    assert.equal(f.requests.length,0);
+    assert.equal(runtime.readLedgerProfile()?.usage.usedToday,0);
+    release();
+    await refreshing;
+    assert.deepEqual(await runtime.modelsFromCurrentCatalog(1),['gpt-6-luna','gpt-6.1-sol']);
+    assert.equal(f.catalogRequests,1);
+  } finally {
+    release?.();
+    await refreshing?.catch(()=>{});
+    await f.close();
+  }
 });
 
 const weatherQuery:WeatherQuery={startDate:null,endDate:null,period:'tomorrow',metrics:['temperature','humidity'],aggregation:'range'};

@@ -231,6 +231,15 @@ export class VelaApiRuntime {
   availability() { const available = this.authorized(); return { available, busy: this.running.size >= VELA_API_RUNTIME_LIMITS.concurrent,
     ...(!available ? { reason: 'Dedicated Vela API usage has not been authorized for this configuration.' } : {}) }; }
   private validate(version: number) { check(this.authorized(version), 'vela_api_usage_authorization_required'); }
+  /** Evaluation preflight may use a current catalog without starting or joining
+   * a provider refresh whose activity would sit outside the usage receipts. */
+  async modelsFromCurrentCatalog(version: number): Promise<string[]> {
+    this.validate(version);
+    const catalog = await this.options.connection.resolveCatalog(version);
+    this.validate(version);
+    this.knownCatalog = {version,expiresAt:catalog.expiresAt,models:[...catalog.models]};
+    return [...catalog.models];
+  }
   async models(version: number): Promise<string[]> {
     this.validate(version);
     if (this.catalogFlight?.version === version) return [...await this.catalogFlight.promise];
@@ -240,11 +249,10 @@ export class VelaApiRuntime {
     finally { if (this.catalogFlight === flight) this.catalogFlight = undefined; }
   }
   private async loadModels(version: number): Promise<string[]> {
-    try { const catalog = await this.options.connection.resolveCatalog(version); this.knownCatalog = { version, expiresAt: catalog.expiresAt, models: [...catalog.models] }; return [...catalog.models]; }
+    try { return await this.modelsFromCurrentCatalog(version); }
     catch (error) { if ((error as { code?: string }).code !== 'api_catalog_stale') throw error; }
     await this.options.connection.catalog(version);
-    this.validate(version);
-    const catalog = await this.options.connection.resolveCatalog(version); this.knownCatalog = { version, expiresAt: catalog.expiresAt, models: [...catalog.models] }; return [...catalog.models];
+    return this.modelsFromCurrentCatalog(version);
   }
   knownModels() { return this.knownCatalog && this.authorized(this.knownCatalog.version) && this.knownCatalog.expiresAt > Date.now() ? [...this.knownCatalog.models] : []; }
 
