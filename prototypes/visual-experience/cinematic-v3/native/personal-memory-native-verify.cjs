@@ -9,6 +9,7 @@ const { showVelaReview, isOwnedVelaReviewWindow } = require('./vela-review.cjs')
 
 const root = realpathSync(process.argv[2]);
 const mode = process.argv[3];
+const headless = process.argv.includes('--headless-worker');
 assert(['save', 'restore'].includes(mode));
 const profile = join(root, 'electron-profile');
 if (mode === 'save') {
@@ -83,21 +84,32 @@ async function run() {
     const input = { conversationId: chat.resourceId, messageId: message.id, text: factText,
       scope: 'conversation', category: 'decisions', keywords: ['quartz', 'relay'] };
     stage = 'open isolated parent';
-    parent = new BrowserWindow({ width: 820, height: 630, show: false, webPreferences: { sandbox: true } });
-    await parent.loadURL('data:text/html,<title>Aerynth synthetic memory check</title><button>Review memory</button>');
-    parent.show();
-    parent.focus();
-    await waitFor(() => parent.isFocused());
+    if (!headless) {
+      parent = new BrowserWindow({ width: 820, height: 630, show: false, webPreferences: { sandbox: true } });
+      await parent.loadURL('data:text/html,<title>Aerynth synthetic memory check</title>');
+      parent.show();
+      parent.focus();
+      await waitFor(() => parent.isFocused());
+    }
     stage = 'review and save';
     let reviewed;
     const saved = await capturePersonalMemory({
-      input, trustedFrame: () => !parent.isDestroyed() && parent.isVisible(),
-      observeGesture: () => parent.isFocused(), allowWrite: async () => true,
+      input, trustedFrame: () => headless || !parent.isDestroyed() && parent.isVisible(),
+      // This fixture enters at the native capture adapter. The owned child
+      // still requires real activation; renderer IPC admission is separate.
+      observeGesture: () => true, allowWrite: async () => true,
       preview: value => backend.call('personalMemoryCapturePreviewNative', value),
       cancel: id => backend.call('personalMemoryCaptureCancelNative', { id }),
       commit: review => backend.call('personalMemoryCaptureCommitNative', review),
       async showReview(review) {
         reviewed = review;
+        if (headless) {
+          assert.equal(review.sourceText, text);
+          assert.equal(review.draft.text, factText);
+          return true;
+        }
+        parent.focus();
+        await waitFor(() => parent.isFocused());
         const result = showVelaReview({ parent, review, expiresAt: review.expiresAt, experience: 'memory-capture' });
         const child = await waitFor(() => BrowserWindow.getAllWindows().find(win =>
           win.isFocused() && isOwnedVelaReviewWindow(win, parent)));
@@ -118,7 +130,7 @@ async function run() {
     backend = undefined;
     assert(!readFileSync(path).includes(Buffer.from(factText)));
     writeFileSync(receiptPath, JSON.stringify({ input, id: saved.id, pid: process.pid }), { flag: 'wx' });
-    console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron, nativeApproval: true, replayDenied: true }));
+    console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron, nativeApproval: !headless, replayDenied: true }));
   } catch (error) {
     const code = /^[a-z][a-z0-9_]{1,79}$/u.test(error.message) ? error.message : error.code ?? error.name;
     console.error(JSON.stringify({ result: 'fail', mode, stage, error: code }));
