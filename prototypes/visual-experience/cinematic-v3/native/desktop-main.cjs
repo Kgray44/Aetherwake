@@ -39,6 +39,7 @@ const {
 } = require("./conversation-broker.cjs");
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
+const { memoryRecallUnavailable } = require('./memory-recall-fallback.cjs');
 const {showVelaReview,projectEvidenceMatches}=require('./vela-review.cjs');
 const {capturePersonalMemory}=require('./personal-memory-capture.cjs');
 const {managePersonalMemory}=require('./personal-memory-management.cjs');
@@ -917,7 +918,7 @@ app.whenReady().then(async () => {
           shouldPreviewMemory: async () => {
             if (!trustedActiveFrame(event)) return false;
             const policy = await call("personalMemoryPolicyNative", {}).catch(error => {
-              if (["private_key_unavailable", "personal_memory_native_required"].includes(error?.message)) return null;
+              if (memoryRecallUnavailable(error)) return null;
               throw error;
             });
             return trustedActiveFrame(event) && policy?.storageEnabled === true && policy.ordinaryEnabled === true;
@@ -990,7 +991,7 @@ app.whenReady().then(async () => {
             shouldPreviewMemory: async () => {
               if (!trustedActiveFrame(event)) return false;
               const policy = await call("personalMemoryPolicyNative", {}).catch(error => {
-                if (["private_key_unavailable", "personal_memory_native_required"].includes(error?.message)) return null;
+                if (memoryRecallUnavailable(error)) return null;
                 throw error;
               });
               return trustedActiveFrame(event) && policy?.storageEnabled === true && policy.velaEnabled === true;

@@ -5,9 +5,10 @@ const { conversationCommand } = require("../native/conversation-broker.cjs");
 
 const providerId = "chatgpt-plan-responses";
 test("ordinary Send offers opted-in memory and binds the exact native review before dispatch", async () => {
-  for (const scenario of ["match", "miss", "off", "web", "cancel", "stale"]) {
+  for (const scenario of ["match", "miss", "locked", "required-locked", "off", "web", "cancel", "stale"]) {
     const calls = [];
     const input = { resourceId: "chat", content: "Synthetic request", expectedRevision: 2, commandId: "send",
+      ...(scenario === "required-locked" ? { useMemory: true } : {}),
       ...(scenario === "web" ? { webSearch: true } : {}) };
     const includeMemory = ["match", "cancel", "stale"].includes(scenario);
     const messages = [{ role: "user", content: input.content }];
@@ -20,6 +21,7 @@ test("ordinary Send offers opted-in memory and binds the exact native review bef
     let reviews = 0, policyReads = 0;
     const operation = conversationCommand({
       input: { name: "send", input },
+      beforeMemoryPreview: async () => {},
       shouldPreviewMemory: async () => { policyReads++; return scenario !== "off"; },
       validateMemoryReview: () => scenario !== "stale",
       reviewSources: async ({ review }) => {
@@ -33,6 +35,7 @@ test("ordinary Send offers opted-in memory and binds the exact native review bef
         if (name === "desktop") return { resources: [{ id: "chat", kind: "conversation", providerId }] };
         if (name === "conversationClock") return null;
         if (name === "conversationSendPreview") {
+          if (request.useMemory && ["locked", "required-locked"].includes(scenario)) throw Error("private_key_unavailable");
           if (request.useMemory && scenario === "miss") throw Error("personal_memory_no_eligible_context");
           assert.equal(request.useMemory === true, includeMemory);
           return { id: "preview", providerId, resourceId: "chat", commandId: "send", fingerprint: "fingerprint",
@@ -50,14 +53,15 @@ test("ordinary Send offers opted-in memory and binds the exact native review bef
         return { state: "provider_completed" };
       },
     });
-    if (scenario === "cancel") await assert.rejects(operation, /authorization_cancelled/);
+    if (scenario === "required-locked") await assert.rejects(operation, /private_key_unavailable/);
+    else if (scenario === "cancel") await assert.rejects(operation, /authorization_cancelled/);
     else if (scenario === "stale") await assert.rejects(operation, /personal_memory_frame_changed/);
     else assert.deepEqual(await operation, { state: "provider_completed" });
     const previews = calls.filter(([name]) => name === "conversationSendPreview").map(([, request]) => request.useMemory);
-    assert.deepEqual(previews, scenario === "miss" ? [true, undefined] : [includeMemory ? true : undefined]);
+    assert.deepEqual(previews, scenario === "required-locked" ? [true] : ["miss", "locked"].includes(scenario) ? [true, undefined] : [includeMemory ? true : undefined]);
     assert.equal(reviews, Number(includeMemory));
-    assert.equal(policyReads, Number(scenario !== "web"));
-    if (scenario === "cancel" || scenario === "stale") {
+    assert.equal(policyReads, Number(!["web", "required-locked"].includes(scenario)));
+    if (["cancel", "stale", "required-locked"].includes(scenario)) {
       assert(!calls.some(([name]) => name === "conversationSend" || name === "authorizeConversationSend"));
     }
   }

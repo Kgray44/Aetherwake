@@ -1,3 +1,4 @@
+const { canSkipOptionalMemory } = require('./memory-recall-fallback.cjs');
 const { createHash } = require("node:crypto");
 const { isIP } = require("node:net");
 const { showVelaReview, isReviewOwnerAlive } = require("./vela-review.cjs");
@@ -113,7 +114,7 @@ exports.conversationCommand = async ({
         preview = await call("conversationSendPreview", { ...request, useMemory: true });
         reviewedMemory = true;
       } catch (error) {
-        if (!["personal_memory_no_eligible_context", "personal_memory_search_incomplete"].includes(error?.code ?? error?.message)) throw error;
+        if (!canSkipOptionalMemory(error)) throw error;
       }
     }
     preview ??= await call("conversationSendPreview", request);

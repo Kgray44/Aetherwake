@@ -1,3 +1,4 @@
+const { canSkipOptionalMemory } = require('./memory-recall-fallback.cjs');
 const {
   validateReview,
   validateFileEditReview,
@@ -368,7 +369,7 @@ exports.velaCommand = async ({
         preview = await stage("preview", () => call("velaRequestPreview", { ...previewInput, useMemory: true, providerId: preview.providerId }));
         reviewedMemory = true;
       } catch (error) {
-        if (!["personal_memory_no_eligible_context", "personal_memory_search_incomplete"].includes(error?.code ?? error?.message)) throw error;
+        if (!canSkipOptionalMemory(error)) throw error;
       }
     }
     if (memoryMiss && reviewMemorySearch && validateMemoryReview?.() === true) {

@@ -49,7 +49,7 @@ test('Vela memory requires a gesture and explicit native approval of its bound p
   await assert.rejects(velaCommand(options), /invalid_native_vela_review/);
 });
 test('ordinary Vela requests check opted-in memory without changing the selected provider', async () => {
-  for (const scenario of ['match', 'miss', 'off', 'other-provider', 'stale', 'cancel']) {
+  for (const scenario of ['match', 'miss', 'locked', 'off', 'other-provider', 'stale', 'cancel']) {
     const calls = [];
     const providerId = scenario === 'other-provider' ? 'chatgpt-plan-responses' : 'openai-api-vela';
     const baseReview = { ...disclosure(), providerId, route: { kind: 'conversational' }, context: { included: [] } };
@@ -64,6 +64,7 @@ test('ordinary Vela requests check opted-in memory without changing the selected
       async call(name, input) {
         calls.push([name, input]);
         if (name === 'velaRequestPreview') {
+          if (input.useMemory && scenario === 'locked') throw Error('private_key_missing');
           if (input.useMemory && scenario === 'miss') throw Error('personal_memory_no_eligible_context');
           withMemory = input.useMemory === true;
           if (withMemory) assert.equal(input.providerId, providerId);
@@ -90,7 +91,7 @@ test('ordinary Vela requests check opted-in memory without changing the selected
     const attempted = !['off', 'other-provider'].includes(scenario);
     assert.deepEqual(calls.filter(([name]) => name === 'velaRequestPreview').map(([, input]) => input.useMemory),
       attempted ? [undefined, true] : [undefined]);
-    assert.equal(reviewed, attempted && scenario !== 'miss');
+    assert.equal(reviewed, attempted && !['miss', 'locked'].includes(scenario));
     if (scenario === 'stale' || scenario === 'cancel') assert(!calls.some(([name]) => name === 'authorizeVelaRequest' || name === 'vela'));
   }
 });
