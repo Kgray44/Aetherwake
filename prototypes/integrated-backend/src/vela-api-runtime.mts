@@ -4,6 +4,7 @@ import { prepareResponsesTurn, ResponsesTransport } from '../../openai-provider/
 import { prepareImageGeneration, sendReviewedImageGeneration, type MissionImageSettings } from '../../openai-provider/images.mts';
 import type { ApiContinuation, ApiContextTransition, ApiFunctionCall, ApiJsonSchema, ApiResponseItem, ApiToolOutput, DispatchReview, ReviewedApiFunction, TurnEvent, TurnResult, TurnTransportTiming } from '../../openai-provider/contracts.mts';
 import { VELA_API_PROVIDER } from '../../openai-provider/api-connection-contracts.mts';
+import { PERSONAL_MEMORY_TRUST_INSTRUCTION } from '../../application-contract/personal-memory.ts';
 import { VELA_IDENTITY_VERSION, renderVelaIdentityPrompt } from '../../vela-core/src/vela-identity.mts';
 import { capabilitySchemaTool, CAPABILITY_SCHEMA_TOOL, type CapabilityCatalogSnapshot } from '../../vela-core/src/capability-catalog.mts';
 import { VelaError } from '../../vela-core/src/capabilities.ts';
@@ -300,7 +301,7 @@ export class VelaApiRuntime {
     const validateMemory = () => {
       if (!memory) return;
       check(!input.lane && !input.missionCognition && !input.tools && !input.weatherTool && !input.catalog &&
-        !input.outputSchema && !input.resume && !input.resumeContext && !input.resumeReceipt && !input.advanceContext,
+        !input.outputSchema && input.instruction === undefined && !input.resume && !input.resumeContext && !input.resumeReceipt && !input.advanceContext,
         'vela_memory_requires_conversation');
       check(input.memory === memory && memory.requestId === input.requestId && memory.promptDigest === digest(currentPrompt),
         'vela_memory_request_mismatch');
@@ -363,7 +364,8 @@ export class VelaApiRuntime {
         };
         const turn = { executionId, requestId: input.requestId, configurationId: VELA_API_CONFIGURATION_ID, providerId: VELA_API_PROVIDER,
           assistant: 'vela' as const, model: input.model,
-          instructions: renderVelaIdentityPrompt('assistant') + '\n' + (input.instruction ?? 'Answer naturally and concisely using the supplied context. Never claim an action occurred without an observed host receipt.')+(catalog?'\nPinned host tools: '+JSON.stringify(velaToolCatalogEnvelope(catalog))+'\nFetch exact schemas before invocation. Tool receipts report actual host outcomes; pending review/job is not completion. Provider reports do not independently verify the objective.':''),
+          instructions: renderVelaIdentityPrompt('assistant') + '\n' + (input.instruction ?? 'Answer naturally and concisely using the supplied context. Never claim an action occurred without an observed host receipt.') +
+            (memory ? '\n\n' + PERSONAL_MEMORY_TRUST_INSTRUCTION : '') + (catalog?'\nPinned host tools: '+JSON.stringify(velaToolCatalogEnvelope(catalog))+'\nFetch exact schemas before invocation. Tool receipts report actual host outcomes; pending review/job is not completion. Provider reports do not independently verify the objective.':''),
           messages: [{ role: 'user' as const, content: currentPrompt }], contextDigest: currentContext,
           ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
           api: { configurationVersion: input.version, instructionVersion: VELA_IDENTITY_VERSION,
