@@ -96,11 +96,11 @@ export function createConversationExecutionPort(
   const notify = (id: string, value: ConversationExecutionObservation) => {
     for (const listener of watchers.get(id) ?? []) listener(value);
   };
-  const connection = (available: boolean) => {
-    if (connected === available) return;
-    connected = available;
+  const disconnect = () => {
+    if (connected === false) return;
+    connected = false;
     for (const id of watchers.keys())
-      notify(id, { connection: available ? "available" : "unavailable" });
+      notify(id, { connection: "unavailable" });
   };
   function deliver(delta: Delta) {
     const execution = latest.get(delta.resourceId);
@@ -233,7 +233,8 @@ export function createConversationExecutionPort(
           !host.visible()
         )
           return;
-        connection(true);
+        // Restore controls only with the resource's current access and execution snapshot.
+        connected = true;
         for (const result of results)
           for (const resource of result.resources) {
             const id = resource.resourceId;
@@ -282,7 +283,7 @@ export function createConversationExecutionPort(
           availability.clear();
           // The chat clears its live preview when the connection is lost.
           signatures.clear();
-          connection(false);
+          disconnect();
           host.onError?.(error);
         }
       }
@@ -356,7 +357,7 @@ export function createConversationExecutionPort(
     pending.length = 0;
     pendingBytes = 0;
     seen.clear();
-    connection(false);
+    disconnect();
     if (read) void refresh();
   }
   function stopIdle() {
@@ -398,7 +399,7 @@ export function createConversationExecutionPort(
         }, 1000);
       }
       if (connected === false)
-        listener({ connection: connected ? "available" : "unavailable" });
+        listener({ connection: "unavailable" });
       void refresh();
       let unsubscribed = false;
       return () => {

@@ -272,7 +272,10 @@ test("an unchanged active preview is delivered again after an activity read fail
     await f.port.refresh();
     assert.deepEqual(received.at(-1), { connection: "unavailable" });
     fail = false;
+    const reconnectStart = received.length;
     await f.port.refresh();
+    assert.equal(received.length, reconnectStart + 1);
+    assert.equal(received[reconnectStart].resourceAvailable, true);
     assert.equal(received.at(-1).connection, "available");
     assert.equal(received.at(-1).preview?.text, preview.text);
     assert.equal(received.at(-1).execution.state, "running");
