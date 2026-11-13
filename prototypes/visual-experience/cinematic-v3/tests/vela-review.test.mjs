@@ -324,6 +324,32 @@ const open = (f) =>
 const fileDisclosure=()=>({files:[{path:'C:\\Synthetic\\sample.mjs',before:'old',after:'new',beforeDigest:'a'.repeat(64),afterDigest:'b'.repeat(64)}]});
 const openThree=f=>showVelaReview({parent:f.parent,review:fileDisclosure(),expiresAt:new Date(Date.now()+30000).toISOString(),runtime:f.runtime,experience:'file-edit',decisionMode:'three-way'});
 
+test('selected-source review closes when its backend owner retires', async t=>{
+  t.mock.timers.enable({apis:['setInterval']});
+  const f=runtime();let current=true;
+  const pending=showVelaReview({parent:f.parent,review:disclosure(),intent:'Read selected evidence',
+    expiresAt:new Date(Date.now()+30000).toISOString(),runtime:f.runtime,
+    experience:'vela-initiated-analysis',isCurrent:()=>current});
+  const child=f.children[0];await Promise.resolve();assert.equal(child.shown,true);
+  current=false;t.mock.timers.tick(250);
+  assert.equal(await pending,false);
+  assert.equal(child.destroyed,true);
+  assert.equal(f.ipcMain.listenerCount('vela-review-decision'),0);
+});
+
+test('selected-source approval requires a trusted gesture in the owned review', async ()=>{
+  for(const active of [false,true]){
+    const f=runtime();
+    const pending=showVelaReview({parent:f.parent,review:disclosure(),intent:'Read selected evidence',
+      expiresAt:new Date(Date.now()+30000).toISOString(),runtime:f.runtime,
+      experience:'vela-initiated-analysis',isCurrent:()=>true});
+    const child=f.children[0];await Promise.resolve();
+    child.webContents.mainFrame.executeJavaScript=async()=>active;
+    f.decide(child,'approve');
+    assert.equal(await pending,active);
+  }
+});
+
 test('optional three-way review has a genuine No while legacy HTML and boolean semantics remain unchanged',async()=>{
   const review=fileDisclosure();assert(!reviewPage(review,'','file-edit').includes('id="reject"'));
   assert(reviewPage(review,'','file-edit',undefined,'three-way').includes('id="reject" type="button">No</button>'));

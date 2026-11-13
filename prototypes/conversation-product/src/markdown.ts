@@ -96,7 +96,13 @@ export function appendInlineMarkdown(target: HTMLElement, text: string, citation
       if (/^(https?:\/\/|mailto:)/i.test(link[2])) { const a = document.createElement('a'); a.href = link[2]; a.rel = 'noreferrer noopener'; a.target = '_blank'; a.textContent = link[1]; node = a; }
       else { node = document.createElement('span'); node.textContent = token; }
     }
-    target.append(node); start = match.index! + original.length;
+    target.append(node);
+    // Keep sources beside the formatted span, outside code and links.
+    if (citation) for (const marker of original.matchAll(/\uE000(\d{1,2})\uE001/g)) {
+      const source = citation(Number(marker[1]));
+      if (source) target.append(source);
+    }
+    start = match.index! + original.length;
   }
   target.append(document.createTextNode(text.slice(start)));
 }

@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { appendFileSync } = require("node:fs");
 const { readFile, writeFile } = require("node:fs/promises");
 const path = require("node:path");
 const { options, sameState } = require("./integration-block-scale.cjs");
@@ -9,25 +10,50 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Uses the real application renderer, host and database with a hidden
  * BrowserWindow. Timings here cannot establish native input or presentation. */
 exports.verify = async ({
-  win, app, privateRoot, call, source, moduleStartedMonotonicMs, startupErrors,
+  win, app, privateRoot, call, source, moduleStartedMonotonicMs, startupErrors, startup,
 }) => {
   const selected = options(process.argv);
   const profile = process.argv.includes("--offscreen-profile");
   const memoryCycles = process.argv.includes("--offscreen-memory-cycles");
+  const trace = process.argv.includes("--offscreen-checkpoints");
+  const phase = selected.restore ? "restart" : "initial";
+  const checkpointPath = path.join(privateRoot, "offscreen-checkpoints-" + phase + ".jsonl");
+  function checkpoint(stage) {
+    if (!trace) return;
+    appendFileSync(checkpointPath, JSON.stringify({
+      stage,
+      elapsedMs: Math.round(performance.now() - moduleStartedMonotonicMs),
+    }) + "\n");
+  }
+  checkpoint("verifier-started");
   const devtools = win.webContents.debugger;
   const receipt = {
     contract: "aerynth.offscreen-block-scale@1",
     source,
-    phase: selected.restore ? "restart" : "initial",
+    phase,
     count: selected.count,
     scope: "Offscreen Electron callback and compositor paint observations. No visible window, native pointer input, OS presentation, or provider execution.",
     passed: false,
     samples: [],
     commandElapsedMs: {},
+    ...(startup ? { startup } : {}),
   };
   const seed = JSON.parse(await readFile(path.join(privateRoot, "block-scale-seed.json"), "utf8"));
   const projection = (state) => Object.fromEntries(Object.keys(seed.expected).map((key) => [key, state[key]]));
   const expectedPath = path.join(privateRoot, "offscreen-scale-expected.json");
+  const pinWitness = process.argv.includes("--offscreen-saved-pin");
+  const pinPath = path.join(privateRoot, "offscreen-scale-pin.json");
+  async function verifySavedPin() {
+    const expected = JSON.parse(await readFile(pinPath, "utf8"));
+    assert.equal(expected.key, "resource:" + seed.primaryBlockId);
+    assert.equal(expected.anchor.pinned, true);
+    const stored = await call("viewState", {});
+    const rendered = await js("window.__aerynth.snapshot().spatial?.anchors");
+    assert.deepEqual(stored?.anchors?.[expected.key], expected.anchor, "saved Constellation pin");
+    assert.deepEqual(rendered?.[expected.key], expected.anchor, "rendered Constellation pin");
+    receipt.savedPin = { key: expected.key, storageMatched: true, rendererMatched: true };
+  }
+
   const paintIntervals = [];
   let lastPaint = 0, paintCount = 0;
   const onPaint = () => {
@@ -57,6 +83,7 @@ exports.verify = async ({
   const snapshot = () => js("window.__aerynth.application()");
   const execute = (action) => js("window.__aerynth.execute(" + JSON.stringify(action) + ")");
   const timed = async (name, action) => {
+    checkpoint(name);
     const start = performance.now();
     const result = await action();
     receipt.commandElapsedMs[name] = performance.now() - start;
@@ -81,6 +108,7 @@ exports.verify = async ({
   ].filter((key) => Number.isFinite(before[key]) && Number.isFinite(after[key]))
     .map((key) => [key, after[key] - before[key]]));
   const sample = async (label) => {
+    checkpoint(label);
     const before = profile ? await chromiumMetrics() : null;
     await js("window.__aerynth.resetMetrics()");
     paintIntervals.length = 0;
@@ -93,6 +121,7 @@ exports.verify = async ({
       return { metrics:s.metrics, active:s.active, graphicsFailed:s.graphicsFailed, contextLost:s.gpu?.contextLost,
         surfacesRendered:s.gpu?.surfacesRendered,detailedSurfacesRendered:s.gpu?.detailedSurfacesRendered,
         distinctSlabGeometries:s.gpu?.distinctSlabGeometries,
+        gpuResources: s.gpu && { geometries: s.gpu.geometries, textures: s.gpu.textures },
         unhiddenCardNodes:cards.filter(card=>!card.hidden).length, mountedCards:cards.length,
         interactiveCardNodes:cards.filter(card=>!card.closest('[inert],[hidden]')).length,
         usableCardNodes:cards.filter(card=>card.dataset.workspacePresentation==='usable').length,
@@ -101,6 +130,7 @@ exports.verify = async ({
     assert.equal(result.active, true);
     assert.equal(result.graphicsFailed, false);
     assert.equal(result.contextLost, false);
+    assertGpuResources(result.gpuResources);
     assert.deepEqual(result.metrics.errors, []);
     assert(result.metrics.draws > 0 && paintCount > 0, "no_offscreen_frames_observed");
     const { metrics, ...observations } = result;
@@ -159,11 +189,15 @@ exports.verify = async ({
       devtools.attach("1.3");
       await devtools.sendCommand("Performance.enable");
     }
+    checkpoint("wait-for-hydration");
     await wait('document.body.dataset.applicationHydrated === "true"');
     receipt.startupToHydratedMs = performance.now() - moduleStartedMonotonicMs;
+    checkpoint("wait-for-first-draw");
     await js("window.__aerynth.setActive(true)");
     await wait("window.__aerynth.snapshot().metrics.draws > 0");
     const initial = await snapshot();
+    checkpoint("initial-state");
+    if (pinWitness) await verifySavedPin();
     if (selected.restore) {
       sameState(JSON.parse(await readFile(expectedPath, "utf8")), initial);
       await visibleWorkspace();
@@ -192,6 +226,17 @@ exports.verify = async ({
       assert.equal((await snapshot()).navigation.kind, "constellation");
       await wait("document.querySelector('#stage').inert === true");
       await sample("universe");
+      if (process.argv.includes("--offscreen-repeat-spatial-recovery")) {
+        const spatialActive = "window.__aerynth.snapshot().gpu?.spatialLayer?.active === true";
+        await wait(spatialActive);
+        for (let cycle = 0; cycle < 2; cycle++) {
+          await js("window.__aerynth.simulateContextLoss()");
+          await wait("window.__aerynth.snapshot().gpu?.contextLost === true");
+          await js("window.__aerynth.restoreContext()");
+          await wait(spatialActive);
+        }
+        receipt.spatialRecoveryCycles = 2;
+      }
       await timed("openEmptyWorkspace", () => navigate({ kind: "workspace", workspaceId: seed.alternateWorkspaceId }));
       await wait("document.querySelectorAll('[data-block]').length === 0");
       await timed("returnToWorkspace", () => navigate({ kind: "workspace", workspaceId: seed.workspaceId }));
@@ -221,6 +266,7 @@ exports.verify = async ({
         // Repeat the same scene lifecycle without capturing images between
         // samples. Each return must retain the same committed workspace.
         for (let cycle = 1; cycle <= 3; cycle++) {
+          checkpoint("navigate-revisit-" + cycle);
           await navigate({ kind: "constellation", projectId: null });
           await wait("document.querySelector('#stage').inert === true");
           await navigate({ kind: "workspace", workspaceId: seed.alternateWorkspaceId });
@@ -231,6 +277,7 @@ exports.verify = async ({
           sameState(projection(canonical), await snapshot());
           await sample("memory-revisit-" + cycle);
         }
+        checkpoint("inactive-draws");
         await js("window.__aerynth.setActive(false)");
         await wait("window.__aerynth.snapshot().active === false");
         await pause(200);
@@ -242,21 +289,35 @@ exports.verify = async ({
         await js("window.__aerynth.setActive(true)");
         await wait("window.__aerynth.snapshot().metrics.draws > " + after);
       }
+      checkpoint("reduced-motion");
       await js("window.__aerynth.setReduced(true)");
       await wait("window.__aerynth.snapshot().reduced === true");
+      checkpoint("lose-context");
       await js("window.__aerynth.simulateContextLoss()");
       await wait("window.__aerynth.snapshot().gpu?.contextLost === true");
       const drawsBeforeRestore = await js("window.__aerynth.snapshot().metrics.draws");
+      checkpoint("restore-context");
       await js("window.__aerynth.restoreContext()");
       await wait("window.__aerynth.snapshot().gpu?.contextLost === false && !window.__aerynth.snapshot().graphicsFailed");
       await wait("window.__aerynth.snapshot().metrics.draws > " + drawsBeforeRestore);
       await visibleWorkspace();
       sameState(projection(canonical), await snapshot());
+      if (memoryCycles) {
+        const recovered = await js(`(() => {
+          const { geometries, textures } = window.__aerynth.snapshot().gpu;
+          return { geometries, textures };
+        })()`);
+        assertGpuResources(recovered);
+        receipt.recoveredGpuResources = recovered;
+      }
+      checkpoint("flush");
       await js("window.__aerynth.flush()");
       await writeFile(expectedPath, JSON.stringify(projection(canonical)), { flag: "wx" });
       receipt.reducedMotion = true;
       receipt.graphicsRecovered = true;
     }
+    checkpoint("final-state-and-capture");
+    if (pinWitness) await verifySavedPin();
     receipt.capture = await capture("offscreen-scale-" + receipt.phase + ".png");
     assert.deepEqual(startupErrors, []);
     assert.deepEqual(Object.keys((await call("snapshot", {})).executions), []);
@@ -268,9 +329,17 @@ exports.verify = async ({
   if (profile && devtools.isAttached()) devtools.detach();
   win.webContents.removeListener("paint", onPaint);
   const evidence = path.join(privateRoot, "offscreen-scale-" + receipt.phase + ".json");
+  checkpoint("close-backend");
   try { await call("close", {}); }
   catch (error) { receipt.passed = false; receipt.error ??= String(error.stack || error); }
   await writeFile(evidence, JSON.stringify(receipt, null, 2), { flag: "wx" });
   console.log(JSON.stringify({ passed: receipt.passed, count: receipt.count, evidence, error: receipt.error }));
   app.exit(receipt.passed ? 0 : 1);
 };
+
+function assertGpuResources(resources) {
+  for (const name of ["geometries", "textures"]) {
+    assert(Number.isSafeInteger(resources?.[name]) && resources[name] >= 0,
+      "missing_or_invalid_gpu_resource_count:" + name);
+  }
+}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalRetrievalQuery, createCanonicalRetrievalRanker, rankCanonicalRetrieval, HISTORY_RETRIEVAL_LIMITS } from '../src/history-retrieval.mts';
+import { canonicalRetrievalQuery, createCanonicalRetrievalRanker, createIncrementalCanonicalRetrievalIndex, rankCanonicalRetrieval, HISTORY_RETRIEVAL_LIMITS } from '../src/history-retrieval.mts';
 
 test('lexical discovery ranks exact canonical source identities and retains ambiguity without producing text', () => {
   const query=canonicalRetrievalQuery('What did we decide earlier about the Aurora release color?',true)!;
@@ -13,6 +13,23 @@ test('lexical discovery ranks exact canonical source identities and retains ambi
   assert.equal(canonicalRetrievalQuery('Explain a rainbow.',true),null,'ordinary turns retain their cheap recent-history path');
   assert.equal(canonicalRetrievalQuery('x'.repeat(16001)),null);
   assert(canonicalRetrievalQuery('remember '+Array.from({length:50},(_,i)=>'topic'+i).join(' '))!.terms.length<=HISTORY_RETRIEVAL_LIMITS.maxTerms);
+});
+
+test('incremental ranking removes deleted postings and rebuilds on policy changes', () => {
+  const index = createIncrementalCanonicalRetrievalIndex();
+  let reads = 0;
+  const stable = { id: 'stable', revision: '1', get text() { reads++; return 'harbor release'; } };
+  index.reconcile('policy-1', [stable, { id: 'removed', revision: '1', text: 'harbor inspection', identities: ['removed-id'] }]);
+  index.reconcile('policy-1', [stable, { id: 'new', revision: '1', text: 'release inspection' }]);
+  assert.equal(reads, 1);
+  assert.deepEqual(index.rank(canonicalRetrievalQuery('removed-id')!).ids, []);
+  assert.deepEqual(index.rank(canonicalRetrievalQuery('harbor inspection')!).ids, ['new', 'stable']);
+  index.reconcile('policy-1', [{ ...stable, revision: '2', text: 'revised decision' }]);
+  assert.deepEqual(index.rank(canonicalRetrievalQuery('harbor')!).ids, []);
+  index.reconcile('policy-2', [stable]);
+  assert.equal(reads, 3);
+  index.clear();
+  assert.deepEqual(index.rank(canonicalRetrievalQuery('harbor')!).ids, []);
 });
 
 test('one reviewed snapshot is tokenized once and ranked consistently across independent queries', () => {

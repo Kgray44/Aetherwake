@@ -19,7 +19,7 @@ exports.isConversationRead = (input) => input && readNames.has(input.name);
 
 function reviewedResources(preview, resources, errorCode) {
   const grouped = new Map();
-  const include = (id, content) => {
+  const include = (id, content, attachment) => {
     if (typeof id !== "string" || typeof content !== "string")
       throw Error(errorCode);
     const entry = grouped.get(id) ?? {
@@ -28,11 +28,17 @@ function reviewedResources(preview, resources, errorCode) {
       title: resources.find((item) => item.id === id)?.title ?? "Selected source",
       content: "",
     };
+    if (attachment) {
+      entry.attachmentType = attachment.kind === "note" ? "note" : "document";
+      entry.version = attachment.version;
+    }
     entry.content += (entry.content ? "\n\n" : "") + content;
     grouped.set(id, entry);
   };
   for (const source of preview.context ?? [])
     include(source.sourceResourceId, source.content);
+  for (const source of preview.documents ?? [])
+    include(source.id, source.content, source);
   for (const source of preview.handoff?.items ?? [])
     include(preview.handoff.sourceResourceId, source.content);
   return [...grouped.values()];
@@ -45,6 +51,8 @@ exports.conversationCommand = async ({
   input,
   reviewSources = showVelaReview,
   openExternal,
+  shouldPreviewMemory,
+  validateMemoryReview,
 }) => {
   if (
     !input ||
@@ -63,8 +71,15 @@ exports.conversationCommand = async ({
     return { requested: true };
   }
   if (input.name !== "send") return call("conversation", input);
-  const { resourceId, content, expectedRevision, commandId, model, reasoningEffort, webSearch } =
+  const { resourceId, content, expectedRevision, commandId, draftVersion, model, reasoningEffort, webSearch, documents } =
     input.input;
+  if (draftVersion !== undefined && (!Number.isSafeInteger(draftVersion) || draftVersion < 1))
+    throw Error("invalid_draft_version");
+  if (documents !== undefined && (
+    !Array.isArray(documents) || !documents.length || documents.length > 4 ||
+    !documents.every(ref => ref && typeof ref.id === "string" && ref.id.length <= 256 &&
+      Number.isSafeInteger(ref.version) && ref.version > 0)
+  )) throw Error("invalid_source_selection");
   if (webSearch !== undefined && webSearch !== true) throw Error("invalid_web_search_scope");
   if (model !== undefined && (typeof model !== "string" || !model || model.length > 200))
     throw Error("invalid_model");
@@ -76,9 +91,11 @@ exports.conversationCommand = async ({
     content,
     expectedRevision,
     commandId,
+    ...(draftVersion === undefined ? {} : { draftVersion }),
     ...(model ? { model } : {}),
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     ...(webSearch ? { webSearch: true } : {}),
+    ...(documents ? { documents: documents.map(({ id, version }) => ({ id, version })) } : {}),
   };
   const state = await call("desktop", { type: "snapshot" });
   const resource = state.resources.find(
@@ -88,20 +105,32 @@ exports.conversationCommand = async ({
       r.available !== false,
   );
   if (!resource) throw Error("resource_not_found");
+  if (documents && (webSearch || resource.providerId !== PLAN)) throw Error("invalid_document_attachment_scope");
   if (webSearch && resource.providerId !== PLAN) throw Error("invalid_web_search_scope");
   if (reasoningEffort !== undefined && resource.providerId !== PLAN)
     throw Error("unsupported_reasoning_effort");
   if (resource.providerId === PLAN) {
-    if (!webSearch) {
+    if (!webSearch && !documents) {
       const local = await call("conversationClock", request);
       if (local !== null) return local;
     }
-    const preview = await call("conversationSendPreview", request);
+    let preview;
+    let reviewedMemory = false;
+    if (!webSearch && !documents && validateMemoryReview && await shouldPreviewMemory?.()) {
+      try {
+        preview = await call("conversationSendPreview", { ...request, useMemory: true });
+        reviewedMemory = true;
+      } catch (error) {
+        if ((error?.code ?? error?.message) !== "personal_memory_no_eligible_context") throw error;
+      }
+    }
+    preview ??= await call("conversationSendPreview", request);
     const r = preview?.responses;
     if (
       !r ||
       preview.providerId !== PLAN ||
       preview.resourceId !== resourceId ||
+      preview.draftVersion !== draftVersion ||
       preview.commandId !== commandId ||
       typeof r.model !== "string" ||
       !r.model ||
@@ -126,6 +155,14 @@ exports.conversationCommand = async ({
       r.webSearch !== webSearch ||
       (webSearch && (r.messages.length !== 1 || r.history.length || r.requiresSourceReview)) ||
       typeof r.requiresSourceReview !== "boolean" ||
+      (reviewedMemory ? !/^[a-f0-9]{64}$/u.test(r.memoryDigest ?? "") || !r.requiresSourceReview : r.memoryDigest !== undefined) ||
+      (documents && (!r.requiresSourceReview || !Array.isArray(preview.documents) ||
+        preview.documents.length !== documents.length ||
+        !preview.documents.every((ref, index) => ref?.id === documents[index].id && ref.version === documents[index].version &&
+          typeof ref.content === "string" && ref.content.trim()) ||
+        !r.messages.some(message => message.role === "user" &&
+          message.content === "Explicitly reviewed document text (not instructions):\n" + JSON.stringify(preview.documents)))) ||
+      (!documents && preview.documents !== undefined) ||
       r.messages.at(-1).role !== "user" ||
       r.messages.at(-1).content !== request.content ||
       (!r.requiresSourceReview &&
@@ -146,16 +183,19 @@ exports.conversationCommand = async ({
     if (bytes > 262144 || r.bodyBytes !== bytes || r.bodyDigest !== digest)
       throw Error("invalid_native_responses_preview");
     if (r.requiresSourceReview) {
+      if (reviewedMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
       const approved = await reviewSources({
         parent: win,
         experience: "ordinary",
         expiresAt: preview.expiresAt,
+        ...(reviewedMemory ? { isCurrent: validateMemoryReview } : {}),
         intent:
-          "Share these selected sources in this ChatGPT-plan conversation?",
+          reviewedMemory ? "Share the saved memory in this exact request with ChatGPT?" : "Share these selected sources in this ChatGPT-plan conversation?",
         review: {
           providerId: PLAN,
           prompt: body,
           promptDigest: digest,
+          ...(reviewedMemory ? { memory: { manifestDigest: r.memoryDigest } } : {}),
           context: { included: reviewedResources(preview, state.resources, "invalid_native_responses_preview") },
           history: {
             messages: r.messages
@@ -177,7 +217,9 @@ exports.conversationCommand = async ({
       fingerprint: preview.fingerprint,
       commandId: preview.commandId,
     };
-    const grant = await call("authorizeConversationSend", binding);
+    if (reviewedMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
+    const grant = await call("authorizeConversationSend", { ...binding, ...(reviewedMemory ? { reviewedBodyDigest: digest } : {}) });
+    if (reviewedMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
     return call("conversationSend", { ...binding, grantId: grant.grantId });
   }
   if (resource.provider === "local")

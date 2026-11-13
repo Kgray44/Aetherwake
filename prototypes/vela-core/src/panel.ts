@@ -258,16 +258,38 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const routeMode = el('select', 'vela-core-input'), routeModel = el('select', 'vela-core-input'), routeEffort = el('select', 'vela-core-input');
   const routeEscalation = el('input');
   routeEscalation.type = 'checkbox';
+  const routeMemory = el('input');
+  routeMemory.type = 'checkbox';
+  const memoryControl = label('Review saved memory for this send', routeMemory);
   const routeHistory = el('input');
   routeHistory.type = 'checkbox';
   const semanticContext = el('input');
   semanticContext.type = 'checkbox';
+  const selectedEvidenceOption = label('Investigate selected notes or files with Vela API', semanticContext);
+  const evidenceApiAvailable = () => current?.planningProviders?.some(route =>
+    route.providerId === 'openai-api-vela' && route.available) === true;
   const workspaceState = el('input');
   workspaceState.type = 'checkbox';
   const projectEvidence = el('input');
   projectEvidence.type = 'checkbox';
+  const runAnalysis = el('button', 'vela-core-button');
+  runAnalysis.type = 'submit'; runAnalysis.textContent = 'Authorize one analysis'; runAnalysis.hidden = true;
+  function syncAnalysisActivation() {
+    memoryControl.hidden = current?.reviewedMemoryAvailable !== true;
+    routeMemory.disabled = memoryControl.hidden || !evidenceApiAvailable() ||
+      (!!chosenProviderId && chosenProviderId !== 'openai-api-vela') || selected.size > 0 ||
+      workspaceState.checked || projectEvidence.checked || !!handoffSelection || !!routingAgentSelection ||
+      routeEscalation.checked || routeMode.value === 'codex';
+    if (routeMemory.disabled) routeMemory.checked = false;
+    runAnalysis.hidden = !semanticContext.checked || semanticContext.disabled || !evidenceApiAvailable() ||
+      chosenProviderId !== 'openai-api-vela' || workspaceState.checked || projectEvidence.checked ||
+      !!handoffSelection || !!routingAgentSelection || !!routeModel.value || !!routeEffort.value ||
+      routeEscalation.checked || routeHistory.checked || useAutomaticOnce || (!!routeMode.value && routeMode.value !== 'auto');
+    runAnalysis.disabled = busy || !intent.value.trim();
+  }
   workspaceState.addEventListener('change', updateSemanticContext);
   projectEvidence.addEventListener('change', updateSemanticContext);
+  for (const control of [routeEffort, routeEscalation, routeHistory]) control.addEventListener('change', syncAnalysisActivation);
   let preparingEvidencePlan = false;
   const planWithEvidence: HTMLButtonElement | undefined = options.missions && button('Plan mission with reviewed evidence', async () => {
     const missions = options.missions!;
@@ -300,14 +322,16 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const apiUnavailable = !current?.planningProviders || chosenProviderId !== 'openai-api-vela';
     const sourceCount = selected.size + Number(!!handoffSelection?.reviewedEvidence);
     const ineligible = !selected.size || sourceCount > 4 || incompatibleSource;
-    semanticContext.disabled = apiUnavailable || ineligible;
-    if (semanticContext.disabled) semanticContext.checked = false;
+    selectedEvidenceOption.hidden = ineligible;
+    if (ineligible || chosenProviderId !== 'openai-api-vela') semanticContext.checked = false;
+    semanticContext.disabled = ineligible || (!evidenceApiAvailable() && !semanticContext.checked);
     workspaceState.disabled = apiUnavailable || incompatibleSource || sourceCount + Number(projectEvidence.checked) > 3 || !current?.applicationContext?.currentWorkspaceId;
     if (workspaceState.disabled) workspaceState.checked = false;
     projectEvidence.disabled = apiUnavailable || incompatibleSource || sourceCount + Number(workspaceState.checked) > 3 || !current?.applicationContext?.currentProjectId;
     if (projectEvidence.disabled) projectEvidence.checked = false;
     if (planWithEvidence) planWithEvidence.disabled = (ineligible && !projectEvidence.checked) ||
       !!handoffSelection || workspaceState.checked || busy || preparingEvidencePlan || !intent.value.trim();
+    syncAnalysisActivation();
   }
   updateSemanticContext();
   const modes = [['auto', 'Auto'], ['fast', 'Fast'], ['deep', 'Deep'], ['codex', 'Codex'], ['custom', 'Custom']] as const;
@@ -324,6 +348,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const efforts = modelOptions.find(model => model.id === routeModel.value)?.reasoningEfforts ?? [];
     setOptions(routeEffort, [['', 'Provider default'], ...efforts.map(effort => [effort, effort] as const)]);
     routeEffort.disabled = efforts.length === 0;
+    syncAnalysisActivation();
   };
   const clearModelOptions = () => {
     modelOptions = [];
@@ -369,7 +394,14 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   if (client.routingOptions) providerRoutes.append(label('Routing mode', routeMode), refreshModels, label('Model', routeModel),
     label('Reasoning effort', routeEffort), label('Allow one deeper attempt if Auto hits an output limit', routeEscalation));
   providerRoutes.append(label('Start fresh for this send', routeHistory));
-  providerRoutes.append(label('Investigate selected notes or files', semanticContext));
+  providerRoutes.append(memoryControl);
+  semanticContext.addEventListener('change', () => {
+    if (!semanticContext.checked || semanticContext.disabled) { syncAnalysisActivation(); return; }
+    if (chosenProviderId !== 'openai-api-vela') clearModelOptions();
+    chosenProviderId = 'openai-api-vela';
+    if (routeMode.value === 'codex') routeMode.value = 'auto';
+    renderProviderChoice();
+  });
   providerRoutes.append(label('Review current workspace state', workspaceState));
   const savedRoutes = disclosure('Saved routing defaults', 'vela-core-routing-defaults');
   const scopeChoice = el('select', 'vela-core-input');
@@ -490,12 +522,21 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   if (options.voice) composeActions.append(voiceControl);
   composeActions.append(stop, send);
   connection.body.append(providerChoice);
-  form.append(intent, selection, composeActions);
+  form.append(intent, selection, selectedEvidenceOption, composeActions, runAnalysis);
   intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
   form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return;
+    const runSelectedAnalysis = event.submitter === runAnalysis;
+    if (runSelectedAnalysis) syncAnalysisActivation();
+    if (runSelectedAnalysis && (runAnalysis.hidden || runAnalysis.disabled)) return;
+    if (semanticContext.checked && !evidenceApiAvailable()) {
+      status.hidden = false;
+      status.textContent = 'Vela API is unavailable. Reconnect to investigate the selected sources. Your question is still here.';
+      present();
+      return;
+    }
     const missions = options.missions;
-    if (missions && EXPLICIT_MISSION_PREFIX.test(intent.value.normalize('NFKC').trim())) {
+    if (!runSelectedAnalysis && missions && EXPLICIT_MISSION_PREFIX.test(intent.value.normalize('NFKC').trim())) {
       const objective = intent.value, revision = draftRevision, sources = [...selected.values()];
       void run(async () => {
         if (handoffSelection || routingAgentSelection || workspaceState.checked) throw Error('mission_composer_context_unsupported');
@@ -533,7 +574,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       });
       return;
     }
-    if (options.voice && /^\s*(?:vela[,!]?\s+)?(?:let['’]?s talk(?: instead)?|switch to voice|start (?:a )?voice(?: conversation)?)[.!?]*\s*$/iu.test(intent.value)) {
+    if (!runSelectedAnalysis && options.voice && /^\s*(?:vela[,!]?\s+)?(?:let['’]?s talk(?: instead)?|switch to voice|start (?:a )?voice(?: conversation)?)[.!?]*\s*$/iu.test(intent.value)) {
       const text = intent.value, revision = draftRevision;
       reveal('voice');
       // Call while the actual Send gesture is active; native authorization owns the start.
@@ -543,7 +584,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     }
     const connected = !!current?.planningProviders, reviewWorkspace = connected && !workspaceState.disabled && workspaceState.checked;
     const reviewProject = connected && !projectEvidence.disabled && projectEvidence.checked;
-    const submitted = { intent: intent.value, resourceIds: [...selected.keys()],...(selected.size?{resourceRefs:[...selected.values()].map(ref=>({...ref}))}:{}), authorizeProvider: connected || allowProvider.checked && chosenProviderId === current?.planner.providerId, ...(connected && chosenProviderId ? { providerId: chosenProviderId } : {}),
+    const useMemory = connected && !routeMemory.disabled && routeMemory.checked;
+    const providerId = useMemory ? 'openai-api-vela' : chosenProviderId;
+    const submitted = { intent: intent.value, resourceIds: [...selected.keys()],...(selected.size?{resourceRefs:[...selected.values()].map(ref=>({...ref}))}:{}), authorizeProvider: connected || allowProvider.checked && chosenProviderId === current?.planner.providerId, ...(connected && providerId ? { providerId } : {}),
+    ...(useMemory ? { useMemory: true as const } : {}),
     ...(connected && routeMode.value && routeMode.value !== 'auto' ? { mode: routeMode.value as typeof modes[number][0] } : {}),
     ...(connected && routeModel.value ? { model: routeModel.value } : {}),
     ...(connected && routeEffort.value ? { reasoningEffort: routeEffort.value as import('../../openai-provider/model-controls.ts').ReasoningEffort } : {}),
@@ -556,10 +600,13 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     ...(connected && routingAgentSelection ? { routingAgentId: routingAgentSelection.id } : {}),
     ...(connected && (useAutomaticOnce || handoffSelection && !routingAgentSelection) ? { overrideDefaults: true as const } : {}),
   }, revision = draftRevision, submittedView = ++viewRevision;
-    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; projectEvidence.checked = workspaceState.checked = semanticContext.checked = routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
+    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; projectEvidence.checked = workspaceState.checked = semanticContext.checked = routeHistory.checked = routeEscalation.checked = routeMemory.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
       try {
-        const recorded = await client.request(submitted);
+        const recorded = await client.request(runSelectedAnalysis ? {
+          intent: submitted.intent, resourceIds: submitted.resourceIds, resourceRefs: submitted.resourceRefs,
+          authorizeProvider: true, providerId: 'openai-api-vela', semanticContext: true, runSelectedAnalysis: true,
+        } : submitted);
         if (disposed) return;
         if (recorded.handoff?.sourceRequestId === handoffSelection?.requestId && recorded.handoff &&
             !['provider-unavailable', 'failed', 'invalid-plan', 'unknown', 'cancelled'].includes(recorded.state)) {
@@ -912,6 +959,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   }
   function present() {
     if (disposed) return;
+    syncAnalysisActivation();
     const latest = current?.requests.at(-1), pendingAttention = current?.attention.some(item => !item.reviewedAt && !item.dismissedAt);
     let phase: VelaPanelPresentation['phase'] = 'idle';
     if (!errorBox.hidden) phase = 'error';
@@ -1010,6 +1058,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         invalid_vela_attempt_limit: 'Enter a whole-number daily attempt limit between 0 and 10,000.',
         vela_planner_busy: 'The AI is busy. Your draft is ready to send when it frees up.',
         authorization_cancelled: 'Your request wasn’t shared. Your draft is still here.',
+        vela_app_request_provider_authority_changed: 'The Vela API authorization changed. Your question is still here.',
+        vela_app_request_owner_unavailable: 'The analysis approval expired or its desktop session ended.',
+        vela_app_request_effect_unavailable: 'This analysis can only read the selected sources and reply. Other actions need their own review.',
+        backend_timeout: 'The outcome could not be confirmed. Check Vela History before retrying.',
       };
       const details = disclosure('Error details', 'vela-core-error-details');
       details.body.append(el('pre', undefined, code));
@@ -1224,9 +1276,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     provider.textContent = state.planner.available ? providerName(state.planner.providerId) + (state.planner.busy ? ' · busy' : ' · available') : 'Provider unavailable';
     providerRoutes.hidden = !state.planningProviders;
     providerConsent.hidden = !!state.planningProviders;
-    providerHint.textContent = state.planningProviders ? 'Auto uses local capabilities, a connected conversational model, or Codex according to the request. Attached sources and Codex work require review.' : state.planner.available ? 'Context sharing needs approval.' : 'Provider unavailable.';
+    providerHint.textContent = state.planningProviders ? 'Auto uses local capabilities, a connected conversational model, or Codex according to the request. Broader evidence and Codex work require review.' : state.planner.available ? 'Context sharing needs approval.' : 'Provider unavailable.';
     providerConsent.firstElementChild!.textContent = 'Use ' + providerName(state.planner.providerId) + ' for this request';
-    allowProvider.disabled = !state.planner.available || state.planner.busy; if (!state.planningProviders && chosenProviderId !== state.planner.providerId) { allowProvider.checked = false; chosenProviderId = null; } renderProviderChoice();
+    allowProvider.disabled = !state.planner.available || state.planner.busy; if (!state.planningProviders && chosenProviderId !== state.planner.providerId && !semanticContext.checked) { allowProvider.checked = false; chosenProviderId = null; } renderProviderChoice();
     const chosen = projectChosen ? nativeProject.value : state.applicationContext?.currentProjectId ?? ''; nativeProject.replaceChildren(); const global = el('option', undefined, 'No project'); global.value = ''; nativeProject.append(global);
     for (const ref of state.applicationContext?.references.filter(ref => ref.kind === 'project') ?? []) { const option = el('option', undefined, ref.title); option.value = ref.id; nativeProject.append(option); }
     if (chosen && !Array.from(nativeProject.options).some(option => option.value === chosen)) { const unavailable = el('option', undefined, 'Previously selected project · unavailable'); unavailable.value = chosen; unavailable.disabled = true; nativeProject.append(unavailable); } nativeProject.value = chosen; updateWorkspaceAvailability();
@@ -1316,6 +1368,17 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   return {
     async open() { observing = true; options.missions?.setVisible(activeContext === 'missions'); options.voice?.setVisible(activeContext === 'voice'); options.permissions?.setVisible(activeContext === 'preferences'); const sequence = ++readSequence, state = await client.open(); if (sequence === readSequence) render(state); return state; },
     showMission(id: string) { reveal('missions'); options.missions?.openReport?.(id); },
+    addDocumentSource(ref: ResourceRef) {
+      if (disposed || busy) throw Error('vela_composer_unavailable');
+      if (!selected.has(ref.id) && selected.size >= 100) throw Error('vela_source_limit');
+      selected.set(ref.id, { ...ref });
+      const control = sourceControls.get(ref.id);
+      if (control) control.checked = true;
+      renderSelection();
+      closeContext(false);
+      intent.focus();
+      present();
+    },
     refresh,
     observeLiveAnswer,
     /** Host visibility notification only; no canonical mutation or inference. */

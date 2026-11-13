@@ -84,11 +84,11 @@ Open the printed loopback address. The fixture seeds `A World for Two` (Developm
 Start in Development, zoom out to its project and Universe, approach Voyagewright, open Engineering, save a note, return to Development, and restart. The native harness automates this journey, including a full canonical-service restart:
 
 ```powershell
-& "$V3/node_modules/electron/dist/electron.exe" prototypes/constellation/tests/native.cjs
+node "$V3/native/launch-native-test.cjs" constellation
 node --experimental-strip-types prototypes/constellation/tests/benchmark.mjs
 ```
 
-On Windows, launch the native harness with `Start-Process -WindowStyle Hidden -PassThru` and wait for its exit to collect its result. The harness uses a nonvisible offscreen compositor and a temporary synthetic SQLite database. It emits five screenshots and `evidence/native-verification.json`. The CPU benchmark emits `evidence/cpu-benchmark.json`; it measures projection/search/culling, **not presented frames or GPU performance**.
+On Windows, use the shared desktop test permit and run the launcher from a hidden terminal. It checks the permit before starting Electron with a hidden child console. The harness uses a nonvisible offscreen compositor and a temporary synthetic SQLite database. It emits five screenshots and `evidence/native-verification.json`. The CPU benchmark emits `evidence/cpu-benchmark.json` and measures projection, search, and culling.
 
 See [VERIFICATION.md](VERIFICATION.md) for evidence, requirements, and remaining acceptance boundaries.
 

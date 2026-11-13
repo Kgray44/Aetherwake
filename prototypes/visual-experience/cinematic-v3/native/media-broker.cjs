@@ -4,6 +4,7 @@ const fileFilters = [
   { name: "Documents and media", extensions: ["pdf", "docx", "txt", "md", "csv", "png", "jpg", "jpeg", "gif", "webp", "mp4", "mov", "webm", "ogv"] },
   { name: "All files", extensions: ["*"] },
 ];
+const documentFilters = [{ name: "Documents", extensions: ["pdf", "docx", "txt", "md", "csv"] }];
 
 exports.createMediaBroker = ({ win, dialog, shell, call, playback }) => {
   let choosing = false;
@@ -29,7 +30,7 @@ exports.createMediaBroker = ({ win, dialog, shell, call, playback }) => {
             const result = await dialog.showOpenDialog(win, {
               title: "Choose a file for Aerynth",
               properties: ["openFile", "dontAddToRecent"],
-              filters: fileFilters,
+              filters: variant === "document" ? documentFilters : fileFilters,
             });
             if (result.canceled) return null;
             if (!ownerAlive() || result.filePaths.length !== 1)

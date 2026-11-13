@@ -15,7 +15,7 @@ const resource = (id, patch = {}) => ({
   ...patch,
 });
 
-function fixture() {
+function fixture(placeNote, askAboutDocument) {
   const dom = blockDocument(),
     restore = dom.install();
   const mounted = [],
@@ -37,6 +37,8 @@ function fixture() {
     },
     anchor: () => ({ x: 240, y: 160, width: 16, height: 16 }),
     failed: (error) => failed.push(error.message),
+    placeNote,
+    askAboutDocument,
     mount(root, value) {
       const editor = document.createElement("textarea");
       editor.value = value.content;
@@ -72,6 +74,46 @@ function fixture() {
     request: () => request,
   };
 }
+
+test("the document action stages the current authorized file and hides when its format changes", () => {
+  const selected = [];
+  const f = fixture(undefined, (value) => selected.push(value));
+  try {
+    const media = { source: "file", format: "pdf", name: "Brief.pdf", mime: "application/pdf", byteLength: 300, sourceRevision: "first" };
+    const initial = resource("brief", { kind: "file", media });
+    f.surface.show(initial);
+    const button = f.request().content.querySelector("button");
+    assert.equal(button.textContent, "Ask Vela about this file");
+    const updated = { ...initial, version: 2 };
+    f.surface.reconcile([updated]);
+    button.fire("click");
+    assert.deepEqual(selected, [updated]);
+    f.surface.reconcile([{ ...updated, media: { ...media, format: "image" } }]);
+    assert.equal(button.hidden, true);
+    button.fire("click");
+    f.surface.reconcile([{ ...updated, available: false }]);
+    button.fire("click");
+    assert.deepEqual(selected, [updated]);
+  } finally { f.surface.dispose(); f.restore(); }
+});
+
+test("a retired document action cannot stage a file after a new viewer opens the same resource", () => {
+  const selected = [];
+  const f = fixture(undefined, value => selected.push(value));
+  try {
+    const media = { source: "file", format: "pdf", name: "Brief.pdf", mime: "application/pdf", byteLength: 300, sourceRevision: "first" };
+    const initial = resource("brief", { kind: "file", media });
+    f.surface.show(initial);
+    const retiredButton = f.request().content.querySelector("button");
+    f.surface.reconcile([{ ...initial, available: false }]);
+    const updated = { ...initial, version: 2 };
+    f.surface.show(updated);
+    retiredButton.fire("click");
+    assert.deepEqual(selected, []);
+    f.request().content.querySelector("button").fire("click");
+    assert.deepEqual(selected, [updated]);
+  } finally { f.surface.dispose(); f.restore(); }
+});
 
 test("focused resource reopens the same editor DOM and keeps its caret, draft and scroll", () => {
   const f = fixture();
@@ -139,6 +181,39 @@ test("failed canonical draft flush keeps the existing view available to recover"
     assert.equal(await f.request().beforeClose("close-button"), false);
     assert.deepEqual(f.failed, ["note_version_conflict"]);
     assert.deepEqual(f.disposed, []);
+    assert.equal(f.mounted[0].active, true);
+  } finally {
+    f.restore();
+  }
+});
+
+test("a focused note can place its canonical resource once while the editor stays open", async () => {
+  const calls = [];
+  let eligible = false;
+  let complete;
+  const f = fixture((note) => eligible ? () => new Promise((resolve) => {
+    calls.push(note);
+    complete = resolve;
+  }) : undefined);
+  try {
+    f.surface.show(resource("saved-note"));
+    const button = f.request().content.querySelector("button");
+    assert.ok(button);
+    assert.equal(button.hidden, true);
+    eligible = true;
+    const current = resource("saved-note", { version: 2 });
+    f.surface.reconcile([current]);
+    assert.equal(button.hidden, false);
+    button.fire("click");
+    button.fire("click");
+    assert.equal(button.disabled, true);
+    assert.deepEqual(calls, [current]);
+    eligible = false;
+    f.surface.reconcile([current]);
+    complete();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(button.hidden, true);
+    assert.equal(f.mounted.length, 1);
     assert.equal(f.mounted[0].active, true);
   } finally {
     f.restore();

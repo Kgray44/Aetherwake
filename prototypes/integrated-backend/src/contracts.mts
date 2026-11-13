@@ -44,12 +44,12 @@ export interface VelaWorkflowReview {
 export interface VelaWorkspaceStatePreview { id: string; revision: number; digest: string; partial?: true }
 export interface VelaProjectEvidencePreview { projectId: string; sourceIds: string[]; partial: boolean; digest: string }
 export interface VelaCheckpointPreview { selection: import('../../vela-core/src/adaptive-routing.ts').VelaMissionCheckpointRef; digest: string }
-export interface VelaRequestPreview { semanticContext?:true; missionCheckpoint?: VelaCheckpointPreview; workspaceState?: VelaWorkspaceStatePreview; projectEvidence?: VelaProjectEvidencePreview; workflowScope?: VelaWorkflowScope; id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};handoff?:import('../../vela-core/src/history-contracts.ts').VelaHandoff;nativeReviewRequired?:boolean; workingDirectory?:string; route?:import('../../vela-core/src/adaptive-routing.ts').VelaRouteDecision; routingSettings?:import('../../vela-core/src/contracts.ts').VelaRequest['routingSettings'];routingAgent?:import('../../vela-core/src/contracts.ts').VelaRoutingAgent;
+export interface VelaRequestPreview { memory?: { manifestDigest: string; promptDigest: string }; semanticContext?:true; missionCheckpoint?: VelaCheckpointPreview; workspaceState?: VelaWorkspaceStatePreview; projectEvidence?: VelaProjectEvidencePreview; workflowScope?: VelaWorkflowScope; id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};handoff?:import('../../vela-core/src/history-contracts.ts').VelaHandoff;nativeReviewRequired?:boolean; workingDirectory?:string; route?:import('../../vela-core/src/adaptive-routing.ts').VelaRouteDecision; routingSettings?:import('../../vela-core/src/contracts.ts').VelaRequest['routingSettings'];routingAgent?:import('../../vela-core/src/contracts.ts').VelaRoutingAgent;
   /** Core-derived foreground send policy, rechecked against the private frozen preview at grant time. */
-  sendDisposition?: 'routine' | 'review-required';
+  sendDisposition?: 'routine' | 'standing-selected-evidence' | 'review-required';
 }
 /** Trusted host inspection only; never registered in renderer command/subcommand allowlists. */
-export interface VelaNativeReview {semanticContext?:true;missionCheckpoint?: VelaCheckpointPreview & { text: string };workspaceState?: VelaWorkspaceStatePreview & { text: string };projectEvidence?: VelaProjectEvidencePreview & { sources: ContextManifest['included'] };previewId:string;signature:string;providerId:string;prompt:string;promptDigest:string;reviewDigest:string;context:ContextManifest;history?:ProviderHistory;handoff?:VelaRequestPreview['handoff'];historyOmissions:{reason:HistoryOmissionReason;count?:number}[];route?:VelaRequestPreview['route'];workingDirectory?:string;routingSettings?:VelaRequestPreview['routingSettings'];routingAgent?:VelaRequestPreview['routingAgent'];agentInstructions?:string;editPaths?:string[]}
+export interface VelaNativeReview { memory?: { manifestDigest: string; promptDigest: string };semanticContext?:true;missionCheckpoint?: VelaCheckpointPreview & { text: string };workspaceState?: VelaWorkspaceStatePreview & { text: string };projectEvidence?: VelaProjectEvidencePreview & { sources: ContextManifest['included'] };previewId:string;signature:string;providerId:string;prompt:string;promptDigest:string;reviewDigest:string;context:ContextManifest;history?:ProviderHistory;handoff?:VelaRequestPreview['handoff'];historyOmissions:{reason:HistoryOmissionReason;count?:number}[];route?:VelaRequestPreview['route'];workingDirectory?:string;routingSettings?:VelaRequestPreview['routingSettings'];routingAgent?:VelaRequestPreview['routingAgent'];agentInstructions?:string;editPaths?:string[]}
 export interface VelaNativeCapabilities {
   supportedActions: VelaNativeAction['type'][];
   /** Registered released Universal Block/application capability; no fallback implementation is supplied by Vela. */
@@ -62,8 +62,10 @@ export type ConversationProductRequest = { [K in keyof ProductCommandMap]: { nam
 export type ConversationProductOutput = ProductCommandMap[keyof ProductCommandMap]['output'];
 export type ConversationSendInput = ProductCommandMap['send']['input'];
 export interface ConversationSendPreview {
+  draftVersion?: number;
  id: string; commandId: string; resourceId: string; providerId: string; expectedRevision: number;
  prompt: string; model?: string; context: AttachedContext[];
+ documents?: { id: string; version: number; source: string; sourceRevision: string; content: string; digest: string; kind?: 'note' }[];
  handoff?: { id:string; fingerprint:string; sourceResourceId:string; items:ContextPackage['items'];continued?:true };
  executionText: string; fingerprint: string; expiresAt: string;
  /** Exact stateless Responses egress, without credentials or account identifiers. */
@@ -78,6 +80,7 @@ export interface OrdinaryResponsesPreview {
  instructions:string;instructionVersion:string;messages:TurnInput['messages'];
  history:{resourceId:string;messageId:string;digest:string;providerId?:string}[];
  contextDigest:string;bodyDigest:string;bodyBytes:number;requiresSourceReview:boolean;
+ memoryDigest?: string;
 }
 export type ProviderAuthRequest={providerId:'chatgpt-plan-responses'}&(
  |{type:'begin'}|{type:'maintain'}|{type:'finish';attemptId:string}|{type:'cancel';attemptId?:string}
@@ -105,6 +108,7 @@ export interface Binding {
   nativeThreadId: string; nativeSessionId: string | null;
 }
 export interface Execution extends PublicConversationExecution {
+  reviewedMemory?: true;
   binding: Binding | null; turnId: string | null;
   /** Actual Responses facts, never a fabricated Codex thread/turn binding. */
   responseId?:string;responseOutcome?:TurnOutcome;usage?:ReportedUsage;reportedModel?:string;
@@ -114,6 +118,7 @@ export interface Execution extends PublicConversationExecution {
   /** Canonical admission counted once per AIR provider stage, including unknown outcomes. */
   velaAdmission?: { projectId: string | null; utcDay: string };
   connectionVersion?:number;inputMessageId?:string;outputMessageId?:string;
+  draftCheckpoint?: { version: number; documentsDigest: string };
   requestedModel?:string;requestBodyDigest?:string;contextDigest?:string;instructionVersion?:string;
   requestedReasoningEffort?:TurnInput['reasoningEffort'];
   cancellation?:{requested:boolean;serverConfirmed:false};
@@ -320,6 +325,8 @@ export interface CommandMap {
   missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true } |
     import('./resource-signals.mts').ResourceSignal; output: null };
   /** Owned desktop command, excluded from renderer and model routes. */
+  aepExperimentNative: { input: import('./aep-native-host.mts').AepNativeRequest;
+    output: Awaited<ReturnType<ReturnType<typeof import('./aep-native-host.mts').createAepNativeHost>['command']>> };
   resourcePolicyNative: { input: import('./resource-policy.mts').ResourcePolicyNativeRequest;
     output: import('./resource-policy.mts').ResourcePolicyNativeView };
   /** Fixed GPU diagnostic, accessible only through the native desktop review. */
@@ -354,7 +361,7 @@ export interface CommandMap {
   githubTimeline: {input:GitHubTimelineCommand;output:{url:string}|{repositories:string[]}};
   taskObjectives: {input:TaskObjectiveRequest|{name:'targets';input:TaskTargetQuery};output:{result:TaskObjectiveResponse|TaskTargetPage;desktop?:DesktopSnapshot}};
   vela: { input: VelaOperation; output: unknown };
-  velaRequestPreview: { input: {intent:string;resourceIds:string[];activeCard?:VelaActiveCard;adaptive?:true;editTargetPaths?:string[];editCreatePaths?:string[];requireInspectionDirectory?:true;inspectionDirectory?:string} & import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting; output: VelaRequestPreview };
+  velaRequestPreview: { input: {intent:string;resourceIds:string[];resourceRefs?:import('../../vela-core/src/contracts.ts').ResourceRef[];activeCard?:VelaActiveCard;adaptive?:true;editTargetPaths?:string[];editCreatePaths?:string[];requireInspectionDirectory?:true;inspectionDirectory?:string} & import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting; output: VelaRequestPreview };
   velaWorkflowReview: { input: { previewId: string; signature: string; editTargetPaths?: string[]; editCreatePaths?: string[]; checkPaths: string[] }; output: VelaWorkflowReview };
   velaWorkflowRun: { input: { id: string }; output: import('../../vela-core/src/contracts.ts').VelaRequest };
   velaNextWorkflowStage: { input: { requestId: string }; output: { intent: string } | null };
@@ -390,7 +397,7 @@ export interface CommandMap {
   conversationClock: { input: ConversationSendInput; output: { id: string; resourceId: string; role: 'user'; content: string; revision: number; deviceClockMessageId: string } | null };
   conversationSendPreview: { input: ConversationSendInput; output: ConversationSendPreview };
   /** Trusted native host only; MUST NOT be exposed to a renderer or tool caller. */
-  authorizeConversationSend: { input: { previewId:string; fingerprint:string; commandId:string }; output: { grantId:string; expiresAt:string } };
+  authorizeConversationSend: { input: { previewId:string; fingerprint:string; commandId:string; reviewedBodyDigest?:string }; output: { grantId:string; expiresAt:string } };
   conversationSend: { input: { previewId:string; grantId:string; fingerprint:string; commandId:string }; output: Execution };
   desktop: { input: DesktopCommand; output: DesktopSnapshot };
   viewState: { input: { state?: unknown; panels?: WorkspacePanelRequest }; output: unknown };
