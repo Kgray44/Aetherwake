@@ -232,6 +232,17 @@ test('conversation-first browse, activity/created/title sorts and explicit searc
   assert.deepEqual((await f.product.command('search',{text:'exact message needle',searchMode:'conversations'})).items.map(hit=>[hit.kind,hit.resourceId]),[['conversation',older.resourceId]]);
   assert.deepEqual((await f.product.command('search',{text:'exact message needle',searchMode:'messages'})).items.map(hit=>[hit.kind,hit.messageId]),[['message',message.id]]);
   assert.deepEqual((await f.product.command('search',{text:'resource needle',searchMode:'resources'})).items.map(hit=>hit.resourceId),[note.id]);
+  assert.deepEqual((await f.product.command('search',{text:'newer',searchMode:'chat-history'})).items.map(hit=>[hit.kind,hit.resourceId]),[['conversation',newer.resourceId]]);
+  assert.deepEqual((await f.product.command('search',{text:'exact message needle',searchMode:'chat-history'})).items.map(hit=>[hit.kind,hit.messageId]),[['message',message.id]]);
+  const owner=f.core as unknown as {conversationReadView():ConversationReadView};
+  let resourceReads=0;
+  f.host.canonicalReadView=async()=>{const view=owner.conversationReadView();return {...view,resourceContent:id=>{resourceReads++;return view.resourceContent(id);}};};
+  try{
+   assert.equal((await f.product.command('search',{text:'resource needle',searchMode:'chat-history'})).total,0);
+   assert.equal(resourceReads,0);
+   assert.equal((await f.product.command('search',{text:'resource needle',searchMode:'all'})).items[0]?.resourceId,note.id);
+   assert.ok(resourceReads>0);
+  }finally{delete f.host.canonicalReadView;}
   f.denied.add(message.id);const denied=(await f.product.command('list',{})).items.find(c=>c.resourceId===older.resourceId)!;assert.equal(denied.messageCount,null);assert.equal(denied.lastActivityAt,null);assert.equal(denied.historyMetadataStatus,'unavailable');assert.equal((await f.product.command('search',{text:'exact message needle'})).total,0);f.denied.delete(message.id);
   const before=await f.product.command('list',{});await f.close();f=fixture(path);assert.deepEqual(await f.product.command('list',{}),before);assert.equal((await f.product.command('detail',{resourceId:older.resourceId,aroundMessageId:message.id})).messages.items[0].id,message.id);
   await assert.rejects(f.product.command('list',{sort:'guessed' as never}),/invalid_sort/);await assert.rejects(f.product.command('search',{searchMode:'guessed' as never}),/invalid_search_mode/);
