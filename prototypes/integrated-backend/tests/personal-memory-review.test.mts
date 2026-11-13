@@ -61,6 +61,10 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     const preview = await review.previewCapture(input);
     assert.equal(preview.sourceText, sourceText);
     assert.equal(preview.draft.text, input.text);
+    assert.equal(preview.draft.certainty, "user-reviewed-summary");
+    const verbatim = await review.previewCapture({ ...input, text: sourceText });
+    assert.equal(verbatim.draft.certainty, "explicit-statement");
+    review.cancelCapture(verbatim.id);
     assert.equal(preview.enableStorage, true);
     assert.deepEqual(preview.draft.scope, { kind: 'project', id: 'project' });
     const service = await owner.open();
@@ -68,6 +72,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     await assert.rejects(review.commitCapture({ ...preview, enableStorage: false }), /personal_memory_review_mismatch/);
     const saved = await review.commitCapture(preview);
     assert.equal(saved.text, input.text);
+    assert.equal(saved.certainty, "user-reviewed-summary");
     assert.throws(() => service.readFact(saved.id), /personal_context_not_authorized/);
     const inspected = await review.inspect({ after: null, limit: 8 });
     assert.deepEqual(inspected.records.map(item => item.id), [saved.id]);

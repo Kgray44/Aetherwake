@@ -320,6 +320,7 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
     const current = await reviewRecall('Which basalt relay should I use?');
     assert.match(current.prompt, new RegExp(replacement.id));
+    assert.match(current.prompt, /"certainty":"user-reviewed-summary"/);
     assert.doesNotMatch(current.prompt, new RegExp(saved.id));
     assert.doesNotMatch(current.prompt, new RegExp(competing.id));
     await assert.rejects(reviewRecall('What about quartz?'), /personal_memory_no_eligible_context/);

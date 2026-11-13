@@ -287,7 +287,9 @@ export function createPersonalMemoryReview(options: Options) {
             () => service.export({ ids: [id], maxBytes: 524288 }));
           return { action, id, bundle };
         }
-        const { scope, purpose, category, keywords, certainty, sensitive, expiresAt, provenance } = approved.fact!;
+        const { scope, purpose, category, keywords, certainty, sensitive, expiresAt, provenance, text } = approved.fact!;
+        const correctedCertainty = provenance.kind === 'conversation-message' && approved.text !== text
+          ? 'user-reviewed-summary' : certainty;
         const source = provenance.kind === 'import'
           ? { kind: 'import' as const, id: provenance.id, version: provenance.version, start: provenance.start, end: provenance.end }
           : provenance;
@@ -295,7 +297,7 @@ export function createPersonalMemoryReview(options: Options) {
           request.operation === 'record.read' && (request.subject?.id === id || source.kind === 'import' && request.subject?.id === source.id) ||
           request.operation === 'fact.review' && (request.subject?.id === id || request.subject === null) &&
             JSON.stringify(request.scope) === JSON.stringify(scope),
-        () => service.correctFact({ ...expected, replacement: { scope, purpose, category, keywords: [...(approved.keywords ?? keywords)], certainty, sensitive,
+        () => service.correctFact({ ...expected, replacement: { scope, purpose, category, keywords: [...(approved.keywords ?? keywords)], certainty: correctedCertainty, sensitive,
           expiresAt, source, text: approved.text! } }));
         return { action, id: corrected.replacement.id };
       });
@@ -338,7 +340,8 @@ export function createPersonalMemoryReview(options: Options) {
         const policy = withPermission(input => input.operation === 'policy.read', () => service.policy());
         const draft: FactDraft = {
           scope: proof.scope, purpose: 'knowledge', category, text, keywords: [...keywords],
-          certainty: 'explicit-statement', sensitive: false, expiresAt: null,
+          certainty: text.trim() === sourceText.trim() ? 'explicit-statement' : 'user-reviewed-summary',
+          sensitive: false, expiresAt: null,
           source: { ...reference, version: source.version, contentDigest: source.contentDigest },
         };
         const timestamp = now();
