@@ -161,6 +161,7 @@ exports.velaCommand = async ({
   beforeMemoryPreview,
   shouldPreviewMemory,
   validateMemoryReview,
+  reviewMemorySearch,
   observeNativeRequest,
   missionFileEditRequest,
 }) => {
@@ -328,11 +329,17 @@ exports.velaCommand = async ({
         ...(request.routingAgentId ? { routingAgentId: request.routingAgentId } : {}),
         ...(value.activeCard === undefined ? {} : { activeCard: value.activeCard }),
     };
+    let memoryMiss = false;
     let preview = await stage("preview", async () => {
       try { return await call("velaRequestPreview", previewInput); }
       catch (error) {
-        if (value.useMemory) throw error;
         const code = error?.code ?? error?.message;
+        if (value.useMemory) {
+          if (code !== "personal_memory_no_eligible_context" || !reviewMemorySearch) throw error;
+          memoryMiss = true;
+          const { useMemory: _memory, ...baseInput } = previewInput;
+          return call("velaRequestPreview", baseInput);
+        }
         if (directMessageSend && requireInspectionDirectory && code === "vela_codex_inspection_target_required") {
           if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
           const selected = await dialog.showOpenDialog(win, {
@@ -351,8 +358,8 @@ exports.velaCommand = async ({
         return call("velaRequestPreview", { ...previewInput, ...paths });
       }
     });
-    let reviewedMemory = value.useMemory === true;
-    if (!reviewedMemory && directMessageSend && preview.providerId === "openai-api-vela" &&
+    let reviewedMemory = value.useMemory === true && !memoryMiss;
+    if (!value.useMemory && directMessageSend && preview.providerId === "openai-api-vela" &&
         preview.route?.kind === "conversational" && !preview.route.nativeMetric && !preview.route.nativeLog &&
         !preview.workflowScope && !value.activeCard && !value.semanticContext && !request.handoffSourceRequestId &&
         !request.routingAgentId && !request.resourceIds.length && !request.resourceRefs && !allowEscalation &&
@@ -364,6 +371,25 @@ exports.velaCommand = async ({
         if ((error?.code ?? error?.message) !== "personal_memory_no_eligible_context") throw error;
       }
     }
+    if (memoryMiss && reviewMemorySearch && validateMemoryReview?.() === true) {
+      const binding = { previewId: preview.id, signature: preview.signature };
+      const search = await call("velaMemorySearchNative", binding);
+      if (search.kind === "review") {
+        if (search.request !== request.intent || typeof search.model !== "string" ||
+            search.model !== preview.route?.model || !/^[a-f0-9]{64}$/.test(search.digest))
+          throw Error("invalid_native_vela_review");
+        if (validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
+        if (await reviewMemorySearch(search) === true) {
+          if (validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
+          const result = await call("velaMemorySearchNative", { ...binding, reviewDigest: search.digest });
+          if (result.kind === "preview") {
+            preview = { ...preview, signature: result.signature, memory: result.memory, sendDisposition: "review-required" };
+            reviewedMemory = true;
+          }
+        }
+      }
+    }
+    if (value.useMemory && !reviewedMemory) throw Error("personal_memory_no_eligible_context");
     if (!!preview.memory !== reviewedMemory || (reviewedMemory &&
         (preview.sendDisposition !== "review-required" || preview.providerId !== "openai-api-vela" ||
          preview.route?.kind !== "conversational" || preview.route.nativeMetric || preview.route.nativeLog || preview.workflowScope)))

@@ -674,7 +674,7 @@ app.whenReady().then(async () => {
     try {
       if (typeof command === "string" && ((command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture") ||
           ["personalMemoryPolicyNative", "personalMemoryManagementNative", "personalMemoryRevokeSourceNative", "authorizeConversationSend",
-           "velaRequestPreview", "velaNativeReview", "authorizeVelaRequest"].includes(command)))
+           "velaRequestPreview", "velaNativeReview", "authorizeVelaRequest", "velaMemorySearchNative"].includes(command)))
         throw Error("unauthorized_private_command");
       if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative'].includes(command))throw Error('unauthorized_private_command');
       if (
@@ -994,6 +994,15 @@ app.whenReady().then(async () => {
               return trustedActiveFrame(event) && policy?.storageEnabled === true && policy.velaEnabled === true;
             },
             validateMemoryReview: () => !closing && !backendFailed && trustedApplicationFrame(event),
+            reviewMemorySearch: async ({ request, model }) => {
+              if (!trustedActiveFrame(event)) return false;
+              const choice = await reviewDialogs.showMessageBox(win, {
+                type: "question", title: "Search saved memory", message: "Let the Vela API interpret this request for a memory search?",
+                detail: "The Vela API will send the request below to OpenAI using " + model + ". Saved memories and conversation history stay local during this search. You can review selected facts before sending a reply request.\n\n" + request,
+                buttons: ["Skip search", "Interpret request"], defaultId: 0, cancelId: 0, noLink: true,
+              });
+              return choice.response === 1 && trustedApplicationFrame(event);
+            },
             offerPlanningByDefault: !verify || verifyAirLocal,
             directMessageSend: !verify || verifyAirLocal || verifyMissions && (process.argv.includes('--missions-api-live-only')||process.argv.includes('--missions-persistence-live-only')),
             routeNative: true,

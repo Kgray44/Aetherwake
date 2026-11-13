@@ -159,6 +159,7 @@ lines.on("line", async (line) => {
         "velaWorkflowRun",
         "velaRouteNative",
         "velaNativeReview",
+        "velaMemorySearchNative",
         "velaFileEditReview",
         "velaFileEditApply",
         "velaProjectCheckReview",

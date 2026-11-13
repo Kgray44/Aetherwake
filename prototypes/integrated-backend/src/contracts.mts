@@ -357,6 +357,8 @@ export interface CommandMap {
   taskObjectives: {input:TaskObjectiveRequest|{name:'targets';input:TaskTargetQuery};output:{result:TaskObjectiveResponse|TaskTargetPage;desktop?:DesktopSnapshot}};
   vela: { input: VelaOperation; output: unknown };
   velaRequestPreview: { input: {intent:string;resourceIds:string[];activeCard?:VelaActiveCard;adaptive?:true;editTargetPaths?:string[];editCreatePaths?:string[];requireInspectionDirectory?:true;inspectionDirectory?:string} & import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting; output: VelaRequestPreview };
+  velaMemorySearchNative: { input: { previewId: string; signature: string; reviewDigest?: string }; output:
+    { kind: 'review'; request: string; model: string; digest: string } | { kind: 'preview'; signature: string; memory: NonNullable<VelaRequestPreview['memory']> } | { kind: 'unavailable' } };
   velaWorkflowReview: { input: { previewId: string; signature: string; editTargetPaths?: string[]; editCreatePaths?: string[]; checkPaths: string[] }; output: VelaWorkflowReview };
   velaWorkflowRun: { input: { id: string }; output: import('../../vela-core/src/contracts.ts').VelaRequest };
   velaNextWorkflowStage: { input: { requestId: string }; output: { intent: string } | null };
