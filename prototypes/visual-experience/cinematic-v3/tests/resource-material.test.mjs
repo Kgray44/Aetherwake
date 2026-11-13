@@ -39,6 +39,7 @@ test("cards share exact slab buffers for one frame and keep their own geometry w
   const renderer = Object.assign(Object.create(Environment.prototype), {
     folios: [],
     folioById: new Map(),
+    frameFolioIds: new Set(),
     frameSlabs: new Map(),
     surfaceOrder: [],
     surfaceView: { scale: 1 },
@@ -78,6 +79,12 @@ test("cards share exact slab buffers for one frame and keep their own geometry w
   frame([{ ...pose, id: "b" }]);
   assert.equal(b.structure, housing, "working detail reuses the housing after zooming back in");
   assert.equal(housing.root.visible, true);
+  frame(undefined);
+  assert.equal(renderer.surfaceOrder.length, 0, "hidden frames release prior pose references");
+  assert.equal(renderer.frameFolioIds.size, 0);
+  assert.equal(renderer.folioById.get("b"), b, "hidden frames retain the visual binding");
+  frame([]);
+  assert.equal(renderer.folioById.has("b"), false, "an empty visible frame releases the binding");
 });
 
 test("resource faces and rims retain finite unit normals, valid indices and outward winding across transformations", () => {
