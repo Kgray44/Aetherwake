@@ -158,6 +158,8 @@ exports.velaCommand = async ({
   directMessageSend = false,
   routeNative = directMessageSend,
   requireInspectionDirectory = false,
+  beforeMemoryPreview,
+  validateMemoryReview,
   observeNativeRequest,
   missionFileEditRequest,
 }) => {
@@ -218,6 +220,9 @@ exports.velaCommand = async ({
       (value.mode !== undefined && !["auto", "fast", "deep", "codex", "custom"].includes(value.mode)) ||
       (value.allowEscalation !== undefined && value.allowEscalation !== true) ||
       (value.includeRecentHistory !== undefined && typeof value.includeRecentHistory !== "boolean") ||
+      (value.useMemory !== undefined && (value.useMemory !== true || !directMessageSend || !value.authorizeProvider ||
+        value.semanticContext || value.handoffSourceRequestId || value.routingAgentId || value.resourceIds.length || value.resourceRefs !== undefined ||
+        value.mode === "codex" || value.providerId !== undefined && value.providerId !== "openai-api-vela")) ||
       (value.semanticContext !== undefined && (!directMessageSend || value.semanticContext !== true || !value.authorizeProvider)) ||
       (value.workspaceState !== undefined && (value.workspaceState !== true || value.semanticContext !== true)) ||
       (value.projectEvidence !== undefined && (value.projectEvidence !== true || value.semanticContext !== true)) ||
@@ -251,7 +256,7 @@ exports.velaCommand = async ({
     const localDocuments=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you|I want(?: you)? to|I(?: would|'d) like(?: you)? to)\s+)*(?:add|attach|import|bring|put|load)\b[\s\S]*\b(?:docs?|documents?|files?|folders?|sources?|resources?|results?|these|those|them)\b[\s\S]*\b(?:(?:this|current|the)\s+)?workspace\b/iu.test(request.intent);
     const localFolderList=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you)\s+)*(?:(?:what(?:'s| is)\s+in\s+(?:this|the selected)\s+folder)|(?:what\s+(?:files|folders|items)\s+(?:are\s+)?(?:in|inside)\s+(?:this|the selected)\s+folder)|(?:(?:list|show)\s+(?:(?:the\s+)?(?:files|folders|items|contents)\s+(?:in|of|inside)\s+)?(?:this|the selected)\s+folder(?:['’]s\s+contents)?))[.!?]*\s*$/iu.test(request.intent);
     const selectedFileEdit=/\b(?:fix|edit|change|update|correct|modify|repair|refactor|replace)\b/iu.test(request.intent)&&/\b(?:file|code|function|selected|attached)\b/iu.test(request.intent);
-    if (routeNative && !value.semanticContext && !request.handoffSourceRequestId && !request.routingAgentId && (!request.resourceIds.length||localDocuments||localFolderList||selectedFileEdit) && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
+    if (routeNative && !value.useMemory && !value.semanticContext && !request.handoffSourceRequestId && !request.routingAgentId && (!request.resourceIds.length||localDocuments||localFolderList||selectedFileEdit) && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
       const settings = directMessageSend
         ? Object.fromEntries(Object.entries({ providerId, mode, model, reasoningEffort, overrideDefaults, budgetLimit }).filter(([, option]) => option !== undefined))
         : {};
@@ -306,12 +311,14 @@ exports.velaCommand = async ({
       return call("vela", { name: "request", input: request });
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
+    if (value.useMemory && await beforeMemoryPreview?.() !== true) throw Error("personal_memory_user_gesture_required");
     const previewInput = {
         intent: request.intent,
         resourceIds: request.resourceIds,
         ...(providerId === undefined ? {} : { providerId }),
         ...(directMessageSend ? { adaptive: true, model, reasoningEffort, mode, budgetLimit, allowEscalation, includeRecentHistory, overrideDefaults } : {}),
         ...(value.semanticContext ? { semanticContext: true } : {}),
+        ...(value.useMemory ? { useMemory: true, providerId: "openai-api-vela" } : {}),
         ...(value.workspaceState ? { workspaceState: true } : {}),
         ...(value.projectEvidence ? { projectEvidence: true } : {}),
         ...(value.missionCheckpoint ? { missionCheckpoint: value.missionCheckpoint } : {}),
@@ -323,6 +330,7 @@ exports.velaCommand = async ({
     const preview = await stage("preview", async () => {
       try { return await call("velaRequestPreview", previewInput); }
       catch (error) {
+        if (value.useMemory) throw error;
         const code = error?.code ?? error?.message;
         if (directMessageSend && requireInspectionDirectory && code === "vela_codex_inspection_target_required") {
           if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
@@ -342,6 +350,10 @@ exports.velaCommand = async ({
         return call("velaRequestPreview", { ...previewInput, ...paths });
       }
     });
+    if (!!preview.memory !== !!value.useMemory || (value.useMemory &&
+        (preview.sendDisposition !== "review-required" || preview.providerId !== "openai-api-vela" ||
+         preview.route?.kind !== "conversational" || preview.route.nativeMetric || preview.route.nativeLog || preview.workflowScope)))
+      throw Error("invalid_native_vela_review");
     if (preview.handoff?.sourceRequestId !== request.handoffSourceRequestId) throw Error("invalid_native_vela_review");
     if (preview.routingAgent?.resourceId !== request.routingAgentId) throw Error("invalid_native_vela_review");
     if (preview.semanticContext !== value.semanticContext) throw Error("invalid_native_vela_review");
@@ -379,7 +391,7 @@ exports.velaCommand = async ({
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    const direct = directMessageSend && preview.sendDisposition === "routine" &&
+    const direct = directMessageSend && !preview.memory && preview.sendDisposition === "routine" &&
       (preview.providerId === "chatgpt-plan-responses" && (!preview.route || preview.route.kind === "conversational") ||
         preview.providerId === "openai-api-vela" && ['conversational', 'app-planning'].includes(preview.route?.kind)) &&
       !preview.route?.nativeMetric && !preview.route?.nativeLog &&
@@ -392,6 +404,7 @@ exports.velaCommand = async ({
       expiresAt: preview.expiresAt,
     });
     if (approved !== true) throw Error("authorization_cancelled");
+    if (value.useMemory && validateMemoryReview?.() !== true) throw Error("personal_memory_frame_changed");
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
     const grant = await stage("grant", () =>
@@ -404,6 +417,7 @@ exports.velaCommand = async ({
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
+    if (value.useMemory && validateMemoryReview?.() !== true) throw Error("personal_memory_frame_changed");
     const result = await stage("request", () =>
       call("vela", {
         name: "request",

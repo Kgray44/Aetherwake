@@ -7,8 +7,47 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 const { validateReview, reviewPage, showVelaReview, isOwnedVelaReviewWindow } =
   createRequire(import.meta.url)("../native/vela-review.cjs");
+const { velaCommand } = createRequire(import.meta.url)("../native/vela-broker.cjs");
 const digest = (text) =>
   createHash("sha256").update(JSON.stringify(text)).digest("hex");
+
+test('Vela memory requires a gesture and explicit native approval of its bound prompt', async () => {
+  const calls = [];
+  const review = { ...disclosure(), providerId: 'openai-api-vela', context: { included: [] } };
+  const memory = { manifestDigest: 'b'.repeat(64), promptDigest: createHash('sha256').update(review.prompt).digest('hex') };
+  const preview = { id: review.previewId, signature: review.signature, providerId: review.providerId,
+    route: { kind: 'conversational' }, sendDisposition: 'review-required', memory };
+  review.route = preview.route;
+  review.memory = memory;
+  assert.match(reviewPage(review, 'Which relay?', 'vela'), /<details open><summary>Exact provider request with saved memory/);
+  let active = false;
+  let approved = false;
+  const options = {
+    win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+    directMessageSend: true, routeNative: false, beforeMemoryPreview: () => active, validateMemoryReview: () => active,
+    input: { name: 'request', input: { intent: 'Which relay?', resourceIds: [], authorizeProvider: true, useMemory: true } },
+    async call(name, input) {
+      calls.push([name, input]);
+      return { velaRequestPreview: preview, velaNativeReview: review, authorizeVelaRequest: { grantId: 'grant' }, vela: { state: 'responded' } }[name];
+    },
+    async reviewProvider({ review: shown }) { assert.equal(shown.prompt, review.prompt); return approved; },
+  };
+  await assert.rejects(velaCommand(options), /personal_memory_user_gesture_required/);
+  assert.deepEqual(calls, []);
+  active = true;
+  await assert.rejects(velaCommand(options), /authorization_cancelled/);
+  assert.equal(calls[0][1].useMemory, true);
+  assert.deepEqual(calls.splice(0).map(([name]) => name), ['velaRequestPreview', 'velaNativeReview']);
+  approved = true;
+  await assert.rejects(velaCommand({ ...options, validateMemoryReview: () => false }), /personal_memory_frame_changed/);
+  assert.deepEqual(calls.splice(0).map(([name]) => name), ['velaRequestPreview', 'velaNativeReview']);
+  await velaCommand(options);
+  assert.deepEqual(calls[2], ['authorizeVelaRequest', { previewId: preview.id, signature: preview.signature, reviewDigest: review.reviewDigest }]);
+  assert.equal(calls[3][1].input.useMemory, undefined);
+  assert.throws(() => validateReview(preview, { ...review, memory: { ...memory, promptDigest: 'c'.repeat(64) } }), /invalid_native_vela_review/);
+  preview.sendDisposition = 'routine';
+  await assert.rejects(velaCommand(options), /invalid_native_vela_review/);
+});
 test("memory review presents the exact escaped source, fact and scope", () => {
   const review = {
     sourceText: "User source </pre><script>capture()</script>",

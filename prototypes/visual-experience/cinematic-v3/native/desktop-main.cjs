@@ -966,6 +966,10 @@ app.whenReady().then(async () => {
             reviewProvider,
             missionFileEditRequest:request=>missionFileEditBroker.prepare(event,request),
             observeNativeRequest: observeVelaRequest,
+            beforeMemoryPreview: async () => trustedActiveFrame(event) &&
+              await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) === true &&
+              trustedActiveFrame(event),
+            validateMemoryReview: () => !closing && !backendFailed && trustedApplicationFrame(event),
             offerPlanningByDefault: !verify || verifyAirLocal,
             directMessageSend: !verify || verifyAirLocal || verifyMissions && (process.argv.includes('--missions-api-live-only')||process.argv.includes('--missions-persistence-live-only')),
             routeNative: true,
