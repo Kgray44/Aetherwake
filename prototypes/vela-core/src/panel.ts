@@ -152,16 +152,18 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const sourcePanel = disclosure('Find and add sources', 'vela-core-source-panel');
   const localFilesPanel=disclosure('Add files or folders','vela-core-local-files');
   let pickingSources=false;
+  let sourcePickerGeneration=0;
   const pickLocalSources=async(kind:'files'|'folder')=>{
     if(disposed||busy||pickingSources)return;
     if(!client.pickSources)throw Error('source_picker_unavailable');
     pickingSources=true;
+    const generation=++sourcePickerGeneration;
     pickFilesButton.disabled=pickFolderButton.disabled=send.disabled=true;
     pickerStatus.textContent=kind==='files'?'Waiting for file selection…':'Waiting for folder selection…';
     pickerStatus.hidden=false;
     try{
       const picked=await client.pickSources({kind,destination:'context'});
-      if(disposed)return;
+      if(disposed||generation!==sourcePickerGeneration)return;
       const refs=picked.resources.map((source):ResourceRef=>{
         const version=source.version;
         if(!Number.isSafeInteger(version)||!version||version<1)throw Error('source_version_unavailable');
@@ -169,6 +171,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       });
       for(const ref of refs)selected.set(ref.id,ref);
       renderSelection();
+    }catch(error){
+      if(!disposed&&generation===sourcePickerGeneration)throw error;
     }finally{
       pickingSources=false;
       pickerStatus.textContent='';
@@ -1375,7 +1379,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     refresh,
     observeLiveAnswer,
     /** Host visibility notification only; no canonical mutation or inference. */
-    close() { observing = false; options.missions?.setVisible(false); options.voice?.setVisible(false); options.permissions?.setVisible(false); observeLiveAnswer(undefined); manifestationSignature = ''; manifestationBaseline = true; try { options.onManifestation?.(null); } catch {} },
+    close() { observing = false; sourcePickerGeneration++; options.missions?.setVisible(false); options.voice?.setVisible(false); options.permissions?.setVisible(false); observeLiveAnswer(undefined); manifestationSignature = ''; manifestationBaseline = true; try { options.onManifestation?.(null); } catch {} },
     dispose() { disposed = true; observing = false; fileProposalView.dispose(); planProposalView.dispose(); planReviewActions.clear(); releaseVoice?.(); options.missions?.setVisible(false); options.voice?.setVisible(false); options.permissions?.setVisible(false); readSequence++; shell.remove(); try { options.onManifestation?.(null); } catch {} },
   };
 }

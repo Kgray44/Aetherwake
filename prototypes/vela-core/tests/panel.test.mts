@@ -469,7 +469,7 @@ test('Vela source search keeps the latest query when an older lookup finishes la
   } finally { panel.dispose(); }
 });
 
-test('Vela waits for the file selection before sending the versioned sources', async () => {
+for (const closeDuringPick of [false,true]) test('Vela waits for the file selection before sending (close: '+closeDuringPick+')', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
   const file = { id: 'file:pending', kind: 'file' as const, title: 'Pending.docx', version: 2, projectId: null };
@@ -495,7 +495,18 @@ test('Vela waits for the file selection before sending the versioned sources', a
     const notice = root.find(node => node.getAttribute('role') === 'status' &&
       node.textContent === 'Waiting for file selection…');
     assert.ok(notice && !notice.hidden, 'the pending selection explains why Send is disabled');
+    if(closeDuringPick){
+      panel.close();
+      await panel.open();
+    }
     finish({ resources: [file] });
+    if(closeDuringPick){
+      await settles(() => !named(root, 'Send to Vela').disabled);
+      assert.equal(!!named(root,'Remove source Pending.docx'),false);
+      assert.equal(editor.value,'Summarize the selected file.');
+      assert.equal(turns.length,0);
+      return;
+    }
     await settles(() => !!named(root, 'Remove source Pending.docx'));
     assert.equal(notice.textContent, '');
     assert.equal(turns.length, 0);
