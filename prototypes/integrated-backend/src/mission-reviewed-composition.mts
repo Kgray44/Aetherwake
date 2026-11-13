@@ -18,10 +18,17 @@ export function parseReviewedArtifactMission(objective: string) {
   return request ? { workObjective, imageOptions: request[1]?.trim(), imagePrompt: artifact.slice(request[0].length) } : null;
 }
 
+/** Use the same reviewed disclosure for a specialist at Start, reassignment and dispatch. */
+export function specialistMissionObjective(plan: Pick<MissionPlan, 'objective' | 'tasks'>): string {
+  return plan.tasks.some(task => task.artifactImage)
+    ? parseReviewedArtifactMission(plan.objective)?.workObjective ?? plan.objective
+    : plan.objective;
+}
+
 /** Use only existing host planners. A recognized request must cover both parts. */
 export function resolveReviewedArtifactMission(objective: string, workPlan: (objective: string) => MissionPlan | null,
-  imagePlan: (prompt: string, options?: string) => MissionPlan): MissionPlan | null {
-  const request = parseReviewedArtifactMission(objective);
+  imagePlan: (prompt: string, options?: string) => MissionPlan,
+  request = parseReviewedArtifactMission(objective)): MissionPlan | null {
   if (!request) return null;
   const work = workPlan(request.workObjective);
   ensure(work, 'mission_composition_work_unsupported');
