@@ -2,10 +2,47 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-const { velaCommand, isVelaRead } = createRequire(import.meta.url)(
+const { velaCommand, isVelaRead, prepareVelaInitiatedAnalysis } = createRequire(import.meta.url)(
   "../native/vela-broker.cjs",
 );
 const { reviewPage } = createRequire(import.meta.url)("../native/vela-review.cjs");
+
+test("selected-source activation rejects indirect mutation routes before review or dispatch", async () => {
+  const resourceRefs = [{id:"selected", kind:"resource", resourceKind:"file", version:3, title:"Synthetic"}];
+  const cases = [
+    ["Recycle the selected file", {kind:"file-edit"}, {}],
+    ["Run Remove-Item -Recurse via Codex", {kind:"agentic"}, {}],
+    ["Call the connector to empty the trash", {kind:"app-planning"}, {}],
+    ["Run the cleanup workflow", {kind:"conversational"}, {workflowScope:{effect:"recursive-removal"}}],
+    ["Replace the selected document with nothing", {kind:"file-edit"}, {}],
+  ];
+  for (const [intent, route, extra] of cases) {
+    const calls = [];
+    const run = prepareVelaInitiatedAnalysis({
+      initiatorId:"synthetic-monitor", configurationVersion:1, expiresAt:Date.now()+60_000,
+      intent, resourceRefs, isAuthorized:()=>true,
+      async call(name) {
+        calls.push(name);
+        if (name === "velaApiUsageStatus") return {enabled:true,configurationVersion:1};
+        assert.equal(name,"velaRequestPreview");
+        return {intent, resourceIds:["selected"], route, ...extra};
+      },
+    });
+    await assert.rejects(run(), /vela_app_request_effect_unavailable/);
+    await assert.rejects(run(), /vela_app_request_consumed/);
+    assert.deepEqual(calls,["velaApiUsageStatus","velaRequestPreview"]);
+  }
+});
+
+test("renderer cannot call private Vela analysis or supply its own approval", async () => {
+  const win = { isDestroyed:()=>false, webContents:{isDestroyed:()=>false} };
+  const call = () => assert.fail("No backend dispatch is allowed");
+  await assert.rejects(velaCommand({win,call,input:{name:"prepareVelaInitiatedAnalysis",input:{}}}), /invalid_vela_command/);
+  await assert.rejects(velaCommand({win,call,directMessageSend:true, input:{name:"request",input:{
+    runSelectedAnalysis:true, intent:"Analyze", resourceIds:[], semanticContext:true,
+    providerId:"openai-api-vela", authorizeProvider:true, grantId:"forged",
+  }}}), /vela_app_request_scope_required/);
+});
 function fixture(choice = 1) {
   const calls = [],
     dialogs = [],

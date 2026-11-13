@@ -467,7 +467,7 @@ export interface VelaClient {
   open(): Promise<VelaState>;
   fileProposal?(input: VelaFileProposalCommand): Promise<unknown>;
   search(query: string): Promise<ResourceRef[]>;
-  request(input: { intent: string; resourceIds: string[]; resourceRefs?:ResourceRef[];authorizeProvider: boolean } & import('./adaptive-routing.ts').VelaTurnRouting): Promise<VelaRequest>;
+  request(input: { intent: string; resourceIds: string[]; resourceRefs?:ResourceRef[];authorizeProvider: boolean;runSelectedAnalysis?:true } & import('./adaptive-routing.ts').VelaTurnRouting): Promise<VelaRequest>;
   routingOptions?(input: { providerId: string }): Promise<import('../../openai-provider/model-controls.ts').OrdinaryModelOption[]>;
   saveRoutingSettings?(input: import('./routing-settings.ts').VelaRoutingSettingsChange): Promise<import('./routing-settings.ts').VelaRoutingProfile>;
   rateRoutingResponse?(input: { requestId: string; feedback: import('./routing-calibration.ts').VelaRoutingFeedback }): Promise<void>;

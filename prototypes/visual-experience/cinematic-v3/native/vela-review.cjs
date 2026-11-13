@@ -144,10 +144,17 @@ function validateReview(preview, review) {
 }
 /** Presentation only. Each trusted native caller validates its own exact DTO,
  * body digest, source policy and capacity before opening this read-only pane. */
-function presentation(experience) {
+function presentation(experience, analysisLimits) {
   if (experience === "memory-capture") return { title: "Aerynth · Review memory", htmlBytes: 196608 };
-  if (!["vela", "ordinary", "codex", "file-edit"].includes(experience))
+  if (!["vela", "ordinary", "codex", "file-edit", "vela-initiated-analysis"].includes(experience))
     throw Error("invalid_native_review_experience");
+  if (experience === "vela-initiated-analysis") return {
+    title: "Vela · Authorize selected-source analysis",
+    subtitle: "Allow one run on this profile using the selected source versions below. Approval expires after 90 seconds. Vela can analyze and reply, with no file changes or other tools." +
+      (Number.isSafeInteger(analysisLimits?.requestsPerDay) && Number.isSafeInteger(analysisLimits?.maxOutputTokens)
+        ? ` Existing limits are ${analysisLimits.requestsPerDay} API requests per day and ${analysisLimits.maxOutputTokens} output tokens per request.` : " Existing provider limits apply."),
+    historyLabel: "Previous messages", emptyHistory: "No prior messages included.", htmlBytes: 524288,
+  };
   if (experience === "file-edit")
     return { title: "Vela · Review file changes", htmlBytes: 524288 };
   if (experience === "codex")
@@ -175,9 +182,9 @@ function presentation(experience) {
         htmlBytes: 524288,
       };
 }
-function reviewPage(review, intent = "", experience = "vela", workflow, decisionMode) {
+function reviewPage(review, intent = "", experience = "vela", workflow, decisionMode, analysisLimits) {
   if(decisionMode!==undefined&&(decisionMode!=='three-way'||experience!=='file-edit'))throw Error('invalid_native_review_decision_mode');
-  const view = presentation(experience);
+  const view = presentation(experience, analysisLimits);
   if (experience === "memory-capture") {
     const draft = review?.draft;
     const scope = draft?.scope;
@@ -263,6 +270,7 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
       const excerpt = included.get(sourceKey(source));
       let label = excerpt ? "Selected excerpt" : "Metadata only";
       if (Number.isSafeInteger(excerpt?.version)) {
+        if (experience === "vela-initiated-analysis") label = "Selected source · version " + excerpt.version;
         if (excerpt.attachmentType === "note") label = "Saved note · version " + excerpt.version;
         if (excerpt.attachmentType === "document") label = "Document · version " + excerpt.version;
       }
@@ -320,7 +328,7 @@ function ownerCanReview(parent) {
 }
 /** A finite, parent-owned native approval surface. It has no application bridge,
  * scripts, network access, credentials, grant, canonical writes or provider port. */
-async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela", workflow, decisionMode }) {
+async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela", workflow, decisionMode, analysisLimits }) {
   if(decisionMode!==undefined&&(decisionMode!=='three-way'||experience!=='file-edit'))throw Error('invalid_native_review_decision_mode');
   const cancelled=decisionMode==='three-way'?'cancel':false;
   const view = presentation(experience);
@@ -329,7 +337,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
   if (!Number.isFinite(remaining) || remaining <= 0) return cancelled;
   const url =
     "data:text/html;charset=utf-8," +
-    encodeURIComponent(reviewPage(review, intent, experience, workflow, decisionMode));
+    encodeURIComponent(reviewPage(review, intent, experience, workflow, decisionMode, analysisLimits));
   const { BrowserWindow, ipcMain, session } = runtime ?? require("electron");
   const token = randomUUID(),
     channel = "vela-review-decision",

@@ -2610,10 +2610,11 @@ for (const outcome of ['failure', 'cancel', 'revoke']) test('standing selected e
 
 for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation interrupt', 'provider failure', 'interrupt', 'revoke', 'app-owned', 'app-owned stale',
   'app-owned revoked', 'app-owned revoked after grant', 'app-owned rotated after grant', 'app-owned wrong scope', 'app-owned wrong version',
-  'app-owned interrupted', 'app-owned retired'] as const) test('selected evidence broker analysis: '+scenario, {timeout:15_000}, async () => {
+  'app-owned interrupted', 'app-owned retired', 'native activation', 'native activation declined', 'native activation revoked',
+  'native activation owner closed', 'native activation interrupted'] as const) test('selected evidence broker analysis: '+scenario, {timeout:15_000}, async () => {
   const evaluation = scenario.startsWith('evaluation');
   const noteCase = scenario === 'evaluation note';
-  const interrupted = scenario === 'interrupt' || scenario === 'evaluation interrupt' || scenario === 'app-owned interrupted';
+  const interrupted = scenario === 'interrupt' || scenario === 'evaluation interrupt' || scenario === 'app-owned interrupted' || scenario === 'native activation interrupted';
   const documentWorker = noteCase ? undefined : await import('../../visual-experience/cinematic-v3/src/document-text-worker.ts');
   const bytes = docxFixture();
   let bodyText: string;
@@ -2671,20 +2672,40 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
     };
     const selectedRefs = scenario === 'app-owned wrong version'
       ? resourceRefs.map(ref => ({ ...ref, version: ref.version + 1 })) : resourceRefs;
+    const nativeActivation = scenario.startsWith('native activation');
+    let approvals = 0;
     const send = scenario.startsWith('app-owned') ? prepareAppOwnedVelaRequest({
       call, isCurrent: () => ownerCurrent, preview, resourceRefs: selectedRefs,
     }) as () => Promise<VelaRequest> : () => velaCommand({
       win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
       directMessageSend: true, routeNative: true, dialog: {},
+      ...(nativeActivation ? { analysisOwnerCurrent: () => ownerCurrent, analysisStorageAllowed: async () => true } : {}),
       call: (name: string,input: any) => evaluation&&name==='velaRequestPreview'
         ? f.core.previewVelaEvaluation(input,claim) : (f.core.command as any)(name,input),
-      reviewProvider: async () => {
+      reviewProvider: async ({ experience, review }: any) => {
+        if (nativeActivation) {
+          approvals++;
+          assert.equal(experience, 'vela-initiated-analysis');
+          assert.equal(review.context.included[0].version, resource.version);
+          assert.match(review.context.included[0].content, /Extracted DOCX body text/);
+          if (scenario === 'native activation revoked') await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
+          if (scenario === 'native activation owner closed') ownerCurrent = false;
+          return scenario !== 'native activation declined';
+        }
         assert.ok(evaluation,'standing file analysis opened the sharing modal');
         return true;
       },
       input: { name: 'request', input: { intent, resourceIds, resourceRefs, authorizeProvider: true,
-        providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
+        providerId: 'openai-api-vela', semanticContext: true,
+        ...(nativeActivation ? { runSelectedAnalysis: true } : { model: 'gpt-6-luna' }) } },
     }) as Promise<VelaRequest>;
+    if (scenario === 'native activation declined' || scenario === 'native activation revoked' || scenario === 'native activation owner closed') {
+      await assert.rejects(send(), scenario === 'native activation revoked' ? /vela_app_request_provider_authority_changed/ : /authorization_cancelled/);
+      assert.equal(approvals, 1);
+      assert.equal(f.requests.length, 0);
+      assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 0);
+      return;
+    }
     if (scenario === 'app-owned stale' || scenario === 'app-owned revoked' || scenario === 'app-owned revoked after grant' || scenario === 'app-owned rotated after grant' ||
         scenario === 'app-owned wrong scope' || scenario === 'app-owned wrong version' || scenario === 'app-owned retired') {
       if (scenario === 'app-owned stale') writeFileSync(path, 'Replaced synthetic source');
@@ -2750,6 +2771,10 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
       }
     }
     const result = await pending;
+    if (nativeActivation) {
+      assert.equal(approvals, 1);
+      assert.ok(f.requests.every(body => body.tools === undefined && body.store === false));
+    }
     if (scenario === 'provider failure' || interrupted || scenario === 'revoke') {
       const outcome = scenario === 'provider failure' ? 'failed' : 'unknown';
       assert.equal(result.state,outcome);
@@ -2815,7 +2840,7 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
       const second = prepareAppOwnedVelaRequest({ call, isCurrent: () => ownerCurrent, preview, resourceRefs });
       await assert.rejects(second(), /stale_vela_input_revision/);
       assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 5);
-    } else {
+    } else if (scenario !== 'native activation') {
       writeFileSync(path, 'Replaced synthetic source');
       await assert.rejects(send(), /source_changed|stale_vela_preview/);
     }

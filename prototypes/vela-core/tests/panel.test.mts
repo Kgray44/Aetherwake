@@ -501,6 +501,34 @@ test('the composer can explicitly investigate an attached file without opening p
   } finally { panel.dispose(); }
 });
 
+test('selected-source analysis uses an explicit activation submitter', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => { turns.push(input); return request(); },
+  }));
+  try {
+    await panel.open();
+    const ref = { id: 'note:synthetic', kind: 'resource' as const, resourceKind: 'note', title: 'Brief', version: 3 };
+    panel.addDocumentSource(ref);
+    const form = root.find(node => node.className === 'vela-core-compose')!;
+    const activation = named(form, 'Authorize one analysis');
+    assert.equal(activation.hidden, true);
+    const option = root.find(node => node.tagName === 'label' && node.textContent === 'Investigate selected notes or files with Vela API')!;
+    const checkbox = option.querySelector('input')!;
+    checkbox.checked = true; checkbox.fire('change');
+    const editor = form.querySelector('textarea')!;
+    editor.value = 'What does the brief say?'; editor.fire('input');
+    assert.equal(activation.hidden, false);
+    assert.equal(turns.length, 0);
+    form.fire('submit', { submitter: activation });
+    await settles(() => turns.length === 1);
+    assert.deepEqual(turns[0], { intent: editor.value, resourceIds: [ref.id], resourceRefs: [ref],
+      authorizeProvider: true, providerId: 'openai-api-vela', semanticContext: true, runSelectedAnalysis: true });
+  } finally { panel.dispose(); }
+});
+
 test('workspace evidence is an explicit dedicated API composer choice', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];

@@ -941,6 +941,7 @@ app.whenReady().then(async () => {
         } else {
           const { submissionId, ...brokerInput } = input ?? {};
           const frame = event.senderFrame;
+          const analysisBackend = child;
           let submission;
           if (submissionId !== undefined) {
             if (input.name !== "request" || !isVelaSubmissionId(submissionId)) throw Error("invalid_vela_submission");
@@ -953,6 +954,9 @@ app.whenReady().then(async () => {
             call,
             input: brokerInput,
             reviewProvider,
+            analysisOwnerCurrent: () => !closing && backendWritable() && child === analysisBackend && trustedApplicationFrame(event) &&
+              win.isVisible() && !win.isMinimized(),
+            analysisStorageAllowed: () => storage.allowWrite(),
             missionFileEditRequest:request=>missionFileEditBroker.prepare(event,request),
             observeNativeRequest: observeVelaRequest,
             offerPlanningByDefault: !verify || verifyAirLocal,

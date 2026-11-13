@@ -153,7 +153,9 @@ function isStandingSelectedEvidence(preview, review, refs) {
     review.semanticContext === true && !review.handoff && !review.routingAgent &&
     !review.projectEvidence && !review.workspaceState && !review.missionCheckpoint && !review.history &&
     Array.isArray(refs) && refs.length === review.context.included.length &&
-    refs.every(ref => review.context.included.some(source => source.id === ref?.id && source.version === ref.version));
+    refs.every(ref => ref?.kind === "resource" && review.context.included.some(source =>
+      source.kind === ref.kind && source.id === ref.id && source.version === ref.version &&
+      (ref.resourceKind === undefined || source.resourceKind === ref.resourceKind)));
 }
 
 async function dispatchReviewedVelaRequest({ call, stage, preview, review, request, direct, checkOwner }) {
@@ -172,7 +174,7 @@ async function dispatchReviewedVelaRequest({ call, stage, preview, review, reque
 
 // Internal preparation only. The app owner must supply an already-authorized exact
 // preview and the same profile's command port. No renderer command or activation is registered here.
-exports.prepareAppOwnedVelaRequest = ({ call, isCurrent, preview, resourceRefs }) => {
+exports.prepareAppOwnedVelaRequest = ({ call, isCurrent, preview, resourceRefs, approve, dispatchCall = call }) => {
   const frozen = structuredClone(preview), refs = structuredClone(resourceRefs);
   const ids = frozen?.resourceIds;
   if (typeof isCurrent !== "function" || frozen?.sendDisposition !== "standing-selected-evidence" ||
@@ -196,10 +198,60 @@ exports.prepareAppOwnedVelaRequest = ({ call, isCurrent, preview, resourceRefs }
     }));
     if (!isStandingSelectedEvidence(frozen, review, refs)) throw Error("vela_app_request_scope_required");
     checkOwner();
-    return dispatchReviewedVelaRequest({ call, stage: (_name, work) => work(), preview: frozen, review,
+    if (approve && await approve(frozen, review) !== true) throw Error("authorization_cancelled");
+    checkOwner();
+    return dispatchReviewedVelaRequest({ call: dispatchCall, stage: (_name, work) => work(), preview: frozen, review,
       request: { intent: frozen.intent, resourceIds: ids, resourceRefs: refs, authorizeProvider: true },
       direct: true, checkOwner,
     });
+  };
+};
+
+// Private host entry. The native owner supplies its profile-bound command port
+// and checks its scoped action grant. No renderer caller or schedule is registered.
+exports.prepareVelaInitiatedAnalysis = ({ call, isAuthorized, initiatorId, configurationVersion, expiresAt, intent, resourceRefs, approve, mayPrepare }) => {
+  if (typeof call !== "function" || typeof isAuthorized !== "function" ||
+      typeof initiatorId !== "string" || !initiatorId.trim() ||
+      !Number.isSafeInteger(configurationVersion) || configurationVersion < 1 ||
+      !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt - Date.now() > 300_000 ||
+      typeof intent !== "string" || !intent.trim() || !Array.isArray(resourceRefs) || !resourceRefs.length || resourceRefs.length > 4 ||
+      !resourceRefs.every(ref => ref?.kind === "resource" && ["file", "note"].includes(ref.resourceKind) &&
+        typeof ref.id === "string" && ref.id.length && typeof ref.title === "string" &&
+        Number.isSafeInteger(ref.version) && ref.version > 0)) {
+    throw Error("vela_app_request_scope_required");
+  }
+  const refs = Object.freeze(resourceRefs.map(({ kind, resourceKind, id, version, title }) =>
+    Object.freeze({ kind, resourceKind, id, version, title })));
+  const ids = Object.freeze(refs.map(ref => ref.id));
+  if (new Set(ids).size !== ids.length) throw Error("vela_app_request_scope_required");
+  const scope = Object.freeze({ initiatorId, configurationVersion, expiresAt, intent, resourceRefs: refs,
+    providerId: "openai-api-vela", capability: "selected-source-analysis" });
+  const isCurrent = () => Date.now() < expiresAt && isAuthorized(scope) === true;
+  const preparing = approve ? () => Date.now() < expiresAt && mayPrepare?.() === true : isCurrent;
+  const fencedCall = (check) => async (name, input) => {
+    if (!check()) throw Error("vela_app_request_owner_unavailable");
+    const usage = await call("velaApiUsageStatus", {});
+    if (!check()) throw Error("vela_app_request_owner_unavailable");
+    if (usage?.enabled !== true || usage.configurationVersion !== configurationVersion)
+      throw Error("vela_app_request_provider_authority_changed");
+    return call(name, input);
+  };
+  let consumed = false;
+  return async () => {
+    if (consumed) throw Error("vela_app_request_consumed");
+    consumed = true;
+    const preview = await fencedCall(preparing)("velaRequestPreview", {
+      intent, resourceIds: ids, resourceRefs: refs, providerId: scope.providerId,
+      adaptive: true, semanticContext: true, includeRecentHistory: false,
+    });
+    const route = preview?.route;
+    if (route?.kind !== "conversational" || route.nativeMetric || route.nativeLog || route.escalation ||
+        preview.workflowScope || preview.projectEvidence || preview.workspaceState || preview.missionCheckpoint ||
+        preview.handoff || preview.routingAgent || preview.history) throw Error("vela_app_request_effect_unavailable");
+    if (preview.intent !== intent || !Array.isArray(preview.resourceIds) || preview.resourceIds.length !== ids.length ||
+        ids.some((id, index) => id !== preview.resourceIds[index])) throw Error("vela_app_request_scope_required");
+    return exports.prepareAppOwnedVelaRequest({ call: fencedCall(preparing), isCurrent: preparing, preview,
+      resourceRefs: refs, approve, dispatchCall: fencedCall(isCurrent) })();
   };
 };
 
@@ -216,6 +268,8 @@ exports.velaCommand = async ({
   requireInspectionDirectory = false,
   observeNativeRequest,
   missionFileEditRequest,
+  analysisOwnerCurrent,
+  analysisStorageAllowed,
 }) => {
   const observe = (event) => {
     try {
@@ -293,6 +347,41 @@ exports.velaCommand = async ({
       (value.reasoningEffort !== undefined && !["none", "low", "medium", "high", "xhigh", "max"].includes(value.reasoningEffort))
     )
       throw Error("invalid_vela_request");
+    if (value.runSelectedAnalysis !== undefined) {
+      if (value.runSelectedAnalysis !== true || !directMessageSend || !value.authorizeProvider ||
+          value.providerId !== "openai-api-vela" || value.semanticContext !== true ||
+          Object.keys(value).some(key => !["runSelectedAnalysis", "intent", "resourceIds", "resourceRefs",
+            "authorizeProvider", "providerId", "semanticContext"].includes(key)) ||
+          typeof analysisOwnerCurrent !== "function" || typeof analysisStorageAllowed !== "function")
+        throw Error("vela_app_request_scope_required");
+      if (!analysisOwnerCurrent()) throw Error("vela_app_request_owner_unavailable");
+      if (!Array.isArray(value.resourceRefs) || value.resourceRefs.length !== value.resourceIds.length ||
+          value.resourceRefs.some((ref,index) => ref?.id !== value.resourceIds[index])) throw Error("vela_app_request_scope_required");
+      const usage = await call("velaApiUsageStatus", {});
+      if (!analysisOwnerCurrent()) throw Error("vela_app_request_owner_unavailable");
+      if (usage?.enabled !== true || !Number.isSafeInteger(usage.configurationVersion))
+        throw Error("vela_app_request_provider_authority_changed");
+      const expiresAt = Date.now() + 90_000;
+      let approved = false;
+      const run = exports.prepareVelaInitiatedAnalysis({
+        initiatorId: "vela-selected-source-analysis", configurationVersion: usage.configurationVersion,
+        expiresAt, intent: value.intent, resourceRefs: value.resourceRefs,
+        isAuthorized: () => analysisOwnerCurrent() && approved,
+        call,
+        approve: async (preview, review) => {
+          if (!analysisOwnerCurrent()) return false;
+          const reviewed = await reviewProvider({ parent: win, review, intent: preview.intent,
+            expiresAt: new Date(expiresAt).toISOString(), experience: "vela-initiated-analysis",
+            analysisLimits: { requestsPerDay: usage.requestsPerDay, maxOutputTokens: usage.maxOutputTokens } });
+          if (reviewed !== true || !analysisOwnerCurrent()) return false;
+          if (await analysisStorageAllowed() !== true) throw Error("storage_reserve_admission_denied");
+          approved = analysisOwnerCurrent();
+          return approved;
+        },
+        mayPrepare: analysisOwnerCurrent,
+      });
+      return stage("request", run);
+    }
     // Renderer intent carries no grant. The host binds the exact prompt below.
     const request = {
       intent: value.intent,
