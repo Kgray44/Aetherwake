@@ -6,6 +6,7 @@ import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { createInterface } from 'node:readline';
+import { pathToFileURL } from 'node:url';
 
 // Invoke only against a trusted local review build. The profile must be a fresh
 // sibling of that build. This test starts the shipped Node worker, never Electron.
@@ -54,6 +55,13 @@ const admission = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-File', gu
 assert.equal(admission.status, 0, 'Storage reserve check failed');
 assert.equal(JSON.parse(admission.stdout).allowed, true);
 await mkdir(profile);
+const catalogFixture = join(profile, 'catalog-fixture.mjs');
+await writeFile(catalogFixture, `globalThis.fetch = async input => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  if (url === 'https://api.openai.com/v1/models')
+    return Response.json({ data: [{ id: 'gpt-6-luna' }] });
+  throw Error('unexpected_provider_dispatch');
+};\n`, { flag: 'wx' });
 
 function protect(operation, input) {
   const method = operation === 'seal' ? 'Protect' : 'Unprotect';
@@ -73,7 +81,7 @@ function protect(operation, input) {
 const require = createRequire(import.meta.url);
 const { createProtectedStorageBroker } = require(join(root, brokerFile));
 async function withWorker(locked, work) {
-  const child = spawn(join(root, 'vendor/node.exe'), [join(root, workerFile), db, profile, profile, '--native-secrets'], {
+  const child = spawn(join(root, 'vendor/node.exe'), ['--import', pathToFileURL(catalogFixture).href, join(root, workerFile), db, profile, profile, '--native-secrets'], {
     cwd: app, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, NODE_DISABLE_COMPILE_CACHE: '1' },
   });
   child.stderr.resume();
@@ -143,21 +151,32 @@ const sourceText = 'Use the synthetic quartz relay.';
 const factText = 'The selected part is synthetic quartz.';
 const saved = await withWorker(false, async call => {
   assert.equal((await call('personalMemoryPolicyNative', {})).storageEnabled, false);
+  const { projects } = await call('desktop', { type: 'createProject', title: 'Synthetic memory project' });
+  const projectId = projects[0].id;
+  const { workspaces } = await call('desktop', { type: 'createWorkspace', title: 'Synthetic memory workspace', projectId });
+  const workspaceId = workspaces[0].id;
   const chat = await call('conversation', { name: 'create', input: {
     title: 'Synthetic packaged memory', providerId: 'local', commandId: 'create',
   } });
+  await call('conversation', { name: 'organize', input: {
+    type: 'associateProject', resourceId: chat.resourceId, projectId, expectedVersion: 1,
+  } });
+  const detail = await call('conversation', { name: 'detail', input: { resourceId: chat.resourceId } });
   const source = await call('addMessage', {
-    resourceId: chat.resourceId, role: 'user', content: sourceText, expectedRevision: chat.revision, commandId: 'message',
+    resourceId: chat.resourceId, role: 'user', content: sourceText, expectedRevision: detail.conversation.revision, commandId: 'message',
   });
   const review = await call('personalMemoryCapturePreviewNative', {
-    conversationId: chat.resourceId, messageId: source.id, scope: 'conversation',
+    conversationId: chat.resourceId, messageId: source.id, scope: 'project',
     category: 'decisions', text: factText, keywords: ['quartz'],
   });
   assert.equal(review.sourceText, sourceText);
   const fact = await call('personalMemoryCaptureCommitNative', review);
-  return { factId: fact.id, conversationId: chat.resourceId, messageId: source.id, expectedRevision: source.revision };
+  return { workspaceId, projectId, factId: fact.id, conversationId: chat.resourceId, messageId: source.id, expectedRevision: source.revision };
 });
 const read = { type: 'read', id: saved.factId };
+const navigate = (call, workspaceId) => call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
+const previewRecall = call => call('velaRequestPreview', { intent: 'Which quartz relay?', resourceIds: [],
+  adaptive: true, providerId: 'openai-api-vela', useMemory: true, includeRecentHistory: false });
 await withWorker(true, call => assert.rejects(call('personalMemoryManagementNative', read), /private_key_unavailable/u));
 await withWorker(false, async call => {
   const fact = await call('personalMemoryManagementNative', read);
@@ -167,16 +186,37 @@ await withWorker(false, async call => {
   const policy = await call('personalMemoryPolicyNative', {});
   assert.equal(policy.ordinaryEnabled, false);
   assert.equal(policy.velaEnabled, false);
-  const { factId: _id, ...source } = saved;
+  await call('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: policy.version });
+  await call('velaApiConfigure', { credential: { configurationId: 'vela-primary', apiKey: 'synthetic-memory-witness' }, expectedVersion: null });
+  await call('velaApiUsageAuthorize', { expectedVersion: 1, enabled: true });
+  const vela = await call('vela', { name: 'open', input: {} });
+  assert.notEqual(vela.conversation?.resourceId, saved.conversationId);
+  await navigate(call, saved.workspaceId);
+  const preview = await previewRecall(call);
+  assert.equal(preview.sendDisposition, 'review-required');
+  const review = await call('velaNativeReview', { previewId: preview.id, signature: preview.signature });
+  const payload = JSON.parse(review.prompt.slice(review.prompt.lastIndexOf('\n') + 1));
+  assert.equal(payload.manifestDigest, preview.memory.manifestDigest);
+  assert.deepEqual(payload.items.map(item => [item.factId, item.text, item.provenance.messageId]), [[saved.factId, factText, saved.messageId]]);
+  const other = (await call('desktop', { type: 'createProject', title: 'Synthetic unrelated project' }))
+    .projects.find(project => project.id !== saved.projectId);
+  const otherWorkspace = (await call('desktop', { type: 'createWorkspace', title: 'Synthetic unrelated workspace', projectId: other.id }))
+    .workspaces.find(workspace => workspace.id !== saved.workspaceId);
+  await navigate(call, otherWorkspace.id);
+  await assert.rejects(previewRecall(call), /personal_memory_no_eligible_context/u);
+  await navigate(call, saved.workspaceId);
+  const { factId: _id, workspaceId: _workspace, projectId: _project, ...source } = saved;
   assert.equal((await call('personalMemoryRevokeSourceNative', source)).erasedFacts, 1);
 });
 await withWorker(false, async call => {
   await assert.rejects(call('personalMemoryManagementNative', read), /personal_record_unavailable/u);
   const opened = await call('openResource', { resourceId: saved.conversationId, selection: { messageId: saved.messageId } });
   assert.equal(opened.status, 'unavailable');
+  await navigate(call, saved.workspaceId);
+  await assert.rejects(previewRecall(call), /personal_memory_no_eligible_context/u);
 });
 const receipt = { result: 'pass', candidate: inventory.candidate, manifestSha256: manifestHash, verifiedFiles: files.size,
-  workerStarts: 4, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true,
+  workerStarts: 4, crossConversationRecall: true, foreignProjectDenied: true, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true,
   custody: 'Windows DPAPI CurrentUser through test adapter', approval: 'simulated', providerDispatch: false };
 await writeFile(join(profile, 'worker-receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify(receipt));
