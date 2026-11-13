@@ -6707,9 +6707,9 @@ export class BackendCore {
       const review = this.personalMemoryReview;
       ensure(review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
       const policy = input as CommandMap['personalMemoryPolicyNative']['input'];
-      if (policy.enable === true) {
-        ensure(Number.isSafeInteger(policy.expectedVersion), 'invalid_privacy_policy');
-        return await review.setProviderUse(policy.assistant ?? 'ordinary', true, policy.expectedVersion!) as CommandMap[K]['output'];
+      if (policy.enable !== undefined) {
+        ensure(typeof policy.enable === 'boolean' && Number.isSafeInteger(policy.expectedVersion), 'invalid_privacy_policy');
+        return await review.setProviderUse(policy.assistant ?? 'ordinary', policy.enable, policy.expectedVersion!) as CommandMap[K]['output'];
       }
       return (await review.inspect({ after: null, limit: 1 })).policy as CommandMap[K]['output'];
     }

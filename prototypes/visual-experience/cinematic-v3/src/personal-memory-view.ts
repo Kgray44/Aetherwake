@@ -26,14 +26,31 @@ export function createPersonalMemoryView(command: Command): HTMLElement {
   };
   let next: string | null = null;
   let selection = 0;
+  let currentPolicy: PersonalPolicy | undefined;
+  const disableMemory = (assistant: 'ordinary' | 'vela', name: string) => button(`Turn off ${name} memory`, async () => {
+    if (!(assistant === 'ordinary' ? currentPolicy?.ordinaryEnabled : currentPolicy?.velaEnabled) || !currentPolicy) return;
+    const version = currentPolicy.version;
+    const updated = await command({ type: 'disableProviderMemory', assistant, version }) as PersonalPolicy;
+    if (!currentPolicy || updated.version >= currentPolicy.version) renderPolicy(updated);
+    status.textContent = `${name} memory is off. Your saved memories are still available here.`;
+  });
+  const disableChatGPT = disableMemory('ordinary', 'ChatGPT');
+  const disableVela = disableMemory('vela', 'Vela');
+  disableChatGPT.hidden = disableVela.hidden = true;
+  function renderPolicy(value: PersonalPolicy) {
+    currentPolicy = value;
+    policy.textContent = 'ChatGPT memory: ' + (value.ordinaryEnabled ? 'Enabled for reviewed sends' : 'Off')
+      + ' · Vela memory: ' + (value.velaEnabled ? 'Enabled' : 'Off');
+    disableChatGPT.hidden = !value.ordinaryEnabled;
+    disableVela.hidden = !value.velaEnabled;
+  }
   async function load(after: string | null) {
     const intent = ++selection;
     const page = await command({ type: 'list', after }) as Page;
     if (intent !== selection) return;
     detail.replaceChildren();
     if (after === null) list.replaceChildren();
-    policy.textContent = 'ChatGPT memory: ' + (page.policy.ordinaryEnabled ? 'Enabled for reviewed sends' : 'Off')
-      + ' · Vela memory: ' + (page.policy.velaEnabled ? 'Enabled' : 'Off');
+    if (!currentPolicy || page.policy.version >= currentPolicy.version) renderPolicy(page.policy);
     for (const record of page.records) {
       const row = document.createElement('li');
       const scope = record.scope.kind === 'assistant.ordinary' ? 'All ordinary chats' : record.scope.kind;
@@ -82,6 +99,6 @@ export function createPersonalMemoryView(command: Command): HTMLElement {
   }
   const more = button('More memories', async () => { if (next !== null) await load(next); });
   more.hidden = true;
-  section.append(button('Load saved memories', () => load(null)), policy, status, list, more, detail);
+  section.append(button('Load saved memories', () => load(null)), policy, disableChatGPT, disableVela, status, list, more, detail);
   return section;
 }

@@ -3,6 +3,28 @@ import test from 'node:test';
 import { componentDocument, named, until } from '../../../conversation-product/test/component-dom.mts';
 import { createPersonalMemoryView } from '../src/personal-memory-view.ts';
 
+test('the inspector turns off Vela memory without changing ChatGPT consent or removing saved records', async () => {
+  const f = componentDocument(), restore = f.install(), calls = [];
+  const policy = { version: 3, ordinaryEnabled: true, velaEnabled: true };
+  const record = { id: 'fact-1', scope: { kind: 'project' }, state: 'active' };
+  try {
+    const view = createPersonalMemoryView(async request => {
+      calls.push(request);
+      if (request.type === 'list') return { records: [record], next: null, policy };
+      return { ...policy, version: 4, velaEnabled: false };
+    });
+    const disable = named(view, 'Turn off Vela memory');
+    assert.equal(disable.hidden, true);
+    named(view, 'Load saved memories').fire('click');
+    await until(() => !disable.hidden);
+    disable.fire('click');
+    await until(() => disable.hidden);
+    assert.deepEqual(calls[1], { type: 'disableProviderMemory', assistant: 'vela', version: 3 });
+    assert.match(view.textContent, /ChatGPT memory: Enabled for reviewed sends.*Vela memory: Off/);
+    assert.ok(named(view, 'Memory fact-1 · project · active'));
+  } finally { restore(); }
+});
+
 test('the inspector loads only on request and sends a version-bound correction', async () => {
   const f = componentDocument(), restore = f.install(), calls = [];
   const record = { id: 'fact-1', version: 3, scope: { kind: 'project', id: 'project' }, state: 'active' };
