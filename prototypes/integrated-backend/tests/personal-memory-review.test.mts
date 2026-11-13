@@ -4,6 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { NativePersonalMemory } from '../src/personal-memory.mts';
 import { createPersonalMemoryReview } from '../src/personal-memory-review.mts';
+import type { PersonalScope } from '../../personal-context/src/contracts.ts';
 
 test('native capture reviews exact source, saves once, and leaves provider use off', async () => {
   const kernel = WorkspaceKernel.open(':memory:');
@@ -12,19 +13,22 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   const message = { conversationId: 'chat', messageId: 'message', projectId: 'project', role: 'user' as const,
     sensitive: false, version: '1', contentDigest: createHash('sha256').update(sourceText).digest('hex') };
   let enabled = true;
+  let projectReadable = true;
+  const resolveScope = (scope: PersonalScope) =>
+    scope.kind === 'project' && !projectReadable ? null : { scope, version: '1' };
   let nativeOpen: () => ReturnType<NativePersonalMemory['open']>;
   const review = createPersonalMemoryReview({
     open: () => nativeOpen(), transaction,
     readSourceText: () => sourceText,
     resolveConversationSource: () => enabled ? message : null,
-    resolveScope: scope => ({ scope, version: '1' }),
+    resolveScope,
   });
   let wrappedValue: string;
   const owner = new NativePersonalMemory({
     kernel, host: {
       identity: () => ({ userId: 'local-owner', policyVersion: '1' }),
       resolveConversationSource: () => enabled ? message : null,
-      resolveScope: scope => ({ scope, version: '1' }),
+      resolveScope,
       authorize: input => review.authorize(input) ? { decision: 'allow', policyVersion: '1', authorizationRef: 'synthetic-review' } : { decision: 'deny' },
     },
     secrets: { available: async () => true, async seal(value) { wrappedValue = value; return randomBytes(64); }, async open() { return wrappedValue; } },
@@ -43,6 +47,15 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     await assert.rejects(review.commitCapture({ ...preview, enableStorage: false }), /personal_memory_review_mismatch/);
     const saved = await review.commitCapture(preview);
     assert.equal(saved.text, input.text);
+    assert.throws(() => service.readFact(saved.id), /personal_context_not_authorized/);
+    const inspected = await review.inspect({ after: null, limit: 8 });
+    assert.deepEqual(inspected.records.map(item => item.id), [saved.id]);
+    assert(!JSON.stringify(inspected).includes(saved.text));
+    assert.equal((await review.read(saved.id)).provenance.kind, 'conversation-message');
+    projectReadable = false;
+    assert.deepEqual((await review.inspect({ after: null, limit: 8 })).records, []);
+    await assert.rejects(review.read(saved.id), /canonical_scope_unavailable/);
+    projectReadable = true;
     await assert.rejects(review.commitCapture(preview), /personal_memory_review_mismatch/);
     const next = await review.previewCapture(input);
     assert.equal(next.enableStorage, false);
@@ -53,6 +66,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     const stale = await review.previewCapture(input);
     enabled = false;
     await assert.rejects(review.commitCapture(stale), /conversation_source_unavailable/);
+    await assert.rejects(review.read(saved.id), /conversation_source_unavailable/);
   } finally {
     owner.close();
     kernel.close();

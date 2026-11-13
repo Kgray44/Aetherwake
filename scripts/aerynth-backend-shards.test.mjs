@@ -39,14 +39,35 @@ test('schedules planning and ordinary Responses on opposite Windows runners', t 
   }
 });
 
-test('acceptance runner executes both assigned lanes and retains their case reports', { skip: process.platform !== 'win32' }, t => {
+test('acceptance runner executes the serial phase without a peer and retains all case reports', { skip: process.platform !== 'win32' }, t => {
   const root = mkdtempSync(join(tmpdir(), 'aerynth-shard-runner-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const backend = join(root, 'prototypes', 'integrated-backend');
   mkdirSync(join(backend, 'tests'), { recursive: true });
+  const serial = ['tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts'];
+  for (const file of serial) writeFileSync(join(backend, file), `
+    import test from 'node:test';
+    import assert from 'node:assert/strict';
+    import { existsSync, writeFileSync } from 'node:fs';
+    import { basename } from 'node:path';
+    import { setTimeout } from 'node:timers/promises';
+    test('serial phase finishes before the parallel lanes start', async () => {
+      await setTimeout(150);
+      assert(!existsSync('parallel-started'));
+      ${file === serial[1] ? "assert(existsSync('mission-stream.test.mts.done'));" : ''}
+      writeFileSync(basename(import.meta.filename) + '.done', '', { flag: 'wx' });
+    });
+  `);
   for (const file of ['a', 'b', 'c', 'd', 'e', 'new']) {
-    writeFileSync(join(backend, 'tests', `${file}.test.mts`),
-      `import test from 'node:test'; test('${file}', () => {});\n`);
+    writeFileSync(join(backend, 'tests', `${file}.test.mts`), `
+      import test from 'node:test';
+      import assert from 'node:assert/strict';
+      import { existsSync, writeFileSync } from 'node:fs';
+      test('${file}', () => {
+        writeFileSync('parallel-started', '');
+        for (const file of ${JSON.stringify(serial)}) assert(existsSync(file.split('/').at(-1) + '.done'));
+      });
+    `);
   }
   // Preserve the runner's relative repository and prototypes paths.
   mkdirSync(join(root, 'scripts'));
@@ -66,6 +87,8 @@ test('acceptance runner executes both assigned lanes and retains their case repo
   const report = JSON.parse(readFileSync(join(output, 'acceptance.json'), 'utf8'));
   const expected = planBackendShards(backend)[1];
   assert.equal(report.windowsShard, 1);
+  assert.deepEqual(expected[2], serial);
+  assert.deepEqual(planBackendShards(backend).flat(2).filter(file => serial.includes(file)).sort(), serial);
   assert.deepEqual(report.groups[0].backendLanes, expected);
   assert.deepEqual(report.groups[0].tests.map(test => test.file).sort(), expected.flat().sort());
   assert.equal(report.groups[0].counts.passed, expected.flat().length);
@@ -73,7 +96,9 @@ test('acceptance runner executes both assigned lanes and retains their case repo
 
 test('Windows reports bind every lane and native receipt to the current run, attempt and revision', () => {
   const identity = { revision: 'tested-revision', runId: '1234', runAttempt: 2, event: 'pull_request' };
-  const lanes = [[[workerLossCase.file], ['tests/a.test.mts']], [['tests/b.test.mts'], ['tests/c.test.mts']]];
+  const lanes = [[[workerLossCase.file], ['tests/a.test.mts']], [
+    ['tests/b.test.mts'], ['tests/c.test.mts'], ['tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts'],
+  ]];
   const passing = ({ file, name = 'fixture' }) => ({ file, name, status: 'passed' });
   const group = (directory, tests, backendLanes) => ({
     directory, status: 'passed', exitCode: 0, signal: null, missingRequiredCases: [],
@@ -95,6 +120,9 @@ test('Windows reports bind every lane and native receipt to the current run, att
     r => { r[1].runId = 'older-run'; },
     r => { r[1].groups.push(r[1].groups[0]); },
     r => { r[1].groups[0].backendLanes[0].push('tests/a.test.mts'); },
+    r => { r[1].groups[0].backendLanes.pop(); },
+    r => { r[1].groups[0].backendLanes[0].push('tests/mission-stream.test.mts'); },
+    r => { r[1].groups[0].tests.pop(); },
     r => { r[1].groups[0].tests[0].file = 'tests/a.test.mts'; },
     r => { r[0].groups[0].tests[0].name = 'missing worker loss'; },
     r => { r[0].groups[1].tests[0].status = 'skipped'; },

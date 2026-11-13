@@ -20,13 +20,14 @@ export interface CaptureRequest {
   keywords: readonly string[];
 }
 
-interface CaptureReview {
+export interface CaptureReview {
   id: string;
   draft: FactDraft;
   sourceText: string;
   scopeProof: ScopeProof;
   policy: PersonalPolicy;
   enableStorage: boolean;
+  expiresAt: string;
 }
 
 const identifier = (value: unknown): value is string =>
@@ -52,6 +53,26 @@ export function createPersonalMemoryReview(options: Options) {
 
   return {
     authorize: (input: PersonalAuthorization) => !closed && permission?.(input) === true,
+    async inspect(page: { after: string | null; limit: number }) {
+      requireOpen();
+      const service = await options.open();
+      requireOpen();
+      return options.transaction(() => withPermission(input =>
+        input.operation === 'policy.read' || input.operation === 'record.list' &&
+          input.subject?.kind === 'fact' && input.scope !== null && !!options.resolveScope(input.scope), () => ({
+        policy: service.policy(),
+        ...service.list({ kind: 'fact', after: page.after, limit: page.limit }),
+      })));
+    },
+    async read(id: string) {
+      requireOpen();
+      if (!identifier(id)) throw new PersonalContextError('invalid_record_id');
+      const service = await options.open();
+      requireOpen();
+      return options.transaction(() => withPermission(input =>
+        input.operation === 'record.read' && input.subject?.kind === 'fact' && input.subject.id === id,
+      () => service.readFact(id)));
+    },
     async previewCapture(input: CaptureRequest): Promise<CaptureReview> {
       requireOpen();
       if (!input || !identifier(input.conversationId) || !identifier(input.messageId) ||
@@ -84,8 +105,9 @@ export function createPersonalMemoryReview(options: Options) {
         const timestamp = now();
         for (const [id, entry] of pending) if (entry.expires <= timestamp) pending.delete(id);
         if (pending.size >= 16) throw new PersonalContextError('personal_memory_review_busy');
-        const review = { id: randomUUID(), draft, sourceText, scopeProof: proof, policy, enableStorage: !policy.storageEnabled };
-        pending.set(review.id, { review: structuredClone(review), expires: timestamp + 300_000 });
+        const expires = timestamp + 300_000;
+        const review = { id: randomUUID(), draft, sourceText, scopeProof: proof, policy, enableStorage: !policy.storageEnabled, expiresAt: new Date(expires).toISOString() };
+        pending.set(review.id, { review: structuredClone(review), expires });
         return review;
       });
     },
