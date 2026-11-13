@@ -147,6 +147,62 @@ async function reviewProjectCheck({ win, dialog, call, requestId, kind, intent, 
     : call("velaProjectCheckRun", { requestId, reviewId: review.reviewId });
 }
 
+function isStandingSelectedEvidence(preview, review, refs) {
+  return preview.sendDisposition === "standing-selected-evidence" &&
+    preview.providerId === "openai-api-vela" && preview.semanticContext === true &&
+    review.semanticContext === true && !review.handoff && !review.routingAgent &&
+    !review.projectEvidence && !review.workspaceState && !review.missionCheckpoint && !review.history &&
+    Array.isArray(refs) && refs.length === review.context.included.length &&
+    refs.every(ref => review.context.included.some(source => source.id === ref?.id && source.version === ref.version));
+}
+
+async function dispatchReviewedVelaRequest({ call, stage, preview, review, request, direct, checkOwner }) {
+  const grant = await stage("grant", () => call("authorizeVelaRequest", {
+    previewId: preview.id,
+    signature: preview.signature,
+    reviewDigest: review.reviewDigest,
+    ...(direct ? { directSend: true } : {}),
+  }));
+  checkOwner();
+  return stage("request", () => call("vela", {
+    name: "request",
+    input: { ...request, previewId: preview.id, grantId: grant.grantId },
+  }));
+}
+
+// Internal preparation only. The app owner must supply an already-authorized exact
+// preview and the same profile's command port. No renderer command or activation is registered here.
+exports.prepareAppOwnedVelaRequest = ({ call, isCurrent, preview, resourceRefs }) => {
+  const frozen = structuredClone(preview), refs = structuredClone(resourceRefs);
+  const ids = frozen?.resourceIds;
+  if (typeof isCurrent !== "function" || frozen?.sendDisposition !== "standing-selected-evidence" ||
+      frozen.providerId !== "openai-api-vela" || frozen.semanticContext !== true ||
+      !Array.isArray(ids) || !ids.length || new Set(ids).size !== ids.length ||
+      !Array.isArray(refs) || refs.length !== ids.length ||
+      !refs.every((ref, index) => ref?.kind === "resource" && ref.id === ids[index] &&
+        Number.isSafeInteger(ref.version) && ref.version > 0)) {
+    throw Error("vela_app_request_scope_required");
+  }
+  const checkOwner = () => {
+    if (isCurrent() !== true) throw Error("vela_app_request_owner_unavailable");
+  };
+  let consumed = false;
+  return async () => {
+    if (consumed) throw Error("vela_app_request_consumed");
+    consumed = true;
+    checkOwner();
+    const review = validateReview(frozen, await call("velaNativeReview", {
+      previewId: frozen.id, signature: frozen.signature,
+    }));
+    if (!isStandingSelectedEvidence(frozen, review, refs)) throw Error("vela_app_request_scope_required");
+    checkOwner();
+    return dispatchReviewedVelaRequest({ call, stage: (_name, work) => work(), preview: frozen, review,
+      request: { intent: frozen.intent, resourceIds: ids, resourceRefs: refs, authorizeProvider: true },
+      direct: true, checkOwner,
+    });
+  };
+};
+
 /** Called only after the host verifies its exact local main frame. Grants never enter IPC results. */
 exports.velaCommand = async ({
   win,
@@ -380,13 +436,7 @@ exports.velaCommand = async ({
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    const standingEvidence = preview.sendDisposition === "standing-selected-evidence" &&
-      preview.providerId === "openai-api-vela" && preview.semanticContext === true &&
-      review.semanticContext === true && !review.handoff && !review.routingAgent &&
-      !review.projectEvidence && !review.workspaceState && !review.missionCheckpoint && !review.history &&
-      Array.isArray(request.resourceRefs) && request.resourceRefs.length === review.context.included.length &&
-      request.resourceRefs.every(ref => review.context.included.some(source =>
-        source.id === ref?.id && source.version === ref.version));
+    const standingEvidence = isStandingSelectedEvidence(preview, review, request.resourceRefs);
     const direct = directMessageSend && (standingEvidence || (preview.sendDisposition === "routine" &&
       (preview.providerId === "chatgpt-plan-responses" && (!preview.route || preview.route.kind === "conversational") ||
         preview.providerId === "openai-api-vela" && ['conversational', 'app-planning'].includes(preview.route?.kind)) &&
@@ -402,26 +452,11 @@ exports.velaCommand = async ({
     if (approved !== true) throw Error("authorization_cancelled");
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    const grant = await stage("grant", () =>
-      call("authorizeVelaRequest", {
-        previewId: preview.id,
-        signature: preview.signature,
-        reviewDigest: review.reviewDigest,
-        ...(direct ? { directSend: true } : {}),
-      }),
-    );
-    if (!isReviewOwnerAlive(win))
-      throw Error("native_review_owner_unavailable");
-    const result = await stage("request", () =>
-      call("vela", {
-        name: "request",
-        input: {
-          ...request,
-          previewId: preview.id,
-          grantId: grant.grantId,
-        },
-      }),
-    );
+    const result = await dispatchReviewedVelaRequest({ call, stage, preview, review, request, direct,
+      checkOwner: () => {
+        if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+      },
+    });
     if (!directMessageSend || result?.state !== "responded" || !(preview.route?.nativeMetric || preview.route?.nativeLog)) return result;
     const next = await call("velaNextWorkflowStage", { requestId: result.id });
     if (!next) return result;

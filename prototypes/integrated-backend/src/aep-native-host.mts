@@ -10,16 +10,20 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { MissionService } from './mission-service.mts';
 import type { MissionScope } from './mission-contracts.mts';
 
+export type AepRollbackReview = MissionScope & { experimentId: string; policyVersion: number };
+
 export type AepNativeRequest =
   | { name: 'propose'; candidate: NativeCandidate }
   | { name: 'test' | 'evidence'; id: string }
   | { name: 'promote'; id: string; revision: number; policyVersion: number }
   | { name: 'inspect-policy' | 'start-probe' }
+  | ({ name: 'rollback-reviewed' } & AepRollbackReview)
   | { name: 'rollback'; policyVersion: number };
 
 const fields = {
   propose: ['candidate'], test: ['id'], evidence: ['id'], promote: ['id', 'revision', 'policyVersion'],
   'inspect-policy': [], 'start-probe': [], rollback: ['policyVersion'],
+  'rollback-reviewed': ['workspaceId', 'projectId', 'experimentId', 'policyVersion'],
 } as const;
 const validVersion = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0;
 
@@ -101,6 +105,16 @@ export function createAepNativeHost(db: DatabaseSync, missions: MissionService, 
       case 'rollback':
         ensure(validVersion(request.policyVersion), 'aep_invalid_native_request');
         return host.atomic(() => rollbackInTransaction(scope, request.policyVersion));
+      case 'rollback-reviewed':
+        ensure(validVersion(request.policyVersion) && typeof request.experimentId === 'string' &&
+          request.experimentId.length > 0, 'aep_invalid_native_request');
+        return host.atomic(() => {
+          const current = owner.read(scope);
+          ensure(request.workspaceId === scope.workspaceId && request.projectId === scope.projectId &&
+            current.experimentId === request.experimentId && current.version === request.policyVersion,
+          'aep_policy_review_changed');
+          return rollbackInTransaction(scope, request.policyVersion);
+        });
       case 'start-probe': {
         ensure(!running, 'aep_trial_in_progress');
         running = true;

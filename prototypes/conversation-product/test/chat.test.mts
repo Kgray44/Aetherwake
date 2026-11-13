@@ -140,8 +140,8 @@ test('quick search opens the exact message from the keyboard and never activates
     assert.equal(!!results.querySelector('button'),false);
     oldRow.fire('click');
     await searchStarted;
-    input.value='readable';input.fire('input');
     input.fire('keydown',{key:'Enter'});
+    input.value='readable';input.fire('input');
     assert.deepEqual(opened,[]);
     await new Promise(resolve=>setTimeout(resolve,160));
     assert.equal(results.querySelector('button').dataset.messageId,messageId);
@@ -158,6 +158,279 @@ test('quick search opens the exact message from the keyboard and never activates
     assert.equal(f.draft.content,'Unsent follow-up');
     assert.equal(switcher.open,false);
   }finally{release();await manager?.dispose();f.restore();}
+});
+
+test('quick search Enter submits pending text immediately and opens the first exact result once', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId, messageId=f.detail.messages.items[1].id;
+ const opened:string[][]=[];
+ let searches=0,manager;
+ const port={async command(name:string,input:any){
+  if(name==='search'&&input.text==='exact phrase'){
+   searches++;
+   return {items:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:'exact phrase'}],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(id,message)=>opened.push([id,message??''])});
+  await manager.ready;
+  await manager.openSwitcher();
+  const input=f.view.root.querySelector('.cp-switcher').querySelector('input');
+  input.value='exact phrase';
+  input.fire('input');
+  input.fire('keydown',{key:'Enter',isComposing:true});
+  assert.equal(searches,0);
+  input.fire('keydown',{key:'Enter'});
+  assert.equal(searches,1,'Enter bypasses the pending debounce');
+  input.value='exact phrase ';
+  input.fire('input');
+  input.fire('keydown',{key:'Enter'});
+  const switcher=f.view.root.querySelector('.cp-switcher');
+  await until(()=>opened.length===1&&!switcher.open);
+  assert.deepEqual(opened,[[resourceId,messageId]]);
+  assert.equal(searches,1);
+  assert.equal(f.view.doc.activeElement===switcher.querySelector('summary'),true);
+ } finally {await manager?.dispose();f.restore();}
+});
+
+test('Switch chat Escape cancels a result still waiting for the draft to save', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId, messageId=f.detail.messages.items[0].id;
+ const opened:string[]=[];
+ let manager, saving=false, release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const port={async command(name:string,input:any){
+  if(name==='search')return {items:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:'exact phrase'}],total:1,offset:0,limit:12,hasMore:false};
+  if(name==='saveDraft'){saving=true;await gate;}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(_id,message)=>{if(message)opened.push(message);}});
+  await manager.ready;
+  const editor=f.view.root.querySelector('textarea');
+  editor.value='Unsent edit before navigating';editor.fire('input');
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'),input=switcher.querySelector('input');
+  input.value='exact phrase';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await until(()=>saving);
+  input.fire('keydown',{key:'Escape'});
+  release();
+  await until(()=>!f.view.root.querySelector('.cp-manager').getAttribute('aria-busy'));
+  assert.deepEqual(opened,[]);
+  assert.equal(f.draft.content,'Unsent edit before navigating');
+  assert.equal(f.view.doc.activeElement,switcher.querySelector('summary'));
+ } finally {release();await manager?.dispose();f.restore();}
+});
+
+test('Switch chat keeps the previous draft available after a different chat fails to open', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId, target='chat:missing';
+ let manager;
+ const port={async command(name:string,input:any){
+  if(name==='search')return {items:[{kind:'conversation',resourceId:target,title:'Other chat',excerpt:''}],total:1,offset:0,limit:12,hasMore:false};
+  if(name==='readDraft'&&input.resourceId===target)return {resourceId:target,version:0,content:'',updatedAt:null};
+  if(name==='detail'&&input.resourceId===target)throw Error('temporary detail failure');
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId});
+  await manager.ready;
+  await manager.openSwitcher();
+  const input=f.view.root.querySelector('.cp-switcher').querySelector('input');
+  input.value='Other chat';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await until(()=>f.view.root.querySelector('.cp-switcher-status').textContent.includes('Couldn’t open'));
+  assert.equal(manager.state.selectedResourceId,resourceId);
+  assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
+ } finally {await manager?.dispose();f.restore();}
+});
+
+for (const failure of ['temporary detail failure','message_unavailable','conversation_missing']) test('Switch chat recovers a failed result open ('+failure+')', async () => {
+ const unavailable=failure!=='temporary detail failure';
+ const f=fixture(),resourceId=f.draft.resourceId,messageId=f.detail.messages.items[0].id;
+ const opened:string[]=[];
+ let manager,failed=false,searches=0;
+ const port={async command(name:string,input:any){
+  if(name==='search'){
+   searches++;
+   const items=unavailable&&failed?[]:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:'exact phrase'}];
+   return {items,total:items.length,offset:0,limit:12,hasMore:false};
+  }
+  if(name==='detail'&&input.aroundMessageId===messageId&&!failed){failed=true;throw Error(failure);}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(_id,message)=>{if(message)opened.push(message);}});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'),input=switcher.querySelector('input');
+  input.value='exact phrase';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await until(()=>failed&&!f.view.root.querySelector('.cp-manager').getAttribute('aria-busy'));
+  assert.equal(switcher.open,true);
+  assert.equal(input.value,'exact phrase');
+  if(unavailable){
+   await until(()=>searches===2&&switcher.querySelector('.cp-switcher-status').textContent.includes('No matches'));
+   assert.equal(switcher.querySelector('[data-message-id]'),null);
+   assert.deepEqual(opened,[]);
+   return;
+  }
+  assert.match(switcher.querySelector('.cp-switcher-status').textContent,/Couldn’t open/);
+  input.fire('keydown',{key:'Enter'});
+  await until(()=>opened.length===1&&!switcher.open);
+  assert.deepEqual(opened,[messageId]);
+ } finally {await manager?.dispose();f.restore();}
+});
+
+test('Switch chat does not auto-open a result after a newer conversation open', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId, messageId=f.detail.messages.items[0].id;
+ const opened:(string|undefined)[]=[];
+ let manager, release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const port={async command(name:string,input:any){
+  if(name==='search'&&input.searchMode==='chat-history'){
+   await gate;
+   return {items:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:input.text}],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(_id,message)=>opened.push(message)});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
+  input.value='exact phrase';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await manager.open(resourceId);
+  assert.deepEqual(opened,[undefined]);
+  release();
+  await until(()=>switcher.querySelector('[data-message-id]')!==null);
+  assert.equal(switcher.open,true);
+  assert.deepEqual(opened,[undefined]);
+  switcher.querySelector('[data-message-id]').fire('click');
+  await until(()=>opened.length===2);
+  assert.deepEqual(opened,[undefined,messageId]);
+ } finally {release();await manager?.dispose();f.restore();}
+});
+
+for(const retryWithButton of [false,true])test('Switch chat retries a failed query and keeps the exact text (button: '+retryWithButton+')', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId, messageId=f.detail.messages.items[0].id;
+ const searches:string[]=[], opened:string[][]=[];
+ let manager;
+ const port={async command(name:string,input:any){
+  if(name==='search'&&input.searchMode==='chat-history'){
+   searches.push(input.text);
+   if(searches.length===1)throw Error('temporary synthetic transport failure');
+   return {items:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:input.text}],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(id,message)=>opened.push([id,message??''])});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
+  input.value='exact phrase';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await until(()=>switcher.querySelector('.cp-switcher-status').textContent.includes('Press Enter to retry'));
+  assert.deepEqual(opened,[]);
+  assert.equal(input.value,'exact phrase');
+  if(retryWithButton){
+   const retry=named(switcher,'Retry search');
+   assert.ok(retry);
+   input.fire('keydown',{key:'ArrowDown'});
+   assert.equal(f.view.doc.activeElement,retry);
+   assert.equal(retry.fire('keydown',{key:'ArrowUp'}).defaultPrevented,true);
+   assert.equal(f.view.doc.activeElement,input);
+   retry.fire('click');
+   retry.fire('click');
+   const results=switcher.querySelector('.cp-switcher-results');
+   await until(()=>results.querySelector('[data-message-id]')!==null);
+   assert.deepEqual(opened,[]);
+   results.querySelector('[data-message-id]').fire('click');
+  }else input.fire('keydown',{key:'Enter'});
+  await until(()=>opened.length===1);
+  assert.deepEqual(searches,['exact phrase','exact phrase']);
+  assert.deepEqual(opened,[[resourceId,messageId]]);
+ } finally {await manager?.dispose();f.restore();}
+});
+
+test('Switch chat refreshes its exact query when the history project changes', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId;
+ const scopes:(string|null|undefined)[]=[], opened:string[]=[];
+ const firstSearch=Promise.withResolvers<void>();
+ let manager;
+ const port={async command(name:string,input:any){
+  if(name==='search'&&input.searchMode==='chat-history'){
+   scopes.push(input.projectId);
+   firstSearch.resolve();
+   const items=input.projectId==='project:second'?[]:[{kind:'conversation',resourceId,title:'First project chat',excerpt:''}];
+   return {items,total:items.length,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  f.projects.push({id:'project:first',title:'First',version:1},{id:'project:second',title:'Second',version:1});
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:id=>opened.push(id)});
+  await manager.ready;
+  const project=f.view.root.querySelector('.cp-filters').querySelector('select');
+  project.value='project:first';project.fire('change');
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'),input=switcher.querySelector('input');
+  const results=switcher.querySelector('.cp-switcher-results');
+  input.value='project chat';input.fire('input');
+  await firstSearch.promise;
+  await until(()=>results.querySelector('button')?.textContent==='First project chat');
+  const stale=results.querySelector('button');
+  project.value='project:second';project.fire('change');
+  assert.equal(!!results.querySelector('button'),false);
+  stale.fire('click');
+  await until(()=>scopes.length===2);
+  assert.deepEqual(scopes,['project:first','project:second']);
+  assert.deepEqual(opened,[]);
+  assert.equal(input.value,'project chat');
+ } finally {await manager?.dispose();f.restore();}
+});
+
+test('Switch chat waits for composed text and Escape invalidates a pending open', async () => {
+ const f=fixture();
+ const searches:string[]=[], opened:string[]=[];
+ let manager,release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const port={async command(name:string,input:any){
+  if(name==='search'){
+   searches.push(input.text);
+   await gate;
+   return {items:[{kind:'message',resourceId:f.draft.resourceId,messageId:f.detail.messages.items[0].id,
+    title:'Synthetic chat',excerpt:'完成'}],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId:f.draft.resourceId,onResource:id=>opened.push(id)});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
+  input.fire('compositionstart');
+  input.value='未';input.fire('input',{isComposing:true});
+  const group=switcher.querySelector('select');
+  group.value='favorite';
+  group.fire('change');
+  for(const isComposing of [true,false]){
+   const composingEscape=input.fire('keydown',{key:'Escape',isComposing});
+   assert.equal(composingEscape.defaultPrevented,false);
+   assert.equal(switcher.open,true);
+   assert.equal(f.view.doc.activeElement,input);
+  }
+  input.fire('keydown',{key:'Enter'});
+  await new Promise(resolve=>setTimeout(resolve,140));
+  assert.deepEqual(searches,[]);
+  input.value='完成';input.fire('compositionend');
+  input.fire('keydown',{key:'Enter'});
+  assert.deepEqual(searches,['完成']);
+  const escaped=input.fire('keydown',{key:'Escape'});
+  assert.equal(escaped.defaultPrevented,true);
+  assert.equal(switcher.open,false);
+  assert.equal(f.view.doc.activeElement,switcher.querySelector('summary'));
+  release();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(opened,[]);
+  assert.equal(switcher.querySelector('.cp-switcher-results').querySelector('button'),null);
+ } finally {release();await manager?.dispose();f.restore();}
 });
 
 test('mounted manager menus, branch/context and canonical nested folders borrow the same frame lifecycle without replacing the live composer',async()=>{

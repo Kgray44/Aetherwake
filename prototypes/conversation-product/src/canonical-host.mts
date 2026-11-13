@@ -72,8 +72,15 @@ export function createCanonicalAccessHelper(options:AccessHelperOptions) {
   const row=db.prepare('SELECT project_id,state FROM collections WHERE id=?').get(collectionId);
   return !!row&&(row.state==='active'||includeArchived&&row.state==='archived')&&allow({kind:'collection',id:collectionId,intent})&&project(row.project_id===null?null:String(row.project_id),intent);
  };
- const access=(resourceId:string,messageId?:string):boolean=>{
-  if(!resource(resourceId,'read',!!options.allowArchivedResources))return false;
+ const access=(resourceId:string,messageId?:string,batchResources?:Map<string,boolean>):boolean=>{
+  // The owning synchronous read transaction can reuse the parent decision.
+  // Message policy and source visibility still apply independently.
+  let readable=batchResources?.get(resourceId);
+  if(readable===undefined){
+   readable=resource(resourceId,'read',!!options.allowArchivedResources);
+   batchResources?.set(resourceId,readable);
+  }
+  if(!readable)return false;
   if(messageId===undefined)return true;
   return allow({kind:'message',resourceId,messageId,intent:'read'})&&options.messageVisible?.(resourceId,messageId)===true;
  };
