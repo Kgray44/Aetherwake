@@ -954,8 +954,9 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         );
         try {
           await click(selector + ' [data-intelligence-zone="resource"]');
-          const resource = await js(`document.querySelector(${quote(selector + ' [role="tabpanel"]')}).textContent`);
-          assert(profile.attempts.some(attempt => attempt.resourceLease && resource.includes(attempt.resourceLease.leaseId)));
+          const resource = await js(`[...document.querySelectorAll(${quote(selector + ' [data-intelligence-field^="Lease · "]')})]
+            .map(row => row.dataset.intelligenceSource).sort()`);
+          assert.deepEqual(resource, profile.attempts.flatMap(attempt => attempt.resourceLease ? [attempt.resourceLease.leaseId] : []).sort());
           await capture("02-adaptive-intelligence-resource");
           await click(selector + ' > summary');
         } finally {

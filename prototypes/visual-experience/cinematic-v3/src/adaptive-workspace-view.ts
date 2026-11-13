@@ -44,6 +44,8 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
     for (const reading of region?.readings ?? []) {
       const term = doc.createElement('dt'), value = doc.createElement('dd');
       term.textContent = reading.field;
+      term.dataset.intelligenceField = reading.field;
+      term.dataset.intelligenceSource = reading.sourceId;
       const provenance = doc.createElement('small');
       value.textContent = `${reading.value === null ? 'Unavailable' : reading.value}${reading.unit ? ` ${reading.unit}` : ''}`;
       provenance.textContent = `${reading.classification} · Source ${reading.sourceId} · ${reading.observedAt ?? 'Timestamp unavailable'}`;
@@ -52,7 +54,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
     }
   }
   details.onkeydown = event => {
-    if (event.key !== 'Escape') return;
+    if (event.key !== 'Escape' || !details.open) return;
     event.preventDefault(); event.stopPropagation(); details.open = false; summary.focus({ preventScroll: true });
   };
   function invalidate(message: string, close = false) {

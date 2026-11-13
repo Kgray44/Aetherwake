@@ -29,7 +29,8 @@ test('canonical AEP profile distinguishes wall time, overlap, missing cost and h
     wallTime: { elapsedMs: 410, from: 'mission-start-command', through: 'last-settlement' },
     work: { workerMs: 530, overlapMs: 120, activeMs: 410, peakWorkers: 2,
       intervalCoverage: { measured: 2, attempts: 2 }, criticalPath: { durationMs: 400, attemptIds: ['attempt-a'] } },
-    economics: { reportedTotalTokens: null, simulatedTotalTokens: null, usageCoverage: 'missing', cost: null },
+    economics: { reportedTotalTokens: null, simulatedTotalTokens: null, usageCoverage: 'missing', cost: null, costCoverage: 'provider-call-count-unavailable',
+      usageGaps: ['unattributed-usage'], unattributedTotalTokens: 20 },
     quality: { objectiveVerified: false }, resourcePolicy: { leaseCoverage: { withReceipt: 1, withoutReceipt: 1 } },
     attempts: [{ id: 'attempt-a', taskId: 'task-a', executor: 'local.cpu', state: 'verified',
       start: { utc: '2026-11-12T00:00:00Z' }, end: null, providerSelection: null,
@@ -40,6 +41,7 @@ test('canonical AEP profile distinguishes wall time, overlap, missing cost and h
   assert.equal(profiler.find(row => row.field === 'Execution wall time').value, 410);
   assert.equal(profiler.find(row => row.field === 'Measured overlap').value, 120);
   assert.equal(profiler.find(row => row.field === 'Provider cost').value, null);
+  assert.equal(profiler.find(row => row.field === 'Usage evidence gap').value, 'unattributed-usage');
   assert.equal(profiler.find(row => row.field === 'Critical path attempts').value, 'attempt-a');
   assert(regions[1].readings.some(row => row.sourceId === 'lease-a' && row.field === 'Reserved RAM'));
   assert.match(regions[1].limitation, /historical/i);
