@@ -1250,7 +1250,41 @@ test('a reviewed Vela turn investigates selected notes and composes from checked
   } finally { await f.close(); }
 });
 
-async function verifySealedReviewedCie(live?: { credential: string; model: string; commit: string; tree: string; journalPath: string }) {
+type BlindObservedRequest = { input?: { content?: string }[]; instructions?: string };
+function collectBlindEvidenceAudit(requests: readonly BlindObservedRequest[], request: string,
+  sources: readonly { fixtureId: string; sourceId: string; title: string; text: string }[]) {
+  const assessments: { round: number; excerpts: { handle: string; title?: string; text: string }[] }[] = [];
+  const compositions: Awaited<ReturnType<typeof import('../src/vela-semantic-history.mts').investigateReviewedVelaEvidence>>[] = [];
+  const inputText = (value: unknown): string[] => {
+    if (typeof value === 'string') return [value];
+    if (Array.isArray(value)) return value.flatMap(inputText);
+    return value && typeof value === 'object' ? Object.values(value).flatMap(inputText) : [];
+  };
+  const outbound = requests.map(body => {
+    const inputs = [body.instructions, ...(body.input ?? []).map(item => item.content)];
+    const content = body.input?.[0]?.content;
+    let payload;
+    try { payload = typeof content === 'string' ? JSON.parse(content) : null; } catch { payload = null; }
+    const decoded = [...inputs, ...inputText(payload)];
+    const textSourceIds = sources.filter(source => decoded.some(input => input?.includes(source.text))).map(source => source.fixtureId);
+    const inputDigest = createHash('sha256').update(JSON.stringify({ input: body.input, instructions: body.instructions })).digest('hex');
+    if (!payload) return { inputDigest, textSourceIds, stage: 'other' };
+    if (payload.stage === 'assess' && payload.request === request) {
+      assessments.push({ round: payload.round, excerpts: payload.excerpts });
+      return { inputDigest, textSourceIds, stage: 'assess' };
+    }
+    if (Array.isArray(payload.evidence?.coverage)) {
+      compositions.push(payload.evidence);
+      return { inputDigest, textSourceIds, stage: 'compose' };
+    }
+    return { inputDigest, textSourceIds, stage: 'other' };
+  });
+  const sourceBindings = sources.map(({ fixtureId, sourceId, title }) => ({ fixtureId, sourceId, title }));
+  return { outbound, sourceBindings, assessments, compositions };
+}
+
+async function verifySealedReviewedCie(live?: { credential: string; model: string; commit: string; tree: string; journalPath: string;
+  requests: BlindObservedRequest[] }) {
   const f = fixture(true, true, undefined, live?.credential);
   const journalPath = live?.journalPath ?? join(f.directory, 'blind-evaluation.sqlite');
   const bytes = readFileSync(new URL('../../../scripts/benchmarks/cie-quality/cases.public.json', import.meta.url));
@@ -1286,6 +1320,8 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
               resourceIds.push(note.id);
             }
             const quote = input.sources[0].text;
+            const requests = live?.requests ?? f.requests;
+            const requestStart = requests.length;
             const eventCursor = (await f.core.command('replay', { limit: 1 })).latest;
             const before = await usage();
             if (!live && !before.usedToday) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
@@ -1338,8 +1374,19 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
             const tokenSamples = settlements.flatMap(receipt => receipt.usage?.totalTokens ?? []);
             const totalTokens = tokenSamples.length === calls ? tokenSamples.reduce((total, value) => total + value, 0) : null;
             if (!live) assert.equal(totalTokens, calls * 140);
+            const sources = input.sources.map((source, index) => ({ fixtureId: source.id, sourceId: resourceIds[index],
+              title: source.title, text: source.text }));
+            const evidenceAudit = collectBlindEvidenceAudit(requests.slice(requestStart), input.request, sources);
+            assert.equal(evidenceAudit.outbound.length, calls);
+            if (!live) {
+              assert.equal(evidenceAudit.assessments.length, 1);
+              assert.ok(evidenceAudit.assessments[0].excerpts.some(excerpt => excerpt.text === quote));
+              assert.deepEqual(evidenceAudit.compositions[0].coverage[0].passages,
+                [{ sourceId: resourceIds[0], title: input.sources[0].title, quote }]);
+              assert.deepEqual(evidenceAudit.outbound.at(-1)?.textSourceIds, [input.sources[0].id]);
+            }
             return { answer, calls, totalTokens, tokenSamples: tokenSamples.length, settlements, requestedModel: live?.model ?? 'gpt-6-luna',
-              transport: live ? 'live' : 'synthetic' };
+              transport: live ? 'live' : 'synthetic', evidenceAudit };
           } catch (error) { hostError = error; throw error; }
         }, signal, { journal, maxCases: 1, route: { provider: 'openai-api-vela', model: live?.model ?? 'gpt-6-luna',
           transport: live ? 'live' : 'synthetic' }, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
@@ -1371,7 +1418,16 @@ test('authorized live CIE smoke returns a sealed native prediction', {
   const tree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim();
   delete process.env.OPENAI_API_KEY;
   writeFileSync(journalPath, '', { flag: 'wx' });
-  const prediction = await verifySealedReviewedCie({ credential, model, commit, tree, journalPath });
+  const requests: BlindObservedRequest[] = [];
+  const fetchProvider = globalThis.fetch;
+  t.mock.method(globalThis, 'fetch', (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (String(url) === 'https://api.openai.com/v1/responses' && typeof init?.body === 'string') {
+      const { input, instructions } = JSON.parse(init.body);
+      requests.push({ input, instructions });
+    }
+    return fetchProvider(url, init);
+  });
+  const prediction = await verifySealedReviewedCie({ credential, model, commit, tree, journalPath, requests });
   t.diagnostic(JSON.stringify({ predictionSha256: prediction.predictionSha256, cases: prediction.results.length }));
 });
 
