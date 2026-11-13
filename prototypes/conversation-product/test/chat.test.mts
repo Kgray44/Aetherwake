@@ -950,3 +950,23 @@ test('a detached send rejection is caught and leaves exact durable recovery with
 test('composer keyboard policy keeps newline and composition distinct from submit',()=>{
   const event={key:'Enter',shiftKey:false,isComposing:false,altKey:false,ctrlKey:false,metaKey:false};assert.equal(composerShouldSubmit(event),true);for(const field of ['shiftKey','isComposing','altKey']as const)assert.equal(composerShouldSubmit({...event,[field]:true}),false);assert.equal(composerShouldSubmit({...event,key:'Escape'}),false);
 });
+
+test('Quote inserts at the draft selection and restores focus after insertion', async () => {
+ const f=fixture();
+ let chat;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});
+  await chat.ready;
+  const editor=f.view.root.querySelector('textarea');
+  editor.setSelectionRange(6,13);
+  const quote=named(f.view.root.querySelector('.cp-message-user'),'Quote');
+  quote.fire('click');
+  const prefix='Saved \n\n> A user message\n\n';
+  assert.equal(editor.value,prefix+'text');
+  assert.equal(editor.selectionStart,prefix.length);
+  assert.equal(editor.selectionEnd,prefix.length);
+  assert.equal(document.activeElement,editor);
+  await chat.flush();
+  assert.equal(f.draft.content,prefix+'text');
+ }finally{await chat?.dispose();f.restore();}
+});
