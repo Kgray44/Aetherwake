@@ -25,7 +25,7 @@ export function preflightArtifactEvidence(destination: string) {
 }
 export function retainArtifactEvidence(destination: string, input: {
   provider: 'simulated' | 'real-openai-api'; objective: string; missionId: string; reportId: string;
-  png: Buffer; notes: Buffer; report: string;
+  png: Buffer; notes: Buffer; report: string; verifiedInferenceRequests?: number;
 }) {
   preflightArtifactEvidence(destination);
   const git = (...args: string[]) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim();
@@ -46,7 +46,9 @@ export function retainArtifactEvidence(destination: string, input: {
       revocation: 'not-tested', originalChatUI: 'not-tested' },
     objective: input.objective, missionId: input.missionId, reportId: input.reportId,
     checks: { workspaceResourceReadback: true, reportRestored: true, duplicateStartSameMission: true,
-      oneInferenceUsage: true, mutatedTextBlocksMission: true, sameReportMarkedStale: true },
+      ...(input.verifiedInferenceRequests === undefined ? { oneInferenceUsage: true } :
+        { verifiedInferenceRequests: input.verifiedInferenceRequests }),
+      mutatedTextBlocksMission: true, sameReportMarkedStale: true },
     files: names.map((name, i) => ({ name, bytes: bytes[i].length, sha256: digest(bytes[i]) })),
   };
   writeFileSync(join(destination, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx', mode: 0o600 });

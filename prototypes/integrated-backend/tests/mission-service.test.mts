@@ -11,6 +11,7 @@ import { MISSION_LIMITS, type Mission, type MissionAdmission, type MissionExecut
 import type { MissionContextSource } from '../../vela-core/src/mission-context.mts';
 import { createMissionAdmission } from '../src/mission-admission.mts';
 import { createResourcePolicy, previewWorkerBudgetExperiment } from '../src/resource-policy.mts';
+import { missionImageModel } from '../../openai-provider/images.mts';
 
 const scope = { workspaceId: 'workspace-1', projectId: 'project-1' };
 const task = (id: string, dependencies: string[] = [], resource?: string): MissionTaskPlan => ({
@@ -49,11 +50,22 @@ function revisionFixture(reassign?: MissionServiceHost['reassign']) {
   const native = { ...f.host.executors.fixture, lane: 'native' };
   const specialist = { ...f.host.executors.fixture, lane: 'chatgpt-plan-responses', replaySafe: false };
   const host = { ...f.host, reassign, executors: { 'sample.cpu': native, 'sample.ram': native,
-    'join.samples': native, 'codex.project-check': { ...native, lane: 'codex-local-check' }, 'chatgpt.specialist': specialist } };
+    'join.samples': native, 'codex.project-check': { ...native, lane: 'codex-local-check' }, 'chatgpt.specialist': specialist,
+    'artifact.illustration': native } };
   return { ...f, host, create: () => new MissionService(host) };
 }
 
 const revisionTask = (id: string, executor: string, dependencies: string[] = []) => ({ ...task(id, dependencies), executor });
+
+test('the tracked Node check includes workspace notes only when explicitly requested', () => {
+  const work = 'Run selected Node tests and measure CPU and RAM';
+  const plain = nativeMissionPlan(work, scope)!;
+  const reviewed = nativeMissionPlan(`${work} using workspace notes`, scope)!;
+  assert.deepEqual(reviewed.tasks.filter(t => t.id !== 'report' && t.id !== 'notes'), plain.tasks.filter(t => t.id !== 'report'));
+  assert.deepEqual(reviewed.tasks.find(t => t.id === 'notes')?.dependencies, []);
+  assert.ok(reviewed.tasks.find(t => t.id === 'report')?.dependencies.includes('notes'));
+  assert.equal(nativeMissionPlan(`${work} using notes from another workspace`, scope), null);
+});
 
 test('profiler off, minimal and full preserve verification and uncertain cancellation', async () => {
   const outcomes = [];
@@ -1427,14 +1439,20 @@ test('reviewed specialist reassignment binds the current trusted profile and ref
   const f = revisionFixture((_mission, _task, id) => id === 'approved' ? specialist(id, version) : undefined);
   const service = f.create();
   try {
+    const work = 'Measure CPU and RAM with two specialists';
     const original = plan({ ...revisionTask('analysis', 'chatgpt.specialist'), specialist: specialist('original', 1) },
-      revisionTask('report', 'join.samples', ['analysis']));
+      { ...revisionTask('illustration', 'artifact.illustration'), artifactImage: {
+        prompt: 'Draw a blue square', digest: '0'.repeat(64), configurationVersion: 1,
+        settings: { model: missionImageModel, quality: 'medium' },
+      } }, revisionTask('report', 'join.samples', ['analysis', 'illustration']));
+    original.objective = `Run a mission to ${work}; generate an illustration: Draw a blue square`;
     const { id, revision } = service.create('reviewed-reassignment', original);
     const paused = service.control(id, scope, revision, { type: 'pause' });
     const change = { type: 'reassign', taskId: 'analysis', agentProfileId: 'approved' } as const;
     assert.throws(() => service.previewRevision(id, scope, paused.revision, { ...change, agentProfileId: 'unavailable' }),
       /mission_revision_reassignment_unavailable/);
     const review = service.previewRevision(id, scope, paused.revision, change);
+    assert.equal(review.externalReview?.objective, work);
     version++;
     assert.throws(() => service.applyRevision(id, scope, paused.revision, change, review.fingerprint), /mission_revision_preview_changed/);
     const fresh = service.previewRevision(id, scope, paused.revision, change);
@@ -1445,8 +1463,10 @@ test('reviewed specialist reassignment binds the current trusted profile and ref
     service.control(id, scope, revised.revision, { type: 'resume' });
     await flush();
     assert.deepEqual(f.active.get('analysis')?.context.task.specialist, specialist('approved', 2));
+    assert.equal(f.active.get('analysis')?.context.context.payload.missionObjective, work);
     service.control(id, scope, service.read(id, scope).revision, { type: 'pause' });
     f.active.get('analysis')!.release();
+    f.active.get('illustration')?.release();
     await flush();
     const verified = service.read(id, scope);
     assert.equal(verified.tasks[0].state, 'verified');
