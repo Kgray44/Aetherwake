@@ -208,17 +208,31 @@ export class ConversationGraph {
     return copy(this.message(messageId));
   }
   private visibleMessageRecords(conversationId:string,budget?:{remaining:number}):Message[] {
-    const c = this.conversation(conversationId);
-    if(budget){const count=1+c.ownMessageIds.length;if(count>budget.remaining)throw new MetadataScanLimit();budget.remaining-=count;}
-    const edge = this.edgesByChild.get(c.id);
-    let inherited: Message[] = [];
-    if (edge) {
-      const parent = this.visibleMessageRecords(edge.parentId,budget);
-      const index = parent.findIndex(m => m.id === edge.sourceMessageId);
-      assert(index >= 0, 'fork point absent');
-      inherited = parent.slice(0, index + 1);
+    const lineage: Conversation[] = [];
+    for (let c = this.conversation(conversationId); ; ) {
+      if (budget) {
+        const count = 1 + c.ownMessageIds.length;
+        if (count > budget.remaining) throw new MetadataScanLimit();
+        budget.remaining -= count;
+      }
+      lineage.push(c);
+      const edge = this.edgesByChild.get(c.id);
+      if (!edge) break;
+      c = this.conversation(edge.parentId);
     }
-    return [...inherited, ...c.ownMessageIds.map(id => this.message(id))];
+
+    // Reuse one array as each fork trims the parent view to its anchor.
+    const records: Message[] = [];
+    for (const c of lineage.reverse()) {
+      const edge = this.edgesByChild.get(c.id);
+      if (edge) {
+        const index = records.findIndex(message => message.id === edge.sourceMessageId);
+        assert(index >= 0, 'fork point absent');
+        records.length = index + 1;
+      }
+      for (const id of c.ownMessageIds) records.push(this.message(id));
+    }
+    return records;
   }
   visibleMessages(conversationId: string): Message[] {
     return this.visibleMessageRecords(conversationId).filter(message => !this.unavailableMessages.has(message.id)).map(copy);
