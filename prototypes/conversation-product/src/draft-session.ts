@@ -40,6 +40,7 @@ export class ConversationDraftSession {
   private documents: DraftDocument[] = [];
   private editRevision = 0;
   private known: ConversationDraftRecord | null = null;
+  private unconfirmedSave: (Pick<ConversationDraftRecord,'version'|'content'|'documents'> & { editRevision: number }) | null = null;
   private remote: ConversationDraftRecord | null = null;
   private error: string | null = null;
   private loading = true;
@@ -125,6 +126,7 @@ export class ConversationDraftSession {
       if (task?.kind === 'acknowledge' && (this.editRevision !== task.checkpoint.editRevision || this.content !== task.checkpoint.record.content || this.known!.version !== task.checkpoint.record.version)) { task.resolve(false); continue; }
       const content = task?.kind === 'checkpoint' ? task.content : task?.kind === 'acknowledge' ? '' : this.content;
       const documents = task?.kind === 'checkpoint' ? task.documents : task?.kind === 'acknowledge' ? [] : this.documents;
+      const editRevision = task?.kind === 'checkpoint' ? task.editRevision : this.editRevision;
       if (!validContent(content)) { this.error = 'draft_limit_exceeded'; task?.reject(new Error(this.error)); this.rejectTasks(new Error(this.error)); this.emit(); return; }
       const expectedVersion = task?.kind === 'acknowledge' ? task.checkpoint.record.version : this.known!.version;
       this.saving = true; this.emit();
@@ -133,6 +135,7 @@ export class ConversationDraftSession {
           ...(documents.length || this.known!.documents?.length ? { documents } : {}) }));
         if (record.version !== expectedVersion + 1 || record.content !== content || !sameDocuments(record.documents, documents)) throw new Error('invalid_draft_response');
         this.known = record;
+        this.unconfirmedSave = null;
         if (task?.kind !== 'acknowledge' && sameDocuments(this.documents, record.documents))
           this.documents = record.documents ?? this.documents;
         if (task?.kind === 'checkpoint') task.resolve({ record: { ...record }, editRevision: task.editRevision });
@@ -141,6 +144,10 @@ export class ConversationDraftSession {
           if (unchanged) { this.content = ''; this.documents = []; this.editRevision++; } task.resolve(unchanged);
         }
       } catch (error) {
+        // A failed delivery can leave the local CAS write committed. Keep the
+        // exact attempted draft only until a canonical read establishes its state.
+        if (task?.kind !== 'acknowledge' && /(?:^|: )(?:backend_disconnected|backend_timeout)$/.test(failure(error)))
+          this.unconfirmedSave = {version:expectedVersion+1,content,documents,editRevision};
         await this.recordError(error); const errorValue = new Error(this.blocked() ?? failure(error)); task?.reject(errorValue); this.rejectTasks(errorValue); return;
       } finally { this.saving = false; this.emit(); }
     }
@@ -193,13 +200,18 @@ export class ConversationDraftSession {
     const differs = (other: Pick<ConversationDraftRecord,'content'|'documents'>) =>
       record.content !== other.content || !sameDocuments(record.documents, other.documents);
     if ((record.version === this.known?.version && differs(this.known)) || (record.version === this.remote?.version && differs(this.remote))) { this.error = 'invalid_draft_response'; this.emit(); throw new Error(this.error); }
-    const localIntent = this.dirty() || this.editRevision !== readRevision || (!this.known && (this.initialLocal || this.editRevision > 0));
+    const attempted = this.unconfirmedSave;
+    const confirmedSave = attempted?.version === record.version && !differs(attempted);
+    this.unconfirmedSave = null;
+    const localIntent = this.dirty() || this.editRevision !== readRevision ||
+      (attempted !== null && this.editRevision !== attempted.editRevision) ||
+      (!this.known && (this.initialLocal || this.editRevision > 0));
     const differsLocally = differs({content:this.content,documents:this.documents});
     if (this.remote && differsLocally) { this.remote = record; this.error = null; }
-    else if (localIntent && differsLocally && record.version > (this.known?.version ?? 0)) this.remote = record;
+    else if (!confirmedSave && localIntent && differsLocally && record.version > (this.known?.version ?? 0)) this.remote = record;
     else {
-      if (!localIntent) this.content = record.content;
-      if (!localIntent || sameDocuments(this.documents, record.documents)) this.documents = record.documents ?? [];
+      if (!localIntent && !confirmedSave) this.content = record.content;
+      if ((!localIntent && !confirmedSave) || sameDocuments(this.documents, record.documents)) this.documents = record.documents ?? [];
       this.known = record; this.remote = null; this.error = null;
     }
     this.emit(); if (this.dirty() && !this.blocked()) this.schedule();

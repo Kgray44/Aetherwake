@@ -8,7 +8,7 @@ async function until(check: () => boolean) { for (let i = 0; i < 50 && !check();
 function fixture(initial: Partial<ConversationDraftRecord> = {}) {
   let record: ConversationDraftRecord = { resourceId: 'chat:synthetic', version: 0, content: '', updatedAt: null, ...initial };
   const writes: { resourceId: string; expectedVersion: number; content: string }[] = [];
-  let readGate: Promise<void> | null = null, responseGate: Promise<void> | null = null, lostResponse = false, denied = false, active = 0, maximumActive = 0, readCount = 0;
+  let readGate: Promise<void> | null = null, responseGate: Promise<void> | null = null, lostResponse: string | undefined, denied = false, active = 0, maximumActive = 0, readCount = 0;
   const port: ConversationDraftPort = { async command(name: string, input: any) {
     if (denied) throw new Error('source_unavailable');
     if (name === 'readDraft') { readCount++; const result = { ...record }; await readGate; return result; }
@@ -17,12 +17,12 @@ function fixture(initial: Partial<ConversationDraftRecord> = {}) {
       if (record.version !== input.expectedVersion) throw new Error('stale_draft_version');
       record = { ...record, version: record.version + 1, content: input.content, updatedAt: '2026-11-02T00:00:00Z',
         ...(input.documents === undefined ? {} : { documents: input.documents }) };
-      const result = { ...record }; await responseGate; if (lostResponse) { lostResponse = false; throw new Error('synthetic_response_lost'); } return result;
+      const result = { ...record }; await responseGate; if (lostResponse) { const error = lostResponse; lostResponse = undefined; throw new Error(error); } return result;
     } finally { active--; }
   } };
   const create = (initialContent?: string) => new ConversationDraftSession({ port, resourceId: record.resourceId, debounceMs: 10000, ...(initialContent !== undefined ? { initialContent } : {}) });
   return { port, create, writes, get record() { return { ...record }; }, get maximumActive() { return maximumActive; }, get readCount() { return readCount; },
-    setReadGate: (gate: Promise<void> | null) => { readGate = gate; }, setResponseGate: (gate: Promise<void> | null) => { responseGate = gate; }, loseResponse: () => { lostResponse = true; }, deny: (value: boolean) => { denied = value; },
+    setReadGate: (gate: Promise<void> | null) => { readGate = gate; }, setResponseGate: (gate: Promise<void> | null) => { responseGate = gate; }, loseResponse: (error = 'synthetic_response_lost') => { lostResponse = error; }, deny: (value: boolean) => { denied = value; },
     external: (content: string) => { record = { ...record, version: record.version + 1, content, updatedAt: '2026-11-02T00:00:01Z' }; } };
 }
 
@@ -101,6 +101,29 @@ test('an edit generation is retained even when later typing returns to identical
 test('lost draft response and access denial preserve text; explicit reload reconciles actual saved recovery without replay', async () => {
   const f = fixture(), session = f.create(); await session.ready; f.loseResponse(); session.update('Recovery whose response was lost'); await assert.rejects(session.flush(), /synthetic_response_lost/); assert.equal(session.snapshot().content, 'Recovery whose response was lost'); assert.equal(session.snapshot().phase, 'error');
   await session.reload(); await session.flush(); assert.equal(f.writes.length, 1); assert.equal(session.snapshot().phase, 'clean'); f.deny(true); await assert.rejects(session.reload(), /source_unavailable/); assert.equal(session.snapshot().content, 'Recovery whose response was lost'); f.deny(false); await session.reload(); await session.dispose();
+});
+
+for (const [competing,later] of [[false,'Later local edit'],[false,''],[true,'Later local edit'],[true,'']] as const)
+test('lost draft save response with later typing (competing edit: '+competing+', cleared: '+!later+')', async () => {
+  const f = fixture(), session = f.create();
+  await session.ready;
+  f.loseResponse('backend_disconnected');
+  session.update('First local edit');
+  await assert.rejects(session.flush(), /backend_disconnected/);
+  session.update(later);
+  if (competing) f.external('Competing stored edit');
+  await session.reload();
+  assert.equal(session.snapshot().content, later);
+  if (competing) {
+    assert.equal(session.snapshot().remote?.content, 'Competing stored edit');
+    assert.equal(f.writes.length, 1);
+    await session.resolve('use-stored', f.record.version);
+  } else {
+    await session.flush();
+    assert.equal(f.record.content, later);
+    assert.deepEqual(f.writes.map(write => write.expectedVersion), [0, 1]);
+  }
+  await session.dispose();
 });
 
 test('over-limit input remains local and visible until corrected; it is never truncated or sent', async () => {
