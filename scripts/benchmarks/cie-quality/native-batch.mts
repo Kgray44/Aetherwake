@@ -23,7 +23,9 @@ export interface NativeCieNoEvidence {
   requestId: string;
   messageId: string;
   admissions: readonly { requestId: string; executionId: string }[];
-  settlements: readonly { executionId: string; stage: 'structured' | 'answer' }[];
+  settlements: readonly { executionId: string; stage: 'answer'; usage: {
+    inputTokens: number; outputTokens: number; totalTokens: number;
+  } }[];
   evidenceAudit: { sourceBindings: readonly []; assessments: readonly { excerpts: readonly [] }[];
     compositions: readonly { coverage: readonly { status: 'missing' | 'inaccessible' | 'uncertain'; passages: readonly [] }[] }[] };
 }
@@ -33,15 +35,16 @@ function isNoEvidenceResult(value: unknown): value is NativeCieNoEvidence {
   const { outcome, answer, requestId, messageId, admissions, settlements, evidenceAudit } = value as Partial<NativeCieNoEvidence>;
   const present = (text: unknown) => typeof text === 'string' && !!text.trim();
   const empty = (items: unknown) => Array.isArray(items) && items.length === 0;
+  const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+  const admission = admissions?.[0];
+  const settlement = settlements?.[0];
+  const usage = settlement?.usage;
   return outcome === 'no-evidence' && present(answer) && present(requestId) && present(messageId) &&
-    Array.isArray(admissions) && admissions.length >= 2 && admissions.length <= 6 &&
-    Array.isArray(settlements) && settlements.length === admissions.length &&
-    new Set(admissions.map(row => row?.executionId)).size === admissions.length &&
-    admissions.every((row, index) => present(row?.executionId) && present(row?.requestId) &&
-      settlements[index]?.executionId === row.executionId &&
-      settlements[index]?.stage === (index === admissions.length - 1 ? 'answer' : 'structured')) &&
-    admissions.at(-1)?.requestId === requestId && empty(evidenceAudit?.sourceBindings) &&
-    Array.isArray(evidenceAudit?.assessments) && evidenceAudit.assessments.every(row => empty(row?.excerpts)) &&
+    Array.isArray(admissions) && admissions.length === 1 && !!admission && admission.requestId === requestId && present(admission.executionId) &&
+    Array.isArray(settlements) && settlements.length === 1 && settlement?.stage === 'answer' &&
+    settlement.executionId === admission.executionId && !!usage &&
+    count(usage.inputTokens) && count(usage.outputTokens) && count(usage.totalTokens) && usage.inputTokens + usage.outputTokens === usage.totalTokens &&
+    empty(evidenceAudit?.sourceBindings) && empty(evidenceAudit?.assessments) &&
     Array.isArray(evidenceAudit?.compositions) && evidenceAudit.compositions.length === 1 &&
     Array.isArray(evidenceAudit.compositions[0]?.coverage) && evidenceAudit.compositions[0].coverage.every((row: { status: string; passages: unknown }) =>
       ['missing', 'inaccessible', 'uncertain'].includes(row?.status) && empty(row?.passages));

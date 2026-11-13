@@ -12,12 +12,12 @@ const emptyIndex = readBlindInputs(bytes).findIndex(item => item.sources.length 
 const candidate = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
 const outcome: NativeCieNoEvidence = {
   outcome: 'no-evidence', answer: 'I have no source evidence for that question.', requestId: 'answer', messageId: 'message',
-  admissions: [{ requestId: 'interpret', executionId: 'first' }, { requestId: 'answer', executionId: 'last' }],
-  settlements: [{ executionId: 'first', stage: 'structured' }, { executionId: 'last', stage: 'answer' }],
+  admissions: [{ requestId: 'answer', executionId: 'last' }],
+  settlements: [{ executionId: 'last', stage: 'answer', usage: { inputTokens: 12, outputTokens: 4, totalTokens: 16 } }],
   evidenceAudit: { sourceBindings: [], assessments: [], compositions: [{ coverage: [{ status: 'missing', passages: [] }] }] },
 };
 
-for (const variant of ['complete', 'citation', 'missing stage'] as const) {
+for (const variant of ['complete', 'citation', 'missing stage', 'unexpected probe', 'missing usage'] as const) {
   test(`empty-source native batch recovery: ${variant}`, async () => {
     const directory = mkdtempSync(join(tmpdir(), 'cie-empty-source-'));
     const path = join(directory, 'batch.sqlite');
@@ -35,6 +35,10 @@ for (const variant of ['complete', 'citation', 'missing stage'] as const) {
         if (variant === 'citation') return { ...outcome, evidenceAudit: { ...outcome.evidenceAudit,
           compositions: [{ coverage: [{ status: 'missing', passages: [{ sourceId: 'fabricated' }] }] }] } };
         if (variant === 'missing stage') return { ...outcome, settlements: outcome.settlements.slice(1) };
+        if (variant === 'unexpected probe') return { ...outcome,
+          admissions: [{ requestId: 'interpret', executionId: 'first' }, ...outcome.admissions],
+          settlements: [{ executionId: 'first', stage: 'structured' }, ...outcome.settlements] };
+        if (variant === 'missing usage') return { ...outcome, settlements: [{ executionId: 'last', stage: 'answer' }] };
         return outcome;
       },
       async verifyRetainedCase(_claim, result) {
