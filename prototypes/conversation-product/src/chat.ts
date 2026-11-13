@@ -179,23 +179,38 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         session.updateDocuments(session.snapshot().documents.filter(item => item.id !== document.id));
         textarea.focus();
       });
+      const replace = options.chooseDocument && el('button', 'Replace');
+      if (replace) {
+        replace.type = 'button';
+        decorateConversationControl(replace,{identity:'source',emphasis:'secondary'});
+        replace.dataset.replaceDocument = 'true';
+        replace.setAttribute('aria-label', 'Replace attachment ' + label);
+        replace.addEventListener('click', () => {
+          if (!replace.disabled) void chooseAttachment(document);
+        });
+      }
+      const editActions = replace ? [remove, replace] : [remove];
       if (!document.unavailable && options.openDocument) {
         const open = el('button', label);
         open.type = 'button';
         decorateConversationControl(open,{identity:'source',emphasis:'secondary'});
         open.setAttribute('aria-label', 'Open attachment ' + label);
         open.addEventListener('click', async () => {
-          if (open.disabled || accessRevoked) return;
+          const inScope = options.captureDocumentHandoffScope?.();
+          const stillSelected = () => !retiring && !disposed && !accessRevoked && (inScope?.() ?? true) &&
+            session.snapshot().documents.some(item => item.id === document.id && item.version === document.version);
+          if (open.disabled || !root.contains(open) || !stillSelected()) return;
           try {
-            if (await options.openDocument!(document) === 'unavailable' && !disposed && !accessRevoked) {
+            if (await options.openDocument!(document) === 'unavailable' && stillSelected()) {
               await session.reload();
-              report('This attachment could not be opened. Check the selected document before sending.');
+              if (stillSelected()) report(replace ? 'This attachment could not be opened. Replace or remove it before sending.'
+                : 'This attachment could not be opened. Check the selected document before sending.');
             }
-          } catch (error) { report(errorText(error)); }
+          } catch (error) { if (stillSelected()) report(errorText(error)); }
         });
         remove.textContent = '×';
         const askVela = options.askVelaAboutDocument && el('button', 'Ask Vela');
-        if (!askVela) return [open, remove];
+        if (!askVela) return [open, ...editActions];
         askVela.type = 'button';
         decorateConversationControl(askVela,{identity:'source',emphasis:'secondary'});
         askVela.setAttribute('aria-label','Ask Vela about ' + label);
@@ -225,18 +240,9 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           } catch (error) { if (isCurrent()) report(errorText(error)); }
           finally { unsubscribe(); stagingForVela = false; if (!disposed) renderDraft(); }
         });
-        return [open, askVela, remove];
+        return [open, askVela, ...editActions];
       }
-      if (!document.unavailable || !options.chooseDocument) return [remove];
-      const replace = el('button', 'Replace');
-      replace.type = 'button';
-      decorateConversationControl(replace,{identity:'source',emphasis:'secondary'});
-      replace.dataset.replaceDocument = 'true';
-      replace.setAttribute('aria-label', 'Replace attachment ' + label);
-      replace.addEventListener('click', () => {
-        if (!replace.disabled) void chooseAttachment(document);
-      });
-      return [remove, replace];
+      return editActions;
     }), documentStatus, continueDocuments);
   }
   async function chooseAttachment(replacing?: DraftDocument) {

@@ -2240,27 +2240,33 @@ test('a picker result cannot attach after the chat starts closing', async () => 
  } finally {picked.resolve(source);save.resolve();await chat?.dispose();f.restore();}
 });
 
-test('replace at the attachment limit preserves the old selection on cancellation and checkpoints the explicit replacement', async () => {
+for (const unavailable of [true,false]) test('replace at the attachment limit preserves the old selection on cancellation and checkpoints the explicit replacement (unavailable: '+unavailable+')', async () => {
  const f = fixture('chatgpt-plan-responses');
  let chat;
  try {
   const documents = [
-   { id: 'file:old', version: 1, title: 'Unavailable document', unavailable: 'inaccessible' as const },
+   { id: 'file:old', version: 1, title: 'Original document', ...(unavailable ? { unavailable: 'inaccessible' as const } : {}) },
    ...[1, 2, 3].map(i => ({ id: 'file:' + i, version: 1, title: 'Document ' + i })),
   ];
   await f.port.command('saveDraft', { resourceId: f.draft.resourceId, expectedVersion: f.draft.version, content: f.draft.content, documents });
   const replacement = { id: 'file:new', version: 2, title: 'Replacement.pdf' };
   let picks = 0;
-  chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId, chooseDocument: async () => ++picks === 1 ? null : replacement });
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId,
+   openDocument: async () => 'unavailable', chooseDocument: async () => ++picks === 1 ? null : replacement });
   await chat.ready;
   const attach = named(f.view.root, 'Attach document');
-  const replace = named(f.view.root, 'Replace');
+  if (!unavailable) {
+   named(f.view.root, 'Original document').fire('click');
+   await until(() => /could not be opened/.test(f.view.root.querySelector('.cp-chat-status').textContent));
+  }
+  const replace = f.view.root.querySelector('[aria-label="Replace attachment Original document"]');
+  assert.ok(replace);
   assert.equal(attach.disabled, true);
   replace.fire('click');
   await until(() => picks === 1 && !replace.disabled);
   assert.deepEqual(f.draft.documents, documents);
   replace.fire('click');
-  await until(() => !!named(f.view.root, 'Replacement.pdf ×'));
+  await until(() => !!named(f.view.root, 'Replacement.pdf'));
   await chat.flush();
   assert.deepEqual(f.draft.documents, [replacement, ...documents.slice(1)]);
   assert.equal(f.draft.content, 'Saved unsent text');
@@ -2271,6 +2277,29 @@ test('replace at the attachment limit preserves the old selection on cancellatio
   f.pending!.reject(Error('authorization_cancelled'));
   await chat.whenSubmissionSettled();
  } finally { f.pending?.reject(Error('synthetic cleanup')); await chat?.dispose(); f.restore(); }
+});
+
+test('a late failed attachment open does not report against its replacement', async () => {
+ const f=fixture('chatgpt-plan-responses');let chat;
+ const old={id:'file:old',version:1,title:'Old brief.pdf'};
+ const replacement={id:'file:new',version:1,title:'New brief.pdf'};
+ const opening=Promise.withResolvers<'unavailable'>();
+ try {
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:[old]});
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   openDocument:()=>opening.promise,chooseDocument:async()=>replacement});
+  await chat.ready;
+  named(f.view.root,'Old brief.pdf').fire('click');
+  named(f.view.root,'Replace').fire('click');
+  await until(()=>!!named(f.view.root,'New brief.pdf'));
+  const reads=f.calls.filter(call=>call.name==='readDraft').length;
+  opening.resolve('unavailable');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.calls.filter(call=>call.name==='readDraft').length,reads);
+  assert.doesNotMatch(f.view.root.querySelector('.cp-chat-status').textContent,/could not be opened/);
+  await chat.flush();
+  assert.deepEqual(f.draft.documents,[replacement]);
+ }finally{opening.resolve('unavailable');await chat?.dispose();f.restore();}
 });
 
 for (const action of ['close', 'switch', 'switch during save'] as const) test('chat manager '+action+' immediately invalidates a pending attachment handoff', async () => {
@@ -2351,7 +2380,7 @@ test('Ask Vela refreshes the saved attachment when the host refuses the selected
   });
   await chat.ready;
   named(f.view.root,'Ask Vela').fire('click');
-  await until(()=>!!named(f.view.root,'Replace'));
+  await until(()=>!!f.view.root.querySelector('[aria-label="Replace attachment Unavailable document"]'));
   assert.doesNotMatch(f.view.root.querySelector('.cp-composer-documents').textContent,/Brief\.pdf/);
   assert.equal(f.draft.content,'Saved unsent text');
   assert.deepEqual(f.draft.documents,[source]);
