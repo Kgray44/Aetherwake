@@ -128,8 +128,10 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
         const current = latest.provenance;
         if (latest.version !== fact.version || current.kind !== 'conversation-message' ||
             current.conversationId !== origin.conversationId || current.messageId !== origin.messageId ||
-            current.version !== origin.version || current.contentDigest !== origin.contentDigest)
+            current.version !== origin.version || current.contentDigest !== origin.contentDigest) {
+          detail.replaceChildren();
           throw Error('Memory has changed. Reload saved memories to see its current source.');
+        }
         await openSource({ conversationId: origin.conversationId, messageId: origin.messageId });
       }));
     }
