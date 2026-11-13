@@ -623,3 +623,62 @@ test("screen-space labels never overlap at project and resource scales; selected
   step(motion);
   assert.ok(c.visible(1440, 900).some((v) => v.key === n.key));
 });
+test("snapshot refresh cannot overwrite a saved pin while restore is reading", async () => {
+  const snapshot = { ...empty(), projects: [{ id: "p", title: "Project" }] };
+  const pin = { x: 25, y: 10, spatial: { x: 100, y: 50, z: -30 }, pinned: true };
+  let saved = {
+    schema: "aerynth.constellation@1", anchors: { "project:p": pin },
+    bookmarks: {}, history: [], future: [], savedViews: [], location: { kind: "universe" },
+  };
+  let releaseRead;
+  const reading = new Promise((resolve) => { releaseRead = resolve; });
+  const writes = [];
+  const c = new ConstellationController({
+    snapshot, motion: new MotionCoordinator(), navigate: async () => snapshot,
+    persistence: {
+      load: async () => { await reading; return structuredClone(saved); },
+      save: async (value) => { saved = value; writes.push(value); },
+    },
+  });
+  const restore = c.restore();
+  c.update(snapshot);
+  const savedView = c.saveView("View during startup");
+  const laterView = c.saveView("Second startup view");
+  const flush = c.persist();
+  await new Promise((resolve) => setImmediate(resolve));
+  const writesBeforeRead = writes.length;
+  releaseRead();
+  await Promise.all([restore, flush]);
+  assert.equal(writesBeforeRead, 0);
+  assert.deepEqual(c.state.anchors["project:p"], pin);
+  assert.deepEqual(
+    saved.savedViews.map(({ id, name }) => [id, name]),
+    [[await savedView, "View during startup"], [await laterView, "Second startup view"]],
+  );
+  await c.pin("project:p", { x: 80, y: 60 });
+  assert.deepEqual(saved.anchors["project:p"], { x: 80, y: 60 });
+  c.dispose();
+});
+
+test("failed restore protects the existing record and an empty successful retry permits writes", async () => {
+  const snapshot = empty();
+  const writes = [];
+  let fail = true;
+  const c = new ConstellationController({
+    snapshot, motion: new MotionCoordinator(), navigate: async () => snapshot,
+    persistence: {
+      load: async () => { if (fail) throw Error("storage unavailable"); return null; },
+      save: async (state) => { writes.push(state); },
+    },
+  });
+  const restore = c.restore();
+  c.update(snapshot);
+  await Promise.all([restore, c.persist()]);
+  assert.equal(writes.length, 0);
+  assert.match(c.error, /could not be restored/);
+  fail = false;
+  await c.restore();
+  await c.persist();
+  assert.equal(writes.length, 1);
+  c.dispose();
+});
