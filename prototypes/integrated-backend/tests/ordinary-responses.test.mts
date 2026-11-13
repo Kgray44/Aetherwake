@@ -104,9 +104,21 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     const binding = { previewId: preview.id, fingerprint: preview.fingerprint, commandId: preview.commandId };
     await assert.rejects(f.core.command('authorizeConversationSend', binding), /personal_memory_disclosure_review_required/);
     const approval = await f.core.command('authorizeConversationSend', { ...binding, reviewedBodyDigest: preview.responses.bodyDigest });
-    f.responses.push(() => complete('memory-turn', 'Synthetic memory-derived reply'));
+    assert.equal((await f.core.command('conversationActivity', { resourceIds: [chat.resourceId] }))
+      .executions.some(execution => !!execution.memoryDisclosure), false);
+    f.responses.push(async () => {
+      const activity = await f.core.command('conversationActivity', { resourceIds: [chat.resourceId] });
+      assert.equal(activity.executions[0].state, 'dispatching');
+      assert.equal(activity.executions[0].memoryDisclosure, undefined);
+      return complete('memory-turn', 'Synthetic memory-derived reply');
+    });
     assert.equal((await f.core.command('conversationSend', { ...binding, grantId: approval.grantId })).state, 'provider_completed');
     assert.deepEqual(f.requests[0].input, preview.responses.messages);
+    const disclosure = { state: 'simulated', manifestDigest: preview.responses.memoryDigest };
+    const activity = () => f.core.command('conversationActivity', { resourceIds: [chat.resourceId] });
+    assert.deepEqual((await activity()).executions[0].memoryDisclosure, disclosure);
+    assert.equal((await f.core.command('conversationActivity', { resourceIds: [origin.resourceId] }))
+      .executions.some(execution => !!execution.memoryDisclosure), false);
     const detail = await f.core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as any;
     const followup = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
       content: 'Can you explain?', expectedRevision: detail.conversation.revision, commandId: randomUUID() });
@@ -136,6 +148,7 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     await assert.rejects(f.core.command('conversationSend', { ...pendingBinding, grantId: pendingApproval.grantId }), /personal_memory_no_eligible_context|stale_send_preview/);
     assert.equal(f.requests.length, 1);
     await f.reopen();
+    assert.deepEqual((await activity()).executions[0].memoryDisclosure, disclosure);
     const restored = await prepare(f, chat.resourceId, 'Can you explain after restart?');
     assert.ok(restored.preview.responses);
     assert.doesNotMatch(JSON.stringify(restored.preview.responses.messages), /Synthetic memory-derived reply/);
