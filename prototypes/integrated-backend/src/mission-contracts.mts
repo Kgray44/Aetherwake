@@ -288,6 +288,9 @@ export type MissionRequest =
   | { name: 'workroom-resource'; input: { resourceId: string } }
   | { name: 'list'; input: Record<string, never> }
   | { name: 'read'; input: { id: string } }
+  | { name: 'experience-list'; input: Record<string, never> }
+  | { name: 'experience-evidence'; input: { id: string } }
+  | { name: 'experience-finding'; input: { id: string; cohort: string } }
   | { name: 'evaluation-reference'; input: import('./aep-evaluation-reference.mts').AepEvaluationReference }
   | { name: 'execution-profile'; input: { id: string } }
   | { name: 'experiment-hypothesis'; input: { id: string; hypothesisId: string; expectedRevision: number } }
@@ -411,6 +414,9 @@ export type MissionWorkroomResource = {
 );
 
 export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomResource |
+  ReturnType<ReturnType<typeof import('./aep-native-host.mts').createAepNativeHost>['finding']> |
+  ReturnType<ReturnType<typeof import('./aep-native-host.mts').createAepNativeHost>['evidence']> |
+  ReturnType<ReturnType<typeof import('./aep-native-host.mts').createAepNativeHost>['list']> |
   ReturnType<typeof import('./aep-evaluation-reference.mts').resolveAepEvaluationReference> |
   import('./execution-profiler.mts').MissionExecutionProfile |
   ReturnType<typeof import('./execution-profiler.mts').resolveMissionHypothesis> |
