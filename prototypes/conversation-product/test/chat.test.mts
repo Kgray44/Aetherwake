@@ -192,6 +192,34 @@ test('quick search Enter submits pending text immediately and opens the first ex
  } finally {await manager?.dispose();f.restore();}
 });
 
+test('Switch chat Escape cancels a result still waiting for the draft to save', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId, messageId=f.detail.messages.items[0].id;
+ const opened:string[]=[];
+ let manager, saving=false, release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const port={async command(name:string,input:any){
+  if(name==='search')return {items:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:'exact phrase'}],total:1,offset:0,limit:12,hasMore:false};
+  if(name==='saveDraft'){saving=true;await gate;}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(_id,message)=>{if(message)opened.push(message);}});
+  await manager.ready;
+  const editor=f.view.root.querySelector('textarea');
+  editor.value='Unsent edit before navigating';editor.fire('input');
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'),input=switcher.querySelector('input');
+  input.value='exact phrase';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await until(()=>saving);
+  input.fire('keydown',{key:'Escape'});
+  release();
+  await until(()=>!f.view.root.querySelector('.cp-manager').getAttribute('aria-busy'));
+  assert.deepEqual(opened,[]);
+  assert.equal(f.draft.content,'Unsent edit before navigating');
+  assert.equal(f.view.doc.activeElement,switcher.querySelector('summary'));
+ } finally {release();await manager?.dispose();f.restore();}
+});
+
 test('Switch chat keeps an exact result available when opening it fails', async () => {
  const f=fixture(),resourceId=f.draft.resourceId,messageId=f.detail.messages.items[0].id;
  const opened:string[]=[];

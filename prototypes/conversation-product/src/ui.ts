@@ -130,8 +130,18 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
     await run(async()=>{await call('publish',{sourceResourceId:event.message.resourceId,sourceMessageId:event.message.id,range:{start:selection.start,end:selection.end},evidence:'excerpt'});status.textContent='Excerpt published for authorized branch discovery';await loadDetail();});
    }});await chat.ready;
  };
- const open=async(resourceId:string,messageId?:string,intent?:number)=>{await flush();if(disposed||closing||intent!==undefined&&intent!==openIntent)return;state.selectedResourceId=resourceId;selectedMessageId=messageId;root.classList.remove('cp-history-open');historyToggle.setAttribute('aria-expanded','false');await bindChat(resourceId,messageId);if(!disposed&&!closing&&(intent===undefined||intent===openIntent)){if(current?.conversation.resourceId===resourceId&&current.conversation.state==='active')await saveSelection(resourceId);if(!disposed&&!closing&&(intent===undefined||intent===openIntent))options.onResource?.(resourceId,messageId);}};
- const requestOpen=(resourceId:string,messageId?:string)=>{if(disposed)return Promise.reject(new Error('conversation_manager_closed'));const intent=++openIntent;request++;return run(async()=>{if(intent!==openIntent)return;await open(resourceId,messageId,intent);},true);};
+ const open=async(resourceId:string,messageId?:string,intent?:number,stillRequested?:()=>boolean)=>{
+  const canOpen=()=>!disposed&&!closing&&(intent===undefined||intent===openIntent)&&(stillRequested?.()??true);
+  await flush();
+  if(!canOpen())return;
+  state.selectedResourceId=resourceId;selectedMessageId=messageId;
+  root.classList.remove('cp-history-open');historyToggle.setAttribute('aria-expanded','false');
+  await bindChat(resourceId,messageId);
+  if(!canOpen())return;
+  if(current?.conversation.resourceId===resourceId&&current.conversation.state==='active')await saveSelection(resourceId);
+  if(canOpen())options.onResource?.(resourceId,messageId);
+ };
+ const requestOpen=(resourceId:string,messageId?:string,stillRequested?:()=>boolean)=>{if(disposed)return Promise.reject(new Error('conversation_manager_closed'));const intent=++openIntent;request++;return run(async()=>{if(intent!==openIntent)return;await open(resourceId,messageId,intent,stillRequested);},true);};
  const scopeProject=(projectId:string|undefined)=>{request++;setHistoryQuery({...(projectId?{projectId}:{}),sort:state.query.sort??'activity',offset:0});query.value='';project.value=projectId??'';collection.value='';archive.value='active';favorite.checked=false;searchMode.value='all';root.classList.add('cp-history-open');historyToggle.setAttribute('aria-expanded','true');return run(refresh);};
  const renderTree=(projects:ProductCommandMap['projects']['output'])=>{
   const visible=new Map(collections.map(c=>[c.id,c])),rendered=new Set<string>(),selected=collections.find(c=>c.id===state.query.collectionId);let cursor=selected;const activePath=new Set<string>();while(cursor&&!activePath.has(cursor.id)){activePath.add(cursor.id);cursor=cursor.parentId?visible.get(cursor.parentId):undefined;}
@@ -187,7 +197,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
     const row=button(hit.title,async()=>{
      if(!stillCurrent()||opening)return;
      opening=true;
-     const pending=requestOpen(hit.resourceId,hit.messageId),intent=openIntent;
+     const pending=requestOpen(hit.resourceId,hit.messageId,stillCurrent),intent=openIntent;
      try{
       await pending;
       if(stillCurrent()&&intent===openIntent)switcher.node.open=false;
