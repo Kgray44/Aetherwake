@@ -181,7 +181,13 @@ test("detached CPU and RAM mission events appear by task name only in their auth
   const view = blockDocument();
   t.after(view.install());
   const opened: string[] = [];
-  const controller = mountEventExperience(view.root, { snapshot: () => input, async refresh() {}, openMission: id => opened.push(id) });
+  const inspected: string[] = [];
+  const controller = mountEventExperience(view.root, {
+    snapshot: () => input,
+    async refresh() {},
+    openMission: id => opened.push(id),
+    inspectMission: id => inspected.push(id),
+  });
   t.after(() => controller.dispose());
   const started = view.root.querySelector('[data-stream-task-id="cpu"]');
   const settled = view.root.querySelector('[data-stream-task-id="ram"]');
@@ -195,6 +201,14 @@ test("detached CPU and RAM mission events appear by task name only in their auth
   assert.match(details.querySelector("dl").textContent, /Mission attemptattempt-ram/);
   details.querySelector("button").onclick();
   assert.deepEqual(opened, ["mission-a"]);
+  const inspection = Array.from(details.querySelectorAll("button")).find(action => action.textContent === "Inspect mission in AIW");
+  assert.ok(inspection);
+  inspection.onclick();
+  assert.deepEqual(inspected, ["mission-a"]);
+  details.open = false;
+  details.fire("toggle");
+  inspection.onclick();
+  assert.deepEqual(inspected, ["mission-a"]);
 });
 test("metadata detail allowlist excludes assistant output and private tool payloads while missing measurements remain unavailable", () => {
   const record = event(1, {

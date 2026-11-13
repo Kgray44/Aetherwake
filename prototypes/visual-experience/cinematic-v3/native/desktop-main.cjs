@@ -168,11 +168,13 @@ if (verifyMissions) {
   if(process.argv.includes('--missions-persistence-reopen-only'))require('./mission-persistence.cjs').assertMissionPersistenceReopen({profile:privateRoot,argv:process.argv,source});
   else if(!/^review-vela-missions-\d+$/u.test(path.basename(privateRoot))||existsSync(privateRoot))throw Error('fresh_offline_mission_profile_required');
 }
+if (process.argv.includes("--missions-aiw-experience") && !process.argv.includes("--missions-aiw-inspection"))
+  throw Error("owned_offline_aiw_verification_required");
 if (process.argv.includes("--missions-aiw-inspection") &&
   (!verifyMissions || !process.argv.includes("--missions-aep-presentation-only") ||
     process.argv.includes("--bootstrap-vela-api") ||
     process.argv.some(arg => arg.startsWith("--integration-") && arg !== "--integration-vela-missions" ||
-      arg.startsWith("--missions-") && !["--missions-aep-presentation-only", "--missions-aiw-inspection"].includes(arg))))
+      arg.startsWith("--missions-") && !["--missions-aep-presentation-only", "--missions-aiw-inspection", "--missions-aiw-experience"].includes(arg))))
   throw Error("owned_offline_aiw_verification_required");
 if (missionProfilerFlags.length && (missionProfilerFlags.length !== 1 || !verifyMissions ||
   !["off", "minimal", "full"].includes(missionProfilerMode) ||
@@ -616,15 +618,32 @@ app.whenReady().then(async () => {
   const nativeReviewGate=async work=>{if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
   const reviewProvider=args=>nativeReviewGate(()=>showVelaReview(args));
   const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
+  const policyReady = () => !closing && !backendFailed && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
+  const { reviewMode, reviewRollback, ...performanceMenu } = require("./resource-policy-menu.cjs").resourcePolicyMenu({
+    call, show: options => reviewDialogs.showMessageBox(win, options),
+    ready: policyReady, canWrite: () => storage.allowWrite(),
+  });
   if (!verify) {
     const menu = Menu.getApplicationMenu() ?? new Menu();
-    menu.append(new MenuItem(require("./resource-policy-menu.cjs").resourcePolicyMenu({
-      call, show: options => reviewDialogs.showMessageBox(win, options),
-      ready: () => !closing && !backendFailed && !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
-      canWrite: () => storage.allowWrite(),
-    })));
+    menu.append(new MenuItem(performanceMenu));
     Menu.setApplicationMenu(menu);
   }
+  ipcMain.handle("application-resource-policy-inspection", require("./resource-policy-inspection.cjs").resourcePolicyInspection({
+    trusted: event => policyReady() && trustedActiveFrame(event),
+    hasGesture: event => !verify && event.senderFrame.executeJavaScript(
+      "navigator.userActivation.isActive && document.hasFocus()", false,
+    ).catch(() => false),
+    inspect: () => call("resourcePolicyNative", { name: "inspect" }),
+    reviewMode, reviewRollback,
+  }));
+  ipcMain.handle("application-experience-policy-rollback", require("./experience-policy-review.cjs").experiencePolicyReview({
+    trusted: event => policyReady() && trustedActiveFrame(event),
+    hasGesture: event => !verify && event.senderFrame.executeJavaScript(
+      "navigator.userActivation.isActive && document.hasFocus()", false,
+    ).catch(() => false),
+    call, show: options => reviewDialogs.showMessageBox(win, options),
+    canWrite: () => storage.allowWrite(),
+  }));
   const validateHostOperation=async(binding,{phase='before-dispatch'}={})=>{
       const frame=maintenanceReviewFrames.get(binding.operationId);
       const trusted=()=>!closing&&!backendFailed&&!!frame&&maintenanceReviewFrames.get(binding.operationId)===frame&&(phase==='after-dispatch'?trustedApplicationFrame:trustedActiveFrame)({sender:win.webContents,senderFrame:frame});
