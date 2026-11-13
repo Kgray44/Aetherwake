@@ -10,9 +10,8 @@ import { crc32, deflateSync } from 'node:zlib';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
 import { projectMissionExecution, type MissionExecutionProfile } from '../src/execution-profiler.mts';
-import { nativeMissionExecutors, nativeMissionPlan, missionResultAvailable } from '../src/mission-native.mts';
-import { composeReviewedArtifactMission } from '../src/mission-reviewed-composition.mts';
-import type { MissionExecutor,MissionPlan,MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
+import { nativeMissionExecutors, missionResultAvailable } from '../src/mission-native.mts';
+import type { MissionExecutor,MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
 import type { ProviderPort, VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
 import { createMissionProjectCheck } from '../src/mission-project-check.mts';
@@ -303,17 +302,17 @@ test('composed artifact mission retains verified files when a native branch fail
     await f.ready();
     const illustration = 'Run a mission to generate an illustration: A simple abstract geometric illustration. Any colors.';
     const artifact = await f.core.command('missions', { name: 'preview', input: { objective: illustration } }) as MissionPreview;
-    const work = nativeMissionPlan('Investigate Aerynth backend performance using workspace notes', artifact.plan.scope)!;
-    const goal = 'Investigate Aerynth backend performance using workspace notes and generate an abstract geometric illustration';
-    const plan = composeReviewedArtifactMission(goal, work, artifact.plan);
-    const proposalId = randomUUID();
-    // Inject a host-owned proposal in this harness until Core composition wiring lands.
-    const proposals = (f.core as unknown as { missionProposals: Map<string, { plan: MissionPlan; expires: number }> }).missionProposals;
-    proposals.set(proposalId, { plan, expires: Date.now() + 150_000 });
-    const preview = await f.core.command('missions', { name: 'preview', input: { objective: goal, proposalId } }) as MissionPreview;
+    const goal = 'Run a mission to investigate Aerynth backend performance using workspace notes; generate an illustration: A simple abstract geometric illustration. Any colors.';
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective: goal } }) as MissionPreview;
+    const plan = preview.plan;
     assert.equal(preview.artifactReview?.digest, artifact.artifactReview?.digest);
-    const input = { objective: goal, proposalId, fingerprint: preview.fingerprint, requestId: proposalId };
+    assert.ok(plan.tasks.find(task => task.id === 'report')?.dependencies.includes('illustration'));
+    const input = { objective: goal, fingerprint: preview.fingerprint, requestId: randomUUID() };
     await assert.rejects(f.core.command('missions', { name: 'start', input }), /mission_artifact_review_required/);
+    await assert.rejects(f.core.command('missionStartReviewed', { ...input, approvedArtifactDigest: '0'.repeat(64) }),
+      /mission_artifact_review_required/);
+    await assert.rejects(f.core.command('missions', { name: 'preview', input: { objective: goal, noteIds: [] } }),
+      /mission_artifact_context_unsupported/);
     if (!live) f.replies.push(() => Response.json({ data: [{ b64_json: illustrationFixture().toString('base64') }] }));
     const usage = await f.core.command('velaApiUsageStatus', {});
     const timingStarted = performance.now(), cpuStarted = process.cpuUsage();
@@ -323,7 +322,7 @@ test('composed artifact mission retains verified files when a native branch fail
     // control in the same host turn before the scheduler microtask runs.
     if (serial) {
       const db = (f.core as unknown as { db: import('node:sqlite').DatabaseSync }).db;
-      const row = db.prepare('SELECT id, json FROM vela_missions WHERE request_id=?').get(proposalId);
+      const row = db.prepare('SELECT id, json FROM vela_missions WHERE request_id=?').get(input.requestId);
       assert.ok(row && typeof row.id === 'string' && typeof row.json === 'string');
       const control = f.core.command('missions', { name: 'control', input: { id: row.id, revision: JSON.parse(row.json).revision,
         control: { type: 'concurrency', concurrency: 1 } } }) as Promise<MissionProjection>;
@@ -390,8 +389,6 @@ test('composed artifact mission retains verified files when a native branch fail
     assert.equal(restored.conversation?.messages.find(message => message.missionReport?.missionId === id)?.id, report?.id);
     const retained = { png: readFileSync(join(f.directory, 'mission-artifacts', id, 'illustration.png')),
       notes: readFileSync(join(f.directory, 'mission-artifacts', id, 'illustration-notes.txt')), report: report.content };
-    const reopenedProposals = (f.core as unknown as { missionProposals: typeof proposals }).missionProposals;
-    reopenedProposals.set(proposalId, { plan, expires: Date.now() + 150_000 });
     assert.equal((await f.core.command('missionStartReviewed', approval) as MissionProjection).id, id);
     assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, usage.usedToday + 1);
     writeFileSync(join(f.directory, 'mission-artifacts', id, 'illustration-notes.txt'), 'Changed after verification.');
@@ -405,6 +402,43 @@ test('composed artifact mission retains verified files when a native branch fail
     t.diagnostic(JSON.stringify({ live, serial, id, verified: true, overlapMs: trace.work.overlapMs, imageNativeOverlapMs,
       criticalPathMs: trace.work.criticalPath.durationMs, elapsedMs, processCpu,
       reportRestored: true, imageRequests: 1, nativeRetries: 1, costCoverage: trace.economics.costCoverage }));
+  } finally { await f.close(); }
+});
+
+test('reviewed mixed mission sends the work clause to specialists and the prompt only to the image route', async () => {
+  const f = fixture(false, true, undefined, undefined, true);
+  try {
+    f.setCatalogModels(['gpt-6.1-sol', missionImageModel]);
+    await f.ready();
+    await f.pin({ providerId: 'openai-api-vela', model: 'gpt-6.1-sol' });
+    const work = 'Measure CPU and RAM with two independent specialists';
+    const imagePrompt = 'A private illustrative detail: draw a blue square';
+    const objective = `Run a mission to ${work}; generate an illustration: ${imagePrompt}`;
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    assert.equal(preview.externalReview?.objective, work);
+    assert.equal(preview.externalReview?.calls, 2);
+    assert.equal(preview.artifactReview?.prompt, imagePrompt);
+    const answer = JSON.stringify({ observations: ['Compare repeated observations', 'Record ambient load'] });
+    f.replies.push(...Array.from({ length: 3 }, () => (body: any) => body.model === missionImageModel
+      ? Response.json({ data: [{ b64_json: illustrationFixture().toString('base64') }] })
+      : response(answer, body.model)));
+    const { id } = await f.core.command('missionStartReviewed', {
+      objective, fingerprint: preview.fingerprint, requestId: randomUUID(), approvedArtifactDigest: preview.artifactReview!.digest,
+    }) as MissionProjection;
+    let result: MissionProjection;
+    const deadline = performance.now() + 7000;
+    do {
+      result = await f.core.command('missions', { name: 'read', input: { id } }) as MissionProjection;
+      if (!['queued', 'running'].includes(result.outcome)) break;
+      await delay(25);
+    } while (performance.now() < deadline);
+    assert.equal(result.outcome, 'verified', JSON.stringify(result.tasks.map(task => [task.id, task.state, task.detail])));
+    assert.equal(f.requests.length, 3);
+    assert.deepEqual(f.requests.filter(body => body.model === missionImageModel).map(body => body.prompt), [imagePrompt]);
+    for (const request of f.requests.filter(body => body.model !== missionImageModel)) {
+      assert.ok(JSON.stringify(request).includes(work));
+      assert.ok(!JSON.stringify(request).includes(imagePrompt));
+    }
   } finally { await f.close(); }
 });
 

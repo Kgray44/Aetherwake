@@ -20,8 +20,8 @@ export function parseReviewedArtifactMission(objective: string) {
 
 /** Use only existing host planners. A recognized request must cover both parts. */
 export function resolveReviewedArtifactMission(objective: string, workPlan: (objective: string) => MissionPlan | null,
-  imagePlan: (prompt: string, options?: string) => MissionPlan): MissionPlan | null {
-  const request = parseReviewedArtifactMission(objective);
+  imagePlan: (prompt: string, options?: string) => MissionPlan,
+  request = parseReviewedArtifactMission(objective)): MissionPlan | null {
   if (!request) return null;
   const work = workPlan(request.workObjective);
   ensure(work, 'mission_composition_work_unsupported');
