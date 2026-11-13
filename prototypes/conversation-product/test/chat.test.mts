@@ -30,6 +30,40 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('Remember message is limited to an eligible own user message and opens native review on submit', async () => {
+  const f = fixture();
+  const requests: unknown[] = [];
+  const chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.detail.conversation.resourceId,
+    async onRememberMessage(request) { requests.push(request); return true; } });
+  try {
+    await chat.ready;
+    const actions = f.view.root.querySelectorAll('.cp-message-actions');
+    assert.equal(actions.length, 2);
+    assert.equal(named(actions[1], 'Remember message'), undefined);
+    named(actions[0], 'Remember message').fire('click');
+    assert.deepEqual(requests, []);
+    actions[0].querySelector('.cp-memory-editor').fire('submit');
+    await until(() => requests.length === 1);
+    assert.deepEqual(requests[0], { conversationId: f.detail.conversation.resourceId, messageId: 'message:user',
+      expectedProjectId: null, expectedSourceText: 'A user message',
+      text: 'A user message', scope: 'conversation', category: 'technical', keywords: ['user', 'message'] });
+    f.detail.conversation.projectId = 'project:synthetic';
+    f.detail.conversation.projectIds = ['project:synthetic'];
+    f.detail.conversation.revision++;
+    await until(() => !actions[0].querySelector('.cp-memory-editor'));
+    await chat.refresh();
+    const [projectMessageActions] = f.view.root.querySelectorAll('.cp-message-actions');
+    named(projectMessageActions, 'Remember message').fire('click');
+    const editor = projectMessageActions.querySelector('.cp-memory-editor');
+    editor.querySelector('select').value = 'project';
+    editor.fire('submit');
+    await until(() => requests.length === 2);
+    assert.deepEqual(requests[1], { conversationId: f.detail.conversation.resourceId, messageId: 'message:user',
+      expectedProjectId: 'project:synthetic', expectedSourceText: 'A user message',
+      text: 'A user message', scope: 'project', category: 'technical', keywords: ['user', 'message'] });
+  } finally { await chat.dispose(); f.restore(); }
+});
+
 function viewPort(f:ReturnType<typeof fixture>){
  const time='2026-11-03T00:00:00Z',resourceId=f.draft.resourceId,trace:{name:string;input:any}[]=[];let selected:ConversationViewSelected={version:2,resourceId,updatedAt:time},view:ConversationView={resourceId,version:4,position:{conversationRevision:2,anchor:{messageId:'message:user',offsetY:-20}},selection:{draftVersion:f.draft.version,start:2,end:6,direction:'backward'},positionStatus:'current',selectionStatus:'current',updatedAt:time};
  let before:((name:string,input:any)=>void|Promise<void>)|undefined;
@@ -104,6 +138,60 @@ test('invalid or revoked timestamp metadata is never replaced with current time 
 
 test('history and quick-switch chat rows show only canonical title while actual metadata stays contextual',async()=>{
  const f=fixture();let manager;try{const summary={...f.detail.conversation,favorite:true,lastActivityAt:'2026-11-01T12:30:00Z'};f.history.items=[{kind:'conversation',resourceId:summary.resourceId,title:summary.title,excerpt:'',summary}];f.history.total=1;manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;const row=f.view.root.querySelector('.cp-results').querySelector('button');assert.equal(row.textContent,summary.title);assert.ok(row.title.includes('Favorite'));assert.ok(row.getAttribute('aria-description').includes('Local recording'));assert.equal(f.view.root.querySelector('.cp-results').querySelectorAll('.cp-result-meta').length,0);await manager.openSwitcher();const quick=f.view.root.querySelector('.cp-switcher-results').querySelector('button');assert.equal(quick.textContent,summary.title);assert.ok(quick.title.includes('Favorite'));assert.ok(quick.getAttribute('aria-description').includes('Local recording'));assert.equal(f.calls.some(c=>['send','selectProvider','organize','branch'].includes(c.name)),false);}finally{await manager?.dispose();f.restore();}
+});
+
+test('quick search opens the exact message from the keyboard and never activates a superseded result',async()=>{
+  const f=fixture();
+  const resourceId=f.draft.resourceId,messageId=f.detail.messages.items[1].id;
+  const summary=f.detail.conversation;
+  f.history.items=[{kind:'conversation',resourceId,title:summary.title,excerpt:'',summary}];
+  f.history.total=1;
+  let manager,release!:()=>void,started!:()=>void;
+  const slow=new Promise<void>(resolve=>{release=resolve;});
+  const searchStarted=new Promise<void>(resolve=>{started=resolve;});
+  const opened:string[][]=[];
+  const port={async command(name:string,input:any){
+    if(name==='search'&&input.text==='slow query'){
+      started();
+      await slow;
+      return {items:[],total:0,offset:0,limit:12,hasMore:false};
+    }
+    if(name==='search'&&input.text==='readable'){
+      assert.equal(input.limit,12);
+      return {items:[{kind:'message',resourceId,messageId,title:summary.title,excerpt:'A readable response.'}],total:1,offset:0,limit:12,hasMore:false};
+    }
+    return (f.port.command as any)(name,input);
+  }} as ConversationProductPort;
+  try{
+    manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(id,message)=>opened.push([id,message??''])});
+    await manager.ready;
+    const editor=f.view.root.querySelector('textarea');
+    editor.value='Unsent follow-up';editor.fire('input');
+    await manager.openSwitcher();
+    const switcher=f.view.root.querySelector('.cp-switcher'),input=switcher.querySelector('input');
+    const results=switcher.querySelector('.cp-switcher-results'),oldRow=results.querySelector('button');
+    input.value='slow query';input.fire('input');
+    assert.equal(!!results.querySelector('button'),false);
+    oldRow.fire('click');
+    await searchStarted;
+    input.value='readable';input.fire('input');
+    input.fire('keydown',{key:'Enter'});
+    assert.deepEqual(opened,[]);
+    await new Promise(resolve=>setTimeout(resolve,160));
+    assert.equal(results.querySelector('button').dataset.messageId,messageId);
+    assert.match(results.textContent,/A readable response/);
+    release();
+    await new Promise<void>(resolve=>setImmediate(resolve));
+    input.fire('keydown',{key:'Enter',isComposing:true});
+    assert.deepEqual(opened,[]);
+    input.fire('keydown',{key:'Enter'});
+    await until(()=>opened.length===1);
+    assert.deepEqual(opened,[[resourceId,messageId]]);
+    assert.equal(f.calls.filter(c=>c.name==='detail').at(-1)?.input.aroundMessageId,messageId);
+    assert.equal(f.view.root.querySelector('textarea'),editor);
+    assert.equal(f.draft.content,'Unsent follow-up');
+    assert.equal(switcher.open,false);
+  }finally{release();await manager?.dispose();f.restore();}
 });
 
 test('mounted manager menus, branch/context and canonical nested folders borrow the same frame lifecycle without replacing the live composer',async()=>{
@@ -410,12 +498,15 @@ test('the animated model picker refreshes explicitly and sends the selected cata
 test('the mounted chat submits an explicit web lookup and opens only canonical citation references',async()=>{
  const f=fixture('chatgpt-plan-responses');let chat;
  try{
-  f.detail.providers[0].modelOptions=[{id:'gpt-6.1-sol',label:'Synthetic Sol catalog entry',eligibleTools:['web_search']}];
+  f.detail.providers[0].modelOptions=[{id:'ordinary-only',label:'Synthetic text-only model'},{id:'gpt-6.1-sol',label:'Synthetic Sol catalog entry',eligibleTools:['web_search']}];
   const message=f.detail.messages.items[1];
   message.webSearch={completed:true,citations:[{url:'https://science.example.org/moon',title:'Moon facts',start:0,end:1},{url:'https://science.example.org/second',title:'Second source',start:1,end:message.content.length-1}]};
   const port={command:async(name:string,input:any)=>name==='openCitation'?(f.calls.push({name,input}),{requested:true}):(f.port.command as any)(name,input)} as ConversationProductPort;
-  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId});await chat.ready;
+  const selections=new Map([[f.draft.resourceId,{id:'ordinary-only',label:'Synthetic text-only model'}]]);
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,models:{selections,async refresh(){}}});await chat.ready;
   const form=f.view.root.querySelector('form'),web=named(form,'Search web'),refs=f.view.root.querySelectorAll('.cp-web-citation');
+  assert.equal(web.hidden,true,'An explicitly selected model must be respected');
+  selections.clear();await chat.refresh();
   assert(web && !web.hidden && !web.disabled);
   assert.equal(refs.length,2);
   assert.equal(refs[0].parentNode?.tagName,'P','ordinary annotated text has an inline source');
@@ -619,6 +710,34 @@ test('revoked detail is removed from view without erasing the retained unsent dr
 test('global manager mounts the same chat component with contextual extras and stable canonical identity',async()=>{
   const f=fixture();let manager;try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;assert.equal(f.view.root.querySelectorAll('.cp-chat').length,1);assert.equal(f.view.root.querySelectorAll('.cp-composer').length,1);assert.equal(f.view.root.querySelector('.cp-chat-extras').open,false);assert.equal(f.view.root.querySelector('.cp-chat-extras').parentElement,f.view.root.querySelector('.cp-detail-header'),'Context extras share the identity header, without a permanent separate transcript row');const editor=f.view.root.querySelector('textarea');await manager.refresh();assert.equal(f.view.root.querySelector('textarea'),editor);assert.equal(f.view.root.querySelector('.cp-chat').dataset.resourceId,f.draft.resourceId);assert.equal(f.calls.some(c=>c.name==='send'),false);}
   finally{await manager?.dispose();f.restore();}
+});
+
+test('resize keeps the followed reply visible and respects manual reading scroll',async()=>{
+ const f=fixture();let chat,notify!:ResizeObserverCallback,runFrame!:FrameRequestCallback;
+ const before={ResizeObserver:globalThis.ResizeObserver,requestAnimationFrame:globalThis.requestAnimationFrame};
+ globalThis.ResizeObserver=class {constructor(callback:ResizeObserverCallback){notify=callback;}observe(){}disconnect(){}} as unknown as typeof ResizeObserver;
+ globalThis.requestAnimationFrame=callback=>{runFrame=callback;return 1;};
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,layoutHost:f.view.root});await chat.ready;
+  const list=f.view.root.querySelector('.cp-messages');
+  const last=f.view.root.querySelector('.cp-message-assistant').querySelector('.cp-message-content');
+  list.scrollHeight=1200;list.scrollTop=700;
+  last.getBoundingClientRect=()=>({bottom:1080-list.scrollTop,height:24});
+  const resize=(width:number)=>{notify([{target:f.view.root,contentRect:{height:300,width}} as unknown as ResizeObserverEntry],{} as ResizeObserver);runFrame(0);};
+  resize(400);
+  assert.equal(list.scrollTop,780);
+  list.fire('wheel');list.scrollTop=250;
+  resize(360);
+  assert.equal(list.scrollTop,250);
+  f.detail.messages.offset=50;f.detail.messages.total=52;f.detail.conversation.messageCount=52;
+  await chat.refresh();
+  list.scrollTop=900;
+  named(f.view.root,'Earlier messages').fire('click');
+  await until(()=>f.calls.at(-1)?.input.offset===0);
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  resize(340);
+  assert.equal(list.scrollTop,900,'Paging takes precedence over following the latest message');
+ }finally{await chat?.dispose();Object.assign(globalThis,before);f.restore();}
 });
 
 test('measured short chat hosts compact the stable editor and consolidate feedback before the final composer without mutating its draft',async()=>{

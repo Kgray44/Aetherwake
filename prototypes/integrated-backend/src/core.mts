@@ -5,6 +5,10 @@ import { dirname, relative, resolve, isAbsolute,sep,extname } from 'node:path';
 import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, type ApiFileProposalProvenance } from './mission-file-edits.mts';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
+import { NativePersonalMemory } from './personal-memory.mts';
+import { createPersonalMemoryReview } from './personal-memory-review.mts';
+import { createPersonalMemorySourceReader } from './personal-memory-sources.mts';
+import { createIntelligenceJournalProjection, missionStreamFields, streamScopeMatches } from './intelligence-journal-projection.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
 import { compareNativeSamples, observeConversationProvider, observeProviderStream, projectMissionExecution, resolveMissionHypothesis, type ProviderStreamObserver, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
 import { missionExecutiveSchema, missionObjectiveAssessmentSchema, projectExecutiveCheckpoint, proposeMissionExecutiveRevision, type ExecutivePacket } from './mission-executive.mts';
@@ -27,7 +31,7 @@ import { missionArtifactFiles, missionArtifactPath, missionArtifactSource, readM
 import { createMissionAdmission } from './mission-admission.mts';
 import { createResourcePolicyStore } from './resource-policy-store.mts';
 import { isResourceSignal } from './resource-signals.mts';
-import { MissionPublication } from './mission-publication.mts';
+import { MissionPublication, lastMissionVerificationEvent } from './mission-publication.mts';
 import { MissionConversationReceipts } from './mission-conversation.mts';
 import { WorkspaceRecoveryService } from './workspace-recovery.mts';
 import { VelaWorkspaceConstruction, matchWorkspaceConstruction } from './vela-workspace-construction.mts';
@@ -223,6 +227,7 @@ export class BackendCore {
   private storedJson: string | null = null;
   private mutationDepth = 0;
   private pendingEventDelivery: StreamEvent[] = [];
+  private readonly intelligenceJournal: ReturnType<typeof createIntelligenceJournalProjection>;
   private deliveringRecordedEvents = false;
   private missionConversations?: MissionConversationReceipts;
   private workspaceRecovery!: WorkspaceRecoveryService;
@@ -251,6 +256,8 @@ export class BackendCore {
   private readonly privateRoot?: string;
   private conversations!: ConversationProduct;
   private nativeHostServices?:NativeHostServices;
+  private personalMemory?: NativePersonalMemory;
+  private personalMemoryReview?: ReturnType<typeof createPersonalMemoryReview>;
   private weatherPermissions?:WeatherPermissionStore;
   private weatherRequest:AbortController|null=null;
   private ordinaryConnections!:OrdinaryConnectionPort;
@@ -426,10 +433,45 @@ export class BackendCore {
         }
         this.save();
       });
+      this.intelligenceJournal = createIntelligenceJournalProjection({
+        db: this.db,
+        withReadSnapshot: read => this.kernel.withTransaction(read),
+        rendererScope: () => this.rendererEventScope(),
+        missionScope: () => this.missionStreamScope(),
+        resourceAllowed: event => this.rendererEventResourceAllowed(event),
+      });
       this.stopEvents = this.port.onEvent(e => this.ingest(e));
       this.desktop = new DesktopState(this.kernel, this.db,{allowSubjectAttachment:(subject,workspaceId)=>this.librarySubjectAllowed(subject,workspaceId)});
       this.initializeConversations();
       this.initializeLibrary();
+      if (this.privateMode && nativeHostServices) {
+        const readOwnMessage = (id: string, messageId: string) => {
+          const graphId = this.state.resources[id];
+          return graphId ? this.graph.readOwnMessage(graphId, messageId) : null;
+        };
+        const sources = createPersonalMemorySourceReader({
+          db: this.db,
+          projectAccess: id => !this.closed && this.libraryAuthorized({ kind: 'project', id }),
+          conversationAccess: (id, messageId) => !this.closed && this.productResourceAccess(id, messageId),
+          readOwnMessage,
+        });
+        const review = this.personalMemoryReview = createPersonalMemoryReview({
+          ...sources, open: () => this.personalMemory!.open(),
+          transaction: work => this.kernel.withTransaction(work),
+          readSourceText: ({ conversationId, messageId }) => readOwnMessage(conversationId, messageId)?.content ?? null,
+        });
+        this.personalMemory = new NativePersonalMemory({
+          kernel: this.kernel,
+          secrets: nativeHostServices.secrets,
+          host: {
+            ...sources,
+            identity: () => ({ userId: 'local-owner', policyVersion: 'aerynth.local-owner@1' }),
+            authorize: input => review.authorize(input)
+              ? { decision: 'allow', policyVersion: 'aerynth.local-owner@1', authorizationRef: 'native-memory-review' }
+              : { decision: 'deny' },
+          },
+        });
+      }
       ensure(!options.velaPlanningPort||!this.privateMode,'synthetic_vela_planner_forbidden');
       this.initializeVela(options.velaPlanningPort);
       this.ordinaryConnections=ordinaryTest?.connection??new OpenAIConnections({db:this.db,transaction:work=>this.kernel.withTransaction(()=>work(this.db)),nativeHost:this.nativeHostServices,localEligibility:{kind:'local-personal-project',scope:'current-owner-local-installation',decisionRef:'aerynth.owner-local-personal-inference'}});
@@ -656,7 +698,7 @@ export class BackendCore {
       if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='timer_documents'").get() &&
           this.db.prepare('SELECT 1 FROM timer_documents LIMIT 1').get())
         void this.ensureTimerDomain().ready.catch(() => {});
-    } catch (error) { this.kernel.close(); throw error; }
+    } catch (error) { this.personalMemory?.close(); this.kernel.close(); throw error; }
   }
   private missionScopeAllowed(scope: MissionScope): boolean {
     if (this.closed || !this.libraryAuthorized({ kind: 'workspace', id: scope.workspaceId })) return false;
@@ -765,7 +807,7 @@ export class BackendCore {
   private projectMissionReport(missionId: string, seq: number, acknowledge: () => void): boolean {
     const { mission, event } = this.missions.publicationEvent(missionId, seq);
     const origin = mission.originConversationId;
-    if (!origin || event.kind !== 'settled' || event.detail !== 'verified' || !this.missionScopeAllowed(mission.scope) ||
+    if (!origin || lastMissionVerificationEvent(mission, [event]) !== event || !this.missionScopeAllowed(mission.scope) ||
       mission.disposition === 'cancelled' || !mission.tasks.every(task => task.state === 'verified')) return false;
     const verified = this.missions.read(mission.id, mission.scope);
     if (!missionResultAvailable(verified)) return false;
@@ -1456,7 +1498,7 @@ export class BackendCore {
         if (card?.dashboard?.kind !== 'stream') return card;
         const mission = this.missions.read(card.missionId, scope);
         const { kind, missionId, outcome, revision } = card;
-        return { kind, missionId, outcome, revision, dashboard: { kind: 'stream', events: this.readWorkroomStream(mission),
+        return { kind, missionId, outcome, revision, dashboard: { kind: 'stream', events: this.intelligenceJournal.readWorkroomStream(mission),
           ...(this.missionPublication.hasLifecycle(missionId) ? { publicationPending: true } : {}) } };
       }
       case 'list':
@@ -1490,7 +1532,7 @@ export class BackendCore {
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
         const mission = this.missions.read(request.input.id, scope, { includeReadyQueue: true });
         let publication: ReportPublication | null = null, delivery: ReportDelivery | null = null;
-        if (this.streamScopeMatches(scope, mission.scope)) {
+        if (streamScopeMatches(scope, mission.scope)) {
           publication = this.missionReportPublication(mission.id);
           const link = this.db.prepare('SELECT message_id FROM vela_mission_report_links WHERE mission_id=?').get(mission.id);
           const messageId = link?.message_id;
@@ -6140,9 +6182,6 @@ export class BackendCore {
     const { principalId, policyVersion, currentProjectId, currentWorkspaceId } = this.velaContext();
     return JSON.stringify([principalId, policyVersion, currentProjectId, currentWorkspaceId]);
   }
-  private journalLatest() {
-    return Number(this.db.prepare('SELECT latest FROM integration_meta WHERE id=1').get()!.latest);
-  }
   private rendererEventResourceAllowed(event: StreamEvent) {
     const execution = event.executionId ? this.state.executions[event.executionId] : undefined;
     if (event.executionId && !execution) return false;
@@ -6158,99 +6197,20 @@ export class BackendCore {
     }
     return true;
   }
-  private rendererEventPage(input: CommandMap['rendererEventPage']['input']): CommandMap['rendererEventPage']['output'] {
-    ensure(input && typeof input === 'object' && !Array.isArray(input) &&
-      Object.keys(input).every(key => ['after', 'limit', 'recent'].includes(key)), 'invalid_cursor');
-    const { recent = false, after = 0, limit = 250 } = input;
-    ensure(typeof recent === 'boolean' && (!recent || input.after === undefined) &&
-      Number.isSafeInteger(after) && after >= 0 && Number.isInteger(limit) && limit >= 1 && limit <= 250, 'invalid_cursor');
-    return this.kernel.withTransaction(() => {
-      // Read bounds, rows, and current access in one SQLite read snapshot. Raw rows determine
-      // coverage, including rows that the current policy excludes from delivery.
-      const scope = this.rendererEventScope();
-      const missionScope = this.missionStreamScope(), legacyMissions = new Map<string, Mission | null>();
-      const latest = this.journalLatest();
-      const earliest = this.db.prepare('SELECT min(cursor) AS value FROM intelligence_events').get()!.value as number | null;
-      const select = "SELECT cursor,dedupe,json_remove(json,'$.externalEvidence','$.externalCoverage','$.payload.delta') AS json FROM intelligence_events";
-      const rows = recent
-        ? this.db.prepare(select + ' ORDER BY cursor DESC LIMIT ?').all(limit).reverse()
-        : this.db.prepare(select + ' WHERE cursor > ? ORDER BY cursor LIMIT ?').all(after, limit);
-      const events = rows.flatMap(row => {
-        const event = JSON.parse(String(row.json)) as StreamEvent;
-        if (!this.rendererEventResourceAllowed(event)) return [];
-        if (!event.type.startsWith('vela.mission/')) return [event];
-        const projected = this.projectReplayedMissionEvent(event, String(row.dedupe), missionScope, legacyMissions);
-        return projected ? [projected] : [];
-      });
-      const scannedThrough = recent || rows.length < limit ? latest : Number(rows.at(-1)!.cursor);
-      const truncated = earliest !== null && (recent ? earliest > 1 || Number(rows[0]?.cursor) > earliest : after < earliest - 1);
-      return { events, earliest, latest, scannedThrough, truncated, scope };
-    });
-  }
-  private missionStreamFields(mission: Mission, event: MissionEvent): Pick<StreamEvent, 'mission' | 'status' | 'payload'> {
-    const executor = (mission.tasks.find(task => task.id === event.taskId) ??
-      mission.retiredTasks?.find(task => task.id === event.taskId))?.executor;
-    let status: string | null = event.kind === 'created' ? 'queued' : event.kind === 'started' ? 'running' : null;
-    if (event.kind === 'settled' || event.kind === 'recovered') {
-      if (event.detail && ['verified', 'failed', 'blocked', 'cancelled', 'uncertain'].includes(event.detail)) status = event.detail;
-      else if (event.detail === 'paused_on_restart') status = 'paused';
-      else if (event.kind === 'settled' && !event.attemptId) status = 'blocked';
-    }
-    return { mission: { id: mission.id, scope: mission.scope, kind: event.kind, seq: event.seq, occurredAt: event.time,
-      ...(event.taskId ? { taskId: event.taskId } : {}), ...(event.attemptId ? { attemptId: event.attemptId } : {}),
-      ...(executor ? { executor } : {}) }, status, payload: { redacted: true, ...(event.taskId ? { taskId: event.taskId } : {}) } };
-  }
   private recordMissionStreamEvent(mission: Mission, event: MissionEvent, acknowledge: () => void) {
     this.record('vela.mission/' + event.kind, 'observed', undefined, `mission:${mission.id}:${event.seq}`, {
       providerId: 'aerynth-native', detached: true, correlationId: mission.id, nativeEventId: event.attemptId,
-      ...this.missionStreamFields(mission, event),
+      ...missionStreamFields(mission, event),
     }, acknowledge);
-  }
-  private readWorkroomStream(mission: Mission) {
-    const legacy = new Map([[mission.id, mission]]);
-    return this.db.prepare(`SELECT dedupe,json FROM intelligence_events
-      WHERE json_extract(json,'$.correlationId')=? AND json_extract(json,'$.type') GLOB 'vela.mission/*'
-      ORDER BY cursor DESC LIMIT 128`).all(mission.id).reverse().flatMap(row => {
-      const stored = JSON.parse(String(row.json)) as StreamEvent;
-      const event = this.projectReplayedMissionEvent(stored, String(row.dedupe), mission.scope, legacy);
-      if (event?.mission?.id !== mission.id) return [];
-      const { eventId, cursor, receivedAt, type, status, classification } = event;
-      const { taskId, executor, occurredAt } = event.mission;
-      return [{ eventId, cursor, receivedAt, type, status, classification,
-        ...(occurredAt ? { occurredAt } : {}),
-        ...(taskId ? { taskId } : {}), ...(executor ? { executor } : {}) }];
-    });
-  }
-  private streamScopeMatches(scope: MissionScope | null, origin: MissionScope | undefined) {
-    return !!scope && scope.workspaceId === origin?.workspaceId && scope.projectId === origin.projectId;
   }
   private missionLiveScopeAllowed(event: StreamEvent) {
     const scope = this.missionStreamScope(), mission = event.mission;
-    if (this.streamScopeMatches(scope, mission?.scope)) return true;
+    if (streamScopeMatches(scope, mission?.scope)) return true;
     // Linked workroom views need a refresh when the originating mission changes.
     // General stream replay remains scoped to the originating workspace.
     return !!scope && !!mission && scope.projectId === mission.scope.projectId && this.missionScopeAllowed(mission.scope) &&
       !!this.db.prepare(`SELECT 1 FROM vela_missions WHERE id=? AND json_extract(json,'$.workroom.workspaceId')=?`)
         .get(mission.id, scope.workspaceId);
-  }
-  private projectReplayedMissionEvent(event: StreamEvent, dedupe: string, scope: MissionScope | null,
-    legacyMissions: Map<string, Mission | null>): StreamEvent | undefined {
-    if (event.mission) return this.streamScopeMatches(scope, event.mission.scope) ? event : undefined;
-    // Older rows have only a correlation ID. Bind them to the exact durable lifecycle event before disclosure.
-    const id = event.correlationId;
-    if (!scope || !id || event.providerId !== 'aerynth-native' || event.classification !== 'observed') return;
-    if (!legacyMissions.has(id)) {
-      const row = this.db.prepare('SELECT json FROM vela_missions WHERE id=?').get(id);
-      legacyMissions.set(id, row ? JSON.parse(String(row.json)) as Mission : null);
-    }
-    const mission = legacyMissions.get(id);
-    if (!mission || mission.id !== id || !this.streamScopeMatches(scope, mission.scope)) return;
-    if (event.type === 'vela.mission/report-posted' && dedupe === 'mission:report:' + id &&
-      this.db.prepare('SELECT 1 FROM vela_mission_report_links WHERE mission_id=?').get(id)) {
-      return { ...event, mission: { id, scope: mission.scope, kind: 'report-posted' }, status: 'posted', payload: { redacted: true } };
-    }
-    const observed = mission.events.find(entry => event.type === 'vela.mission/' + entry.kind && dedupe === `mission:${id}:${entry.seq}`);
-    if (observed) return { ...event, ...this.missionStreamFields(mission, observed) };
   }
   private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;execution?:Execution;detached?:boolean;resourceId?:string;correlationId?:string;payload?:StreamEvent['payload'];nativeEventId?:string;providerTime?:number;providerTimeSource?:string;externalEvidence?:GitHubCommitEvidence;externalCoverage?:TimelineSourceCoverage;mission?:StreamEvent['mission'];status?:string|null}, acknowledge?: () => void) {
     const execution = override?.execution ?? this.active;
@@ -6644,6 +6604,19 @@ export class BackendCore {
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
+    if (name === 'personalMemoryCapturePreviewNative' || name === 'personalMemoryCaptureCommitNative' || name === 'personalMemoryCaptureCancelNative') {
+      const review = this.personalMemoryReview;
+      ensure(review && !this.closed, 'personal_memory_native_required');
+      if (name === 'personalMemoryCaptureCancelNative') {
+        review.cancelCapture((input as CommandMap['personalMemoryCaptureCancelNative']['input']).id);
+        return null as CommandMap[K]['output'];
+      }
+      ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
+      if (name === 'personalMemoryCapturePreviewNative')
+        return await review.previewCapture(input as CommandMap['personalMemoryCapturePreviewNative']['input']) as CommandMap[K]['output'];
+      const saved = await review.commitCapture(input as CommandMap['personalMemoryCaptureCommitNative']['input']);
+      return { id: saved.id } as CommandMap[K]['output'];
+    }
     if(['missionFileEditPrepareNative','missionFileEditRunNative','missionFileEditReviewNative','missionFileEditChoiceNative','missionFileEditApplyNative','missionFileEditCheckReviewNative','missionFileEditCheckRunNative','missionFileEditRead'].includes(name)){
       ensure(!this.closed&&this.nativeMedia&&this.nativeHostServices?.secrets&&(this.privateMode||this.velaApiTest)&&input&&typeof input==='object'&&!Array.isArray(input),'mission_edit_native_required');
       ensure(this.missionStorageAdmitted,'storage_reserve_admission_denied');const p=input as any;
@@ -7041,7 +7014,7 @@ export class BackendCore {
           if (authorized.length) snapshot.missionWorkroomCardIds = authorized;
         }
         if (this.rendererEventTransport) {
-          snapshot.eventCursor = this.journalLatest();
+          snapshot.eventCursor = this.intelligenceJournal.latestCursor();
           snapshot.eventScope = this.rendererEventScope();
         }
         return snapshot as any;
@@ -7121,27 +7094,11 @@ export class BackendCore {
         } catch { this.record('stream/provider-thread-unavailable', 'inferred'); return { resourceId: a.resourceId, providerThreadAvailable: false, executionOutcome: 'unchanged' } as any; }
       }
       case 'snapshot': return { contract: CONTRACT, schemaVersion: 1, conversations: Object.keys(this.state.resources).map(id => this.conv(id)), graph: this.graph.snapshot(), resourceMap: structuredClone(this.state.resources), bindings: structuredClone(this.state.bindings), handoffs: structuredClone(this.state.reviews), executions: structuredClone(this.state.executions), messageEvidence: structuredClone(this.state.messageEvidence), resources: Object.keys(this.state.resources).map(id => this.kernel.getResource(id)), relationships: Object.keys(this.state.resources).flatMap(id => this.kernel.listRelationships(id)) } as any;
-      case 'rendererEventPage': return this.rendererEventPage(a) as CommandMap[K]['output'];
-      case 'replay': {
-        const after = a.after ?? 0, limit = a.limit ?? 100;
-        ensure(Number.isSafeInteger(after) && after >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 1000, 'invalid_cursor');
-        const scope = this.missionStreamScope(), legacyMissions = new Map<string, Mission | null>();
-        const rows = this.db.prepare(`SELECT e.dedupe, json_remove(e.json,'$.externalEvidence','$.externalCoverage') AS json
-          FROM intelligence_events e WHERE e.cursor>? AND (json_extract(e.json,'$.type') NOT GLOB 'vela.mission/*'
-            OR EXISTS (SELECT 1 FROM vela_missions m WHERE m.id=json_extract(e.json,'$.correlationId')
-              AND json_extract(m.json,'$.scope.workspaceId')=? AND json_extract(m.json,'$.scope.projectId') IS ?))
-          ORDER BY e.cursor LIMIT ?`).all(after, scope?.workspaceId ?? null, scope?.projectId ?? null, limit);
-        const events = rows.flatMap(row => {
-          const event = JSON.parse(String(row.json)) as StreamEvent;
-          if (!event.type.startsWith('vela.mission/')) return [event];
-          const projected = this.projectReplayedMissionEvent(event, String(row.dedupe), scope, legacyMissions);
-          return projected ? [projected] : [];
-        });
-        const earliest = this.db.prepare('SELECT min(cursor) AS value FROM intelligence_events').get()!.value as number | null;
-        const latest = Number(this.db.prepare('SELECT latest FROM integration_meta WHERE id=1').get()!.latest);
-        return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
-      }
+      case 'rendererEventPage': return this.intelligenceJournal.rendererPage(a) as CommandMap[K]['output'];
+      case 'replay': return this.intelligenceJournal.replay(a) as CommandMap[K]['output'];
       case 'close': {
+        this.personalMemoryReview?.close();
+        this.personalMemory?.close();
         this.velaVoiceRuntime.closeSpeechAdmission();
         let cleanupError: unknown, cleanupFailed = false;
         const cleanup = async (work: () => unknown | Promise<unknown>) => {
