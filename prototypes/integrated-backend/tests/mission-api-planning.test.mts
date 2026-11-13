@@ -350,7 +350,7 @@ test('composed artifact mission retains verified files when a native branch fail
         outcome: mission.outcome,
         waits: mission.waits,
         admission: mission.admission?.reasons,
-        tasks: JSON.parse(nativeMissionDiagnostics(mission)),
+        ...(!live ? { tasks: JSON.parse(nativeMissionDiagnostics(mission)) } : {}),
       })}`);
     };
     const first = await settle('initial');
