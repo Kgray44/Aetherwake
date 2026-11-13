@@ -10,6 +10,7 @@ import { mountMissionFlow } from '../../../block-library/mission-flow.ts';
 export interface MissionWorkroomView extends TimelineExperience {
   setScope(scope: string | null): void;
   observe(accessChanged?: boolean): void;
+  disconnect(): void;
 }
 
 const waitLabel: Record<MissionProjection["waits"][string], string> = {
@@ -89,6 +90,7 @@ export function mountMissionWorkroomView(
   section.insertBefore(flowControls, list); section.insertBefore(flowStatus, list); section.insertBefore(flowHost, list);
 
   let scope = initialScope, generation = 0, active = true, disposed = false;
+  let disconnected = false;
   let presentation: "workspace" | "focused" = "workspace";
   let manual: TimelineExperience | undefined, resolvedManual = false;
   let projection: MissionWorkroomResource | null = null;
@@ -505,8 +507,17 @@ export function mountMissionWorkroomView(
   statusOnly("Checking the mission card…");
   void refreshProjection();
   return {
+    disconnect() {
+      if (disconnected || disposed) return;
+      disconnected = true;
+      active = false;
+      queued = false;
+      generation++;
+      intelligence?.invalidate("Backend disconnected. Mission evidence unavailable.", true);
+      statusOnly("Backend disconnected. Restart to inspect mission evidence.");
+    },
     setScope(next) {
-      if (scope === next) return;
+      if (disconnected || scope === next) return;
       intelligence?.invalidate("Workspace changed. Mission evidence unavailable.", true);
       scope = next;
       generation++;
@@ -517,7 +528,7 @@ export function mountMissionWorkroomView(
       void refreshProjection();
     },
     observe(accessChanged) {
-      if (resolvedManual && !accessChanged) return;
+      if (disconnected || (resolvedManual && !accessChanged)) return;
       if (accessChanged) {
         intelligence?.invalidate("Mission access changed. Checking evidence…", true);
         generation++;
@@ -528,7 +539,7 @@ export function mountMissionWorkroomView(
       void refreshProjection();
     },
     setActive(next) {
-      if (active === next) return;
+      if (disconnected || active === next) return;
       active = next;
       if (!next) { intelligence?.invalidate("Mission inspection inactive.", true); generation++; clearFlow(); } else flow?.setActive(true);
       syncAdmissionRefresh();

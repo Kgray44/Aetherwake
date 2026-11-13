@@ -627,7 +627,7 @@ app.whenReady().then(async () => {
   const nativeReviewGate=async work=>{checkDesktopTest();if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
   const reviewProvider=args=>nativeReviewGate(()=>showVelaReview({ ...args, runtime: args.runtime ?? { BrowserWindow, ipcMain, session } }));
   const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
-  const policyReady = () => !closing && !backendFailed && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
+  const policyReady = () => !closing && backendWritable() && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
   const { reviewMode, reviewRollback, ...performanceMenu } = require("./resource-policy-menu.cjs").resourcePolicyMenu({
     call, show: options => reviewDialogs.showMessageBox(win, options),
     ready: policyReady, canWrite: () => storage.allowWrite(),
@@ -637,13 +637,19 @@ app.whenReady().then(async () => {
     menu.append(new MenuItem(performanceMenu));
     Menu.setApplicationMenu(menu);
   }
+  const trustedPolicyFrame = event => policyReady() && trustedActiveFrame(event);
+  const policyGesture = event => !verify && event.senderFrame.executeJavaScript(
+    "navigator.userActivation.isActive && document.hasFocus()", false,
+  ).catch(() => false);
   ipcMain.handle("application-resource-policy-inspection", require("./resource-policy-inspection.cjs").resourcePolicyInspection({
-    trusted: event => policyReady() && trustedActiveFrame(event),
-    hasGesture: event => !verify && event.senderFrame.executeJavaScript(
-      "navigator.userActivation.isActive && document.hasFocus()", false,
-    ).catch(() => false),
+    trusted: trustedPolicyFrame, hasGesture: policyGesture,
     inspect: () => call("resourcePolicyNative", { name: "inspect" }),
     reviewMode, reviewRollback,
+  }));
+  ipcMain.handle("application-experience-policy-rollback", require("./experience-policy-review.cjs").experiencePolicyReview({
+    trusted: trustedPolicyFrame, hasGesture: policyGesture,
+    call, show: options => reviewDialogs.showMessageBox(win, options),
+    canWrite: () => storage.allowWrite(),
   }));
   const validateHostOperation=async(binding,{phase='before-dispatch'}={})=>{
       const frame=maintenanceReviewFrames.get(binding.operationId);

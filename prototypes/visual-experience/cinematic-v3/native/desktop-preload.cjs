@@ -63,6 +63,11 @@ contextBridge.exposeInMainWorld(
         throw new Error("resource_policy_user_gesture_required");
       return ipcRenderer.invoke("application-resource-policy-inspection", action);
     },
+    experiencePolicyRollback(review) {
+      if (navigator.userActivation?.isActive !== true)
+        throw new Error("experience_policy_user_gesture_required");
+      return ipcRenderer.invoke("application-experience-policy-rollback", review);
+    },
     async command(name, input) {
       if (
         ![

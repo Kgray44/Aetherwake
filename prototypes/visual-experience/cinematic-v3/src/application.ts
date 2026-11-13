@@ -68,8 +68,10 @@ import { velaVisualState, velaVisualLabels, type VelaVisualEvidence } from './ve
 import { createVelaManifestation } from "./vela-manifestation.ts";
 import { createVelaOutputObservation } from "./vela-output-observation.ts";
 import { createVelaMissionView } from "./vela-missions.ts";
+import { mountAdaptiveWorkspace } from "./adaptive-workspace-surface.ts";
 import { mountMissionWorkroomView, type MissionWorkroomView } from "./mission-workroom-view.ts";
-import type { MissionResponse, MissionProjection } from "../../../integrated-backend/src/mission-contracts.mts";
+import { createMissionWorkrooms } from "./mission-workrooms.ts";
+import type { MissionResponse, MissionProjection, MissionSummary } from "../../../integrated-backend/src/mission-contracts.mts";
 import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
 import { createWorkspaceStage } from "./workspace-stage.ts";
@@ -532,9 +534,8 @@ export function installApplication(hooks: Hooks) {
     pending: boolean;
     resourceId?: string;
   } | null = null;
-  let missionWorkroomScope: string | null = null;
+  const missionWorkrooms = createMissionWorkrooms(document);
   let missionWorkroomCardIds = new Set<string>();
-  const missionWorkroomViews = new Set<MissionWorkroomView>();
   const missionDashboardViews = new Map<string, MissionWorkroomView>();
   const checklistViews = new Map<
     string,
@@ -564,11 +565,87 @@ export function installApplication(hooks: Hooks) {
     }
   >();
   const timelineProjections = new Map<string, NonNullable<Parameters<typeof blockIdentity>[0]["timeline"]>>();
-  function refreshMissionWorkroomCards(accessChanged = false) {
-    for (const view of missionWorkroomViews) view.observe(accessChanged);
+  let adaptiveWorkspace: { dispose(): void } | undefined;
+  async function readMissionProfile(id: string) {
+    const result = await host.command!("missions", { name: "execution-profile", input: { id } }) as MissionResponse;
+    return result && "kind" in result && result.kind === "execution-profile" ? result : null;
   }
-  const restoreMissionWorkroomCards = () => refreshMissionWorkroomCards();
-  document.addEventListener("visibilitychange", restoreMissionWorkroomCards);
+  async function readAuthorizedMission(id: string) {
+    const result = await host.command!("missions", { name: "read", input: { id } }) as MissionResponse;
+    if (result === null) return null;
+    if (result && "tasks" in result && "outcome" in result && "scope" in result && result.id === id) return result;
+    throw new Error("mission_projection_unavailable");
+  }
+  function closeAdaptiveWorkspace() {
+    adaptiveWorkspace?.dispose();
+    adaptiveWorkspace = undefined;
+    surfaces.close("adaptive-intelligence-workspace");
+  }
+  function adaptiveWorkspaceAction() {
+    const anchor = document.createElement("button");
+    anchor.type = "button";
+    anchor.textContent = "Inspect intelligence";
+    anchor.className = "aw-adaptive-workspace-entry";
+    anchor.setAttribute("aria-haspopup", "dialog");
+    anchor.onclick = () => openAdaptiveWorkspace(anchor);
+    return anchor;
+  }
+  function openAdaptiveWorkspace(anchor: HTMLButtonElement, initialMissionId?: string) {
+    if (document.hidden) return;
+    if (eventDisconnected) {
+      hooks.status("Backend disconnected. Restart to inspect mission evidence.");
+      return;
+    }
+    closeAdaptiveWorkspace();
+    const workspace = state?.navigation.kind === "workspace"
+      ? state.workspaces.find(item => item.id === state?.activeWorkspaceId) : undefined;
+    if (!workspace) {
+      hooks.status("Open a workspace to inspect mission evidence.");
+      return;
+    }
+    const scope = { workspaceId: workspace.id, projectId: workspace.project_id };
+    const content = document.createElement("div");
+    const view = mountAdaptiveWorkspace(content, {
+      scope,
+      experience: {
+        scope,
+        read: (name, input) => host.command!("missions", { name, input }),
+        rollback: host.experiencePolicyRollback,
+      },
+      viewId: "adaptive-intelligence-workspace",
+      initialMissionId,
+      list: async () => {
+        const result = await host.command!("missions", { name: "list", input: {} });
+        if (!Array.isArray(result)) throw new Error("mission_list_unavailable");
+        return result as MissionSummary[];
+      },
+      readMission: readAuthorizedMission,
+      readProfile: readMissionProfile,
+      resourcePolicy: host.resourcePolicyInspection,
+    });
+    const lifecycle = missionWorkrooms.track({
+      observe(accessChanged) {
+        if (document.hidden) closeAdaptiveWorkspace();
+        else view.refresh(accessChanged);
+      },
+      setScope: closeAdaptiveWorkspace,
+      disconnect: closeAdaptiveWorkspace,
+      dispose: view.dispose,
+    });
+    adaptiveWorkspace = lifecycle;
+    surfaces.open({
+      id: "adaptive-intelligence-workspace", anchor, content,
+      label: "Adaptive Intelligence Workspace", placement: "bottom",
+      minSize: { width: 350, height: 230 },
+      maxSize: { width: 770, height: 760 },
+      preferredSize: { width: 660, height: 620 },
+      initialFocus: view.focus,
+      onClose: () => {
+        lifecycle.dispose();
+        if (adaptiveWorkspace === lifecycle) adaptiveWorkspace = undefined;
+      },
+    });
+  }
   let missionWorkroomSerial = 0;
   function mountWorkroomCard(
     root: HTMLElement,
@@ -576,7 +653,7 @@ export function installApplication(hooks: Hooks) {
     kind: "checklist" | "timeline" | "dashboard" | "stream",
     mountDefault?: (container: HTMLElement) => ReturnType<typeof mountTimelineExperience>,
   ): MissionWorkroomView {
-    const view = mountMissionWorkroomView(root, kind, missionWorkroomScope, async () => {
+    const view = mountMissionWorkroomView(root, kind, missionWorkrooms.scope, async () => {
       try {
         const result = await host.command!("missions", { name: "workroom-resource", input: { resourceId } }) as MissionResponse;
         if (result === null) return null;
@@ -593,19 +670,10 @@ export function installApplication(hooks: Hooks) {
       motion: experienceMotion,
       viewId: `mission-workroom:${resourceId}:${++missionWorkroomSerial}`,
       resourcePolicy: host.resourcePolicyInspection,
-      readProfile: async (id) => {
-        const result = await host.command!("missions", { name: "execution-profile", input: { id } }) as MissionResponse;
-        return result && "kind" in result && result.kind === "execution-profile" ? result : null;
-      },
-      readMission: async (id) => {
-        const result = await host.command!("missions", { name: "read", input: { id } }) as MissionResponse;
-        if (result === null) return null;
-        if (result && "tasks" in result && "outcome" in result && "scope" in result && result.id === id) return result;
-        throw new Error("mission_projection_unavailable");
-      },
+      readProfile: readMissionProfile,
+      readMission: readAuthorizedMission,
     });
-    missionWorkroomViews.add(view);
-    return { ...view, dispose() { missionWorkroomViews.delete(view); view.dispose(); } };
+    return missionWorkrooms.track(view);
   }
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
@@ -960,7 +1028,8 @@ export function installApplication(hooks: Hooks) {
       controlMotion.dispose();
       resourceOpener.cancel();
       directResources.dispose();
-      document.removeEventListener("visibilitychange", restoreMissionWorkroomCards);
+      closeAdaptiveWorkspace();
+      missionWorkrooms.dispose();
     },
     { once: true },
   );
@@ -1318,10 +1387,7 @@ export function installApplication(hooks: Hooks) {
         timelineViews.delete(id);
         timelineProjections.delete(id);
       }
-    if (missionWorkroomScope !== workroomScope) {
-      missionWorkroomScope = workroomScope;
-      for (const view of missionWorkroomViews) view.setScope(workroomScope);
-    }
+    missionWorkrooms.setScope(workroomScope);
     for (const [id, entry] of taskTrackerViews)
       if (!next.blocks.some((block) => block.id === id)) {
         entry.view.dispose();
@@ -1565,6 +1631,7 @@ export function installApplication(hooks: Hooks) {
   }
   function syncWorkspacePanels(workspaceId: string | null) {
     if ((panelScope?.workspaceId ?? null) === workspaceId) return;
+    closeAdaptiveWorkspace();
     for (const panel of WORKSPACE_PANELS) surfaces.close(panel);
     const scope = workspaceId ? { workspaceId, preferences: {} as WorkspacePanelPreferences } : null;
     panelScope = scope;
@@ -2565,6 +2632,7 @@ export function installApplication(hooks: Hooks) {
       anchor: el("#vela"),
       content: velaContent,
       label: "Vela",
+      headerActions: adaptiveWorkspaceAction(),
       placement: "left",
       minSize: { width: 280, height: 110 },
       maxSize: { width: 560, height: 640 },
@@ -4860,6 +4928,7 @@ export function installApplication(hooks: Hooks) {
       refresh: refreshEvents,
       openResource: openCanonicalResource,
       openMission: openStreamMission,
+      inspectMission: (id, source) => openAdaptiveWorkspace(source, id),
     }, { motion: experienceMotion, viewId });
     const motion = conversationDisclosures(content, { motion: experienceMotion, viewId });
     const pickers = [...content.querySelectorAll<HTMLSelectElement>("select")]
@@ -4872,6 +4941,7 @@ export function installApplication(hooks: Hooks) {
       anchor,
       content,
       label: "Intelligence Stream",
+      headerActions: adaptiveWorkspaceAction(),
       placement: "bottom",
       minSize: { width: 360, height: 320 },
       maxSize: { width: 810, height: 760 },
@@ -4936,17 +5006,17 @@ export function installApplication(hooks: Hooks) {
     if (e.type.startsWith("vela.mission/") || accessChanged || sourceChanged) {
       if (accessChanged) velaMissions.invalidateEvidence();
       else velaMissions.observe();
-      refreshMissionWorkroomCards(accessChanged);
+      missionWorkrooms.observe(accessChanged);
     }
     if (e.type === "storage/reserve-admission-denied") {
       velaMissions.observe();
-      refreshMissionWorkroomCards();
+      missionWorkrooms.observe();
       hooks.status("Storage check paused saving and new runs. Your data is retained.");
       return;
     }
     if (e.type === "storage/reserve-admission-restored") {
       velaMissions.observe();
-      refreshMissionWorkroomCards();
+      missionWorkrooms.observe();
       hooks.status("Storage check passed. Saving is available again.");
       void enqueue(async () => {
         for (const session of composerSessions.values()) {
@@ -4984,6 +5054,7 @@ export function installApplication(hooks: Hooks) {
     }
     if (e.type === "backend/disconnected") {
       eventDisconnected = true;
+      missionWorkrooms.disconnect();
       resetEventProjection();
       clearTimeout(velaRefreshTimer);
       velaRefreshTimer = undefined;

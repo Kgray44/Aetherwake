@@ -27,7 +27,10 @@ exports.resourcePolicyInspection = function resourcePolicyInspection({
     }
     if (action !== "mode" && action !== "rollback") throw Error("invalid_resource_inspection_action");
     if (!await hasGesture(event) || !trusted(event)) throw Error("resource_policy_user_gesture_required");
-    await (action === "mode" ? reviewMode() : reviewRollback());
-    lastRead = -Infinity;
+    try {
+      await (action === "mode" ? reviewMode : reviewRollback)(() => trusted(event));
+    } finally {
+      lastRead = -Infinity;
+    }
   };
 };

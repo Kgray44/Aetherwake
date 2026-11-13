@@ -9,7 +9,12 @@ test("resource inspection exposes reads and reviewed actions through separate au
     trusted: () => trusted,
     hasGesture: async () => gesture,
     inspect: async () => { calls.push("inspect"); return { epoch: "source" }; },
-    reviewMode: async () => { calls.push("mode"); },
+    reviewMode: async current => {
+      assert.equal(current(), true);
+      trusted = false;
+      assert.equal(current(), false);
+      calls.push("mode");
+    },
     reviewRollback: async () => { calls.push("rollback"); },
   });
   await assert.rejects(dispatch({}, "inspect"), /unauthorized/);
@@ -19,6 +24,7 @@ test("resource inspection exposes reads and reviewed actions through separate au
   await assert.rejects(dispatch({}, { name: "set-mode", mode: "max_throughput" }), /invalid/);
   gesture = true;
   await dispatch({}, "mode");
+  trusted = true;
   await dispatch({}, "rollback");
   assert.deepEqual(calls, ["inspect", "mode", "rollback"]);
 });
