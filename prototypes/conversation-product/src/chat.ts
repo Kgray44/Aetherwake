@@ -616,7 +616,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const replyNotes = new Map<string, { pending: boolean; noteId?: string }>();
   const updateReplyNoteControl = (messageId: string, button: HTMLButtonElement) => {
     const capture = replyNotes.get(messageId);
-    button.disabled = !!capture?.pending || !!capture?.noteId && !options.openReplyNote;
+    const opening = !!capture?.noteId && capture.pending;
+    button.disabled = capture?.noteId ? !options.openReplyNote : !!capture?.pending;
+    if (opening) button.setAttribute('aria-disabled', 'true');
+    else button.removeAttribute('aria-disabled');
     const label = capture?.noteId
       ? capture.pending ? 'Opening saved note…' : options.openReplyNote ? 'Open saved note' : 'Reply saved as note'
       : capture?.pending ? 'Saving reply…' : 'Save reply as note';

@@ -1381,11 +1381,15 @@ test('Save reply as note sends exact IDs, recovers the same command and preserve
   complete({noteId:'note:saved'});
   await until(()=>!!named(refreshed,'Open saved note'));
   const open=named(refreshed,'Open saved note');
+  open.focus();
   open.fire('click');open.fire('click');
   assert.deepEqual(opened,['note:saved']);
-  assert.equal(open.disabled,true);
-  noteOpening.resolve();
-  await until(()=>!open.disabled);
+  assert.equal(open.disabled,false);
+  assert.equal(open.getAttribute('aria-disabled'),'true');
+  noteOpening.reject(Error('synthetic note lookup failed'));
+  await until(()=>open.getAttribute('aria-disabled')===null);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/saved note could not open/i);
+  assert.ok(f.view.doc.activeElement===open);
   assert.equal(f.draft.content,'Saved unsent text');
   await chat.dispose();
   chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
