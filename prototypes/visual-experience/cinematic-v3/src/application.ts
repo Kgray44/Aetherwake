@@ -2514,6 +2514,7 @@ export function installApplication(hooks: Hooks) {
       chooseDocument: chooseChatDocument,
       listDocuments: listChatDocuments,
       openDocument: openChatDocument,
+      askVelaAboutDocument: askVelaAboutChatDocument,
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
@@ -2578,6 +2579,21 @@ export function installApplication(hooks: Hooks) {
     });
     return result.status === "ready" ? "opened" as const
       : result.status === "superseded" ? "superseded" as const : "unavailable" as const;
+  }
+  async function askVelaAboutChatDocument(document: {id: string; version: number}, isCurrent: () => boolean) {
+    const result = await host.command!("openResource", {
+      resourceId: document.id, expectedVersion: document.version, origin: { source: "application" },
+    }) as ResourceOpeningResult;
+    if (!isCurrent()) return;
+    if (result.status !== "ready" || result.resource.kind !== "note" && !supportsDocumentQuestion(result.resource))
+      throw Error("The selected attachment is no longer available.");
+    if (!velaOpen) openVela();
+    if (!velaPanel) throw Error("Vela could not open.");
+    const resource = result.resource;
+    velaPanel.addDocumentSource({
+      id: resource.id, kind: "resource", resourceKind: resource.kind, version: resource.version,
+      title: resource.title, projectId: resource.project_id,
+    });
   }
   function openVela() {
     if (velaOpen) {
@@ -4394,6 +4410,7 @@ export function installApplication(hooks: Hooks) {
           chooseDocument: chooseChatDocument,
           listDocuments: listChatDocuments,
           openDocument: openChatDocument,
+          askVelaAboutDocument: askVelaAboutChatDocument,
           viewPersistence: chatViewPersistence,
           onProviderChange: async (change) => {
             if (change.mode === "continuation") {
