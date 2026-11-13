@@ -76,7 +76,7 @@ export interface ConversationChatOptions {
   openReplyNote?: (noteId: string) => void | Promise<void>;
   chooseDocument?: () => Promise<{ id: string; version: number; title: string } | null>;
   listDocuments?: (conversationId: string) => readonly DraftDocument[];
-  openDocument?: (document: DraftDocument) => Promise<void>;
+  openDocument?: (document: DraftDocument) => Promise<'opened' | 'unavailable' | 'superseded'>;
   onViewState?: (state: { resourceId: string; content: string; scroll: number; offset: number; view?:ConversationViewCapture }) => void;
 }
 export interface ConversationChat {
@@ -173,9 +173,14 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         open.type = 'button';
         decorateConversationControl(open,{identity:'source',emphasis:'secondary'});
         open.setAttribute('aria-label', 'Open attachment ' + label);
-        open.addEventListener('click', () => {
-          if (!open.disabled && !accessRevoked)
-            void options.openDocument!(document).catch(error => report(errorText(error)));
+        open.addEventListener('click', async () => {
+          if (open.disabled || accessRevoked) return;
+          try {
+            if (await options.openDocument!(document) === 'unavailable' && !disposed && !accessRevoked) {
+              await session.reload();
+              report('This attachment could not be opened. Check the selected document before sending.');
+            }
+          } catch (error) { report(errorText(error)); }
         });
         remove.textContent = '×';
         return [open, remove];

@@ -2570,12 +2570,14 @@ export function installApplication(hooks: Hooks) {
       .sort((left, right) => left.title.localeCompare(right.title));
   }
   async function openChatDocument(document: {id: string; version: number}) {
-    await resourceOpener.open({
+    const result = await resourceOpener.open({
       resourceId: document.id,
       expectedVersion: document.version,
       preferredPresentation: "direct",
       origin: { source: "application" },
     });
+    return result.status === "ready" ? "opened" as const
+      : result.status === "superseded" ? "superseded" as const : "unavailable" as const;
   }
   function openVela() {
     if (velaOpen) {

@@ -1477,10 +1477,11 @@ test('saved document picker reuses an exact current resource without importing o
   const saved = { id: 'file:saved', version: 1, title: 'Saved brief.pdf' };
   let available = [saved];
   const opened: typeof available = [];
+  let opening: 'opened' | 'unavailable' = 'opened';
   chat = mountConversationChat(f.view.root, {
    port: f.port, resourceId: f.draft.resourceId, motion: motion.motion, viewId: 'chat:saved-document',
    listDocuments: id => { assert.equal(id, f.draft.resourceId); return available; },
-   openDocument: async document => { opened.push(document); },
+   openDocument: async document => { opened.push(document); return opening; },
    chooseDocument: async () => { throw Error('Saved selection must not use the file picker'); },
   });
   await chat.ready;
@@ -1503,5 +1504,13 @@ test('saved document picker reuses an exact current resource without importing o
   assert.equal(f.calls.some(call => call.name === 'send'), false);
   picker.fire('click');
   assert.equal(f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').disabled, true);
+  picker.fire('click');
+  opening = 'unavailable';
+  const changed = [{ ...available[0], unavailable: 'changed' as const }];
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:changed});
+  openAttachment.fire('click');
+  await until(() => !!named(f.view.root,'Replace'));
+  assert.equal(f.draft.content,draft.content);
+  assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,true);
  } finally { await chat?.dispose(); assert.equal(motion.poses.size, 0); f.restore(); }
 });
