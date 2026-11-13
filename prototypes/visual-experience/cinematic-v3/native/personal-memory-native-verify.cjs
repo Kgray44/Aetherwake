@@ -9,6 +9,7 @@ const { showVelaReview, isOwnedVelaReviewWindow } = require('./vela-review.cjs')
 
 const root = realpathSync(process.argv[2]);
 const mode = process.argv[3];
+const workerOnly = process.argv.includes('--worker-only');
 assert(['save', 'restore'].includes(mode));
 const profile = join(root, 'electron-profile');
 if (mode === 'save') {
@@ -17,7 +18,8 @@ if (mode === 'save') {
 }
 app.setPath('userData', profile);
 app.setPath('sessionData', profile);
-const path = join(root, 'profile.sqlite');
+const sourcePath = join(root, 'profile.sqlite');
+const backupPath = join(root, 'restored.sqlite');
 const receiptPath = join(root, 'synthetic-receipt.json');
 const text = 'Use the synthetic quartz relay for the next prototype.';
 const factText = 'The next prototype uses the synthetic quartz relay.';
@@ -36,12 +38,12 @@ async function run() {
   const { Backend } = await import('../../../integrated-backend/src/service.mts');
   const { createNativeHostClient } = await import('../../../integrated-backend/src/native-host.mts');
   const { WorkspaceKernel } = await import('../../../workspace-kernel/kernel.mts');
-  const { NativePersonalMemory } = await import('../../../integrated-backend/src/personal-memory.mts');
   const client = createNativeHostClient(wire => broker.handle(wire));
   const broker = createProtectedStorageBroker({
     safeStorage, isReady: () => app.isReady(), send: wire => client.handle(wire),
   });
-  let backend = new Backend({ path, privateRoot: root, contentPolicy: 'local-private', provider: 'fixture' }, client.services);
+  let backend = new Backend({ path: mode === 'restore' ? backupPath : sourcePath,
+    privateRoot: root, contentPolicy: 'local-private', provider: 'fixture' }, client.services);
   let parent;
   let stage = 'start';
   try {
@@ -55,25 +57,12 @@ async function run() {
       assert.equal(preview.policy.ordinaryEnabled, false);
       assert.equal(preview.policy.velaEnabled, false);
       await backend.call('personalMemoryCaptureCancelNative', { id: preview.id });
-      await backend.close();
-      backend = undefined;
       stage = 'decrypt restored reviewed fact';
-      const kernel = WorkspaceKernel.openExisting(path);
-      const source = preview.draft.source;
-      const owner = new NativePersonalMemory({ kernel, secrets: client.services.secrets, host: {
-        identity: () => ({ userId: 'local-owner', policyVersion: 'aerynth.local-owner@1' }),
-        resolveScope: scope => ({ scope, version: preview.scopeProof.version }),
-        resolveConversationSource: () => ({ ...source, projectId: null, role: 'user', sensitive: false }),
-        authorize: input => input.operation === 'record.read' && input.subject?.id === expected.id
-          ? { decision: 'allow', policyVersion: 'aerynth.local-owner@1', authorizationRef: 'synthetic-verify' }
-          : { decision: 'deny' },
-      } });
-      try {
-        const fact = (await owner.open()).readFact(expected.id);
-        assert.equal(fact.text, factText);
-        assert.deepEqual(fact.provenance, source);
-      } finally { owner.close(); kernel.close(); }
-      console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron, restoredFact: true, providerUseOff: true }));
+      const fact = await backend.call('personalMemoryManagementNative', { type: 'read', id: expected.id });
+      assert.equal(fact.text, factText);
+      assert.deepEqual(fact.provenance, preview.draft.source);
+      console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron,
+        restoredBackup: true, canonicalSourceVerified: true, providerUseOff: true }));
       return;
     }
     stage = 'seed canonical conversation';
@@ -83,21 +72,28 @@ async function run() {
     const input = { conversationId: chat.resourceId, messageId: message.id, text: factText,
       scope: 'conversation', category: 'decisions', keywords: ['quartz', 'relay'] };
     stage = 'open isolated parent';
-    parent = new BrowserWindow({ width: 820, height: 630, show: false, webPreferences: { sandbox: true } });
-    await parent.loadURL('data:text/html,<title>Aerynth synthetic memory check</title><button>Review memory</button>');
-    parent.show();
-    parent.focus();
-    await waitFor(() => parent.isFocused());
+    if (!workerOnly) {
+      parent = new BrowserWindow({ width: 820, height: 630, show: false, webPreferences: { sandbox: true } });
+      await parent.loadURL('data:text/html,<title>Aerynth synthetic memory check</title><button>Review memory</button>');
+      parent.show();
+      parent.focus();
+      await waitFor(() => parent.isFocused());
+    }
     stage = 'review and save';
     let reviewed;
     const saved = await capturePersonalMemory({
-      input, trustedFrame: () => !parent.isDestroyed() && parent.isVisible(),
-      observeGesture: () => parent.isFocused(), allowWrite: async () => true,
+      input, trustedFrame: () => workerOnly || !parent.isDestroyed() && parent.isVisible(),
+      observeGesture: () => workerOnly || parent.isFocused(), allowWrite: async () => true,
       preview: value => backend.call('personalMemoryCapturePreviewNative', value),
       cancel: id => backend.call('personalMemoryCaptureCancelNative', { id }),
       commit: review => backend.call('personalMemoryCaptureCommitNative', review),
       async showReview(review) {
         reviewed = review;
+        if (workerOnly) {
+          assert.equal(review.sourceText, text);
+          assert.equal(review.draft.text, factText);
+          return true;
+        }
         const result = showVelaReview({ parent, review, expiresAt: review.expiresAt, experience: 'memory-capture' });
         const child = await waitFor(() => BrowserWindow.getAllWindows().find(win =>
           win.isFocused() && isOwnedVelaReviewWindow(win, parent)));
@@ -116,9 +112,14 @@ async function run() {
     await assert.rejects(backend.call('personalMemoryCaptureCommitNative', reviewed), /personal_memory_review_mismatch/);
     await backend.close();
     backend = undefined;
-    assert(!readFileSync(path).includes(Buffer.from(factText)));
+    stage = 'create canonical backup';
+    const kernel = WorkspaceKernel.openExisting(sourcePath);
+    try { await kernel.backupTo(backupPath); }
+    finally { kernel.close(); }
+    assert(!readFileSync(backupPath).includes(Buffer.from(factText)));
     writeFileSync(receiptPath, JSON.stringify({ input, id: saved.id, pid: process.pid }), { flag: 'wx' });
-    console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron, nativeApproval: true, replayDenied: true }));
+    console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron,
+      nativeApproval: !workerOnly, replayDenied: true, canonicalBackupCreated: true }));
   } catch (error) {
     const code = /^[a-z][a-z0-9_]{1,79}$/u.test(error.message) ? error.message : error.code ?? error.name;
     console.error(JSON.stringify({ result: 'fail', mode, stage, error: code }));
