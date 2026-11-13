@@ -129,6 +129,33 @@ test('the desktop broker and backend worker restore an offline document draft wi
       offset: 0, length: Buffer.byteLength(body),
     });
     assert.equal(Buffer.from(readback.base64, 'base64').toString('utf8'), body);
+    const revisedBody = 'A deliberately different synthetic document revision.';
+    writeFileSync(path, revisedBody);
+    await assert.rejects(backend.call('mediaReadChunk', {
+      resourceId: resource.id, expectedVersion: resource.version, sourceRevision: description.metadata.sourceRevision,
+      offset: 0, length: Buffer.byteLength(body),
+    }), /source_changed/);
+    assert.deepEqual(await draft('readDraft', { resourceId }), saved);
+
+    const replacement = (await backend.call('mediaImportTrusted', {
+      kind: 'file', variant: 'document', commandId: randomUUID(), selection: { kind: 'file', path },
+    })).resource;
+    assert.notEqual(replacement.id, resource.id);
+    const replaced = await draft('saveDraft', {
+      resourceId, expectedVersion: saved.version, content: saved.content,
+      documents: [{ id: replacement.id, version: replacement.version }],
+    });
+    await backend.close();
+    backend = new Backend(options);
+    assert.deepEqual(await draft('readDraft', { resourceId }), replaced);
+    assert.equal(replaced.content, saved.content);
+    assert.deepEqual(replaced.documents, [{ id: replacement.id, version: replacement.version, title: replacement.title }]);
+    const revised = await backend.call('mediaDescribe', { resourceId: replacement.id });
+    const replacementBytes = await backend.call('mediaReadChunk', {
+      resourceId: replacement.id, expectedVersion: replacement.version, sourceRevision: revised.metadata.sourceRevision,
+      offset: 0, length: Buffer.byteLength(revisedBody),
+    });
+    assert.equal(Buffer.from(replacementBytes.base64, 'base64').toString('utf8'), revisedBody);
     const snapshot = await backend.call('snapshot', {});
     assert.equal(snapshot.graph.messages.length, 0);
     assert.equal(Object.keys(snapshot.executions).length, 0);
