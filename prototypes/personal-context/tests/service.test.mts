@@ -237,6 +237,25 @@ test('a current project decision gets scanned before old facts regardless of its
   } finally { f.close(); }
 });
 
+test('reviewed fact text supports bounded recall when search terms omit the wording', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const saved = f.service.reviewFact(fact(undefined, { scope: { kind: 'project', id: 'p1' },
+      text: 'Keep the quartz relay as the primary circuit.', keywords: ['hardware'] }));
+    const competing = f.service.reviewFact(fact(undefined, { scope: { kind: 'project', id: 'p1' },
+      text: 'Use the graphite relay as the secondary circuit.', keywords: ['graphite'] }));
+    const inProject = { projectId: 'p1', query: 'What did we decide for the quartz relay?' };
+    assert.deepEqual(f.service.previewContext(request(inProject)).items.map(item => item.factId), [saved.id]);
+    assert.equal(f.service.previewContext(request({ ...inProject, projectId: 'p2' })).items.length, 0);
+    assert.equal(f.service.previewContext(request({ ...inProject, query: 'What did we use?' })).items.length, 0);
+    assert.deepEqual(f.service.previewContext(request({ ...inProject, query: 'Compare graphite relay circuit' })).items
+      .map(item => item.factId), [competing.id, saved.id]);
+    f.service.revoke({ id: saved.id, expectedVersion: saved.version });
+    assert.equal(f.service.previewContext(request(inProject)).items.length, 0);
+  } finally { f.close(); }
+});
+
 test('exact source anchors recall a project fact without keyword overlap and cannot cross scope', () => {
   const f = fixture();
   try {

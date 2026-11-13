@@ -66,7 +66,8 @@ function request(value: ContextRequest) {
     check(new Set(value.sourceAnchors.map(anchor => encode(anchor))).size === value.sourceAnchors.length, 'invalid_context_request');
   }
 }
-const words = (v: string) => new Set(v.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu)?.filter(w => w.length >= 2).slice(0, 128) ?? []);
+const commonWords = new Set('about after also an and are before been but can could did does for from had has have how into its may more most much need now of on one only or our out over said see should some than that the their them then there these they this those through to under use used was were what when where which who why will with would you your'.split(' '));
+const words = (v: string) => new Set(v.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu)?.filter(w => w.length >= 2 && !commonWords.has(w)).slice(0, 128) ?? []);
 
 const existingSchemaOnly = Symbol('existing personal context schema only');
 
@@ -464,7 +465,11 @@ export class PersonalContextService {
         if (scanned >= (input.maxScan ?? 128)) { omit('scan-limit'); continue; } scanned++;
         try {
           const proof = this.proof(head.scope!); this.authorize('record.read', head.scope, this.ref(head)); const value = this.decode<ReviewedFact>(head), reason = this.usable(value, head, input, policy, sourceCache); if (reason) { omit(reason); continue; }
-          const score = value.purpose === 'behavior' ? 1000 : value.keywords.reduce((sum, key) => sum + [...words(key)].filter(word => query.has(word)).length, 0);
+          const keywordTerms = words(value.keywords.join(' '));
+          const keywordMatches = [...keywordTerms].filter(word => query.has(word)).length;
+          const textMatches = [...words(value.text)].filter(word => query.has(word)).length;
+          const score = value.purpose === 'behavior' ? 1000
+            : keywordMatches ? 129 + keywordMatches : textMatches >= 2 ? textMatches : 0;
           const provenance = value.provenance;
           const anchored = anchors.has(value.id) && provenance.kind === 'conversation-message' && input.sourceAnchors!.some(anchor =>
             anchor.conversationId === provenance.conversationId && anchor.messageId === provenance.messageId);
