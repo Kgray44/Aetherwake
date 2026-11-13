@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 export const BLIND_INPUT_SHA256 = 'bd9fb6898473fb60b3e669d40b097f7e0e231f0ac98997365d86bddbca701997';
 export interface BlindCase { id: string; category: string; request: string; sources: { id: string; title: string; text: string }[] }
@@ -19,6 +19,14 @@ export interface BlindCheckpoint {
 interface BlindJournalState {
   checkpoint: BlindCheckpoint;
   inFlight: string | null;
+  claim?: BlindClaim;
+  pending?: Prediction;
+  pendingDigest?: string;
+}
+export interface BlindClaim { claimToken: string; bindingDigest: string }
+export interface BlindRecovery {
+  binding: string;
+  verify(claim: BlindClaim, result: unknown, signal: AbortSignal): Promise<boolean>;
 }
 export interface BlindJournal {
   read(): Promise<BlindJournalState | null>;
@@ -53,9 +61,9 @@ export function readBlindInputs(bytes: Buffer): readonly BlindCase[] {
 /** The injected host must use canonical CIE, exact admission and existing credential custody.
  * No fallback inference, retries, fabricated predictions, credential reader or promotion. */
 export async function runBlindCie(bytes: Buffer, candidate: Candidate,
-  run: (input: Readonly<BlindPayload>, signal: AbortSignal) => Promise<unknown>, signal: AbortSignal,
+  run: (input: Readonly<BlindPayload>, signal: AbortSignal, claim?: BlindClaim) => Promise<unknown>, signal: AbortSignal,
   options: { maxCases?: number; resume?: BlindCheckpoint; journal?: BlindJournal; route?: EvaluationRoute;
-    canStartCase?: (signal: AbortSignal) => Promise<boolean> } = {}): Promise<BlindCheckpoint> {
+    canStartCase?: (signal: AbortSignal) => Promise<boolean>; recovery?: BlindRecovery } = {}): Promise<BlindCheckpoint> {
   if (![candidate.commit, candidate.tree].every(value => /^[a-f0-9]{40}$/.test(value))) throw new Error('candidate_identity');
   const inputs = readBlindInputs(bytes);
   const maxCases = options.maxCases ?? inputs.length;
@@ -65,9 +73,12 @@ export async function runBlindCie(bytes: Buffer, candidate: Candidate,
   if (route && (![route.provider, route.model].every(value => typeof value === 'string' && value.trim()) ||
     (route.transport !== 'synthetic' && route.transport !== 'live'))) throw new Error('blind_route_invalid');
   const journal = options.journal;
+  const recovery = options.recovery;
+  if (recovery && (!journal || !route)) throw new Error('blind_recovery_binding');
+  const bindingFor = (id: string) => sha(JSON.stringify([BLIND_INPUT_SHA256, candidate.commit, candidate.tree, route, recovery?.binding, id]));
   if (journal && options.resume) throw new Error('blind_checkpoint_conflicting_owners');
   let journalState = journal ? await journal.read() : null;
-  if (journalState && journalState.inFlight !== null) throw new Error('blind_case_unreconciled');
+  if (journalState?.inFlight && (!recovery || !journalState.claim || !journalState.pending)) throw new Error('blind_case_unreconciled');
   const resume = journalState?.checkpoint ?? options.resume;
   if (resume) {
     const { predictionSha256, ...checkpoint } = resume;
@@ -90,29 +101,56 @@ export async function runBlindCie(bytes: Buffer, candidate: Candidate,
       results: structuredClone(results), stopped, complete: results.length === inputs.length && !stopped };
     return { ...payload, predictionSha256: sha(JSON.stringify(payload)) };
   };
-  const persist = async (inFlight: string | null) => {
+  const persist = async (inFlight: string | null, claim?: BlindClaim, pending?: Prediction) => {
     if (!journal) return;
-    const next = { checkpoint: snapshot(), inFlight };
+    const checkpoint = snapshot();
+    const next = { checkpoint, inFlight, ...(claim ? { claim } : {}),
+      ...(pending ? { pending, pendingDigest: sha(JSON.stringify([checkpoint.predictionSha256, claim, pending])) } : {}) };
     if (!await journal.compareAndSet(journalState, next)) throw new Error('blind_journal_changed');
     journalState = next;
   };
-  for (const input of inputs.slice(results.length, results.length + maxCases)) {
+  let recovered = 0;
+  if (journalState?.inFlight && recovery) {
+    const { inFlight, claim, pending } = journalState;
+    if (!claim || !pending || pending.id !== inFlight || inputs[results.length]?.id !== inFlight ||
+      !/^[a-f0-9]{64}$/.test(claim.claimToken) || claim.bindingDigest !== bindingFor(inFlight) ||
+      !Number.isFinite(pending.endToEndMs) || pending.endToEndMs < 0 ||
+      journalState.pendingDigest !== sha(JSON.stringify([journalState.checkpoint.predictionSha256, claim, pending])) ||
+      !await recovery.verify(structuredClone(claim), structuredClone(pending.result), signal)) throw new Error('blind_case_unreconciled');
+    signal.throwIfAborted();
+    results.push(structuredClone(pending));
+    await persist(null);
+    recovered = 1;
+  }
+  for (const input of inputs.slice(results.length, results.length + maxCases - recovered)) {
     if (signal.aborted) { stopped = { caseId: input.id, kind: 'cancelled' }; break; }
-    if (options.canStartCase && !await options.canStartCase(signal)) break;
+    const claim = recovery ? { claimToken: randomBytes(32).toString('hex'), bindingDigest: bindingFor(input.id) } : undefined;
+    if (claim) await persist(input.id, claim);
+    if (options.canStartCase && !await options.canStartCase(signal)) {
+      if (claim) await persist(null);
+      break;
+    }
     if (signal.aborted) { stopped = { caseId: input.id, kind: 'cancelled' }; break; }
-    if (journal) await persist(input.id);
+    if (journal && !claim) await persist(input.id);
     // The host must include qualification/preparation inside this callback. No labels exist here.
     const start = performance.now();
+    let prediction: Prediction | undefined;
     try {
       signal.throwIfAborted();
-      const result = await run(structuredClone({ id: input.id, request: input.request, sources: input.sources }), signal);
-      results.push({ id: input.id, result: structuredClone(result), endToEndMs: performance.now() - start });
+      const result = await run(structuredClone({ id: input.id, request: input.request, sources: input.sources }), signal, claim && structuredClone(claim));
+      prediction = { id: input.id, result: structuredClone(result), endToEndMs: performance.now() - start };
       if (signal.aborted) stopped = { caseId: input.id, kind: 'cancelled' };
     } catch {
       // Preserve completed predictions; never echo possible private host/credential error text.
       stopped = { caseId: input.id, kind: signal.aborted ? 'cancelled' : 'host-error' };
     }
-    if (journal) await persist(stopped ? input.id : null);
+    if (claim && prediction && !stopped) {
+      await persist(input.id, claim, prediction);
+      if (!await recovery!.verify(structuredClone(claim), structuredClone(prediction.result), signal)) throw new Error('blind_case_unreconciled');
+      signal.throwIfAborted();
+    }
+    if (prediction) results.push(prediction);
+    if (journal) await persist(stopped ? input.id : null, stopped ? claim : undefined);
     if (stopped) break;
   }
   return snapshot();

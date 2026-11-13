@@ -27,7 +27,7 @@ import { preflightArtifactEvidence, retainArtifactEvidence, verifyArtifactEviden
 import { runBlindCie, type BlindPayload } from '../../../scripts/benchmarks/cie-quality/blind-runner.mts';
 import { openBlindJournal } from '../../../scripts/benchmarks/cie-quality/blind-journal.mts';
 import { canStartReviewedCieCase } from '../../../scripts/benchmarks/cie-quality/native-budget.mts';
-import { runNativeCieBatch } from '../../../scripts/benchmarks/cie-quality/native-batch.mts';
+import { runNativeCieBatch, type NativeCieClaim } from '../../../scripts/benchmarks/cie-quality/native-batch.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
 const marker='SYNTHETIC_ONLY_MISSION_API_KEY';
 const graph={tasks:[{capability:'cpu',after:[]},{capability:'ram',after:[]},{capability:'backend',after:['cpu','ram']}],unsupported:['Server tick timings and logs are unavailable.']};
@@ -1448,7 +1448,7 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
     assessment: [{ key, status: 'supported', query: '', passages: [{ source: 'e1', quote }] }] });
   const reply = (value: unknown) => (body: { model: string }) => response(JSON.stringify(value), body.model);
   const predictions = [];
-  const profileId = randomUUID();
+  const runtime = () => (f.core as unknown as { velaApiRuntime: VelaApiRuntime }).velaApiRuntime;
   const route = { provider: 'openai-api-vela', model: live?.model ?? 'gpt-6-luna',
     transport: live ? 'live' as const : 'synthetic' as const };
   try {
@@ -1456,7 +1456,7 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
     for (const expectedCase of live ? ['blind-001'] : ['blind-001', 'blind-002']) {
       {
         let hostError: unknown;
-        const runCase = async (input: Readonly<BlindPayload>) => {
+        const runCase = async (input: Readonly<BlindPayload>, _signal: AbortSignal, claim?: NativeCieClaim) => {
           try {
             assert.equal(input.id, expectedCase);
             const project = await f.core.command('desktop', { type: 'createProject', title: input.id });
@@ -1488,7 +1488,9 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
               });
             const result = await velaCommand({
               win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
-              directMessageSend: true, routeNative: true, dialog: {}, call: f.core.command.bind(f.core),
+              directMessageSend: true, routeNative: true, dialog: {},
+              call: (name: string, input: any) => claim && name === 'velaRequestPreview'
+                ? f.core.previewVelaEvaluation(input, claim) : (f.core.command as any)(name, input),
               reviewProvider: async ({ review }: { review: VelaNativeReview }) => {
                 assert.equal(review.semanticContext, true);
                 return true;
@@ -1540,7 +1542,10 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
                 [{ sourceId: resourceIds[0], title: input.sources[0].title, quote }]);
               assert.deepEqual(evidenceAudit.outbound.at(-1)?.textSourceIds, [input.sources[0].id]);
             }
-            return { answer, calls, totalTokens, tokenSamples: tokenSamples.length, settlements, requestedModel: live?.model ?? 'gpt-6-luna',
+            const admissions = claim ? runtime().readEvaluationAdmissions(claim) : undefined;
+            if (claim) assert.deepEqual(admissions?.map(row => row.executionId), settlements.map(row => row.executionId));
+            return { answer, requestId: result.id, messageId: result.response!.messageId, calls, totalTokens,
+              tokenSamples: tokenSamples.length, settlements, ...(admissions ? { admissions } : {}), requestedModel: live?.model ?? 'gpt-6-luna',
               transport: live ? 'live' : 'synthetic', evidenceAudit };
           } catch (error) { hostError = error; throw error; }
         };
@@ -1548,22 +1553,50 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
         if (live) {
           const journal = openBlindJournal(journalPath);
           try {
-            checkpoint = await runBlindCie(bytes, identity, runCase, signal,
+            checkpoint = await runBlindCie(bytes, identity, (input, abort) => runCase(input, abort), signal,
               { journal, maxCases: 1, route, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
           } finally { journal.close(); }
         } else {
-          checkpoint = await runNativeCieBatch(bytes, identity, { profileId, route, readUsage: usage, runReviewedCase: runCase },
-            journalPath, 1, signal);
+          const profile = runtime().readLedgerProfile();
+          assert.ok(profile && profile.configurationVersion !== null);
+          await runtime().models(profile.configurationVersion);
+          let interruptPromotion = expectedCase === 'blind-001';
+          const runBatch = () => runNativeCieBatch(bytes, identity, {
+            profileId: profile.profileId, configurationVersion: profile.configurationVersion!, route,
+            readUsage: usage, runReviewedCase: runCase,
+            async verifyRetainedCase(claim, value) {
+              const retained = value as Awaited<ReturnType<typeof runCase>>;
+              if (!retained?.admissions || !Array.isArray(retained.settlements) || retained.admissions.length !== retained.settlements.length ||
+                retained.evidenceAudit?.outbound?.length !== retained.admissions.length || !retained.evidenceAudit?.assessments?.length ||
+                !retained.evidenceAudit?.compositions?.some(packet => packet.coverage.some(row => row.passages.length))) return false;
+              const checked = f.core.readVelaEvaluationResult(claim, retained.admissions);
+              const verified = checked.state === 'verified-answer' && checked.answer === retained.answer &&
+                checked.requestId === retained.requestId && checked.messageId === retained.messageId &&
+                checked.receipts.every((receipt, index) => receipt.executionId === retained.settlements[index].executionId);
+              if (verified && interruptPromotion) { interruptPromotion = false; throw new Error('fixture interrupted before checkpoint CAS'); }
+              return verified;
+            },
+          }, journalPath, 1, signal);
+          if (interruptPromotion) {
+            await assert.rejects(runBatch(), /fixture interrupted before checkpoint CAS/);
+            const journal = openBlindJournal(journalPath, { profileId: profile.profileId });
+            let staged;
+            try { staged = (await journal.read())?.pending; } finally { journal.close(); }
+            assert.ok(staged);
+            const before = await usage();
+            const callsBefore = f.requests.length;
+            await f.reopen();
+            assert.equal(runtime().readLedgerProfile()?.profileId, profile.profileId);
+            assert.equal((await usage()).usedToday, before.usedToday);
+            checkpoint = await runBatch();
+            assert.deepEqual(checkpoint.results.at(-1), staged);
+            assert.equal(f.requests.length, callsBefore);
+          } else checkpoint = await runBatch();
         }
         if (hostError) throw hostError;
         assert.equal(checkpoint.stopped, null);
         assert.equal(checkpoint.results.at(-1)?.id, expectedCase);
         predictions.push(checkpoint);
-      }
-      if (!live && expectedCase === 'blind-001') {
-        const before = await usage();
-        await f.reopen();
-        assert.equal((await usage()).usedToday, before.usedToday);
       }
     }
     if (!live) assert.equal((await usage()).usedToday, 10);

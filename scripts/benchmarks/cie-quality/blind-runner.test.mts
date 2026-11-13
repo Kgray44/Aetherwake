@@ -188,3 +188,31 @@ test('a lost completion receipt leaves a durable claim and blocks replay on rest
   await assert.rejects(runBlindCie(bytes, identity, host, signal, { journal, maxCases: 1 }), /blind_case_unreconciled/);
   assert.equal(calls, 1);
 });
+
+test('a recovery claim precedes preflight and an altered pending timing prevents replay', async () => {
+  type Journal = NonNullable<NonNullable<Parameters<typeof runBlindCie>[4]>['journal']>;
+  let stored: Awaited<ReturnType<Journal['read']>> = null;
+  const journal: Journal = {
+    async read() { return structuredClone(stored); },
+    async compareAndSet(expected, next) { assert.deepEqual(stored, expected); stored = structuredClone(next); return true; },
+  };
+  const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const signal = new AbortController().signal;
+  const options = { journal, maxCases: 1, route: { provider: 'openai-api-vela', model: 'fixture', transport: 'synthetic' as const },
+    canStartCase: async () => { assert.equal(stored?.inFlight, 'blind-001'); assert.ok(stored?.claim); return true; },
+    recovery: { binding: 'profile:1', verify: async () => false } };
+  let calls = 0;
+  const host: Parameters<typeof runBlindCie>[2] = async (_item, _abort, claim) => {
+    assert.deepEqual(claim, stored?.claim);
+    calls++;
+    return { answer: 'fixture' };
+  };
+  await assert.rejects(runBlindCie(bytes, identity, host, signal, options), /blind_case_unreconciled/);
+  const retained = await journal.read();
+  assert.ok(retained?.pending);
+  retained.pending.endToEndMs += 1;
+  stored = retained;
+  await assert.rejects(runBlindCie(bytes, identity, host, signal, { ...options,
+    recovery: { ...options.recovery, verify: async () => assert.fail('altered prediction reached the host verifier') } }), /blind_case_unreconciled/);
+  assert.equal(calls, 1);
+});

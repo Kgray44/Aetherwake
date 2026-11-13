@@ -38,14 +38,20 @@ for (const cached of [[], ['interpret'], ['assess'], ['interpret', 'assess']] as
     const receipts = new Map<string, any>(cached.map(stage => [stage, { model: 'synthetic-model', stage }]));
     const stageFor = (schema: unknown) => schema === semanticHistoryFormats.interpret.schema ? 'interpret' : 'assess';
     const probes: string[] = [];
+    const evaluationClaim = { profileId: 'fixture-profile', configurationVersion: 1,
+      claimToken: 'a'.repeat(64), bindingDigest: 'b'.repeat(64) };
     const api = {
       qualifiedStructuredRoute(_version: number, _models: string[], schema: unknown) { return receipts.get(stageFor(schema)); },
-      async resolveQualifiedStructuredRoute(version: number, models: string[], schema: unknown) {
+      async resolveQualifiedStructuredRoute(_version: number, _models: string[], schema: unknown, _instruction: string,
+        _signal: AbortSignal, currentCatalogOnly: boolean) {
+        assert.equal(currentCatalogOnly, true);
         return receipts.get(stageFor(schema));
       },
       isStructuredQualificationCurrent(receipt: any) { return receipts.get(receipt.stage) === receipt; },
       async qualifyStructuredRoute(input: any) {
         input.validate();
+        assert.equal(input.currentCatalogOnly, true);
+        assert.deepEqual(input.evaluationClaim, evaluationClaim);
         const stage = input.payload.stage;
         probes.push(stage);
         const receipt = { model: 'synthetic-model', stage };
@@ -54,12 +60,16 @@ for (const cached of [[], ['interpret'], ['assess'], ['interpret', 'assess']] as
       },
       async structuredProposal(input: any) {
         input.validate();
+        assert.equal(input.currentCatalogOnly, true);
+        assert.deepEqual(input.evaluationClaim, evaluationClaim);
         return { version: 2, objective: 'No historical evidence needed', clarification: '', needs: [],
           perception: { kind: 'recall', explicitGoals: [], inferredGoals: [], constraints: [],
             capabilityHints: [], deliverables: ['text'], verification: [] } };
       },
     } as unknown as VelaApiRuntime;
-    await investigateReviewedVelaEvidence(api, 'Synthetic request', [], 1, 'synthetic-model', () => {}, new AbortController().signal);
+    const result = await investigateReviewedVelaEvidence(api, 'Synthetic request', [], 1, 'synthetic-model', () => {},
+      new AbortController().signal, undefined, undefined, evaluationClaim);
+    assert.equal(result.state, 'assessed');
     assert.deepEqual(probes, ['interpret', 'assess'].filter(stage => !(cached as readonly string[]).includes(stage)));
   });
 }
