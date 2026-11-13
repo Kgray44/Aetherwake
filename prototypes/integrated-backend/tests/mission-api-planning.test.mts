@@ -2380,6 +2380,127 @@ test('reviewed CIE cites a selected local file and fences physical replacement b
   }
 });
 
+test('dormant CIE adapter recovers the original frozen source-free prediction without replay', async () => {
+  const { createDormantNativeCieHost } = await import('../../../scripts/benchmarks/cie-quality/native-host-adapter.mts');
+  const { readBlindInputs } = await import('../../../scripts/benchmarks/cie-quality/blind-runner.mts');
+  const f = fixture(true, true);
+  const bytes = readFileSync(new URL('../../../scripts/benchmarks/cie-quality/cases.public.json', import.meta.url));
+  const cases = readBlindInputs(bytes);
+  const emptyIndex = cases.findIndex(item => item.sources.length === 0);
+  assert.ok(emptyIndex >= 0);
+  const empty = cases[emptyIndex];
+  const candidate = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const route = { provider: 'openai-api-vela', model: 'gpt-6-luna', transport: 'synthetic' as const };
+  const signal = new AbortController().signal;
+  const path = join(f.directory, 'dormant-cie.sqlite');
+  const answer = 'No sources were supplied, so the evidence cannot establish an answer.';
+  try {
+    await f.ready();
+    await f.core.command('vela', { name: 'routingOptions', input: { providerId: route.provider } });
+    const profile = f.core.readVelaEvaluationProfile();
+    assert.ok(profile && profile.configurationVersion !== null);
+    const { profileId, configurationVersion } = profile;
+    const catalogDigest = createHash('sha256').update(JSON.stringify([configurationVersion, route.model])).digest('hex');
+    if (emptyIndex > 0) {
+      const journal = openBlindJournal(path, { profileId });
+      try {
+        await runBlindCie(bytes, candidate, async () => ({ fixturePrefix: true }), signal,
+          { journal, route, maxCases: emptyIndex });
+      } finally { journal.close(); }
+    }
+    f.replies.push(body => {
+      assert.deepEqual(JSON.parse(body.input[0].content), { request: empty.request, evidence: [] });
+      assert.deepEqual(body.tools ?? [], []);
+      return response(answer, body.model);
+    });
+    const readJournal = async () => {
+      const journal = openBlindJournal(path, { profileId });
+      try { return await journal.read(); } finally { journal.close(); }
+    };
+    let callbackCount = 0;
+    const makeHost = (incomplete = false) => createDormantNativeCieHost({
+      bytes, candidate, route, profileId, configurationVersion, catalogDigest,
+      core: {
+        readVelaEvaluationProfile: () => f.core.readVelaEvaluationProfile(),
+        readVelaEvaluationAdmissions: claim => f.core.readVelaEvaluationAdmissions(claim),
+        readVelaEvaluationResult: (claim, expected) => f.core.readVelaEvaluationResult(claim,
+          incomplete ? [] : expected),
+      },
+      async readCatalog() { return { configurationVersion, digest: catalogDigest, models: [route.model] }; },
+      async runReviewed(input, _signal, claim) {
+        assert.equal(++callbackCount, 1);
+        assert.deepEqual(input, { id: empty.id, request: empty.request, sources: [] });
+        const eventCursor = (await f.core.command('replay', { limit: 1 })).latest;
+        const preview = await f.core.previewVelaEvaluation({
+          intent: input.request, resourceIds: [], resourceRefs: [], adaptive: true,
+          providerId: route.provider, model: route.model, semanticContext: true,
+        }, claim);
+        const binding = { previewId: preview.id, signature: preview.signature };
+        const review = await f.core.command('velaNativeReview', binding);
+        assert.deepEqual(review.context.included, []);
+        const grant = await f.core.command('authorizeVelaRequest', { ...binding, reviewDigest: review.reviewDigest });
+        const result = await f.core.command('vela', { name: 'request', input: {
+          intent: input.request, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId: grant.grantId,
+        } }) as VelaRequest;
+        assert.equal(result.state, 'responded');
+        assert.equal(result.response?.kind, 'answer');
+        const admissions = f.core.readVelaEvaluationAdmissions(claim);
+        assert.equal(admissions?.length, 1);
+        const replay = await f.core.command('replay', { after: eventCursor, limit: 500 });
+        const events = replay.events.filter(event => event.type === 'execution/provider_completed' &&
+          event.providerId === route.provider && event.classification === 'simulated');
+        assert.equal(events.length, 1);
+        const [event] = events;
+        const executionId = event.payload.api?.executionId ?? event.executionId;
+        const usage = event.payload.usage;
+        assert.equal(executionId, admissions![0].executionId);
+        assert.ok(usage && usage.totalTokens === 140);
+        const canonical = f.core.readVelaEvaluationResult(claim, admissions!);
+        assert.equal(canonical.state, 'verified-answer');
+        const evidenceAudit = collectBlindEvidenceAudit(f.requests, input.request, []);
+        assert.deepEqual(evidenceAudit.compositions, []);
+        assert.deepEqual(evidenceAudit.outbound.map(row => row.stage), ['other']);
+        return { outcome: 'no-evidence' as const, answer, requestId: result.id, messageId: result.response!.messageId,
+          admissions: admissions!, calls: 1, totalTokens: usage.totalTokens, tokenSamples: 1,
+          transport: route.transport, requestedModel: route.model, evidenceAudit,
+          settlements: [{ executionId, stage: 'answer' as const, elapsedMs: canonical.receipts[0].elapsedMs,
+            reportedModel: route.model, usage }] };
+      },
+    });
+    const host = makeHost();
+    let hostFailure: unknown;
+    await assert.rejects(runNativeCieBatch(bytes, candidate, {
+      ...host,
+      async runReviewedCase(...args) {
+        try { return await host.runReviewedCase(...args); }
+        catch (error) { hostFailure = error; throw error; }
+      },
+      async verifyRetainedCase(...args) {
+        assert.equal(await host.verifyRetainedCase(...args), true);
+        throw new Error('fixture interrupted before checkpoint CAS');
+      },
+    }, path, 1, signal), /fixture interrupted before checkpoint CAS/).catch(error => { throw hostFailure ?? error; });
+    const interrupted = await readJournal();
+    assert.ok(interrupted?.pending);
+    assert.equal(interrupted.inFlight, empty.id);
+    assert.equal(interrupted.checkpoint.results.length, emptyIndex);
+    assert.equal(f.requests.length, 1);
+    await f.reopen();
+    await assert.rejects(runNativeCieBatch(bytes, candidate, makeHost(true), path, 1, signal), /blind_case_unreconciled/);
+    assert.deepEqual(await readJournal(), interrupted);
+    assert.equal(f.requests.length, 1);
+    const resumed = await runNativeCieBatch(bytes, candidate, makeHost(), path, 1, signal);
+    assert.deepEqual(resumed.results.at(-1), interrupted.pending);
+    assert.equal(resumed.results.at(-1)?.endToEndMs, interrupted.pending.endToEndMs);
+    assert.equal((await readJournal())?.inFlight, null);
+    assert.equal(f.requests.length, 1);
+    assert.equal(callbackCount, 1);
+    assert.equal(f.core.readVelaEvaluationProfile()?.usage.usedToday, 1);
+  } finally {
+    await f.close();
+  }
+});
+
 test('private CIE evaluation binds an explicit empty selection to one canonical answer', async () => {
   const f = fixture(true, true);
   try {
