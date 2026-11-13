@@ -110,6 +110,23 @@ test('a novel model refinement takes precedence over another page of the origina
   assert.deepEqual(result.coverage[0].sources, [candidate]);
 });
 
+test('a refinement that returns only previously reviewed sources falls back to the next original page', async () => {
+  const initial = { ...candidate, sourceId: 'initial', text: 'Earlier inspection planning.' };
+  const result = await investigateSemanticHistory(request, {
+    search: query => ({ sources: [initial], scan: 'bounded', moreMatches: query === evidence.query }),
+    widen: query => {
+      assert.equal(query, evidence.query);
+      return { sources: [candidate], scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : { version: 1, assessment: [{
+      key: 's1', status: call.round === 1 ? 'missing' : 'supported',
+      sources: call.round === 1 ? [] : ['e2'], query: call.round === 1 ? 'inspection action' : '',
+    }] },
+  });
+  assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
 test('the current correction gets a slot ahead of lower-ranked matches', async () => {
   const needs = [evidence, { key: 'second', question: 'What else?', query: 'other result' }];
   const recent = { ...candidate, sourceId: 'recent', text: 'Current correction supplies the missing fact.' };

@@ -229,7 +229,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     const queries = new Set<string>();
     const truncatedQueries = new Set<string>();
     let next = needs.map(need => need.query).filter(Boolean);
-    let widen: string[] = [];
+    let widen: { query: string; digest: string; refinement?: string }[] = [];
     let related: T[] = [];
     let anchorsRead = false;
     let priorAssessment: EvidenceReview | undefined;
@@ -296,6 +296,8 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       // Preserve selected evidence and leave discovery slots for refined queries.
       const limit = rounds < maxRounds ? Math.max(priorCount, candidateLimit - 2) : candidateLimit;
       const matches: T[][] = [];
+      const refinementResults = new Map<string, readonly T[]>();
+      const previouslyObserved = widen.length ? new Set(observed) : undefined;
       for (const query of next) {
         const digest = canonicalRetrievalQuery(query)!.digest;
         if (queries.has(digest)) continue;
@@ -305,7 +307,9 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         if (moreMatches) truncatedQueries.add(digest);
         recordScan(scan);
         if (sources.length > 2 * maxCandidates) partial();
-        matches.push(sources.slice(0, 2 * maxCandidates));
+        const batch = sources.slice(0, 2 * maxCandidates);
+        matches.push(batch);
+        if (previouslyObserved) refinementResults.set(digest, batch);
       }
       // Admit the top result from each query before lower-ranked results.
       for (let rank = 0; rank < Math.max(0, ...matches.map(sources => sources.length)); rank++) {
@@ -313,21 +317,24 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         addCandidates({ sources, scan: searchCoverage ?? 'bounded' }, limit);
         if (evidence.size >= limit && matches.some(group => group.length > rank + 1)) { partial(); break; }
       }
+      const remainingPages = widen.filter(({ refinement }) => !refinement ||
+        !refinementResults.get(refinement)?.some(source => !previouslyObserved?.has(source.sourceId) && observed.has(source.sourceId)));
       if (owner.recent && !anchorsRead && ((rounds === 1 && evidence.size === priorCount) || investigateAnchors)) {
         anchorsRead = true;
         addCandidates(owner.recent(), limit);
       }
       if (owner.related && related.length && evidence.size < limit) addCandidates(owner.related(related), limit);
       // Keep the existing refinement and recent-evidence priorities.
-      if (owner.widen && widen.length) {
+      if (owner.widen && remainingPages.length) {
         if (evidence.size >= limit) partial();
         else {
-          const pages = widen.map(query => owner.widen!(query));
+          const pages = remainingPages.filter(({ digest }) => truncatedQueries.delete(digest))
+            .map(({ query }) => owner.widen!(query));
           for (const page of pages) {
             recordScan(page.scan);
             if (page.sources.length > 2 * maxCandidates) partial();
           }
-          const ranks = Math.min(2 * maxCandidates, Math.max(...pages.map(page => page.sources.length)));
+          const ranks = Math.min(2 * maxCandidates, Math.max(0, ...pages.map(page => page.sources.length)));
           for (let rank = 0; rank < ranks; rank++) {
             addCandidates({ sources: pages.flatMap(page => page.sources[rank] ? [page.sources[rank]] : []),
               scan: searchCoverage ?? 'bounded' }, limit);
@@ -365,11 +372,12 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       const gaps = assessment.rows.filter(row => row.status !== 'supported');
       related = owner.related ? [...new Set(gaps.flatMap(row => row.sources))].map(handle => evidence.get(handle)!) : [];
       next = gaps.filter(row => row.query && !queries.has(canonicalRetrievalQuery(row.query)!.digest)).map(row => row.query);
-      const gapKeys = new Set(gaps.filter(row => !row.query || queries.has(canonicalRetrievalQuery(row.query)!.digest))
-        .map(row => row.key));
+      const gapsByKey = new Map(gaps.map(row => [row.key, row]));
       widen = owner.widen ? needs.flatMap(need => {
+        const gap = gapsByKey.get(need.key);
         const digest = canonicalRetrievalQuery(need.query)?.digest;
-        return gapKeys.has(need.key) && digest && truncatedQueries.delete(digest) ? [need.query] : [];
+        if (!gap || !digest || !truncatedQueries.has(digest)) return [];
+        return [{ query: need.query, digest, refinement: canonicalRetrievalQuery(gap.query)?.digest }];
       }) : [];
       investigateAnchors = !!owner.recent && !anchorsRead && gaps.length > 0;
       const budgetExhausted = rounds === maxRounds || evidence.size === candidateLimit;
