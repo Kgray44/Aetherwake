@@ -54,7 +54,11 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
   const sourceText = 'Synthetic project uses a quartz relay.';
   let sourceAvailable = true;
   let wrapped: string;
-  const source = { conversationId: 'source', messageId: 'message', projectId: 'project',
+  const origin = await f.core.command('createConversation', { providerId: 'local', commandId: randomUUID() });
+  const original = await f.core.command('addMessage', { resourceId: origin.resourceId, role: 'user',
+    content: sourceText, expectedRevision: origin.revision });
+  const referencePrompt = 'What did we settle on in message:' + original.id + '?';
+  const source = { conversationId: origin.resourceId, messageId: original.id, projectId: 'project',
     role: 'user' as const, sensitive: false, version: '1', contentDigest: createHash('sha256').update(sourceText).digest('hex') };
   const kernel = f.owner.kernel;
   const sources = {
@@ -73,14 +77,16 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
   f.owner.personalMemoryReview = review;
   f.owner.personalMemory = owner;
   try {
-    await review.commitCapture(await review.previewCapture({ conversationId: 'source', messageId: 'message',
+    await review.commitCapture(await review.previewCapture({ conversationId: origin.resourceId, messageId: original.id,
       scope: 'project', category: 'decisions', text: sourceText, keywords: ['quartz'] }));
     await review.setProviderUse('ordinary', true, 1);
     const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
     const preview = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
-      content: 'Which quartz part?', expectedRevision: chat.revision, commandId: randomUUID(), useMemory: true });
+      content: referencePrompt, expectedRevision: chat.revision, commandId: randomUUID(), useMemory: true });
     assert(preview.responses?.memoryDigest);
     assert.equal(preview.responses.requiresSourceReview, true);
+    assert.match(JSON.stringify(preview.responses.messages), /Synthetic project uses a quartz relay/);
+    assert.equal(preview.responses.messages.at(-1)?.content, referencePrompt);
     const binding = { previewId: preview.id, fingerprint: preview.fingerprint, commandId: preview.commandId };
     await assert.rejects(f.core.command('authorizeConversationSend', binding), /personal_memory_disclosure_review_required/);
     const approval = await f.core.command('authorizeConversationSend', { ...binding, reviewedBodyDigest: preview.responses.bodyDigest });
@@ -98,6 +104,11 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     const nextApproval = await f.core.command('authorizeConversationSend', { ...nextBinding, reviewedBodyDigest: next.responses.bodyDigest });
     sourceAvailable = false;
     await assert.rejects(f.core.command('conversationSend', { ...nextBinding, grantId: nextApproval.grantId }), /personal_memory_no_eligible_context|stale_send_preview/);
+    f.owner.atomic(() => f.owner.graph.markUnavailable(original.id));
+    sourceAvailable = true;
+    await assert.rejects(f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
+      content: referencePrompt, expectedRevision: detail.conversation.revision, commandId: randomUUID(), useMemory: true }),
+    /personal_memory_no_eligible_context/);
     sourceAvailable = true;
     const pending = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
       content: 'Which quartz part?', expectedRevision: detail.conversation.revision, commandId: randomUUID(), useMemory: true });
