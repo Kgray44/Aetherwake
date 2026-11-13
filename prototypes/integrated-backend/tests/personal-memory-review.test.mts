@@ -20,6 +20,8 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   const review = createPersonalMemoryReview({
     open: () => nativeOpen(), transaction,
     readSourceText: () => sourceText,
+    resolveRecallTarget: id => id === 'other-chat' ? { projectId: 'project' } :
+      id === 'foreign-chat' ? { projectId: 'foreign-project' } : null,
     resolveConversationSource: () => enabled ? message : null,
     resolveScope,
   });
@@ -61,12 +63,35 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.equal(next.enableStorage, false);
     assert.equal(next.policy.ordinaryEnabled, false);
     assert.equal(next.policy.velaEnabled, false);
+    const turn = {
+      executionId: 'execution', requestId: 'recall', configurationId: 'fixture',
+      providerId: 'chatgpt-plan-responses', assistant: 'ordinary', model: 'fixture',
+      instructions: 'Trusted instructions', messages: [{ role: 'user', content: 'Which relay?' }],
+      contextDigest: '0'.repeat(64),
+    } as const;
+    assert.equal(await review.prepareOrdinaryRecall('other-chat', turn), null);
+    await review.setProviderUse('ordinary', true, next.policy.version);
+    const recall = await review.prepareOrdinaryRecall('other-chat', turn);
+    assert.ok(recall);
+    assert.match(recall.turn.messages[0].content, /synthetic relay/);
+    assert.throws(() => recall.validate(recall.turn), /personal_memory_disclosure_review_required/);
+    assert.throws(() => recall.approve('0'.repeat(64)), /personal_memory_body_changed/);
+    recall.approve(recall.bodyDigest);
+    assert.doesNotThrow(() => recall.validate(recall.turn));
+    assert.equal(await review.prepareOrdinaryRecall('foreign-chat', turn), null);
+    assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...turn, webSearch: true }), null);
+    assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...turn, messages: [{ role: 'user', content: 'Weather tomorrow' }] }), null);
+    const cancelled = await review.prepareOrdinaryRecall('other-chat', turn);
+    assert.ok(cancelled);
+    cancelled.revoke();
+    assert.throws(() => cancelled.approve(cancelled.bodyDigest), /personal_memory_disclosure_review_required/);
     review.cancelCapture(next.id);
     await assert.rejects(review.commitCapture(next), /personal_memory_review_mismatch/);
     const stale = await review.previewCapture(input);
     enabled = false;
     await assert.rejects(review.commitCapture(stale), /conversation_source_unavailable/);
     await assert.rejects(review.read(saved.id), /conversation_source_unavailable/);
+    assert.throws(() => recall.validate(recall.turn), /stale_personal_context/);
   } finally {
     owner.close();
     kernel.close();
