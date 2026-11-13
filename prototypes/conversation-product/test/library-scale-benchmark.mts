@@ -4,6 +4,7 @@
  * Commit this file and the released canonical read API before running:
  *   node test/library-scale-benchmark.mts --candidate=<HEAD> --datasets=small
  * Add --search-only to measure Switch chat on the same fixture.
+ * Use --prepare-search-profile to seed and reopen one synthetic desktop-sized profile.
  * --describe is read-only. No npm installs, external providers or GUI are used.
  */
 import assert from 'node:assert/strict';
@@ -46,7 +47,8 @@ const jsonBytes=(value:unknown)=>Buffer.byteLength(JSON.stringify(value));
 const digestIds=(ids:string[])=>hash(JSON.stringify([...ids].sort()));
 const serializeError=(error:unknown)=>({name:error instanceof Error?error.name:'Error',message:String(error instanceof Error?error.message:error).slice(0,500)});
 const parsed=new Map(process.argv.slice(2).map(arg=>{assert(arg.startsWith('--'),'invalid_argument');const n=arg.indexOf('=');return n<0?[arg.slice(2),'true']:[arg.slice(2,n),arg.slice(n+1)];}));
-const datasetDeadlineMs=parsed.has('search-only')?MAX_SEARCH_DATASET_MS:MAX_DATASET_MS;
+const prepareSearchProfile=parsed.has('prepare-search-profile');
+const datasetDeadlineMs=parsed.has('search-only')||prepareSearchProfile?MAX_SEARCH_DATASET_MS:MAX_DATASET_MS;
 const git=(...args:string[])=>execFileSync('git',args,{cwd:REPO,encoding:'utf8',windowsHide:true,maxBuffer:2*MiB}).trim();
 function directoryBytes(root:string):number{let count=0,total=0;const visit=(dir:string)=>{for(const e of readdirSync(dir,{withFileTypes:true})){assert(++count<=256,'fixture_file_bound');const p=join(dir,e.name);if(e.isDirectory())visit(p);else{assert(e.isFile()&&!e.isSymbolicLink(),'unexpected_fixture_entry');total+=statSync(p).size;}}};visit(root);return total;}
 function writeReceipt(file:string,value:unknown){const bytes=Buffer.from(JSON.stringify(value,null,2)+'\n');assert(bytes.length<=OUTPUT_BOUND,'receipt_capacity');writeFileSync(file,bytes,{flag:'wx'});}
@@ -82,20 +84,23 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
  const started=performance.now(),binding=sourceBinding(candidate);readApiReleased();
  const custody=relative(OUTPUT_ROOT,resolve(session));assert(custody&&!isAbsolute(custody)&&!custody.startsWith('..')&&/^library-scale-\d+-[a-f0-9]{8}$/.test(custody),'unowned_session_location');
  const marker=JSON.parse(readFileSync(join(session,'owner.json'),'utf8'));
- assert(marker.contract==='aerynth.library-scale-owner@1'&&marker.candidate===candidate&&marker.searchOnly===searchOnly,'unowned_session');
+ assert(marker.contract==='aerynth.library-scale-owner@1'&&marker.candidate===candidate&&marker.searchOnly===searchOnly&&marker.prepareSearchProfile===prepareSearchProfile,'unowned_session');
  const profile=join(session,dataset);assert(!readdirSync(session).includes(dataset),'fresh_profile_required');mkdirSync(profile);
- const file=join(profile,'canonical.sqlite'),requested=DATASETS[dataset];let core:BackendCore|undefined,providerCalls=0;
+ const file=join(profile,prepareSearchProfile?'aerynth.sqlite':'canonical.sqlite'),requested=DATASETS[dataset];let core:BackendCore|undefined,providerCalls=0;
  const receipt:Record<string,unknown>={contract:'aerynth.library-scale@1',synthetic:true,binding,searchOnly,dataset:{name:dataset,requested},passed:false,
   tiers:{structural:'instrumented canonical reads; excluded from timing',timing:'in-process Core/conversation service only; excludes Electron/IPC/render/presentation'},
   bounds:{ownedDiskBytes:DISK_BOUND,databaseBytes:DB_BOUND,canonicalStateBytes:STATE_BOUND,deadlineMs:datasetDeadlineMs,sampledRssBytes:RSS_CHECKPOINT_BOUND,workerHeapFlags:WORKER_HEAP_FLAGS},
   limitations:['Fresh synthetic local messages, not model output or account history.','Old-heap flag and RSS checkpoints are not an OS total-memory quota.','Counts/data sizes and work are measured separately from timing.','No native input/paint/presentation latency, accessibility or artistic acceptance.']};
+ const forbidProvider=(owner:FixtureOwner)=>{
+  for(const name of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'] as const)
+   (owner.port as unknown as Record<string,unknown>)[name]=async()=>{providerCalls++;throw Error('provider_forbidden_in_local_scale_fixture');};
+ };
  try{
   core=new BackendCore({path:file,privateRoot:profile,contentPolicy:'synthetic-only',provider:'fixture'});
   const owner=core as unknown as FixtureOwner,db=owner.db;
   assert.equal(db.prepare('PRAGMA journal_mode').get()!.journal_mode,'delete');
   db.exec('PRAGMA max_page_count='+Math.floor(DB_BOUND/Number(db.prepare('PRAGMA page_size').get()!.page_size)));
-  for(const name of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'] as const)
-   (owner.port as unknown as Record<string,unknown>)[name]=async()=>{providerCalls++;throw Error('provider_forbidden_in_local_scale_fixture');};
+  forbidProvider(owner);
   const originalSave=owner.save.bind(owner);
   owner.save=()=>{assert(jsonBytes({...owner.state,graph:owner.graph.snapshot()})<=STATE_BOUND,'synthetic_state_capacity');originalSave();};
   const entries:Entry[]=[],projects:string[]=[],rareMarker='SYNTHETIC_RARE_LIBRARY_TOKEN',rootMessages=Math.min(1000,Math.floor(requested.messages/4));
@@ -155,6 +160,28 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
   assert.equal(entries.length,graph.conversations.length,'fixture_identity_count_mismatch');
   receipt.dataset={name:dataset,requested,actual:{conversations:entries.length,baseOwnMessages:seededMessages,graphMessages:graph.messages.length,revokedMessages:graph.unavailableMessageIds.length,deniedSources:denied.size,fanout:fanout.length,chainDepth:chain.length,projects:projects.length,notes:notes.length,collections:3,favorites:favoriteIds.length},capped,canonicalStateBytes:stateBytes,sqliteBytes:statSync(file).size,graphBodyBytes:graph.messages.reduce((n,m)=>n+Buffer.byteLength(m.content),0),noteBodyBytes:noteBytes,fixtureIdentityDigest:digestIds(entries.map(e=>e.resourceId)),permissionFixtureDigest:digestIds([...denied])};
   const active=entries.filter(e=>!e.archived&&!denied.has(e.resourceId)),activeIds=new Set(active.map(e=>e.resourceId)),rare=entries[2],scope=projects[1];
+  if(prepareSearchProfile){
+   assert(!capped&&entries.length===requested.conversations+72&&seededMessages===requested.messages,'incomplete_search_profile');
+   const resourceId=rare.resourceId,messageId=rare.messageIds[0],draft='Synthetic unsent search acceptance draft.';
+   await core.command('conversation',{name:'saveDraft',input:{resourceId,expectedVersion:0,content:draft}});
+   await core.command('close',{});core=undefined;
+   core=new BackendCore({path:file,privateRoot:profile,contentPolicy:'synthetic-only',provider:'fixture'});
+   forbidProvider(core as unknown as FixtureOwner);
+   const results=page(await core.command('conversation',{name:'search',input:{text:rareMarker,searchMode:'chat-history',sort:'activity',limit:12}}));
+   assert.equal(results.total,1);
+   assert.equal(results.items[0]?.resourceId,resourceId);
+   assert.equal(results.items[0]?.messageId,messageId);
+   const restored=await core.command('conversation',{name:'readDraft',input:{resourceId}}) as {content:string};
+   assert.equal(restored.content,draft);
+   assert.equal(providerCalls,0);
+   await core.command('close',{});core=undefined;
+   fixtureFence(session,profile,started);
+   receipt.profile={directory:dataset,database:'aerynth.sqlite',sha256:hash(readFileSync(file)),
+    target:{query:rareMarker,resourceId,messageId,draft},reopenedThroughCore:true};
+   receipt.providerCalls=providerCalls;
+   receipt.passed=true;
+   return receipt;
+  }
   const invoke=async(operation:Operation)=>core!.command('conversation',{name:operation.name,input:operation.input} as ReadRequest);
   const listActivity={limit:50,sort:'activity' as const},empty={text:'',limit:50},rareSearch={text:rareMarker,searchMode:'conversations' as const,limit:50},commonSearch={text:'synthetic common library',searchMode:'conversations' as const,limit:50},scopedList={projectId:scope,sort:'title' as const,limit:50},resourceSearch={text:noteMarker,searchMode:'resources' as const,limit:50},operations:Operation[]=[
    {id:'recent-metadata',name:'list',input:listActivity,check:value=>{const p=page(value);assert.equal(p.items.length,Math.min(50,active.length));if(typeof p.total==='number')assert.equal(p.total,active.length);let previous:string|undefined;for(const row of p.items){assert(activeIds.has(String(row.resourceId)));assert(Object.hasOwn(row,'lastActivityAt'),'activity_metadata_unavailable');const at=String(row.lastActivityAt??row.createdAt);if(previous)assert(previous>=at,'activity_order_mismatch');previous=at;}}},
@@ -257,19 +284,21 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
 }
 
 async function main(){
- const allowed=new Set(['candidate','datasets','describe','worker','session','dataset','search-only']);for(const key of parsed.keys())assert(allowed.has(key),'unknown_argument');
+ const allowed=new Set(['candidate','datasets','describe','worker','session','dataset','search-only','prepare-search-profile']);for(const key of parsed.keys())assert(allowed.has(key),'unknown_argument');
  const searchOnly=parsed.has('search-only');
- if(parsed.has('describe')){console.log(JSON.stringify({contract:'aerynth.library-scale-plan@1',datasets:DATASETS,modes:['full-library','search-only'],bounds:{disk:DISK_BOUND,db:DB_BOUND,state:STATE_BOUND,receipt:OUTPUT_BOUND,perDatasetMs:MAX_DATASET_MS,searchOnlyPerDatasetMs:MAX_SEARCH_DATASET_MS},providerCalls:0,qualification:'No benchmark performed by --describe'}));return;}
+ assert(!(searchOnly&&prepareSearchProfile),'conflicting_fixture_modes');
+ if(parsed.has('describe')){console.log(JSON.stringify({contract:'aerynth.library-scale-plan@1',datasets:DATASETS,modes:['full-library','search-only','prepare-search-profile'],bounds:{disk:DISK_BOUND,db:DB_BOUND,state:STATE_BOUND,receipt:OUTPUT_BOUND,perDatasetMs:MAX_DATASET_MS,searchOnlyPerDatasetMs:MAX_SEARCH_DATASET_MS},providerCalls:0,qualification:'No benchmark performed by --describe'}));return;}
  const candidate=parsed.get('candidate');assert(candidate,'explicit_candidate_required');
  if(parsed.has('worker')){assert(parsed.get('session')&&parsed.get('dataset'));const dataset=parsed.get('dataset') as Dataset;assert(Object.hasOwn(DATASETS,dataset));const result=await worker(dataset,parsed.get('session')!,candidate,searchOnly);process.exitCode=result.passed?0:1;return;}
  const names=(parsed.get('datasets')??'small').split(',') as Dataset[];assert(names.length>=1&&names.length<=3&&new Set(names).size===names.length&&names.every(n=>Object.hasOwn(DATASETS,n)),'invalid_datasets');
- const binding=sourceBinding(candidate);readApiReleased();const reserve=guard(),session=join(OUTPUT_ROOT,'library-scale-'+Date.now()+'-'+randomUUID().slice(0,8));mkdirSync(session,{recursive:true});writeReceipt(join(session,'owner.json'),{contract:'aerynth.library-scale-owner@1',candidate,binding,reserve,searchOnly});
+ if(prepareSearchProfile)assert.equal(names.length,1,'one_owned_profile_required');
+ const binding=sourceBinding(candidate);readApiReleased();const reserve=guard(),session=join(OUTPUT_ROOT,'library-scale-'+Date.now()+'-'+randomUUID().slice(0,8));mkdirSync(session,{recursive:true});writeReceipt(join(session,'owner.json'),{contract:'aerynth.library-scale-owner@1',candidate,binding,reserve,searchOnly,prepareSearchProfile});
  const stages:unknown[]=[];
  for(const dataset of names){
   guard();assert(directoryBytes(session)<DISK_BOUND-DB_BOUND*2-OUTPUT_BOUND,'insufficient_owned_envelope');
   const result=await new Promise<{dataset:string;code:number|null;signal:string|null;deadline:boolean}>((done,reject)=>{
    const options={cwd:REPO,execArgv:WORKER_HEAP_FLAGS,env:{...process.env,NODE_DISABLE_COMPILE_CACHE:'1'},silent:true,windowsHide:true};
-   const child=fork(HERE,['--worker','--candidate='+candidate,'--session='+session,'--dataset='+dataset,...(searchOnly?['--search-only']:[])],options);let deadline=false,output=0;
+   const child=fork(HERE,['--worker','--candidate='+candidate,'--session='+session,'--dataset='+dataset,...(searchOnly?['--search-only']:[]),...(prepareSearchProfile?['--prepare-search-profile']:[])],options);let deadline=false,output=0;
    const timer=setTimeout(()=>{deadline=true;child.kill();},datasetDeadlineMs+3000);
    for(const stream of [child.stdout,child.stderr])stream?.on('data',(data:Buffer)=>{output+=data.length;if(output>65536){deadline=true;child.kill();}});
    child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',(code,signal)=>{clearTimeout(timer);done({dataset,code,signal,deadline});});
