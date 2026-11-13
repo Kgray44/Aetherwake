@@ -2,6 +2,7 @@
 import type { NativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity.ts';
 import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 import type { OrdinaryModelOption, ReasoningEffort } from '../../openai-provider/model-controls.ts';
+import type { CaptureConversationReply, ReplyNoteReceipt } from '../../block-library/note-contracts.ts';
 export type { FidelityStatus, NativeChatGPTAimId, NativeChatGPTAimAssessment, NativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity.ts';
 export type SharingMode = 'independent' | 'connected' | 'collaborative';
 export type Evidence = 'excerpt' | 'reported' | 'observed' | 'hypothesis' | 'decision' | 'disputed';
@@ -18,7 +19,9 @@ export type Share = { id: string; sourceResourceId: string; sourceMessageId: str
 export type ProviderCapability = { id: string; label: string; available: boolean; record: boolean; execute: boolean; nativeFork: boolean; history: 'local' | 'unavailable'; reason?: string; reasonCode?: string; simulated: boolean; models: string[]; modelOptions?: OrdinaryModelOption[];default?:boolean;catalogOnly?:true; /** Documentation support is separate from the runtime booleans above. */ accountFidelity?: NativeChatGPTFidelityDescriptor };
 export type Detail = { conversation: ConversationSummary & {messageCount:number}; messages: Page<MessageView>; lineage: { id: string; parentResourceId: string; childResourceId: string; sourceMessageId: string; mode: string; createdAt: string }[]; policy: BranchPolicy; shares: Share[]; providers: ProviderCapability[] };
 /** Unsent local text. Its revision is independent from the canonical transcript. */
-export type ConversationDraft = { resourceId: string; version: number; content: string; updatedAt: string | null };
+export type DraftDocumentRef = { id: string; version: number };
+export type DraftDocument = DraftDocumentRef & { title: string; unavailable?: 'changed' | 'inaccessible' };
+export type ConversationDraft = { resourceId: string; version: number; content: string; updatedAt: string | null; documents?: DraftDocument[] };
 export const CONVERSATION_DRAFT_LIMITS = { contentUnits: 16384, contentBytes: 65536, aggregateBytes: 8 * 1024 * 1024, records: 4096 } as const;
 /** Local recovery metadata only. No draft text, transcript, provider or title copy. */
 export type ConversationViewPosition = { conversationRevision:number;anchor:{messageId:string;offsetY:number}|null };
@@ -39,7 +42,7 @@ export interface ProductCommandMap {
  search: { input: SearchQuery; output: Page<SearchHit> };
  detail: { input: { resourceId: string; offset?: number; limit?: number; aroundMessageId?: string }; output: Detail };
  readDraft: { input: { resourceId: string }; output: ConversationDraft };
- saveDraft: { input: { resourceId: string; expectedVersion: number; content: string }; output: ConversationDraft };
+ saveDraft: { input: { resourceId: string; expectedVersion: number; content: string; documents?: DraftDocumentRef[] }; output: ConversationDraft };
  readViewState: {input:{resourceId?:string};output:ConversationViewState};
  saveViewState: {input:{resourceId:string;expectedVersion:number;position:ConversationViewPosition|null;selection:ConversationViewSelection|null};output:ConversationView};
  selectView: {input:{expectedVersion:number;resourceId:string|null};output:ConversationViewSelected};
@@ -50,8 +53,9 @@ export interface ProductCommandMap {
  favorite: { input: { resourceId: string; favorite: boolean }; output: boolean };
  create: { input: { title?: string; providerId?: string; commandId: string }; output: { resourceId: string } };
  archive: { input: { resourceId: string; archived: boolean; expectedVersion: number }; output: unknown };
- send: { input: { resourceId: string; content: string; expectedRevision: number; commandId: string; model?: string; reasoningEffort?: ReasoningEffort; webSearch?: true }; output: unknown };
+ send: { input: { resourceId: string; content: string; expectedRevision: number; commandId: string; draftVersion?: number; model?: string; reasoningEffort?: ReasoningEffort; webSearch?: true; documents?: { id: string; version: number }[] }; output: unknown };
  openCitation: { input: { resourceId: string; messageId: string; index: number }; output: { requested: true } };
+ captureReplyNote: { input: CaptureConversationReply; output: ReplyNoteReceipt };
  branch: { input: { resourceId: string; messageId: string; includeMessageIds: string[]; providerId: string; title: string; commandId: string; tokenBudget: number; expectedRevision: number }; output: { resourceId: string; handoffId: string; fingerprint: string; mode: string } };
  reviewBranch: { input: { handoffId: string; fingerprint: string; approve: boolean }; output: unknown };
  policy: { input: Omit<BranchPolicy, 'revision'> & { expectedRevision: number }; output: BranchPolicy };

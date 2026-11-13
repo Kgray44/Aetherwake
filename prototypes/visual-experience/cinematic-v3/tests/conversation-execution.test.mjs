@@ -93,6 +93,21 @@ function setup(command) {
   };
 }
 
+test("ordinary execution observations preserve the authorized input message anchor", async () => {
+  const f = setup(() => [execution({
+    providerId: "chatgpt-plan-responses",
+    state: "provider_completed",
+    inputMessageId: "message:accepted",
+  })]);
+  const received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  try {
+    await f.port.refresh();
+    assert.ok(received.some(value => value.execution?.inputMessageId === "message:accepted"));
+    assert.equal(JSON.stringify(received).includes("private-native-id"), false);
+  } finally { off(); f.port.dispose(); }
+});
+
 test("native chat observations strip private bindings and only forward exact reported assistant deltas, including metadata sharing the same event ID", async () => {
   const f = setup(),
     received = [];
@@ -177,6 +192,41 @@ test("one shared visible-view poll stops after the last subscriber and cancellat
   offSecond();
   assert.deepEqual(f.counts(), { stopped: 1, unscheduled: 1 });
   f.port.dispose();
+});
+
+test("Stop waits for a fresh authorized activity read after a disconnect", async () => {
+  let disconnected = false;
+  const f = setup(async (name) => {
+    if (name === "interrupt") return { requested: true, confirmed: false };
+    if (disconnected) throw Error("backend_disconnected");
+    return [execution()];
+  });
+  const off = f.port.observe("r", () => {});
+  try {
+    await f.port.refresh();
+    disconnected = true;
+    await assert.rejects(f.port.cancel("e"), /No observed active/);
+    assert.equal(f.calls.filter(call => call.name === "interrupt").length, 0);
+    disconnected = false;
+    await f.port.cancel("e");
+    assert.equal(f.calls.filter(call => call.name === "interrupt").length, 1);
+  } finally { off(); f.port.dispose(); }
+});
+
+test("Stop cannot dispatch after the desktop hides during activity readback", async () => {
+  let pending;
+  const f = setup(async (name) => name === "interrupt" ? { requested: true } : pending ?? [execution()]);
+  const off = f.port.observe("r", () => {});
+  try {
+    await f.port.refresh();
+    const readback = Promise.withResolvers();
+    pending = readback.promise;
+    const stopping = f.port.cancel("e");
+    f.setVisible(false);
+    readback.resolve([execution()]);
+    await assert.rejects(stopping, /No observed active/);
+    assert.equal(f.calls.filter(call => call.name === "interrupt").length, 0);
+  } finally { off(); f.port.dispose(); }
 });
 
 test("known backend disconnection fences a pending old read without inventing an execution outcome", async () => {

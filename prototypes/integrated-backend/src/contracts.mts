@@ -62,8 +62,10 @@ export type ConversationProductRequest = { [K in keyof ProductCommandMap]: { nam
 export type ConversationProductOutput = ProductCommandMap[keyof ProductCommandMap]['output'];
 export type ConversationSendInput = ProductCommandMap['send']['input'];
 export interface ConversationSendPreview {
+  draftVersion?: number;
  id: string; commandId: string; resourceId: string; providerId: string; expectedRevision: number;
  prompt: string; model?: string; context: AttachedContext[];
+ documents?: { id: string; version: number; source: string; sourceRevision: string; content: string; digest: string; kind?: 'note' }[];
  handoff?: { id:string; fingerprint:string; sourceResourceId:string; items:ContextPackage['items'];continued?:true };
  executionText: string; fingerprint: string; expiresAt: string;
  /** Exact stateless Responses egress, without credentials or account identifiers. */
@@ -114,6 +116,7 @@ export interface Execution extends PublicConversationExecution {
   /** Canonical admission counted once per AIR provider stage, including unknown outcomes. */
   velaAdmission?: { projectId: string | null; utcDay: string };
   connectionVersion?:number;inputMessageId?:string;outputMessageId?:string;
+  draftCheckpoint?: { version: number; documentsDigest: string };
   requestedModel?:string;requestBodyDigest?:string;contextDigest?:string;instructionVersion?:string;
   requestedReasoningEffort?:TurnInput['reasoningEffort'];
   cancellation?:{requested:boolean;serverConfirmed:false};

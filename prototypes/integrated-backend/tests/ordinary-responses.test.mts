@@ -5,10 +5,12 @@ import { execFileSync } from 'node:child_process';
 import { fixtureFileEditHost, fixtureFileEditScratchRoot } from './fixture-file-edit-admission.mts';
 import { tmpdir } from 'node:os';
 import { join,resolve,relative,isAbsolute } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { BackendCore } from '../src/core.mts';
+import type { NoteDocument } from '../../block-library/note-contracts.ts';
+import type { CreatedBlock } from '../../block-library/contracts.ts';
 import { createRequire } from 'node:module';
 const { conversationCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/conversation-broker.cjs');
 const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
@@ -22,6 +24,9 @@ import { agentTemplates } from '../../agent-product/service.mts';
 import { VELA_IDENTITY_PROMPT, VELA_IDENTITY_VERSION } from '../../vela-core/src/vela-identity.mts';
 import type { AgentMutationReceipt, AgentProviderCatalog } from '../../agent-product/contracts.ts';
 import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
+import { docxFixture, pdfFixture } from '../../block-library/tests/media-fixtures.mts';
+import { extractDocumentText } from '../../visual-experience/cinematic-v3/src/document-text-worker.ts';
+import type { NativeDocumentTextServices } from '../src/document-text-host.mts';
 import type { MissionPlanningOffer, MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview } from '../src/mission-contracts.mts';
 import type { MissionTeam } from '../src/mission-teams.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
@@ -40,11 +45,256 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', h
  const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream',...(body.reasoning?['reasoning']:[]),...(body.tools?['tools','tool_choice']:[])]);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
  const provider = useCodexProtocolDouble ? { provider: 'codex' as const, codexExecutable: process.execPath,
    codexArgs: [fileURLToPath(new URL('../../codex-bridge/tests/catalog-server.mjs', import.meta.url)), codexMode] } : { provider: 'fixture' as const };
- let core:BackendCore;const create=()=>{core=new BackendCore({path,...provider,contentPolicy:'synthetic-only',...(historyContext===undefined?{}:{velaHistoryContext:historyContext})},event=>events.push(event),fileEditRoots?fixtureFileEditHost([dir,...fileEditRoots]):undefined,{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
- return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(realpathSync.native(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
+ let core: BackendCore;
+ const documents: NativeDocumentTextServices = {
+  async extract(input, signal) {
+   const { metadata } = await core.command('mediaDescribe', { resourceId: input.resourceId });
+   assert.equal(metadata.source, 'file');
+   const chunk = await core.command('mediaReadChunk', { ...input, offset: 0, length: metadata.byteLength });
+   const result = await extractDocumentText(Uint8Array.from(Buffer.from(chunk.base64, 'base64')), input.format, input.maxTextBytes, signal);
+   return { ...result, jobId: input.jobId, sourceRevision: input.sourceRevision,
+    ...(result.state === 'complete' ? { textDigest: createHash('sha256').update(result.text).digest('hex') } : {}) } as Awaited<ReturnType<NativeDocumentTextServices['extract']>>;
+  },
+ };
+ const {fileEditAdmission,secrets}=fixtureFileEditHost([dir,...(fileEditRoots??[])]);
+ const create=()=>{core=new BackendCore({path,...provider,nativeMedia:true,contentPolicy:'synthetic-only',...(historyContext===undefined?{}:{velaHistoryContext:historyContext})},event=>events.push(event),{secrets,...(fileEditRoots?{fileEditAdmission}:{}),documents},{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
+ return {dir,get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(realpathSync.native(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
+for (const outcome of ['completed','newer draft','unknown','document']) test('restart reconciles an ordinary draft ('+outcome+')', async () => {
+ const f = fixture();
+ try {
+  const chat = await f.core.command('createConversation',{providerId,commandId:randomUUID()});
+  const resourceId = chat.resourceId, content = 'Synthetic submitted question';
+  let documents: {id:string;version:number}[] | undefined;
+  if (outcome==='document') {
+   const path=join(f.dir,'Synthetic restart.txt');
+   writeFileSync(path,'Synthetic evidence for the restart journey.');
+   const {resource}=await f.core.command('mediaImportTrusted',{
+    kind:'file',variant:'document',commandId:randomUUID(),selection:{kind:'file',path},
+   });
+   documents=[{id:resource.id,version:resource.version}];
+  }
+  const save = (expectedVersion:number,text:string) => f.core.command('conversation',{
+   name:'saveDraft',input:{resourceId,expectedVersion,content:text,documents},
+  }) as Promise<import('../../conversation-product/src/contracts.ts').ConversationDraft>;
+  const read = () => f.core.command('conversation',{name:'readDraft',input:{resourceId}});
+  const draft = await save(0,content);
+  f.responses.push(() => outcome === 'unknown'
+   ? sse([{type:'response.created',response:{id:'resp-draft-recovery'}}])
+   : complete('resp-draft-recovery'));
+  const result = await conversationCommand({ call:f.core.command.bind(f.core),reviewSources:async()=>true,
+   input:{name:'send',input:{resourceId,content,expectedRevision:chat.revision,commandId:randomUUID(),draftVersion:draft.version,documents}},
+  });
+  assert.equal(result.state,outcome==='unknown'?'unknown':'provider_completed');
+  assert.deepEqual(await read(),draft);
+  if(outcome==='newer draft')await save(draft.version,'Synthetic later edits');
+  await f.reopen();
+  const recovered = await read() as Awaited<ReturnType<typeof save>>;
+  assert.equal(recovered.version,draft.version+(outcome==='unknown'?0:1));
+  assert.equal(recovered.content,outcome==='unknown'?content:outcome==='newer draft'?'Synthetic later edits':'');
+  assert.equal(recovered.documents,undefined);
+  await f.reopen();
+  assert.deepEqual(await read(),recovered);
+  assert.equal(f.requests.length,1);
+  const egress=JSON.stringify(f.requests[0]);
+  assert.doesNotMatch(egress,/draftVersion|draftCheckpoint|documentsDigest/);
+  if(documents){
+   assert.match(egress,/Synthetic evidence for the restart journey/);
+   const stored=(await f.core.command('snapshot',{})).executions[result.id];
+   assert.equal(stored.draftCheckpoint,undefined);
+   assert.deepEqual(Object.keys(result.draftCheckpoint).sort(),['documentsDigest','version']);
+   assert.match(result.draftCheckpoint.documentsDigest,/^[a-f0-9]{64}$/);
+  }
+ } finally { await f.close(); }
+});
+test('ordinary document draft survives restart without persisting file contents or a path in the draft', async () => {
+ const f = fixture();
+ try {
+  const path = join(f.dir, 'Synthetic draft brief.txt');
+  writeFileSync(path, 'Synthetic private file body');
+  const project = f.owner.kernel.createProject('Synthetic chat project');
+  const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+  const { resourceId } = chat;
+  await f.core.command('conversation', { name: 'organize', input: {
+   type: 'associateProject', resourceId, projectId: project.id, expectedVersion: 1,
+  } });
+  const { resource } = await f.core.command('mediaImportTrusted', {
+   kind: 'file', variant: 'document', projectId: project.id, commandId: randomUUID(), selection: { kind: 'file', path },
+  });
+  assert.equal(resource.project_id, project.id);
+  const ref = { id: resource.id, version: resource.version };
+  const otherProject = f.owner.kernel.createProject('Synthetic other project');
+  const other = await f.core.command('mediaImportTrusted', {
+   kind: 'file', variant: 'document', projectId: otherProject.id, commandId: randomUUID(), selection: { kind: 'file', path },
+  });
+  const read = () => f.core.command('conversation', { name: 'readDraft', input: { resourceId } });
+  const save = (expectedVersion: number, documents?: typeof ref[]) => f.core.command('conversation', {
+   name: 'saveDraft', input: { resourceId, expectedVersion, content: 'Summarize this', documents },
+  }) as Promise<import('../../conversation-product/src/contracts.ts').ConversationDraft>;
+  await assert.rejects(save(0, [{ ...ref, version: ref.version + 1 }]), /source_unavailable/);
+  await assert.rejects(save(0, [{ id: other.resource.id, version: other.resource.version }]), /source_unavailable/);
+  const saved = await save(0, [ref]);
+  assert.deepEqual(saved.documents, [{ ...ref, title: resource.title }]);
+  const row = f.owner.db.prepare('SELECT documents_json FROM cp_drafts WHERE resource_id=?').get(resourceId);
+  assert.deepEqual(JSON.parse(row.documents_json), [ref]);
+  await f.reopen();
+  assert.deepEqual(await read(), saved);
+  await f.core.command('desktop', { type: 'archiveSubject', kind: 'resource', id: ref.id, expectedVersion: ref.version, archived: true });
+  const archived = await read() as Awaited<ReturnType<typeof save>>;
+  assert.deepEqual(archived.documents, [{ ...ref, title: 'Unavailable document', unavailable: 'inaccessible' }]);
+  await f.core.command('desktop', { type: 'archiveSubject', kind: 'resource', id: ref.id, expectedVersion: ref.version + 1, archived: false });
+  const textOnlySave = await save(saved.version);
+  assert.deepEqual(textOnlySave.documents, [{ ...ref, title: resource.title, unavailable: 'changed' }]);
+  f.owner.kernel.assignResourceProject(ref.id, otherProject.id, ref.version + 2);
+  const moved = await read() as Awaited<ReturnType<typeof save>>;
+  assert.deepEqual(moved.documents, [{ ...ref, title: 'Unavailable document', unavailable: 'inaccessible' }]);
+  await assert.rejects(save(saved.version, []), /stale_draft_version/);
+  assert.equal((await save(textOnlySave.version, [])).documents, undefined);
+  assert.equal(f.requests.length, 0);
+ } finally { await f.close(); }
+});
+for (const format of ['txt', 'pdf', 'docx'] as const) test('ordinary document send reviews ' + format + ' text and refuses replacement during review', async () => {
+ const f = fixture();
+ try {
+  const path = join(f.dir, 'Synthetic brief.' + format);
+  const content = { pdf: 'Searchable second page', docx: 'Table cell', txt: 'Synthetic document evidence: the sample weighs twelve grams.' }[format];
+  writeFileSync(path, format === 'pdf' ? pdfFixture() : format === 'docx' ? docxFixture() : content);
+  const { resource } = await f.core.command('mediaImportTrusted', {
+   kind: 'file', variant: 'document', commandId: randomUUID(), selection: { kind: 'file', path },
+  });
+  const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+  const call = f.core.command.bind(f.core);
+  const input = {
+   name: 'send', input: { resourceId: chat.resourceId, expectedRevision: chat.revision,
+    content: 'What does the sample weigh?', commandId: randomUUID(),
+    documents: [{ id: resource.id, version: resource.version }] },
+  };
+  await assert.rejects(conversationCommand({ call, input, reviewSources: async () => false }), /authorization_cancelled/);
+  assert.equal(f.requests.length, 0);
+  f.responses.push(() => complete('resp-document', 'Twelve grams.'));
+  const result = await conversationCommand({ call, input, reviewSources: async ({ review }: any) => {
+   assert(review.context.included[0].content.includes(content));
+   assert.equal(review.context.included[0].id, resource.id);
+   assert.equal(review.prompt.includes(path), false);
+   return true;
+  } });
+  assert.equal(result.state, 'provider_completed');
+  assert.equal(f.requests.length, 1);
+  const activity = await f.core.command('conversationActivity', { resourceIds: [chat.resourceId] });
+  const execution = activity.executions.find(item => item.commandId === input.input.commandId);
+  assert.ok(execution?.inputMessageId);
+  const detail = await f.core.command('conversation', {
+   name: 'detail', input: { resourceId: chat.resourceId, aroundMessageId: execution.inputMessageId },
+  }) as import('../../conversation-product/src/contracts.ts').Detail;
+  assert.ok(detail.messages.items.some(message => message.id === execution.inputMessageId &&
+   !message.inherited && message.role === 'user' && message.content === input.input.content));
+  assert(f.requests[0].input.some((message: { content: string }) => message.content.includes(content)));
+  const revised = { ...input, input: { ...input.input, expectedRevision: chat.revision + 2, commandId: randomUUID() } };
+  await assert.rejects(conversationCommand({ call, input: revised, reviewSources: async () => {
+   writeFileSync(path, 'Changed synthetic document text');
+   return true;
+  } }), /document_text_unavailable|source_changed/);
+  assert.equal(f.requests.length, 1);
+ } finally { await f.close(); }
+});
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
+
+test('a completed ordinary chat reply can be edited, reused, placed and reopened as one note', async () => {
+ const f=fixture();
+ try {
+  const chat=await f.core.command('createConversation',{providerId,commandId:randomUUID()});
+  const call=f.core.command.bind(f.core);
+  const content='Synthetic complete reply';
+  f.responses.push(()=>complete('resp-source-note',content));
+  const generated=await conversationCommand({call,input:{name:'send',input:{
+    resourceId:chat.resourceId,content:'Synthetic question',expectedRevision:chat.revision,commandId:randomUUID(),
+  }}});
+  assert.equal(generated.state,'provider_completed');
+  assert.ok(generated.inputMessageId);
+  assert.ok(generated.outputMessageId);
+  const reply={id:generated.outputMessageId,content};
+  const input={resourceId:chat.resourceId,messageId:reply.id,commandId:randomUUID()};
+  const capture=(request:typeof input)=>f.core.command('conversation',{name:'captureReplyNote',input:request}) as Promise<{noteId:string}>;
+  const receipt=await capture(input);
+  const opened=await f.core.command('openResource',{resourceId:receipt.noteId,origin:{source:'application'}});
+  assert.equal(opened.status,'ready');
+  const readNote=async()=>(await f.core.command('notes',{name:'readNote',input:receipt.noteId})).result as NoteDocument;
+  const note=await readNote();
+  assert.equal(note.resource.content,reply.content);
+  const edited='Synthetic edited reply note';
+  const updated=(await f.core.command('notes',{name:'commitNote',input:{
+    resourceId:receipt.noteId,expectedResourceVersion:note.resource.version,
+    expectedDraftVersion:note.draftRevision,content:edited,
+  }})).result as NoteDocument;
+  assert.equal(updated.resource.content,edited);
+  const target=await f.core.command('createConversation',{providerId,commandId:randomUUID()});
+  const documents=[{id:receipt.noteId,version:updated.resource.version}];
+  const draft=await f.core.command('conversation',{name:'saveDraft',input:{
+   resourceId:target.resourceId,expectedVersion:0,content:'Summarize my saved note.',documents,
+  }}) as import('../../conversation-product/src/contracts.ts').ConversationDraft;
+  const send=()=>({name:'send',input:{resourceId:target.resourceId,content:draft.content,
+   expectedRevision:target.revision,commandId:randomUUID(),draftVersion:draft.version,documents}});
+  await assert.rejects(conversationCommand({call,input:send(),reviewSources:async()=>false}),/authorization_cancelled/);
+  assert.equal(f.requests.length,1);
+  f.responses.push(()=>complete('resp-saved-note','Synthetic grounded summary.'));
+  const sent=await conversationCommand({call,input:send(),reviewSources:async({review}:any)=>{
+   assert.equal(review.context.included[0].id,receipt.noteId);
+   assert.equal(review.context.included[0].content,edited);
+   const {reviewPage}=createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+   const html=reviewPage(review,draft.content);
+   assert.ok(html.includes('Saved note · version '+updated.resource.version));
+   assert.ok(html.includes(edited));
+   return true;
+  }});
+  assert.equal(sent.state,'provider_completed');
+  assert.equal(f.requests.length,2);
+  assert.match(JSON.stringify(f.requests[1].input),/Synthetic edited reply note/);
+  assert.doesNotMatch(JSON.stringify(f.requests[1].input),/Synthetic complete reply/);
+  const staleSend={name:'send',input:{...send().input,expectedRevision:target.revision+2}};
+  await assert.rejects(conversationCommand({call,input:staleSend,reviewSources:async()=>{
+   await f.core.command('desktop',{type:'archiveSubject',kind:'resource',id:receipt.noteId,
+    expectedVersion:updated.resource.version,archived:true});
+   return true;
+  }}),/source_selection_unavailable|stale_send_preview/);
+  const restoredSnapshot=await f.core.command('desktop',{type:'archiveSubject',kind:'resource',id:receipt.noteId,
+   expectedVersion:updated.resource.version+1,archived:false});
+  const restoredVersion=restoredSnapshot.resources.find(resource=>resource.id===receipt.noteId)!.version;
+  assert.equal(f.requests.length,2);
+  const workspace=await f.core.command('desktop',{type:'createWorkspace',title:'Synthetic saved reply workspace',projectId:null});
+  const workspaceId=workspace.activeWorkspaceId!;
+  const attachInput={commandId:randomUUID(),workspaceId,expectedLayoutVersion:workspace.layoutVersion,
+    resourceId:receipt.noteId,expectedResourceVersion:restoredVersion,kind:'note' as const};
+  const place=async()=>(await f.core.command('library',{name:'attachBlock',input:attachInput})).result as CreatedBlock;
+  const placement=await place();
+  assert.equal(placement.resourceId,receipt.noteId);
+  assert.equal(placement.workspaceId,workspaceId);
+  await assert.rejects(capture({...input,messageId:generated.inputMessageId}),/source_unavailable/);
+  const unrelated=await f.core.command('createConversation',{providerId:'local',commandId:randomUUID()});
+  await assert.rejects(capture({...input,resourceId:unrelated.resourceId}),/source_unavailable/);
+  f.owner.state.messageEvidence[reply.id]={outputState:'partial'};
+  await assert.rejects(capture(input),/source_unavailable/);
+  delete f.owner.state.messageEvidence[reply.id];
+  await f.reopen();
+  assert.deepEqual(await capture(input),receipt);
+  assert.deepEqual(await place(),placement);
+  const restored=await readNote();
+  assert.equal(restored.resource.id,receipt.noteId);
+  assert.equal(restored.resource.content,edited);
+  const desktop=await f.core.command('desktop',{type:'snapshot'});
+  assert.deepEqual(desktop.resources.filter(resource=>resource.kind==='note').map(resource=>resource.id),[receipt.noteId]);
+  assert.deepEqual(desktop.blocks.filter(block=>block.resource_id===receipt.noteId).map(block=>[block.id,block.workspace_id]),
+    [[placement.placementId,workspaceId]]);
+  f.owner.atomic(() => f.owner.graph.markUnavailable(reply.id));
+  await f.reopen();
+  const results = await f.core.command('conversation', { name: 'search', input: {
+    text: reply.content, searchMode: 'chat-history',
+  } }) as { total: number };
+  assert.equal(results.total, 0);
+  await assert.rejects(capture(input), /source_unavailable/);
+  assert.equal(f.requests.length,2);
+ } finally {await f.close();}
+});
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
 
 test('a reviewed planning request compiles one graph and runs native dependencies and a specialist after review', async () => {
@@ -1566,6 +1816,34 @@ test('explicit web search sends only the submitted draft and restores verified c
     await assert.rejects(conversationCommand({ call, openExternal, input: { ...open, input: { ...open.input, resourceId: other.resourceId } } }), /source_unavailable/);
     await assert.rejects(conversationCommand({ call, input: { name: 'send', input: { ...input, resourceId: other.resourceId } } }), /invalid_web_search_scope/);
     assert.deepEqual(launched, [safe.url]);
+    const source = (await detail()).conversation;
+    const child = await f.core.command('branch', {
+      resourceId: source.resourceId, messageId: response.id, includeMessageIds: [response.id],
+      providerId: 'local', title: 'Synthetic research follow-up', commandId: randomUUID(),
+      tokenBudget: 32768, expectedRevision: source.revision,
+    });
+    const search = () => f.core.command('conversation', { name: 'search', input: {
+      text: answer, searchMode: 'chat-history',
+    } }) as Promise<import('../../conversation-product/src/contracts.ts').Page<import('../../conversation-product/src/contracts.ts').SearchHit>>;
+    const hit = (await search()).items.find(item => item.resourceId === child.conversation.resourceId && item.messageId === response.id);
+    assert(hit?.messageId);
+    const childDetail = await f.core.command('conversation', {
+      name: 'detail', input: { resourceId: hit.resourceId, aroundMessageId: hit.messageId, limit: 1 },
+    }) as Awaited<ReturnType<typeof detail>>;
+    const inherited = childDetail.messages.items.find(message => message.id === response.id);
+    assert(inherited?.inherited);
+    assert.equal(inherited.resourceId, source.resourceId);
+    assert.deepEqual(inherited.webSearch, response.webSearch);
+    const inheritedOpen = { name: 'openCitation', input: {
+      resourceId: inherited.resourceId, messageId: inherited.id, index: 0,
+    } };
+    assert.deepEqual(await conversationCommand({ call, openExternal, input: inheritedOpen }), { requested: true });
+    assert.deepEqual(launched, [safe.url, safe.url]);
+    f.owner.atomic(() => f.owner.graph.markUnavailable(response.id));
+    await f.reopen();
+    assert.equal((await search()).items.some(item => item.messageId === response.id), false);
+    await assert.rejects(conversationCommand({ call, openExternal, input: inheritedOpen }), /source_unavailable/);
+    assert.deepEqual(launched, [safe.url, safe.url]);
     assert.equal(f.requests.length, 1);
     assert.equal(f.codexCalls, 0);
   } finally { await f.close(); }

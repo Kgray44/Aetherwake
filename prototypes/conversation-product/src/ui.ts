@@ -1,13 +1,13 @@
 import type { BranchPolicy, Collection, ConversationProductPort, ConversationSummary, ConversationView, Detail, FidelityStatus, NativeChatGPTFidelityDescriptor, ProductCommandMap, SearchHit, SearchQuery, Share } from './contracts.ts';
 import { ConversationDraftSession, flushConversationDraftSessions } from './draft-session.ts';
-import { mountConversationChat, decorateConversationControl, decorateConversationDisclosure, type ConversationChat, type ConversationExecutionPort, type ConversationControlIdentity, type ConversationControlPresentation, type ConversationProviderChange, type ConversationModelControls } from './chat.ts';
+import { mountConversationChat, decorateConversationControl, decorateConversationDisclosure, type ConversationChat, type ConversationChatOptions, type ConversationExecutionPort, type ConversationControlIdentity, type ConversationControlPresentation, type ConversationProviderChange, type ConversationModelControls } from './chat.ts';
 import type { ExperienceMotionPort } from '../../application-contract/motion.ts';
 import { enhanceConversationSelect, conversationControlStates, conversationDisclosures, conversationHistoryDrawer, conversationDetailReveal } from './picker.ts';
 import type { ConversationViewPersistence } from './view-persistence.ts';
 export { acceptedConversationSubmission } from './chat.ts';
 
 export type ManagerState = { selectedResourceId: string | null; drafts: Record<string,string>; scroll: Record<string,number>; query: SearchQuery; messageOffset: Record<string,number> };
-export type ManagerOptions = { models?: ConversationModelControls; embedded?: boolean; motion?:ExperienceMotionPort;viewId?:string;execution?: ConversationExecutionPort; draftSession?: (resourceId: string) => ConversationDraftSession; state?: ManagerState; resourceId?: string; initialMessageId?:string;viewPersistence?:ConversationViewPersistence;onClose?: () => void; onResource?: (resourceId: string, messageId?: string) => void; onState?: (state: ManagerState) => void; copy?: (text: string) => Promise<void>; download?: (name: string, content: string) => void; /** Explicit host-owned creation using this canonical conversation resource; no workspace or transcript mutation here. */ onCreateChecklist?: (canonicalConversationResourceId: string) => void | Promise<void>; /** Explicit ChatGPT site/reviewed documentation navigation only; host revalidates an exact allowlist. Never account connection or sync. */ onOpenChatGPT?: (reference?: string) => Promise<{status:'requested'|'unknown'|'unavailable'}> };
+export type ManagerOptions = Pick<ConversationChatOptions, 'saveReplyNote' | 'openReplyNote' | 'chooseDocument' | 'listDocuments' | 'openDocument' | 'askVelaAboutDocument'> & { models?: ConversationModelControls; embedded?: boolean; motion?:ExperienceMotionPort;viewId?:string;execution?: ConversationExecutionPort; draftSession?: (resourceId: string) => ConversationDraftSession; state?: ManagerState; resourceId?: string; initialMessageId?:string;viewPersistence?:ConversationViewPersistence;onClose?: () => void; onResource?: (resourceId: string, messageId?: string) => void; onState?: (state: ManagerState) => void; copy?: (text: string) => Promise<void>; download?: (name: string, content: string) => void; /** Explicit host-owned creation using this canonical conversation resource; no workspace or transcript mutation here. */ onCreateChecklist?: (canonicalConversationResourceId: string) => void | Promise<void>; /** Explicit ChatGPT site/reviewed documentation navigation only; host revalidates an exact allowlist. Never account connection or sync. */ onOpenChatGPT?: (reference?: string) => Promise<{status:'requested'|'unknown'|'unavailable'}> };
 export const createManagerState = (): ManagerState => ({selectedResourceId:null,drafts:{},scroll:{},query:{},messageOffset:{}});
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, label?: string, className?: string): HTMLElementTagNameMap[K] => { const node=document.createElement(tag); if(label!==undefined)node.textContent=label;if(className)node.className=className;return node; };
 const button = (label: string, action: () => void | Promise<void>, presentation: ConversationControlPresentation={identity:'action'}) => { const b=el('button',label);b.type='button';decorateConversationControl(b,presentation);b.addEventListener('click',()=>{if(!b.disabled)void action();});return b; };
@@ -123,6 +123,12 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   if(!session){if(options.draftSession)session=options.draftSession(resourceId);else{session=new ConversationDraftSession({resourceId,port,...(Object.hasOwn(state.drafts,resourceId)?{initialContent:state.drafts[resourceId]}:{})});ownedDraftSessions.add(session);}if(session.resourceId!==resourceId)throw new Error('draft_resource_mismatch');draftSessions.set(resourceId,session);}else await session.reload();
   const initialView=restoredView?.resourceId===resourceId?restoredView:undefined;restoredView=null;
   chatResource=resourceId;chat=mountConversationChat(chatHost,{port,resourceId,draftSession:session,execution:options.execution,copy:options.copy,motion:options.motion,models:options.models,viewId:options.viewId?options.viewId+':chat:'+resourceId:undefined,onProviderChange:requestProviderChange,initialScroll:options.viewPersistence?undefined:state.scroll[resourceId],initialOffset:options.viewPersistence?undefined:state.messageOffset[resourceId],viewPersistence:options.viewPersistence,initialView,initialAroundMessageId:aroundMessageId,
+   saveReplyNote:options.saveReplyNote,openReplyNote:options.openReplyNote,chooseDocument:options.chooseDocument,listDocuments:options.listDocuments,openDocument:options.openDocument,
+   askVelaAboutDocument:options.askVelaAboutDocument,
+   captureDocumentHandoffScope:()=>{
+    const navigation=openIntent;
+    return ()=>!disposed&&!closing&&navigation===openIntent&&chatResource===resourceId;
+   },
    onViewState:view=>{state.drafts[view.resourceId]=view.content;state.scroll[view.resourceId]=view.scroll;state.messageOffset[view.resourceId]=view.offset;save();},onDetail:renderDetail,onUnavailable:()=>{current=null;detailHeader.replaceChildren();secondary.replaceChildren();extras.open=false;},onChanged:refresh,
    onMessageAction:async event=>{if(event.action==='source'){options.onResource?.(event.message.resourceId,event.message.id);return;}if(event.action==='branch'){if(current)showBranch(current,event.message.id);return;}
     const selection=event.selection;if(!selection||event.message.content.slice(selection.start,selection.end)!==selection.text)throw new Error('Select a current source excerpt');
@@ -327,12 +333,101 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    }).catch(error=>{if(!disposed&&token===generation)view.panel.replaceChildren(el('p',error instanceof Error?error.message:String(error)));});
   });return view.node;
  };
- const showBranch=(d:Detail,messageId:string,targetProviderId=d.conversation.providerId)=>{
+ const showBranch=(d:Detail,messageId:string,targetProviderId=d.conversation.providerId,offerDraftCopy=false)=>{
+  const sourceIntent=openIntent;
   extras.open=true;secondary.replaceChildren();const form=el('form'),title=el('input'),providers=select(d.providers.filter(p=>p.record).map(p=>({value:p.id,label:p.label,disabled:!p.available})),targetProviderId),selection=el('fieldset'),legend=el('legend','Select source messages to prepare for review');title.value=d.conversation.title+' · branch';title.setAttribute('aria-label','Branch title');providers.setAttribute('aria-label','Branch provider');selection.append(legend);
   let reached=false;const chosen=new Set([messageId]);for(const m of d.messages.items){if(reached)break;const box=el('input');box.type='checkbox';box.checked=m.id===messageId;box.addEventListener('change',()=>box.checked?chosen.add(m.id):chosen.delete(m.id));selection.append(field(`${m.role}: ${m.content.slice(0,100)}`,box));if(m.id===messageId)reached=true;}
-  const note=el('p','Application continuation: selected source references are prepared for review. Creating a branch does not send a model turn.'),create=el('button','Create branch and review context');decorateConversationControl(create,{identity:'branch',emphasis:'primary'});selection.dataset.cpGroup='branch-source-review';form.append(field('Title',title),field('Provider',providers),selection,note,create);form.addEventListener('submit',event=>{event.preventDefault();void run(async()=>{const b=await call('branch',{resourceId:d.conversation.resourceId,messageId,includeMessageIds:[...chosen],providerId:providers.value,title:title.value,commandId:crypto.randomUUID(),tokenBudget:32768,expectedRevision:d.conversation.revision});secondary.replaceChildren(el('p','Branch created; source context is prepared, awaiting your review.'),button('Approve selected context',async()=>run(async()=>{await call('reviewBranch',{handoffId:b.handoffId,fingerprint:b.fingerprint,approve:true});await open(b.resourceId);await refresh();})),button('Reject context',async()=>run(async()=>{await call('reviewBranch',{handoffId:b.handoffId,fingerprint:b.fingerprint,approve:false});await open(b.resourceId);await refresh();})));});});secondary.append(form);syncPickers();options.motion?.wake();title.focus();
+  const note=el('p','Application continuation: selected source references are prepared for review. Creating a branch does not send a model turn.');
+  const create=el('button','Create branch and review context');
+  const carry=el('input');
+  carry.type='checkbox';
+  carry.setAttribute('aria-label','Copy unsent draft to the new branch');
+  const carryDocuments=el('input');
+  carryDocuments.type='checkbox';
+  carryDocuments.setAttribute('aria-label','Copy selected documents to the new branch draft');
+  const displayedDocuments=draftSessions.get(d.conversation.resourceId)?.snapshot().documents.filter(document=>!document.unavailable)??[];
+  decorateConversationControl(create,{identity:'branch',emphasis:'primary'});
+  selection.dataset.cpGroup='branch-source-review';
+  form.append(field('Title',title),field('Provider',providers),selection);
+  if(offerDraftCopy&&draftSessions.get(d.conversation.resourceId)?.snapshot().content)
+   form.append(field('Copy unsent draft to the new branch',carry));
+  if(offerDraftCopy&&targetProviderId==='chatgpt-plan-responses'&&displayedDocuments.length){
+   form.append(field('Copy selected documents to the new branch draft',carryDocuments),
+    el('p',displayedDocuments.map(document=>document.title).join(' · ')),
+    el('p','Sending these documents from the new draft requires source review.'));
+  }
+  form.append(note,create);
+  form.addEventListener('submit',event=>{
+   event.preventDefault();
+   if(create.disabled)return;
+   create.disabled=true;
+   const copyDraft=carry.checked;
+   const copyDocuments=carryDocuments.checked&&providers.value==='chatgpt-plan-responses';
+   const input={resourceId:d.conversation.resourceId,messageId,includeMessageIds:[...chosen],providerId:providers.value,
+    title:title.value,commandId:crypto.randomUUID(),tokenBudget:32768,expectedRevision:d.conversation.revision};
+   void run(async()=>{
+    if(sourceIntent!==openIntent||closing||disposed)return;
+    if(state.selectedResourceId!==input.resourceId)throw new Error('The selected conversation changed.');
+    if(copyDraft||copyDocuments)await flush();
+    if(sourceIntent!==openIntent||closing||disposed)return;
+    const sourceDraft=draftSessions.get(input.resourceId)?.snapshot();
+    const draft=copyDraft?sourceDraft?.content:undefined;
+    const documents=copyDocuments?displayedDocuments.map(({id,version})=>({id,version})):[];
+    const sameSelection=(current:typeof sourceDraft|ProductCommandMap['readDraft']['output'])=>
+     documents.every(ref=>current?.documents?.some(document=>document.id===ref.id&&document.version===ref.version&&!document.unavailable));
+    if(!sameSelection(sourceDraft))
+     throw new Error('The selected documents changed. Reopen the continuation to review them.');
+    const b=await call('branch',input);
+    if(sourceIntent!==openIntent||closing||disposed)return;
+    let reviewed=false;
+    const review=(approve:boolean)=>{
+     const intent=sourceIntent;
+     return run(async()=>{
+      if(reviewed||intent!==openIntent)return;
+      await call('reviewBranch',{handoffId:b.handoffId,fingerprint:b.fingerprint,approve});
+      reviewed=true;
+      let copyFailed=false;
+      if(draft||documents.length){
+       try {
+        if(documents.length){
+         const latest=await call('readDraft',{resourceId:input.resourceId});
+         if(intent!==openIntent||closing||disposed)return;
+         if(!sameSelection(latest)||!sameSelection(draftSessions.get(input.resourceId)?.snapshot()))
+          throw new Error('The selected documents changed.');
+        }
+        await call('saveDraft',{resourceId:b.resourceId,expectedVersion:0,content:draft??'',...(documents.length?{documents}:{})});
+       }
+       catch { copyFailed=true; }
+      }
+      if(intent!==openIntent||closing||disposed)return;
+      await open(b.resourceId,undefined,intent);
+      if(intent!==openIntent||closing||disposed)return;
+      await refresh();
+      if(copyFailed)status.textContent='The branch opened. Draft copy could not be confirmed. Your original draft is still saved.';
+     });
+    };
+    secondary.replaceChildren(el('p','Branch created; source context is prepared, awaiting your review.'),
+     button('Approve selected context',()=>review(true)),button('Reject context',()=>review(false)));
+   }).finally(()=>{create.disabled=false;});
+  });
+  secondary.append(form);syncPickers();options.motion?.wake();title.focus();
  };
- const beginProviderContinuation=(targetProviderId:string)=>run(async()=>{await flush();const id=state.selectedResourceId;if(!id)throw new Error('Open a conversation before continuing with another provider.');await loadDetail();const detail=current;if(!detail||detail.conversation.resourceId!==id||!detail.providers.some(p=>p.id===targetProviderId&&p.available&&p.record))throw new Error('That provider is unavailable for this conversation.');const anchor=detail.messages.items.find(m=>m.id===selectedMessageId)??detail.messages.items.at(-1);if(!anchor)throw new Error('No authorized source message is available to continue from. Start a new conversation instead.');showBranch(detail,anchor.id,targetProviderId);},true);
+ const beginProviderContinuation=(targetProviderId:string)=>{
+  const intent=openIntent,id=state.selectedResourceId;
+  return run(async()=>{
+   if(intent!==openIntent||closing||disposed)return;
+   if(!id)throw new Error('Open a conversation before continuing with another provider.');
+   await flush();
+   if(intent!==openIntent||closing||disposed)return;
+   await loadDetail();
+   if(intent!==openIntent||closing||disposed)return;
+   const detail=current;
+   if(!detail||detail.conversation.resourceId!==id||!detail.providers.some(p=>p.id===targetProviderId&&p.available&&p.record))throw new Error('That provider is unavailable for this conversation.');
+   const anchor=detail.messages.items.find(m=>m.id===selectedMessageId)??detail.messages.items.at(-1);
+   if(!anchor)throw new Error('No authorized source message is available to continue from. Start a new conversation instead.');
+   showBranch(detail,anchor.id,targetProviderId,true);
+  },true);
+ };
  async function requestProviderChange(event:ConversationProviderChange){if(event.mode==='continuation'){if(state.selectedResourceId!==event.resourceId)throw new Error('The selected conversation changed.');return beginProviderContinuation(event.targetProviderId);}return run(async()=>{if(state.selectedResourceId!==event.resourceId||current?.conversation.revision!==event.expectedRevision)throw new Error('The conversation changed. Refresh before choosing its provider.');await flush();await call('selectProvider',{resourceId:event.resourceId,providerId:event.targetProviderId,expectedRevision:event.expectedRevision});await loadDetail();},true);}
  const renderPolicy=(d:Detail)=>{
   const panel=el('details'),summary=el('summary','Connected Branches and source scopes'),form=el('form'),mode=select([{value:'independent',label:'Independent — explicit discovery only'},{value:'connected',label:'Connected — scoped retrieval allowed'},{value:'collaborative',label:'Collaborative — approved publication categories'}],d.policy.mode),scope=el('input'),sensitivity=select([{value:'public',label:'Public'},{value:'internal',label:'Internal'},{value:'sensitive',label:'Sensitive with explicit publication consent'}],d.policy.maxSensitivity),cross=el('input');scope.value=d.policy.allowedSourceIds.join(', ');scope.placeholder='All authorized family branches';cross.type='checkbox';cross.checked=d.policy.allowCrossProject;
