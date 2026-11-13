@@ -116,6 +116,12 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.throws(() => velaRecall.validate(velaRecall.prompt), /stale_personal_context/);
     assert.equal(await review.prepareVelaRecall({ ...velaInput, projectId: null }), null);
     activeVelaProject = 'project';
+    const enabledPolicy = (await review.inspect({ after: null, limit: 1 })).policy;
+    await review.setProviderUse('ordinary', false, enabledPolicy.version);
+    assert.throws(() => recall.validate(recall.turn), /stale_personal_context/);
+    assert.equal(await review.prepareOrdinaryRecall('other-chat', turn), null);
+    await review.setProviderUse('ordinary', true, enabledPolicy.version + 1);
+    assert.throws(() => recall.validate(recall.turn), /stale_personal_context/);
     assert.equal(await review.prepareOrdinaryRecall('foreign-chat', turn), null);
     assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...turn, webSearch: true }), null);
     assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...turn, messages: [{ role: 'user', content: 'Weather tomorrow' }] }), null);
