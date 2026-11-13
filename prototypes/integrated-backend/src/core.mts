@@ -6049,12 +6049,26 @@ export class BackendCore {
     const contextDigest = hash({history,context,handoff,clock,instructions,instructionVersion:packet.version});
     const baseTurn = { ...turn, messages, contextDigest };
     const memory = input.useMemory ? await this.personalMemoryReview?.prepareOrdinaryRecall(input.resourceId, baseTurn,
-      this.personalMemorySourceAnchors(input.content)) : null;
+      this.ordinaryMemorySourceAnchors(input.content, context, handoff)) : null;
     if (input.useMemory) ensure(memory, 'personal_memory_no_eligible_context');
     if (memory) captureMemory?.(memory);
     const exact = memory?.turn ?? baseTurn;
     const prepared = prepareResponsesTurn(exact);
     return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions: exact.instructions, instructionVersion: packet.version, messages: exact.messages, history, contextDigest: exact.contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview: requiresSourceReview || !!memory, ...(memory ? { memoryDigest: memory.manifest.digest } : {}) };
+  }
+  private ordinaryMemorySourceAnchors(intent: string, context: AttachedContext[], handoff: ConversationSendPreview['handoff']) {
+    const anchors = this.personalMemorySourceAnchors(intent);
+    const seen = new Set(anchors.map(source => JSON.stringify([source.conversationId, source.messageId])));
+    const append = (conversationId: string, messageId: string) => {
+      if (anchors.length >= 8 || !this.productResourceAccess(conversationId, messageId)) return;
+      const key = JSON.stringify([conversationId, messageId]);
+      if (seen.has(key)) return;
+      seen.add(key);
+      anchors.push({ kind: 'conversation-message', conversationId, messageId });
+    };
+    for (const item of context) append(item.sourceResourceId, item.sourceMessageId);
+    for (const item of handoff?.items ?? []) append(this.publicId(item.sourceConversationId), item.sourceMessageId);
+    return anchors;
   }
   private personalMemorySourceAnchors(intent: string) {
     const query = canonicalRetrievalQuery(intent);

@@ -80,6 +80,20 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     await review.commitCapture(await review.previewCapture({ conversationId: origin.resourceId, messageId: original.id,
       scope: 'project', category: 'decisions', text: sourceText, keywords: ['quartz'] }));
     await review.setProviderUse('ordinary', true, 1);
+    await f.core.command('ordinaryProviderCheck', {});
+    const branch = await f.core.command('branch', { resourceId: origin.resourceId, messageId: original.id,
+      includeMessageIds: [original.id], providerId, title: 'Synthetic related chat', commandId: randomUUID(), tokenBudget: 8192 });
+    const branchInput = { resourceId: branch.conversation.resourceId, content: 'What did we settle on?',
+      expectedRevision: branch.conversation.revision, commandId: randomUUID(), useMemory: true as const };
+    await assert.rejects(f.core.command('conversationSendPreview', branchInput), /handoff_not_approved/);
+    await f.core.command('review', { handoffId: branch.handoff.id, fingerprint: branch.handoff.fingerprint, approve: true });
+    const related = await f.core.command('conversationSendPreview', branchInput);
+    assert.equal(related.handoff?.items[0]?.sourceMessageId, original.id);
+    assert.match(related.responses?.memoryDigest ?? '', /^[a-f0-9]{64}$/);
+    assert.match(related.responses?.messages.at(-2)?.content ?? '', /untrusted-personalization-data/);
+    const relatedBinding = { previewId: related.id, fingerprint: related.fingerprint, commandId: branchInput.commandId };
+    const relatedApproval = await f.core.command('authorizeConversationSend', { ...relatedBinding,
+      reviewedBodyDigest: related.responses!.bodyDigest });
     const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
     const preview = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
       content: referencePrompt, expectedRevision: chat.revision, commandId: randomUUID(), useMemory: true });
@@ -105,6 +119,8 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     sourceAvailable = false;
     await assert.rejects(f.core.command('conversationSend', { ...nextBinding, grantId: nextApproval.grantId }), /personal_memory_no_eligible_context|stale_send_preview/);
     f.owner.atomic(() => f.owner.graph.markUnavailable(original.id));
+    await assert.rejects(f.core.command('conversationSend', { ...relatedBinding, grantId: relatedApproval.grantId }),
+      /source_unavailable|stale_context|source_revoked/);
     sourceAvailable = true;
     await assert.rejects(f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
       content: referencePrompt, expectedRevision: detail.conversation.revision, commandId: randomUUID(), useMemory: true }),
