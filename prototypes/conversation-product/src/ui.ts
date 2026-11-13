@@ -305,7 +305,10 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    event.preventDefault();
    if(first)first.focus();
    else if(switchTimer!==undefined)void loadSwitcher(false,true);
-   else if(switchLoading)switchFocusGeneration=switchGeneration;
+   else if(switchLoading){
+    switchOpen=undefined;
+    switchFocusGeneration=switchGeneration;
+   }
   }
   if(event.key!=='Enter'||!switcher.node.open)return;
   event.preventDefault();

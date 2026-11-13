@@ -427,7 +427,7 @@ for (const focusResult of [false,true]) test('Switch chat refreshes its exact qu
  } finally {await manager?.dispose();f.restore();}
 });
 
-for (const moveFocus of [false,true]) test('Switch chat ArrowDown reaches a pending result only while the query retains focus (moved: '+moveFocus+')', async () => {
+for (const action of ['focus result','focus filter','change from open to focus']) test('Switch chat ArrowDown handles a pending result ('+action+')', async () => {
  const f=fixture(), resourceId=f.draft.resourceId;
  const started=Promise.withResolvers<void>(), response=Promise.withResolvers<void>();
  const opened:string[]=[];
@@ -446,13 +446,15 @@ for (const moveFocus of [false,true]) test('Switch chat ArrowDown reaches a pend
   await manager.openSwitcher();
   const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
   const filter=switcher.querySelector('select');
-  input.value='Pending';input.fire('input');input.fire('keydown',{key:'ArrowDown'});
+  input.value='Pending';input.fire('input');
+  if(action==='change from open to focus')input.fire('keydown',{key:'Enter'});
+  input.fire('keydown',{key:'ArrowDown'});
   await started.promise;
-  if(moveFocus)filter.focus();
+  if(action==='focus filter')filter.focus();
   response.resolve();
   const results=switcher.querySelector('.cp-switcher-results');
   await until(()=>!!results.querySelector('button'));
-  assert.ok(f.view.doc.activeElement===(moveFocus?filter:results.querySelector('button')));
+  assert.ok(f.view.doc.activeElement===(action==='focus filter'?filter:results.querySelector('button')));
   assert.deepEqual(opened,[]);
  } finally {response.resolve();await manager?.dispose();f.restore();}
 });
