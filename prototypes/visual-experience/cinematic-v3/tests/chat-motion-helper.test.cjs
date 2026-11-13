@@ -39,7 +39,7 @@ test('representative search requires its explicit owned profile and a complete s
   query: 'SYNTHETIC_RARE_LIBRARY_TOKEN', draft: 'Synthetic unsent search acceptance draft.' };
  const receipt = { contract: 'aerynth.library-scale@1', synthetic: true, passed: true, providerCalls: 0,
   dataset: { name: 'large', actual: { conversations: 1072, graphMessages: 12072 } },
-  profile: { directory: 'large', database: 'aerynth.sqlite', reopenedThroughCore: true, sha256: 'a'.repeat(64), target } };
+  profile: { directory: 'large', database: 'aerynth.sqlite', reopenedThroughCore: true, contentPolicy: 'local-private', sha256: 'a'.repeat(64), target } };
  assert.deepEqual(helper.validateSearchSeed(receipt), { ...target, databaseDigest: receipt.profile.sha256 });
  assert.throws(() => helper.validateSearchSeed({ ...receipt, providerCalls: 1 }), /passing_synthetic_search_seed_required/);
  assert.throws(() => helper.validateSearchSeed({ ...receipt, dataset: { name: 'large', actual: { conversations: 1, graphMessages: 2 } } }));

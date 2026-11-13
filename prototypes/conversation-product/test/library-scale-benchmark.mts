@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { fork, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +48,12 @@ const digestIds=(ids:string[])=>hash(JSON.stringify([...ids].sort()));
 const serializeError=(error:unknown)=>({name:error instanceof Error?error.name:'Error',message:String(error instanceof Error?error.message:error).slice(0,500)});
 const parsed=new Map(process.argv.slice(2).map(arg=>{assert(arg.startsWith('--'),'invalid_argument');const n=arg.indexOf('=');return n<0?[arg.slice(2),'true']:[arg.slice(2,n),arg.slice(n+1)];}));
 const prepareSearchProfile=parsed.has('prepare-search-profile');
+function outputRoot(){
+ if(!prepareSearchProfile)return OUTPUT_ROOT;
+ const local=process.env.LOCALAPPDATA;
+ assert(local&&isAbsolute(local),'absolute_local_app_data_required');
+ return join(realpathSync(local),'Aerynth','synthetic-chat-search-profiles');
+}
 const datasetDeadlineMs=parsed.has('search-only')||prepareSearchProfile?MAX_SEARCH_DATASET_MS:MAX_DATASET_MS;
 const git=(...args:string[])=>execFileSync('git',args,{cwd:REPO,encoding:'utf8',windowsHide:true,maxBuffer:2*MiB}).trim();
 function directoryBytes(root:string):number{let count=0,total=0;const visit=(dir:string)=>{for(const e of readdirSync(dir,{withFileTypes:true})){assert(++count<=256,'fixture_file_bound');const p=join(dir,e.name);if(e.isDirectory())visit(p);else{assert(e.isFile()&&!e.isSymbolicLink(),'unexpected_fixture_entry');total+=statSync(p).size;}}};visit(root);return total;}
@@ -82,7 +88,7 @@ function page(value:unknown):{items:Record<string,unknown>[];total?:number}{
 
 async function worker(dataset:Dataset,session:string,candidate:string,searchOnly:boolean){
  const started=performance.now(),binding=sourceBinding(candidate);readApiReleased();
- const custody=relative(OUTPUT_ROOT,resolve(session));assert(custody&&!isAbsolute(custody)&&!custody.startsWith('..')&&/^library-scale-\d+-[a-f0-9]{8}$/.test(custody),'unowned_session_location');
+ const custody=relative(outputRoot(),realpathSync(session));assert(/^library-scale-\d+-[a-f0-9]{8}$/.test(custody),'unowned_session_location');
  const marker=JSON.parse(readFileSync(join(session,'owner.json'),'utf8'));
  assert(marker.contract==='aerynth.library-scale-owner@1'&&marker.candidate===candidate&&marker.searchOnly===searchOnly&&marker.prepareSearchProfile===prepareSearchProfile,'unowned_session');
  const profile=join(session,dataset);assert(!readdirSync(session).includes(dataset),'fresh_profile_required');mkdirSync(profile);
@@ -165,7 +171,7 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
    const resourceId=rare.resourceId,messageId=rare.messageIds[0],draft='Synthetic unsent search acceptance draft.';
    await core.command('conversation',{name:'saveDraft',input:{resourceId,expectedVersion:0,content:draft}});
    await core.command('close',{});core=undefined;
-   core=new BackendCore({path:file,privateRoot:profile,contentPolicy:'synthetic-only',provider:'fixture'});
+   core=new BackendCore({path:file,privateRoot:profile,contentPolicy:'local-private',provider:'codex',nativeMedia:true,rendererEventTransport:true});
    forbidProvider(core as unknown as FixtureOwner);
    const results=page(await core.command('conversation',{name:'search',input:{text:rareMarker,searchMode:'chat-history',sort:'activity',limit:12}}));
    assert.equal(results.total,1);
@@ -177,7 +183,7 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
    await core.command('close',{});core=undefined;
    fixtureFence(session,profile,started);
    receipt.profile={directory:dataset,database:'aerynth.sqlite',sha256:hash(readFileSync(file)),
-    target:{query:rareMarker,resourceId,messageId,draft},reopenedThroughCore:true};
+    target:{query:rareMarker,resourceId,messageId,draft},reopenedThroughCore:true,contentPolicy:'local-private'};
    receipt.providerCalls=providerCalls;
    receipt.passed=true;
    return receipt;
@@ -291,8 +297,11 @@ async function main(){
  const candidate=parsed.get('candidate');assert(candidate,'explicit_candidate_required');
  if(parsed.has('worker')){assert(parsed.get('session')&&parsed.get('dataset'));const dataset=parsed.get('dataset') as Dataset;assert(Object.hasOwn(DATASETS,dataset));const result=await worker(dataset,parsed.get('session')!,candidate,searchOnly);process.exitCode=result.passed?0:1;return;}
  const names=(parsed.get('datasets')??'small').split(',') as Dataset[];assert(names.length>=1&&names.length<=3&&new Set(names).size===names.length&&names.every(n=>Object.hasOwn(DATASETS,n)),'invalid_datasets');
- if(prepareSearchProfile)assert.equal(names.length,1,'one_owned_profile_required');
- const binding=sourceBinding(candidate);readApiReleased();const reserve=guard(),session=join(OUTPUT_ROOT,'library-scale-'+Date.now()+'-'+randomUUID().slice(0,8));mkdirSync(session,{recursive:true});writeReceipt(join(session,'owner.json'),{contract:'aerynth.library-scale-owner@1',candidate,binding,reserve,searchOnly,prepareSearchProfile});
+ if(prepareSearchProfile)assert.deepEqual(names,['large'],'one_large_owned_profile_required');
+ const binding=sourceBinding(candidate);readApiReleased();const reserve=guard(),root=outputRoot();
+ mkdirSync(root,{recursive:true});
+ assert.equal(realpathSync(root).toLowerCase(),root.toLowerCase(),'fixture_root_redirected');
+ const session=join(root,'library-scale-'+Date.now()+'-'+randomUUID().slice(0,8));mkdirSync(session);writeReceipt(join(session,'owner.json'),{contract:'aerynth.library-scale-owner@1',candidate,binding,reserve,searchOnly,prepareSearchProfile});
  const stages:unknown[]=[];
  for(const dataset of names){
   guard();assert(directoryBytes(session)<DISK_BOUND-DB_BOUND*2-OUTPUT_BOUND,'insufficient_owned_envelope');

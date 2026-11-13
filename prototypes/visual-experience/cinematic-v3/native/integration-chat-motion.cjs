@@ -110,22 +110,28 @@ function validateSearchSeed(seed) {
   assert.equal(seed.dataset.actual?.conversations, 1072);
   assert.equal(seed.dataset.actual?.graphMessages, 12072);
   assert(seed.profile?.directory === 'large' && seed.profile.database === 'aerynth.sqlite' &&
-    seed.profile.reopenedThroughCore === true && /^[a-f0-9]{64}$/.test(seed.profile.sha256), 'verified_search_database_required');
+    seed.profile.reopenedThroughCore === true && seed.profile.contentPolicy === 'local-private' &&
+    /^[a-f0-9]{64}$/.test(seed.profile.sha256), 'verified_search_database_required');
   const target = seed.profile.target;
   assert(target?.query === 'SYNTHETIC_RARE_LIBRARY_TOKEN' && /^[a-f0-9-]{36}$/.test(target.resourceId) &&
     /^msg-\d+$/.test(target.messageId) && target.draft === 'Synthetic unsent search acceptance draft.', 'exact_search_target_required');
   return { resourceId: target.resourceId, messageId: target.messageId, query: target.query, draft: target.draft, databaseDigest: seed.profile.sha256 };
 }
-function preflightSearchSeed(root, argv, source) {
+function ownedSearchSeed(root, argv) {
   assertOwnedProfile(root, argv, 'Automated check');
-  const evidenceRoot = realpathSync(path.resolve(__dirname, '../.runtime/application-evidence'));
-  assert.equal(path.dirname(path.dirname(realpathSync(root))).toLowerCase(), evidenceRoot.toLowerCase(), 'owned_search_evidence_root_required');
+  assert(process.env.LOCALAPPDATA && path.isAbsolute(process.env.LOCALAPPDATA), 'absolute_local_app_data_required');
+  const evidenceRoot = path.join(realpathSync(process.env.LOCALAPPDATA), 'Aerynth', 'synthetic-chat-search-profiles');
+  assert.equal(realpathSync(root).toLowerCase(), path.join(evidenceRoot, path.basename(path.dirname(root)), 'large').toLowerCase(), 'owned_search_evidence_root_required');
+  return path.join(root, '../large.json');
+}
+function preflightSearchSeed(root, argv, source) {
+  const receiptFile = ownedSearchSeed(root, argv);
   const readBounded = (file, maxBytes) => {
     const stat = lstatSync(file);
     assert(stat.isFile() && stat.size <= maxBytes, 'bounded_search_seed_required');
     return readFileSync(file);
   };
-  const seed = JSON.parse(readBounded(path.join(root, '../large.json'), MiB));
+  const seed = JSON.parse(readBounded(receiptFile, MiB));
   const target = validateSearchSeed(seed);
   const benchmark = 'prototypes/conversation-product/test/library-scale-benchmark.mts';
   const hashes = seed.binding?.hashes;
@@ -245,9 +251,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const canonical = async id => { const { core, desktop: d } = await proof(); return canonicalChat(await detail(id), await draft(id), d, core, await rpc('conversation', { name: 'collections', input: {} })); };
     await wait('Combined actual app ready', () => js("document.body.dataset.applicationHydrated==='true'"));
     if (seeded) {
-      const evidenceRoot = path.resolve(__dirname, '../.runtime/application-evidence');
-      assert.equal(path.dirname(path.dirname(await fs.realpath(root))).toLowerCase(), (await fs.realpath(evidenceRoot)).toLowerCase(), 'owned_search_evidence_root_required');
-      const seed = await readJson(path.join(root, '../large.json')), target = validateSearchSeed(seed);
+      const seed = await readJson(ownedSearchSeed(root, process.argv)), target = validateSearchSeed(seed);
       const { resourceId: id, messageId, query } = target;
       const core = await rpc('snapshot', {});
       const assertSeededHistory = snapshot => {
