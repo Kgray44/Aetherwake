@@ -1320,12 +1320,25 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
             else assert.equal(calls, expectedCase === 'blind-001' ? 5 : 3);
             const replay = await f.core.command('replay', { after: eventCursor, limit: 500 });
             assert.equal(replay.truncated, false);
-            const usageEvents = replay.events.filter(event => event.type === 'provider/usage' &&
-              event.classification === (live ? 'reported' : 'simulated'));
-            const tokenSamples = usageEvents.flatMap(event => event.payload.usage?.totalTokens ?? []);
+            const classification = live ? 'reported' : 'simulated';
+            const settlements = replay.events.filter(event =>
+              event.providerId === 'openai-api-vela' && event.classification === classification &&
+              (event.type === 'vela.api/scoped-completed' || event.type === 'execution/provider_completed'))
+              .map(event => ({
+                eventId: event.eventId,
+                executionId: event.payload.api?.executionId ?? event.executionId,
+                stage: event.type === 'vela.api/scoped-completed' ? 'structured' : 'answer',
+                elapsedMs: event.payload.api?.elapsedMs ?? null,
+                usage: event.payload.usage ?? null,
+              }));
+            assert.equal(settlements.length, calls);
+            assert.ok(settlements.every(receipt => receipt.executionId));
+            assert.equal(new Set(settlements.map(receipt => receipt.executionId)).size, calls);
+            assert.equal(settlements.filter(receipt => receipt.stage === 'answer').length, 1);
+            const tokenSamples = settlements.flatMap(receipt => receipt.usage?.totalTokens ?? []);
             const totalTokens = tokenSamples.length === calls ? tokenSamples.reduce((total, value) => total + value, 0) : null;
             if (!live) assert.equal(totalTokens, calls * 140);
-            return { answer, calls, totalTokens, tokenSamples: tokenSamples.length, requestedModel: live?.model ?? 'gpt-6-luna',
+            return { answer, calls, totalTokens, tokenSamples: tokenSamples.length, settlements, requestedModel: live?.model ?? 'gpt-6-luna',
               transport: live ? 'live' : 'synthetic' };
           } catch (error) { hostError = error; throw error; }
         }, signal, { journal, maxCases: 1, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
