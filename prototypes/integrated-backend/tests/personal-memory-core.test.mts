@@ -318,6 +318,28 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     await core.command('close', {});
     core = open();
     await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
+    const changedPreference = await core.command('personalMemoryManagementNative', {
+      type: 'preview', request: { action: 'correct', id: global.id, version: 1,
+        text: 'I now prefer the synthetic indigo enclosure.', keywords: ['indigo', 'enclosure'] },
+    }) as import('../src/personal-memory-review.mts').ManagementReview;
+    const reviewedPreference = await reviewRecall('Which amber enclosure?');
+    const updatedPreference = await core.command('personalMemoryManagementNative', {
+      type: 'commit', review: changedPreference,
+    }) as { id: string };
+    await assert.rejects(core.command('authorizeVelaRequest', { previewId: reviewedPreference.previewId,
+      signature: reviewedPreference.signature, reviewDigest: reviewedPreference.reviewDigest }),
+      /stale_personal_context|personal_record_unavailable/);
+    await core.command('close', {});
+    core = open();
+    await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: otherWorkspace.id } });
+    const recalledPreference = await reviewRecall('Which enclosure do I prefer?');
+    assert.match(recalledPreference.prompt, new RegExp(updatedPreference.id));
+    assert.match(recalledPreference.prompt, new RegExp(preference.id));
+    assert.match(recalledPreference.prompt, /synthetic indigo enclosure/);
+    assert.doesNotMatch(recalledPreference.prompt, new RegExp(global.id));
+    assert.doesNotMatch(recalledPreference.prompt, /synthetic amber enclosure/);
+    await assert.rejects(reviewRecall('What about amber?'), /personal_memory_no_eligible_context/);
+    await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
     const current = await reviewRecall('Which basalt relay should I use?');
     assert.match(current.prompt, new RegExp(replacement.id));
     assert.match(current.prompt, /"certainty":"user-reviewed-summary"/);
