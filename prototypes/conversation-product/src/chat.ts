@@ -78,6 +78,7 @@ export interface ConversationChatOptions {
   listDocuments?: (conversationId: string) => readonly DraftDocument[];
   openDocument?: (document: DraftDocument) => Promise<'opened' | 'unavailable' | 'superseded'>;
   askVelaAboutDocument?: (document: DraftDocument, isCurrent: () => boolean) => Promise<void>;
+  captureDocumentHandoffScope?: () => () => boolean;
   onViewState?: (state: { resourceId: string; content: string; scroll: number; offset: number; view?:ConversationViewCapture }) => void;
 }
 export interface ConversationChat {
@@ -196,9 +197,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         decorateConversationControl(askVela,{identity:'source',emphasis:'secondary'});
         askVela.setAttribute('aria-label','Ask Vela about ' + label);
         askVela.addEventListener('click', async () => {
-          const isCurrent = () => !retiring && !disposed && !accessRevoked && root.contains(askVela) &&
+          if (askVela.disabled || stagingForVela) return;
+          const inScope = options.captureDocumentHandoffScope?.();
+          const isCurrent = () => !retiring && !disposed && !accessRevoked && (inScope?.() ?? true) && root.contains(askVela) &&
             session.snapshot().documents.some(item => item.id === document.id && item.version === document.version && !item.unavailable);
-          if (askVela.disabled || stagingForVela || !isCurrent()) return;
+          if (!isCurrent()) return;
           stagingForVela = true;
           renderDraft();
           try {

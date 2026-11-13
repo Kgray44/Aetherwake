@@ -1565,12 +1565,19 @@ test('replace at the attachment limit preserves the old selection on cancellatio
  } finally { f.pending?.reject(Error('synthetic cleanup')); await chat?.dispose(); f.restore(); }
 });
 
-for (const action of ['close', 'switch'] as const) test('chat manager '+action+' immediately invalidates a pending attachment handoff', async () => {
+for (const action of ['close', 'switch', 'switch during save'] as const) test('chat manager '+action+' immediately invalidates a pending attachment handoff', async () => {
  const f = fixture('chatgpt-plan-responses');
  const resourceId = f.draft.resourceId;
  const document = { id: 'file:brief', version: 1, title: 'Brief.pdf' };
  const destination = 'chat:other';
+ let saving = false;
+ let releaseSave!: () => void;
+ const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
  const port = { async command(name: string, input: any) {
+  if (name === 'saveDraft' && input.content === 'Edited before handoff') {
+   saving = true;
+   await saveGate;
+  }
   if (name === 'detail' && input.resourceId === destination) {
    const detail = structuredClone(f.detail);
    detail.conversation.resourceId = destination;
@@ -1589,6 +1596,21 @@ for (const action of ['close', 'switch'] as const) test('chat manager '+action+'
   manager = mountConversationManager(f.view.root,port,{resourceId,onClose:()=>{closed=true;},openDocument:async ()=>'opened',
    askVelaAboutDocument:async (_document, current)=>{isCurrent=current;await gate;}});
   await manager.ready;
+  if (action === 'switch during save') {
+   const editor = f.view.root.querySelector('textarea');
+   editor.value = 'Edited before handoff';
+   editor.fire('input');
+   named(f.view.root,'Ask Vela').fire('click');
+   await until(()=>saving);
+   const navigation = manager.open(destination);
+   releaseSave();
+   await navigation;
+   assert.equal(isCurrent,undefined);
+   assert.equal(manager.state.selectedResourceId,destination);
+   assert.equal(f.draft.content,'Edited before handoff');
+   assert.deepEqual(f.draft.documents,[document]);
+   return;
+  }
   named(f.view.root,'Ask Vela').fire('click');
   await until(()=>!!isCurrent);
   assert.equal(isCurrent?.(),true);
@@ -1600,7 +1622,7 @@ for (const action of ['close', 'switch'] as const) test('chat manager '+action+'
    assert.equal(manager.state.selectedResourceId,destination);
   } else await until(()=>closed);
   assert.deepEqual(f.draft.documents,[document]);
- } finally { release(); await manager?.dispose(); f.restore(); }
+ } finally { releaseSave(); release(); await manager?.dispose(); f.restore(); }
 });
 
 for (const closeDuringHandoff of [false, true]) test('saved document picker reuses an exact current resource (close during handoff: '+closeDuringHandoff+')', async () => {
