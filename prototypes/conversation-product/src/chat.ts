@@ -371,7 +371,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   for(const name of ['wheel','pointerdown','touchstart'])messages.addEventListener(name,event=>{pendingFollow=pendingAnchor=presentationAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;if(name!=='pointerdown'||event.target===messages)beginTranscriptScroll();},{passive:true});
   messages.addEventListener('keydown',event=>{if(event.target===messages&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)){pendingFollow=pendingAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;beginTranscriptScroll();}});
   const doAction = (event: ConversationMessageAction) => { Promise.resolve(options.onMessageAction?.(event)).catch(error=>report(errorText(error))); };
-  const replyNotes = new Map<string, { commandId: string; pending: boolean; noteId?: string }>();
+  const replyNotes = new Map<string, { pending: boolean; noteId?: string }>();
   const updateReplyNoteControl = (messageId: string, button: HTMLButtonElement) => {
     const capture = replyNotes.get(messageId);
     button.disabled = !!capture?.pending || !!capture?.noteId && !options.openReplyNote;
@@ -417,12 +417,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           await options.openReplyNote?.(capture.noteId);
           return;
         }
-        capture ??= { commandId: crypto.randomUUID(), pending: false };
+        capture ??= { pending: false };
         replyNotes.set(message.id, capture);
         capture.pending = save.disabled = true;
         setConversationControlLabel(save, 'Saving reply…');
         try {
-          const receipt = await options.saveReplyNote!({ resourceId, messageId: message.id, commandId: capture.commandId });
+          // Both chat surfaces use the same idempotency key for this exact reply.
+          const source = new TextEncoder().encode(JSON.stringify([resourceId, message.id]));
+          const digest = await crypto.subtle.digest('SHA-256', source);
+          if (disposed || accessRevoked) return;
+          const key = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+          const receipt = await options.saveReplyNote!({ resourceId, messageId: message.id, commandId: 'reply-note-v1:' + key });
           if (typeof receipt?.noteId !== 'string' || !receipt.noteId) throw new Error('Missing saved note receipt');
           capture.noteId = receipt.noteId;
           if (!accessRevoked) report('Reply saved as a note.');
