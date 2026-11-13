@@ -1784,6 +1784,24 @@ test('History retries a failed search with the same query and keeps the open cha
  }finally{await manager?.dispose();f.restore();}
 });
 
+test('History waits for composed text before searching',async t=>{
+ const f=fixture();let manager;
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const query=f.view.root.querySelector('input[aria-label="Search conversation history"]');
+  query.fire('compositionstart');query.value='intermediate';query.fire('input',{isComposing:true});
+  t.mock.timers.tick(180);
+  await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);
+  assert.equal(f.calls.filter(call=>call.name==='search').length,0);
+  query.value='確定';query.fire('compositionend');query.fire('input');
+  t.mock.timers.tick(180);
+  await until(()=>f.calls.some(call=>call.name==='search'));
+  assert.deepEqual(f.calls.filter(call=>call.name==='search').map(call=>call.input.text),['確定']);
+ }finally{await manager?.dispose();f.restore();}
+});
+
 test('a History filter change consumes the pending text debounce',async t=>{
  const f=fixture();let manager;
  t.mock.timers.enable({apis:['setTimeout']});

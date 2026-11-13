@@ -507,12 +507,16 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    },true);
   });collectionOpening=operation.catch(()=>{});return operation;
  };
- const filter=()=>{clearTimeout(searchTimer);searchTimer=undefined;request++;setHistoryQuery({...state.query,text:query.value,projectId:project.value==='__none'?null:project.value||undefined,collectionId:collection.value||undefined,archived:archive.value==='archived',favorite:favorite.checked,sort:sort.value as SearchQuery['sort'],searchMode:searchMode.value as SearchQuery['searchMode'],offset:0});syncFilterControls();if(busy)filterQueued=true;else void run(refresh);};
- query.addEventListener('input',()=>{request++;clearSearch.hidden=!query.value;clearTimeout(searchTimer);searchTimer=setTimeout(filter,180);});for(const control of [project,collection,archive,favorite,sort,searchMode])control.addEventListener('change',filter);
+ let historyComposing=false;
+ const filter=()=>{clearTimeout(searchTimer);searchTimer=undefined;if(historyComposing)return;request++;setHistoryQuery({...state.query,text:query.value,projectId:project.value==='__none'?null:project.value||undefined,collectionId:collection.value||undefined,archived:archive.value==='archived',favorite:favorite.checked,sort:sort.value as SearchQuery['sort'],searchMode:searchMode.value as SearchQuery['searchMode'],offset:0});syncFilterControls();if(busy)filterQueued=true;else void run(refresh);};
+ const scheduleHistorySearch=()=>{request++;clearSearch.hidden=!query.value;clearTimeout(searchTimer);searchTimer=undefined;if(!historyComposing)searchTimer=setTimeout(filter,180);};
+ query.addEventListener('compositionstart',()=>{historyComposing=true;scheduleHistorySearch();});
+ query.addEventListener('compositionend',()=>{historyComposing=false;scheduleHistorySearch();});
+ query.addEventListener('input',scheduleHistorySearch);for(const control of [project,collection,archive,favorite,sort,searchMode])control.addEventListener('change',filter);
  createForm.addEventListener('submit',event=>{event.preventDefault();void run(async()=>{const c=await call('create',{title:newTitle.value.trim()||'New conversation',...(explicitNewProvider?{providerId:explicitNewProvider}:{}),commandId:crypto.randomUUID()});newTitle.value='';newChat.node.open=false;await open(c.resourceId);await refresh();chat?.focusComposer();});});
  createFolder.addEventListener('submit',event=>{event.preventDefault();void run(async()=>{const parentId=state.query.collectionId,created=await call('organize',{type:'createCollection',title:folderTitle.value,projectId:state.query.projectId??collections.find(item=>item.id===parentId)?.projectId??null});await reloadCollections();const c=createdCollection(created);if(parentId)await call('collectionRule',{collectionId:c.id,parentId,rule:null,expectedVersion:c.version,expectedRuleRevision:c.ruleRevision});folderTitle.value='';await refresh();});});
  root.addEventListener('toggle',event=>{const opened=event.target as HTMLDetailsElement;if(opened.tagName!=='DETAILS'||!opened.open||opened.closest('.cp-library-tree'))return;for(const other of root.querySelectorAll<HTMLDetailsElement>('details[open]'))if(!other.closest('.cp-library-tree')&&other!==opened&&!other.contains(opened)&&!opened.contains(other))other.open=false;},true);
- root.addEventListener('keydown',event=>{if(event.key==='Escape'){
+ root.addEventListener('keydown',event=>{if(event.key==='Escape'&&!event.isComposing&&!(historyComposing&&event.target===query)){
   const target=event.target as HTMLElement,active=target.closest<HTMLDetailsElement>('details[open]')??[...root.querySelectorAll<HTMLDetailsElement>('details[open]')].at(-1);
   event.preventDefault();event.stopPropagation();if(active){active.open=false;active.querySelector('summary')?.focus();return;}void closeManager();
  }});
