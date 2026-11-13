@@ -999,8 +999,13 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         const afterEventInspection = await desktop();
         assert.equal(afterEventInspection.activeWorkspaceId, beforeEventInspection.activeWorkspaceId);
         assert.deepEqual(afterEventInspection.viewport, beforeEventInspection.viewport);
+        receipt.recordedEventInspection = {
+          missionId, representation: "forensic", focusReturned: true,
+          workspacePreserved: true, viewportPreserved: true,
+        };
         await click(stream + ' [aria-label="Close panel"]');
         await wait("Stream closes after event inspection", () => js(`!document.querySelector(${quote(stream)})`));
+        if (!await js(`document.querySelector(${quote(SURFACE)})?.open`)) await click("#vela");
         await click(reportLink);
         await click(RECORD + ' [data-mission-focus="preview-workroom"]');
         await click(RECORD + ' [data-mission-focus="apply-workroom"]');
