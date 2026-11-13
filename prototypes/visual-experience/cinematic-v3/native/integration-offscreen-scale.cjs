@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { appendFileSync } = require("node:fs");
 const { readFile, writeFile } = require("node:fs/promises");
 const path = require("node:path");
 const { options, sameState } = require("./integration-block-scale.cjs");
@@ -14,11 +15,22 @@ exports.verify = async ({
   const selected = options(process.argv);
   const profile = process.argv.includes("--offscreen-profile");
   const memoryCycles = process.argv.includes("--offscreen-memory-cycles");
+  const trace = process.argv.includes("--offscreen-checkpoints");
+  const phase = selected.restore ? "restart" : "initial";
+  const checkpointPath = path.join(privateRoot, "offscreen-checkpoints-" + phase + ".jsonl");
+  function checkpoint(stage) {
+    if (!trace) return;
+    appendFileSync(checkpointPath, JSON.stringify({
+      stage,
+      elapsedMs: Math.round(performance.now() - moduleStartedMonotonicMs),
+    }) + "\n");
+  }
+  checkpoint("verifier-started");
   const devtools = win.webContents.debugger;
   const receipt = {
     contract: "aerynth.offscreen-block-scale@1",
     source,
-    phase: selected.restore ? "restart" : "initial",
+    phase,
     count: selected.count,
     scope: "Offscreen Electron callback and compositor paint observations. No visible window, native pointer input, OS presentation, or provider execution.",
     passed: false,
@@ -70,6 +82,7 @@ exports.verify = async ({
   const snapshot = () => js("window.__aerynth.application()");
   const execute = (action) => js("window.__aerynth.execute(" + JSON.stringify(action) + ")");
   const timed = async (name, action) => {
+    checkpoint(name);
     const start = performance.now();
     const result = await action();
     receipt.commandElapsedMs[name] = performance.now() - start;
@@ -94,6 +107,7 @@ exports.verify = async ({
   ].filter((key) => Number.isFinite(before[key]) && Number.isFinite(after[key]))
     .map((key) => [key, after[key] - before[key]]));
   const sample = async (label) => {
+    checkpoint(label);
     const before = profile ? await chromiumMetrics() : null;
     await js("window.__aerynth.resetMetrics()");
     paintIntervals.length = 0;
@@ -174,11 +188,14 @@ exports.verify = async ({
       devtools.attach("1.3");
       await devtools.sendCommand("Performance.enable");
     }
+    checkpoint("wait-for-hydration");
     await wait('document.body.dataset.applicationHydrated === "true"');
     receipt.startupToHydratedMs = performance.now() - moduleStartedMonotonicMs;
+    checkpoint("wait-for-first-draw");
     await js("window.__aerynth.setActive(true)");
     await wait("window.__aerynth.snapshot().metrics.draws > 0");
     const initial = await snapshot();
+    checkpoint("initial-state");
     if (pinWitness) await verifySavedPin();
     if (selected.restore) {
       sameState(JSON.parse(await readFile(expectedPath, "utf8")), initial);
@@ -237,6 +254,7 @@ exports.verify = async ({
         // Repeat the same scene lifecycle without capturing images between
         // samples. Each return must retain the same committed workspace.
         for (let cycle = 1; cycle <= 3; cycle++) {
+          checkpoint("navigate-revisit-" + cycle);
           await navigate({ kind: "constellation", projectId: null });
           await wait("document.querySelector('#stage').inert === true");
           await navigate({ kind: "workspace", workspaceId: seed.alternateWorkspaceId });
@@ -247,6 +265,7 @@ exports.verify = async ({
           sameState(projection(canonical), await snapshot());
           await sample("memory-revisit-" + cycle);
         }
+        checkpoint("inactive-draws");
         await js("window.__aerynth.setActive(false)");
         await wait("window.__aerynth.snapshot().active === false");
         await pause(200);
@@ -258,11 +277,14 @@ exports.verify = async ({
         await js("window.__aerynth.setActive(true)");
         await wait("window.__aerynth.snapshot().metrics.draws > " + after);
       }
+      checkpoint("reduced-motion");
       await js("window.__aerynth.setReduced(true)");
       await wait("window.__aerynth.snapshot().reduced === true");
+      checkpoint("lose-context");
       await js("window.__aerynth.simulateContextLoss()");
       await wait("window.__aerynth.snapshot().gpu?.contextLost === true");
       const drawsBeforeRestore = await js("window.__aerynth.snapshot().metrics.draws");
+      checkpoint("restore-context");
       await js("window.__aerynth.restoreContext()");
       await wait("window.__aerynth.snapshot().gpu?.contextLost === false && !window.__aerynth.snapshot().graphicsFailed");
       await wait("window.__aerynth.snapshot().metrics.draws > " + drawsBeforeRestore);
@@ -276,11 +298,13 @@ exports.verify = async ({
         assertGpuResources(recovered);
         receipt.recoveredGpuResources = recovered;
       }
+      checkpoint("flush");
       await js("window.__aerynth.flush()");
       await writeFile(expectedPath, JSON.stringify(projection(canonical)), { flag: "wx" });
       receipt.reducedMotion = true;
       receipt.graphicsRecovered = true;
     }
+    checkpoint("final-state-and-capture");
     if (pinWitness) await verifySavedPin();
     receipt.capture = await capture("offscreen-scale-" + receipt.phase + ".png");
     assert.deepEqual(startupErrors, []);
@@ -293,6 +317,7 @@ exports.verify = async ({
   if (profile && devtools.isAttached()) devtools.detach();
   win.webContents.removeListener("paint", onPaint);
   const evidence = path.join(privateRoot, "offscreen-scale-" + receipt.phase + ".json");
+  checkpoint("close-backend");
   try { await call("close", {}); }
   catch (error) { receipt.passed = false; receipt.error ??= String(error.stack || error); }
   await writeFile(evidence, JSON.stringify(receipt, null, 2), { flag: "wx" });

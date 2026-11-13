@@ -464,12 +464,15 @@ test('the animated model picker refreshes explicitly and sends the selected cata
 test('the mounted chat submits an explicit web lookup and opens only canonical citation references',async()=>{
  const f=fixture('chatgpt-plan-responses');let chat;
  try{
-  f.detail.providers[0].modelOptions=[{id:'gpt-6.1-sol',label:'Synthetic Sol catalog entry',eligibleTools:['web_search']}];
+  f.detail.providers[0].modelOptions=[{id:'ordinary-only',label:'Synthetic text-only model'},{id:'gpt-6.1-sol',label:'Synthetic Sol catalog entry',eligibleTools:['web_search']}];
   const message=f.detail.messages.items[1];
   message.webSearch={completed:true,citations:[{url:'https://science.example.org/moon',title:'Moon facts',start:0,end:1},{url:'https://science.example.org/second',title:'Second source',start:1,end:message.content.length-1}]};
   const port={command:async(name:string,input:any)=>name==='openCitation'?(f.calls.push({name,input}),{requested:true}):(f.port.command as any)(name,input)} as ConversationProductPort;
-  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId});await chat.ready;
+  const selections=new Map([[f.draft.resourceId,{id:'ordinary-only',label:'Synthetic text-only model'}]]);
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,models:{selections,async refresh(){}}});await chat.ready;
   const form=f.view.root.querySelector('form'),web=named(form,'Search web'),refs=f.view.root.querySelectorAll('.cp-web-citation');
+  assert.equal(web.hidden,true,'An explicitly selected model must be respected');
+  selections.clear();await chat.refresh();
   assert(web && !web.hidden && !web.disabled);
   assert.equal(refs.length,2);
   assert.equal(refs[0].parentNode?.tagName,'P','ordinary annotated text has an inline source');
