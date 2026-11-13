@@ -21,6 +21,7 @@ import { Backend } from '../../integrated-backend/src/service.mts';
 import type { ProviderPort, ConversationProductRequest } from '../../integrated-backend/src/contracts.mts';
 import type { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import type { ConversationGraph, GraphData } from '../../connected-conversations/src/graph.ts';
+import type { SearchQuery } from '../src/contracts.ts';
 import type { ConversationProduct, CanonicalConversationHost } from '../src/service.mts';
 
 const MiB=1024*1024,DISK_BOUND=64*MiB,DB_BOUND=15*MiB,STATE_BOUND=6*MiB;
@@ -96,7 +97,7 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
  const marker=JSON.parse(readFileSync(join(session,'owner.json'),'utf8'));
  assert(marker.contract==='aerynth.library-scale-owner@1'&&marker.candidate===candidate&&marker.searchOnly===searchOnly&&marker.prepareSearchProfile===prepareSearchProfile,'unowned_session');
  const profile=join(session,dataset);assert(!readdirSync(session).includes(dataset),'fresh_profile_required');mkdirSync(profile);
- let backend:Backend|undefined;
+
  const file=join(profile,prepareSearchProfile?'aerynth.sqlite':'canonical.sqlite'),requested=DATASETS[dataset];let core:BackendCore|undefined,providerCalls=0;
  const receipt:Record<string,unknown>={contract:'aerynth.library-scale@1',synthetic:true,binding,searchOnly,dataset:{name:dataset,requested},passed:false,
   tiers:{structural:'instrumented canonical reads; excluded from timing',timing:'in-process Core/conversation service only; excludes Electron/IPC/render/presentation'},
@@ -268,6 +269,7 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
    ];
   }
   const observations:unknown[]=[];receipt.operations=observations;
+  const workerQueries:{id:string;input:SearchQuery;digest:string}[]=[];
   owner.save=originalSave;
   for(const operation of selectedOperations){
    fixtureFence(session,profile,started);
@@ -283,6 +285,10 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
    try{value=await invoke(operation);operation.check(value);work.responseBytes=jsonBytes(value);}
    finally{restores.forEach(restore=>restore());owner.graph.snapshot=originalSnapshot;owner.graph.visibleMessages=originalVisible;owner.kernel.getResource=originalResource;}
    work.sqliteChanges=Number(db.prepare('SELECT total_changes() AS n').get()!.n)-before;work.providerCalls=providerCalls;assert.equal(work.sqliteChanges,0);assert.equal(providerCalls,0);
+   if(measureWorker){
+    assert(operation.name==='search');
+    workerQueries.push({id:operation.id,input:operation.input,digest:hash(JSON.stringify(value))});
+   }
    const actual=operation.name==='detail'?(value as {messages:{items:{id:string}[]}}).messages.items.map(row=>row.id):page(value).items.map(row=>row.kind==='message'?String(row.resourceId)+'/'+String(row.messageId):String(row.resourceId));
    const observation:Record<string,unknown>={id:operation.id,kind:operation.name,queryClass:operation.id,limit:operation.input.limit,work,instrumentationCoverage:['same canonical graph/state message content getters','graph snapshot/visibleMessages entry points','kernel.getResource note-return counter; direct SQL note reads not counted'],correctness:{passed:true,resultIdentityDigest:digestIds(actual)},timing:{tier:'in-process-Core-CP-read',warmups:0,samplesMs:[]}};observations.push(observation);
    const samples:number[]=[],timing=observation.timing as {tier:string;warmups:number;samplesMs:number[];medianMs?:number;p95Ms?:number;complete?:boolean;stopped?:string};
@@ -294,63 +300,90 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
    timing.samplesMs=samples;timing.complete=samples.length===20;if(samples.length){const sorted=[...samples].sort((a,b)=>a-b);timing.medianMs=sorted[Math.floor((sorted.length-1)/2)];timing.p95Ms=sorted[Math.ceil(sorted.length*.95)-1];}
   }
   assert.equal(providerCalls,0);receipt.providerCalls=providerCalls;
-  if(measureWorker){
-   await core.command('close',{});core=undefined;
-   const startupAt=performance.now();
-   backend=new Backend({path:file,privateRoot:profile,contentPolicy:'synthetic-only',provider:'fixture'});
-   const firstResult=await backend.call('conversation',{name:selectedOperations[0].name,input:selectedOperations[0].input} as ReadRequest);
-   receipt.workerStartupAndFirstQueryMs=performance.now()-startupAt;
-   selectedOperations[0].check(firstResult);
-   const workerObservations=[];
-   for(const operation of selectedOperations){
-    const samplesMs:number[]=[];
-    for(let n=0;n<25;n++){
-     fixtureFence(session,profile,started);
-     const time=performance.now();
-     const result=await backend.call('conversation',{name:operation.name,input:operation.input} as ReadRequest);
-     const elapsed=performance.now()-time;
-     operation.check(result);
-     assert(elapsed<=SLOW_SAMPLE_MS,'worker_slow_sample');
-     if(n>=5)samplesMs.push(elapsed);
-    }
-    const sorted=[...samplesMs].sort((a,b)=>a-b);
-    workerObservations.push({id:operation.id,limit:operation.input.limit,warmups:5,samplesMs,p95Ms:sorted[18]});
-   }
-   await backend.close();backend=undefined;
-   receipt.workerRoundTrip=workerObservations;
-  }
+  if(measureWorker)receipt.workerQueries=workerQueries;
   receipt.timingComplete=observations.every(value=>(value as {timing:{complete?:boolean}}).timing.complete===true);
   receipt.passed=!searchOnly||receipt.timingComplete;receipt.presentationPerformanceQualified=false;
  }catch(error){receipt.error=serializeError(error);}
- finally{if(backend)await backend.close();if(core)await core.command('close',{});receipt.elapsedMs=performance.now()-started;receipt.processMemory=process.memoryUsage();receipt.ownedDiskBytes=directoryBytes(session);writeReceipt(join(session,dataset+'.json'),receipt);}
+ finally{if(core)await core.command('close',{});receipt.elapsedMs=performance.now()-started;receipt.processMemory=process.memoryUsage();receipt.ownedDiskBytes=directoryBytes(session);writeReceipt(join(session,dataset+'.json'),receipt);}
  return receipt;
 }
 
+async function measureReopenedWorker(dataset:Dataset,session:string,candidate:string){
+ const started=performance.now(),binding=sourceBinding(candidate);
+ const custody=relative(outputRoot(),realpathSync(session));
+ assert(/^library-scale-\d+-[a-f0-9]{8}$/.test(custody),'unowned_session_location');
+ const owner=JSON.parse(readFileSync(join(session,'owner.json'),'utf8'));
+ assert(owner.contract==='aerynth.library-scale-owner@1'&&owner.candidate===candidate&&owner.measureWorker===true,'unowned_worker_session');
+ const seed=JSON.parse(readFileSync(join(session,dataset+'.json'),'utf8'));
+ assert(seed.synthetic===true&&seed.passed===true&&seed.binding?.candidate===candidate&&
+  seed.binding?.tree===binding.tree&&seed.dataset?.name===dataset,'invalid_worker_seed');
+ const profile=join(session,dataset),file=join(profile,'canonical.sqlite');
+ assert.equal(realpathSync(file).toLowerCase(),file.toLowerCase(),'worker_database_redirected');
+ const queries=seed.workerQueries as {id:string;input:SearchQuery;digest:string}[];
+ assert(queries?.length===4&&queries.every(query=>query.input.limit===12&&query.input.searchMode==='chat-history'),'invalid_worker_queries');
+ const receipt:Record<string,unknown>={binding,dataset,passed:false};
+ const startupAt=performance.now();
+ const backend=new Backend({path:file,privateRoot:profile,contentPolicy:'synthetic-only',provider:'fixture'});
+ const query=async(input:SearchQuery)=>backend.call('conversation',{name:'search',input});
+ try{
+  const first=await query(queries[0].input);
+  receipt.startupAndFirstQueryMs=performance.now()-startupAt;
+  assert.equal(hash(JSON.stringify(first)),queries[0].digest,'worker_reopen_result_changed');
+  const observations=[];
+  for(const {id,input,digest} of queries){
+   const samplesMs:number[]=[];
+   for(let n=0;n<25;n++){
+    fixtureFence(session,profile,started);
+    const time=performance.now(),result=await query(input),elapsed=performance.now()-time;
+    assert.equal(hash(JSON.stringify(result)),digest,'worker_reopen_result_changed:'+id);
+    assert(elapsed<=SLOW_SAMPLE_MS,'worker_slow_sample');
+    if(n>=5)samplesMs.push(elapsed);
+   }
+   const sorted=[...samplesMs].sort((a,b)=>a-b);
+   observations.push({id,limit:input.limit,warmups:5,samplesMs,p95Ms:sorted[18]});
+  }
+  receipt.workerRoundTrip=observations;
+  receipt.passed=true;
+ }catch(error){receipt.error=serializeError(error);throw error;}
+ finally{
+  await backend.close();
+  receipt.processMemory=process.memoryUsage();
+  writeReceipt(join(session,dataset+'-worker.json'),receipt);
+ }
+}
 async function main(){
- const allowed=new Set(['candidate','datasets','describe','worker','session','dataset','search-only','prepare-search-profile','measure-worker']);for(const key of parsed.keys())assert(allowed.has(key),'unknown_argument');
+ const allowed=new Set(['candidate','datasets','describe','worker','session','dataset','search-only','prepare-search-profile','measure-worker','worker-reopen']);for(const key of parsed.keys())assert(allowed.has(key),'unknown_argument');
  const searchOnly=parsed.has('search-only');
  assert(!(searchOnly&&prepareSearchProfile),'conflicting_fixture_modes');
  assert(!measureWorker||searchOnly,'worker_measurement_requires_search_only');
  if(parsed.has('describe')){console.log(JSON.stringify({contract:'aerynth.library-scale-plan@1',datasets:DATASETS,modes:['full-library','search-only','prepare-search-profile'],bounds:{disk:DISK_BOUND,db:DB_BOUND,state:STATE_BOUND,receipt:OUTPUT_BOUND,perDatasetMs:MAX_DATASET_MS,searchOnlyPerDatasetMs:MAX_SEARCH_DATASET_MS},providerCalls:0,qualification:'No benchmark performed by --describe'}));return;}
  const candidate=parsed.get('candidate');assert(candidate,'explicit_candidate_required');
  if(parsed.has('worker')){assert(parsed.get('session')&&parsed.get('dataset'));const dataset=parsed.get('dataset') as Dataset;assert(Object.hasOwn(DATASETS,dataset));const result=await worker(dataset,parsed.get('session')!,candidate,searchOnly);process.exitCode=result.passed?0:1;return;}
+ if(parsed.has('worker-reopen')){
+  const dataset=parsed.get('dataset') as Dataset;
+  assert(measureWorker&&Object.hasOwn(DATASETS,dataset),'invalid_worker_reopen');
+  await measureReopenedWorker(dataset,parsed.get('session')!,candidate);
+  return;
+ }
  const names=(parsed.get('datasets')??'small').split(',') as Dataset[];assert(names.length>=1&&names.length<=3&&new Set(names).size===names.length&&names.every(n=>Object.hasOwn(DATASETS,n)),'invalid_datasets');
  if(prepareSearchProfile)assert.deepEqual(names,['large'],'one_large_owned_profile_required');
  const binding=sourceBinding(candidate);readApiReleased();const reserve=guard(),root=outputRoot();
  mkdirSync(root,{recursive:true});
  assert.equal(realpathSync(root).toLowerCase(),root.toLowerCase(),'fixture_root_redirected');
- const session=join(root,'library-scale-'+Date.now()+'-'+randomUUID().slice(0,8));mkdirSync(session);writeReceipt(join(session,'owner.json'),{contract:'aerynth.library-scale-owner@1',candidate,binding,reserve,searchOnly,prepareSearchProfile});
+ const session=join(root,'library-scale-'+Date.now()+'-'+randomUUID().slice(0,8));mkdirSync(session);writeReceipt(join(session,'owner.json'),{contract:'aerynth.library-scale-owner@1',candidate,binding,reserve,searchOnly,prepareSearchProfile,measureWorker});
  const stages:unknown[]=[];
  for(const dataset of names){
   guard();assert(directoryBytes(session)<DISK_BOUND-DB_BOUND*2-OUTPUT_BOUND,'insufficient_owned_envelope');
-  const result=await new Promise<{dataset:string;code:number|null;signal:string|null;deadline:boolean}>((done,reject)=>{
+  const runStage=(mode:string)=>new Promise<{dataset:string;mode:string;code:number|null;signal:string|null;deadline:boolean}>((done,reject)=>{
    const options={cwd:REPO,execArgv:WORKER_HEAP_FLAGS,env:{...process.env,NODE_DISABLE_COMPILE_CACHE:'1'},silent:true,windowsHide:true};
-   const child=fork(HERE,['--worker','--candidate='+candidate,'--session='+session,'--dataset='+dataset,...(searchOnly?['--search-only']:[]),...(prepareSearchProfile?['--prepare-search-profile']:[]),...(measureWorker?['--measure-worker']:[])],options);let deadline=false,output=0;
+   const child=fork(HERE,[mode,'--candidate='+candidate,'--session='+session,'--dataset='+dataset,...(searchOnly?['--search-only']:[]),...(prepareSearchProfile?['--prepare-search-profile']:[]),...(measureWorker?['--measure-worker']:[])],options);let deadline=false,output=0;
    const timer=setTimeout(()=>{deadline=true;child.kill();},datasetDeadlineMs+3000);
    for(const stream of [child.stdout,child.stderr])stream?.on('data',(data:Buffer)=>{output+=data.length;if(output>65536){deadline=true;child.kill();}});
-   child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',(code,signal)=>{clearTimeout(timer);done({dataset,code,signal,deadline});});
-  });stages.push(result);if(result.code!==0||result.deadline)break;
+   child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',(code,signal)=>{clearTimeout(timer);done({dataset,mode,code,signal,deadline});});
+  });
+  const result=await runStage('--worker');stages.push(result);if(result.code!==0||result.deadline)break;
+  if(measureWorker){guard();const reopened=await runStage('--worker-reopen');stages.push(reopened);if(reopened.code!==0||reopened.deadline)break;}
  }
- const passed=stages.length===names.length&&stages.every(stage=>(stage as {code:number|null}).code===0);writeReceipt(join(session,'summary.json'),{contract:'aerynth.library-scale-runner@1',binding,searchOnly,passed,stages,ownedDiskBytes:directoryBytes(session),limits:['Headless in-process only.','No real UI/account/provider activity.','Old heap is bounded; total RSS is checked at operation boundaries, not hard OS quota.','Synthetic fixture retained; never clean up another profile.']});console.log(JSON.stringify({passed,session,stages}));process.exitCode=passed?0:1;
+ const passed=stages.length===names.length*(measureWorker?2:1)&&stages.every(stage=>(stage as {code:number|null}).code===0);writeReceipt(join(session,'summary.json'),{contract:'aerynth.library-scale-runner@1',binding,searchOnly,passed,stages,ownedDiskBytes:directoryBytes(session),limits:['Headless in-process only.','No real UI/account/provider activity.','Old heap is bounded; total RSS is checked at operation boundaries, not hard OS quota.','Synthetic fixture retained; never clean up another profile.']});console.log(JSON.stringify({passed,session,stages}));process.exitCode=passed?0:1;
 }
 if(process.argv[1]&&resolve(process.argv[1])===HERE)void main().catch(error=>{console.error(JSON.stringify({passed:false,error:serializeError(error)}));process.exitCode=1;});
