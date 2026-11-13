@@ -22,6 +22,7 @@ const profile = join(parent, basename(profilePath));
 const app = join(root, 'resources/app');
 const db = join(profile, 'profile.sqlite');
 const workerFile = 'resources/app/prototypes/integrated-backend/src/desktop-host.mts';
+const kernelFile = 'resources/app/prototypes/workspace-kernel/kernel.mts';
 const brokerFile = 'resources/app/prototypes/visual-experience/cinematic-v3/native/protected-storage.cjs';
 const manifest = await readFile(join(root, 'manifest.json'));
 const manifestHash = createHash('sha256').update(manifest).digest('hex');
@@ -43,14 +44,14 @@ for (const entry of inventory.files) {
   assert.equal(bytes, entry.bytes);
   assert.equal(hash.digest('hex'), entry.sha256);
 }
-for (const file of ['vendor/node.exe', workerFile, brokerFile]) assert(files.has(relative(root, join(root, file))));
+for (const file of ['vendor/node.exe', workerFile, brokerFile, kernelFile]) assert(files.has(relative(root, join(root, file))));
 
 const shell = join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
 const drive = profile[0].toUpperCase();
 assert(['C', 'D'].includes(drive));
 const guard = join(process.env.LOCALAPPDATA, 'AeroStorageWatch/ReserveGuard.ps1');
 const admission = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-File', guard,
-  '-EstimatedCBytes', drive === 'C' ? '33554432' : '0', '-EstimatedDBytes', drive === 'D' ? '33554432' : '0'],
+  '-EstimatedCBytes', drive === 'C' ? '268435456' : '0', '-EstimatedDBytes', drive === 'D' ? '268435456' : '0'],
 { encoding: 'utf8', windowsHide: true, timeout: 10000 });
 assert.equal(admission.status, 0, 'Storage reserve check failed');
 assert.equal(JSON.parse(admission.stdout).allowed, true);
@@ -111,8 +112,8 @@ function protect(operation, input) {
 
 const require = createRequire(import.meta.url);
 const { createProtectedStorageBroker } = require(join(root, brokerFile));
-async function withWorker(locked, work) {
-  const child = spawn(join(root, 'vendor/node.exe'), ['--import', pathToFileURL(catalogFixture).href, join(root, workerFile), db, profile, profile, '--native-secrets'], {
+async function withWorker(locked, work, activeProfile = profile) {
+  const child = spawn(join(root, 'vendor/node.exe'), ['--import', pathToFileURL(catalogFixture).href, join(root, workerFile), join(activeProfile, 'profile.sqlite'), activeProfile, activeProfile, '--native-secrets'], {
     cwd: app, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, NODE_DISABLE_COMPILE_CACHE: '1' },
   });
   child.stderr.resume();
@@ -178,6 +179,16 @@ async function withWorker(locked, work) {
   }
 }
 
+const { WorkspaceKernel } = await import(pathToFileURL(join(root, kernelFile)).href);
+const beforeRevocationProfile = join(profile, 'backup-before-revocation');
+const afterRevocationProfile = join(profile, 'backup-after-revocation');
+async function snapshot(destination) {
+  await mkdir(destination);
+  const kernel = WorkspaceKernel.open(db);
+  try { await kernel.backupTo(join(destination, 'profile.sqlite')); }
+  finally { kernel.close(); }
+}
+
 const sourceText = 'Use the synthetic quartz relay.';
 const factText = 'The selected part is synthetic quartz.';
 const correctedText = 'The selected part is synthetic basalt.';
@@ -205,6 +216,7 @@ const saved = await withWorker(false, async call => {
   const fact = await call('personalMemoryCaptureCommitNative', review);
   return { workspaceId, projectId, factId: fact.id, conversationId: chat.resourceId, messageId: source.id, expectedRevision: source.revision };
 });
+await snapshot(beforeRevocationProfile);
 const read = { type: 'read', id: saved.factId };
 const navigate = (call, workspaceId) => call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
 const intent = 'Which quartz relay?';
@@ -293,6 +305,7 @@ const correctedId = await withWorker(false, async call => {
   await assert.rejects(call('vela', { name: 'request', input: {
     ...binding, intent: correctedIntent, resourceIds: [], authorizeProvider: true, grantId,
   } }), /stale_personal_context|personal_record_unavailable/u);
+  await snapshot(afterRevocationProfile);
   return corrected.id;
 });
 await withWorker(false, async call => {
@@ -303,9 +316,30 @@ await withWorker(false, async call => {
   await navigate(call, saved.workspaceId);
   await assert.rejects(previewRecall(call, 'Which basalt part?'), /personal_memory_no_eligible_context/u);
 });
+await withWorker(false, async call => {
+  const fact = await call('personalMemoryManagementNative', read);
+  assert.equal(fact.text, factText);
+  assert.equal(fact.provenance.messageId, saved.messageId);
+  const policy = await call('personalMemoryPolicyNative', {});
+  assert.equal(policy.storageEnabled, true);
+  assert.equal(policy.ordinaryEnabled, false);
+  assert.equal(policy.velaEnabled, false);
+}, beforeRevocationProfile);
+await withWorker(false, async call => {
+  await assert.rejects(call('personalMemoryManagementNative', read), /personal_record_unavailable/u);
+  await assert.rejects(call('personalMemoryManagementNative', { type: 'read', id: correctedId }), /personal_record_unavailable/u);
+  assert.equal((await call('openResource', {
+    resourceId: saved.conversationId, selection: { messageId: saved.messageId },
+  })).status, 'unavailable');
+  const policy = await call('personalMemoryPolicyNative', {});
+  assert.equal(policy.ordinaryEnabled, false);
+  assert.equal(policy.velaEnabled, true);
+  await navigate(call, saved.workspaceId);
+  await assert.rejects(previewRecall(call, 'Which basalt part?'), /personal_memory_no_eligible_context/u);
+}, afterRevocationProfile);
 await assert.rejects(readFile(unexpectedFetch), { code: 'ENOENT' });
 const receipt = { result: 'pass', candidate: inventory.candidate, manifestSha256: manifestHash, verifiedFiles: files.size,
-  workerStarts: 4, correctedRecall: true, attributedExport: true, crossConversationRecall: true, foreignProjectDenied: true, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true, revokedApprovedRequestDenied: true,
+  workerStarts: 6, backupConsentRestored: true, preRevocationBackupRetainsFact: true, postRevocationBackupDeniesRecall: true, correctedRecall: true, attributedExport: true, crossConversationRecall: true, foreignProjectDenied: true, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true, revokedApprovedRequestDenied: true,
   custody: 'Windows DPAPI CurrentUser through test adapter', approval: 'simulated', simulatedProviderRequests: 1, replayDeniedWithoutAppend: true, liveProviderDispatch: false };
 await writeFile(join(profile, 'worker-receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify(receipt));
