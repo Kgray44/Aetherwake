@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { containsRecognizableMemoryCredential } from '../../application-contract/personal-memory.ts';
 import type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
 export type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
 import type { DatabaseSync } from 'node:sqlite';
@@ -239,6 +240,8 @@ export function createPersonalMemoryReview(options: Options) {
         (input.keywords !== undefined && (input.action !== 'correct' || !validKeywords(input.keywords))))
         throw new PersonalContextError('invalid_personal_memory_management');
       const { action, id, version, text, keywords } = structuredClone(input);
+      if (action === 'correct' && (containsRecognizableMemoryCredential(text!) || keywords?.some(containsRecognizableMemoryCredential)))
+        throw new PersonalContextError('personal_memory_credential_detected');
       const service = await options.open();
       requireOpen();
       return options.transaction(() => {
@@ -311,6 +314,8 @@ export function createPersonalMemoryReview(options: Options) {
         (input.expectedSourceText !== undefined && (typeof input.expectedSourceText !== 'string' || Buffer.byteLength(input.expectedSourceText) > 16384)) ||
         !validKeywords(input.keywords)) throw new PersonalContextError('invalid_personal_memory_capture');
       const { conversationId, messageId, scope, category, text, keywords, expectedProjectId, expectedSourceText } = structuredClone(input);
+      if (containsRecognizableMemoryCredential(text) || keywords.some(containsRecognizableMemoryCredential))
+        throw new PersonalContextError('personal_memory_credential_detected');
       const expectedDigest = expectedSourceText === undefined ? undefined : createHash('sha256').update(expectedSourceText).digest('hex');
       const assistantWide = scope === 'assistant.ordinary' || scope === 'assistant.vela';
       const reference = { kind: 'conversation-message', conversationId, messageId } as const;
@@ -326,7 +331,16 @@ export function createPersonalMemoryReview(options: Options) {
         return source;
       };
       // Declining an ineligible source must not initialize protected storage.
-      const original = options.transaction(eligibleSource);
+      const { original, sourceText } = options.transaction(() => {
+        const original = eligibleSource();
+        const sourceText = options.readSourceText(reference);
+        if (sourceText === null || Buffer.byteLength(sourceText) > 16384 ||
+          createHash('sha256').update(sourceText).digest('hex') !== original.contentDigest)
+          throw new PersonalContextError('conversation_source_unavailable');
+        if (containsRecognizableMemoryCredential(sourceText))
+          throw new PersonalContextError('personal_memory_credential_detected');
+        return { original, sourceText };
+      });
       const service = await options.open();
       requireOpen();
       return options.transaction(() => {
@@ -338,10 +352,6 @@ export function createPersonalMemoryReview(options: Options) {
           source.projectId ? { kind: scope, id: source.projectId } as const : null;
         const proof = requestedScope && options.resolveScope(requestedScope);
         if (!proof) throw new PersonalContextError('canonical_scope_unavailable');
-        const sourceText = options.readSourceText(reference);
-        if (sourceText === null || Buffer.byteLength(sourceText) > 16384 ||
-          createHash('sha256').update(sourceText).digest('hex') !== source.contentDigest)
-          throw new PersonalContextError('conversation_source_unavailable');
         const policy = withPermission(input => input.operation === 'policy.read', () => service.policy());
         const draft: FactDraft = {
           scope: proof.scope, purpose: 'knowledge', category, text, keywords: [...keywords],

@@ -30,7 +30,11 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
       if (control.disabled) return;
       control.disabled = true;
       status.textContent = '';
-      void work().catch(error => { status.textContent = error instanceof Error ? error.message : 'Memory unavailable'; })
+      void work().catch(error => {
+        const message = error instanceof Error ? error.message : 'Memory unavailable';
+        status.textContent = message === 'personal_memory_credential_detected'
+          ? 'Remove credentials from the memory text and search terms before reviewing.' : message;
+      })
         .finally(() => { control.disabled = false; });
     });
     return control;

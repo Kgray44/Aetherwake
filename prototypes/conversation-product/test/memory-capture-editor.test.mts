@@ -92,6 +92,23 @@ test('preference drafting leaves tentative, quoted, and formatted material for m
   } finally { restore(); }
 });
 
+test('credential-bearing source text never becomes a draft or a review request', () => {
+  const f = componentDocument(), restore = f.install();
+  const reports: string[] = [];
+  try {
+    const editor = createMemoryCaptureEditor({
+      content: 'Remember: ' + 'ghp_' + 'SYNTHETIC'.repeat(4), conversationId: 'chat',
+      messageId: 'message', projectAvailable: true,
+      async review() { throw Error('unexpected review'); },
+      report(message) { reports.push(message); },
+    });
+    assert.equal(editor.querySelector('textarea')!.value, '');
+    assert.equal(editor.querySelector('input')!.value, '');
+    (editor as any).fire('submit');
+    assert.deepEqual(reports, ['This message appears to contain a credential. Choose another source message.']);
+  } finally { restore(); }
+});
+
 test('drafted search terms keep the distinctive term after a long conversational lead-in', () => {
   const f = componentDocument(), restore = f.install();
   try {

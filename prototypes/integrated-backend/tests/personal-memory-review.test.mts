@@ -12,6 +12,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   const sourceText = 'The synthetic relay is our choice.';
   const message = { conversationId: 'chat', messageId: 'message', projectId: 'project', role: 'user' as const,
     sensitive: false, version: '1', contentDigest: createHash('sha256').update(sourceText).digest('hex') };
+  let sourceBody = sourceText;
   let enabled = true;
   let sensitive = false;
   let openCount = 0;
@@ -24,7 +25,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   let nativeOpen: () => ReturnType<NativePersonalMemory['open']>;
   const review = createPersonalMemoryReview({
     open: async () => { openCount++; const store = await nativeOpen(); afterOpen?.(); return store; }, transaction,
-    readSourceText: () => sourceText,
+    readSourceText: () => sourceBody,
     resolveVelaRecallTarget: () => ({ conversationId: 'vela-chat', projectId: activeVelaProject }),
     resolveRecallTarget: id => id === 'other-chat' ? { projectId: 'project' } :
       id === 'foreign-chat' ? { projectId: 'foreign-project' } : null,
@@ -45,6 +46,18 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   try {
     const input = { conversationId: 'chat', messageId: 'message', scope: 'project', category: 'decisions',
       text: 'Use the synthetic relay', keywords: ['relay'] } as const;
+    const credential = 'ghp_' + 'SYNTHETIC'.repeat(4);
+    await assert.rejects(review.previewCapture({ ...input, text: credential }), /personal_memory_credential_detected/);
+    await assert.rejects(review.previewCapture({ ...input, keywords: [credential] }), /personal_memory_credential_detected/);
+    const originalDigest = message.contentDigest;
+    const credentialMessage = 'Remember: ' + credential;
+    sourceBody = credentialMessage;
+    message.contentDigest = createHash('sha256').update(credentialMessage).digest('hex');
+    await assert.rejects(review.previewCapture(input), /personal_memory_credential_detected/);
+    sourceBody = sourceText;
+    message.contentDigest = originalDigest;
+    assert.equal(openCount, 0);
+    assert.equal(owner.hasStorage(), false);
     await assert.rejects(review.previewCapture({ ...input, expectedProjectId: 'foreign-project' }), /stale_personal_memory_source/);
     assert.equal(openCount, 0);
     await assert.rejects(review.previewCapture({ ...input, expectedSourceText: 'The earlier relay choice.' }), /stale_personal_memory_source/);
@@ -82,6 +95,10 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.equal(saved.text, input.text);
     assert.equal(saved.certainty, "user-reviewed-summary");
     assert.throws(() => service.readFact(saved.id), /personal_context_not_authorized/);
+    await assert.rejects(review.previewManagement({ action: 'correct', id: saved.id, version: saved.version,
+      text: credential }), /personal_memory_credential_detected/);
+    await assert.rejects(review.previewManagement({ action: 'correct', id: saved.id, version: saved.version,
+      text: saved.text, keywords: [credential] }), /personal_memory_credential_detected/);
     const inspected = await review.inspect({ after: null, limit: 8 });
     assert.deepEqual(inspected.records.map(item => item.id), [saved.id]);
     assert(!JSON.stringify(inspected).includes(saved.text));

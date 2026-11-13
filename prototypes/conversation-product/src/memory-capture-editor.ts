@@ -1,4 +1,4 @@
-import { personalMemorySearchTerms } from '../../application-contract/personal-memory.ts';
+import { containsRecognizableMemoryCredential, personalMemorySearchTerms } from '../../application-contract/personal-memory.ts';
 import type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
 
 export type MemoryCaptureRequest = CaptureRequest;
@@ -36,7 +36,8 @@ function explicitMemoryCandidate(content: string): { text: string; category?: 'p
 }
 
 export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormElement {
-  const candidate = explicitMemoryCandidate(options.content);
+  const credentialSource = containsRecognizableMemoryCredential(options.content);
+  const candidate = credentialSource ? undefined : explicitMemoryCandidate(options.content);
   const form = document.createElement('form');
   form.className = 'cp-memory-editor';
   form.setAttribute('aria-label', 'Remember message');
@@ -61,7 +62,7 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     return input;
   };
   const text = document.createElement('textarea');
-  text.value = candidate?.text ?? options.content;
+  text.value = credentialSource ? '' : candidate?.text ?? options.content;
   text.maxLength = 4096;
   text.rows = 3;
   text.required = true;
@@ -97,6 +98,10 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
   form.addEventListener('submit', event => {
     event.preventDefault();
     if (review.disabled) return;
+    if (credentialSource) {
+      options.report('This message appears to contain a credential. Choose another source message.');
+      return;
+    }
     if ((scope.value === 'assistant.ordinary' || scope.value === 'assistant.vela') && category.value !== 'preferences') {
       options.report('Choose Preference to save a memory across chats.');
       return;
@@ -122,6 +127,8 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
       if (message === 'conversation_source_unavailable') {
         options.report('The original message is no longer available.');
         close();
+      } else if (message === 'personal_memory_credential_detected') {
+        options.report('Remove credentials from the memory text and search terms before reviewing.');
       } else if (message === 'stale_personal_memory_source' || message === 'stale_personal_scope') {
         options.report('The original message or its project changed. Open Remember message again to review the current source.');
         close();
