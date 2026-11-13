@@ -162,6 +162,24 @@ test('the current correction gets a slot ahead of lower-ranked matches', async (
   assert.deepEqual(result.coverage[0].sources, [recent]);
 });
 
+test('recent corrections take priority over secondary matches for a refinement', async () => {
+  const initial = Array.from({ length: 6 }, (_, index) => ({ ...candidate, sourceId: 'initial-' + index }));
+  const match = { ...candidate, sourceId: 'refinement' };
+  const distractor = { ...candidate, sourceId: 'secondary' };
+  const correction = { ...candidate, sourceId: 'correction', text: 'Correction: use the replacement key.' };
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search: query => ({ sources: query === evidence.query ? initial : [match, distractor], scan: 'bounded' }),
+    recent: () => ({ sources: [correction], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : { version: 1, assessment: [{
+      key: 's1', status: call.round === 1 ? 'missing' : 'supported',
+      sources: call.round === 1 ? [] : ['e7', 'e8'], query: call.round === 1 ? 'replacement key' : '',
+    }] },
+  });
+  assert.deepEqual(result.coverage[0].sources, [match, correction]);
+});
+
 test('reserves serialized bytes for gap recovery when first-pass excerpts are large', async () => {
   const needs = Array.from({ length: 4 }, (_, index) => ({ key: 'topic' + index, question: 'Find topic ' + index, query: 'topic' + index }));
   const source = (id: string) => ({ sourceId: id, revision: '1', sourceKind: 'conversation-exchange' as const, text: id.padEnd(3800, 'x') });

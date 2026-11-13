@@ -318,6 +318,12 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       for (let rank = 0; rank < Math.max(0, ...matches.map(sources => sources.length)); rank++) {
         const sources = matches.flatMap(group => group[rank] ? [group[rank]] : []);
         addCandidates({ sources, scan: searchCoverage ?? 'bounded' }, limit);
+        if (rank === 0 && matches.some(group => group.length > 1) &&
+          owner.adaptiveDiscovery && owner.recent && !anchorsRead && investigateAnchors && evidence.size < limit) {
+          signal.throwIfAborted();
+          anchorsRead = true;
+          addCandidates(owner.recent(), Math.min(limit, evidence.size + 1));
+        }
         if (evidence.size >= limit && matches.some(group => group.length > rank + 1)) { partial(); break; }
       }
       const remainingPages = widen.filter(({ refinement }) => !refinement ||
