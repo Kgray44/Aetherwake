@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
+import { lastMissionVerificationEvent } from './mission-publication.mts';
 import type { MissionProjection } from './mission-contracts.mts';
 import { missionCompletion, missionResultAvailable } from './mission-native.mts';
 
@@ -45,7 +46,9 @@ export class MissionConversationReceipts {
         WHERE mission_id=? AND evidence_digest=?`).get(mission.id, digest);
       if (!previous) {
         const evidence = mission.tasks.map(task => ({ taskId: task.id, evidence: task.attempts.at(-1)?.evidence }));
-        const recordedAt = mission.events.findLast(event => event.kind === 'settled' && event.detail === 'verified')!.time;
+        const verified = lastMissionVerificationEvent(mission);
+        if (!verified) throw Error('mission_verification_event_unavailable');
+        const recordedAt = verified.time;
         const content = [`Mission ${mission.id} · plan ${mission.planRevision}`, `Objective: ${mission.objective}`,
           `${mission.coverage?'Partial evidence':'Verified result'} recorded at ${recordedAt}`, missionCompletion(mission).content,
           ...evidence.flatMap(({ taskId, evidence: item }) => item ?
