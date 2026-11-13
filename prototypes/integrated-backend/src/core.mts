@@ -1,3 +1,4 @@
+import { createAepNativeHost } from './aep-native-host.mts';
 import { resolveAepEvaluationReference } from './aep-evaluation-reference.mts';
 import { randomUUID, createHash } from 'node:crypto';
 import { realpathSync,openSync,closeSync,lstatSync,fstatSync } from 'node:fs';
@@ -22,6 +23,7 @@ import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS, MISSION_PROPOSAL
 import { describeMissionObjectiveReview, provisionalObjectiveCoverage, reviewableMissionObjective } from './mission-objective-review.mts';
 import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, reassignMissionSpecialist, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
 import { MissionTeams } from './mission-teams.mts';
+import { parseReviewedArtifactMission, resolveReviewedArtifactMission, specialistMissionObjective } from './mission-reviewed-composition.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
 import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningEvidenceSelection, MissionPlanningOffer, MissionPlanningSourceRef, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import { ARTIFACT_MISSION_PREFIX, EXPLICIT_MISSION_PREFIX, MISSION_LIMITS } from './mission-contracts.mts';
@@ -309,6 +311,7 @@ export class BackendCore {
   private velaWorkflows = new Map<string, PendingVelaWorkflow>();
   private velaWorkflowClaims = new Set<string>();
   private missions: MissionService;
+  private readonly aepNative?: ReturnType<typeof createAepNativeHost>;
   private missionAdmission: ReturnType<typeof createMissionAdmission>;
   private readonly missionCpuPool = createMissionCpuPool(MISSION_LIMITS.workers);
   private gpuReadback: ReturnType<typeof createGpuReadbackAdapter>;
@@ -627,6 +630,19 @@ export class BackendCore {
         stagePublication: (mission, from) => this.missionPublication.stage(mission, from),
         observe: () => {this.flushMissionPublication();this.queueToolOwnerJobResults();},
       });
+      if (this.privateMode && this.nativeHostServices) {
+        this.aepNative = createAepNativeHost(this.db, this.missions, {
+          atomic: operation => this.kernel.withTransaction(operation),
+          authorized: scope => this.missionScopeAllowed(scope),
+          governorVersion: () => this.missionAdmission.inspectPolicy().configVersion,
+          admit: scope => {
+            ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
+            const context = this.velaContext();
+            ensure(context.currentWorkspaceId === scope.workspaceId && context.currentProjectId === scope.projectId &&
+              this.missionScopeAllowed(scope), 'aep_scope_denied');
+          },
+        });
+      }
       this.missionConversations = new MissionConversationReceipts({
         db: this.db, atomic: work => this.atomic(work),
         read: id => {
@@ -1401,7 +1417,8 @@ export class BackendCore {
           (agentProfileId === undefined || identifier(agentProfileId)) &&
           (teamId === undefined || identifier(teamId) && agentProfileId === undefined && proposalId === undefined), 'invalid_mission_command');
         const artifactRequest = typeof objective === 'string' ? ARTIFACT_MISSION_PREFIX.exec(objective.trim()) : null;
-        if (artifactRequest) ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
+        const mixedArtifact = artifactRequest ? null : parseReviewedArtifactMission(objective);
+        if (artifactRequest || mixedArtifact) ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
           noteIds === undefined && fileIds === undefined && projectEvidence === undefined, 'mission_artifact_context_unsupported');
         if (noteIds !== undefined || fileIds !== undefined || projectEvidence !== undefined) {
           ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
@@ -1416,10 +1433,13 @@ export class BackendCore {
         if (stored) ensure(this.missionPlanningContextCurrent(stored.plan), 'mission_planning_context_changed');
         const artifactPlan = artifactRequest ? this.missionArtifactPlan(objective, scope,
           objective.trim().slice(artifactRequest[0].length), artifactRequest[1]?.trim()) : undefined;
+        const mixedPlan = mixedArtifact ? resolveReviewedArtifactMission(objective,
+          work => nativeMissionPlan(work, scope) ?? specialistMissionPlan(work, scope, this.missionSpecialistSelection(scope)),
+          (prompt, options) => this.missionArtifactPlan(objective, scope, prompt, options), mixedArtifact) : undefined;
         const plan = teamId !== undefined ? teamMissionPlan(objective, scope, this.missionTeams.read(teamId, scope), id => {
           const profile = this.missionAgentProfile(scope, id);
           return profile ? { title: profile.resource.title, selection: this.missionSpecialistSelection(scope, id) } : undefined;
-        }) : (stored ? structuredClone(stored.plan) : undefined) ?? artifactPlan ??
+        }) : (stored ? structuredClone(stored.plan) : undefined) ?? artifactPlan ?? mixedPlan ??
           (agentProfileId === undefined ? nativeMissionPlan(objective, scope) : null) ??
           specialistMissionPlan(objective, scope, this.missionSpecialistSelection(scope),
             agentProfileId === undefined ? undefined : { selection: this.missionSpecialistSelection(scope, agentProfileId) });
@@ -1449,7 +1469,8 @@ export class BackendCore {
             ...artifactImage.settings, width: missionImageSize, height: missionImageSize,
             rates: missionImageRates, files: missionArtifactFiles } } : {}),
           ...(remote.length ? { externalReview: { provider: [...new Set(remote.map(task => task.specialist?.provider === VELA_API_PROVIDER ? 'Vela dedicated API' : 'ChatGPT plan'))].join(' + '), model: selected?.model ?? 'Unavailable',
-            effort: selected?.effort, calls: remote.length } } : {}) };
+            effort: selected?.effort, calls: remote.length,
+            ...(mixedArtifact ? { objective: specialistMissionObjective(plan) } : {}) } } : {}) };
         ensure(request.input.fingerprint === fingerprint, 'mission_preview_changed');
         if (approvedObjectiveDigest !== undefined)
           ensure(reviewed && objectiveReview && approvedObjectiveDigest === objectiveReview.digest, 'mission_objective_review_changed');
@@ -1519,6 +1540,19 @@ export class BackendCore {
           Number.isSafeInteger(expectedRevision) && expectedRevision > 0 && Number.isSafeInteger(cpuSlots), 'invalid_mission_command');
         const observed = resolveMissionHypothesis(this.missions.read(id, scope), hypothesisId, expectedRevision);
         return observed ? this.missionAdmission.previewWorkerBudgetExperiment(observed, cpuSlots) : null;
+      }
+      case 'experience-list': {
+        ensure(Object.keys(request.input).length === 0, 'invalid_mission_command');
+        return this.aepNative?.list(scope) ?? null;
+      }
+      case 'experience-evidence': {
+        ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
+        return this.aepNative?.evidence(scope, request.input.id) ?? null;
+      }
+      case 'experience-finding': {
+        const { id, cohort } = request.input;
+        ensure(Object.keys(request.input).length === 2 && identifier(id) && identifier(cohort), 'invalid_mission_command');
+        return this.aepNative?.finding(scope, id, cohort) ?? null;
       }
       case 'evaluation-reference': return resolveAepEvaluationReference(request.input, this.missions, scope);
       case 'execution-profile': {
@@ -6871,6 +6905,13 @@ export class BackendCore {
       const mission = this.missions.create(review.id, { ...plan, originConversationId: this.vela.ensureMissionConversation() });
       this.gpuReadbackReview = undefined;
       return { kind: 'started', missionId: mission.id } as CommandMap[K]['output'];
+    }
+    if (name === 'aepExperimentNative') {
+      ensure(this.aepNative && !this.closed, 'native_aep_experiment_required');
+      const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
+      ensure(workspaceId, 'mission_workspace_required');
+      return await this.aepNative.command({ workspaceId, projectId },
+        input as CommandMap['aepExperimentNative']['input']) as CommandMap[K]['output'];
     }
     if (name === 'resourcePolicyNative') {
       ensure(!this.closed && this.privateMode && this.nativeHostServices, 'native_resource_policy_required');
