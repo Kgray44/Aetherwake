@@ -1776,6 +1776,126 @@ test('an acknowledged Send retains its exact follow target while geometry is zer
   finally{f.pending?.reject(new Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();f.restore();}
 });
 
+test('History retries a failed search with the same query and keeps the open chat',async()=>{
+ const f=fixture();let manager;
+ try{
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  named(f.view.root,'History').fire('click');
+  const editor=f.view.root.querySelector('textarea');
+  const query=f.view.root.querySelector('input[aria-label="Search conversation history"]');
+  f.failSearch('backend_disconnected');
+  query.value='exact retry';
+  f.view.root.querySelector('[aria-label="Sort conversations"]').fire('change');
+  await until(()=>!!named(f.view.root,'Retry history search'));
+  f.history.items.push({kind:'conversation',resourceId:f.draft.resourceId,title:'Recovered result',excerpt:''});
+  f.history.total=1;f.failSearch(null);
+  named(f.view.root,'Retry history search').fire('click');
+  await until(()=>!!named(f.view.root,'Recovered result'));
+  assert.equal(query.value,'exact retry');
+  assert.equal(f.view.root.querySelector('textarea'),editor);
+  assert.equal(f.view.doc.activeElement,query);
+  assert.deepEqual(f.calls.filter(call=>call.name==='search').map(call=>call.input.text),['exact retry','exact retry']);
+ }finally{await manager?.dispose();f.restore();}
+});
+
+test('History waits for composed text before searching',async t=>{
+ const f=fixture();let manager;
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const query=f.view.root.querySelector('input[aria-label="Search conversation history"]');
+  query.fire('compositionstart');query.value='intermediate';query.fire('input',{isComposing:true});
+  assert.equal(query.fire('keydown',{key:'Escape',isComposing:true}).defaultPrevented,false);
+  assert.equal(query.fire('keydown',{key:'Escape'}).defaultPrevented,false);
+  t.mock.timers.tick(180);
+  await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);
+  assert.equal(f.calls.filter(call=>call.name==='search').length,0);
+  query.value='確定';query.fire('compositionend');query.fire('input');
+  t.mock.timers.tick(180);
+  await until(()=>f.calls.some(call=>call.name==='search'));
+  assert.deepEqual(f.calls.filter(call=>call.name==='search').map(call=>call.input.text),['確定']);
+ }finally{await manager?.dispose();f.restore();}
+});
+
+test('History retires old results as soon as the search text changes',async t=>{
+ const f=fixture();let manager;
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  f.history.items.push({kind:'conversation',resourceId:f.draft.resourceId,title:'Previous result',excerpt:''});
+  f.history.total=1;
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const row=named(f.view.root,'Previous result');assert.ok(row);
+  const query=f.view.root.querySelector('input[aria-label="Search conversation history"]');
+  query.value='new search';query.fire('input');
+  assert.ok(!named(f.view.root,'Previous result'));
+  const reads=f.calls.filter(call=>call.name==='detail').length;
+  row.fire('click');await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.calls.filter(call=>call.name==='detail').length,reads);
+ }finally{await manager?.dispose();f.restore();}
+});
+
+test('History paging retires the old page before reading the next one',async()=>{
+ const f=fixture();let manager;
+ const page=Promise.withResolvers<void>();
+ const port={async command(name:string,input:any){
+  if(name==='list'&&input.offset===50)await page.promise;
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try{
+  f.history.items.push({kind:'conversation',resourceId:f.draft.resourceId,title:'Previous page result',excerpt:''});
+  f.history.total=51;
+  manager=mountConversationManager(f.view.root,port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const row=named(f.view.root,'Previous page result');assert.ok(row);
+  const next=named(f.view.root,'More results');next.focus();next.fire('click');
+  assert.ok(!named(f.view.root,'Previous page result'));
+  row.fire('click');next.fire('click');
+  page.resolve();
+  await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);
+  assert.equal(f.calls.filter(call=>call.name==='list'&&call.input.offset===50).length,1);
+  assert.equal(f.view.doc.activeElement,f.view.root.querySelector('input[aria-label="Search conversation history"]'));
+ }finally{page.resolve();await manager?.dispose();f.restore();}
+});
+
+test('History Enter runs a pending query once and leaves focus in the field',async t=>{
+ const f=fixture();let manager;
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const query=f.view.root.querySelector('input[aria-label="Search conversation history"]');
+  query.focus();query.value='exact keyboard query';query.fire('input');
+  assert.equal(query.fire('keydown',{key:'Enter',isComposing:true}).defaultPrevented,false);
+  assert.equal(query.fire('keydown',{key:'Enter'}).defaultPrevented,true);
+  query.fire('keydown',{key:'Enter',repeat:true});
+  await until(()=>f.calls.some(call=>call.name==='search'));
+  t.mock.timers.tick(180);
+  await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);
+  assert.deepEqual(f.calls.filter(call=>call.name==='search').map(call=>call.input.text),['exact keyboard query']);
+  assert.equal(f.view.doc.activeElement,query);
+ }finally{await manager?.dispose();f.restore();}
+});
+
+test('a History filter change consumes the pending text debounce',async t=>{
+ const f=fixture();let manager;
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const query=f.view.root.querySelector('input[aria-label="Search conversation history"]');
+  query.value='latest history query';query.fire('input');
+  const sort=f.view.root.querySelector('[aria-label="Sort conversations"]');
+  sort.value='title';sort.fire('change');
+  await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);
+  t.mock.timers.tick(180);
+  await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);
+  assert.deepEqual(f.calls.filter(call=>call.name==='search').map(call=>[call.input.text,call.input.sort]),[['latest history query','title']]);
+ }finally{await manager?.dispose();f.restore();}
+});
+
 test('filter and clear-search changes made during an existing read drain to the latest actual query without replaying actions',async()=>{
   const f=fixture();let manager,release!:()=>void;
   try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;const priorDetails=f.calls.filter(call=>call.name==='detail').length;f.gateDetail(new Promise<void>(resolve=>{release=resolve;}));const reading=manager.refresh();await until(()=>f.calls.filter(call=>call.name==='detail').length>priorDetails);

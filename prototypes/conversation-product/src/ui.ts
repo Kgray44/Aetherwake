@@ -60,7 +60,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const toolbar=el('div',undefined,'cp-toolbar'),query=el('input'),project=el('select'),collection=el('select'),archive=select([{value:'active',label:'Active'},{value:'archived',label:'Archived'}],state.query.archived?'archived':'active'),favorite=el('input');
  const sort=select([{value:'activity',label:'Recent activity'},{value:'created',label:'Newest created'},{value:'title',label:'Title'},{value:'active',label:'Running first'}],state.query.sort??'activity'),searchMode=select([{value:'all',label:'All matches'},{value:'conversations',label:'Conversations'},{value:'messages',label:'Messages'},{value:'resources',label:'Resources'}],state.query.searchMode??'all');sort.setAttribute('aria-label','Sort conversations');searchMode.setAttribute('aria-label','Search result type');
  query.type='search';query.placeholder='Search chats';query.value=state.query.text??'';query.setAttribute('aria-label','Search conversation history');favorite.type='checkbox';favorite.checked=!!state.query.favorite;
- const clearSearch=button('Clear history search',()=>{clearTimeout(searchTimer);query.value='';filter();query.focus();},{identity:'clear-search'});clearSearch.hidden=!query.value;query.dataset.cpControl='search';clearSearch.setAttribute('aria-label','Clear history search');
+ const clearSearch=button('Clear history search',()=>{query.value='';filter();query.focus();},{identity:'clear-search'});clearSearch.hidden=!query.value;query.dataset.cpControl='search';clearSearch.setAttribute('aria-label','Clear history search');
  const filters=disclosure('Filters','cp-filters');filters.panel.append(field('Project',project),field('Folder or collection',collection),field('History',archive),field('Favorites',favorite),field('Search result type',searchMode));toolbar.dataset.cpGroup='search';toolbar.append(query,clearSearch,sort,filters.node);
  const filterCount=el('span',undefined,'cp-control-count');filterCount.setAttribute('aria-hidden','true');filters.summary.append(filterCount);project.className=collection.className='cp-native-select';
  const createForm=el('form',undefined,'cp-create'),newTitle=el('input'),newProvider=el('select'),createButton=el('button','Create conversation');newTitle.placeholder='Optional title';newTitle.setAttribute('aria-label','New conversation title');newProvider.setAttribute('aria-label','New conversation provider');createForm.append(field('Title (optional)',newTitle),field('Provider',newProvider),createButton);newChat.panel.append(createForm);
@@ -172,7 +172,23 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   const unscoped=roots.filter(c=>!c.projectId||!projects.some(p=>p.id===c.projectId));if(unscoped.length){const branch=group('Collections','collections');if(unscoped.some(c=>activePath.has(c.id)))branch.node.open=true;branch.node.dataset.open=String(branch.node.open);for(const c of unscoped){const node=folder(c,new Set());if(node)branch.panel.append(node);}tree.append(branch.node);}
   if(rendered.size<collections.length)tree.append(el('p','Some collection hierarchy is unavailable. Use the folder filter to inspect a visible collection.','cp-tree-meta'));
  };
- const historyRow=(hit:SearchHit,label:string)=>{const row=button(label,()=>hit.kind==='resource'?run(async()=>{options.onResource?.(hit.resourceId,hit.messageId);}):requestOpen(hit.resourceId,hit.messageId),{identity:'history-result'});row.dataset.resourceId=hit.resourceId;row.dataset.resultKind=hit.kind;if(hit.messageId)row.dataset.messageId=hit.messageId;row.setAttribute('aria-current',String(hit.resourceId===state.selectedResourceId&&(hit.kind!=='message'||hit.messageId===selectedMessageId)));return row;};
+ let historyResultsRevision=0;
+ const retireHistoryResults=()=>{
+  historyResultsRevision++;
+  if(results.contains(document.activeElement)||paging.contains(document.activeElement))query.focus();
+  results.replaceChildren();paging.replaceChildren();paging.hidden=true;
+  resultCount.textContent='Searching history…';
+ };
+ const historyRow=(hit:SearchHit,label:string)=>{
+  const revision=historyResultsRevision;
+  const currentResult=()=>!disposed&&!closing&&revision===historyResultsRevision;
+  const row=button(label,()=>{
+   if(!currentResult()||!results.contains(row))return;
+   return hit.kind==='resource'?run(async()=>{if(currentResult())options.onResource?.(hit.resourceId,hit.messageId);}):
+    requestOpen(hit.resourceId,hit.messageId,currentResult);
+  },{identity:'history-result'});
+  row.dataset.resourceId=hit.resourceId;row.dataset.resultKind=hit.kind;if(hit.messageId)row.dataset.messageId=hit.messageId;row.setAttribute('aria-current',String(hit.resourceId===state.selectedResourceId&&(hit.kind!=='message'||hit.messageId===selectedMessageId)));return row;
+ };
  const renderMatches=(list:ProductCommandMap['search']['output'],providers:ProductCommandMap['providers']['output'])=>{
   const groups=new Map<string,SearchHit[]>(),resources:SearchHit[]=[];for(const hit of list.items){if(hit.kind==='resource')resources.push(hit);else groups.set(hit.resourceId,[...groups.get(hit.resourceId)??[],hit]);}results.replaceChildren();
   for(const [id,hits]of groups){const representative=hits.find(hit=>hit.kind==='conversation')??hits[0],section=el('article',undefined,'cp-result-group'),heading=historyRow({...representative,kind:'conversation',messageId:undefined},representative.title),summary=representative.summary,c=collections.find(c=>c.id===state.query.collectionId),membership=c?(c.pinnedIds.includes(id)?'Manual member':c.rule?'Smart match':'Member'):'';
@@ -287,6 +303,8 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const scheduleSwitcher=()=>{switchText=switchQuery.value.trim();invalidateSwitcher();if(switcher.node.open&&!switchComposing)switchTimer=setTimeout(()=>void loadSwitcher(),120);};
  const setHistoryQuery=(next:SearchQuery)=>{
   const projectChanged=next.projectId!==state.query.projectId;
+  clearTimeout(searchTimer);searchTimer=undefined;
+  retireHistoryResults();
   state.query=next;
   if(projectChanged&&switcher.node.open){
    if(switchComposing)invalidateSwitcher();
@@ -468,14 +486,38 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const loadDetail=async(aroundMessageId?:string)=>{const id=state.selectedResourceId;if(!id){const selected=collections.find(c=>c.id===state.query.collectionId&&c.state==='active');if(selected){root.dataset.collectionId=selected.id;detailHeader.replaceChildren(el('h3',selected.title),el('p','Choose a conversation or resource from this collection.'));}else{delete root.dataset.collectionId;detailHeader.replaceChildren(el('p','Open or create a conversation.'));}return;}delete root.dataset.collectionId;await bindChat(id,aroundMessageId);};
  const reloadCollections=async(provided?:Collection[])=>{collections=provided??await call('collections',{});const previous=collection.value;collection.replaceChildren(el('option','All collections'));collection.options[0].value='';for(const c of collections){const o=el('option',`${c.parentId?'↳ ':''}${c.title}${c.rule?' (smart)':''}`);o.value=c.id;collection.append(o);}collection.value=state.query.collectionId??previous;syncFilterControls();};
  type CatalogRead={collections:Collection[];list:ProductCommandMap['search']['output'];providers:ProductCommandMap['providers']['output'];projects:ProductCommandMap['projects']['output']};
+ let failedHistoryGeneration:number|undefined;
  const refresh=async(provided?:CatalogRead)=>{
-  const generation=++request,scope={...state.query};save();const visible=provided?.collections??await call('collections',{});
-  const [list,providers,projects]=provided?[provided.list,provided.providers,provided.projects]:await Promise.all([readMatches(scope),call('providers',{}),call('projects',{})]);if(disposed||generation!==request)return;
+  const generation=++request,scope={...state.query};save();
+  const catalogRead=provided?[provided.collections,provided.list,provided.providers,provided.projects] as const:
+   await call('collections',{}).then(async visible=>
+    [visible,...await Promise.all([readMatches(scope),call('providers',{}),call('projects',{})])] as const).catch(()=>null);
+  if(disposed||generation!==request)return;
+  if(!catalogRead){
+   failedHistoryGeneration=generation;
+   const notice=el('p','Couldn’t load conversation history. Press Enter in the search field to retry.');notice.setAttribute('role','status');
+   const retry=button('Retry history search',()=>{
+    if(disposed||closing||busy||generation!==request)return;
+    query.focus();return run(refresh);
+   });
+   resultCount.textContent='';paging.replaceChildren();paging.hidden=true;
+   results.replaceChildren(notice,retry);
+   return;
+  }
+  const [visible,list,providers,projects]=catalogRead;
+  failedHistoryGeneration=undefined;
   await reloadCollections(visible);if(disposed||generation!==request)return;
   newProviderCatalog=providers;newProvider.replaceChildren();for(const p of providers.filter(p=>p.record||p.id===explicitNewProvider)){const o=el('option',p.label+(p.record?'':' · unavailable'));o.value=p.id;o.disabled=!p.record;newProvider.append(o);}
   const preferred=explicitNewProvider??providers.find(p=>p.default&&p.available&&p.execute&&p.record)?.id??providers.find(p=>p.record&&!p.execute)?.id;
   if(preferred){if(![...newProvider.options].some(o=>o.value===preferred)){const missing=el('option','Selected provider · unavailable');missing.value=preferred;missing.disabled=true;newProvider.append(missing);}newProvider.value=preferred;}syncNewProvider();providerLabels=new Map(providers.map(provider=>[provider.id,provider.label]));renderTree(projects);renderMatches(list,providers);
-  const previous=button('Previous results',async()=>run(async()=>{state.query.offset=Math.max(0,list.offset-50);await refresh();}),{identity:'previous'}),next=button('More results',async()=>run(async()=>{if(list.hasMore){state.query.offset=list.offset+50;await refresh();}}),{identity:'next'});previous.disabled=list.offset===0;next.disabled=!list.hasMore;paging.dataset.cpGroup='history-navigation';paging.replaceChildren(previous,next);paging.hidden=list.total<=50;
+  const pageRevision=historyResultsRevision;
+  const showPage=(offset:number)=>{
+   if(disposed||closing||pageRevision!==historyResultsRevision)return;
+   request++;
+   setHistoryQuery({...state.query,offset});
+   return run(refresh);
+  };
+  const previous=button('Previous results',()=>showPage(Math.max(0,list.offset-50)),{identity:'previous'}),next=button('More results',()=>showPage(list.offset+50),{identity:'next'});previous.disabled=list.offset===0;next.disabled=!list.hasMore;paging.dataset.cpGroup='history-navigation';paging.replaceChildren(previous,next);paging.hidden=list.total<=50;
   // Available project IDs come from visible canonical summaries; host may also provide its normal project picker.
   const prior=project.value;project.replaceChildren();for(const p of [{value:'',label:'All projects'},{value:'__none',label:'No project'},...projects.map(p=>({value:p.id,label:p.title}))]){const o=el('option',p.label);o.value=p.value;project.append(o);}project.value=prior|| (state.query.projectId===null?'__none':state.query.projectId??'');await loadDetail(chatResource===null?selectedMessageId:undefined);
  };
@@ -493,12 +535,24 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    },true);
   });collectionOpening=operation.catch(()=>{});return operation;
  };
- const filter=()=>{request++;setHistoryQuery({...state.query,text:query.value,projectId:project.value==='__none'?null:project.value||undefined,collectionId:collection.value||undefined,archived:archive.value==='archived',favorite:favorite.checked,sort:sort.value as SearchQuery['sort'],searchMode:searchMode.value as SearchQuery['searchMode'],offset:0});syncFilterControls();if(busy)filterQueued=true;else void run(refresh);};
- query.addEventListener('input',()=>{request++;clearSearch.hidden=!query.value;clearTimeout(searchTimer);searchTimer=setTimeout(filter,180);});for(const control of [project,collection,archive,favorite,sort,searchMode])control.addEventListener('change',filter);
+ let historyComposing=false;
+ const filter=()=>{if(historyComposing)return;request++;setHistoryQuery({...state.query,text:query.value,projectId:project.value==='__none'?null:project.value||undefined,collectionId:collection.value||undefined,archived:archive.value==='archived',favorite:favorite.checked,sort:sort.value as SearchQuery['sort'],searchMode:searchMode.value as SearchQuery['searchMode'],offset:0});syncFilterControls();if(busy)filterQueued=true;else void run(refresh);};
+ const scheduleHistorySearch=()=>{request++;retireHistoryResults();clearSearch.hidden=!query.value;clearTimeout(searchTimer);searchTimer=undefined;if(!historyComposing)searchTimer=setTimeout(filter,180);};
+ query.addEventListener('compositionstart',()=>{historyComposing=true;scheduleHistorySearch();});
+ query.addEventListener('compositionend',()=>{historyComposing=false;scheduleHistorySearch();});
+ query.addEventListener('keydown',event=>{
+  if(event.key!=='Enter'||event.isComposing||historyComposing||event.keyCode===229||
+    event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
+  event.preventDefault();
+  if(event.repeat)return;
+  if(searchTimer!==undefined)filter();
+  else if(!busy&&failedHistoryGeneration===request)void run(refresh);
+ });
+ query.addEventListener('input',scheduleHistorySearch);for(const control of [project,collection,archive,favorite,sort,searchMode])control.addEventListener('change',filter);
  createForm.addEventListener('submit',event=>{event.preventDefault();void run(async()=>{const c=await call('create',{title:newTitle.value.trim()||'New conversation',...(explicitNewProvider?{providerId:explicitNewProvider}:{}),commandId:crypto.randomUUID()});newTitle.value='';newChat.node.open=false;await open(c.resourceId);await refresh();chat?.focusComposer();});});
  createFolder.addEventListener('submit',event=>{event.preventDefault();void run(async()=>{const parentId=state.query.collectionId,created=await call('organize',{type:'createCollection',title:folderTitle.value,projectId:state.query.projectId??collections.find(item=>item.id===parentId)?.projectId??null});await reloadCollections();const c=createdCollection(created);if(parentId)await call('collectionRule',{collectionId:c.id,parentId,rule:null,expectedVersion:c.version,expectedRuleRevision:c.ruleRevision});folderTitle.value='';await refresh();});});
  root.addEventListener('toggle',event=>{const opened=event.target as HTMLDetailsElement;if(opened.tagName!=='DETAILS'||!opened.open||opened.closest('.cp-library-tree'))return;for(const other of root.querySelectorAll<HTMLDetailsElement>('details[open]'))if(!other.closest('.cp-library-tree')&&other!==opened&&!other.contains(opened)&&!opened.contains(other))other.open=false;},true);
- root.addEventListener('keydown',event=>{if(event.key==='Escape'){
+ root.addEventListener('keydown',event=>{if(event.key==='Escape'&&!event.isComposing&&!(historyComposing&&event.target===query)){
   const target=event.target as HTMLElement,active=target.closest<HTMLDetailsElement>('details[open]')??[...root.querySelectorAll<HTMLDetailsElement>('details[open]')].at(-1);
   event.preventDefault();event.stopPropagation();if(active){active.open=false;active.querySelector('summary')?.focus();return;}void closeManager();
  }});
