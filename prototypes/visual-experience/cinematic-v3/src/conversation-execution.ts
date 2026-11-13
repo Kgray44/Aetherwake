@@ -264,7 +264,7 @@ export function createConversationExecutionPort(
               notify(id, {
                 resourceAvailable: resource.available,
                 connection: "available",
-                ...(next ? { execution: next } : {}),
+                execution: next ?? null,
                 preview: preview ? {
                   executionId: preview.executionId,
                   cursor: preview.cursor,

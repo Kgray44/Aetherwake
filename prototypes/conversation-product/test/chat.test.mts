@@ -924,6 +924,28 @@ test('externally owned draft session survives unmount; explicit conflict resolut
   }finally{await chat?.dispose();await session.dispose();f.restore();}
 });
 
+test('a missing execution after reconnect retires Stop but keeps the draft for outcome review',async()=>{
+  const f=fixture('chatgpt-plan-responses');
+  let chat,observe:((value:ConversationExecutionObservation)=>void)|undefined;
+  const execution={id:'execution:missing',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:'command:missing',state:'running' as const,startedAt:'2026-11-02T00:00:00Z',endedAt:null,taskVerified:false as const};
+  try{
+    chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+      observe(_id,listener){observe=listener;return()=>{};},async cancel(){assert.fail('No automatic Stop');}
+    }});
+    await chat.ready;
+    observe!({execution,preview:{executionId:execution.id,cursor:1,text:'Partial reply'}});
+    assert.equal(named(f.view.root,'Stop').hidden,false);
+    observe!({connection:'unavailable'});
+    observe!({resourceAvailable:true,connection:'available',execution:null,preview:null});
+    assert.equal(named(f.view.root,'Stop').hidden,true);
+    assert.equal(f.view.root.querySelector('.cp-stream').hidden,true);
+    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/outcome.*unconfirmed/i);
+    assert.ok(named(f.view.root,'I reviewed the send outcome'));
+    assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
+    assert.equal(f.calls.some(call=>call.name==='send'),false);
+  }finally{await chat?.dispose();f.restore();}
+});
+
 test('reopening an ongoing execution restores only its scoped complete preview then appends strictly later deltas without a duplicate prefix',async()=>{
   const f=fixture('codex:native');let chat,observe:((value:ConversationExecutionObservation)=>void)|undefined;
   const execution={id:'execution:ongoing',resourceId:f.draft.resourceId,providerId:'codex:native',commandId:'command:ongoing',state:'running' as const,startedAt:'2026-11-02T00:00:00Z',endedAt:null,taskVerified:false as const};

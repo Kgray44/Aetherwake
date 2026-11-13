@@ -248,6 +248,23 @@ test("an unchanged active preview is delivered again after an activity read fail
   }
 });
 
+test("a successful activity read explicitly retires an execution absent from the snapshot", async () => {
+  let rows = [execution()];
+  const f = setup((_name, { resourceIds }) => activity(resourceIds, rows));
+  const received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  try {
+    await f.port.refresh();
+    assert.equal(received.at(-1).execution.id, "e");
+    rows = [];
+    await f.port.refresh();
+    assert.deepEqual(received.at(-1), { resourceAvailable: true, connection: "available", execution: null, preview: null });
+  } finally {
+    off();
+    f.port.dispose();
+  }
+});
+
 test("reopening and returning from a hidden view read the full existing backend preview without replaying a provider request", async () => {
   let preview = {
     resourceId: "r",

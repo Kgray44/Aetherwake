@@ -34,7 +34,8 @@ export function decorateConversationDisclosure(node: HTMLDetailsElement, summary
 }
 /** The host translates only observed assistant text deltas; never reasoning/tool summaries or fabricated approval events. */
 export type ConversationExecutionObservation = {
-  execution?: ConversationExecution; connection?: 'available'|'unavailable'; resourceAvailable?: boolean;
+  /** Null means an authorized activity read found no execution. Omission leaves it unchanged. */
+  execution?: ConversationExecution | null; connection?: 'available'|'unavailable'; resourceAvailable?: boolean;
   /** Complete, access-checked live buffer from the same canonical execution, through cursor. */
   preview?: { executionId: string; cursor: number; text: string } | null;
   delta?: { eventId: string; cursor: number; text: string };
@@ -879,6 +880,15 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(connection==='unavailable'){
       streamText.textContent='';stream.hidden=true;lastCursor=-1;seenEvents.clear();streamLimited=false;liveFollow=false;
       report('Connection unavailable. '+(execution?'Last observed: '+execution.state+'. Outcome unconfirmed.':'Execution state is unavailable.'));renderDraft();
+    }
+    if(observation.execution===null&&connection==='available'&&observation.resourceAvailable===true){
+      const needsReview=!!active()||needsSendReview();
+      execution=null;stopRequestedFor=null;streamExecution='';
+      streamText.textContent='';stream.hidden=true;lastCursor=-1;seenEvents.clear();streamLimited=false;liveFollow=false;
+      delete root.dataset.executionState;
+      if(needsReview){uncertain=true;report('Send outcome is unconfirmed. Inspect the chat before retrying.');}
+      renderDraft();
+      return;
     }
     const next=observation.execution??execution;if(!next)return;
     if(webSearchCommandId&&(next.commandId!==webSearchCommandId||next.providerId!=='chatgpt-plan-responses'))return;
