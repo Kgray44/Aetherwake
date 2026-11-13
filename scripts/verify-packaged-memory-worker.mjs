@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, realpath, unlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { DatabaseSync } from 'node:sqlite';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
@@ -189,6 +190,20 @@ async function snapshot(destination) {
   finally { kernel.close(); }
 }
 
+function backupMemoryRows(directory, ids, source) {
+  const backup = new DatabaseSync(join(directory, 'profile.sqlite'), { readOnly: true });
+  try {
+    const [original, corrected] = ids;
+    const heads = backup.prepare('SELECT count(*) AS total FROM personal_context_heads WHERE id IN (?,?)')
+      .get(original, corrected).total;
+    const revisions = backup.prepare('SELECT cipher FROM personal_context_revisions WHERE id IN (?,?)')
+      .all(original, corrected).map(row => Buffer.from(row.cipher));
+    const lineage = backup.prepare('SELECT count(*) AS total FROM personal_context_conversation_sources WHERE conversation_id=? AND message_id=?')
+      .get(source.conversationId, source.messageId).total;
+    return { heads, revisions, lineage };
+  } finally { backup.close(); }
+}
+
 const sourceText = 'Use the synthetic quartz relay.';
 const factText = 'The selected part is synthetic quartz.';
 const correctedText = 'The selected part is synthetic basalt.';
@@ -337,9 +352,17 @@ await withWorker(false, async call => {
   await navigate(call, saved.workspaceId);
   await assert.rejects(previewRecall(call, 'Which basalt part?'), /personal_memory_no_eligible_context/u);
 }, afterRevocationProfile);
+const ids = [saved.factId, correctedId];
+const retained = backupMemoryRows(beforeRevocationProfile, ids, saved);
+assert.equal(retained.heads, 1);
+assert.equal(retained.lineage, 1);
+assert.equal(retained.revisions.length, 1);
+assert(retained.revisions[0].length > 0);
+assert(!retained.revisions[0].includes(Buffer.from(factText)));
+assert.deepEqual(backupMemoryRows(afterRevocationProfile, ids, saved), { heads: 0, revisions: [], lineage: 0 });
 await assert.rejects(readFile(unexpectedFetch), { code: 'ENOENT' });
 const receipt = { result: 'pass', candidate: inventory.candidate, manifestSha256: manifestHash, verifiedFiles: files.size,
-  workerStarts: 6, backupConsentRestored: true, preRevocationBackupRetainsFact: true, postRevocationBackupDeniesRecall: true, correctedRecall: true, attributedExport: true, crossConversationRecall: true, foreignProjectDenied: true, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true, revokedApprovedRequestDenied: true,
+  workerStarts: 6, backupConsentRestored: true, preRevocationBackupRetainsFact: true, postRevocationBackupDeniesRecall: true, postRevocationBackupHasNoMemoryRows: true, correctedRecall: true, attributedExport: true, crossConversationRecall: true, foreignProjectDenied: true, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true, revokedApprovedRequestDenied: true,
   custody: 'Windows DPAPI CurrentUser through test adapter', approval: 'simulated', simulatedProviderRequests: 1, replayDeniedWithoutAppend: true, liveProviderDispatch: false };
 await writeFile(join(profile, 'worker-receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify(receipt));
