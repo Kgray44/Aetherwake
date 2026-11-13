@@ -153,8 +153,9 @@ app
     win.webContents.on("render-process-gone", (_event, detail) =>
       errors.push(`Renderer gone: ${detail.reason}`),
     );
-    win.webContents.on("console-message", (details) => {
-      if (details.level === "error") errors.push(details.message);
+    win.webContents.on("console-message", (_event, details, legacyMessage) => {
+      if (details?.level === "error") errors.push(details.message);
+      else if (details === 3) errors.push(legacyMessage);
     });
     let suspended = false;
     const active = () =>
@@ -242,10 +243,19 @@ app
       }
       return;
     }
+    if (relationshipOnly) {
+      try {
+        await verifyRelationship();
+        app.exit(0);
+      } catch (error) {
+        console.error(error);
+        app.exit(1);
+      }
+      return;
+    }
     if (verifyMode) {
       try {
-        if (relationshipOnly) await verifyRelationship();
-        else await verify();
+        await verify();
       } catch (error) {
         console.error(error);
         await fs.mkdir(runtime, { recursive: true });
