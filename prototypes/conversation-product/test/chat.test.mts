@@ -2080,6 +2080,29 @@ test('an inherited citation opens through its source chat and suppresses repeat 
  }finally{await chat?.dispose();f.restore();}
 });
 
+test('a citation completion cannot replace chat feedback after its source disappears',async()=>{
+ const f=fixture(), opening=Promise.withResolvers<{requested:true}>();let chat;
+ try{
+  const message=f.detail.messages.items[1];
+  message.webSearch={completed:true,citations:[{url:'https://science.example.org/moon',title:'Moon facts',start:0,end:1}]};
+  const port={async command(name:string,input:any){
+   if(name==='openCitation')return opening.promise;
+   return (f.port.command as any)(name,input);
+  }} as ConversationProductPort;
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId});
+  await chat.ready;
+  const status=f.view.root.querySelector('.cp-chat-status');
+  f.view.root.querySelector('.cp-web-citation').fire('click');
+  delete message.webSearch;
+  await chat.refresh();
+  assert.equal(f.view.root.querySelector('.cp-web-citation'),null);
+  const currentStatus=status.textContent;
+  opening.resolve({requested:true});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(status.textContent,currentStatus);
+ }finally{opening.resolve({requested:true});await chat?.dispose();f.restore();}
+});
+
 test('research progress yields to Stop and a disconnected turn keeps the draft for explicit retry',async()=>{
  const f=fixture('chatgpt-plan-responses'),cancelled:string[]=[];let chat,observe!:(value:ConversationExecutionObservation)=>void;
  try{

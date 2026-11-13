@@ -658,6 +658,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const doAction = (event: ConversationMessageAction) => { Promise.resolve(options.onMessageAction?.(event)).catch(error=>report(errorText(error))); };
   const replyNotes = new Map<string, { pending: boolean; noteId?: string }>();
   const openingCitations = new Set<string>();
+  const citationBindings = new WeakMap<HTMLButtonElement, string>();
   const updateReplyNoteControl = (messageId: string, button: HTMLButtonElement) => {
     const capture = replyNotes.get(messageId);
     const opening = !!capture?.noteId && capture.pending;
@@ -685,6 +686,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         button.type = 'button'; button.title = source.title; button.setAttribute('aria-label', 'Open source ' + (index + 1) + ', ' + source.title);
         button.dataset.aerynthMotionControl = 'true';
         button.dataset.citationIndex = String(index);
+        const binding = JSON.stringify([key, source]);
+        citationBindings.set(button, binding);
+        const currentCitation = () => cache.get(message.id)?.node.querySelector<HTMLButtonElement>(`[data-citation-index="${index}"]`);
+        const canReport = () => {
+          const current = currentCitation();
+          return !disposed && !retiring && !accessRevoked && current && citationBindings.get(current) === binding;
+        };
         if (openingCitations.has(key)) button.setAttribute('aria-disabled', 'true');
         button.addEventListener('click', async () => {
           if (openingCitations.has(key) || disposed || accessRevoked || !root.contains(button)) return;
@@ -692,13 +700,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           button.setAttribute('aria-disabled', 'true');
           try {
             await port.command('openCitation', { resourceId: message.resourceId, messageId: message.id, index });
-            if (!accessRevoked) report('Browser open requested for this source.');
+            if (canReport()) report('Browser open requested for this source.');
           } catch {
-            if (!accessRevoked) report('This source could not be opened.');
+            if (canReport()) report('This source could not be opened.');
           } finally {
             openingCitations.delete(key);
             button.removeAttribute('aria-disabled');
-            cache.get(message.id)?.node.querySelector(`[data-citation-index="${index}"]`)?.removeAttribute('aria-disabled');
+            currentCitation()?.removeAttribute('aria-disabled');
           }
         });
         return button;
