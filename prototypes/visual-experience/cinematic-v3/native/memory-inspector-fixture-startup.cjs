@@ -54,6 +54,7 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
     runtime.prepareStorage?.({ profileRoot: backendDescriptor.profileRoot, check });
     const key = randomBytes(32);
     const policyToken = randomBytes(32).toString("base64url");
+    const detailToken = randomBytes(32).toString("base64url");
     try {
       protector = await runtime.createProtector({
         modulePath: assets.protectorPath,
@@ -65,7 +66,7 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
     backend = await runtime.startBackend({
       executable: assets.nodePath,
       args: [assets.hostPath, "--memory-fixture-bootstrap-v1", JSON.stringify(backendDescriptor)],
-      env: { AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN: policyToken },
+      env: { AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN: policyToken, AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN: detailToken },
       protector, wirePath: assets.wirePath, check, close: requestClose,
     });
     await backend.waitUntilReady?.();
@@ -76,6 +77,10 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
     check();
     const { win, dialog } = surface;
     const frames = applicationFrameTrust(win, assets.rendererURL);
+    const detail = createFixtureDetailRoute({
+      check, trustedFrame: frames.trustedApplicationFrame,
+      detailToken, call: request => backend.call(request),
+    });
     const { reviewDialogs } = nativeReviewBoundary({ dialog, checkDesktopTest: check });
     const call = (command, input) => {
       check();
@@ -98,11 +103,8 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
         if (command === "personalMemory" &&
             ["list", "read", "enableProviderMemory", "disableProviderMemory", "revokeSource"].includes(input?.type))
           result = await route(event, input);
-        else if (command === "openResource" && typeof input?.resourceId === "string" &&
-            typeof input.selection?.messageId === "string")
-          result = await call("openResource", {
-            resourceId: input.resourceId, selection: { messageId: input.selection.messageId },
-          });
+        else if (command === "openResource" || command === "conversation")
+          result = await detail.dispatch(event, command, input);
         else throw Error("memory_fixture_command_denied");
         check();
         if (closed || !frames.trustedApplicationFrame(event)) throw Error("unauthorized_sender");
@@ -111,7 +113,7 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
         return { ok: false, error: /^[a-z][a-z0-9_]+$/u.test(error?.message) ? error.message : "memory_fixture_command_failed" };
       }
     };
-    await surface.mount({ rendererURL: assets.rendererURL, dispatch, check });
+    await surface.mount({ rendererURL: assets.rendererURL, dispatch, check, invalidateDetail: detail.clear });
     check();
     starting = false;
     return { close };
@@ -121,4 +123,51 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
   }
 }
 
-module.exports = { startMemoryInspectorFixture };
+function createFixtureDetailRoute({ check, trustedFrame, detailToken, call }) {
+  let selection, revision = 0;
+  const clear = () => { selection = undefined; revision++; };
+  const current = event => {
+    check();
+    if (!trustedFrame(event)) throw Error("unauthorized_sender");
+  };
+  const identifier = value => typeof value === "string" && value.length <= 256 && value.trim().length > 0;
+  return {
+    clear,
+    async dispatch(event, command, input) {
+      current(event);
+      if (command === "openResource") {
+        clear();
+        const attempt = revision;
+        const resourceId = input?.resourceId, messageId = input?.selection?.messageId;
+        if (!identifier(resourceId) || !identifier(messageId)) throw Error("memory_fixture_command_denied");
+        const result = await call({ command, input: { resourceId, selection: { messageId } }, fixtureDetailToken: detailToken });
+        current(event);
+        if (attempt !== revision) throw Error("source_unavailable");
+        if (result?.status === "ready") {
+          if (result.resourceId !== resourceId || result.resource?.kind !== "conversation" ||
+              result.selection?.messageId !== messageId) throw Error("source_unavailable");
+          selection = { resourceId, messageId, frame: event.senderFrame };
+        }
+        return result;
+      }
+      const accepted = selection;
+      if (command !== "conversation" || input?.name !== "detail" || !accepted ||
+          accepted.frame !== event.senderFrame || input.input?.resourceId !== accepted.resourceId ||
+          input.input?.aroundMessageId !== accepted.messageId)
+        throw Error("memory_fixture_command_denied");
+      try {
+        const result = await call({ command, fixtureDetailToken: detailToken, input: {
+          name: "detail", input: { resourceId: accepted.resourceId, aroundMessageId: accepted.messageId },
+        } });
+        current(event);
+        if (selection !== accepted) throw Error("source_unavailable");
+        return result;
+      } catch (error) {
+        if (selection === accepted) clear();
+        throw error;
+      }
+    },
+  };
+}
+
+module.exports = { startMemoryInspectorFixture, createFixtureDetailRoute };

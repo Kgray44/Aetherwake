@@ -147,7 +147,7 @@ for (const outcome of ["ready", "unresolved", "unready"]) test(`isolated Electro
       assert.equal(executable, join(artifactRoot, paths.node));
       assert.equal(args[0], join(artifactRoot, paths.host));
       assert.equal(options.cwd, storage);
-      assert.deepEqual(Object.keys(options.env), ["AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN"]);
+      assert.deepEqual(Object.keys(options.env), ["AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN", "AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN"]);
       effects.push("worker");
       return child;
     },
