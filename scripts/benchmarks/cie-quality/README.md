@@ -23,6 +23,14 @@ Fresh evaluation inputs must be independently authored and frozen before impleme
 
 No provider request, secret reader, native qualification, or performance/accuracy improvement is implied by these offline checks.
 
+## Reviewed project retrieval baseline
+
+Run `node scripts/benchmarks/cie-quality/lexical-latency.mts` with the PR #61 baseline commit available locally. The Windows Node 24.18 comparison used 300 alternating timed repetitions per arm after 30 warmups. Each repetition built the index and ranked 12 synthetic reviewed sources against six queries. Ordered IDs and ambiguity matched in the fixture. The baseline rebuilt the index for each query and took 2.03 ms p50 and 3.61 ms p95. The request-local index took 0.40 ms p50 and 0.80 ms p95. These measurements cover lexical retrieval only. This fixture made zero provider calls.
+
+The index is built lazily from the authorized project snapshot during one request. Canonical scope and source-proof checks still run through Vela's native review and transport fences. Corrections, deletions and permission changes invalidate that review. The next request builds a fresh index. The project snapshot still has its original owner-level limits, so additional sources can remain undiscoverable until reviewed. One to three evidence needs retain the eight-candidate ceiling. Reviewed project discovery widens to ten to fourteen candidates for four to six needs. Initial project discovery reserves two slots and 5 KiB for gap recovery within the provider's 32 KiB payload limit, accounting for serialized host review metadata. Ordinary history retains its previous candidate limits. Explicitly selected sources have priority and can use the reserved capacity. Large serialized excerpts can exceed the reserved capacity. The maximum remains two assessment rounds. The interpreter instruction changed, so exact-instruction qualification must be obtained again through the existing provider runtime.
+
+The request timer in `blind-runner.mts` includes qualification and evidence preparation when the host callback owns those operations. The native synthetic tests exercise review, source expansion, final composition and revocation fences. Provider variability, actual usage, final answer quality and full-request latency require matched authorized live repetitions. The lexical timings do not establish any of those outcomes.
+
 ## Independent blind corpus
 
 `cases.public.json` is the independently authored, frozen input-only 48-case corpus (six examples in each of eight categories). Its exact SHA-256 is pinned in `blind-runner.mts`. Labels and adjudication rationales are deliberately not checked in and have not been consulted by the implementer. The fixture file expands semantic evaluation inputs sixfold over the original eight-case set; **that is corpus expansion, not a claimed measured accuracy gain**.

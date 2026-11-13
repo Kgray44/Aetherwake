@@ -32,6 +32,65 @@ test('disclosure denial preserves the native fallback and skips model-proposed r
   assert.deepEqual(result.coverage, []);
 });
 
+test('widens bounded candidate admission for six distinct needs and reserves gap capacity', async () => {
+  const needs = Array.from({ length: 6 }, (_, index) => ({ key: 'need' + index, question: 'Find topic ' + index, query: 'topic' + index }));
+  const source = (text: string) => ({ sourceId: text, revision: '1', text });
+  const gap = source('resolved gap');
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search: query => ({ sources: query === 'resolved gap' ? [gap] : [source(query + ' alpha'), source(query + ' beta')], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return { ...proposal, needs };
+      for (const need of needs) assert.equal(call.excerpts.filter(excerpt => excerpt.text.startsWith(need.query)).length, 2);
+      return { version: 1, assessment: needs.map((need, index) => {
+        const found = call.excerpts.find(excerpt => excerpt.text === (index === 0 ? gap.text : need.query + ' alpha'));
+        return { key: need.key, status: found ? 'supported' : 'missing', sources: found ? [found.handle] : [], query: found ? '' : 'resolved gap' };
+      }) };
+    },
+  });
+  assert.equal(result.state, 'assessed');
+  assert.equal(result.rounds, 2);
+  assert.deepEqual(result.coverage[0].sources, [gap]);
+});
+
+test('reserves serialized bytes for gap recovery when first-pass excerpts are large', async () => {
+  const needs = Array.from({ length: 4 }, (_, index) => ({ key: 'topic' + index, question: 'Find topic ' + index, query: 'topic' + index }));
+  const source = (id: string) => ({ sourceId: id, revision: '1', sourceKind: 'conversation-exchange' as const, text: id.padEnd(3800, 'x') });
+  const gap = source('refined result');
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search: query => ({ sources: query === 'refined search' ? [gap] : [source(query + 'a'), source(query + 'b')], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return { ...proposal, needs };
+      return { version: 1, assessment: needs.map((need, index) => {
+        const found = call.excerpts.find(excerpt => excerpt.text.startsWith(index === 0 ? gap.sourceId : need.query));
+        return { key: need.key, status: found ? 'supported' : 'missing', sources: found ? [found.handle] : [], query: found ? '' : 'refined search' };
+      }) };
+    },
+  });
+  assert.deepEqual(result.coverage[0].sources.map(source => source.sourceId), [gap.sourceId]);
+});
+
+test('retains three explicit files that fit the provider payload but exceed the discovery budget', async () => {
+  const files = Array.from({ length: 3 }, (_, index) => ({
+    sourceId: 'file-' + index, sourceKind: 'file' as const, revision: '1', text: String(index).repeat(10_000),
+  }));
+  const result = await investigateSemanticHistory(request, {
+    assessmentMetadataBytes: 100,
+    selected: () => ({ sources: files, scan: 'bounded' }),
+    search: () => ({ sources: [], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      assert.equal(call.excerpts.length, 3);
+      return answer;
+    },
+  });
+  assert.equal(result.state, 'assessed');
+});
+
 test('a high-volume search leaves room for other evidence needs and a follow-up', async () => {
   const second = { ...candidate, sourceId: 'second', text: 'The supervisor approved the release.' };
   const followup = { ...candidate, sourceId: 'followup', text: 'The release takes effect at noon.' };
