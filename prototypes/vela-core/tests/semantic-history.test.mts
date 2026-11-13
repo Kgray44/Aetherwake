@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { investigateSemanticHistory } from '../src/semantic-history.mts';
+import { investigateSemanticHistory, maxSemanticAssessmentBytes } from '../src/semantic-history.mts';
 
 const request = 'Which safeguard stopped the batch from being applied twice?';
 const evidence = { key: 's1', question: 'What was the duplication safeguard?', query: 'duplicate operation' };
@@ -30,6 +30,243 @@ test('disclosure denial preserves the native fallback and skips model-proposed r
   });
   assert.equal(result.state, 'unavailable');
   assert.deepEqual(result.coverage, []);
+});
+
+test('widens bounded candidate admission for six distinct needs and reserves gap capacity', async () => {
+  const needs = Array.from({ length: 6 }, (_, index) => ({ key: 'need' + index, question: 'Find topic ' + index, query: 'topic' + index }));
+  const source = (text: string) => ({ sourceId: text, revision: '1', text });
+  const gap = source('resolved gap');
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search: query => ({ sources: query === 'resolved gap' ? [gap] : [source(query + ' alpha'), source(query + ' beta')], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return { ...proposal, needs };
+      for (const need of needs) assert.equal(call.excerpts.filter(excerpt => excerpt.text.startsWith(need.query)).length, 2);
+      return { version: 1, assessment: needs.map((need, index) => {
+        const found = call.excerpts.find(excerpt => excerpt.text === (index === 0 ? gap.text : need.query + ' alpha'));
+        return { key: need.key, status: found ? 'supported' : 'missing', sources: found ? [found.handle] : [], query: found ? '' : 'resolved gap' };
+      }) };
+    },
+  });
+  assert.equal(result.state, 'assessed');
+  assert.equal(result.rounds, 2);
+  assert.deepEqual(result.coverage[0].sources, [gap]);
+});
+
+test('revisits a truncated discovery query when an incomplete need has no better query', async () => {
+  const distractor = { ...candidate, sourceId: 'distractor', text: 'The duplicate operation alarm was reset.' };
+  let widened = 0;
+  const result = await investigateSemanticHistory(request, {
+    search: () => ({ sources: [distractor], scan: 'partial', moreMatches: true }),
+    widen: query => {
+      assert.equal(query, evidence.query);
+      widened++;
+      return { sources: [candidate], scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      return call.round === 1
+        ? { version: 1, assessment: [{ key: 's1', status: 'missing', sources: [], query: '' }] }
+        : { version: 1, assessment: [{ key: 's1', status: 'supported', sources: ['e2'], query: '' }] };
+    },
+  });
+  assert.equal(widened, 1);
+  assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
+test('retrieves reviewed references from a cited partial match within the follow-up round', async () => {
+  const anchor = { ...candidate, sourceId: 'anchor', text: 'See the equipment handoff.' };
+  const refinement = Array.from({ length: 7 }, (_, index) => ({ ...candidate, sourceId: 'keyword-' + index }));
+  let relationshipReads = 0;
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search: query => ({ sources: query === evidence.query ? [anchor] : refinement, scan: 'bounded' }),
+    related: sources => {
+      relationshipReads++;
+      assert.deepEqual(sources, [anchor]);
+      return { sources: [candidate], scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : { version: 1, assessment: [{
+      key: 's1', status: call.round === 1 ? 'partial' : 'supported',
+      sources: call.round === 1 ? ['e1'] : ['e1', 'e3'], query: call.round === 1 ? 'equipment handoff' : '',
+    }] },
+  });
+  assert.equal(result.rounds, 2);
+  assert.equal(relationshipReads, 1);
+  assert.deepEqual(result.coverage[0].sources, [anchor, candidate]);
+});
+
+test('reviewed discovery can recover from a lossy search query using the evidence question', async () => {
+  const need = { ...evidence, question: 'Which idempotency key was used?' };
+  const searches: string[] = [];
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search: query => {
+      searches.push(query);
+      return { sources: query === need.question ? [candidate] : [], scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? { ...proposal, needs: [need] } : call.round === 1
+      ? { version: 1, assessment: [{ key: 's1', status: 'missing', sources: [], query: '' }] }
+      : answer,
+  });
+  assert.deepEqual(searches, [need.query, need.question]);
+  assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
+test('a novel model refinement takes precedence over another page of the original query', async () => {
+  const initial = { ...candidate, sourceId: 'initial' };
+  const result = await investigateSemanticHistory(request, {
+    search: query => query === evidence.query
+      ? { sources: [initial], scan: 'partial', moreMatches: true }
+      : { sources: [candidate], scan: 'bounded' },
+    widen: () => assert.fail('the original query is not widened when a refinement is available'),
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : { version: 1, assessment: [{
+      key: 's1', status: call.round === 1 ? 'missing' : 'supported',
+      sources: call.round === 1 ? [] : ['e2'], query: call.round === 1 ? 'idempotency key' : '',
+    }] },
+  });
+  assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
+test('a shared hit leaves room for another missing need to supply distinct evidence', async () => {
+  const second = { key: 'second', question: 'Which engineer signs the release?', query: 'approval workflow' };
+  const approver = { ...candidate, sourceId: 'approver', text: 'The duty engineer signs the release.' };
+  const initial = Array.from({ length: 6 }, (_, index) => ({ ...candidate, sourceId: 'initial-' + index }));
+  const secondary = { ...candidate, sourceId: 'secondary' };
+  const searched: string[] = [];
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search(query) {
+      searched.push(query);
+      const sources = query === evidence.query ? initial : query === second.question ? [candidate, approver] :
+        query === 'replacement key' ? [candidate, secondary] : [];
+      return { sources, scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? { ...proposal, needs: [evidence, second] } : {
+      version: 1, assessment: [
+        { key: evidence.key, status: call.round === 1 ? 'missing' : 'supported', sources: call.round === 1 ? [] : ['e7'], query: call.round === 1 ? 'replacement key' : '' },
+        { key: second.key, status: call.round === 1 ? 'missing' : 'supported', sources: call.round === 1 ? [] : ['e8'], query: '' },
+      ],
+    },
+  });
+  assert.deepEqual(searched, [evidence.query, second.query, 'replacement key', second.question]);
+  assert.deepEqual(result.coverage[1].sources, [approver]);
+});
+
+test('a refinement that returns only previously reviewed sources falls back to the next original page', async () => {
+  const initial = { ...candidate, sourceId: 'initial', text: 'Earlier inspection planning.' };
+  const result = await investigateSemanticHistory(request, {
+    search: query => ({ sources: [initial], scan: 'bounded', moreMatches: query === evidence.query }),
+    widen: query => {
+      assert.equal(query, evidence.query);
+      return { sources: [candidate], scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : { version: 1, assessment: [{
+      key: 's1', status: call.round === 1 ? 'missing' : 'supported',
+      sources: call.round === 1 ? [] : ['e2'], query: call.round === 1 ? 'inspection action' : '',
+    }] },
+  });
+  assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
+test('a truncated refinement can advance when its first page repeats reviewed sources', async () => {
+  const initial = { ...candidate, sourceId: 'initial', text: 'Earlier inspection planning.' };
+  const refinement = 'replacement inspection';
+  const pages: string[] = [];
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search: query => ({ sources: [initial], scan: 'bounded', moreMatches: query === refinement }),
+    widen(query) {
+      pages.push(query);
+      return { sources: [candidate], scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : { version: 1, assessment: [{
+      key: evidence.key, status: call.round === 1 ? 'missing' : 'supported',
+      sources: call.round === 1 ? [] : ['e2'], query: call.round === 1 ? refinement : '',
+    }] },
+  });
+  assert.deepEqual(pages, [refinement]);
+  assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
+test('the current correction gets a slot ahead of lower-ranked matches', async () => {
+  const needs = [evidence, { key: 'second', question: 'What else?', query: 'other result' }];
+  const recent = { ...candidate, sourceId: 'recent', text: 'Current correction supplies the missing fact.' };
+  const sources = (prefix: string) => Array.from({ length: 3 }, (_, index) => ({ ...candidate, sourceId: prefix + index }));
+  const result = await investigateSemanticHistory(request, {
+    search: query => ({ sources: sources(query), scan: 'partial', moreMatches: true }),
+    recent: () => ({ sources: [recent], scan: 'bounded' }),
+    widen: () => ({ sources: sources('lower rank'), scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? { ...proposal, needs } : { version: 1, assessment: [
+      { key: 's1', status: call.round === 1 ? 'missing' : 'supported', sources: call.round === 1 ? [] : ['e7'], query: '' },
+      { key: 'second', status: 'supported', sources: ['e2'], query: '' },
+    ] },
+  });
+  assert.deepEqual(result.coverage[0].sources, [recent]);
+});
+
+test('recent corrections take priority over secondary matches for a refinement', async () => {
+  const initial = Array.from({ length: 6 }, (_, index) => ({ ...candidate, sourceId: 'initial-' + index }));
+  const match = { ...candidate, sourceId: 'refinement' };
+  const distractor = { ...candidate, sourceId: 'secondary' };
+  const correction = { ...candidate, sourceId: 'correction', text: 'Correction: use the replacement key.' };
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search: query => ({ sources: query === evidence.query ? initial : [match, distractor], scan: 'bounded' }),
+    recent: () => ({ sources: [correction], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : { version: 1, assessment: [{
+      key: 's1', status: call.round === 1 ? 'missing' : 'supported',
+      sources: call.round === 1 ? [] : ['e7', 'e8'], query: call.round === 1 ? 'replacement key' : '',
+    }] },
+  });
+  assert.deepEqual(result.coverage[0].sources, [match, correction]);
+});
+
+test('reserves serialized bytes for gap recovery when first-pass excerpts are large', async () => {
+  const needs = Array.from({ length: 4 }, (_, index) => ({ key: 'topic' + index, question: 'Find topic ' + index, query: 'topic' + index }));
+  const source = (id: string) => ({ sourceId: id, revision: '1', sourceKind: 'conversation-exchange' as const, text: id.padEnd(3800, 'x') });
+  const gap = source('refined result');
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search: query => ({ sources: query === 'refined search' ? [gap] : [source(query + 'a'), source(query + 'b')], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return { ...proposal, needs };
+      return { version: 1, assessment: needs.map((need, index) => {
+        const found = call.excerpts.find(excerpt => excerpt.text.startsWith(index === 0 ? gap.sourceId : need.query));
+        return { key: need.key, status: found ? 'supported' : 'missing', sources: found ? [found.handle] : [], query: found ? '' : 'refined search' };
+      }) };
+    },
+  });
+  assert.deepEqual(result.coverage[0].sources.map(source => source.sourceId), [gap.sourceId]);
+});
+
+test('retains three explicit files that fit the provider payload but exceed the discovery budget', async () => {
+  const files = Array.from({ length: 3 }, (_, index) => ({
+    sourceId: 'file-' + index, sourceKind: 'file' as const, revision: '1', text: String(index).repeat(10_000),
+  }));
+  const result = await investigateSemanticHistory(request, {
+    assessmentMetadataBytes: 100,
+    selected: () => ({ sources: files, scan: 'bounded' }),
+    search: () => ({ sources: [], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      assert.equal(call.excerpts.length, 3);
+      return answer;
+    },
+  });
+  assert.equal(result.state, 'assessed');
 });
 
 test('a high-volume search leaves room for other evidence needs and a follow-up', async () => {
@@ -85,6 +322,18 @@ test('reports partial owner coverage and retains usable hits after an oversized 
   });
   assert.equal(result.searchCoverage, 'partial');
   assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
+test('reports a partial excerpt without discarding a fact it directly supports', async () => {
+  const excerpt = { ...candidate, partial: true as const };
+  const result = await investigateSemanticHistory(request, {
+    search: () => ({ sources: [excerpt], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : answer,
+  });
+  assert.equal(result.searchCoverage, 'partial');
+  assert.equal(result.coverage[0].status, 'supported');
+  assert.deepEqual(result.coverage[0].sources, [excerpt]);
 });
 
 test('separates inferred intent, constraints and verification from the search proposal', async () => {
@@ -230,6 +479,107 @@ test('overlapping passages from one source cannot establish a cross-source contr
   assert.equal(result.failure, 'assessment-support');
 });
 
+test('a later assessment cannot erase an earlier sourced conflict by dropping a citation', async () => {
+  const monday = { ...candidate, sourceId: 'monday', text: 'Inspection is Monday.' };
+  const tuesday = { ...candidate, sourceId: 'tuesday', text: 'Inspection is Tuesday.' };
+  const additional = { ...candidate, sourceId: 'additional', text: 'The inspection takes one hour.' };
+  const corrected = { ...additional, text: 'Correction: the inspection is Tuesday. Monday was cancelled.' };
+  for (const scenario of ['dropped-citation', 'previously-seen-source', 'new-correction'] as const) {
+    const resolvingSource = scenario === 'new-correction' ? corrected : undefined;
+    const result = await investigateSemanticHistory(request, {
+      search: query => ({ sources: query === evidence.query
+        ? [monday, tuesday, ...(scenario === 'previously-seen-source' ? [additional] : [])]
+        : [resolvingSource ?? { ...additional, sourceId: 'later' }], scan: 'bounded' }),
+      isCurrent: () => true,
+      disclose: async call => {
+        if (call.stage === 'interpret') return proposal;
+        const first = call.round === 1;
+        assert.deepEqual(call.priorDisputes, first ? undefined : [{ key: 's1', sources: ['e1', 'e2'],
+          passages: [{ source: 'e1', start: 0, end: monday.text.length },
+            { source: 'e2', start: 0, end: tuesday.text.length }] }]);
+        return { version: 3, clarification: '', assessment: [{
+          key: 's1', status: first ? 'contradicted' : 'supported', query: first ? 'inspection correction' : '',
+          passages: first ? [{ source: 'e1', quote: monday.text }, { source: 'e2', quote: tuesday.text }]
+            : resolvingSource ? [{ source: 'e3', quote: resolvingSource.text }]
+            : scenario === 'previously-seen-source' ? [{ source: 'e3', quote: additional.text }] : [{ source: 'e2', quote: tuesday.text }],
+        }] };
+      },
+    });
+    assert.equal(result.rounds, 2);
+    assert.equal(result.coverage[0].status, resolvingSource ? 'supported' : 'contradicted');
+    assert.deepEqual(result.coverage[0].sources, resolvingSource ? [corrected] : [monday, tuesday]);
+  }
+});
+
+test('an unresolved follow-up retains earlier conflicting passages alongside a partial new account', async () => {
+  const accounts = ['Inspection is Monday.', 'Inspection is Tuesday.', 'Inspection is Wednesday.']
+    .map((text, index) => ({ ...candidate, sourceId: String(index), text }));
+  const result = await investigateSemanticHistory(request, {
+    search: query => ({ sources: query === evidence.query ? accounts.slice(0, 2) : accounts.slice(2), scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      const cited = call.round === 1 ? [0, 1] : [2];
+      return { version: 3, clarification: '', assessment: [{
+        key: 's1', status: call.round === 1 ? 'contradicted' : 'partial', query: call.round === 1 ? 'inspection correction' : '',
+        passages: cited.map(index => ({ source: 'e' + (index + 1), quote: accounts[index].text })),
+      }] };
+    },
+  });
+  assert.equal(result.coverage[0].status, 'contradicted');
+  assert.deepEqual(result.coverage[0].passages, accounts.map(({ sourceId, text }) => ({ sourceId, quote: text })));
+});
+
+test('dispute pointers yield to newly retrieved evidence when the follow-up payload is full', async () => {
+  const accounts = ['Inspection is Monday.', 'Inspection is Tuesday.', 'Correction: the inspection is Wednesday.']
+    .map((text, index) => ({ ...candidate, sourceId: String(index), text }));
+  let firstPayloadBytes = 0;
+  const metadataBytes = 32_360;
+  const result = await investigateSemanticHistory(request, {
+    assessmentMetadataBytes: metadataBytes,
+    search: query => ({ sources: query === evidence.query ? accounts.slice(0, 2) : accounts.slice(2), scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      const bytes = Buffer.byteLength(JSON.stringify(call));
+      assert.ok(bytes + metadataBytes <= maxSemanticAssessmentBytes);
+      if (call.round === 1) {
+        firstPayloadBytes = bytes;
+        return { version: 3, clarification: '', assessment: [{ key: 's1', status: 'contradicted', query: 'inspection correction',
+          passages: accounts.slice(0, 2).map((source, index) => ({ source: 'e' + (index + 1), quote: source.text })) }] };
+      }
+      assert.ok(bytes > firstPayloadBytes);
+      assert.equal(call.excerpts[2].text, accounts[2].text);
+      return { version: 3, clarification: '', assessment: [{ key: 's1', status: 'supported', query: '',
+        passages: [{ source: 'e3', quote: accounts[2].text }] }] };
+    },
+  });
+  assert.equal(result.coverage[0].status, 'supported');
+  assert.deepEqual(result.coverage[0].sources, accounts.slice(2));
+});
+
+test('the contradiction passage limit preserves distinct accounts before additional quotes', async () => {
+  const quotes = Array.from({ length: 7 }, (_, index) => 'Monday account ' + index + '.');
+  const accounts = [quotes.join(' '), 'Inspection is Tuesday.', 'Inspection is Wednesday.']
+    .map((text, index) => ({ ...candidate, sourceId: String(index), text }));
+  const result = await investigateSemanticHistory(request, {
+    search: query => ({ sources: query === evidence.query ? accounts.slice(0, 2) : accounts.slice(2), scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      return { version: 3, clarification: '', assessment: [{
+        key: 's1', status: 'contradicted', query: call.round === 1 ? 'inspection correction' : '',
+        passages: call.round === 1
+          ? [...quotes.map(quote => ({ source: 'e1', quote })), { source: 'e2', quote: accounts[1].text }]
+          : [{ source: 'e2', quote: accounts[1].text }, { source: 'e3', quote: accounts[2].text }],
+      }] };
+    },
+  });
+  assert.deepEqual(result.coverage[0].sources, accounts);
+  assert.equal(result.coverage[0].passages?.length, 8);
+  assert.equal(result.searchCoverage, 'partial');
+});
+
 test('distinguishes cancelling a reviewed assessment from an invalid model response', async () => {
   const controller = new AbortController();
   const result = await investigateSemanticHistory(request, {
@@ -244,4 +594,29 @@ test('distinguishes cancelling a reviewed assessment from an invalid model respo
   assert.equal(result.state, 'unavailable');
   assert.equal(result.failure, 'cancelled');
   assert.deepEqual(result.coverage, []);
+});
+
+test('cancellation during synchronous discovery prevents further source reads and assessment', async () => {
+  const controller = new AbortController();
+  let searches = 0;
+  let admissions = 0;
+  let assessments = 0;
+  const result = await investigateSemanticHistory(request, {
+    search: () => {
+      searches++;
+      controller.abort();
+      return { sources: [candidate], scan: 'bounded' };
+    },
+    recent: () => { searches++; return { sources: [], scan: 'bounded' }; },
+    isCurrent: () => { admissions++; return true; },
+    disclose: async call => {
+      if (call.stage === 'interpret') return { ...proposal, needs: [evidence, { ...evidence, key: 's2', query: 'other source' }] };
+      assessments++;
+      return answer;
+    },
+  }, controller.signal);
+  assert.equal(result.failure, 'cancelled');
+  assert.equal(searches, 1);
+  assert.equal(admissions, 0);
+  assert.equal(assessments, 0);
 });
