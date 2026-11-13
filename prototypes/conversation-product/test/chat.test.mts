@@ -950,3 +950,26 @@ test('a detached send rejection is caught and leaves exact durable recovery with
 test('composer keyboard policy keeps newline and composition distinct from submit',()=>{
   const event={key:'Enter',shiftKey:false,isComposing:false,altKey:false,ctrlKey:false,metaKey:false};assert.equal(composerShouldSubmit(event),true);for(const field of ['shiftKey','isComposing','altKey']as const)assert.equal(composerShouldSubmit({...event,[field]:true}),false);assert.equal(composerShouldSubmit({...event,key:'Escape'}),false);
 });
+
+test('research status distinguishes preparation, matching execution, and streamed output',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat,observe!:(value:ConversationExecutionObservation)=>void;
+ try{
+  f.detail.providers[0].modelOptions=[{id:'gpt-6.1-sol',label:'Synthetic Sol',eligibleTools:['web_search']}];
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+   observe(_id,listener){observe=listener;return ()=>{};},async cancel(){},
+  }});
+  await chat.ready;
+  const form=f.view.root.querySelector('form'),status=f.view.root.querySelector('.cp-chat-status');
+  form.fire('submit',{submitter:named(form,'Search web')});
+  await until(()=>!!f.pending);
+  assert.match(status.textContent,/Preparing web search/);
+  const execution={id:'execution:research',resourceId:f.draft.resourceId,commandId:f.pending!.input.commandId,
+   providerId:'chatgpt-plan-responses',state:'running' as const,startedAt:'2026-11-02T01:00:00Z',endedAt:null,taskVerified:false as const};
+  observe({execution:{...execution,commandId:'another-turn'}});
+  assert.doesNotMatch(status.textContent,/Web research is running/);
+  observe({execution});
+  assert.equal(status.textContent,'Web research is running.');
+  observe({execution,delta:{eventId:'delta:research',cursor:1,text:'Synthetic answer'}});
+  assert.equal(status.textContent,'Writing the research reply…');
+ }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();f.restore();}
+});
