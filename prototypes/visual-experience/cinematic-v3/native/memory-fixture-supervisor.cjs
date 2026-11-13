@@ -54,7 +54,7 @@ function superviseMemoryFixture({
   return startFixture({
     profileRoot, artifactPath, descriptorDigest: digest(descriptor),
     expiresAt: allocation.expiresAt,
-    ...(assets ? { entryPath: assets.entryPath } : {}),
+    ...(assets ? { entryPath: assets.entryPath, artifactSha256 } : {}),
     env: { AERYNTH_NATIVE_TEST_SLOT: token },
   });
 }

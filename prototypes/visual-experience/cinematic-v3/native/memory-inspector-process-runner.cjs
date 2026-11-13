@@ -6,7 +6,7 @@ const { superviseMemoryInspectorExecutable } = require("./memory-fixture-supervi
 
 // Match the reviewed portable package's retained Electron vendor inventory.
 // Its packaged normal entry must never be invoked by this fixture runner.
-function reviewedElectron({ manifestPath, manifestSha256, check }) {
+function reviewedElectron({ manifestPath, manifestSha256, check, requireFixture = false }) {
   const fail = () => { throw Error("memory_fixture_electron_unverified"); };
   if (!isAbsolute(manifestPath) || realpathSync(manifestPath) !== manifestPath) fail();
   const info = lstatSync(manifestPath);
@@ -14,15 +14,17 @@ function reviewedElectron({ manifestPath, manifestSha256, check }) {
   const bytes = readFileSync(manifestPath);
   if (digest(bytes) !== manifestSha256) fail();
   const manifest = JSON.parse(bytes);
-  if (manifest.contract !== "aerynth.portable-review@1" || manifest.complete !== true ||
+  if (!["aerynth.portable-review@1", "aerynth.memory-inspector-electron@1"].includes(manifest.contract) || manifest.complete !== true ||
       manifest.runtimes?.platform !== "win32" || manifest.runtimes?.arch !== "x64" ||
       !Array.isArray(manifest.files) || manifest.files.length > 4096) fail();
   const root = dirname(manifestPath);
-  const entries = manifest.files.filter(file => file.origin?.startsWith("electron-runtime:"));
+  const fixtureLayout = manifest.contract === "aerynth.memory-inspector-electron@1";
+  if (requireFixture && !fixtureLayout) fail();
+  const entries = fixtureLayout ? manifest.files : manifest.files.filter(file => file.origin?.startsWith("electron-runtime:"));
   const seen = new Set();
   for (const file of entries) {
     check();
-    const name = file.origin.slice("electron-runtime:".length);
+    const name = file.origin?.startsWith("electron-runtime:") ? file.origin.slice("electron-runtime:".length) : file.path;
     const path = resolve(root, file.path);
     const rel = relative(root, path);
     if (!rel || rel.startsWith(".." + sep) || rel === ".." || isAbsolute(rel) ||
@@ -33,6 +35,21 @@ function reviewedElectron({ manifestPath, manifestSha256, check }) {
   }
   const binary = entries.find(file => file.origin === "electron-runtime:electron.exe");
   if (binary?.path !== "AerynthReview.exe") fail();
+  if (fixtureLayout) {
+    const { readdirSync } = require("node:fs");
+    const expected = new Set(entries.map(file => file.path));
+    function verifyDirectory(directory, prefix = "", depth = 0) {
+      if (depth > 8) fail();
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        check();
+        const name = prefix + entry.name;
+        if (entry.isDirectory()) verifyDirectory(join(directory, entry.name), name + "/", depth + 1);
+        else if (!entry.isFile() || (name !== "manifest.json" && !expected.delete(name))) fail();
+      }
+    }
+    verifyDirectory(root);
+    if (expected.size || !seen.has("resources/app/package.json") || !seen.has("resources/app/fixture-bootstrap.cjs")) fail();
+  }
   return resolve(root, binary.path);
 }
 
@@ -55,16 +72,18 @@ function runMemoryInspectorProcess({
   const admission = openAdmission(directory);
   const check = () => admission.checkPermit(token);
   check();
-  const executable = reviewedElectron({ ...electronReceipt, check });
+  const executable = reviewedElectron({ ...electronReceipt, check, requireFixture: true });
   return superviseMemoryInspectorExecutable({
     allocation, profileRoot, artifactPath, token, allowWrite, locateDesktop, openAdmission, now,
     async startFixture({ env, ...handoff }) {
-      if (reviewedElectron({ ...electronReceipt, check }) !== executable)
+      if (reviewedElectron({ ...electronReceipt, check, requireFixture: true }) !== executable)
         throw Error("memory_fixture_electron_unverified");
       check();
-      const child = launchFixture(executable, [handoff.entryPath], {
+      const child = launchFixture(executable, [], {
         windowsHide: true, shell: false,
-        env: { ...env, AERYNTH_MEMORY_FIXTURE_HANDOFF: JSON.stringify(handoff) },
+        cwd: dirname(executable),
+        env: { ...env, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+          AERYNTH_MEMORY_FIXTURE_HANDOFF: JSON.stringify(handoff) },
       });
       const exit = child.exit.then(result => result, () => undefined);
       const result = await waitForExit(exit, Math.max(0, Math.min(runMs, handoff.expiresAt - now())));
@@ -84,4 +103,4 @@ function runMemoryInspectorProcess({
   });
 }
 
-module.exports = { runMemoryInspectorProcess };
+module.exports = { runMemoryInspectorProcess, reviewedElectron };

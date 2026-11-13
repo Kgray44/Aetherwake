@@ -23,9 +23,15 @@ test("fixture runner verifies both inventories, privately transfers once and pre
   writeFileSync(artifactPath, JSON.stringify({ contract: "aerynth.memory-inspector-artifact@1", files }));
   mkdirSync(vendor);
   writeFileSync(executable, "electron stub");
+  const vendorFiles = [{ path: "AerynthReview.exe", origin: "electron-runtime:electron.exe", bytes: 13, sha256: digest("electron stub") }];
+  for (const path of ["resources/app/package.json", "resources/app/fixture-bootstrap.cjs"]) {
+    mkdirSync(dirname(join(vendor, path)), { recursive: true });
+    writeFileSync(join(vendor, path), path);
+    vendorFiles.push({ path, origin: "fixture-bootstrap:" + path, bytes: Buffer.byteLength(path), sha256: digest(path) });
+  }
   const receipt = JSON.stringify({
-    contract: "aerynth.portable-review@1", complete: true, runtimes: { platform: "win32", arch: "x64" },
-    files: [{ path: "AerynthReview.exe", origin: "electron-runtime:electron.exe", bytes: 13, sha256: digest("electron stub") }],
+    contract: "aerynth.memory-inspector-electron@1", complete: true, runtimes: { platform: "win32", arch: "x64" },
+    files: vendorFiles,
   });
   writeFileSync(manifestPath, receipt);
   const admission = createAdmission(directory);
@@ -55,7 +61,8 @@ test("fixture runner verifies both inventories, privately transfers once and pre
     ...good,
     launchFixture(binary, args, { env, shell }) {
       assert.equal(binary, executable);
-      assert.deepEqual(args, [join(artifact, paths.executable)]);
+      assert.deepEqual(args, []);
+      assert.equal(JSON.parse(env.AERYNTH_MEMORY_FIXTURE_HANDOFF).entryPath, join(artifact, paths.executable));
       assert.equal(shell, false);
       assert.equal(env.AERYNTH_NATIVE_TEST_SLOT, permit.token);
       assert.ok(!env.AERYNTH_MEMORY_FIXTURE_HANDOFF.includes(permit.token));
