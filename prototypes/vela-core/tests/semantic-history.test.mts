@@ -442,6 +442,28 @@ test('an unresolved follow-up retains earlier conflicting passages alongside new
   assert.deepEqual(result.coverage[0].passages, accounts.map(({ sourceId, text }) => ({ sourceId, quote: text })));
 });
 
+test('the contradiction passage limit preserves distinct accounts before additional quotes', async () => {
+  const quotes = Array.from({ length: 7 }, (_, index) => 'Monday account ' + index + '.');
+  const accounts = [quotes.join(' '), 'Inspection is Tuesday.', 'Inspection is Wednesday.']
+    .map((text, index) => ({ ...candidate, sourceId: String(index), text }));
+  const result = await investigateSemanticHistory(request, {
+    search: query => ({ sources: query === evidence.query ? accounts.slice(0, 2) : accounts.slice(2), scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      return { version: 3, clarification: '', assessment: [{
+        key: 's1', status: 'contradicted', query: call.round === 1 ? 'inspection correction' : '',
+        passages: call.round === 1
+          ? [...quotes.map(quote => ({ source: 'e1', quote })), { source: 'e2', quote: accounts[1].text }]
+          : [{ source: 'e2', quote: accounts[1].text }, { source: 'e3', quote: accounts[2].text }],
+      }] };
+    },
+  });
+  assert.deepEqual(result.coverage[0].sources, accounts);
+  assert.equal(result.coverage[0].passages?.length, 8);
+  assert.equal(result.searchCoverage, 'partial');
+});
+
 test('distinguishes cancelling a reviewed assessment from an invalid model response', async () => {
   const controller = new AbortController();
   const result = await investigateSemanticHistory(request, {

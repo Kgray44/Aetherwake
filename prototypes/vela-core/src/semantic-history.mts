@@ -375,12 +375,21 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
           if (!prior) return row;
           if (row.status === 'contradicted') {
             if (!prior.passages || !row.passages) return row;
-            const passages = [...prior.passages];
+            const combined = [...prior.passages];
             for (const passage of row.passages) {
-              if (passages.length >= maxPassagesPerNeed) break;
-              if (!passages.some(previous => previous.source === passage.source && previous.quote === passage.quote)) {
-                passages.push(passage);
+              if (!combined.some(previous => previous.source === passage.source && previous.quote === passage.quote)) {
+                combined.push(passage);
               }
+            }
+            let passages = combined;
+            if (combined.length > maxPassagesPerNeed) {
+              partial();
+              const firstBySource = new Map<string, Passage>();
+              for (const passage of combined) {
+                if (!firstBySource.has(passage.source)) firstBySource.set(passage.source, passage);
+              }
+              const first = [...firstBySource.values()];
+              passages = [...first, ...combined.filter(passage => firstBySource.get(passage.source) !== passage)].slice(0, maxPassagesPerNeed);
             }
             return { ...row, passages, sources: [...new Set(passages.map(passage => passage.source))] };
           }
