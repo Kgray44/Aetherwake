@@ -3,7 +3,7 @@
  *               moduleStartedMonotonicMs}) --integration-resource-opening
  * Optional --record-resource-opening; --verify-restore uses the SAME profile,
  * resource-opening-expected.json and exact original source/build identities.
- * Initial/restore global slots: 45s/12s, or 60s/30s for --verify-reply-note.
+ * Initial/restore global slots: 45s/12s, or 45s/30s for --verify-reply-note.
  * Combined evidence:
  * <=6 PNG/24MiB and one exact-window WebM/48MiB. Root's caller must confirm exit.
  * Requires production library.inspectWorkspace({workspaceId}) ->
@@ -96,7 +96,7 @@ function targetScript(selector, action, value) {
 exports.createSlot = createSlot; exports.canonicalProjection = canonicalProjection; exports.sourceIdentity = sourceIdentity; exports.targetScript = targetScript; exports.unplacedSelector = unplacedSelector; exports.waitForCondition = waitForCondition; exports.assertWorkspaceProjection = assertWorkspaceProjection;
 
 exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], session, localURL, moduleStartedMonotonicMs }) {
-  const restore = process.argv.includes('--verify-restore'), replyNote = process.argv.includes('--verify-reply-note'), limitMs = restore ? (replyNote ? 30000 : 12000) : (replyNote ? 60000 : 45000), started = performance.now(), root = path.resolve(privateRoot), out = path.join(root, 'resource-opening-evidence', (restore ? 'restore-' : 'initial-') + Date.now());
+  const restore = process.argv.includes('--verify-restore'), replyNote = process.argv.includes('--verify-reply-note'), limitMs = restore ? (replyNote ? 30000 : 12000) : 45000, started = performance.now(), root = path.resolve(privateRoot), out = path.join(root, 'resource-opening-evidence', (restore ? 'restore-' : 'initial-') + Date.now());
   const expectedFile = path.join(root, 'resource-opening-expected.json'), budgetFile = path.join(root, 'resource-opening-capture-budget.json');
   const receipt = { contract: 'aerynth.resource-opening-integration@1', source, passed: false, restore, syntheticOnly: true, inputMethod: 'Renderer integration: actual visible DOM click/input handlers and application capabilities; no OS mouse/keyboard input', limits: { milliseconds: limitMs, combinedPNGs: 6, combinedPNGBytes: 24 * 1024 * 1024, combinedVideos: 1, videoBytes: 48 * 1024 * 1024 }, actions: [], checks: [], captures: [], errors: [], coverage: {}, limitations: ['No physical input, live model, sign-in, multiuser revocation, artistic or production qualification.', 'F covers the real Vela source-search Open control; natural-language interpretation is untested.', 'Fresh positive GPU draw acknowledgement is not monitor-presentation or performance acceptance.'] };
   let slot, driver, recorder, budget = { count: 0, bytes: 0, videos: 0, files: [] }, pendingExpected, runPassed = false, owned = false, admitted = false, hardTimer, workTimer, abortReject;
