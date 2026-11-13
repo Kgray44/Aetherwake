@@ -1,3 +1,5 @@
+import { createMemoryCaptureEditor, type MemoryCaptureRequest } from '../../conversation-product/src/memory-capture-editor.ts';
+import { componentDocument, until } from '../../conversation-product/test/component-dom.mts';
 import type { VelaRequest, VelaState } from '../../vela-core/src/contracts.ts';
 import type { Execution } from '../src/contracts.mts';
 import type { VelaApiRuntime } from '../src/vela-api-runtime.mts';
@@ -187,12 +189,27 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
       type: 'associateProject', resourceId: chat.resourceId, projectId: project.id, expectedVersion: 1,
     } });
     const detail = await core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as { conversation: { revision: number } };
-    const content = 'The synthetic quartz relay is the approved part.';
+    const content = 'After all that we have said about what we should use, the synthetic quartz relay is the approved part.';
     const message = await core.command('addMessage', { resourceId: chat.resourceId, role: 'user',
       content, expectedRevision: detail.conversation.revision, commandId: 'message' });
-    const saved = await core.command('personalMemoryCaptureCommitNative', await core.command('personalMemoryCapturePreviewNative', {
-      conversationId: chat.resourceId, messageId: message.id, scope: 'project', category: 'decisions', text: content, keywords: ['quartz', 'relay'],
-    }));
+    const dom = componentDocument();
+    const restoreDom = dom.install();
+    let submitted: MemoryCaptureRequest | undefined;
+    try {
+      const editor = createMemoryCaptureEditor({
+        content, conversationId: chat.resourceId, messageId: message.id, projectAvailable: true, expectedProjectId: project.id,
+        async review(request) { submitted = request; return false; }, report() {},
+      });
+      const [scope, category] = editor.querySelectorAll('select');
+      scope.value = 'project';
+      category.value = 'decisions';
+      (editor as unknown as { fire(name: string): void }).fire('submit');
+      await until(() => submitted !== undefined);
+    } finally { restoreDom(); }
+    assert.ok(submitted);
+    assert.ok(submitted.keywords.includes('quartz'));
+    const saved = await core.command('personalMemoryCaptureCommitNative',
+      await core.command('personalMemoryCapturePreviewNative', submitted));
     const preferenceChat = await core.command('createConversation', { title: 'Synthetic preferences', commandId: 'preferences-chat' });
     const preference = await core.command('addMessage', { resourceId: preferenceChat.resourceId, role: 'user',
       content: 'I prefer the synthetic amber enclosure.', expectedRevision: preferenceChat.revision, commandId: 'preference-message' });
@@ -226,7 +243,7 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     assert.match(globalReview.prompt, new RegExp(global.id));
     assert.match(globalReview.prompt, new RegExp(preference.id));
     assert.doesNotMatch(globalReview.prompt, new RegExp(saved.id));
-    const indirect = { ...input, resourceIds: [] as string[], intent: 'What did we settle on?', includeRecentHistory: false };
+    const indirect = { ...input, resourceIds: [] as string[], intent: 'What was chosen?', includeRecentHistory: false };
     await assert.rejects(core.command('velaRequestPreview', indirect), /personal_memory_no_eligible_context/);
     const base = await core.command('velaRequestPreview', { ...indirect, useMemory: undefined });
     const searchBinding = { previewId: base.id, signature: base.signature };
@@ -269,6 +286,9 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     const binding = { previewId: preview.id, signature: preview.signature };
     const reviewed = await core.command('velaNativeReview', binding);
     assert.match(reviewed.prompt, /synthetic quartz relay is the approved part/);
+    const keywordOnly = await core.command('velaRequestPreview', { ...input, resourceIds: [], intent: 'Quartz?' });
+    const keywordReview = await core.command('velaNativeReview', { previewId: keywordOnly.id, signature: keywordOnly.signature });
+    assert.match(keywordReview.prompt, new RegExp(saved.id));
     assert.equal(reviewed.memory?.partialCoverage, undefined);
     assert.match(reviewed.prompt, new RegExp(saved.id));
     const bySource = () => core.command('velaRequestPreview', { ...input, resourceIds: [],

@@ -91,3 +91,18 @@ test('preference drafting leaves tentative, quoted, and formatted material for m
     }
   } finally { restore(); }
 });
+
+test('drafted search terms keep the distinctive term after a long conversational lead-in', () => {
+  const f = componentDocument(), restore = f.install();
+  try {
+    const editor = createMemoryCaptureEditor({
+      content: 'Remember: After all that we have said about what we should use, the quartz relay is the decision.',
+      conversationId: 'chat', messageId: 'message', projectAvailable: true,
+      async review() { throw Error('unexpected review'); }, report() {},
+    });
+    const terms = editor.querySelector('input')!.value.split(', ');
+    assert.ok(terms.includes('quartz'));
+    assert.ok(terms.includes('relay'));
+    assert.ok(!terms.includes('should'));
+  } finally { restore(); }
+});
