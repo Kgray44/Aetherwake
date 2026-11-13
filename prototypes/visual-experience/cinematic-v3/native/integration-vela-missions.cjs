@@ -957,6 +957,17 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
           const resource = await js(`[...document.querySelectorAll(${quote(selector + ' [data-intelligence-field^="Lease · "]')})]
             .map(row => row.dataset.intelligenceSource).sort()`);
           assert.deepEqual(resource, profile.attempts.flatMap(attempt => attempt.resourceLease ? [attempt.resourceLease.leaseId] : []).sort());
+          if (argv.includes("--missions-aiw-inspection")) {
+            const policy = await rpc("resourcePolicyNative", { name: "inspect" });
+            await wait("AIW reads the authoritative resource policy", () => js(`(() => {
+              const panel = document.querySelector(${quote(selector + ' [aria-label="Current resource policy"]')});
+              return panel && !panel.hidden && panel.textContent.includes(${quote(policy.epoch)}) &&
+                panel.textContent.includes("Configuration version") && panel.textContent.includes("Local CPU");
+            })()`));
+            const privateRouteDenied = await js(`window.aerynthHost.command("resourcePolicyNative", {name:"inspect"}).then(() => false, () => true)`);
+            assert.equal(privateRouteDenied, true);
+            receipt.workroomInspection.resourcePolicy = { epoch: policy.epoch, configVersion: policy.configVersion, privateRouteDenied };
+          }
           await capture("02-adaptive-intelligence-resource");
           await click(selector + ' > summary');
         } finally {
