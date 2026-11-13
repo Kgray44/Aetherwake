@@ -758,6 +758,14 @@ export function installApplication(hooks: Hooks) {
       })) as ProductCommandMap[K]["output"];
     },
   };
+  const replyNoteActions = {
+    async saveReplyNote(input: ProductCommandMap["captureReplyNote"]["input"]) {
+      const receipt = await composerPort.command("captureReplyNote", input);
+      await command({ type: "snapshot" });
+      return receipt;
+    },
+    openReplyNote: (noteId: string) => openCanonicalResource(noteId),
+  };
   const chatViewPersistence = new ConversationViewPersistence({
     port: composerPort,
     onError: (error) => report(error),
@@ -2556,12 +2564,7 @@ export function installApplication(hooks: Hooks) {
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
-      saveReplyNote: async (input) => {
-        const receipt = await port.command("captureReplyNote", input);
-        apply((await host.command!("desktop", { type: "snapshot" })) as DesktopSnapshot);
-        return receipt;
-      },
-      openReplyNote: (noteId) => openCanonicalResource(noteId),
+      ...replyNoteActions,
       onOpenChatGPT: async (reference) => {
         const receipt = (await host.command!(
           "firstPartyChat",
@@ -4393,6 +4396,7 @@ export function installApplication(hooks: Hooks) {
       if (!view && activeBlocks.get(b.id)) {
         const session = composerSession(r.id);
         view = mountBlockChat(surface, {
+          ...replyNoteActions,
           copy: copyText,
           motion: experienceMotion,
           viewId: "block:" + b.id + ":conversation",
