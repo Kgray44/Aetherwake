@@ -861,6 +861,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     report(webSearch?'Preparing web search. Your draft remains saved.':providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
+      if (accessRevoked) return;
       const content = checkpoint.record.content;
       if (checkpoint.record.documents?.some(item => item.unavailable)) {
         report('A selected document is unavailable or has changed. Remove or reattach it before sending.');

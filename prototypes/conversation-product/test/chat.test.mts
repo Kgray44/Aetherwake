@@ -993,6 +993,31 @@ test('Enter submits once; Shift+Enter and IME do not submit; draft draining is i
   }finally{await chat?.dispose();f.restore();}
 });
 
+test('access loss during a send checkpoint retains the draft without dispatch',async()=>{
+  const f=fixture('chatgpt-plan-responses');
+  const checkpoint=Promise.withResolvers<void>();
+  let chat, started=false, observe!:(value:ConversationExecutionObservation)=>void;
+  const port={async command(name:string,input:any){
+    if(name==='saveDraft'){started=true;await checkpoint.promise;}
+    if(name==='send'){f.calls.push({name,input});throw Error('unexpected synthetic dispatch');}
+    return (f.port.command as any)(name,input);
+  }} as ConversationProductPort;
+  try {
+    chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,execution:{
+      observe(_id,listener){observe=listener;return()=>{};},async cancel(){},
+    }});
+    await chat.ready;
+    f.view.root.querySelector('form').fire('submit');
+    await until(()=>started);
+    observe({resourceAvailable:false});
+    checkpoint.resolve();
+    await chat.whenSubmissionSettled();
+    assert.equal(f.calls.filter(call=>call.name==='send').length,0);
+    assert.equal(f.draft.content,'Saved unsent text');
+    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/no longer available/);
+  } finally {checkpoint.resolve();await chat?.dispose();f.restore();}
+});
+
 test('accepted local send clears only its captured CAS draft; unknown and native-cancelled sends retain recovery',async()=>{
   const f=fixture();let chat;try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;const editor=f.view.root.querySelector('textarea'),form=f.view.root.querySelector('.cp-composer');
     form.fire('submit');await until(()=>!!f.pending);f.accept();await chat.whenSubmissionSettled();assert.equal(editor.value,'');assert.equal(f.draft.content,'');assert.ok(f.draft.version>3);
