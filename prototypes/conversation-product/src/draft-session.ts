@@ -133,6 +133,8 @@ export class ConversationDraftSession {
           ...(documents.length || this.known!.documents?.length ? { documents } : {}) }));
         if (record.version !== expectedVersion + 1 || record.content !== content || !sameDocuments(record.documents, documents)) throw new Error('invalid_draft_response');
         this.known = record;
+        if (task?.kind !== 'acknowledge' && sameDocuments(this.documents, record.documents))
+          this.documents = record.documents ?? this.documents;
         if (task?.kind === 'checkpoint') task.resolve({ record: { ...record }, editRevision: task.editRevision });
         if (task?.kind === 'acknowledge') {
           const unchanged = this.editRevision === task.checkpoint.editRevision && this.content === task.checkpoint.record.content;

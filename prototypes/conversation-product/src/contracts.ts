@@ -20,7 +20,7 @@ export type ProviderCapability = { id: string; label: string; available: boolean
 export type Detail = { conversation: ConversationSummary & {messageCount:number}; messages: Page<MessageView>; lineage: { id: string; parentResourceId: string; childResourceId: string; sourceMessageId: string; mode: string; createdAt: string }[]; policy: BranchPolicy; shares: Share[]; providers: ProviderCapability[] };
 /** Unsent local text. Its revision is independent from the canonical transcript. */
 export type DraftDocumentRef = { id: string; version: number };
-export type DraftDocument = DraftDocumentRef & { title: string };
+export type DraftDocument = DraftDocumentRef & { title: string; unavailable?: 'changed' | 'inaccessible' };
 export type ConversationDraft = { resourceId: string; version: number; content: string; updatedAt: string | null; documents?: DraftDocument[] };
 export const CONVERSATION_DRAFT_LIMITS = { contentUnits: 16384, contentBytes: 65536, aggregateBytes: 8 * 1024 * 1024, records: 4096 } as const;
 /** Local recovery metadata only. No draft text, transcript, provider or title copy. */

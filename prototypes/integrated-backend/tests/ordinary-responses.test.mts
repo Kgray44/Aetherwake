@@ -82,8 +82,12 @@ test('ordinary document draft survives restart without persisting file contents 
   assert.deepEqual(JSON.parse(row.documents_json), [ref]);
   await f.reopen();
   assert.deepEqual(await read(), saved);
+  await f.core.command('desktop', { type: 'archiveSubject', kind: 'resource', id: ref.id, expectedVersion: ref.version, archived: true });
+  const archived = await read() as Awaited<ReturnType<typeof save>>;
+  assert.deepEqual(archived.documents, [{ ...ref, title: 'Unavailable document', unavailable: 'inaccessible' }]);
+  await f.core.command('desktop', { type: 'archiveSubject', kind: 'resource', id: ref.id, expectedVersion: ref.version + 1, archived: false });
   const textOnlySave = await save(saved.version);
-  assert.deepEqual(textOnlySave.documents, saved.documents);
+  assert.deepEqual(textOnlySave.documents, [{ ...ref, title: resource.title, unavailable: 'changed' }]);
   await assert.rejects(save(saved.version, []), /stale_draft_version/);
   assert.equal((await save(textOnlySave.version, [])).documents, undefined);
   assert.equal(f.requests.length, 0);

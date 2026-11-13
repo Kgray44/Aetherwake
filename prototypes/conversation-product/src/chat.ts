@@ -144,6 +144,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
   let webSearchCommandId: string|undefined;
   const documentList = el('div', undefined, 'cp-composer-documents');
+  const documentStatus = el('span', 'Remove or reattach the unavailable documents to send.');
+  documentStatus.setAttribute('role', 'status');
   documentList.hidden = true;
   composer.insertBefore(documentList, tools);
   const attachDocument = el('button', 'Attach document');
@@ -153,17 +155,18 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if (documents === renderedDocuments) return;
     renderedDocuments = documents;
     documentList.replaceChildren(...documents.map(document => {
-      const remove = el('button', document.title + ' ×');
+      const label = document.title + (document.unavailable === 'changed' ? ' (changed)' : '');
+      const remove = el('button', label + ' ×');
       remove.type = 'button';
       decorateConversationControl(remove,{identity:'source',emphasis:'secondary'});
-      remove.setAttribute('aria-label', 'Remove attachment ' + document.title);
+      remove.setAttribute('aria-label', 'Remove attachment ' + label);
       remove.addEventListener('click', () => {
         if (sending) return;
         session.updateDocuments(session.snapshot().documents.filter(item => item.id !== document.id));
         textarea.focus();
       });
       return remove;
-    }));
+    }), documentStatus);
   }
   if (options.chooseDocument) {
     attachDocument.type = 'button';
@@ -362,6 +365,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const plan = ordinaryPlan();
     const documents = accessRevoked ? [] : snapshot.documents;
     const documentsUnsupported = documents.length > 0 && !plan;
+    const unavailableDocuments = documents.some(item => item.unavailable);
     const draftNeedsAttention = ['loading', 'conflict', 'error'].includes(snapshot.phase);
     const planDisconnected = plan?.available === false;
     const selectedModel = effectiveModel();
@@ -413,14 +417,15 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const codexOutcomeUnknown = execution?.providerId === 'codex-app-server' && execution.state === 'unknown';
     checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
     checkOutcome.disabled = recovering;
-    send.disabled = choosingDocument || planDisconnected || documentsUnsupported || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
+    send.disabled = choosingDocument || planDisconnected || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
     web.hidden = !plan?.execute || !webSearchModel();
-    send.title = planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : documentsUnsupported ? 'Switch to ChatGPT or remove the documents to send.' : '';
+    send.title = unavailableDocuments ? 'Remove or reattach the unavailable documents to send.' : planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : documentsUnsupported ? 'Switch to ChatGPT or remove the documents to send.' : '';
     web.disabled = send.disabled || web.hidden || !plan?.available || documents.length > 0;
     attachDocument.hidden = !plan || !options.chooseDocument;
     attachDocument.disabled = choosingDocument || sending || draftNeedsAttention || documents.length >= 4;
     renderDocuments(documents);
     documentList.hidden = !documents.length;
+    documentStatus.hidden = !unavailableDocuments;
     for (const remove of documentList.querySelectorAll('button')) remove.disabled = sending || draftNeedsAttention;
     send.dataset.state=needsSendReview()?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=stopRequestedFor?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = !!stopRequestedFor || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
@@ -679,6 +684,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     report(webSearch?'Preparing web search. Your draft remains saved.':providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
+      if (checkpoint.record.documents?.some(item => item.unavailable)) {
+        report('A selected document is unavailable or has changed. Remove or reattach it before sending.');
+        return;
+      }
       if (checkpoint.record.documents?.length) attachments = checkpoint.record.documents.map(({ id, version }) => ({ id, version }));
       if (reasoningEffort !== undefined) thinking = undefined;
       sendStarted = true;

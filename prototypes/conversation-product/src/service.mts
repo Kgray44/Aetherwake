@@ -173,9 +173,10 @@ export class ConversationProduct implements ConversationProductPort {
   const content=String(row.content),version=Number(row.version),updatedAt=String(row.updated_at);
   check(Number.isSafeInteger(version)&&version>=1&&content.length<=CONVERSATION_DRAFT_LIMITS.contentUnits&&Buffer.byteLength(content,'utf8')===row.content_bytes&&Number(row.content_bytes)<=CONVERSATION_DRAFT_LIMITS.contentBytes&&!Number.isNaN(Date.parse(updatedAt)),'corrupt_conversation_draft');
   const documents = this.draftDocumentRefs(JSON.parse(String(row.documents_json))).map(ref => {
-   const file = this.db.prepare("SELECT title FROM resources WHERE id=? AND state='active'").get(ref.id);
-   const title = file && this.host.access?.(ref.id) === true ? String(file.title) : 'Unavailable document';
-   return { ...ref, title };
+   const file = this.db.prepare("SELECT r.title,r.version FROM resources r JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=? AND d.kind='file' AND r.state='active'").get(ref.id);
+   if (!file || this.host.access?.(ref.id) !== true)
+    return { ...ref, title: 'Unavailable document', unavailable: 'inaccessible' as const };
+   return { ...ref, title: String(file.title), ...(file.version !== ref.version ? { unavailable: 'changed' as const } : {}) };
   });
   return {resourceId:id,version,content,updatedAt,...(documents.length?{documents}:{})};
  }

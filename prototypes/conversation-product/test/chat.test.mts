@@ -1303,3 +1303,25 @@ test('a disconnected ChatGPT plan keeps the draft editable and enables an explic
   assert.equal(f.calls.filter(c=>c.name==='send').length,0);
  }finally{await chat?.dispose();f.restore();}
 });
+
+test('a recovered unavailable document can be removed without losing the draft or sending', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ let chat;
+ try {
+  const documents = [{ id: 'file:brief', version: 3, title: 'Unavailable document', unavailable: 'inaccessible' as const }];
+  await f.port.command('saveDraft', {
+   resourceId: f.draft.resourceId, expectedVersion: f.draft.version, content: f.draft.content, documents,
+  });
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId });
+  await chat.ready;
+  const send = f.view.root.querySelector('[data-cp-control="send"]');
+  assert.equal(send.disabled, true);
+  assert.match(send.title, /reattach/);
+  f.view.root.querySelector('form').fire('submit');
+  named(f.view.root, 'Unavailable document ×').fire('click');
+  await chat.flush();
+  assert.equal(send.disabled, false);
+  assert.equal(f.draft.content, 'Saved unsent text');
+  assert.equal(f.calls.some(call => call.name === 'send'), false);
+ } finally { await chat?.dispose(); f.restore(); }
+});
