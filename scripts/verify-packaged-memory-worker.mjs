@@ -152,6 +152,7 @@ async function withWorker(locked, work) {
 
 const sourceText = 'Use the synthetic quartz relay.';
 const factText = 'The selected part is synthetic quartz.';
+const correctedText = 'The selected part is synthetic basalt.';
 const saved = await withWorker(false, async call => {
   assert.equal((await call('personalMemoryPolicyNative', {})).storageEnabled, false);
   const { projects } = await call('desktop', { type: 'createProject', title: 'Synthetic memory project' });
@@ -179,10 +180,14 @@ const saved = await withWorker(false, async call => {
 const read = { type: 'read', id: saved.factId };
 const navigate = (call, workspaceId) => call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
 const intent = 'Which quartz relay?';
-const previewRecall = call => call('velaRequestPreview', { intent, resourceIds: [],
+const previewRecall = (call, request = intent) => call('velaRequestPreview', { intent: request, resourceIds: [],
   adaptive: true, providerId: 'openai-api-vela', useMemory: true, includeRecentHistory: false });
+const manage = async (call, request) => {
+  const review = await call('personalMemoryManagementNative', { type: 'preview', request });
+  return call('personalMemoryManagementNative', { type: 'commit', review });
+};
 await withWorker(true, call => assert.rejects(call('personalMemoryManagementNative', read), /private_key_unavailable/u));
-await withWorker(false, async call => {
+const correctedId = await withWorker(false, async call => {
   const fact = await call('personalMemoryManagementNative', read);
   assert.equal(fact.text, factText);
   assert.equal(fact.provenance.conversationId, saved.conversationId);
@@ -209,27 +214,48 @@ await withWorker(false, async call => {
   await navigate(call, otherWorkspace.id);
   await assert.rejects(previewRecall(call), /personal_memory_no_eligible_context/u);
   await navigate(call, saved.workspaceId);
-  const beforeRevocation = await previewRecall(call);
+  const correction = await manage(call, { action: 'correct', id: saved.factId, version: fact.version,
+    text: correctedText, keywords: ['basalt'] });
+  assert.equal(correction.action, 'correct');
+  assert.notEqual(correction.id, saved.factId);
+  const corrected = await call('personalMemoryManagementNative', { type: 'read', id: correction.id });
+  assert.equal(corrected.text, correctedText);
+  assert.deepEqual(corrected.provenance, fact.provenance);
+  const previous = await call('personalMemoryManagementNative', read);
+  assert.equal(previous.state, 'superseded');
+  assert.equal(previous.supersededBy, corrected.id);
+  const exported = await manage(call, { action: 'export', id: corrected.id, version: corrected.version });
+  assert.equal(exported.action, 'export');
+  const exportedBody = JSON.stringify(exported.bundle);
+  assert(exportedBody.includes(correctedText) && exportedBody.includes(saved.messageId));
+  assert(!exportedBody.includes(factText));
+  await assert.rejects(previewRecall(call), /personal_memory_no_eligible_context/u);
+  const correctedIntent = 'Which basalt part?';
+  const beforeRevocation = await previewRecall(call, correctedIntent);
   const binding = { previewId: beforeRevocation.id, signature: beforeRevocation.signature };
   const nativeReview = await call('velaNativeReview', binding);
+  assert(nativeReview.prompt.includes(correctedText));
+  assert(!nativeReview.prompt.includes(factText));
   const { grantId } = await call('authorizeVelaRequest', { ...binding, reviewDigest: nativeReview.reviewDigest });
   assert.equal(typeof grantId, 'string');
   const { factId: _id, workspaceId: _workspace, projectId: _project, ...source } = saved;
-  assert.equal((await call('personalMemoryRevokeSourceNative', source)).erasedFacts, 1);
+  assert.equal((await call('personalMemoryRevokeSourceNative', source)).erasedFacts, 2);
   await assert.rejects(call('vela', { name: 'request', input: {
-    ...binding, intent, resourceIds: [], authorizeProvider: true, grantId,
+    ...binding, intent: correctedIntent, resourceIds: [], authorizeProvider: true, grantId,
   } }), /stale_personal_context|personal_record_unavailable/u);
+  return corrected.id;
 });
 await withWorker(false, async call => {
   await assert.rejects(call('personalMemoryManagementNative', read), /personal_record_unavailable/u);
+  await assert.rejects(call('personalMemoryManagementNative', { type: 'read', id: correctedId }), /personal_record_unavailable/u);
   const opened = await call('openResource', { resourceId: saved.conversationId, selection: { messageId: saved.messageId } });
   assert.equal(opened.status, 'unavailable');
   await navigate(call, saved.workspaceId);
-  await assert.rejects(previewRecall(call), /personal_memory_no_eligible_context/u);
+  await assert.rejects(previewRecall(call, 'Which basalt part?'), /personal_memory_no_eligible_context/u);
 });
 await assert.rejects(readFile(unexpectedFetch), { code: 'ENOENT' });
 const receipt = { result: 'pass', candidate: inventory.candidate, manifestSha256: manifestHash, verifiedFiles: files.size,
-  workerStarts: 4, crossConversationRecall: true, foreignProjectDenied: true, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true, revokedApprovedRequestDenied: true,
+  workerStarts: 4, correctedRecall: true, attributedExport: true, crossConversationRecall: true, foreignProjectDenied: true, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true, revokedApprovedRequestDenied: true,
   custody: 'Windows DPAPI CurrentUser through test adapter', approval: 'simulated', providerDispatch: false };
 await writeFile(join(profile, 'worker-receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify(receipt));
