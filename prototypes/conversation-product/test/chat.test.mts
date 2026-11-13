@@ -1668,6 +1668,36 @@ test('a recovered unavailable document can be removed without losing the draft o
  } finally { await chat?.dispose(); f.restore(); }
 });
 
+test('a picker result cannot attach after the chat starts closing', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const picked = Promise.withResolvers<{id:string;version:number;title:string}>();
+ const save = Promise.withResolvers<void>();
+ const source = { id:'file:brief', version:3, title:'Brief.pdf' };
+ let chat, pickerOpened=false, saving=false;
+ const port = {async command(name:string,input:any){
+  if(name==='saveDraft'){saving=true;await save.promise;}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,chooseDocument:async()=>{
+   pickerOpened=true;return picked.promise;
+  }});
+  await chat.ready;
+  named(f.view.root,'Attach document').fire('click');
+  await until(()=>pickerOpened);
+  const editor=f.view.root.querySelector('textarea');
+  editor.value='Keep this draft';editor.fire('input');
+  const closing=chat.dispose();
+  await until(()=>saving);
+  picked.resolve(source);
+  await new Promise(resolve=>setImmediate(resolve));
+  save.resolve();
+  await closing;
+  assert.equal(f.draft.content,'Keep this draft');
+  assert.deepEqual(f.draft.documents??[],[]);
+ } finally {picked.resolve(source);save.resolve();await chat?.dispose();f.restore();}
+});
+
 test('replace at the attachment limit preserves the old selection on cancellation and checkpoints the explicit replacement', async () => {
  const f = fixture('chatgpt-plan-responses');
  let chat;

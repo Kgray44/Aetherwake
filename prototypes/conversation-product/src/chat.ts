@@ -237,12 +237,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     }), documentStatus, continueDocuments);
   }
   async function chooseAttachment(replacing?: DraftDocument) {
-    if (choosingDocument || !options.chooseDocument) return;
+    if (choosingDocument || retiring || !options.chooseDocument) return;
+    const inScope = options.captureDocumentHandoffScope?.();
     choosingDocument = true;
     renderDraft();
     try {
       const document = await options.chooseDocument();
-      if (!document || disposed || !canStageDocuments()) return;
+      if (!document || retiring || disposed || inScope?.() === false || !canStageDocuments()) return;
       const { documents, phase } = session.snapshot();
       if (['loading', 'conflict', 'error'].includes(phase)) return;
       if (replacing) {
