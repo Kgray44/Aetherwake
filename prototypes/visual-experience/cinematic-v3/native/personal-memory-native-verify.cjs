@@ -35,13 +35,12 @@ async function waitFor(read) {
 async function run() {
   const { Backend } = await import('../../../integrated-backend/src/service.mts');
   const { createNativeHostClient } = await import('../../../integrated-backend/src/native-host.mts');
-  const { WorkspaceKernel } = await import('../../../workspace-kernel/kernel.mts');
-  const { NativePersonalMemory } = await import('../../../integrated-backend/src/personal-memory.mts');
   const client = createNativeHostClient(wire => broker.handle(wire));
   const broker = createProtectedStorageBroker({
     safeStorage, isReady: () => app.isReady(), send: wire => client.handle(wire),
   });
-  let backend = new Backend({ path, privateRoot: root, contentPolicy: 'local-private', provider: 'fixture' }, client.services);
+  const startBackend = () => new Backend({ path, privateRoot: root, contentPolicy: 'local-private', provider: 'fixture' }, client.services);
+  let backend = startBackend();
   let parent;
   let stage = 'start';
   try {
@@ -55,25 +54,30 @@ async function run() {
       assert.equal(preview.policy.ordinaryEnabled, false);
       assert.equal(preview.policy.velaEnabled, false);
       await backend.call('personalMemoryCaptureCancelNative', { id: preview.id });
+      stage = 'read restored fact through the canonical worker';
+      const read = { type: 'read', id: expected.id };
+      const fact = await backend.call('personalMemoryManagementNative', read);
+      assert.equal(fact.text, factText);
+      assert.deepEqual(fact.provenance, preview.draft.source);
+      stage = 'revoke the exact restored source';
+      const revoke = await backend.call('personalMemoryManagementNative', {
+        type: 'previewSourceRevocation', id: fact.id, version: fact.version,
+      });
+      assert.equal(revoke.sourceText, text);
+      const { conversationId, messageId } = expected.input;
+      assert.equal(revoke.binding.conversationId, conversationId);
+      assert.equal(revoke.binding.messageId, messageId);
+      const result = await backend.call('personalMemoryRevokeSourceNative', revoke.binding);
+      assert.deepEqual(result, { revision: revoke.binding.expectedRevision + 1, erasedFacts: 1 });
       await backend.close();
       backend = undefined;
-      stage = 'decrypt restored reviewed fact';
-      const kernel = WorkspaceKernel.openExisting(path);
-      const source = preview.draft.source;
-      const owner = new NativePersonalMemory({ kernel, secrets: client.services.secrets, host: {
-        identity: () => ({ userId: 'local-owner', policyVersion: 'aerynth.local-owner@1' }),
-        resolveScope: scope => ({ scope, version: preview.scopeProof.version }),
-        resolveConversationSource: () => ({ ...source, projectId: null, role: 'user', sensitive: false }),
-        authorize: input => input.operation === 'record.read' && input.subject?.id === expected.id
-          ? { decision: 'allow', policyVersion: 'aerynth.local-owner@1', authorizationRef: 'synthetic-verify' }
-          : { decision: 'deny' },
-      } });
-      try {
-        const fact = (await owner.open()).readFact(expected.id);
-        assert.equal(fact.text, factText);
-        assert.deepEqual(fact.provenance, source);
-      } finally { owner.close(); kernel.close(); }
-      console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron, restoredFact: true, providerUseOff: true }));
+      stage = 'verify revocation after worker restart';
+      backend = startBackend();
+      await assert.rejects(backend.call('personalMemoryManagementNative', read), /personal_record_unavailable/);
+      const opened = await backend.call('openResource', { resourceId: conversationId, selection: { messageId } });
+      assert.equal(opened.status, 'unavailable');
+      console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron,
+        restoredFact: true, providerUseOff: true, revokedSourceSurvivedWorkerRestart: true }));
       return;
     }
     stage = 'seed canonical conversation';
