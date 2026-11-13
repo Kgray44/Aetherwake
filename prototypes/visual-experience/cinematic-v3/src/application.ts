@@ -67,6 +67,7 @@ import { createVelaManifestation } from "./vela-manifestation.ts";
 import { createVelaOutputObservation } from "./vela-output-observation.ts";
 import { createVelaMissionView } from "./vela-missions.ts";
 import { mountMissionWorkroomView, type MissionWorkroomView } from "./mission-workroom-view.ts";
+import { createMissionWorkrooms } from "./mission-workrooms.ts";
 import type { MissionResponse, MissionProjection } from "../../../integrated-backend/src/mission-contracts.mts";
 import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
@@ -538,9 +539,8 @@ export function installApplication(hooks: Hooks) {
     pending: boolean;
     resourceId?: string;
   } | null = null;
-  let missionWorkroomScope: string | null = null;
+  const missionWorkrooms = createMissionWorkrooms(document);
   let missionWorkroomCardIds = new Set<string>();
-  const missionWorkroomViews = new Set<MissionWorkroomView>();
   const missionDashboardViews = new Map<string, MissionWorkroomView>();
   const checklistViews = new Map<
     string,
@@ -570,11 +570,6 @@ export function installApplication(hooks: Hooks) {
     }
   >();
   const timelineProjections = new Map<string, NonNullable<Parameters<typeof blockIdentity>[0]["timeline"]>>();
-  function refreshMissionWorkroomCards(accessChanged = false) {
-    for (const view of missionWorkroomViews) view.observe(accessChanged);
-  }
-  const restoreMissionWorkroomCards = () => refreshMissionWorkroomCards();
-  document.addEventListener("visibilitychange", restoreMissionWorkroomCards);
   let missionWorkroomSerial = 0;
   function mountWorkroomCard(
     root: HTMLElement,
@@ -582,7 +577,7 @@ export function installApplication(hooks: Hooks) {
     kind: "checklist" | "timeline" | "dashboard" | "stream",
     mountDefault?: (container: HTMLElement) => ReturnType<typeof mountTimelineExperience>,
   ): MissionWorkroomView {
-    const view = mountMissionWorkroomView(root, kind, missionWorkroomScope, async () => {
+    const view = mountMissionWorkroomView(root, kind, missionWorkrooms.scope, async () => {
       try {
         const result = await host.command!("missions", { name: "workroom-resource", input: { resourceId } }) as MissionResponse;
         if (result === null) return null;
@@ -609,8 +604,7 @@ export function installApplication(hooks: Hooks) {
         throw new Error("mission_projection_unavailable");
       },
     });
-    missionWorkroomViews.add(view);
-    return { ...view, dispose() { missionWorkroomViews.delete(view); view.dispose(); } };
+    return missionWorkrooms.track(view);
   }
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
@@ -970,7 +964,7 @@ export function installApplication(hooks: Hooks) {
       controlMotion.dispose();
       resourceOpener.cancel();
       directResources.dispose();
-      document.removeEventListener("visibilitychange", restoreMissionWorkroomCards);
+      missionWorkrooms.dispose();
     },
     { once: true },
   );
@@ -1293,10 +1287,7 @@ export function installApplication(hooks: Hooks) {
         timelineViews.delete(id);
         timelineProjections.delete(id);
       }
-    if (missionWorkroomScope !== workroomScope) {
-      missionWorkroomScope = workroomScope;
-      for (const view of missionWorkroomViews) view.setScope(workroomScope);
-    }
+    missionWorkrooms.setScope(workroomScope);
     for (const [id, entry] of taskTrackerViews)
       if (!next.blocks.some((block) => block.id === id)) {
         entry.view.dispose();
@@ -4790,17 +4781,17 @@ export function installApplication(hooks: Hooks) {
     if (e.type.startsWith("vela.mission/") || accessChanged || sourceChanged) {
       if (accessChanged) velaMissions.invalidateEvidence();
       else velaMissions.observe();
-      refreshMissionWorkroomCards(accessChanged);
+      missionWorkrooms.observe(accessChanged);
     }
     if (e.type === "storage/reserve-admission-denied") {
       velaMissions.observe();
-      refreshMissionWorkroomCards();
+      missionWorkrooms.observe();
       hooks.status("Storage check paused saving and new runs. Your data is retained.");
       return;
     }
     if (e.type === "storage/reserve-admission-restored") {
       velaMissions.observe();
-      refreshMissionWorkroomCards();
+      missionWorkrooms.observe();
       hooks.status("Storage check passed. Saving is available again.");
       void enqueue(() => conversationDrafts.recoverStorage(report));
       return;

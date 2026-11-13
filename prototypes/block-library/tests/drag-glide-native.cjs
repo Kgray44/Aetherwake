@@ -73,7 +73,10 @@ exports.verify=async({win,app,privateRoot,call,source,moduleStarted,startupError
         const actions='[data-surface-id="workspace-actions"]';
         const undo=actions+' [data-action="undo"]';
         await click('.aw-workspace-layout [aria-label="Workspace actions"]');
-        await click(actions+' [data-action="history-toggle"]');
+        const history=actions+' [data-action="history-toggle"]';
+        await wait(x.exists(history));
+        if (await js(x.exists(history+'[aria-expanded="false"]'))) await click(history);
+        await wait(x.exists(history+'[aria-expanded="true"]'));
         await wait(x.enabled(undo));
         await click(undo);
         await wait(x.layoutAfter(after.layoutVersion));
