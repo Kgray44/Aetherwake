@@ -222,6 +222,30 @@ test('Switch chat Escape cancels a result still waiting for the draft to save', 
  } finally {release();await manager?.dispose();f.restore();}
 });
 
+test('Switch chat Escape preserves the prior message when a same-chat result is still loading', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId;
+ const [previous,target]=f.detail.messages.items;
+ let manager, reading=false, release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const port={async command(name:string,input:any){
+  if(name==='search')return {items:[{kind:'message',resourceId,messageId:target.id,title:'Match',excerpt:target.content}],total:1,offset:0,limit:12,hasMore:false};
+  if(name==='detail'&&input.aroundMessageId===target.id){reading=true;await gate;}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,initialMessageId:previous.id});
+  await manager.ready;
+  await manager.openSwitcher();
+  const input=f.view.root.querySelector('.cp-switcher').querySelector('input');
+  input.value='Match';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await until(()=>reading);
+  input.fire('keydown',{key:'Escape'});release();
+  await until(()=>!f.view.root.querySelector('.cp-manager').getAttribute('aria-busy'));
+  assert.equal(f.calls.filter(call=>call.name==='detail').at(-1)?.input.aroundMessageId,previous.id);
+  assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
+ } finally {release();await manager?.dispose();f.restore();}
+});
+
 for (const cancel of [false,true]) test('Switch chat restores the previous draft after a failed or cancelled open (cancel: '+cancel+')', async () => {
  const f=fixture(), resourceId=f.draft.resourceId, target='chat:missing';
  let manager, reading=false, release!:()=>void;

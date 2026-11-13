@@ -136,7 +136,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   if(!canOpen())return;
   const previousResourceId=state.selectedResourceId,previousMessageId=selectedMessageId;
   const restorePrevious=async()=>{
-   if(!disposed&&!closing&&(intent===undefined||intent===openIntent)&&previousResourceId!==resourceId){
+   if(!disposed&&!closing&&(intent===undefined||intent===openIntent)&&(previousResourceId!==resourceId||previousMessageId!==messageId)){
     state.selectedResourceId=previousResourceId;selectedMessageId=previousMessageId;
     if(previousResourceId)await bindChat(previousResourceId,previousMessageId).catch(()=>{});
     else await detachChat();
