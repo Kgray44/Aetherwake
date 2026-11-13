@@ -1,4 +1,4 @@
-import type { ConversationProductPort, ConversationView, ConversationViewPosition, Detail, MessageView } from './contracts.ts';
+import type { ConversationProductPort, ConversationView, ConversationViewPosition, Detail, DraftDocument, MessageView } from './contracts.ts';
 import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-session.ts';
 import { renderMarkdown } from './markdown.ts';
@@ -143,49 +143,72 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   root.append(top,messages,paging,feedback,composer);messages.append(stream,feedbackBody);container.append(root);
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
   let webSearchCommandId: string|undefined;
-  const documents = new Map<string, { id: string; version: number; title: string }>();
   const documentList = el('div', undefined, 'cp-composer-documents');
+  const documentStatus = el('span', 'Remove or replace the unavailable documents to send.');
+  documentStatus.setAttribute('role', 'status');
+  documentList.hidden = true;
+  composer.insertBefore(documentList, tools);
   const attachDocument = el('button', 'Attach document');
   let choosingDocument = false;
-  function renderDocuments() {
-    documentList.replaceChildren(...[...documents.values()].map(document => {
-      const remove = el('button', document.title + ' ×');
+  let renderedDocuments: readonly DraftDocument[] | undefined;
+  function renderDocuments(documents: readonly DraftDocument[]) {
+    if (documents === renderedDocuments) return;
+    renderedDocuments = documents;
+    documentList.replaceChildren(...documents.flatMap(document => {
+      const label = document.title + (document.unavailable === 'changed' ? ' (changed)' : '');
+      const remove = el('button', label + ' ×');
       remove.type = 'button';
       decorateConversationControl(remove,{identity:'source',emphasis:'secondary'});
-      remove.setAttribute('aria-label', 'Remove attachment ' + document.title);
+      remove.setAttribute('aria-label', 'Remove attachment ' + label);
       remove.addEventListener('click', () => {
-        if (sending) return;
-        documents.delete(document.id);
-        renderDocuments();
-        renderDraft();
+        if (remove.disabled) return;
+        session.updateDocuments(session.snapshot().documents.filter(item => item.id !== document.id));
         textarea.focus();
       });
-      return remove;
-    }));
+      if (!document.unavailable || !options.chooseDocument) return [remove];
+      const replace = el('button', 'Replace');
+      replace.type = 'button';
+      decorateConversationControl(replace,{identity:'source',emphasis:'secondary'});
+      replace.dataset.replaceDocument = 'true';
+      replace.setAttribute('aria-label', 'Replace attachment ' + label);
+      replace.addEventListener('click', () => {
+        if (!replace.disabled) void chooseAttachment(document);
+      });
+      return [remove, replace];
+    }), documentStatus);
+  }
+  async function chooseAttachment(replacing?: DraftDocument) {
+    if (choosingDocument || !options.chooseDocument) return;
+    choosingDocument = true;
+    renderDraft();
+    try {
+      const document = await options.chooseDocument();
+      if (!document || disposed || accessRevoked || !ordinaryPlan()) return;
+      const { documents, phase } = session.snapshot();
+      if (['loading', 'conflict', 'error'].includes(phase)) return;
+      if (replacing) {
+        if (!documents.some(item => item.id === replacing.id && item.version === replacing.version)) return;
+        session.updateDocuments(documents
+          .filter(item => item.id !== document.id || item.id === replacing.id)
+          .map(item => item.id === replacing.id ? document : item));
+        textarea.focus();
+      } else {
+        session.updateDocuments([...documents.filter(item => item.id !== document.id), document]);
+      }
+    } catch (error) {
+      if (!disposed) report(errorText(error));
+    } finally {
+      choosingDocument = false;
+      if (!disposed) renderDraft();
+    }
   }
   if (options.chooseDocument) {
     attachDocument.type = 'button';
     attachDocument.hidden = true;
     decorateConversationControl(attachDocument,{identity:'source',emphasis:'secondary'});
     tools.insertBefore(attachDocument, hint);
-    documentList.hidden = true;
-    composer.insertBefore(documentList, tools);
-    attachDocument.addEventListener('click', async () => {
-      if (attachDocument.disabled || attachDocument.hidden || !options.chooseDocument) return;
-      choosingDocument = true;
-      renderDraft();
-      try {
-        const document = await options.chooseDocument();
-        if (document && !disposed && !accessRevoked && ordinaryPlan()) {
-          documents.set(document.id, document);
-          renderDocuments();
-        }
-      } catch (error) {
-        if (!disposed) report(errorText(error));
-      } finally {
-        choosingDocument = false;
-        if (!disposed) renderDraft();
-      }
+    attachDocument.addEventListener('click', () => {
+      if (!attachDocument.disabled && !attachDocument.hidden) void chooseAttachment();
     });
   }
   let sendTask: Promise<void>|null = null, stopRequestedFor: string|null = null, streamLimited = false, accessRevoked = false;
@@ -350,8 +373,6 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   });
   if(layoutHost)resizeObserver?.observe(layoutHost);
   function revokeView() {
-    documents.clear();
-    renderDocuments();
     followingLatest=false;
     stopRequestedFor=null;
     const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=pendingAnchor=presentationAnchor=null;viewWanted=userScroll=false;inspectionFollow=liveFollow=false;inspectionReturn=null;root.dataset.resourceAvailable='false';current=null;thinking=undefined;cache.clear();days.clear();messages.replaceChildren(stream,feedbackBody);
@@ -361,6 +382,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   function renderDraft(snapshot: DraftSessionSnapshot = session.snapshot()) {
     if (disposed) return;
     const plan = ordinaryPlan();
+    const documents = accessRevoked ? [] : snapshot.documents;
+    const documentsUnsupported = documents.length > 0 && !plan;
+    const unavailableDocuments = documents.some(item => item.unavailable);
+    const draftNeedsAttention = ['loading', 'conflict', 'error'].includes(snapshot.phase);
     const planDisconnected = plan?.available === false;
     const selectedModel = effectiveModel();
     const modelControlsDisabled = !plan?.available || sending || !!active() || accessRevoked || current?.conversation.state !== 'active';
@@ -399,9 +424,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     // Do not assign equal values: native caret, selection and composition remain intact.
     if (textarea.value !== snapshot.content) { const start = textarea.selectionStart, end = textarea.selectionEnd,direction=textarea.selectionDirection??'none'; textarea.value = snapshot.content; if (document.activeElement === textarea) textarea.setSelectionRange(Math.min(start,snapshot.content.length),Math.min(end,snapshot.content.length),direction); resize(); }
     draftStatus.dataset.phase = draftStatus.dataset.draftState = snapshot.phase; draftStatus.dataset.version = snapshot.version === null ? '' : String(snapshot.version);
-    draftStatus.textContent = snapshot.phase === 'clean' ? (snapshot.content ? 'Draft saved' : '') : snapshot.phase === 'saving' ? 'Saving draft…' : snapshot.phase === 'dirty' ? 'Unsaved changes' : snapshot.phase === 'loading' ? 'Loading saved draft…' : snapshot.phase === 'conflict' ? 'This draft changed in another view. Choose which text to keep.' : 'Draft recovery needs attention: '+snapshot.error;
+    draftStatus.textContent = snapshot.phase === 'clean' ? (snapshot.content || documents.length ? 'Draft saved' : '') : snapshot.phase === 'saving' ? 'Saving draft…' : snapshot.phase === 'dirty' ? 'Unsaved changes' : snapshot.phase === 'loading' ? 'Loading saved draft…' : snapshot.phase === 'conflict' ? 'This draft changed in another view. Choose which draft to keep.' : 'Draft recovery needs attention: '+snapshot.error;
     if (snapshot.remote) {
-      localText.textContent = snapshot.content; storedText.textContent = snapshot.remote.content;
+      localText.textContent = [snapshot.content, ...documents.map(item => item.title)].filter(Boolean).join('\n');
+      storedText.textContent = [snapshot.remote.content, ...(!accessRevoked ? snapshot.remote.documents ?? [] : []).map(item => item.title)].filter(Boolean).join('\n');
       if (recoveryDetails.parentNode !== recovery) { recovery.replaceChildren(recoveryDetails); recoveryDetails.open = true; }
     } else if (snapshot.phase === 'error') { if (retry.parentNode !== recovery) recovery.replaceChildren(retry); }
     else if (!needsSendReview()) recovery.replaceChildren();
@@ -410,14 +436,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const codexOutcomeUnknown = execution?.providerId === 'codex-app-server' && execution.state === 'unknown';
     checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
     checkOutcome.disabled = recovering;
-    send.disabled = choosingDocument || planDisconnected || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
+    send.disabled = choosingDocument || planDisconnected || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
     web.hidden = !plan?.execute || !webSearchModel();
-    send.title = planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : '';
-    web.disabled = send.disabled || web.hidden || !plan?.available || documents.size > 0;
+    send.title = unavailableDocuments ? documentStatus.textContent ?? '' : planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : documentsUnsupported ? 'Switch to ChatGPT or remove the documents to send.' : '';
+    web.disabled = send.disabled || web.hidden || !plan?.available || documents.length > 0;
     attachDocument.hidden = !plan || !options.chooseDocument;
-    attachDocument.disabled = choosingDocument || sending || documents.size >= 4;
-    documentList.hidden = !plan || !documents.size;
-    for (const remove of documentList.querySelectorAll('button')) remove.disabled = sending;
+    attachDocument.disabled = choosingDocument || sending || draftNeedsAttention || documents.length >= 4;
+    renderDocuments(documents);
+    documentList.hidden = !documents.length;
+    documentStatus.hidden = !unavailableDocuments;
+    for (const button of documentList.querySelectorAll('button'))
+      button.disabled = sending || choosingDocument || draftNeedsAttention || (button.dataset.replaceDocument === 'true' && !plan);
     send.dataset.state=needsSendReview()?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=stopRequestedFor?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = !!stopRequestedFor || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
   }
@@ -656,7 +685,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if (send.disabled || !current || webSearch && web.disabled) return;
     const before = current, content = textarea.value, commandId = crypto.randomUUID();
     const plan = ordinaryPlan(), selectedModel = webSearch ? webSearchModel() : effectiveModel();
-    const attachments = plan && documents.size ? [...documents.values()].map(({ id, version }) => ({ id, version })) : undefined;
+    let attachments: { id: string; version: number }[] | undefined;
+    let sendStarted = false;
     if (webSearch && !selectedModel) return;
     const reasoningEffort = plan ? thinking?.effort : undefined;
     if (reasoningEffort !== undefined && (selectedModel?.id !== thinking?.modelId ||
@@ -674,7 +704,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     report(webSearch?'Preparing web search. Your draft remains saved.':providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
+      if (checkpoint.record.documents?.some(item => item.unavailable)) {
+        report('A selected document is unavailable or has changed. Remove or reattach it before sending.');
+        return;
+      }
+      if (checkpoint.record.documents?.length) attachments = checkpoint.record.documents.map(({ id, version }) => ({ id, version }));
       if (reasoningEffort !== undefined) thinking = undefined;
+      sendStarted = true;
       const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{}),...(attachments?{documents:attachments}:{})});
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
@@ -690,10 +726,6 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           evidence?.messages.items.find(m => m.resourceId === resourceId && !m.inherited &&
             m.role === 'user' && m.content === content && !input.priorMessageIds.includes(m.id))?.id);
         const cleared = await session.acknowledgeSent(checkpoint);
-        if (attachments) {
-          documents.clear();
-          renderDocuments();
-        }
         const accepted = clockMessageId ? 'Answered from this device’s clock.' : 'Message accepted.';
         report(cleared ? accepted : accepted + ' Later draft edits were retained.', 'send-accepted');
       } else if (interrupted) {
@@ -711,7 +743,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       }
     })().catch(error=>{
       const code = errorText(error);
-      if (observedSubmittedStop()) report('Reply stopped. Your draft is still here.');
+      if (!sendStarted) report('Message held until the draft can be saved: '+code);
+      else if (observedSubmittedStop()) report('Reply stopped. Your draft is still here.');
       else if (code === 'authorization_cancelled') report('Send cancelled. Your saved draft was retained.');
       else if (code === 'unsupported_model') report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');
       else if (code === 'unsupported_reasoning_effort') report('This model cannot use the requested thinking level. Your draft is still here.');
