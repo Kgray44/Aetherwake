@@ -6656,6 +6656,19 @@ export class BackendCore {
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
+    if (name === 'personalMemoryManagementNative') {
+      const review = this.personalMemoryReview;
+      ensure(review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+      const request = input as CommandMap['personalMemoryManagementNative']['input'];
+      switch (request?.type) {
+        case 'list': return await review.inspect({ after: request.after, limit: 20 }) as CommandMap[K]['output'];
+        case 'read': return await review.read(request.id) as CommandMap[K]['output'];
+        case 'preview': return await review.previewManagement(request.request) as CommandMap[K]['output'];
+        case 'commit': return await review.commitManagement(request.review) as CommandMap[K]['output'];
+        case 'cancel': review.cancelManagement(request.ticket); return null as CommandMap[K]['output'];
+        default: throw new ServiceError('invalid_personal_memory_management');
+      }
+    }
     if (name === 'personalMemoryPolicyNative') {
       const review = this.personalMemoryReview;
       ensure(review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');

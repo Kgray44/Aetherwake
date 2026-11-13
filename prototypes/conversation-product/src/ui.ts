@@ -46,7 +46,7 @@ const renderChatGPTCompatibility=(report:NativeChatGPTFidelityDescriptor,onOpenE
 
 /** Temporary surface: the host decides placement, focus transition, and shared Motion Coordinator. */
 export function mountConversationManager(container: HTMLElement, port: ConversationProductPort,
-  options: ManagerOptions & { onRememberMessage?: (request: MemoryCaptureRequest) => Promise<boolean> } = {}) {
+  options: ManagerOptions & { onRememberMessage?: (request: MemoryCaptureRequest) => Promise<boolean>; memoryView?: HTMLElement } = {}) {
  if(options.motion&&!options.viewId?.trim())throw new Error('conversation_motion_identity_required');
  const state=options.state??createManagerState();if(options.resourceId)state.selectedResourceId=options.resourceId;
  const root=el('section',undefined,'cp-manager aw-optical-controls'+(options.embedded===false?' cp-standalone':' cp-embedded'));root.dataset.awOptics='workspace';root.setAttribute('role','region');root.setAttribute('aria-label','Conversations');
@@ -57,6 +57,11 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const header=el('header'),heading=el('h2','Conversations'),status=el('p','', 'cp-status');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
  const historyToggle=button('History',()=>{const open=root.classList.toggle('cp-history-open');historyToggle.setAttribute('aria-expanded',String(open));},{identity:'history'}),close=button('Close',()=>closeManager(),{identity:'close'}),headerActions=el('div',undefined,'cp-header-actions'),newChat=disclosure('New chat','cp-new-chat'),switcher=disclosure('Switch chat','cp-switcher');historyToggle.classList.add('cp-history-toggle');historyToggle.setAttribute('aria-expanded','false');headerActions.dataset.cpGroup='surface';headerActions.setAttribute('role','group');headerActions.setAttribute('aria-label','Conversation controls');headerActions.append(newChat.node,switcher.node,historyToggle,close);header.append(heading,headerActions);
  const switchQuery=el('input'),switchMode=select([{value:'recent',label:'Recent chats'},{value:'favorite',label:'Favorites'},{value:'running',label:'Running chats'}]),switchStatus=el('p','', 'cp-switcher-status'),switchResults=el('div',undefined,'cp-switcher-results');switchQuery.type='search';switchQuery.placeholder='Find a conversation';switchQuery.maxLength=1000;switchQuery.setAttribute('aria-label','Find a conversation to switch to');switchMode.setAttribute('aria-label','Quick conversation group');switchStatus.setAttribute('role','status');switcher.panel.append(switchQuery,switchMode,switchStatus,switchResults);
+ if (options.memoryView) {
+   const memories = disclosure('Saved memories', 'cp-memory');
+   memories.panel.append(options.memoryView);
+   headerActions.insertBefore(memories.node, close);
+ }
  const toolbar=el('div',undefined,'cp-toolbar'),query=el('input'),project=el('select'),collection=el('select'),archive=select([{value:'active',label:'Active'},{value:'archived',label:'Archived'}],state.query.archived?'archived':'active'),favorite=el('input');
  const sort=select([{value:'activity',label:'Recent activity'},{value:'created',label:'Newest created'},{value:'title',label:'Title'},{value:'active',label:'Running first'}],state.query.sort??'activity'),searchMode=select([{value:'all',label:'All matches'},{value:'conversations',label:'Conversations'},{value:'messages',label:'Messages'},{value:'resources',label:'Resources'}],state.query.searchMode??'all');sort.setAttribute('aria-label','Sort conversations');searchMode.setAttribute('aria-label','Search result type');
  query.type='search';query.placeholder='Search chats';query.value=state.query.text??'';query.setAttribute('aria-label','Search conversation history');favorite.type='checkbox';favorite.checked=!!state.query.favorite;

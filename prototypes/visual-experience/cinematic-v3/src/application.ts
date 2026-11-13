@@ -1,3 +1,4 @@
+import { createPersonalMemoryView } from './personal-memory-view.ts';
 import type {
   GraphActions,
   SpatialRenderLayer,
@@ -2561,6 +2562,7 @@ export function installApplication(hooks: Hooks) {
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
+      memoryView: createPersonalMemoryView(request => host.command!("personalMemory", request)),
       onRememberMessage: async (request) => {
         const result = await host.command!("personalMemoryCapture", request) as { status: "saved" | "cancelled" };
         return result.status === "saved";
