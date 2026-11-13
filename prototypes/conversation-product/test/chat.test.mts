@@ -993,7 +993,7 @@ test('Enter submits once; Shift+Enter and IME do not submit; draft draining is i
   }finally{await chat?.dispose();f.restore();}
 });
 
-for (const restoresAccess of [false,true]) test('access loss during a send checkpoint retains the draft without dispatch (restored: '+restoresAccess+')',async()=>{
+for (const interruption of ['revoked','restored','disconnected']) test('a send checkpoint retains the draft without dispatch when '+interruption,async()=>{
   const f=fixture('chatgpt-plan-responses');
   const checkpoint=Promise.withResolvers<void>();
   let chat, started=false, observe!:(value:ConversationExecutionObservation)=>void;
@@ -1009,13 +1009,22 @@ for (const restoresAccess of [false,true]) test('access loss during a send check
     await chat.ready;
     f.view.root.querySelector('form').fire('submit');
     await until(()=>started);
-    observe({resourceAvailable:false});
-    if (restoresAccess) await chat.refresh();
+    if (interruption==='disconnected') observe({connection:'unavailable'});
+    else observe({resourceAvailable:false});
+    if (interruption==='restored') await chat.refresh();
     checkpoint.resolve();
     await chat.whenSubmissionSettled();
     assert.equal(f.calls.filter(call=>call.name==='send').length,0);
     assert.equal(f.draft.content,'Saved unsent text');
-    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,restoresAccess?/access changed.*send again/i:/no longer available/);
+    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,
+      interruption==='disconnected'?/reconnect.*send again/i:interruption==='restored'?/access changed.*send again/i:/no longer available/);
+    if (interruption==='disconnected') {
+      const send=f.view.root.querySelector('[data-cp-control="send"]');
+      assert.equal(send.disabled,true);
+      observe({connection:'available'});
+      assert.equal(send.disabled,false);
+      assert.equal(f.calls.filter(call=>call.name==='send').length,0);
+    }
   } finally {checkpoint.resolve();await chat?.dispose();f.restore();}
 });
 

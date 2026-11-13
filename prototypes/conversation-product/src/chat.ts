@@ -569,11 +569,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const codexOutcomeUnknown = execution?.providerId === 'codex-app-server' && execution.state === 'unknown';
     checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
     checkOutcome.disabled = recovering;
-    send.disabled = choosingDocument || stagingForVela || changingProvider || planDisconnected || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
+    send.disabled = connection === 'unavailable' || choosingDocument || stagingForVela || changingProvider || planDisconnected || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
     web.hidden = !plan?.execute || !webSearchModel();
     documentStatus.textContent = unavailableDocuments ? 'Remove or replace the unavailable documents to send.'
       : documentsUnsupported ? 'Switch to ChatGPT or remove the documents to send.' : '';
-    send.title = documentStatus.textContent || (planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : '');
+    send.title = documentStatus.textContent || (connection === 'unavailable' ? 'Reconnect to send this draft.' : planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : '');
     web.disabled = send.disabled || web.hidden || !plan?.available || documents.length > 0;
     attachDocument.hidden = !mayStageDocuments || !options.chooseDocument;
     attachDocument.disabled = !mayStageDocuments || choosingDocument || stagingForVela || sending || changingProvider || draftNeedsAttention || documents.length >= 4;
@@ -868,6 +868,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         if (!accessRevoked) report('Conversation access changed. Your draft is saved. Press Send again to submit it.');
         return;
       }
+      if (connection === 'unavailable') {
+        report('Your draft is saved. Reconnect, then press Send again.');
+        return;
+      }
       const content = checkpoint.record.content;
       if (checkpoint.record.documents?.some(item => item.unavailable)) {
         report('A selected document is unavailable or has changed. Remove or reattach it before sending.');
@@ -1022,7 +1026,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       streamText.textContent='';stream.hidden=true;lastCursor=-1;seenEvents.clear();streamLimited=false;liveFollow=false;
       report('Connection unavailable. '+(execution?'Last observed: '+execution.state+'. Outcome unconfirmed.':'Execution state is unavailable.'));renderDraft();
     }
-    const next=observation.execution??execution;if(!next)return;
+    const next=observation.execution??execution;
+    if(!next){if(observation.connection==='available')renderDraft();return;}
     if(webSearchCommandId&&(next.commandId!==webSearchCommandId||next.providerId!=='chatgpt-plan-responses'))return;
     const canonical = current?.conversation.execution;
     if(canonical && (next.id !== canonical.id && next.startedAt < canonical.startedAt ||
