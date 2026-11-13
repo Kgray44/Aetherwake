@@ -407,6 +407,7 @@ export class VelaService {
       return structuredClone({ id: r.id, conversationId: r.conversationId, state: r.state, providerId: r.providerId,
         ...(r.handoff?.taskId ? { taskId: r.handoff.taskId } : {}),
         ...(r.origin ? { origin: r.origin } : {}), ...(r.inputMessageId ? { inputMessageId: r.inputMessageId } : {}), ...(r.inputContentDigest ? { inputContentDigest: r.inputContentDigest } : {}),
+        ...(r.reviewedMemory ? { reviewedMemory: true as const } : {}),
         ...(r.response ? { response: r.response } : {}), ...(r.provenance ? { provenance: r.provenance } : {}),...(r.nativeSourceObservation?{nativeSourceObservation:r.nativeSourceObservation}:{}), sourcePolicyVersion: r.context.policyVersion, sourceDependencies });
     });
   }
@@ -786,9 +787,12 @@ export class VelaService {
       const { history: _history, agentInstructions: _agentInstructions, operations, ...storedContext } = providerContext;
       const conversationId=this.conversationId(),baseRevision=frozen?this.opts.host.conversationRevision?.(conversationId):undefined;
       if(frozen)check(Number.isSafeInteger(baseRevision)&&Number(baseRevision)>=1&&Number(baseRevision)<Number.MAX_SAFE_INTEGER,'canonical_history_revision_required');
-      const r: VelaRequest = { id: randomUUID(), conversationId, intent: input.intent,
+      const requestId = frozen?.requestId ?? randomUUID();
+      check(identifier(requestId) && !this.data.requests.some(item => item.id === requestId), 'invalid_canonical_request');
+      const r: VelaRequest = { id: requestId, conversationId, intent: input.intent,
         state: 'planning', createdAt: this.now(), updatedAt: this.now(), providerId: planner?.providerId ?? null,
         context: storedContext, origin: this.historyOrigin(scope), inputContentDigest: historyDigest(input.intent),
+        ...(frozen?.requestId ? { reviewedMemory: true as const } : {}),
         ...(operations ? { operationContext: { contract: operations.contract, digest: operations.digest,
           receiptIds: operations.operations.map(operation => operation.receiptId) } } : {}),
         ...(routed ? structuredClone(routed) : {}),

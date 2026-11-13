@@ -26,6 +26,8 @@ export interface CanonicalConversationHost {
  /** Current host authority. A message check includes its canonical visibility
   * from the given conversation and its source policy, not merely owner ACL. */
  access?(resourceId: string, messageId?: string): boolean;
+ /** Canonical owner can keep an otherwise readable message local. */
+ canShareMessage?(messageId: string): boolean;
  /** Uses existing canonical execution service, with context receipt after actual dispatch. */
  sendWithContext?(input: ProductCommandMap['send']['input'], context: AttachedContext[]): Promise<unknown>;
  contextReceipt?(executionId: string, resourceId: string, shareId: string, digest: string): boolean;
@@ -327,7 +329,7 @@ export class ConversationProduct implements ConversationProductPort {
   let status: Share['status'] = row.revoked ? 'revoked' : 'current', content: string | undefined;
   const supersededBy=this.db.prepare('SELECT id FROM cp_shares WHERE supersedes=? ORDER BY created_at,id').all(id).map(r=>String(r.id));
   if(status==='current'&&supersededBy.length)status='superseded';
-  if (!this.readable(v, sourceId, messageId)) status = 'unavailable';
+  if (!this.readable(v, sourceId, messageId) || this.host.canShareMessage?.(messageId) === false) status = 'unavailable';
   if (status === 'current') { try { const m = this.message(v,sourceId,messageId); if (hash(m.content) !== row.digest) status = 'stale'; else if (includeContent) content = m.content.slice(Number(row.start),Number(row.end)); } catch { status='unavailable'; } }
   const a = targetId ? this.db.prepare('SELECT * FROM cp_adoptions WHERE share_id=? AND target_id=?').get(id,targetId) : undefined;
   return { id, sourceResourceId: sourceId, sourceMessageId: messageId, sourceTime: String(row.source_time), digest: String(row.digest), range: { start: Number(row.start), end: Number(row.end) }, evidence: row.evidence, createdAt: String(row.created_at), supersedes: row.supersedes ? String(row.supersedes) : null, supersededBy, status, state: a?.sent_at ? 'sent' : a?.attached_at ? 'attached' : a?.inspected_at ? 'inspected' : 'discoverable', attached:!!a?.attached_at, ...(targetId ? { targetResourceId:targetId } : {}), ...(a?.execution_id ? { executionId:String(a.execution_id) } : {}), ...(content === undefined ? {} : {content}) };
@@ -350,7 +352,7 @@ export class ConversationProduct implements ConversationProductPort {
  private contextSources(v:View,target:string,sources:readonly {resourceId:string;messageId:string;sensitivity:string;evidence?:Evidence}[]) {
   this.resource(v,target);const p=this.policy(target),family=this.family(v,target),ranks:Record<string,number>={public:0,internal:1,sensitive:2,restricted:3};
   for(const source of sources){
-   this.resource(v,source.resourceId,source.messageId);check(family.has(source.resourceId),'outside_branch_family');check(!p.allowedSourceIds.length||p.allowedSourceIds.includes(source.resourceId),'source_scope_denied');
+   this.resource(v,source.resourceId,source.messageId);check(this.host.canShareMessage?.(source.messageId) !== false,'source_unavailable');check(family.has(source.resourceId),'outside_branch_family');check(!p.allowedSourceIds.length||p.allowedSourceIds.includes(source.resourceId),'source_scope_denied');
    const sp=this.policy(source.resourceId);check(JSON.stringify(this.projectIds(v,source.resourceId))===JSON.stringify(this.projectIds(v,target))||p.allowCrossProject&&sp.allowCrossProject,'cross_project_sharing_denied');
    check(ranks[source.sensitivity]!==undefined&&ranks[source.sensitivity]<=Math.min(ranks[p.maxSensitivity],ranks[sp.maxSensitivity])&&source.sensitivity!=='restricted','sensitivity_denied');check(p.categories.includes(source.evidence??'excerpt')&&sp.categories.includes(source.evidence??'excerpt'),'category_denied');
   }
@@ -449,6 +451,7 @@ export class ConversationProduct implements ConversationProductPort {
     this.tx(()=>{const current=this.policy(a.resourceId);check(current.revision===a.expectedRevision,'stale_policy_version');this.db.prepare('INSERT INTO cp_policy VALUES(?,?,?) ON CONFLICT(resource_id) DO UPDATE SET revision=excluded.revision,json=excluded.json').run(a.resourceId,p.revision,JSON.stringify(p));this.audit('branch.policy',a.resourceId);});result=p;break;
    }
    case 'publish': {
+    check(this.host.canShareMessage?.(a.sourceMessageId) !== false, 'source_unavailable');
     const m=this.message(v,a.sourceResourceId,a.sourceMessageId);check(evidence.includes(a.evidence),'invalid_evidence');check(m.sensitivity!=='restricted'&&(m.sensitivity!=='sensitive'||a.allowSensitive===true),'sensitive_source_requires_consent');
     const range=a.range??{start:0,end:m.content.length};check(Number.isInteger(range.start)&&Number.isInteger(range.end)&&range.start>=0&&range.end>range.start&&range.end<=m.content.length&&range.end-range.start<=16384,'invalid_source_range');
     if(a.supersedes){const old=this.db.prepare('SELECT source_resource_id FROM cp_shares WHERE id=?').get(a.supersedes);check(old?.source_resource_id===a.sourceResourceId,'invalid_supersedes');}
