@@ -33,6 +33,7 @@ test('schedules planning and ordinary Responses on opposite Windows runners', t 
     const weights = Object.fromEntries(order.map((file, index) => [file, 50_000 - index * 10_000]));
     const plan = planBackendShards(root, weights);
     assert.deepEqual(plan.flat(2).sort(), [...files].sort());
+    assert.deepEqual(plan[1][2], [planning]);
     const shardFor = file => plan.findIndex(lanes => lanes.flat().includes(file));
     assert.notEqual(shardFor(planning), shardFor(responses));
     assert.deepEqual(planBackendShards(root, weights), plan);
@@ -44,8 +45,8 @@ test('acceptance runner executes the serial phase without a peer and retains all
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const backend = join(root, 'prototypes', 'integrated-backend');
   mkdirSync(join(backend, 'tests'), { recursive: true });
-  const serial = ['tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts'];
-  for (const file of serial) writeFileSync(join(backend, file), `
+  const serial = ['tests/mission-api-planning.test.mts', 'tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts'];
+  for (const [index, file] of serial.entries()) writeFileSync(join(backend, file), `
     import test from 'node:test';
     import assert from 'node:assert/strict';
     import { existsSync, writeFileSync } from 'node:fs';
@@ -54,7 +55,7 @@ test('acceptance runner executes the serial phase without a peer and retains all
     test('serial phase finishes before the parallel lanes start', async () => {
       await setTimeout(150);
       assert(!existsSync('parallel-started'));
-      ${file === serial[1] ? "assert(existsSync('mission-stream.test.mts.done'));" : ''}
+      ${index ? `assert(existsSync(${JSON.stringify(serial[index - 1].split('/').at(-1) + '.done')}));` : ''}
       writeFileSync(basename(import.meta.filename) + '.done', '', { flag: 'wx' });
     });
   `);
