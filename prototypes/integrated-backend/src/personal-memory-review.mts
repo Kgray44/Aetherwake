@@ -82,6 +82,11 @@ export function createPersonalMemoryReview(options: Options) {
 
   return {
     authorize: (input: PersonalAuthorization) => !closed && permission?.(input) === true,
+    withSourceErasure<T>(source: ConversationSourceRef, erase: () => T): T {
+      requireOpen();
+      return withPermission(input => (input.operation === 'source.erase' || input.operation === 'record.delete' && input.subject?.kind === 'fact') &&
+        input.conversationSource?.conversationId === source.conversationId && input.conversationSource.messageId === source.messageId, erase);
+    },
     /** Called only after the native owner approves this setting change. */
     async setProviderUse(assistant: 'ordinary' | 'vela', enabled: boolean, expectedVersion: number) {
       requireOpen();

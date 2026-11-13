@@ -265,6 +265,7 @@ export interface Options {
   syntheticTimerClock?: TimerClockReading;
 }
 export interface CommandMap {
+  personalMemoryRevokeSourceNative: { input: { conversationId: string; messageId: string; expectedRevision: number }; output: { revision: number; erasedFacts: number } };
   personalMemoryCapturePreviewNative: { input: import('./personal-memory-review.mts').CaptureRequest; output: import('./personal-memory-review.mts').CaptureReview };
   personalMemoryCaptureCommitNative: { input: import('./personal-memory-review.mts').CaptureReview; output: { id: string } };
   personalMemoryCaptureCancelNative: { input: { id: string }; output: null };

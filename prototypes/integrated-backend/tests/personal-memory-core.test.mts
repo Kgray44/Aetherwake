@@ -74,6 +74,22 @@ test('Core native capture persists a canonical user message across a private pro
     assert.equal(fact.text, content);
     assert.equal(fact.provenance.kind, 'conversation-message');
     assert.equal((await inspection.inspect({ after: null, limit: 8 })).policy.ordinaryEnabled, false);
+    const revoke = { conversationId: chat.resourceId, messageId: message.id, expectedRevision: message.revision };
+    await assert.rejects(core.command('personalMemoryRevokeSourceNative', { ...revoke, expectedRevision: chat.revision }), /stale_source_revision/);
+    assert.equal((await inspection.read(saved.id)).text, content);
+    const graph = (core as unknown as { graph: import('../../connected-conversations/src/graph.ts').ConversationGraph }).graph;
+    const mark = graph.markUnavailable;
+    graph.markUnavailable = () => { throw Error('synthetic graph write failure'); };
+    try {
+      await assert.rejects(core.command('personalMemoryRevokeSourceNative', revoke), /synthetic graph write failure/);
+    } finally { graph.markUnavailable = mark; }
+    assert.equal((await inspection.read(saved.id)).text, content);
+    assert.deepEqual(await core.command('personalMemoryRevokeSourceNative', revoke), { revision: message.revision + 1, erasedFacts: 1 });
+    await core.command('close', {});
+    core = open();
+    await assert.rejects(core.command('personalMemoryManagementNative', { type: 'read', id: saved.id }), /personal_record_unavailable/);
+    const reopenedSource = await core.command('openResource', { resourceId: chat.resourceId, selection: { messageId: message.id } });
+    assert.equal(reopenedSource.status, 'unavailable');
   } finally {
     await core?.command('close', {});
     rmSync(root, { recursive: true, force: true });
@@ -153,6 +169,17 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     await assert.rejects(core.command('authorizeVelaRequest', { ...binding, reviewDigest: reviewed.reviewDigest }), /stale_vela_preview/);
     await assert.rejects(recall(), /personal_memory_no_eligible_context/);
     await assert.rejects(bySource(), /personal_memory_no_eligible_context/);
+    await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
+    const beforeRevocation = await recall();
+    const revocationBinding = { previewId: beforeRevocation.id, signature: beforeRevocation.signature };
+    const revocationReview = await core.command('velaNativeReview', revocationBinding);
+    const { grantId } = await core.command('authorizeVelaRequest', { ...revocationBinding, reviewDigest: revocationReview.reviewDigest });
+    await core.command('personalMemoryRevokeSourceNative', {
+      conversationId: chat.resourceId, messageId: message.id, expectedRevision: message.revision,
+    });
+    await assert.rejects(core.command('vela', { name: 'request', input: { ...revocationBinding,
+      intent: input.intent, resourceIds: [], authorizeProvider: true, grantId } }), /stale_personal_context|personal_record_unavailable/);
+    await assert.rejects(recall(), /personal_memory_no_eligible_context/);
   } finally {
     await core.command('close', {});
     rmSync(root, { recursive: true, force: true });

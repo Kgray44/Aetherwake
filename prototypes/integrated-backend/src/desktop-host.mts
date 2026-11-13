@@ -137,6 +137,7 @@ lines.on("line", async (line) => {
         "personalMemoryCapturePreviewNative",
         "personalMemoryCaptureCommitNative",
         "personalMemoryCaptureCancelNative",
+        "personalMemoryRevokeSourceNative",
         "personalMemoryPolicyNative",
         "personalMemoryManagementNative",
         "authorizeConversationSend",

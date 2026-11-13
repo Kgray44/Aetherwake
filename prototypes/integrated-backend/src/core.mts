@@ -6702,6 +6702,25 @@ export class BackendCore {
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
+    if (name === 'personalMemoryRevokeSourceNative') {
+      const memory = this.personalMemory, review = this.personalMemoryReview;
+      ensure(memory && review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+      const request = input as CommandMap['personalMemoryRevokeSourceNative']['input'];
+      ensure(request && identifier(request.conversationId) && identifier(request.messageId) &&
+        Number.isSafeInteger(request.expectedRevision) && request.expectedRevision >= 1, 'invalid_personal_memory_source');
+      const { conversationId, messageId, expectedRevision } = request;
+      return this.atomic(() => {
+        ensure(this.state.revisions[conversationId] === expectedRevision, 'stale_source_revision');
+        const graphId = this.gid(conversationId);
+        const message = this.graph.readOwnMessage(graphId, messageId);
+        ensure(message?.role === 'user' && message.provenance === 'user' &&
+          this.productResourceAccess(conversationId, messageId), 'conversation_source_unavailable');
+        const source = { kind: 'conversation-message' as const, conversationId, messageId };
+        const { deleted } = review.withSourceErasure(source, () => memory.eraseConversationSource(source));
+        this.graph.markUnavailable(messageId);
+        return { revision: ++this.state.revisions[conversationId], erasedFacts: deleted.length };
+      }) as CommandMap[K]['output'];
+    }
     if (name === 'personalMemoryManagementNative') {
       const review = this.personalMemoryReview;
       ensure(review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');

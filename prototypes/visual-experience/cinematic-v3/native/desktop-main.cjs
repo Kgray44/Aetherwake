@@ -682,7 +682,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
       if (typeof command === "string" && ((command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture") ||
-          ["personalMemoryPolicyNative", "personalMemoryManagementNative", "authorizeConversationSend",
+          ["personalMemoryPolicyNative", "personalMemoryManagementNative", "personalMemoryRevokeSourceNative", "authorizeConversationSend",
            "velaRequestPreview", "velaNativeReview", "authorizeVelaRequest"].includes(command)))
         throw Error("unauthorized_private_command");
       if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative','aepExperimentNative'].includes(command))throw Error('unauthorized_private_command');
