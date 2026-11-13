@@ -4,11 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   validate:
+    name: Aerynth governance
     timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
