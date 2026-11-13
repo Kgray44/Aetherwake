@@ -761,7 +761,10 @@ export function installApplication(hooks: Hooks) {
   const replyNoteActions = {
     async saveReplyNote(input: ProductCommandMap["captureReplyNote"]["input"]) {
       const receipt = await composerPort.command("captureReplyNote", input);
-      await command({ type: "snapshot" });
+      // The canonical save has committed. Refresh the workspace independently.
+      void command({ type: "snapshot" }).catch(() => {
+        if (!eventClosed) hooks.status("Note saved. The workspace could not refresh.");
+      });
       return receipt;
     },
     openReplyNote: (noteId: string) => openCanonicalResource(noteId),
