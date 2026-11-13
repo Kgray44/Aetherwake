@@ -57,7 +57,7 @@ test("turning off ChatGPT memory requires current gesture and forwards only a ve
 
 test("source revocation only commits the native binding after confirmation and renewed admission", async () => {
   const binding = { conversationId: "chat", messageId: "message", expectedRevision: 7 };
-  for (const outcome of ["apply", "cancel", "frame", "reserve", "gesture"]) {
+  for (const outcome of ["apply", "cancel", "frame", "reserve", "gesture", "stale", "changed source"]) {
     const calls = [];
     let current = true;
     let storageAllowed = true;
@@ -68,6 +68,8 @@ test("source revocation only commits the native binding after confirmation and r
       allowWrite: () => storageAllowed,
       async call(command, request) {
         calls.push([command, request]);
+        if (calls.length === 2 && outcome === "stale") throw Error("stale_personal_context_version");
+        if (calls.length === 2 && outcome === "changed source") return { binding: { ...binding, expectedRevision: 8 }, sourceText: "Synthetic original" };
         return request.type === "previewSourceRevocation"
           ? { binding, sourceText: "Synthetic original" }
           : { erasedFacts: 2 };
@@ -84,9 +86,12 @@ test("source revocation only commits the native binding after confirmation and r
     if (outcome === "frame") await assert.rejects(operation, /personal_memory_frame_changed/);
     if (outcome === "reserve") await assert.rejects(operation, /storage_reserve_admission_denied/);
     if (outcome === "gesture") await assert.rejects(operation, /personal_memory_user_gesture_required/);
+    if (outcome === "stale") await assert.rejects(operation, /stale_personal_context_version/);
+    if (outcome === "changed source") await assert.rejects(operation, /personal_memory_review_mismatch/);
     const expected = outcome === "gesture" ? [] : [
       ["personalMemoryManagementNative", { type: "previewSourceRevocation", id: "fact", version: 3 }],
     ];
+    if (["apply", "stale", "changed source"].includes(outcome)) expected.push(expected[0]);
     if (outcome === "apply") expected.push(["personalMemoryRevokeSourceNative", binding]);
     assert.deepEqual(calls, expected);
   }
