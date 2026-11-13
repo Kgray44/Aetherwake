@@ -1565,24 +1565,40 @@ test('replace at the attachment limit preserves the old selection on cancellatio
  } finally { f.pending?.reject(Error('synthetic cleanup')); await chat?.dispose(); f.restore(); }
 });
 
-test('closing the chat manager immediately invalidates a pending attachment handoff', async () => {
+for (const action of ['close', 'switch'] as const) test('chat manager '+action+' immediately invalidates a pending attachment handoff', async () => {
  const f = fixture('chatgpt-plan-responses');
  const resourceId = f.draft.resourceId;
  const document = { id: 'file:brief', version: 1, title: 'Brief.pdf' };
+ const destination = 'chat:other';
+ const port = { async command(name: string, input: any) {
+  if (name === 'detail' && input.resourceId === destination) {
+   const detail = structuredClone(f.detail);
+   detail.conversation.resourceId = destination;
+   detail.policy.resourceId = destination;
+   return detail;
+  }
+  if (name === 'readDraft' && input.resourceId === destination)
+   return { resourceId: destination, content: '', version: 0, updatedAt: null };
+  return (f.port.command as any)(name, input);
+ }} as ConversationProductPort;
  let manager, isCurrent: (() => boolean) | undefined, closed = false;
  let release!: () => void;
  const gate = new Promise<void>(resolve => { release = resolve; });
  try {
   await f.port.command('saveDraft',{resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:[document]});
-  manager = mountConversationManager(f.view.root,f.port,{resourceId,onClose:()=>{closed=true;},openDocument:async ()=>'opened',
+  manager = mountConversationManager(f.view.root,port,{resourceId,onClose:()=>{closed=true;},openDocument:async ()=>'opened',
    askVelaAboutDocument:async (_document, current)=>{isCurrent=current;await gate;}});
   await manager.ready;
   named(f.view.root,'Ask Vela').fire('click');
   await until(()=>!!isCurrent);
   assert.equal(isCurrent?.(),true);
-  named(f.view.root,'Close').fire('click');
+  const navigation = action === 'switch' ? manager.open(destination) : undefined;
+  if (action === 'close') named(f.view.root,'Close').fire('click');
   assert.equal(isCurrent?.(),false);
-  await until(()=>closed);
+  if (navigation) {
+   await navigation;
+   assert.equal(manager.state.selectedResourceId,destination);
+  } else await until(()=>closed);
   assert.deepEqual(f.draft.documents,[document]);
  } finally { release(); await manager?.dispose(); f.restore(); }
 });
