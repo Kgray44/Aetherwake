@@ -28,6 +28,7 @@ export interface Message {
 }
 export type MessageMetadata = Readonly<Pick<Message,'id'|'conversationId'|'sequence'|'role'|'sensitivity'> & {ordinal:number;bodyBytes:number;unavailable:boolean}>;
 export interface MessageMetadataWindow {items:MessageMetadata[];emittedCount:number;emittedBodyBytes:number;hasMore:boolean;limitedBy:null|'scan-limit'|'byte-limit'|'denied'}
+export type MessageSearchMatch = Readonly<Pick<Message, 'id' | 'createdAt'> & { excerpt: string }>;
 class MetadataScanLimit extends Error {}
 export interface Artifact {
   id: string; conversationId: string; sourceMessageId: string;
@@ -216,6 +217,36 @@ export class ConversationGraph {
     return [...inherited, ...c.ownMessageIds.map(id => this.message(id))];
   }
   visibleMessages(conversationId: string): Message[] {return this.visibleMessageRecords(conversationId).map(copy);}
+  searchVisibleMessages(
+    conversationIds: readonly string[],
+    needle: string,
+    allow: (conversationId: string, messageId: string) => boolean,
+  ): Map<string, MessageSearchMatch[]> {
+    const results = new Map<string, MessageSearchMatch[]>();
+    const examined = new Map<string, MessageSearchMatch | null>();
+    for (const conversationId of conversationIds) {
+      const matches: MessageSearchMatch[] = [];
+      for (const message of this.visibleMessageRecords(conversationId)) {
+        if (!examined.has(message.id)) {
+          let match: MessageSearchMatch | null = null;
+          if (!this.unavailableMessages.has(message.id) && allow(message.conversationId, message.id)) {
+            const content = message.content;
+            const index = content.toLocaleLowerCase().indexOf(needle);
+            if (index >= 0) match = Object.freeze({
+              id: message.id,
+              createdAt: message.createdAt,
+              excerpt: content.slice(Math.max(0, index - 60), index + 160),
+            });
+          }
+          examined.set(message.id, match);
+        }
+        const match = examined.get(message.id);
+        if (match) matches.push(match);
+      }
+      if (matches.length) results.set(conversationId, matches);
+    }
+    return results;
+  }
   /** Bounded lineage projection only. Counts/bytes describe this window, never the entire history.
    * maxScan counts ancestry nodes plus own-message refs before allocation.
    * The mandatory host policy gates ALL contributing messages before anything escapes. */

@@ -264,3 +264,39 @@ test('trusted same-graph metadata browse avoids snapshot/transcript cloning and 
   const current=await f.product.command('list',{});assert.equal(current.items.some(c=>c.resourceId===parent.resourceId),false);const visibleChild=current.items.find(c=>c.resourceId===child.resourceId)!;assert.equal(visibleChild.messageCount,null);assert.equal(visibleChild.lastActivityAt,null);assert.equal(visibleChild.historyMetadataStatus,'unavailable');assert.equal(bodyReads,0);assert.equal(clones,0);
  }finally{restore();await f.close();removeFixture(dir);}
 });
+
+test('canonical chat search reads an inherited message once per query and rechecks source access on the next query', async () => {
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-search-read-work-')),f=fixture(join(dir,'canonical.sqlite'));
+ try {
+  const parent=await create(f,'Synthetic search parent');
+  const source=await record(f,parent.resourceId,'Synthetic inherited performance needle');
+  const child=await branch(f,parent.resourceId,source.id);
+  const afterFork=await record(f,parent.resourceId,'Synthetic parent-only performance needle');
+  await record(f,child.resourceId,'Synthetic child-only unrelated reply');
+  const graph=(f.core as unknown as {graph:ConversationGraph}).graph;
+  const records=(graph as unknown as {data:GraphData}).data;
+  const inherited=records.messages.find(message=>message.id===source.id)!;
+  const inheritedBody=inherited.content;
+  let inheritedReads=0;
+  Object.defineProperty(inherited,'content',{configurable:true,enumerable:true,get:()=>{
+   inheritedReads++;
+   return inheritedBody;
+  }});
+  const original=graph.visibleMessages.bind(graph);
+  let bodyCopies=0;
+  graph.visibleMessages=id=>{bodyCopies++;return original(id);};
+  const search=async()=>(await f.core.command('conversation',{name:'search',input:{text:'performance needle',searchMode:'chat-history'}})) as {items:{resourceId:string;messageId?:string}[]};
+  let hits=(await search()).items;
+  assert.equal(hits.length,3);
+  assert.ok(hits.some(hit=>hit.resourceId===child.resourceId&&hit.messageId===source.id));
+  assert.ok(hits.some(hit=>hit.resourceId===parent.resourceId&&hit.messageId===afterFork.id));
+  assert.ok(!hits.some(hit=>hit.resourceId===child.resourceId&&hit.messageId===afterFork.id));
+  assert.equal(bodyCopies,0,'chat search must avoid cloning complete visible transcripts');
+  assert.equal(inheritedReads,1,'both branches share one search of the authorized source');
+  graph.markUnavailable(source.id);
+  inheritedReads=0;
+  hits=(await search()).items;
+  assert.deepEqual(hits.map(hit=>[hit.resourceId,hit.messageId]),[[parent.resourceId,afterFork.id]]);
+  assert.equal(inheritedReads,0,'revoked content is excluded before reading its body');
+ } finally {await f.close();removeFixture(dir);}
+});
