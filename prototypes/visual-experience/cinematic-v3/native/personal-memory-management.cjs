@@ -8,14 +8,15 @@ async function managePersonalMemory({ input, trustedFrame, observeGesture, allow
   requireFrame();
   if (input?.type === "list") return send({ type: "list", after: input.after ?? null });
   if (input?.type === "read") return send({ type: "read", id: input.id });
-  if (input?.type !== "manage" && input?.type !== "disableChatGPT") throw Error("invalid_personal_memory_management");
+  if (input?.type !== "manage" && input?.type !== "disableProviderMemory") throw Error("invalid_personal_memory_management");
   if (!await observeGesture()) throw Error("personal_memory_user_gesture_required");
   requireFrame();
   if (!await allowWrite()) throw Error("storage_reserve_admission_denied");
   requireFrame();
-  if (input.type === "disableChatGPT") {
-    if (!Number.isSafeInteger(input.version) || input.version < 1) throw Error("invalid_privacy_policy");
-    return call("personalMemoryPolicyNative", { enable: false, expectedVersion: input.version });
+  if (input.type === "disableProviderMemory") {
+    if (!["ordinary", "vela"].includes(input.assistant) || !Number.isSafeInteger(input.version) || input.version < 1)
+      throw Error("invalid_privacy_policy");
+    return call("personalMemoryPolicyNative", { assistant: input.assistant, enable: false, expectedVersion: input.version });
   }
   const { action, id, version, text } = input;
   const review = await send({ type: "preview", request: { action, id, version, ...(text === undefined ? {} : { text }) } });

@@ -6,7 +6,7 @@ test("turning off ChatGPT memory requires current gesture and forwards only a ve
   const calls = [];
   let active = false;
   const options = {
-    input: { type: "disableChatGPT", version: 3, enable: true },
+    input: { type: "disableProviderMemory", assistant: "ordinary", version: 3, enable: true },
     trustedFrame: () => true,
     observeGesture: () => active,
     allowWrite: () => true,
@@ -16,7 +16,12 @@ test("turning off ChatGPT memory requires current gesture and forwards only a ve
   assert.deepEqual(calls, []);
   active = true;
   assert.deepEqual(await managePersonalMemory(options), { ordinaryEnabled: false });
-  assert.deepEqual(calls, [["personalMemoryPolicyNative", { enable: false, expectedVersion: 3 }]]);
+  await managePersonalMemory({ ...options, input: { ...options.input, assistant: "vela" } });
+  await assert.rejects(managePersonalMemory({ ...options, input: { ...options.input, assistant: "foreign" } }), /invalid_privacy_policy/);
+  assert.deepEqual(calls, [
+    ["personalMemoryPolicyNative", { assistant: "ordinary", enable: false, expectedVersion: 3 }],
+    ["personalMemoryPolicyNative", { assistant: "vela", enable: false, expectedVersion: 3 }],
+  ]);
 });
 
 test("management keeps review private and cancels after frame loss", async () => {

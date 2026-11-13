@@ -145,9 +145,24 @@ test('Vela Core binds approved memory to its canonical request and exact transpo
     const pendingBinding = { previewId: pending.id, signature: pending.signature };
     const pendingReview = await f.core.command('velaNativeReview', pendingBinding);
     const pendingGrant = await f.core.command('authorizeVelaRequest', { ...pendingBinding, reviewDigest: pendingReview.reviewDigest });
-    await review.commitManagement(await review.previewManagement({ action: 'revoke', id: saved.id, version: saved.version }));
+    const policy = await f.core.command('personalMemoryPolicyNative', {});
+    const disabled = await f.core.command('personalMemoryPolicyNative', { assistant: 'vela', enable: false, expectedVersion: policy.version });
+    assert.equal(disabled.velaEnabled, false);
+    assert.equal(disabled.ordinaryEnabled, policy.ordinaryEnabled);
     await assert.rejects(f.core.command('vela', { name: 'request', input: {
       intent, resourceIds: [], authorizeProvider: true, previewId: pending.id, grantId: pendingGrant.grantId,
+    } }), /stale_personal_context/);
+    await f.core.command('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: disabled.version });
+    await assert.rejects(f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds: [], authorizeProvider: true, previewId: pending.id, grantId: pendingGrant.grantId,
+    } }), /stale_personal_context/);
+    const fresh = await f.core.command('velaRequestPreview', { intent, resourceIds: [], adaptive: true, providerId: 'openai-api-vela', useMemory: true });
+    const freshBinding = { previewId: fresh.id, signature: fresh.signature };
+    const freshReview = await f.core.command('velaNativeReview', freshBinding);
+    const freshGrant = await f.core.command('authorizeVelaRequest', { ...freshBinding, reviewDigest: freshReview.reviewDigest });
+    await review.commitManagement(await review.previewManagement({ action: 'revoke', id: saved.id, version: saved.version }));
+    await assert.rejects(f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds: [], authorizeProvider: true, previewId: fresh.id, grantId: freshGrant.grantId,
     } }), /stale_personal_context/);
     assert.equal(f.requests.length, 1);
   } finally { await f.close(); }
