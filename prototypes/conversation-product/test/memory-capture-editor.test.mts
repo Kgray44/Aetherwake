@@ -23,7 +23,7 @@ test('the editor sends edited text and explicit scope only after review is reque
     (editor as any).fire('submit');
     await until(() => !f.root.contains(editor));
     assert.deepEqual(submissions, [{ conversationId: 'chat', messageId: 'message', text: 'Use a relay',
-      scope: 'project', expectedProjectId: 'project', category: 'decisions', keywords: ['relay', 'circuit'] }]);
+      scope: 'project', expectedProjectId: 'project', expectedSourceText: 'Original user text', category: 'decisions', keywords: ['relay', 'circuit'] }]);
     assert(named(editor, 'Review memory'));
   } finally { restore(); }
 });
@@ -89,5 +89,91 @@ test('preference drafting leaves tentative, quoted, and formatted material for m
       assert.equal(editor.querySelector('textarea')!.value, text);
       assert.equal(editor.querySelectorAll('select')[1].value, 'technical');
     }
+  } finally { restore(); }
+});
+
+test('drafted search terms keep the distinctive term after a long conversational lead-in', () => {
+  const f = componentDocument(), restore = f.install();
+  try {
+    const editor = createMemoryCaptureEditor({
+      content: 'Remember: After all that we have said about what we should use, the quartz relay is the decision.',
+      conversationId: 'chat', messageId: 'message', projectAvailable: true,
+      async review() { throw Error('unexpected review'); }, report() {},
+    });
+    const terms = editor.querySelector('input')!.value.split(', ');
+    assert.ok(terms.includes('quartz'));
+    assert.ok(terms.includes('relay'));
+    assert.ok(!terms.includes('should'));
+  } finally { restore(); }
+});
+
+test('an explicitly marked decision drafts a verbatim candidate without expanding its scope', async () => {
+  const f = componentDocument(), restore = f.install();
+  const submitted: MemoryCaptureRequest[] = [];
+  try {
+    const draft = (content: string) => createMemoryCaptureEditor({
+      content, conversationId: 'chat', messageId: 'decision-source', projectAvailable: true, expectedProjectId: 'project',
+      async review(request) { submitted.push(request); return false; }, report() {},
+    });
+    const content = 'Earlier options are still in the transcript.\nRemember decision: Use quartz for the relay.';
+    const editor = draft(content);
+    assert.equal(editor.querySelector('textarea')!.value, 'Use quartz for the relay.');
+    assert.equal(editor.querySelectorAll('select')[0].value, 'conversation');
+    assert.equal(editor.querySelectorAll('select')[1].value, 'decisions');
+    assert.deepEqual(submitted, []);
+    (editor as any).fire('submit');
+    await until(() => submitted.length === 1);
+    assert.equal(submitted[0].messageId, 'decision-source');
+    assert.equal(submitted[0].category, 'decisions');
+    assert.equal(submitted[0].scope, 'conversation');
+    for (const ambiguous of [
+      '> Remember decision: Use quartz.', 'Remember decision: Maybe use quartz.',
+      'Remember decision: Use quartz.\nRemember: Keep slate.',
+      '~~~\nRemember decision: Use quartz.\n~~~',
+    ]) {
+      const manual = draft(ambiguous);
+      assert.equal(manual.querySelector('textarea')!.value, ambiguous);
+      assert.equal(manual.querySelectorAll('select')[1].value, 'technical');
+    }
+  } finally { restore(); }
+});
+
+test('editing a draft refreshes suggested search terms until the user edits them', () => {
+  const f = componentDocument(), restore = f.install();
+  try {
+    const editor = createMemoryCaptureEditor({
+      content: 'Remember: Use quartz.', conversationId: 'chat', messageId: 'message', projectAvailable: true,
+      async review() { throw Error('unexpected review'); }, report() {},
+    });
+    const text = editor.querySelector('textarea')! as any;
+    const terms = editor.querySelector('input')! as any;
+    assert.equal(terms.value, 'quartz');
+    text.value = 'Use basalt.';
+    text.fire('input');
+    assert.equal(terms.value, 'basalt');
+    terms.value = 'relay';
+    terms.fire('input');
+    text.value = 'Use indigo.';
+    text.fire('input');
+    assert.equal(terms.value, 'relay');
+  } finally { restore(); }
+});
+
+test('a stale source closes the capture draft and requires a fresh review', async () => {
+  const f = componentDocument(), restore = f.install();
+  const messages: string[] = [];
+  let returned = 0;
+  try {
+    const editor = createMemoryCaptureEditor({
+      content: 'Remember: Use quartz.', conversationId: 'chat', messageId: 'message', projectAvailable: true,
+      async review() { throw Error('stale_personal_memory_source'); },
+      report(message) { messages.push(message); }, returnFocus() { returned++; },
+    });
+    f.root.append(editor);
+    (editor as any).fire('submit');
+    await until(() => messages.length === 1);
+    assert.match(messages[0], /Open Remember message again/);
+    assert.equal(f.root.contains(editor), false);
+    assert.equal(returned, 1);
   } finally { restore(); }
 });

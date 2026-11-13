@@ -47,6 +47,8 @@ test('native capture reviews exact source, saves once, and leaves provider use o
       text: 'Use the synthetic relay', keywords: ['relay'] } as const;
     await assert.rejects(review.previewCapture({ ...input, expectedProjectId: 'foreign-project' }), /stale_personal_memory_source/);
     assert.equal(openCount, 0);
+    await assert.rejects(review.previewCapture({ ...input, expectedSourceText: 'The earlier relay choice.' }), /stale_personal_memory_source/);
+    assert.equal(openCount, 0);
     sensitive = true;
     await assert.rejects(review.previewCapture(input), /conversation_source_unavailable/);
     assert.equal(openCount, 0);

@@ -58,9 +58,25 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
   async function load(after: string | null) {
     const intent = ++selection;
     detail.replaceChildren();
-    const page = await command({ type: 'list', after }) as Page;
+    if (after === null) {
+      list.replaceChildren();
+      next = null;
+      more.hidden = true;
+    }
+    const policyAtStart = currentPolicy;
+    let page: Page;
+    try {
+      page = await command({ type: 'list', after }) as Page;
+    } catch (error) {
+      if (intent !== selection) return;
+      if (after === null && currentPolicy === policyAtStart) {
+        currentPolicy = undefined;
+        policy.textContent = 'Memory settings could not be verified.';
+        disableChatGPT.hidden = disableVela.hidden = true;
+      }
+      throw error;
+    }
     if (intent !== selection) return;
-    if (after === null) list.replaceChildren();
     if (!currentPolicy || page.policy.version >= currentPolicy.version) renderPolicy(page.policy);
     for (const record of page.records) {
       const row = document.createElement('li');
@@ -128,8 +144,10 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
         const current = latest.provenance;
         if (latest.version !== fact.version || current.kind !== 'conversation-message' ||
             current.conversationId !== origin.conversationId || current.messageId !== origin.messageId ||
-            current.version !== origin.version || current.contentDigest !== origin.contentDigest)
+            current.version !== origin.version || current.contentDigest !== origin.contentDigest) {
+          detail.replaceChildren();
           throw Error('Memory has changed. Reload saved memories to see its current source.');
+        }
         await openSource({ conversationId: origin.conversationId, messageId: origin.messageId });
       }));
     }

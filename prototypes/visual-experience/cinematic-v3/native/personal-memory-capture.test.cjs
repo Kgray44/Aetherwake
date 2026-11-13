@@ -3,7 +3,7 @@ const test = require('node:test');
 const { capturePersonalMemory } = require('./personal-memory-capture.cjs');
 
 test('native capture rechecks the trusted frame and storage after review', async () => {
-  const input = { conversationId: 'chat', messageId: 'message' };
+  const input = { conversationId: 'chat', messageId: 'message', expectedProjectId: null, expectedSourceText: 'Synthetic source' };
   const review = { id: 'review', sourceText: 'Synthetic source', draft: { text: 'Synthetic fact' } };
   const calls = [];
   let active = true;
@@ -38,4 +38,17 @@ test('native capture rechecks the trusted frame and storage after review', async
   assert.deepEqual(calls.splice(0), ['preview', 'cancel']);
   await assert.rejects(capturePersonalMemory({ ...options, observeGesture: async () => false }), /personal_memory_user_gesture_required/);
   assert.deepEqual(calls, []);
+});
+
+test('native capture rejects missing or oversized source text before checking gesture or opening review', async () => {
+  const unexpected = () => { throw Error('capture work started'); };
+  for (const input of [
+    { expectedProjectId: null },
+    { expectedProjectId: null, expectedSourceText: 42 },
+    { expectedProjectId: null, expectedSourceText: '🧭'.repeat(4097) },
+    { expectedProjectId: '', expectedSourceText: 'Synthetic source' },
+  ]) {
+    await assert.rejects(capturePersonalMemory({ input, trustedFrame: unexpected }),
+      /invalid_personal_memory_capture/);
+  }
 });

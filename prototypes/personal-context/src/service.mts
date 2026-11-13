@@ -1,3 +1,4 @@
+import { personalMemorySearchTerms } from '../../application-contract/personal-memory.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { PERSONAL_CONTEXT_CONTRACT } from './contracts.ts';
@@ -72,8 +73,7 @@ function request(value: ContextRequest) {
     check(new Set(value.sourceAnchors.map(anchor => encode(anchor))).size === value.sourceAnchors.length, 'invalid_context_request');
   }
 }
-const commonWords = new Set('about after also an and are before been but can could did does for from had has have how into its may more most much need now of on one only or our out over said see should some than that the their them then there these they this those through to under use used was were what when where which who why will with would you your'.split(' '));
-const words = (v: string) => new Set(v.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu)?.filter(w => w.length >= 2 && !commonWords.has(w)).slice(0, 128) ?? []);
+const words = (value: string) => new Set(personalMemorySearchTerms(value));
 
 const existingSchemaOnly = Symbol('existing personal context schema only');
 

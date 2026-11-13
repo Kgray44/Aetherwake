@@ -1,6 +1,10 @@
 /** Called from a trusted native IPC handler. Only the main process sees the
  * private review ticket and can send a commit to the backend. */
 async function capturePersonalMemory({ input, observeGesture, trustedFrame, allowWrite, preview, showReview, commit, cancel }) {
+  if (typeof input?.expectedSourceText !== 'string' || Buffer.byteLength(input.expectedSourceText) > 16384 ||
+      (input.expectedProjectId !== null &&
+        (typeof input.expectedProjectId !== 'string' || !input.expectedProjectId.trim() || input.expectedProjectId.length > 200)))
+    throw Error('invalid_personal_memory_capture');
   if (!trustedFrame() || !await observeGesture() || !trustedFrame()) {
     throw Error('personal_memory_user_gesture_required');
   }

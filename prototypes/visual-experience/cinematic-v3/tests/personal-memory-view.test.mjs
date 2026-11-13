@@ -105,13 +105,19 @@ test('opening a saved memory source rechecks the record and opens its exact mess
     await until(() => !button.disabled);
     assert.deepEqual(opened, []);
     assert.match(view.textContent, /Memory has changed/);
+    assert.doesNotMatch(view.textContent, /Synthetic decision/);
+    assert.equal(named(view, 'Export'), undefined);
+    assert.equal(named(view, 'Open original message'), undefined);
     current = fact;
-    button.fire('click');
-    await until(() => !button.disabled);
+    named(view, 'Memory fact-1 · project · active').fire('click');
+    await until(() => !!named(view, 'Open original message'));
+    const refreshed = named(view, 'Open original message');
+    refreshed.fire('click');
+    await until(() => !refreshed.disabled);
     assert.deepEqual(opened, [{ conversationId: 'chat', messageId: 'message' }]);
     current = null;
-    button.fire('click');
-    await until(() => !button.disabled);
+    refreshed.fire('click');
+    await until(() => !refreshed.disabled);
     assert.equal(opened.length, 1);
     assert.doesNotMatch(view.textContent, /Synthetic decision/);
     assert.equal(named(view, 'Open original message'), undefined);
@@ -175,5 +181,40 @@ test('a listed memory whose source cannot be opened can still be deleted', async
     named(view, 'Delete').fire('click');
     await until(() => changes.length === 1);
     assert.deepEqual(changes, [{ type: 'manage', action: 'delete', id: 'old', version: 2 }]);
+  } finally { restore(); }
+});
+
+test('a failed full reload clears stale memory rows, details, and the page cursor', async () => {
+  const f = componentDocument(), restore = f.install();
+  const record = { id: 'fact-1', version: 1, scope: { kind: 'project', id: 'project' }, state: 'active' };
+  let fail = false;
+  try {
+    const view = createPersonalMemoryView(async request => {
+      if (request.type === 'list') {
+        if (fail) throw Error('Memory unavailable');
+        return { records: [record], next: 'next', policy: { version: 1, velaEnabled: true } };
+      }
+      return { ...record, text: 'Synthetic memory', keywords: ['memory'], provenance: { kind: 'user-statement' } };
+    });
+    const load = named(view, 'Load saved memories');
+    load.fire('click');
+    await until(() => !load.disabled);
+    named(view, 'Memory fact-1 · project · active').fire('click');
+    await until(() => view.textContent.includes('Synthetic memory'));
+    fail = true;
+    load.fire('click');
+    await until(() => !load.disabled);
+    assert.match(view.textContent, /Memory unavailable/);
+    assert.equal(named(view, 'Memory fact-1 · project · active'), undefined);
+    assert.doesNotMatch(view.textContent, /Synthetic memory/);
+    assert.equal(named(view, 'More memories').hidden, true);
+    assert.match(view.textContent, /Memory settings could not be verified/);
+    assert.doesNotMatch(view.textContent, /Enabled for reviewed sends/);
+    assert.equal(named(view, 'Turn off Vela memory').hidden, true);
+    fail = false;
+    load.fire('click');
+    await until(() => !load.disabled);
+    assert.match(view.textContent, /Vela memory: Enabled for reviewed sends/);
+    assert.equal(named(view, 'Turn off Vela memory').hidden, false);
   } finally { restore(); }
 });

@@ -308,15 +308,18 @@ export function createPersonalMemoryReview(options: Options) {
       if (!input || !identifier(input.conversationId) || !identifier(input.messageId) ||
         !['conversation', 'project', 'assistant.ordinary', 'assistant.vela'].includes(input.scope) || !['preferences', 'projects', 'technical', 'decisions'].includes(input.category) ||
         typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4096 ||
+        (input.expectedSourceText !== undefined && (typeof input.expectedSourceText !== 'string' || Buffer.byteLength(input.expectedSourceText) > 16384)) ||
         !validKeywords(input.keywords)) throw new PersonalContextError('invalid_personal_memory_capture');
-      const { conversationId, messageId, scope, category, text, keywords, expectedProjectId } = structuredClone(input);
+      const { conversationId, messageId, scope, category, text, keywords, expectedProjectId, expectedSourceText } = structuredClone(input);
+      const expectedDigest = expectedSourceText === undefined ? undefined : createHash('sha256').update(expectedSourceText).digest('hex');
       const assistantWide = scope === 'assistant.ordinary' || scope === 'assistant.vela';
       const reference = { kind: 'conversation-message', conversationId, messageId } as const;
       const eligibleSource = () => {
         const source = options.resolveConversationSource(reference);
         if (!source || source.role !== 'user' || source.sensitive || source.conversationId !== conversationId || source.messageId !== messageId)
           throw new PersonalContextError('conversation_source_unavailable');
-        if (expectedProjectId !== undefined && source.projectId !== expectedProjectId)
+        if ((expectedProjectId !== undefined && source.projectId !== expectedProjectId) ||
+          (expectedDigest !== undefined && source.contentDigest !== expectedDigest))
           throw new PersonalContextError('stale_personal_memory_source');
         if (assistantWide && (source.projectId !== null || category !== 'preferences'))
           throw new PersonalContextError('conversation_source_scope_mismatch');
