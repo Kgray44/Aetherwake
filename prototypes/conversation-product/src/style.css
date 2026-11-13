@@ -1477,6 +1477,13 @@ details[data-active="true"] > .cp-control .cp-control-glyph {
 .cp-switcher-results button {
   flex-wrap: wrap;
 }
+.cp-switcher-excerpt {
+  flex-basis: 100%;
+  min-width: 0;
+  color: var(--text-muted, #b8afc7);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
 .cp-branch-row {
   padding-block: 8px;
   border-top: 1px solid #c6b0db20;
