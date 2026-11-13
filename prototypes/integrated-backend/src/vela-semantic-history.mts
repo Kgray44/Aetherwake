@@ -59,7 +59,7 @@ interface MissionCognitionObservations {
 }
 
 export async function qualifyVelaHistoryModelWithApi(api: VelaApiRuntime, admission: SemanticHistoryProbeAdmission, signal: AbortSignal,
-  observations?: MissionCognitionObservations) {
+  observations?: MissionCognitionObservations, stages: readonly SemanticHistoryCall['stage'][] = ['interpret', 'assess']) {
   const { configurationVersion, model, authorize } = admission;
   const request = 'Which weekday did the previously recorded handoff note name for the pump inspection in the fictional maintenance exercise?';
   const calls: SemanticHistoryCall[] = [
@@ -70,6 +70,7 @@ export async function qualifyVelaHistoryModelWithApi(api: VelaApiRuntime, admiss
   ];
   const receipts = [];
   for (const call of calls) {
+    if (!stages.includes(call.stage)) continue;
     const schema = semanticHistoryFormats[call.stage].schema;
     const contextDigest = historyDigest({ configurationVersion, model, call, purpose: 'synthetic-cie-route-probe' });
     const review = { purpose: 'qualification' as const, configurationVersion, model, call, sources: [], contextDigest };
@@ -166,7 +167,12 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
   const perception = api.qualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret) ??
     await api.resolveQualifiedStructuredRoute(configurationVersion, [model], perceptionSchema, instructions.interpret, signal);
   const assessment = api.qualifiedStructuredRoute(configurationVersion, [model], semanticHistoryFormats.assess.schema, instructions.assess);
-  if (!perception || !assessment) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize }, signal, observations);
+  // Reuse only the existing runtime's exact, current contract receipts. A missing
+  // assessment does not invalidate an independently qualified perception contract.
+  const missingStages: SemanticHistoryCall['stage'][] = [];
+  if (!perception) missingStages.push('interpret');
+  if (!assessment) missingStages.push('assess');
+  if (missingStages.length) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize }, signal, observations, missingStages);
   const candidates = new Map(discovery?.sources.map(source => [source.sourceId, source]));
   const searchable = [...candidates.values()].map(source => ({ id: source.sourceId, text: source.title + '\n' + source.text }));
   const approved = new Set([...sources, ...candidates.values()]);
