@@ -197,9 +197,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         decorateConversationControl(askVela,{identity:'source',emphasis:'secondary'});
         askVela.setAttribute('aria-label','Ask Vela about ' + label);
         askVela.addEventListener('click', async () => {
-          if (askVela.disabled || stagingForVela) return;
+          if (askVela.disabled || stagingForVela || !root.contains(askVela)) return;
           const inScope = options.captureDocumentHandoffScope?.();
-          const isCurrent = () => !retiring && !disposed && !accessRevoked && (inScope?.() ?? true) && root.contains(askVela) &&
+          // A save can replace the rendered chip while preserving the same selected attachment.
+          const isCurrent = () => !retiring && !disposed && !accessRevoked && (inScope?.() ?? true) &&
             session.snapshot().documents.some(item => item.id === document.id && item.version === document.version && !item.unavailable);
           if (!isCurrent()) return;
           stagingForVela = true;

@@ -1637,8 +1637,12 @@ for (const closeDuringHandoff of [false, true]) test('saved document picker reus
   const staged: typeof available = [];
   let verifyHandoff: (() => boolean) | undefined;
   let opening: 'opened' | 'unavailable' = 'opened';
+  const port = {async command(name:string,input:any) {
+   const result = await (f.port.command as any)(name,input);
+   return name==='saveDraft' ? structuredClone(result) : result;
+  }} as ConversationProductPort;
   chat = mountConversationChat(f.view.root, {
-   port: f.port, resourceId: f.draft.resourceId, motion: motion.motion, viewId: 'chat:saved-document',
+   port, resourceId: f.draft.resourceId, motion: motion.motion, viewId: 'chat:saved-document',
    listDocuments: id => { assert.equal(id, f.draft.resourceId); return available; },
    openDocument: async document => { opened.push(document); return opening; },
    askVelaAboutDocument: async (document, isCurrent) => {
@@ -1668,10 +1672,14 @@ for (const closeDuringHandoff of [false, true]) test('saved document picker reus
   assert.deepEqual(opened,available);
   const askVela = named(f.view.root,'Ask Vela');
   assert.equal(askVela.getAttribute('aria-label'),'Ask Vela about Saved brief.pdf');
+  const editor = f.view.root.querySelector('textarea');
+  editor.value = 'Unsent question typed before asking Vela';
+  editor.fire('input');
   askVela.fire('click');askVela.fire('click');
-  await until(()=>staged.length===1&&!askVela.disabled);
+  await until(()=>f.draft.content===editor.value&&!named(f.view.root,'Ask Vela').disabled);
   assert.deepEqual(staged,available);
-  assert.deepEqual(f.draft,draft);
+  assert.equal(f.draft.content,editor.value);
+  assert.deepEqual(f.draft.documents,draft.documents);
   assert.equal(f.calls.some(call => call.name === 'send'), false);
   picker.fire('click');
   assert.equal(f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').disabled, true);
@@ -1680,9 +1688,9 @@ for (const closeDuringHandoff of [false, true]) test('saved document picker reus
    opening = 'unavailable';
    const changed = [{ ...available[0], unavailable: 'changed' as const }];
    await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:changed});
-   openAttachment.fire('click');
+   named(f.view.root,'Saved brief.pdf').fire('click');
    await until(() => !!named(f.view.root,'Replace'));
-   assert.equal(f.draft.content,draft.content);
+   assert.equal(f.draft.content,editor.value);
    assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,true);
    return;
   }
@@ -1694,6 +1702,7 @@ for (const closeDuringHandoff of [false, true]) test('saved document picker reus
   releaseHandoff();
   await closing;
   assert.equal(staged.length,1);
-  assert.deepEqual(f.draft,draft);
+  assert.equal(f.draft.content,editor.value);
+  assert.deepEqual(f.draft.documents,draft.documents);
  } finally { releaseHandoff(); await chat?.dispose(); assert.equal(motion.poses.size, 0); f.restore(); }
 });
