@@ -1671,6 +1671,27 @@ test('a recovered unavailable document can be removed without losing the draft o
  } finally { await chat?.dispose(); f.restore(); }
 });
 
+test('a picker result cannot overfill a draft shared by two chat views', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const session = new ConversationDraftSession({resourceId:f.draft.resourceId,port:f.port});
+ const picked = Promise.withResolvers<{id:string;version:number;title:string}>();
+ const source = { id:'file:late', version:3, title:'Late brief.pdf' };
+ const documents = [1,2,3,4].map(i=>({id:'file:'+i,version:1,title:'Document '+i}));
+ let chat;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,draftSession:session,chooseDocument:()=>picked.promise});
+  await chat.ready;
+  named(f.view.root,'Attach document').fire('click');
+  session.updateDocuments(documents);
+  picked.resolve(source);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(session.snapshot().documents,documents);
+  await chat.flush();
+  assert.deepEqual(f.draft.documents,documents);
+  assert.equal(f.draft.content,'Saved unsent text');
+ } finally {picked.resolve(source);await chat?.dispose();await session.dispose();f.restore();}
+});
+
 test('a picker result cannot attach after the chat starts closing', async () => {
  const f = fixture('chatgpt-plan-responses');
  const picked = Promise.withResolvers<{id:string;version:number;title:string}>();

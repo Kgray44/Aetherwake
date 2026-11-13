@@ -255,7 +255,12 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           .map(item => item.id === replacing.id ? document : item));
         textarea.focus();
       } else {
-        session.updateDocuments([...documents.filter(item => item.id !== document.id), document]);
+        const retained = documents.filter(item => item.id !== document.id);
+        if (retained.length >= 4) {
+          report('This draft already has four attachments. Remove one before adding another.');
+          return;
+        }
+        session.updateDocuments([...retained, document]);
       }
     } catch (error) {
       if (!disposed) report(errorText(error));
