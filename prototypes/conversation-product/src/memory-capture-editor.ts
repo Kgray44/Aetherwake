@@ -12,14 +12,20 @@ interface EditorOptions {
   returnFocus?(): void;
 }
 
-/** Draft only a single explicitly marked statement. The user still edits and reviews it. */
-function explicitMemoryCandidate(content: string): string | undefined {
-  const marked = content.split(/\r?\n/u)
-    .flatMap(line => {
-      const match = /^Remember:[ \t]+(\S.*)$/iu.exec(line);
-      return match ? [match[1].trimEnd()] : [];
-    });
-  return marked.length === 1 ? marked[0] : undefined;
+/** Called only after the user chooses Remember message. Keep a single verbatim statement. */
+function explicitMemoryCandidate(content: string): { text: string; category?: 'preferences' } | undefined {
+  // Leave formatted examples and ambiguous multi-statement messages to manual editing.
+  if (/(?:`{3,}|~{3,})/u.test(content)) return;
+  const marked = content.split(/\r?\n/u).flatMap(line => {
+    const match = /^Remember:[ \t]+(\S.*)$/iu.exec(line);
+    return match ? [match[1].trimEnd()] : [];
+  });
+  if (marked.length === 1) return { text: marked[0] };
+  if (marked.length) return;
+  const statement = content.trim();
+  if (/^I prefer [^.\n\r?!]+\.?$/iu.test(statement) &&
+      !/\b(?:might|maybe|probably|if|unless|today|currently|for now)\b/iu.test(statement))
+    return { text: statement, category: 'preferences' };
 }
 
 export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormElement {
@@ -48,7 +54,7 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     return input;
   };
   const text = document.createElement('textarea');
-  text.value = candidate ?? options.content;
+  text.value = candidate?.text ?? options.content;
   text.maxLength = 4096;
   text.rows = 3;
   text.required = true;
@@ -58,8 +64,9 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     : [['conversation', 'This conversation'], ['assistant.ordinary', 'All ordinary chats (preferences only)']]);
   const category = select('Category', [['technical', 'Technical fact'], ['decisions', 'Decision'],
     ['preferences', 'Preference'], ['projects', 'Project detail']]);
+  if (candidate?.category) category.value = candidate.category;
   const keywords = document.createElement('input');
-  keywords.value = [...new Set(text.value.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]{2,64}/gu) ?? [])].slice(0, 8).join(', ');
+  keywords.value = [...new Set(text.value.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]{2,64}/gu) ?? [])].filter(term => term !== 'prefer').slice(0, 8).join(', ');
   keywords.maxLength = 1056;
   keywords.required = true;
   field('Search terms, separated by commas', keywords);

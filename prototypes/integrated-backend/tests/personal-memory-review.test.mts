@@ -13,6 +13,8 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   const message = { conversationId: 'chat', messageId: 'message', projectId: 'project', role: 'user' as const,
     sensitive: false, version: '1', contentDigest: createHash('sha256').update(sourceText).digest('hex') };
   let enabled = true;
+  let sensitive = false;
+  let openCount = 0;
   let sourceProject: string | null = 'project';
   let activeVelaProject: string | null = 'project';
   let projectReadable = true;
@@ -20,19 +22,19 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     scope.kind === 'project' && !projectReadable ? null : { scope, version: '1' };
   let nativeOpen: () => ReturnType<NativePersonalMemory['open']>;
   const review = createPersonalMemoryReview({
-    open: () => nativeOpen(), transaction,
+    open: () => { openCount++; return nativeOpen(); }, transaction,
     readSourceText: () => sourceText,
     resolveVelaRecallTarget: () => ({ conversationId: 'vela-chat', projectId: activeVelaProject }),
     resolveRecallTarget: id => id === 'other-chat' ? { projectId: 'project' } :
       id === 'foreign-chat' ? { projectId: 'foreign-project' } : null,
-    resolveConversationSource: () => enabled ? { ...message, projectId: sourceProject } : null,
+    resolveConversationSource: () => enabled ? { ...message, projectId: sourceProject, sensitive } : null,
     resolveScope,
   });
   let wrappedValue: string;
   const owner = new NativePersonalMemory({
     kernel, host: {
       identity: () => ({ userId: 'local-owner', policyVersion: '1' }),
-      resolveConversationSource: () => enabled ? { ...message, projectId: sourceProject } : null,
+      resolveConversationSource: () => enabled ? { ...message, projectId: sourceProject, sensitive } : null,
       resolveScope,
       authorize: input => review.authorize(input) ? { decision: 'allow', policyVersion: '1', authorizationRef: 'synthetic-review' } : { decision: 'deny' },
     },
@@ -42,6 +44,11 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   try {
     const input = { conversationId: 'chat', messageId: 'message', scope: 'project', category: 'decisions',
       text: 'Use the synthetic relay', keywords: ['relay'] } as const;
+    sensitive = true;
+    await assert.rejects(review.previewCapture(input), /conversation_source_unavailable/);
+    assert.equal(openCount, 0);
+    assert.equal(owner.hasStorage(), false);
+    sensitive = false;
     const preview = await review.previewCapture(input);
     assert.equal(preview.sourceText, sourceText);
     assert.equal(preview.draft.text, input.text);
