@@ -29,6 +29,24 @@ export interface Message {
 export type MessageMetadata = Readonly<Pick<Message,'id'|'conversationId'|'sequence'|'role'|'sensitivity'> & {ordinal:number;bodyBytes:number;unavailable:boolean}>;
 export interface MessageMetadataWindow {items:MessageMetadata[];emittedCount:number;emittedBodyBytes:number;hasMore:boolean;limitedBy:null|'scan-limit'|'byte-limit'|'denied'}
 export type MessageSearchMatch = Readonly<Pick<Message, 'id' | 'createdAt'> & { excerpt: string }>;
+class SearchMatch implements MessageSearchMatch {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly #content: string;
+  readonly #index: number;
+
+  constructor(message: Message, content: string, index: number) {
+    this.id = message.id;
+    this.createdAt = message.createdAt;
+    this.#content = content;
+    this.#index = index;
+    Object.freeze(this);
+  }
+
+  get excerpt() {
+    return this.#content.slice(Math.max(0, this.#index - 60), this.#index + 160);
+  }
+}
 class MetadataScanLimit extends Error {}
 export interface Artifact {
   id: string; conversationId: string; sourceMessageId: string;
@@ -264,20 +282,16 @@ export class ConversationGraph {
     for (const conversationId of conversationIds) {
       const matches: MessageSearchMatch[] = [];
       for (const message of this.visibleMessageRecords(conversationId)) {
-        if (!examined.has(message.id)) {
-          let match: MessageSearchMatch | null = null;
+        let match = examined.get(message.id);
+        if (match === undefined) {
+          match = null;
           if (!this.unavailableMessages.has(message.id) && allow(message.conversationId, message.id)) {
             const content = message.content;
             const index = content.toLocaleLowerCase().indexOf(needle);
-            if (index >= 0) match = Object.freeze({
-              id: message.id,
-              createdAt: message.createdAt,
-              get excerpt() { return content.slice(Math.max(0, index - 60), index + 160); },
-            });
+            if (index >= 0) match = new SearchMatch(message, content, index);
           }
           examined.set(message.id, match);
         }
-        const match = examined.get(message.id);
         if (match) matches.push(match);
       }
       if (matches.length) results.set(conversationId, matches);
