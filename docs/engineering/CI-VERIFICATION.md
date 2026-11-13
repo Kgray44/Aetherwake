@@ -16,7 +16,7 @@ Classifications can overlap. The group arrays describe the kinds of evidence a g
 
 ## Runner and evidence
 
-Use Node 24.18.0 and run from the repository root. Install the same locked dependencies as the platform workflow. Package scripts for block library, Codex bridge, connected conversations, constellation, conversation product, integrated backend, OpenAI provider, personal context, timer, Vela Core, desktop, workspace engine and workspace kernel have corresponding entries in the shared runner. The runner additionally covers the manifest-free agent, checklist, task and timeline products. It retains extra CJS/MJS and provider suites where the package's shorthand runs a subset. `application-contract` has no independent runner and is exercised by integration and typechecking.
+Use Node 24.18.0 and run from the repository root. Install the same locked dependencies as the platform workflow. The provider install keeps its checkout-local npm cache because the offline review packager validates the original locked `jose` tarball. Package scripts for block library, Codex bridge, connected conversations, constellation, conversation product, integrated backend, OpenAI provider, personal context, timer, Vela Core, desktop, workspace engine and workspace kernel have corresponding entries in the shared runner. The runner additionally covers the manifest-free agent, checklist, task and timeline products. It retains extra CJS/MJS and provider suites where the package's shorthand runs a subset. `application-contract` has no independent runner and is exercised by integration and typechecking.
 
 ```powershell
 node scripts/run-aerynth-acceptance.mts
@@ -43,6 +43,18 @@ Run the existing provider-free overhead workload with `node prototypes/integrate
 
 Previous hosted Windows failures included native fixture startup/restore assertions and recovery deadlines. Run [43155673384](https://github.com/Kgray44/Aetherwake/actions/runs/43155673384) was followed by [43159788011](https://github.com/Kgray44/Aetherwake/actions/runs/43159788011) after the source-withdrawal fixture stopped depending on CPU sample timing. [43104541070](https://github.com/Kgray44/Aetherwake/actions/runs/43104541070) also reported direct Codex turn recovery and specialist settlement timeouts. Distinguish expected negative-fixture diagnostics from the Node runner's actual failure records.
 
+The [exact-main baseline run](https://github.com/Kgray44/Aetherwake/actions/runs/43329909127) timed out in the native transport fixture. The original five-second deadline covered process startup and all commands, and the first metrics response only established that the parent process had started. The test now uses a canonical snapshot as the worker readiness barrier, keeps five-second deadlines after readiness, and reports the mode and RPC on timeout. To reproduce cold startup without changing production code, run the following from the repository root. Under the same 5.5-second injection the original fixture failed at `desktop_fixture_timeout`, and the corrected fixture passed both host modes.
+
+```powershell
+$preload = (Resolve-Path 'prototypes/integrated-backend/tests/fixtures/slow-desktop-start.mjs').Path
+$env:NODE_OPTIONS = '--import=' + ([uri]$preload).AbsoluteUri
+try {
+  node --test --test-name-pattern 'three-argument and opt-in' prototypes/integrated-backend/tests/native-host-transport.test.mts
+} finally {
+  Remove-Item Env:NODE_OPTIONS
+}
+```
+
 ## Physical Windows qualification
 
 1. Check out the exact clean SHA and provision the locked Windows dependencies, Node 24.18.0, MSVC and Electron. Use a disposable synthetic profile and a foreground desktop session. Check both drive reserves before setup, build and execution and at least every five minutes during long writes. Record Node/Electron/Windows versions and device class.
@@ -58,3 +70,9 @@ For a previously authorized signed-in Codex account, from `prototypes/integrated
 For paid API qualification, use the normal Vela API connection and reviewed mission controls with the authorized key in the native broker. First confirm the allowed model, approved ceiling and the account's enforceable request, token and spend limits. Use a synthetic bounded request, one authorized attempt, and an independently observed postcondition. If enforceable limits or authorization are unavailable, record the gate as unqualified and stop before inference. Retain only the redacted admission, request count, usage, verification and uncertainty states. Each separately authorized provider/device scenario needs its own receipt.
 
 Hosted CI covers fixture-backed behavior and native build/addon evidence. Physical desktop, live providers, independent quality and owner acceptance remain unqualified in its report. ReserveGuard is a local instruction and monitoring mechanism. External applications, hosted tasks and local processes that never loaded it can operate outside its coverage.
+
+## Observed verification on 2026-11-12
+
+- [First aggregate run](https://github.com/Kgray44/Aetherwake/actions/runs/43331669464) rejected two platform failures after a cache change removed offline tarball proof and a security failure because GitHub Dependency Review was unavailable. The provider cache was restored. The replacement lockfile audit rejected Vite 7.1.12 for high-severity advisories and passed after the 7.3.8 update. The [next complete security check](https://github.com/Kgray44/Aetherwake/actions/runs/43332377549) audited all six locks with zero high or critical findings and passed Gitleaks and actionlint.
+- At `fe37430c`, Windows Node 24.18.0 ran one signed-in Codex marker turn through the real App Server. It observed the exact marker and a same-profile reopen with the expected two turn item types. The receipt kept `taskVerified: false` and recorded 16.8 seconds. The first local launcher stopped before SQLite creation. The file-backed launcher then completed the one authorized provider turn. Paid API qualification remains open.
+- The same revision passed typecheck, desktop/native build, fixture preparation and all 12 initial Electron checks on Windows. Fresh-process restore rejected differing spatial anchors and a missing pin. The renderer/Constellation owner should investigate with the retained exact profile and source-bound receipt. The restore assertion remains enabled. Physical input and owner acceptance remain open.
