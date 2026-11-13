@@ -441,15 +441,27 @@ test('a research mission authorizes web search only for the source specialist an
     const waitStarted = performance.now();
     const end = waitStarted + 5000;
     let mission: MissionProjection;
+    let snapshot: { startedMs: number; finishedMs: number; syntheticRequests: number };
+    let timerElapsedMs: number | null;
     do {
+      const readStarted = performance.now();
       mission = await f.core.command('missions', { name: 'read', input: { id: run.id } }) as MissionProjection;
+      snapshot = {
+        startedMs: Math.round(readStarted - waitStarted),
+        finishedMs: Math.round(performance.now() - waitStarted),
+        syntheticRequests: f.requests.length,
+      };
+      timerElapsedMs = null;
       if (mission.outcome !== 'queued' && mission.outcome !== 'running') break;
+      const timerStarted = performance.now();
       await wait(25);
+      timerElapsedMs = Math.round(performance.now() - timerStarted);
     } while (performance.now() < end);
     assert.equal(mission.outcome, 'blocked', mission.outcome === 'blocked' ? undefined : JSON.stringify({
       postStartWaitMs: Math.round(performance.now() - waitStarted),
+      snapshot,
+      timerElapsedMs,
       waits: Object.entries(mission.waits).slice(0, 8),
-      syntheticRequests: f.requests.length,
       tasks: mission.tasks.slice(0, 8).map(task => {
         const attempt = task.attempts.at(-1);
         return { id: task.id, state: task.state, dispatch: attempt?.dispatch?.state,
