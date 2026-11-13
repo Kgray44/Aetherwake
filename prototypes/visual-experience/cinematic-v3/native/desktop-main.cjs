@@ -908,7 +908,20 @@ app.whenReady().then(async () => {
           openExternal: (url) => shell.openExternal(url),
         });
       } else if (command === "conversation") {
-        result = await conversationCommand({ win, call, input,reviewSources:reviewProvider, openExternal: (url) => shell.openExternal(url) });
+        const memoryBackend = child;
+        const memoryCurrent = () => !closing && backendWritable() && child === memoryBackend &&
+          trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized();
+        result = await conversationCommand({ win, call, input,reviewSources:reviewProvider, openExternal: (url) => shell.openExternal(url),
+          validateMemoryReview: memoryCurrent,
+          shouldPreviewMemory: async () => {
+            if (!memoryCurrent() || !trustedActiveFrame(event)) return false;
+            const policy = await call("personalMemoryPolicyNative", {}).catch(error => {
+              if (["private_key_unavailable", "personal_memory_native_required"].includes(error?.code ?? error?.message)) return null;
+              throw error;
+            });
+            return memoryCurrent() && trustedActiveFrame(event) && policy?.storageEnabled === true && policy.ordinaryEnabled === true;
+          },
+        });
       } else if (command === "vela") {
         if (input?.name === "submissionStatus") {
           const submissionId = input.input?.submissionId;
@@ -958,6 +971,9 @@ app.whenReady().then(async () => {
               !!submission && velaSubmissions.get(frame) === submission && trustedApplicationFrame(event) &&
               win.isVisible() && !win.isMinimized(),
             analysisStorageAllowed: () => storage.allowWrite(),
+            validateMemoryReview: () => !closing && backendWritable() && child === analysisBackend &&
+              !!submission && velaSubmissions.get(frame) === submission && trustedApplicationFrame(event) &&
+              win.isVisible() && !win.isMinimized(),
             missionFileEditRequest:request=>missionFileEditBroker.prepare(event,request),
             observeNativeRequest: observeVelaRequest,
             offerPlanningByDefault: !verify || verifyAirLocal,

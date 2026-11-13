@@ -51,6 +51,8 @@ exports.conversationCommand = async ({
   input,
   reviewSources = showVelaReview,
   openExternal,
+  shouldPreviewMemory,
+  validateMemoryReview,
 }) => {
   if (
     !input ||
@@ -112,7 +114,17 @@ exports.conversationCommand = async ({
       const local = await call("conversationClock", request);
       if (local !== null) return local;
     }
-    const preview = await call("conversationSendPreview", request);
+    let preview;
+    let reviewedMemory = false;
+    if (!webSearch && !documents && validateMemoryReview && await shouldPreviewMemory?.()) {
+      try {
+        preview = await call("conversationSendPreview", { ...request, useMemory: true });
+        reviewedMemory = true;
+      } catch (error) {
+        if ((error?.code ?? error?.message) !== "personal_memory_no_eligible_context") throw error;
+      }
+    }
+    preview ??= await call("conversationSendPreview", request);
     const r = preview?.responses;
     if (
       !r ||
@@ -143,6 +155,7 @@ exports.conversationCommand = async ({
       r.webSearch !== webSearch ||
       (webSearch && (r.messages.length !== 1 || r.history.length || r.requiresSourceReview)) ||
       typeof r.requiresSourceReview !== "boolean" ||
+      (reviewedMemory ? !/^[a-f0-9]{64}$/u.test(r.memoryDigest ?? "") || !r.requiresSourceReview : r.memoryDigest !== undefined) ||
       (documents && (!r.requiresSourceReview || !Array.isArray(preview.documents) ||
         preview.documents.length !== documents.length ||
         !preview.documents.every((ref, index) => ref?.id === documents[index].id && ref.version === documents[index].version &&
@@ -170,16 +183,19 @@ exports.conversationCommand = async ({
     if (bytes > 262144 || r.bodyBytes !== bytes || r.bodyDigest !== digest)
       throw Error("invalid_native_responses_preview");
     if (r.requiresSourceReview) {
+      if (reviewedMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
       const approved = await reviewSources({
         parent: win,
         experience: "ordinary",
         expiresAt: preview.expiresAt,
+        ...(reviewedMemory ? { isCurrent: validateMemoryReview } : {}),
         intent:
-          "Share these selected sources in this ChatGPT-plan conversation?",
+          reviewedMemory ? "Share the saved memory in this exact request with ChatGPT?" : "Share these selected sources in this ChatGPT-plan conversation?",
         review: {
           providerId: PLAN,
           prompt: body,
           promptDigest: digest,
+          ...(reviewedMemory ? { memory: { manifestDigest: r.memoryDigest } } : {}),
           context: { included: reviewedResources(preview, state.resources, "invalid_native_responses_preview") },
           history: {
             messages: r.messages
@@ -201,7 +217,9 @@ exports.conversationCommand = async ({
       fingerprint: preview.fingerprint,
       commandId: preview.commandId,
     };
-    const grant = await call("authorizeConversationSend", binding);
+    if (reviewedMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
+    const grant = await call("authorizeConversationSend", { ...binding, ...(reviewedMemory ? { reviewedBodyDigest: digest } : {}) });
+    if (reviewedMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
     return call("conversationSend", { ...binding, grantId: grant.grantId });
   }
   if (resource.provider === "local")
