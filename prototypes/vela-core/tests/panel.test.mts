@@ -370,6 +370,35 @@ test('ordinary sends use runtime history by default and Start fresh applies to o
   panel.dispose();
 });
 
+test('a retained Vela draft keeps Start fresh until a send is accepted', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'chatgpt-plan-responses', available: true }];
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => {
+      turns.push(input);
+      if (turns.length === 1) throw Error('backend_disconnected');
+      return request({ state: 'responded' });
+    },
+  }));
+  try {
+    await panel.open();
+    const fresh = root.find(node => node.tagName === 'label' && node.textContent === 'Start fresh for this send')!.querySelector('input')!;
+    const composer = root.querySelector('textarea')!;
+    fresh.checked = true;
+    composer.value = 'A standalone question';
+    composer.fire('input');
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => !root.find(node => node.className === 'vela-core-error')!.hidden);
+    assert.equal(turns.length, 1);
+    assert.equal(fresh.checked, true);
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => turns.length === 2 && composer.closest('form')?.getAttribute('aria-busy') === 'false');
+    assert.deepEqual(turns.map(turn => turn.includeRecentHistory), [false, false]);
+    assert.equal(fresh.checked, false);
+  } finally { panel.dispose(); }
+});
+
 test('continuing an answer selects one exchange and preserves that selection after cancelling review', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   const source = request({ id: '11111111-1111-4111-8111-111111111111', state: 'responded',

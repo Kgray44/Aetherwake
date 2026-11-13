@@ -614,7 +614,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     ...(connected && (useAutomaticOnce || handoffSelection && !routingAgentSelection) ? { overrideDefaults: true as const } : {}),
   }, revision = draftRevision, submittedView = ++viewRevision;
     const selectedInvestigation = semanticContext.checked;
-    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; projectEvidence.checked = workspaceState.checked = routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
+    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; projectEvidence.checked = workspaceState.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
       let recorded: VelaRequest | undefined;
       try {
@@ -631,6 +631,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         }
         if (!keepDraft && draftRevision === revision && intent.value === submitted.intent) {
           intent.value = '';
+          if (submitted.includeRecentHistory === false) routeHistory.checked = false;
           if (selectedInvestigation) semanticContext.checked = false;
         }
         observeLiveAnswer(undefined);
