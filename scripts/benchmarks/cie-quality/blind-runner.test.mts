@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, rmdirSync } from 'node:fs';
@@ -241,4 +242,28 @@ test('a host result returned after cancellation never enters the gradeable prefi
     await assert.rejects(runBlindCie(bytes, identity, async () => assert.fail('cancelled case replayed'),
       new AbortController().signal, options), /blind_case_unreconciled/);
   } finally { journal.close(); }
+});
+
+test('a late result after cancellation stays outside the sealed prefix and the cancelled run cannot replay', async () => {
+  const candidate = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const controller = new AbortController();
+  const dispatched: string[] = [];
+  const host: Parameters<typeof runBlindCie>[2] = async input => {
+    dispatched.push(input.id);
+    if (input.id === 'blind-002') controller.abort();
+    return { answer: input.id };
+  };
+
+  const result = await runBlindCie(bytes, candidate, host, controller.signal);
+  assert.deepEqual(result.stopped, { caseId: 'blind-002', kind: 'cancelled' });
+  assert.equal(result.complete, false);
+  assert.deepEqual(result.results.map(row => [row.id, row.result]), [['blind-001', { answer: 'blind-001' }]]);
+  assert.ok(result.results[0].endToEndMs >= 0);
+  const { predictionSha256, ...payload } = result;
+  assert.equal(predictionSha256, createHash('sha256').update(JSON.stringify(payload)).digest('hex'));
+
+  const cancelled = await runBlindCie(bytes, candidate, host, controller.signal);
+  assert.equal(cancelled.stopped?.kind, 'cancelled');
+  assert.deepEqual(cancelled.results, []);
+  assert.deepEqual(dispatched, ['blind-001', 'blind-002']);
 });
