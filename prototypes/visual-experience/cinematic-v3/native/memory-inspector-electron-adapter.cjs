@@ -39,8 +39,12 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
       } catch (error) { wire.close(); throw error; }
       const pending = new Map();
       let sequence = 0, active = true, stopping = false, buffer = "", seeded = false;
+      let cleanExit = false;
       const exited = new Promise(resolve => {
-        child.once("close", resolve);
+        child.once("close", (code, signal) => {
+          cleanExit = code === 0 && !signal;
+          resolve();
+        });
       });
       const write = message => {
         check();
@@ -90,6 +94,9 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
       let ready = false;
       const worker = {
         ready: () => active && ready,
+        assertWorkerExited() {
+          if (!cleanExit) throw Error("memory_fixture_clean_worker_exit_required");
+        },
         call(request) {
           if (!active || pending.size >= 16) throw Error("memory_fixture_worker_unavailable");
           const id = ++sequence;
