@@ -356,6 +356,7 @@ test("workspace chat can review memory from its exact user message", async (t) =
     await until(() => reviews.length === 1);
     assert.deepEqual(reviews, [{
       conversationId: f.draft.resourceId, messageId: "message:actual",
+      expectedProjectId: null, expectedSourceText: "Actual saved text",
       text: "Actual saved text", scope: "conversation", category: "technical",
       keywords: ["actual", "saved", "text"],
     }]);
