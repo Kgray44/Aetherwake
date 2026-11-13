@@ -1,6 +1,6 @@
 import { LOCAL_FACT_LABELS } from './capabilities.ts';
 import { VELA_PROJECT_CHECK_LABELS } from './contracts.ts';
-import type { ResourceRef, VelaClient, VelaMessage, VelaNativeAction, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch, VelaLocalFacts } from './contracts.ts';
+import type { ResourceRef, VelaClient, VelaMessage, VelaNativeAction, VelaRequest, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch, VelaLocalFacts } from './contracts.ts';
 import { velaPanelStatus } from './panel-status.ts';
 import { confirmedVelaPlan, projectVelaManifestation, type VelaManifestationState } from './manifestation-state.ts';
 import { summarizeSystemMemory } from './system-information.ts';
@@ -616,8 +616,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const selectedInvestigation = semanticContext.checked;
     transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; projectEvidence.checked = workspaceState.checked = routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
+      let recorded: VelaRequest | undefined;
       try {
-        const recorded = await client.request(submitted);
+        recorded = await client.request(submitted);
         if (disposed) return;
         const keepDraft = ['provider-unavailable', 'failed', 'invalid-plan', 'unknown', 'cancelled'].includes(recorded.state);
         if (!keepDraft && recorded.handoff && recorded.handoff.sourceRequestId === handoffSelection?.requestId) {
@@ -635,7 +636,15 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         observeLiveAnswer(undefined);
         await settleSubmittedView(submittedView);
       }
-      catch (error) { observeLiveAnswer(undefined); busy = false; try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; } throw error; }
+      catch (error) {
+        observeLiveAnswer(undefined);
+        if (recorded) {
+          throw Error(recorded.state === 'responded' ? 'vela_response_refresh_failed' : 'vela_request_refresh_failed');
+        }
+        busy = false;
+        try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; }
+        throw error;
+      }
       finally { busy = false; send.disabled = !intent.value.trim(); form.setAttribute('aria-busy', 'false'); stop.hidden = !current?.requests.some(request => request.state === 'planning'); if (!disposed) renderReading(); present(); }
     });
   });
@@ -998,6 +1007,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       status.dataset.actionState = 'failed'; errorBox.hidden = false;
       const code = error instanceof Error ? error.message : String(error);
       const messages: Record<string, string> = {
+        vela_response_refresh_failed: 'Vela responded, but the view could not refresh. Check the conversation before sending again.',
+        vela_request_refresh_failed: 'Vela recorded the request, but the view could not refresh. Check its outcome before sending again.',
         vela_project_evidence_unavailable: 'Open a project with readable notes or short text files to search for evidence.',
         vela_project_evidence_changed: 'Project evidence changed. Review the current sources and send again.',
         vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',

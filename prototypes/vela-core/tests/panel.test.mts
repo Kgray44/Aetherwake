@@ -432,6 +432,33 @@ test('terminal status survives request completion and refresh; connection probe 
   panel.dispose(); assert.equal(root.children.length, 0);
 });
 
+test('Vela preserves confirmed delivery when refreshing the response fails', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  let delivered = false, sends = 0;
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => {
+    if (delivered) throw Error('synthetic_read_unavailable');
+    return canonical;
+  }, {
+    request: async () => {
+      sends++;
+      delivered = true;
+      return request({ state: 'responded' });
+    },
+  }));
+  try {
+    await panel.open();
+    const editor = root.querySelector('textarea')!;
+    editor.value = 'A question for Vela';
+    editor.fire('input');
+    editor.fire('keydown', { key: 'Enter' });
+    const feedback = root.find(node => node.className === 'vela-core-error')!;
+    await settles(() => !feedback.hidden);
+    assert.match(feedback.textContent, /Vela responded.*could not refresh/i);
+    assert.equal(editor.value, '');
+    assert.equal(sends, 1);
+  } finally { panel.dispose(); }
+});
+
 test('Vela source search keeps the latest query when an older lookup finishes last', async () => {
   const doc = new Document(), root = doc.createElement('main');
   const canonical = state(), opened: unknown[] = [];
