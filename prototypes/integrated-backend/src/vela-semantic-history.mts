@@ -229,14 +229,28 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
           validate();
           cancel?.throwIfAborted();
           const anchorIds = new Set(anchors.map(anchor => anchor.sourceId));
-          const bodies = anchors.filter(isApproved).map(anchor => ' ' + referenceText(anchor.text) + ' ');
+          const approvedAnchors = anchors.filter(isApproved);
+          const linkedIds = new Set<string>();
+          for (const anchor of approvedAnchors) {
+            for (const match of anchor.text.matchAll(/aerynth:\/\/resource\/([a-zA-Z0-9_.~%:-]+)(?:\?([^\s)\]>"',;]+))?(?=$|[\s)\]>"',;])/g)) {
+              try {
+                const id = decodeURIComponent(match[1]);
+                const target = candidates.get(id);
+                if (!target || anchorIds.has(id)) continue;
+                if (match[2] && (target.sourceKind !== 'note' || match[2] !== 'version=' + target.revision)) continue;
+                linkedIds.add(id);
+              } catch { /* Ignore malformed references in reviewed text. */ }
+            }
+          }
+          const bodies = approvedAnchors.map(anchor => ' ' + referenceText(anchor.text) + ' ');
           const titles = discovery.sources.map(source => ({ source, title: referenceText(source.title) }));
           const uniqueTitles = new Map<string, number>();
           for (const { title } of titles) uniqueTitles.set(title, (uniqueTitles.get(title) ?? 0) + 1);
-          const matches = titles.filter(({ source, title }) => !anchorIds.has(source.sourceId) &&
+          const named = titles.filter(({ source, title }) => !anchorIds.has(source.sourceId) &&
             title.length >= 8 && title.includes(' ') && uniqueTitles.get(title) === 1 &&
             bodies.some(body => body.includes(' ' + title + ' ')));
-          return { sources: matches.slice(0, 2).map(match => match.source), scan: matches.length > 2 ? 'partial' as const : scan };
+          const matches = [...new Set([...linkedIds, ...named.map(match => match.source.sourceId)])];
+          return { sources: matches.slice(0, 2).map(id => candidates.get(id)!), scan: matches.length > 2 ? 'partial' as const : scan };
         } } : {}),
         isSnapshotCurrent: authorize,
         isCurrent: isApproved,
