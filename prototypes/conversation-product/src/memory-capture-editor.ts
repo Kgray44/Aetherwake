@@ -7,6 +7,7 @@ interface EditorOptions {
   messageId: string;
   content: string;
   projectAvailable: boolean;
+  expectedProjectId?: string | null;
   review(request: CaptureRequest): Promise<boolean>;
   report(message: string): void;
   returnFocus?(): void;
@@ -95,6 +96,7 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     review.disabled = cancel.disabled = true;
     const request: CaptureRequest = {
       conversationId: options.conversationId, messageId: options.messageId,
+      ...(options.expectedProjectId !== undefined ? { expectedProjectId: options.expectedProjectId } : {}),
       text: text.value, keywords: terms, scope: scope.value as CaptureRequest['scope'],
       category: category.value as CaptureRequest['category'],
     };

@@ -449,7 +449,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         if (panel.querySelector('.cp-memory-editor')) return;
         const editor = createMemoryCaptureEditor({
           conversationId: resourceId, messageId: message.id, content: message.content,
-          projectAvailable: projectId !== null,
+          projectAvailable: projectId !== null, expectedProjectId: projectId,
           review: remember, report, returnFocus: () => button.focus(),
         });
         panel.append(editor);

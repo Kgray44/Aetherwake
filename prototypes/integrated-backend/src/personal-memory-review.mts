@@ -47,7 +47,7 @@ const identifier = (value: unknown): value is string =>
  * a renderer-facing capture request must never forward directly to commit. */
 export function createPersonalMemoryReview(options: Options) {
   const now = options.now ?? Date.now;
-  const pending = new Map<string, { review: CaptureReview; expires: number }>();
+  const pending = new Map<string, { review: CaptureReview; expires: number; projectId: string | null }>();
   const management = new Map<string, ManagementReview>();
   let permission: ((input: PersonalAuthorization) => boolean) | undefined;
   let closed = false;
@@ -309,13 +309,15 @@ export function createPersonalMemoryReview(options: Options) {
         !['conversation', 'project', 'assistant.ordinary', 'assistant.vela'].includes(input.scope) || !['preferences', 'projects', 'technical', 'decisions'].includes(input.category) ||
         typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4096 ||
         !validKeywords(input.keywords)) throw new PersonalContextError('invalid_personal_memory_capture');
-      const { conversationId, messageId, scope, category, text, keywords } = structuredClone(input);
+      const { conversationId, messageId, scope, category, text, keywords, expectedProjectId } = structuredClone(input);
       const assistantWide = scope === 'assistant.ordinary' || scope === 'assistant.vela';
       const reference = { kind: 'conversation-message', conversationId, messageId } as const;
       const eligibleSource = () => {
         const source = options.resolveConversationSource(reference);
         if (!source || source.role !== 'user' || source.sensitive || source.conversationId !== conversationId || source.messageId !== messageId)
           throw new PersonalContextError('conversation_source_unavailable');
+        if (expectedProjectId !== undefined && source.projectId !== expectedProjectId)
+          throw new PersonalContextError('stale_personal_memory_source');
         if (assistantWide && (source.projectId !== null || category !== 'preferences'))
           throw new PersonalContextError('conversation_source_scope_mismatch');
         return source;
@@ -349,7 +351,7 @@ export function createPersonalMemoryReview(options: Options) {
         if (pending.size >= 16) throw new PersonalContextError('personal_memory_review_busy');
         const expires = timestamp + 300_000;
         const review = { id: randomUUID(), draft, sourceText, scopeProof: proof, policy, enableStorage: !policy.storageEnabled, expiresAt: new Date(expires).toISOString() };
-        pending.set(review.id, { review: structuredClone(review), expires });
+        pending.set(review.id, { review: structuredClone(review), expires, projectId: source.projectId });
         return review;
       });
     },
@@ -364,6 +366,13 @@ export function createPersonalMemoryReview(options: Options) {
       requireOpen();
       if (pendingReview.expires <= now()) throw new PersonalContextError('personal_memory_review_mismatch');
       return options.transaction(() => {
+        const original = approved.draft.source;
+        if (original.kind !== 'conversation-message') throw new PersonalContextError('personal_memory_review_mismatch');
+        const source = options.resolveConversationSource(original);
+        if (!source || source.sensitive || source.role !== 'user' || source.conversationId !== original.conversationId || source.messageId !== original.messageId)
+          throw new PersonalContextError('conversation_source_unavailable');
+        if (source.projectId !== pendingReview.projectId || source.version !== original.version || source.contentDigest !== original.contentDigest)
+          throw new PersonalContextError('stale_personal_memory_source');
         const current = options.resolveScope(approved.draft.scope);
         if (JSON.stringify(current) !== JSON.stringify(approved.scopeProof)) throw new PersonalContextError('stale_personal_scope');
         return withPermission(input => input.operation === 'policy.read' || input.operation === 'policy.write' && approved.enableStorage ||

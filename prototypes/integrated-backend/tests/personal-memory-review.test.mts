@@ -45,6 +45,8 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   try {
     const input = { conversationId: 'chat', messageId: 'message', scope: 'project', category: 'decisions',
       text: 'Use the synthetic relay', keywords: ['relay'] } as const;
+    await assert.rejects(review.previewCapture({ ...input, expectedProjectId: 'foreign-project' }), /stale_personal_memory_source/);
+    assert.equal(openCount, 0);
     sensitive = true;
     await assert.rejects(review.previewCapture(input), /conversation_source_unavailable/);
     assert.equal(openCount, 0);
@@ -60,6 +62,10 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.equal((await review.inspect({ after: null, limit: 8 })).policy.storageEnabled, false);
     const preview = await review.previewCapture(input);
     assert.equal(preview.sourceText, sourceText);
+    const moveDuringReview = await review.previewCapture({ ...input, scope: 'conversation', expectedProjectId: 'project' });
+    sourceProject = 'other-project';
+    await assert.rejects(review.commitCapture(moveDuringReview), /stale_personal_memory_source/);
+    sourceProject = 'project';
     assert.equal(preview.draft.text, input.text);
     assert.equal(preview.draft.certainty, "user-reviewed-summary");
     const verbatim = await review.previewCapture({ ...input, text: sourceText });
