@@ -194,12 +194,20 @@ for (const format of ['txt', 'pdf', 'docx'] as const) test('ordinary document se
 });
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
 
-test('a captured chat reply retains the edited note, workspace placement and save receipt across restart', async () => {
+test('a completed ordinary chat reply can be edited, reused, placed and reopened as one note', async () => {
  const f=fixture();
  try {
-  const chat=await f.core.command('createConversation',{providerId:'local',commandId:randomUUID()});
-  const user=await f.core.command('addMessage',{resourceId:chat.resourceId,role:'user',content:'Synthetic question',expectedRevision:chat.revision});
-  const reply=await f.core.command('addMessage',{resourceId:chat.resourceId,role:'assistant',content:'Synthetic complete reply',expectedRevision:user.revision});
+  const chat=await f.core.command('createConversation',{providerId,commandId:randomUUID()});
+  const call=f.core.command.bind(f.core);
+  const content='Synthetic complete reply';
+  f.responses.push(()=>complete('resp-source-note',content));
+  const generated=await conversationCommand({call,input:{name:'send',input:{
+    resourceId:chat.resourceId,content:'Synthetic question',expectedRevision:chat.revision,commandId:randomUUID(),
+  }}});
+  assert.equal(generated.state,'provider_completed');
+  assert.ok(generated.inputMessageId);
+  assert.ok(generated.outputMessageId);
+  const reply={id:generated.outputMessageId,content};
   const input={resourceId:chat.resourceId,messageId:reply.id,commandId:randomUUID()};
   const capture=(request:typeof input)=>f.core.command('conversation',{name:'captureReplyNote',input:request}) as Promise<{noteId:string}>;
   const receipt=await capture(input);
@@ -221,9 +229,8 @@ test('a captured chat reply retains the edited note, workspace placement and sav
   }}) as import('../../conversation-product/src/contracts.ts').ConversationDraft;
   const send=()=>({name:'send',input:{resourceId:target.resourceId,content:draft.content,
    expectedRevision:target.revision,commandId:randomUUID(),draftVersion:draft.version,documents}});
-  const call=f.core.command.bind(f.core);
   await assert.rejects(conversationCommand({call,input:send(),reviewSources:async()=>false}),/authorization_cancelled/);
-  assert.equal(f.requests.length,0);
+  assert.equal(f.requests.length,1);
   f.responses.push(()=>complete('resp-saved-note','Synthetic grounded summary.'));
   const sent=await conversationCommand({call,input:send(),reviewSources:async({review}:any)=>{
    assert.equal(review.context.included[0].id,receipt.noteId);
@@ -235,9 +242,9 @@ test('a captured chat reply retains the edited note, workspace placement and sav
    return true;
   }});
   assert.equal(sent.state,'provider_completed');
-  assert.equal(f.requests.length,1);
-  assert.match(JSON.stringify(f.requests[0].input),/Synthetic edited reply note/);
-  assert.doesNotMatch(JSON.stringify(f.requests[0].input),/Synthetic complete reply/);
+  assert.equal(f.requests.length,2);
+  assert.match(JSON.stringify(f.requests[1].input),/Synthetic edited reply note/);
+  assert.doesNotMatch(JSON.stringify(f.requests[1].input),/Synthetic complete reply/);
   const staleSend={name:'send',input:{...send().input,expectedRevision:target.revision+2}};
   await assert.rejects(conversationCommand({call,input:staleSend,reviewSources:async()=>{
    await f.core.command('desktop',{type:'archiveSubject',kind:'resource',id:receipt.noteId,
@@ -247,7 +254,7 @@ test('a captured chat reply retains the edited note, workspace placement and sav
   const restoredSnapshot=await f.core.command('desktop',{type:'archiveSubject',kind:'resource',id:receipt.noteId,
    expectedVersion:updated.resource.version+1,archived:false});
   const restoredVersion=restoredSnapshot.resources.find(resource=>resource.id===receipt.noteId)!.version;
-  assert.equal(f.requests.length,1);
+  assert.equal(f.requests.length,2);
   const workspace=await f.core.command('desktop',{type:'createWorkspace',title:'Synthetic saved reply workspace',projectId:null});
   const workspaceId=workspace.activeWorkspaceId!;
   const attachInput={commandId:randomUUID(),workspaceId,expectedLayoutVersion:workspace.layoutVersion,
@@ -256,7 +263,7 @@ test('a captured chat reply retains the edited note, workspace placement and sav
   const placement=await place();
   assert.equal(placement.resourceId,receipt.noteId);
   assert.equal(placement.workspaceId,workspaceId);
-  await assert.rejects(capture({...input,messageId:user.id}),/source_unavailable/);
+  await assert.rejects(capture({...input,messageId:generated.inputMessageId}),/source_unavailable/);
   const unrelated=await f.core.command('createConversation',{providerId:'local',commandId:randomUUID()});
   await assert.rejects(capture({...input,resourceId:unrelated.resourceId}),/source_unavailable/);
   f.owner.state.messageEvidence[reply.id]={outputState:'partial'};
@@ -279,6 +286,7 @@ test('a captured chat reply retains the edited note, workspace placement and sav
   } }) as { total: number };
   assert.equal(results.total, 0);
   await assert.rejects(capture(input), /source_unavailable/);
+  assert.equal(f.requests.length,2);
  } finally {await f.close();}
 });
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
