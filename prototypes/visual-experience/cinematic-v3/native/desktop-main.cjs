@@ -811,6 +811,7 @@ app.whenReady().then(async () => {
               : review.action === "export" ? "Export this fact and its retained revisions to a JSON file you choose. The file contains readable memory text.\n\n" + review.fact.text
               : (review.action === "delete" ? "Remove this memory and its retained revisions from the profile."
                 : "Keep the record for inspection and exclude it from future recall.")
+                + " Older backups and exports may still contain this memory."
                 + "\n\nMemory " + review.id + " · revision " + review.version;
             const choice = await reviewDialogs.showMessageBox(win, { type: "question", title: "Aerynth memory",
               message: labels[review.action] + "?", detail, buttons: ["Cancel", labels[review.action]], defaultId: 0, cancelId: 0, noLink: true });
