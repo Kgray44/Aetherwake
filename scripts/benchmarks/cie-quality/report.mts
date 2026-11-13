@@ -17,29 +17,51 @@ export interface Rate {
   effectiveAt: string;
   inputPerMillion: number;
   cachedInputPerMillion: number;
+  cacheWriteInputPerMillion?: number;
   outputPerMillion: number;
 }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const nonnegative = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const tokens = (value: unknown): value is number => nonnegative(value) && Number.isSafeInteger(value);
-function cost(run: Run, rates: readonly Rate[]) {
-  const candidates = rates.filter(rate => rate.model === run.reportedModel);
-  if (run.providerEvidence !== 'reported' || candidates.length !== 1 || !run.usage) return null;
-  const rate = candidates[0], usage = run.usage;
+export function estimateReportedTokenCost(model: unknown, observation: unknown, rates: readonly Rate[]) {
+  if (typeof model !== 'string' || !observation || typeof observation !== 'object') return null;
+  const candidates = rates.filter(rate => rate.model === model);
+  if (candidates.length !== 1) return null;
+  const rate = candidates[0];
+  const usage = observation as Partial<Record<keyof NonNullable<Run['usage']>, number>>;
+  const cacheWrites = usage.cacheWriteInputTokens === undefined ? 0 : usage.cacheWriteInputTokens;
+  if (rate.cacheWriteInputPerMillion !== undefined && !nonnegative(rate.cacheWriteInputPerMillion)) return null;
+  if (rate.cacheWriteInputPerMillion !== undefined && usage.cacheWriteInputTokens === undefined) return null;
   if (!rate.source || !rate.effectiveAt || !rate.currency ||
     ![rate.inputPerMillion, rate.cachedInputPerMillion, rate.outputPerMillion].every(nonnegative) ||
     ![usage.inputTokens, usage.outputTokens, usage.cachedInputTokens].every(tokens) ||
-    usage.cachedInputTokens! > usage.inputTokens! || !tokens(usage.totalTokens) ||
+    !tokens(cacheWrites) || (cacheWrites > 0 && rate.cacheWriteInputPerMillion === undefined) ||
+    usage.cachedInputTokens! + cacheWrites > usage.inputTokens! || !tokens(usage.totalTokens) ||
     usage.inputTokens! + usage.outputTokens! !== usage.totalTokens) return null;
   return { kind: 'estimate' as const, currency: rate.currency,
-    amount: ((usage.inputTokens! - usage.cachedInputTokens!) * rate.inputPerMillion +
-      usage.cachedInputTokens! * rate.cachedInputPerMillion + usage.outputTokens! * rate.outputPerMillion) / 1e6,
+    amount: ((usage.inputTokens! - usage.cachedInputTokens! - cacheWrites) * rate.inputPerMillion +
+      usage.cachedInputTokens! * rate.cachedInputPerMillion + cacheWrites * (rate.cacheWriteInputPerMillion ?? 0) +
+      usage.outputTokens! * rate.outputPerMillion) / 1e6,
     rate: { ...rate }, scope: 'reported cognitive token usage only; not an invoice or subscription quota' };
 }
-function distribution(values: number[]) {
+export function distribution(values: number[]) {
   if (!values.length) return { samples: 0, p50: null, p95: null };
   values.sort((a, b) => a - b);
   return { samples: values.length, p50: values[Math.ceil(values.length * .5) - 1], p95: values[Math.ceil(values.length * .95) - 1] };
+}
+
+export function summarizeTokenUsage(observations: readonly unknown[]) {
+  const usage = { samples: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  for (const value of observations) {
+    if (value === null || typeof value !== 'object') continue;
+    const { inputTokens, outputTokens, totalTokens } = value as Record<string, unknown>;
+    if (!tokens(inputTokens) || !tokens(outputTokens) || !tokens(totalTokens) || inputTokens + outputTokens !== totalTokens) continue;
+    usage.samples++;
+    usage.inputTokens += inputTokens;
+    usage.outputTokens += outputTokens;
+    usage.totalTokens += totalTokens;
+  }
+  return usage;
 }
 
 function summarizeReportedCalls(calls: readonly Run[]) {
@@ -53,17 +75,7 @@ function summarizeReportedCalls(calls: readonly Run[]) {
   }
   return [...byModel].map(([model, group]) => {
     const dispatched = group.filter(call => call.dispatched === true);
-    const usage = { samples: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-    for (const call of dispatched) {
-      const input = call.usage?.inputTokens;
-      const output = call.usage?.outputTokens;
-      const total = call.usage?.totalTokens;
-      if (!tokens(input) || !tokens(output) || !tokens(total) || input + output !== total) continue;
-      usage.samples++;
-      usage.inputTokens += input;
-      usage.outputTokens += output;
-      usage.totalTokens += total;
-    }
+    const usage = summarizeTokenUsage(dispatched.map(call => call.usage));
     return { model, reportedDispatched: dispatched.length, dispatchUnknown: group.filter(call => call.dispatched === null).length,
       providerLatencyMs: distribution(dispatched.flatMap(call => nonnegative(call.elapsedMs) ? [call.elapsedMs] : [])), usage };
   });
@@ -90,7 +102,7 @@ export function reportCognitiveRepetitions(repetitions: readonly Repetition[], r
       if (run.providerEvidence !== 'reported') issues.push('simulated-provider');
       if (run.dispatched === null) issues.push('dispatch-unknown');
       if (!run.usage) issues.push('usage-unavailable');
-      return { ...run, cost: cost(run, rates),
+      return { ...run, cost: run.providerEvidence === 'reported' ? estimateReportedTokenCost(run.reportedModel, run.usage, rates) : null,
         qualityContribution: 'not causally identified; independent ablation evidence required' };
     });
     return { id: repetition.id, arm: repetition.arm, endToEndMs: nonnegative(repetition.endToEndMs) ? repetition.endToEndMs : null,
