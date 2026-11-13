@@ -243,10 +243,10 @@ test('a long-running project can recall an older decision after restart within t
     f.enable();
     const scope = { kind: 'project', id: 'p1' } as const;
     const older = f.service.reviewFact(fact(undefined, {
-      scope, text: 'Use the synthetic chalcedony relay in the final prototype.', keywords: ['chalcedony'],
+      scope, text: 'Use the synthetic chalcedony relay in the final prototype.', keywords: ['chalcedony', 'relay'],
     }));
     for (let i = 0; i < 129; i++) f.service.reviewFact(fact(undefined, {
-      scope, text: 'Synthetic maintenance interval for fixture ' + i, keywords: ['maintenance'],
+      scope, text: 'Synthetic maintenance interval for relay fixture ' + i, keywords: ['maintenance', 'relay'],
     }));
     f.restart();
     const recentQuery = request({ projectId: 'p1', query: 'Which maintenance interval?' });
@@ -254,7 +254,7 @@ test('a long-running project can recall an older decision after restart within t
     const recent = f.service.previewContext(recentQuery);
     assert(recent.items.length > 0);
     assert.equal(f.calls.decrypted - before, 129, 'policy and the initial 128 facts only');
-    const query = request({ projectId: 'p1', query: 'Which chalcedony relay?' });
+    const query = request({ projectId: 'p1', query: 'Which chalcedony?' });
     assert.deepEqual(f.service.previewContext({ ...query, maxScan: 128 }).items, []);
     const result = f.service.previewContext(query);
     assert.deepEqual(result.items.map(item => item.factId), [older.id]);
@@ -262,7 +262,11 @@ test('a long-running project can recall an older decision after restart within t
     const expanded = f.service.previewContext(multipleNeeds);
     assert.equal(expanded.items.length, 2);
     assert.ok(expanded.items.some(item => item.factId === older.id), 'a recent match must not hide an older evidence need');
-    assert.equal(f.service.previewContext({ ...multipleNeeds, maxScan: 128 }).items.some(item => item.factId === older.id), false);
+    assert.equal(expanded.omissions.some(({ reason }) => reason === 'unmatched-evidence-query'), false);
+    const limited = f.service.previewContext({ ...multipleNeeds, maxScan: 128 });
+    assert.equal(limited.items.some(item => item.factId === older.id), false);
+    assert.deepEqual(limited.omissions.find(({ reason }) => reason === 'unmatched-evidence-query'),
+      { reason: 'unmatched-evidence-query', count: 1 });
     assert.equal(f.service.previewContext({ ...multipleNeeds, projectId: 'p2' }).items.length, 0);
     assert.equal(f.service.previewContext({ ...query, projectId: 'p2' }).items.length, 0);
     assert.equal(f.service.previewContext({ ...query, query: 'Unrelated photography' }).items.length, 0);

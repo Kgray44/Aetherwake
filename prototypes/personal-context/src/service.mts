@@ -484,11 +484,14 @@ export class PersonalContextService {
           const proof = this.proof(head.scope!); this.authorize('record.read', head.scope, this.ref(head)); const value = this.decode<ReviewedFact>(head), reason = this.usable(value, head, input, policy, sourceCache); if (reason) { omit(reason); continue; }
           const keywordTerms = words(value.keywords.join(' '));
           const textTerms = words(value.text);
-          const scores = queries.map(query => {
-            if (value.purpose === 'behavior') return 1000;
-            const keywordMatches = [...keywordTerms].filter(word => query.has(word)).length;
-            const textMatches = [...textTerms].filter(word => query.has(word)).length;
-            return keywordMatches ? 129 + keywordMatches : textMatches >= 2 ? textMatches : 0;
+          const scores = queries.map((query, index) => {
+            if (value.purpose === 'behavior') return index === 0 ? 1000 : 0;
+            // A partial keyword match can rank direct recall but cannot cover an interpreted need.
+            if (index > 0 && (!query.size || ![...query].every(word => keywordTerms.has(word) || textTerms.has(word))))
+              return 0;
+            const keywordMatches = [...query].filter(word => keywordTerms.has(word)).length;
+            const textMatches = [...query].filter(word => textTerms.has(word)).length;
+            return keywordMatches ? 129 + keywordMatches : index > 0 || textMatches >= 2 ? textMatches : 0;
           });
           const score = scores[0] || Math.max(...scores);
           const provenance = value.provenance;
