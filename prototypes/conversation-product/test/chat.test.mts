@@ -653,6 +653,34 @@ test('the animated model picker refreshes explicitly and sends the selected cata
  }finally{await chat?.dispose();f.restore();}
 });
 
+test('the memory action preserves the saved draft after native cancellation and ordinary Send skips recall', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ let chat;
+ try {
+  const port = { command: async (name: string, input: unknown) => {
+   if (name === 'send' && (input as { useMemory?: true }).useMemory) {
+    f.calls.push({ name, input });
+    throw Error('authorization_cancelled');
+   }
+   return (f.port.command as any)(name, input);
+  } } as ConversationProductPort;
+  chat = mountConversationChat(f.view.root, { port, resourceId: f.draft.resourceId, onRememberMessage: async () => true });
+  await chat.ready;
+  const form = f.view.root.querySelector('form');
+  const memory = named(form, 'Send with memory');
+  assert(memory && !memory.hidden && !memory.disabled);
+  form.fire('submit', { submitter: memory });
+  await until(() => f.view.root.querySelector('.cp-chat-status').textContent.includes('Send cancelled'));
+  assert.equal(f.view.root.querySelector('textarea').value, f.draft.content);
+  assert.equal((f.calls.find(call => call.name === 'send')?.input as { useMemory?: true }).useMemory, true);
+  form.fire('submit', { submitter: named(form, 'Send') });
+  await until(() => !!f.pending);
+  assert.equal(f.pending?.input.useMemory, undefined);
+  f.accept(true);
+  await chat.whenSubmissionSettled();
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
 test('the mounted chat submits an explicit web lookup and opens only canonical citation references',async()=>{
  const f=fixture('chatgpt-plan-responses');let chat;
  try{

@@ -127,6 +127,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   composer.dataset.aerynthMotionControl='true';
   textarea.setAttribute('aria-label', 'Message'); textarea.placeholder = 'Ask anything, or share an idea'; textarea.rows = 2;
   send.type = 'submit'; send.setAttribute('aria-label', 'Send message'); stop.type = 'button'; stop.hidden = true; web.type = 'submit'; web.hidden = true; web.title = 'Search the public web using only this message'; web.setAttribute('aria-label', web.title); tools.append(hint, stop, send, web); composer.append(textarea, tools);providerSlot.append(provider);provider.classList.add('cp-chat-provider-label');
+  const sendWithMemory = el('button', 'Send with memory');
+  sendWithMemory.type = 'submit';
+  sendWithMemory.hidden = true;
+  decorateConversationControl(sendWithMemory, { identity: 'action', emphasis: 'secondary' });
+  tools.append(sendWithMemory);
   decorateConversationControl(send,{identity:'send',emphasis:'primary'});decorateConversationControl(stop,{identity:'stop',emphasis:'secondary'});decorateConversationControl(web,{identity:'search',emphasis:'secondary'});tools.dataset.cpGroup='composer';tools.setAttribute('role','group');tools.setAttribute('aria-label','Message controls');
   const capabilityNote=el('p','','cp-capability-note'),contextNote=el('p','','cp-context-note'),draftStatus = el('p', '', 'cp-draft-status'), recovery = el('div', undefined, 'cp-draft-recovery'); draftStatus.setAttribute('role', 'status');
   const recoveryDetails = el('details', undefined, 'cp-draft-conflict'), recoverySummary = el('summary', 'Review draft conflict'), localText = el('pre'), storedText = el('pre');
@@ -361,6 +366,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     checkOutcome.disabled = recovering;
     send.disabled = sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
     web.hidden = !plan?.execute || !webSearchModel();
+    sendWithMemory.hidden = !options.onRememberMessage || !plan?.execute;
+    sendWithMemory.disabled = send.disabled || sendWithMemory.hidden || !plan?.available;
     web.disabled = send.disabled || web.hidden || !plan?.available;
     send.dataset.state=needsSendReview()?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=stopRequestedFor?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = !!stopRequestedFor || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
@@ -560,7 +567,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   composer.addEventListener('submit',event=>{
     event.preventDefault();
     const webSearch = event.submitter === web;
-    if (send.disabled || !current || webSearch && web.disabled) return;
+    const useMemory = event.submitter === sendWithMemory;
+    if (send.disabled || !current || webSearch && web.disabled || useMemory && sendWithMemory.disabled) return;
     const before = current, content = textarea.value, commandId = crypto.randomUUID();
     const plan = ordinaryPlan(), selectedModel = webSearch ? webSearchModel() : effectiveModel();
     if (webSearch && !selectedModel) return;
@@ -580,7 +588,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
       if (reasoningEffort !== undefined) thinking = undefined;
-      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{})});
+      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{}),...(useMemory?{useMemory:true}:{})});
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
       const receipt = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
@@ -614,6 +622,9 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       const code = errorText(error);
       if (observedSubmittedStop()) report('Reply stopped. Your draft is still here.');
       else if (code === 'authorization_cancelled') report('Send cancelled. Your saved draft was retained.');
+      else if (useMemory && code === 'personal_memory_no_eligible_context') report('No eligible saved memories matched. Your draft is still here.');
+      else if (useMemory && code === 'personal_memory_frame_changed') report('Memory review expired. Your draft is still here.');
+      else if (useMemory && code === 'personal_memory_user_gesture_required') report('Choose Send with memory again from this conversation. Your draft is still here.');
       else if (code === 'unsupported_model') report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');
       else if (code === 'unsupported_reasoning_effort') report('This model cannot use the requested thinking level. Your draft is still here.');
       else if (code === 'unsupported_web_search_model') report('This model cannot use web search. Your draft is still here.');

@@ -102,6 +102,24 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     const followup = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
       content: 'Can you explain?', expectedRevision: detail.conversation.revision, commandId: randomUUID() });
     assert.doesNotMatch(JSON.stringify(followup.responses?.messages), /Synthetic memory-derived reply/);
+    const reviewedSend = (reviewSources: (value: { review: { prompt: string } }) => Promise<boolean>) =>
+      conversationCommand({
+        call: f.core.command.bind(f.core), beforeMemoryPreview: async () => {}, validateMemoryReview: () => true,
+        input: { name: 'send', input: { resourceId: chat.resourceId, content: referencePrompt,
+          expectedRevision: detail.conversation.revision, commandId: randomUUID(), useMemory: true } },
+        reviewSources,
+      });
+    await assert.rejects(reviewedSend(async ({ review }) => {
+      assert.match(review.prompt, /Synthetic project uses a quartz relay/);
+      return false;
+    }), /authorization_cancelled/);
+    await assert.rejects(reviewedSend(async ({ review }) => {
+      assert.match(review.prompt, /Synthetic project uses a quartz relay/);
+      sourceAvailable = false;
+      return true;
+    }), /personal_memory_no_eligible_context|stale_send_preview/);
+    sourceAvailable = true;
+    assert.equal(f.requests.length, 1, 'a declined or revoked native review never dispatches');
     const next = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
       content: 'Which quartz part?', expectedRevision: detail.conversation.revision, commandId: randomUUID(), useMemory: true });
     assert(next.responses?.memoryDigest);
