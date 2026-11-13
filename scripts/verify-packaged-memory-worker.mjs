@@ -264,12 +264,20 @@ const correctedId = await withWorker(false, async call => {
   const sendReview = await call('velaNativeReview', sendBinding);
   const sendGrant = await call('authorizeVelaRequest', { ...sendBinding, reviewDigest: sendReview.reviewDigest });
   await writeFile(expectedPrompt, JSON.stringify(sendReview.prompt), { flag: 'wx' });
+  const send = { name: 'request', input: {
+    ...sendBinding, intent: correctedIntent, resourceIds: [], authorizeProvider: true, grantId: sendGrant.grantId,
+  } };
+  const velaState = () => call('vela', { name: 'state', input: {} });
   try {
-    const reply = await call('vela', { name: 'request', input: {
-      ...sendBinding, intent: correctedIntent, resourceIds: [], authorizeProvider: true, grantId: sendGrant.grantId,
-    } });
+    const reply = await call('vela', send);
     assert.equal(reply.state, 'responded', reply.errorCode);
     assert.equal(await readFile(acceptedFetch, 'utf8'), 'accepted');
+    const beforeReplay = await velaState();
+    assert(beforeReplay.requests.some(request => request.id === reply.id));
+    await assert.rejects(call('vela', send), /native_vela_grant_consumed|native_vela_grant_required/u);
+    const afterReplay = await velaState();
+    assert.equal(afterReplay.conversation.revision, beforeReplay.conversation.revision);
+    assert.deepEqual(afterReplay.requests.map(request => request.id), beforeReplay.requests.map(request => request.id));
   } finally {
     await unlink(expectedPrompt);
   }
@@ -298,7 +306,7 @@ await withWorker(false, async call => {
 await assert.rejects(readFile(unexpectedFetch), { code: 'ENOENT' });
 const receipt = { result: 'pass', candidate: inventory.candidate, manifestSha256: manifestHash, verifiedFiles: files.size,
   workerStarts: 4, correctedRecall: true, attributedExport: true, crossConversationRecall: true, foreignProjectDenied: true, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true, revokedApprovedRequestDenied: true,
-  custody: 'Windows DPAPI CurrentUser through test adapter', approval: 'simulated', simulatedProviderRequests: 1, liveProviderDispatch: false };
+  custody: 'Windows DPAPI CurrentUser through test adapter', approval: 'simulated', simulatedProviderRequests: 1, replayDeniedWithoutAppend: true, liveProviderDispatch: false };
 await writeFile(join(profile, 'worker-receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify(receipt));
 
