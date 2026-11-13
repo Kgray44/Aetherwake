@@ -1137,6 +1137,14 @@ export function installApplication(hooks: Hooks) {
   function apply(next: DesktopSnapshot) {
     if (eventClosed || next.eventCursor !== undefined &&
         next.eventCursor < Math.max(requiredAccessCursor, eventBoundary?.cursor ?? 0)) return;
+    const blocksById = new Map<string, Block>();
+    const placedResourceIds = new Set<string>();
+    for (const block of next.blocks) {
+      blocksById.set(block.id, block);
+      if (block.resource_id != null) placedResourceIds.add(block.resource_id);
+    }
+    const resourcesById = new Map<string, Resource>();
+    for (const resource of next.resources) resourcesById.set(resource.id, resource);
     const changed = state?.activeWorkspaceId !== next.activeWorkspaceId;
     const leavingWorkspace =
       state?.navigation.kind === "workspace" &&
@@ -1150,7 +1158,7 @@ export function installApplication(hooks: Hooks) {
       changed ||
       navigated ||
       (approachReturn &&
-        !next.blocks.some((block) => block.id === approachReturn!.blockId))
+        !blocksById.has(approachReturn.blockId))
     )
       clearApproachReturn();
     if (navigated) {
@@ -1224,7 +1232,7 @@ export function installApplication(hooks: Hooks) {
       next.workspaces.map((workspace) => [workspace.id, workspace.version]),
     ]);
     for (const [id, view] of identityViews)
-      if (!next.blocks.some((block) => block.id === id)) {
+      if (!blocksById.has(id)) {
         view.dispose();
         identityViews.delete(id);
       }
@@ -1239,9 +1247,9 @@ export function installApplication(hooks: Hooks) {
       directGestures,
     ])
       for (const id of map.keys())
-        if (!next.blocks.some((block) => block.id === id)) map.delete(id);
+        if (!blocksById.has(id)) map.delete(id);
     for (const [id, view] of chatViews)
-      if (!next.blocks.some((block) => block.id === id)) {
+      if (!blocksById.has(id)) {
         chatViews.delete(id);
         chatRefreshKeys.delete(id);
         void view.dispose().catch(report);
@@ -1250,67 +1258,66 @@ export function installApplication(hooks: Hooks) {
     // including sends that outlive a departed block or a closed manager. View
     // disposal releases DOM/execution observers, never the in-flight draft owner.
     for (const id of activeBlocks.keys())
-      if (!next.blocks.some((block) => block.id === id))
+      if (!blocksById.has(id))
         activeBlocks.delete(id);
     for (const [id, view] of noteViews)
-      if (!next.blocks.some((b) => b.id === id)) {
+      if (!blocksById.has(id)) {
         view.dispose();
         noteViews.delete(id);
       }
     for (const [id, view] of missionDashboardViews) {
-      const resourceId = next.blocks.find((block) => block.id === id)?.resource_id;
+      const resourceId = blocksById.get(id)?.resource_id;
       if (resourceId && missionWorkroomCardIds.has(resourceId)) continue;
       view.dispose();
       missionDashboardViews.delete(id);
     }
     for (const [id, entry] of checklistViews)
-      if (!next.blocks.some((block) => block.id === id)) {
+      if (!blocksById.has(id)) {
         entry.view.dispose();
         checklistViews.delete(id);
       }
-    for(const [id,entry] of clockTimerViews)if(!next.blocks.some(block=>block.id===id)){
+    for(const [id,entry] of clockTimerViews)if(!blocksById.has(id)){
       entry.view.dispose();clockTimerViews.delete(id);clockTimerProjections.delete(id);
     }
     for (const [id, entry] of agentBlockViews)
-      if (!next.blocks.some((block) => block.id === id)) {
+      if (!blocksById.has(id)) {
         entry.view.dispose();
         agentBlockViews.delete(id);
         agentProjections.delete(id);
       }
     for (const [id, entry] of timelineViews)
-      if (!next.blocks.some((block) => block.id === id)) {
+      if (!blocksById.has(id)) {
         entry.view.dispose();
         timelineViews.delete(id);
         timelineProjections.delete(id);
       }
     missionWorkrooms.setScope(workroomScope);
     for (const [id, entry] of taskTrackerViews)
-      if (!next.blocks.some((block) => block.id === id)) {
+      if (!blocksById.has(id)) {
         entry.view.dispose();
         taskTrackerViews.delete(id);
         taskProjections.delete(id);
       }
     for (const [id, view] of groupViews)
-      if (!next.blocks.some((b) => b.id === id)) {
+      if (!blocksById.has(id)) {
         view.dispose();
         groupViews.delete(id);
       }
     for (const [id, view] of manualTaskViews)
-      if (!next.blocks.some((b) => b.id === id)) { view.dispose(); manualTaskViews.delete(id); }
+      if (!blocksById.has(id)) { view.dispose(); manualTaskViews.delete(id); }
     for (const [id, view] of subjectViews)
-      if (!next.blocks.some((b) => b.id === id)) {
+      if (!blocksById.has(id)) {
         view.dispose();
         subjectViews.delete(id);
       }
     for (const [id, view] of eventViews)
-      if (!next.blocks.some((block) => block.id === id)) {
+      if (!blocksById.has(id)) {
         view.dispose();
         eventViews.delete(id);
       }
     for (const [id, view] of mediaViews) {
-      const block = next.blocks.find((item) => item.id === id);
-      const resource =
-        block && next.resources.find((item) => item.id === block.resource_id);
+      const resourceId = blocksById.get(id)?.resource_id;
+      const resource = resourceId == null ? undefined : resourcesById.get(resourceId);
       if (
         !resource ||
         resource.available === false ||
@@ -1320,21 +1327,25 @@ export function installApplication(hooks: Hooks) {
         mediaViews.delete(id);
       }
     }
-    for(const [id,view] of folderViews){
-      const block=next.blocks.find(item=>item.id===id),resource=block&&next.resources.find(item=>item.id===block.resource_id);
-      if(!resource||resource.available===false||resource.visible===false){view.dispose();folderViews.delete(id);}
+    for (const [id, view] of folderViews) {
+      const resourceId = blocksById.get(id)?.resource_id;
+      const resource = resourceId == null ? undefined : resourcesById.get(resourceId);
+      if (!resource || resource.available === false || resource.visible === false) {
+        view.dispose();
+        folderViews.delete(id);
+      }
     }
     for (const id of blockSettings.keys())
-      if (!next.blocks.some((block) => block.id === id))
+      if (!blocksById.has(id))
         blockSettings.delete(id);
     for (const id of settingsFailures.keys())
-      if (!next.blocks.some((block) => block.id === id))
+      if (!blocksById.has(id))
         settingsFailures.delete(id);
     for (const id of unavailableBlocks)
-      if (!next.blocks.some((block) => block.id === id))
+      if (!blocksById.has(id))
         unavailableBlocks.delete(id);
     for (const [id, binding] of directBindings)
-      if (!next.blocks.some((block) => block.id === id)) {
+      if (!blocksById.has(id)) {
         binding.dispose();
         directBindings.delete(id);
       }
@@ -1342,7 +1353,7 @@ export function installApplication(hooks: Hooks) {
       if (
         !session.hasObservers &&
         !session.snapshot().dirty &&
-        !next.blocks.some((block) => block.resource_id === id)
+        !placedResourceIds.has(id)
       )
         noteSessions.delete(id);
     directResources.reconcile(next.resources);
