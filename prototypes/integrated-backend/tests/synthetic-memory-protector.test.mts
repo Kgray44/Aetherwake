@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -16,7 +16,13 @@ function fixture(t: test.TestContext) {
   function profile(name: string) {
     const profileRoot = join(scratch, name);
     mkdirSync(profileRoot);
-    writeFileSync(join(profileRoot, 'synthetic-packaged.started'), '');
+    writeFileSync(join(profileRoot, 'synthetic-packaged.started'), JSON.stringify({
+      contract: 'aerynth.memory-fixture-descriptor@1', profileRoot,
+      artifactPath: join(scratch, 'synthetic.exe'), artifactDigest: 'a'.repeat(64),
+      owner: 'memory-witness', availabilityId: 'fixture', permitDigest: 'b'.repeat(64),
+      expiresAt: Date.now() + 40_000,
+    }), { flag: 'wx' });
+    writeFileSync(join(profileRoot, 'synthetic-packaged.consumed'), '', { flag: 'wx' });
     return { profileRoot, databasePath: join(profileRoot, 'aerynth.sqlite'), fixtureKey };
   }
   return { profile };
@@ -89,6 +95,26 @@ test('synthetic custody rejects wrong root, production envelopes and invalid reo
   }
   assert.equal(await secrets.available(), false);
   assert.throws(() => createSyntheticMemoryProtector({ ...options, mode: 'create' }), /synthetic_memory_custody_state/);
+  const descriptorPath = join(options.profileRoot, 'synthetic-packaged.started');
+  const consumedPath = join(options.profileRoot, 'synthetic-packaged.consumed');
+  const descriptor = readFileSync(descriptorPath, 'utf8');
+  const checkSubstitution = async () => {
+    const substituted = createSyntheticMemoryProtector({ ...options, mode: 'reopen' });
+    try { await assert.rejects(substituted.open(envelope!), /synthetic_memory_key_envelope_invalid/); }
+    finally { substituted.close(); }
+  };
+  writeFileSync(descriptorPath, descriptor + ' ');
+  await checkSubstitution();
+  writeFileSync(descriptorPath, descriptor);
+  renameSync(consumedPath, consumedPath + '.original');
+  assert.throws(() => createSyntheticMemoryProtector({ ...options, mode: 'reopen' }));
+  writeFileSync(consumedPath, '', { flag: 'wx' });
+  await checkSubstitution();
+  rmSync(consumedPath);
+  renameSync(consumedPath + '.original', consumedPath);
+  writeFileSync(descriptorPath, ' '.repeat(8193));
+  assert.throws(() => createSyntheticMemoryProtector({ ...options, mode: 'reopen' }), /synthetic_memory_profile_mismatch/);
+  writeFileSync(descriptorPath, descriptor);
   copyFileSync(options.databasePath, foreign.databasePath);
   const copied = createSyntheticMemoryProtector({ ...foreign, mode: 'reopen' });
   const wrongKey = createSyntheticMemoryProtector({ ...options, fixtureKey: randomBytes(32), mode: 'reopen' });
