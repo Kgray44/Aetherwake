@@ -427,7 +427,7 @@ for (const focusResult of [false,true]) test('Switch chat refreshes its exact qu
  } finally {await manager?.dispose();f.restore();}
 });
 
-for (const action of ['focus result','focus filter','change from open to focus']) test('Switch chat ArrowDown handles a pending result ('+action+')', async () => {
+for (const action of ['focus result','focus filter','change from open to focus','leave query after Enter','return to query after Enter']) test('Switch chat handles a pending keyboard action ('+action+')', async () => {
  const f=fixture(), resourceId=f.draft.resourceId;
  const started=Promise.withResolvers<void>(), response=Promise.withResolvers<void>();
  const opened:string[]=[];
@@ -447,14 +447,19 @@ for (const action of ['focus result','focus filter','change from open to focus']
   const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
   const filter=switcher.querySelector('select');
   input.value='Pending';input.fire('input');
-  if(action==='change from open to focus')input.fire('keydown',{key:'Enter'});
-  input.fire('keydown',{key:'ArrowDown'});
+  const opens=action.includes('after Enter');
+  if(opens||action==='change from open to focus')input.fire('keydown',{key:'Enter'});
+  if(!opens)input.fire('keydown',{key:'ArrowDown'});
   await started.promise;
-  if(action==='focus filter')filter.focus();
+  const leavesQuery=opens||action==='focus filter';
+  if(leavesQuery){input.fire('blur');filter.focus();}
+  if(action==='return to query after Enter')input.focus();
   response.resolve();
   const results=switcher.querySelector('.cp-switcher-results');
   await until(()=>!!results.querySelector('button'));
-  assert.ok(f.view.doc.activeElement===(action==='focus filter'?filter:results.querySelector('button')));
+  const expectedFocus=action==='return to query after Enter'?input:leavesQuery?filter:results.querySelector('button');
+  assert.ok(f.view.doc.activeElement===expectedFocus);
+  assert.equal(switcher.open,true);
   assert.deepEqual(opened,[]);
  } finally {response.resolve();await manager?.dispose();f.restore();}
 });

@@ -287,7 +287,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  switchQuery.addEventListener('compositionstart',()=>{switchComposing=true;invalidateSwitcher();});
  switchQuery.addEventListener('compositionend',()=>{switchComposing=false;scheduleSwitcher();});
  switchQuery.addEventListener('input',event=>{if(!(event as InputEvent).isComposing&&switchQuery.value.trim()!==switchText)scheduleSwitcher();});
- switchQuery.addEventListener('blur',()=>{switchFocusGeneration=undefined;});
+ switchQuery.addEventListener('blur',()=>{switchFocusGeneration=undefined;switchOpen=undefined;});
  switcher.node.addEventListener('keydown',event=>{
   if(event.key!=='Escape'||!switcher.node.open)return;
   event.stopPropagation();
