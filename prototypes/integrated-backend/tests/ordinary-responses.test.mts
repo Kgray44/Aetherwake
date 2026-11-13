@@ -1566,6 +1566,27 @@ test('explicit web search sends only the submitted draft and restores verified c
     await assert.rejects(conversationCommand({ call, openExternal, input: { ...open, input: { ...open.input, resourceId: other.resourceId } } }), /source_unavailable/);
     await assert.rejects(conversationCommand({ call, input: { name: 'send', input: { ...input, resourceId: other.resourceId } } }), /invalid_web_search_scope/);
     assert.deepEqual(launched, [safe.url]);
+    const source = (await detail()).conversation;
+    const child = await f.core.command('branch', {
+      resourceId: source.resourceId, messageId: response.id, includeMessageIds: [response.id],
+      providerId: 'local', title: 'Synthetic research follow-up', commandId: randomUUID(),
+      tokenBudget: 32768, expectedRevision: source.revision,
+    });
+    const childDetail = await f.core.command('conversation', {
+      name: 'detail', input: { resourceId: child.conversation.resourceId },
+    }) as Awaited<ReturnType<typeof detail>>;
+    const inherited = childDetail.messages.items.find(message => message.id === response.id);
+    assert(inherited?.inherited);
+    assert.equal(inherited.resourceId, source.resourceId);
+    assert.deepEqual(inherited.webSearch, response.webSearch);
+    const inheritedOpen = { name: 'openCitation', input: {
+      resourceId: inherited.resourceId, messageId: inherited.id, index: 0,
+    } };
+    assert.deepEqual(await conversationCommand({ call, openExternal, input: inheritedOpen }), { requested: true });
+    assert.deepEqual(launched, [safe.url, safe.url]);
+    f.owner.atomic(() => f.owner.graph.markUnavailable(response.id));
+    await assert.rejects(conversationCommand({ call, openExternal, input: inheritedOpen }), /source_unavailable/);
+    assert.deepEqual(launched, [safe.url, safe.url]);
     assert.equal(f.requests.length, 1);
     assert.equal(f.codexCalls, 0);
   } finally { await f.close(); }

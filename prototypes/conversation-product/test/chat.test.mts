@@ -1142,3 +1142,28 @@ test('a detached send rejection is caught and leaves exact durable recovery with
 test('composer keyboard policy keeps newline and composition distinct from submit',()=>{
   const event={key:'Enter',shiftKey:false,isComposing:false,altKey:false,ctrlKey:false,metaKey:false};assert.equal(composerShouldSubmit(event),true);for(const field of ['shiftKey','isComposing','altKey']as const)assert.equal(composerShouldSubmit({...event,[field]:true}),false);assert.equal(composerShouldSubmit({...event,key:'Escape'}),false);
 });
+
+test('an inherited citation opens through its source chat and suppresses repeat requests while pending',async()=>{
+ const f=fixture();let chat,finish!:(value:{requested:true})=>void;
+ try{
+  const message=f.detail.messages.items[1];
+  message.resourceId='chat:source';
+  message.inherited=true;
+  message.webSearch={completed:true,citations:[{url:'https://science.example.org/moon',title:'Moon facts',start:0,end:1}]};
+  const port={async command(name:string,input:any){
+   if(name!=='openCitation')return (f.port.command as any)(name,input);
+   f.calls.push({name,input});
+   return new Promise(resolve=>{finish=resolve;});
+  }} as ConversationProductPort;
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId});
+  await chat.ready;
+  const citation=f.view.root.querySelector('.cp-web-citation');
+  citation.fire('click');citation.fire('click');
+  assert.deepEqual(f.calls.filter(c=>c.name==='openCitation').map(c=>c.input),
+   [{resourceId:'chat:source',messageId:message.id,index:0}]);
+  assert.equal(citation.disabled,true);
+  finish({requested:true});
+  await until(()=>!citation.disabled);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/browser/i);
+ }finally{await chat?.dispose();f.restore();}
+});
