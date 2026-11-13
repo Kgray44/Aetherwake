@@ -263,6 +263,9 @@ export interface Options {
   syntheticTimerClock?: TimerClockReading;
 }
 export interface CommandMap {
+  personalMemoryCapturePreviewNative: { input: import('./personal-memory-review.mts').CaptureRequest; output: import('./personal-memory-review.mts').CaptureReview };
+  personalMemoryCaptureCommitNative: { input: import('./personal-memory-review.mts').CaptureReview; output: { id: string } };
+  personalMemoryCaptureCancelNative: { input: { id: string }; output: null };
   hostOperationReviewNative:{input:{operationId:string;selection?:{kind:'codex-directory';directory:string}};output:import('../../application-contract/vela-host-operations.ts').VelaHostReviewBinding};
   hostOperationDispatchNative:{input:{binding:import('../../application-contract/vela-host-operations.ts').VelaHostReviewBinding;identityDigest:string;approvalDigest:string};output:import('../../application-contract/windows-maintenance.ts').WindowsMaintenanceDispatchClaim};
   hostOperationResultNative:{input:import('../../application-contract/vela-host-operations.ts').VelaHostOperationNativeResult;output:import('../../application-contract/vela-tools.ts').VelaHostOperationView};
@@ -307,6 +310,8 @@ export interface CommandMap {
   missionHostSignal: { input: { storageAdmitted: boolean } | { foregroundInput: true } |
     import('./resource-signals.mts').ResourceSignal; output: null };
   /** Owned desktop command, excluded from renderer and model routes. */
+  aepExperimentNative: { input: import('./aep-native-host.mts').AepNativeRequest;
+    output: Awaited<ReturnType<ReturnType<typeof import('./aep-native-host.mts').createAepNativeHost>['command']>> };
   resourcePolicyNative: { input: import('./resource-policy.mts').ResourcePolicyNativeRequest;
     output: import('./resource-policy.mts').ResourcePolicyNativeView };
   /** Fixed GPU diagnostic, accessible only through the native desktop review. */
