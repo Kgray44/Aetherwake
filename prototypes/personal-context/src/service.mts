@@ -463,13 +463,20 @@ export class PersonalContextService {
       if (anchors.size) heads.sort((a, b) => Number(anchors.has(String(b.id))) - Number(anchors.has(String(a.id))));
       const queries = [input.query, ...(input.evidenceQueries ?? [])].map(words);
       const candidates: { value: ReviewedFact; score: number; primary: boolean; anchored: boolean; proofs: ScopeProof[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
+      // On a miss, continue the same authorized scan through a bounded older window.
+      // Explicit scan limits are strict and a recent match needs no extra decryption.
+      const recentScanLimit = input.maxScan ?? 128;
+      const missScanLimit = input.maxScan ?? 512;
+      let scanLimit = recentScanLimit;
       for (const row of heads) {
         const head = this.decodeHead(row);
         check(head.kind === 'fact' && head.scope, 'corrupt_personal_context');
         if (!this.inScope(head.scope!, input)) { omit('outside-scope'); continue; }
         if (head.scope!.kind === 'user.shared' && (!policy.sharingEnabled || !input.sharedFactIds.includes(head.id))) { omit('not-shared'); continue; }
         if (head.state !== 'active') { omit('inactive'); continue; }
-        if (scanned >= (input.maxScan ?? 128)) { omit('scan-limit'); continue; } scanned++;
+        if (scanned === recentScanLimit && !candidates.length) scanLimit = missScanLimit;
+        if (scanned >= scanLimit) { omit('scan-limit'); continue; }
+        scanned++;
         try {
           const proof = this.proof(head.scope!); this.authorize('record.read', head.scope, this.ref(head)); const value = this.decode<ReviewedFact>(head), reason = this.usable(value, head, input, policy, sourceCache); if (reason) { omit(reason); continue; }
           const keywordTerms = words(value.keywords.join(' '));
