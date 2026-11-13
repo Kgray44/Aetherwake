@@ -2368,8 +2368,9 @@ test('reviewed CIE cites a selected local file and fences physical replacement b
   }
 });
 
-for (const scenario of ['standing', 'evaluation', 'evaluation interrupt', 'provider failure', 'interrupt', 'revoke'] as const) test('selected DOCX broker analysis: '+scenario, {timeout:15_000}, async () => {
+for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation interrupt', 'provider failure', 'interrupt', 'revoke'] as const) test('selected evidence broker analysis: '+scenario, {timeout:15_000}, async () => {
   const evaluation = scenario.startsWith('evaluation');
+  const noteCase = scenario === 'evaluation note';
   const interrupted = scenario === 'interrupt' || scenario === 'evaluation interrupt';
   const bytes = docxFixture();
   let bodyText: string;
@@ -2385,10 +2386,20 @@ for (const scenario of ['standing', 'evaluation', 'evaluation interrupt', 'provi
     await f.ready();
     const path = join(f.directory, 'Synthetic table.docx');
     writeFileSync(path, bytes);
-    const { resource } = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file', selection: { kind: 'file', path } });
+    let resource;
+    if (noteCase) {
+      const created = await f.core.command('desktop',{type:'createResource',kind:'note',title:'Synthetic table note',workspaceId:null});
+      const note = created.resources.find(item=>item.title==='Synthetic table note')!;
+      bodyText = 'The extracted body contains Table cell.';
+      const updated = await f.core.command('desktop',{type:'content',resourceId:note.id,expectedVersion:note.version,content:bodyText});
+      resource = updated.resources.find(item=>item.id===note.id)!;
+    } else {
+      ({ resource } = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file', selection: { kind: 'file', path } }));
+    }
     const intent = 'Which text was extracted from the table?';
     const resourceIds = [resource.id];
-    const resourceRefs = [{ id: resource.id, kind: 'resource' as const, resourceKind: 'file',
+    const sourceKind = noteCase ? 'note' as const : 'file' as const;
+    const resourceRefs = [{ id: resource.id, kind: 'resource' as const, resourceKind: sourceKind,
       title: resource.title, version: resource.version }];
     const runtime=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
     const evaluationProfile=f.core.readVelaEvaluationProfile()!;
@@ -2399,7 +2410,7 @@ for (const scenario of ['standing', 'evaluation', 'evaluation interrupt', 'provi
       model: 'gpt-6-luna', semanticContext: true, resourceRefs });
     assert.equal(preview.sendDisposition, 'standing-selected-evidence');
     const review = await f.core.command('velaNativeReview', { previewId: preview.id, signature: preview.signature });
-    assert.match(review.context.included[0].content, /Extracted DOCX body text/);
+    assert.match(review.context.included[0].content, noteCase ? /Table cell/ : /Extracted DOCX body text/);
     const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
     const send = () => velaCommand({
       win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
@@ -2427,11 +2438,11 @@ for (const scenario of ['standing', 'evaluation', 'evaluation interrupt', 'provi
     f.replies.push(reply(proposal('day')), reply(assessment('day', 'The pump inspection is on Tuesday.')), reply(proposal('table')),
       body => {
         assert.deepEqual(JSON.parse(body.input[0].content).excerpts, [
-          { handle: 'e1', sourceKind: 'file', title: resource.title, text: bodyText, partial: true },
+          { handle: 'e1', sourceKind, title: resource.title, text: bodyText, ...(!noteCase?{partial:true}:{}) },
         ]);
         return reply(assessment('table', 'Table cell'))(body);
       }, async body => {
-        assert.equal(JSON.parse(body.input[0].content).evidence.searchCoverage, 'partial');
+        if (!noteCase) assert.equal(JSON.parse(body.input[0].content).evidence.searchCoverage, 'partial');
         assert.doesNotMatch(JSON.stringify(body.input), /Extracted DOCX body text/);
         signalFinalDispatch();
         if (scenario === 'provider failure') return new Response(null,{status:400});
@@ -2504,6 +2515,12 @@ for (const scenario of ['standing', 'evaluation', 'evaluation interrupt', 'provi
       assert.equal(recovered.answerDigest,result.response!.contentDigest);
       assert.deepEqual(f.core.readVelaEvaluationResult(claim,expected.slice(1)),{state:'unresolved'});
       assert.deepEqual(f.core.readVelaEvaluationResult({...claim,bindingDigest:'c'.repeat(64)},expected),{state:'unresolved'});
+      if (noteCase) {
+        await f.core.command('desktop',{type:'content',resourceId:resource.id,expectedVersion:resource.version,content:'Corrected table entry.'});
+      } else {
+        writeFileSync(path, 'Replaced synthetic source');
+      }
+      assert.deepEqual(f.core.readVelaEvaluationResult(claim,expected),{state:'unresolved'});
       assert.equal(f.requests.length,5);
       return;
     }
