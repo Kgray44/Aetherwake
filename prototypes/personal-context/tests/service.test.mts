@@ -237,6 +237,35 @@ test('a current project decision gets scanned before old facts regardless of its
   } finally { f.close(); }
 });
 
+test('a long-running project can recall an older decision after restart within the bounded miss scan', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const scope = { kind: 'project', id: 'p1' } as const;
+    const older = f.service.reviewFact(fact(undefined, {
+      scope, text: 'Use the synthetic chalcedony relay in the final prototype.', keywords: ['chalcedony'],
+    }));
+    for (let i = 0; i < 129; i++) f.service.reviewFact(fact(undefined, {
+      scope, text: 'Synthetic maintenance interval for fixture ' + i, keywords: ['maintenance'],
+    }));
+    f.restart();
+    const recentQuery = request({ projectId: 'p1', query: 'Which maintenance interval?' });
+    const before = f.calls.decrypted;
+    const recent = f.service.previewContext(recentQuery);
+    assert(recent.items.length > 0);
+    assert.equal(f.calls.decrypted - before, 129, 'policy and the initial 128 facts only');
+    const query = request({ projectId: 'p1', query: 'Which chalcedony relay?' });
+    assert.deepEqual(f.service.previewContext({ ...query, maxScan: 128 }).items, []);
+    const result = f.service.previewContext(query);
+    assert.deepEqual(result.items.map(item => item.factId), [older.id]);
+    assert.equal(f.service.previewContext({ ...query, projectId: 'p2' }).items.length, 0);
+    assert.equal(f.service.previewContext({ ...query, query: 'Unrelated photography' }).items.length, 0);
+    f.service.revoke({ id: older.id, expectedVersion: older.version });
+    assert.deepEqual(f.service.previewContext(query).items, []);
+    assert.throws(() => f.service.validateContext(result, query), /stale_personal_context|personal_record_unavailable/);
+  } finally { f.close(); }
+});
+
 test('reviewed fact text supports bounded recall when search terms omit the wording', () => {
   const f = fixture();
   try {
