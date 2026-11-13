@@ -409,6 +409,7 @@ test('composed artifact mission retains verified files when a native branch fail
 test('reviewed mixed mission sends the work clause to specialists and the prompt only to the image route', { timeout: 145_000 }, async t => {
   const live = process.env.AERYNTH_VERIFY_LIVE_CODEX_ARTIFACT === '1';
   const serial = live && process.env.AERYNTH_MIXED_ARTIFACT_SEQUENTIAL === '1';
+  const recover = live && process.env.AERYNTH_MIXED_ARTIFACT_RECOVER_NOTES === '1';
   const destination = live ? process.env.AERYNTH_MIXED_ARTIFACT_EVIDENCE_DIR : undefined;
   if (destination) preflightArtifactEvidence(destination);
   const testPath = live ? process.env.AERYNTH_MIXED_CODEX_TEST : undefined;
@@ -422,7 +423,7 @@ test('reviewed mixed mission sends the work clause to specialists and the prompt
     f.setCatalogModels(['gpt-6.1-sol', missionImageModel]);
     await f.ready();
     await f.pin({ providerId: 'openai-api-vela', model: 'gpt-6.1-sol' });
-    const work = testPath ? 'Run selected Node tests and measure CPU and RAM with two independent specialists' :
+    const work = testPath ? `Run selected Node tests and measure CPU and RAM${recover ? ' using workspace notes' : ''} with two independent specialists` :
       'Measure CPU and RAM with two independent specialists';
     const imagePrompt = 'A private illustrative detail: draw a blue square';
     const objective = `Run a mission to ${work}; generate an illustration: ${imagePrompt}`;
@@ -481,13 +482,33 @@ test('reviewed mixed mission sends the work clause to specialists and the prompt
       assert.ok(controlled.tasks.every(task => task.attempts.length === 0));
       await f.core.command('missionHostSignal', { storageAdmitted: true });
     }
-    let result: MissionProjection;
-    const deadline = performance.now() + (live ? 125_000 : 7000);
-    do {
-      result = await f.core.command('missions', { name: 'read', input: { id } }) as MissionProjection;
-      if (!['queued', 'running'].includes(result.outcome)) break;
-      await delay(25);
-    } while (performance.now() < deadline);
+    const settle = async () => {
+      const deadline = performance.now() + (live ? 125_000 : 7000);
+      do {
+        const result = await f.core.command('missions', { name: 'read', input: { id } }) as MissionProjection;
+        if (!['queued', 'running'].includes(result.outcome)) return result;
+        await delay(25);
+      } while (performance.now() < deadline);
+      throw Error('reviewed_mixed_mission_deadline');
+    };
+    let result = await settle();
+    if (recover) {
+      const failed = result;
+      assert.equal(failed.outcome, 'failed');
+      assert.deepEqual(failed.tasks.filter(task => task.state !== 'verified').map(task => task.id).sort(), ['notes', 'report']);
+      assert.deepEqual(failed.tasks.find(task => task.id === 'notes')?.attempts.map(attempt => attempt.outcome), ['failed']);
+      const { resources } = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: work,
+        workspaceId: failed.scope.workspaceId });
+      const note = resources.find(resource => resource.title === work)!;
+      await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version,
+        content: 'Synthetic Node test and CPU and RAM measurements. Record repeated samples and test exit status.' });
+      await f.core.command('missions', { name: 'control', input: { id, revision: failed.revision,
+        control: { type: 'retry', taskId: 'notes' } } });
+      result = await settle();
+      assert.deepEqual(result.tasks.find(task => task.id === 'notes')?.attempts.map(attempt => attempt.outcome), ['failed', 'verified']);
+      for (const prior of failed.tasks.filter(task => task.state === 'verified'))
+        assert.deepEqual(result.tasks.find(task => task.id === prior.id)?.attempts, prior.attempts);
+    }
     const elapsedMs = performance.now() - started, processCpu = process.cpuUsage(cpuStarted);
     const processPeakRssKiB = process.resourceUsage().maxRSS;
     assert.equal(result.outcome, 'verified', JSON.stringify(result.tasks.map(task => [task.id, task.state, task.detail])));
@@ -509,6 +530,7 @@ test('reviewed mixed mission sends the work clause to specialists and the prompt
       assert.match(report.content, /1 test passed/);
       assert.match(report.content, /illustration\.png.*illustration-notes\.txt/u);
       assert.match(report.content, /Specialist reported:/u);
+      if (recover) assert.match(report.content, /Found 1 relevant note\./u);
       const image = result.tasks.find(task => task.id === 'illustration');
       const artifacts = (image?.attempts[0]?.evidence?.value as { artifacts: { name: string; resourceId: string }[] }).artifacts;
       assert.deepEqual(artifacts.map(file => file.name), ['illustration.png', 'illustration-notes.txt']);
@@ -533,7 +555,7 @@ test('reviewed mixed mission sends the work clause to specialists and the prompt
         png, notes, report: report.content, provider: 'real-openai-api', objective, missionId: id, reportId: report.id,
         verifiedInferenceRequests: 3,
       });
-      t.diagnostic(JSON.stringify({ id, serial, elapsedMs, processCpu, processPeakRssKiB, providerCalls: 3, codexTests: 1,
+      t.diagnostic(JSON.stringify({ id, serial, recover, elapsedMs, processCpu, processPeakRssKiB, providerCalls: 3, codexTests: 1,
         peakWorkers: trace.work.peakWorkers, overlapMs: trace.work.overlapMs, criticalPathMs: trace.work.criticalPath.durationMs,
         reportedTokens: trace.economics.reportedTotalTokens, costCoverage: trace.economics.costCoverage }));
       return;

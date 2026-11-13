@@ -19,7 +19,7 @@ import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS, MISSION_PROPOSAL
 import { describeMissionObjectiveReview, provisionalObjectiveCoverage, reviewableMissionObjective } from './mission-objective-review.mts';
 import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, reassignMissionSpecialist, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
 import { MissionTeams } from './mission-teams.mts';
-import { parseReviewedArtifactMission, resolveReviewedArtifactMission } from './mission-reviewed-composition.mts';
+import { parseReviewedArtifactMission, resolveReviewedArtifactMission, specialistMissionObjective } from './mission-reviewed-composition.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
 import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningEvidenceSelection, MissionPlanningOffer, MissionPlanningSourceRef, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import { ARTIFACT_MISSION_PREFIX, EXPLICIT_MISSION_PREFIX, MISSION_LIMITS } from './mission-contracts.mts';
@@ -1420,7 +1420,7 @@ export class BackendCore {
             rates: missionImageRates, files: missionArtifactFiles } } : {}),
           ...(remote.length ? { externalReview: { provider: [...new Set(remote.map(task => task.specialist?.provider === VELA_API_PROVIDER ? 'Vela dedicated API' : 'ChatGPT plan'))].join(' + '), model: selected?.model ?? 'Unavailable',
             effort: selected?.effort, calls: remote.length,
-            ...(mixedArtifact ? { objective: mixedArtifact.workObjective } : {}) } } : {}) };
+            ...(mixedArtifact ? { objective: specialistMissionObjective(plan) } : {}) } } : {}) };
         ensure(request.input.fingerprint === fingerprint, 'mission_preview_changed');
         if (approvedObjectiveDigest !== undefined)
           ensure(reviewed && objectiveReview && approvedObjectiveDigest === objectiveReview.digest, 'mission_objective_review_changed');

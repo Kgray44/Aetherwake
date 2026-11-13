@@ -28,3 +28,23 @@ Run the synthetic test with `node --test --test-name-pattern='composed artifact 
 Image request counts are observed. The current image path retains the provider request ID but does not capture image-token quantities or billing receipts. CPU time is the test process and its threads. The live experiment covers the existing artifact and native paths in one graph. The separate mixed Codex/API fixture qualifies read-only Codex execution.
 
 An additional live Windows witness used the normal mixed preview and the existing native review broker with simulated dialogs. The installed read-only Codex sandbox ran one explicitly selected tracked test. Two live specialists and one image request completed in the same mission as the native measurements. The final report named the verified files and the passing test and attributed specialist recommendations to their sources. AEP recorded 6.52 seconds of attempt overlap, a 15.84-second occupied critical path and 1,259 provider-reported text tokens. No Codex model request ran. To reproduce, set `AERYNTH_VERIFY_LIVE_CODEX_ARTIFACT=1`, provide the authorized test credential and point `AERYNTH_MIXED_CODEX_TEST` to an absolute path to a reviewed tracked Node test in a disposable checkout. Run the same test file with `--test-name-pattern='reviewed mixed mission'`. This route makes three inferences and may perform catalog reads.
+
+### Matched full-mission comparison
+
+Six alternating pairs on clean `9cac9b23` ran the same graph in fresh Windows profiles. The sequential arm set `AERYNTH_MIXED_ARTIFACT_SEQUENTIAL=1` and asserted that the canonical worker limit was one before the first attempt. Each trial made two text requests and one image request. The installed Codex sandbox ran a tracked Node test without a model request. Set `AERYNTH_MIXED_ARTIFACT_EVIDENCE_DIR` to a distinct fresh directory outside the checkout for each trial. Time starts at acceptance of the final review and ends at verified settlement. CPU time and peak RSS cover the harness process and its threads. Codex child-process usage and whole-host energy are outside those two metrics.
+
+| Metric | Concurrent | Sequential |
+| --- | ---: | ---: |
+| Median time to verified settlement | 23.13 s | 33.79 s |
+| Elapsed range | 20.90–27.48 s | 28.16–34.82 s |
+| Median process CPU time | 4.71 s | 5.70 s |
+| Median peak process RSS | 171.99 MiB | 171.04 MiB |
+| Median AEP attempt overlap | 7.86 s | 0 s |
+| Median occupied critical path | 15.87 s | 18.08 s |
+| Median provider-reported text tokens | 1,240.5 | 1,245 |
+
+Concurrent finished sooner in all six pairs, by 3.69–13.91 seconds. The median paired gain was 11.23 seconds. Each trial verified a CPU and RAM observation, one passing Codex test, two attributed specialist reports, the PNG and companion notes. An independent read checked all file hashes and decoded each PNG to check that the saturated blue region formed the requested square. Each run restored the same report after restart, returned the same mission on a repeated Start, and marked that report stale after a companion-file change. Image usage and account billing receipts were unavailable, so cost comparison is limited to equal request counts and reported text tokens. The result applies to this workload and host.
+
+### Failure recovery in the full graph
+
+Add `AERYNTH_MIXED_ARTIFACT_RECOVER_NOTES=1` to exercise the same reviewed routes plus a requested workspace notes branch. The initial missing note caused only that branch to fail and held the report. Adding a scoped note and retrying reused the verified image, both specialist attempts, Codex test and host measurements. The report then cited the recovered note and restored after restart. The initial witness settled in 21.00 seconds with 7.35 seconds of AEP occupancy overlap and the same three inference requests. This witness is separate from the twelve comparison trials.
