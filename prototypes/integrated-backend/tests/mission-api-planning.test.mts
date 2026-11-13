@@ -1996,6 +1996,73 @@ test('reviewed CIE cites a selected local file and fences physical replacement b
   }
 });
 
+for (const outcome of ['failure', 'cancel', 'revoke']) test('standing selected evidence settles an in-flight ' + outcome, {timeout: 10000}, async () => {
+  const f = fixture(true);
+  let assessmentEntered!: () => void, release!: () => void;
+  const assessmentStarted = new Promise<void>(resolve => { assessmentEntered = resolve; });
+  const assessmentPaused = new Promise<void>(resolve => { release = resolve; });
+  let sending: Promise<VelaRequest> | undefined;
+  try {
+    await f.ready();
+    const snapshot = await f.core.command('desktop', {type:'createResource',kind:'note',title:'Synthetic standing evidence',workspaceId:null});
+    const original = snapshot.resources.find(item => item.title === 'Synthetic standing evidence')!;
+    const noteText = 'The west lift returns to service after an inspection.';
+    const updated = await f.core.command('desktop', {type:'content',resourceId:original.id,expectedVersion:original.version,content:noteText});
+    const note = updated.resources.find(item => item.id === original.id)!;
+    const intent = 'When can the west lift return to service?';
+    const resourceIds = [note.id];
+    const resourceRefs = [{id:note.id,kind:'resource' as const,resourceKind:'note' as const,version:note.version,title:note.title}];
+    const request = {intent,resourceIds,resourceRefs,providerId:'openai-api-vela',model:'gpt-6-luna',semanticContext:true as const};
+    const preview = await f.core.command('velaRequestPreview',{...request,adaptive:true});
+    assert.equal(preview.sendDisposition,'standing-selected-evidence');
+    const proposal = (key:string) => ({version:2,objective:intent,clarification:'',
+      perception:{kind:'answer',explicitGoals:[],inferredGoals:[],constraints:[],capabilityHints:[],deliverables:['text'],verification:[]},
+      needs:[{key,question:intent,query:'lift inspection'}]});
+    const assess = (key:string, quote:string) => ({version:3,clarification:'',
+      assessment:[{key,status:'supported',passages:[{source:'e1',quote}],query:''}]});
+    const reply = (value:unknown) => (body:any) => response(JSON.stringify(value),body.model);
+    f.replies.push(reply(proposal('day')),reply(assess('day','The pump inspection is on Tuesday.')),reply(proposal('lift')),
+      async body => {
+        assert.match(body.input[0].content,/west lift returns to service/);
+        assessmentEntered();
+        await assessmentPaused;
+        if (outcome === 'failure') return new Response(null,{status:400});
+        return reply(assess('lift',noteText))(body);
+      });
+    const {velaCommand} = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    sending = velaCommand({
+      win:{isDestroyed:()=>false,webContents:{isDestroyed:()=>false}},
+      directMessageSend:true,routeNative:true,dialog:{},
+      call:f.core.command.bind(f.core),
+      reviewProvider:async()=>assert.fail('standing evidence opened a sharing modal'),
+      input:{name:'request',input:{...request,authorizeProvider:true}},
+    }) as Promise<VelaRequest>;
+    const deadline = new AbortController();
+    try {
+      await Promise.race([assessmentStarted,sending.then(()=>assert.fail('request settled before assessment')),
+        delay(5000,undefined,{signal:deadline.signal}).then(()=>assert.fail('assessment did not start'))]);
+    } finally { deadline.abort(); }
+    const before = await f.core.command('vela',{name:'state',input:{}}) as VelaBackendState;
+    const active = before.requests.find(item => item.intent === intent);
+    assert.ok(active);
+    if (outcome === 'cancel') await f.core.command('vela',{name:'cancel',input:active.id});
+    if (outcome === 'revoke') await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:false});
+    release();
+    const result = await sending;
+    assert.equal(result.state,outcome === 'cancel' ? 'cancelled' : 'failed');
+    assert.equal(result.response,undefined);
+    const after = await f.core.command('vela',{name:'state',input:{}}) as VelaBackendState;
+    assert.equal(after.requests.find(item=>item.id===active.id)?.state,result.state);
+    assert.equal(after.activeAnswer,undefined);
+    assert.equal(f.requests.length,4,'no retry or answer composition after the assessment');
+    assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,4);
+  } finally {
+    release();
+    await sending?.catch(()=>{});
+    await f.close();
+  }
+});
+
 test('standing selected DOCX analysis runs through the broker and preserves partial extraction coverage', async () => {
   const bytes = docxFixture();
   let bodyText: string;
