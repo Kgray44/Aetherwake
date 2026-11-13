@@ -1031,3 +1031,28 @@ test('Save reply as note sends exact IDs, recovers the same command and preserve
   assert.deepEqual(attempts[2],request,'a fresh view must recover the same canonical capture');
  }finally{await chat?.dispose();f.restore();}
 });
+
+test('an inherited citation opens through its source chat and suppresses repeat requests while pending',async()=>{
+ const f=fixture();let chat,finish!:(value:{requested:true})=>void;
+ try{
+  const message=f.detail.messages.items[1];
+  message.resourceId='chat:source';
+  message.inherited=true;
+  message.webSearch={completed:true,citations:[{url:'https://science.example.org/moon',title:'Moon facts',start:0,end:1}]};
+  const port={async command(name:string,input:any){
+   if(name!=='openCitation')return (f.port.command as any)(name,input);
+   f.calls.push({name,input});
+   return new Promise(resolve=>{finish=resolve;});
+  }} as ConversationProductPort;
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId});
+  await chat.ready;
+  const citation=f.view.root.querySelector('.cp-web-citation');
+  citation.fire('click');citation.fire('click');
+  assert.deepEqual(f.calls.filter(c=>c.name==='openCitation').map(c=>c.input),
+   [{resourceId:'chat:source',messageId:message.id,index:0}]);
+  assert.equal(citation.disabled,true);
+  finish({requested:true});
+  await until(()=>!citation.disabled);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/browser/i);
+ }finally{await chat?.dispose();f.restore();}
+});
