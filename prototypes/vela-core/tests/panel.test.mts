@@ -474,7 +474,12 @@ for (const outcome of ['responded', 'provider-unavailable', 'cancelled', 'unknow
     await settles(() => composer.closest('form')?.getAttribute('aria-busy') === 'false');
     assert.equal(composer.value, outcome === 'responded' ? '' : 'What does this file say about the schedule?');
     assert.equal(turns.length, 1);
-    assert.equal(checkbox.checked, false);
+    assert.equal(checkbox.checked, outcome !== 'responded');
+    if (outcome === 'provider-unavailable') {
+      composer.fire('keydown', { key: 'Enter' });
+      await settles(() => turns.length === 2 && composer.closest('form')?.getAttribute('aria-busy') === 'false');
+      assert.deepEqual(turns[1], turns[0]);
+    }
   } finally { panel.dispose(); }
 });
 
