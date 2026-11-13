@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { fixtureFileEditHost, fixtureFileEditScratchRoot } from './fixture-file-edit-admission.mts';
 import { tmpdir } from 'node:os';
 import { join,resolve,relative,isAbsolute } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { BackendCore } from '../src/core.mts';
