@@ -873,6 +873,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         report('Your draft is saved. Reconnect, then press Send again.');
         return;
       }
+      if (model && !ordinaryPlan()?.modelOptions?.some(item => item.id === model)) {
+        report('The selected model is no longer available. Choose another model or use Automatic. Your draft is saved.');
+        return;
+      }
       const content = checkpoint.record.content;
       if (checkpoint.record.documents?.some(item => item.unavailable)) {
         report('A selected document is unavailable or has changed. Remove or reattach it before sending.');

@@ -918,18 +918,26 @@ test('thinking is bound to the observed model and applies only to the next submi
  } finally { await chat?.dispose(); f.restore(); }
 });
 
-test('a missing pinned model leaves the draft unsent until the model is reset', async () => {
+for (const duringSave of [false,true]) test('a missing pinned model leaves the draft unsent until the model is reset (during save: '+duringSave+')', async () => {
  const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
  const selections = new Map([[f.draft.resourceId,{id:'gpt-6.1-sol',label:'Synthetic Sol'}]]);
  f.detail.providers[0].modelOptions = [{id:'gpt-6.1-sol',label:'Synthetic Sol'}];
- let chat;
+ const save=Promise.withResolvers<void>();
+ let chat, saving=false, blockSave=duringSave;
+ const port={async command(name:string,input:any){
+  if(name==='saveDraft'&&blockSave){saving=true;await save.promise;}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
  try {
-  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,
    motion:motion.motion,viewId:'model-stale',models:{selections,async refresh(){}}});
   await chat.ready;
+  const form=f.view.root.querySelector('form'),send=named(form,'Send');
+  if(duringSave){form.fire('submit');await until(()=>saving);}
   f.detail.providers[0].modelOptions=[{id:'gpt-6.1-luna',label:'Synthetic Luna'}];
   await chat.refresh();
-  const form=f.view.root.querySelector('form'),send=named(form,'Send');
+  blockSave=false;save.resolve();
+  if(duringSave)await until(()=>f.calls.some(call=>call.name==='send')||/model is no longer available/i.test(f.view.root.querySelector('.cp-chat-status').textContent));
   assert.equal(send.disabled,true);
   assert.match(send.title,/model is no longer available/i);
   form.fire('submit');
@@ -943,7 +951,7 @@ test('a missing pinned model leaves the draft unsent until the model is reset', 
   assert.equal(Object.hasOwn(f.pending!.input,'model'),false);
   f.accept(true);
   await chat.whenSubmissionSettled();
- } finally {f.pending?.reject(Error('fixture cleanup'));await chat?.dispose();f.restore();}
+ } finally {save.resolve();f.pending?.reject(Error('fixture cleanup'));await chat?.dispose();f.restore();}
 });
 
 test('an undocumented catalog model offers no tool and a stale thinking choice cannot silently send', async () => {
