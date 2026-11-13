@@ -65,8 +65,9 @@ test('Core native project capture recalls across conversations after restart and
       } });
     }
     const content = 'I prefer a synthetic relay.';
-    const source = await core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } });
-    assert.ok(source && 'conversation' in source);
+    const source = await core.command('conversation', {
+      name: 'detail', input: { resourceId: chat.resourceId },
+    }) as { conversation: { revision: number } };
     const message = await core.command('addMessage', { resourceId: chat.resourceId, role: 'user',
       content, expectedRevision: source.conversation.revision, commandId: 'message' });
     const preview = await core.command('personalMemoryCapturePreviewNative', {
