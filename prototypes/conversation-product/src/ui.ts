@@ -318,6 +318,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   }
   if(event.key!=='Enter'||!switcher.node.open)return;
   event.preventDefault();
+  if(event.repeat)return;
   if(switchFailedGeneration===switchGeneration)void loadSwitcher(true);
   else if(first)first.click();
   else if(switchTimer!==undefined)void loadSwitcher(true);
