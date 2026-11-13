@@ -4,7 +4,7 @@ const { spawnSync } = require('node:child_process');
 const { join, resolve } = require('node:path');
 const { mkdtempSync, unlinkSync, rmdirSync } = require('node:fs');
 const { tmpdir } = require('node:os');
-const { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot, claimMemoryWitnessPhase } = require('./personal-memory-review-guard.cjs');
+const { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot, claimMemoryWitnessPhase, validateMemoryWitnessReceipt } = require('./personal-memory-review-guard.cjs');
 
 test('memory approval accepts only the current authenticated review child', () => {
   const parent = {}, review = {}, foreign = {};
@@ -90,4 +90,13 @@ test('save and restore are individually one-shot even if the first attempt fails
     unlinkSync(join(root, 'synthetic-restore.started'));
     rmdirSync(root);
   }
+});
+
+test('restore requires a completed save receipt from another process for the same project', () => {
+  const receipt = { contract: 'aerynth.synthetic-memory-save@1', pid: 13, id: 'fact', workspaceId: 'workspace',
+    projectId: 'project', input: { conversationId: 'chat', messageId: 'message', scope: 'project', expectedProjectId: 'project' } };
+  assert.equal(validateMemoryWitnessReceipt(receipt, 14), receipt);
+  assert.throws(() => validateMemoryWitnessReceipt(receipt, 13), /native_memory_save_receipt_invalid/);
+  assert.throws(() => validateMemoryWitnessReceipt({ ...receipt, projectId: 'foreign' }, 14), /native_memory_save_receipt_invalid/);
+  assert.throws(() => validateMemoryWitnessReceipt({}, 14), /native_memory_save_receipt_invalid/);
 });

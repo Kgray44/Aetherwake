@@ -47,4 +47,17 @@ function claimMemoryWitnessPhase(root, mode) {
   }
 }
 
-module.exports = { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot, claimMemoryWitnessPhase };
+function validateMemoryWitnessReceipt(receipt, pid = process.pid) {
+  const identifier = value => typeof value === 'string' && /^[A-Za-z0-9:_-]{1,200}$/u.test(value);
+  assert(receipt?.contract === 'aerynth.synthetic-memory-save@1' &&
+    Number.isSafeInteger(receipt.pid) && receipt.pid > 0 && receipt.pid !== pid &&
+    identifier(receipt.id) && identifier(receipt.workspaceId) && identifier(receipt.projectId) &&
+    identifier(receipt.input?.conversationId) && identifier(receipt.input?.messageId) &&
+    receipt.input.scope === 'project' && receipt.input.expectedProjectId === receipt.projectId,
+  'native_memory_save_receipt_invalid');
+  return receipt;
+}
+
+module.exports = {
+  createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot, claimMemoryWitnessPhase, validateMemoryWitnessReceipt,
+};

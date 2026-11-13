@@ -3,7 +3,7 @@ const { mkdirSync, readFileSync, readdirSync, writeFileSync } = require('node:fs
 const { spawnSync } = require('node:child_process');
 const { join } = require('node:path');
 const { setTimeout: pause } = require('node:timers/promises');
-const { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot, claimMemoryWitnessPhase } = require('./personal-memory-review-guard.cjs');
+const { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot, claimMemoryWitnessPhase, validateMemoryWitnessReceipt } = require('./personal-memory-review-guard.cjs');
 
 const mode = process.argv[3];
 assert(['save', 'restore'].includes(mode));
@@ -33,7 +33,8 @@ function allowWrite() {
 assert(allowWrite(), 'storage_reserve_admission_denied');
 const profile = join(root, 'electron-profile');
 if (mode === 'save') assert.equal(readdirSync(root).length, 0);
-else readFileSync(join(root, 'synthetic-receipt.json'));
+const receiptPath = join(root, 'synthetic-receipt.json');
+const expected = mode === 'restore' ? validateMemoryWitnessReceipt(JSON.parse(readFileSync(receiptPath, 'utf8'))) : null;
 claimMemoryWitnessPhase(root, mode);
 const { app, BrowserWindow, safeStorage } = require('electron');
 const { createProtectedStorageBroker } = require('./protected-storage.cjs');
@@ -43,7 +44,6 @@ if (mode === 'save') mkdirSync(profile);
 app.setPath('userData', profile);
 app.setPath('sessionData', profile);
 const path = join(root, 'profile.sqlite');
-const receiptPath = join(root, 'synthetic-receipt.json');
 const text = 'Use the synthetic quartz relay for the next prototype.';
 const factText = 'The next prototype uses the synthetic quartz relay.';
 
@@ -98,8 +98,6 @@ async function run() {
   try {
     if (mode === 'restore') {
       stage = 'verify restored canonical source';
-      const expected = JSON.parse(readFileSync(receiptPath, 'utf8'));
-      assert.notEqual(expected.pid, process.pid);
       const preview = await backend.call('personalMemoryCapturePreviewNative', expected.input);
       assert.equal(preview.sourceText, text);
       assert.equal(preview.enableStorage, false);
@@ -213,7 +211,8 @@ async function run() {
     await backend.close();
     backend = undefined;
     assert(!readFileSync(path).includes(Buffer.from(factText)));
-    writeFileSync(receiptPath, JSON.stringify({ input, id: saved.id, workspaceId: workspace.id, projectId: project.id, pid: process.pid }), { flag: 'wx' });
+    writeFileSync(receiptPath, JSON.stringify({ contract: 'aerynth.synthetic-memory-save@1', input, id: saved.id,
+      workspaceId: workspace.id, projectId: project.id, pid: process.pid }), { flag: 'wx' });
     console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron, nativeApproval: true, replayDenied: true }));
   } catch (error) {
     const code = /^[a-z][a-z0-9_]{1,79}$/u.test(error.message) ? error.message : error.code ?? error.name;
