@@ -882,3 +882,21 @@ test('SYNTHETIC hidden-DOM prepared long-request/open-evidence fixture preserves
   assert.equal(named(root, 'Approve and apply'), approve); assert.equal(named(root, 'Reject plan'), reject); assert.equal(approve.disabled, false);
   assert.equal(root.find(node => node.tagName === 'textarea'), editor); assert.equal(editor.value, 'Synthetic unsent recovery text'); assert.equal(editor.selectionStart, 4); assert.equal(editor.selectionEnd, 12); assert.equal(writes, 0); panel.dispose();
 });
+
+test('Vela request details show only the supplied memory acknowledgement classification', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.requests = [request({ state: 'responded', reviewedMemory: true })];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical));
+  try {
+    await panel.refresh();
+    assert.doesNotMatch(root.textContent, /saved-memory delivery|Provider acknowledged/);
+    canonical.requests[0].memoryDisclosure = { state: 'simulated', manifestDigest: 'a'.repeat(64) };
+    await panel.refresh();
+    assert.match(root.textContent, /Simulated saved-memory delivery/);
+    assert.doesNotMatch(root.textContent, /Provider acknowledged/);
+    canonical.requests[0].memoryDisclosure.state = 'acknowledged';
+    await panel.refresh();
+    assert.match(root.textContent, /Provider acknowledged the reviewed request with saved memory/);
+    assert.doesNotMatch(root.textContent, /Simulated saved-memory delivery/);
+  } finally { panel.dispose(); }
+});
