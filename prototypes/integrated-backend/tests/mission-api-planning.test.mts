@@ -2614,11 +2614,11 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
   const evaluation = scenario.startsWith('evaluation');
   const noteCase = scenario === 'evaluation note';
   const interrupted = scenario === 'interrupt' || scenario === 'evaluation interrupt' || scenario === 'app-owned interrupted';
+  const documentWorker = noteCase ? undefined : await import('../../visual-experience/cinematic-v3/src/document-text-worker.ts');
   const bytes = docxFixture();
   let bodyText: string;
-  const f = fixture(true, true, { extract: async (input, signal) => {
-    const { extractDocumentText } = await import('../../visual-experience/cinematic-v3/src/document-text-worker.ts');
-    const extracted = await extractDocumentText(bytes, input.format, input.maxTextBytes, signal);
+  const f = fixture(true, true, documentWorker && { extract: async (input, signal) => {
+    const extracted = await documentWorker.extractDocumentText(bytes, input.format, input.maxTextBytes, signal);
     assert.equal(extracted.state, 'complete');
     bodyText = extracted.text;
     return { ...extracted, jobId: input.jobId, sourceRevision: input.sourceRevision,
