@@ -460,6 +460,10 @@ test("an observed conversation retires busy from readback after a dropped termin
   await drain();
   assert.equal(received.at(-1).execution.state, "unknown");
   assert.equal(received.at(-1).execution.taskVerified, false);
+  const terminalCount = received.length;
+  f.emit(delta({ eventId: "late-after-terminal", cursor: 2 }));
+  await drain();
+  assert.equal(received.length, terminalCount);
   off();
 });
 
