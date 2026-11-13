@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve, isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
+import { nativeMissionDiagnostics } from './fixtures/native-mission-diagnostics.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
 import type { MissionExecutor, MissionPlanningOffer, MissionPreview, MissionProjection } from '../src/mission-contracts.mts';
 
@@ -139,7 +140,8 @@ test('native measured objectives retain domain verification when API workers add
     const preview = await f.preview('Measure CPU and RAM with two independent specialists');
     assert.equal(preview.plan.coverage, undefined);
     const mission = await f.start(preview), done = await settled(f, mission.id);
-    assert.equal(done.outcome, 'verified'); assert.ok(done.tasks.every(task => task.state === 'verified'));
+    assert.equal(done.outcome, 'verified', nativeMissionDiagnostics(done));
+    assert.ok(done.tasks.every(task => task.state === 'verified'), nativeMissionDiagnostics(done));
     assert.equal(done.tasks.find(task => task.id === 'cpu')!.attempts[0].evidence?.source, 'node:os.cpus');
     assert.equal(done.tasks.find(task => task.id === 'ram')!.attempts[0].evidence?.source, 'node:os.totalmem+freemem');
     assert.ok(done.tasks.filter(task => task.specialist).every(task => task.attempts[0].evidence?.source === 'openai-api-vela:reported'));

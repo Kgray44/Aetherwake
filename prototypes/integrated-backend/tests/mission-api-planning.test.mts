@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { crc32, deflateSync } from 'node:zlib';
 import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
+import { nativeMissionDiagnostics } from './fixtures/native-mission-diagnostics.mts';
 import { projectMissionExecution, type MissionExecutionProfile } from '../src/execution-profiler.mts';
 import { nativeMissionExecutors, missionResultAvailable } from '../src/mission-native.mts';
 import type { MissionExecutor,MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
@@ -619,7 +620,7 @@ test('Executive reviews a real native mission checkpoint through the synthetic R
       await new Promise(done => setTimeout(done, 10));
       settled = await f.core.command('missions', { name: 'read', input: { id: started.id } }) as MissionProjection;
     }
-    assert.equal(settled.outcome, 'verified');
+    assert.equal(settled.outcome, 'verified', nativeMissionDiagnostics(settled));
     const trigger = settled.events.findLast(event => event.kind === 'settled')!;
     const options = { configurationVersion: 1, model: 'gpt-6-luna', authorize: () => false };
     assert.equal((await f.core.proposeVelaMissionRevision(started.id, trigger.seq, options)).state, 'unavailable');
@@ -1014,7 +1015,7 @@ test('native Start review binds the complete objective to current host proofs ac
       await new Promise(done => setTimeout(done, 10));
       settled = await read();
     }
-    assert.equal(settled.outcome, 'verified');
+    assert.equal(settled.outcome, 'verified', nativeMissionDiagnostics(settled));
     assert.equal(settled.coverage, undefined);
     assert.equal(settled.objectiveReview?.digest, approvedObjectiveDigest);
     await f.core.command('missions', { name: 'post-report', input: { id: started.id } });
