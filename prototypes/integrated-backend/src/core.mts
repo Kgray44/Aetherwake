@@ -6843,6 +6843,7 @@ export class BackendCore {
       }
       if (policy.enable !== undefined) {
         ensure(typeof policy.enable === 'boolean' && Number.isSafeInteger(policy.expectedVersion), 'invalid_privacy_policy');
+        if (policy.enable) ensure(this.personalMemory?.hasStorage(), 'personal_storage_disabled');
         return await review.setProviderUse(policy.assistant ?? 'ordinary', policy.enable, policy.expectedVersion!) as CommandMap[K]['output'];
       }
       if (!this.personalMemory?.hasStorage()) return defaultPersonalMemoryPolicy() as CommandMap[K]['output'];
