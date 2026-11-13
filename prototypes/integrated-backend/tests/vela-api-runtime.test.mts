@@ -89,6 +89,55 @@ const weatherQuery:WeatherQuery={startDate:null,endDate:null,period:'tomorrow',m
 const weatherCall=(query:unknown=weatherQuery,id='resp-weather',callId='call-weather')=>response('',id,[{type:'function_call',id:'fc-'+callId,call_id:callId,name:WEATHER_TOOL_NAME,arguments:JSON.stringify(query),status:'completed'}] as any);
 const unavailableWeather=()=>readWeatherData(weatherQuery,new AbortController().signal,{authorize(){throw Error('location_os_denied');},locate:async()=>{throw Error('unexpected_location');},fetch:async()=>{throw Error('unexpected_weather_network');}});
 
+test('Vela memory transport binds one reviewed user prompt and forbids tool continuations', async () => {
+  const f = fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const runtime = (f.core as any).velaApiRuntime as VelaApiRuntime;
+    await runtime.models(1);
+    const requestId = 'synthetic-vela-memory';
+    const prompt = 'Which relay?\nQuoted personalization: synthetic relay.';
+    let current = false;
+    const memory = { requestId, promptDigest: createHash('sha256').update(prompt).digest('hex'), validate(value: string) {
+      assert.equal(value, prompt);
+      if (!current) throw Error('stale_personal_context');
+      return 'synthetic-memory-grant';
+    } };
+    const input = { requestId, version: 1, model: 'gpt-6-luna', prompt, contextDigest: 'a'.repeat(64), memory, validate() {} };
+    const signal = new AbortController().signal;
+    await assert.rejects(runtime.run(input, signal), /stale_personal_context/);
+    current = true;
+    await assert.rejects(runtime.run({ ...input, prompt: prompt + ' altered' }, signal), /vela_memory_request_mismatch/);
+    await assert.rejects(runtime.run({ ...input, requestId: requestId + '-foreign' }, signal), /vela_memory_request_mismatch/);
+    await assert.rejects(runtime.run({ ...input, weatherTool: { async run() { throw Error('unexpected weather'); } } }, signal), /vela_memory_requires_conversation/);
+    const connection = (f.core as any).velaApiConnection as import('../src/vela-api-connection.mts').VelaApiConnection;
+    const revalidate = connection.revalidate.bind(connection);
+    connection.revalidate = async (...args) => {
+      await revalidate(...args);
+      current = false;
+    };
+    try {
+      const result = await runtime.run(input, signal);
+      assert.notEqual(result.result.outcome, 'completed');
+    } finally { connection.revalidate = revalidate; }
+    assert.equal(f.requests.length, 0);
+    current = true;
+    const freshId = requestId + '-fresh-review';
+    const fresh = { ...input, requestId: freshId, memory: { ...memory, requestId: freshId } };
+    f.replies.push(body => {
+      assert.deepEqual(body.input, [{ role: 'user', content: prompt }]);
+      assert(!body.instructions.includes('synthetic relay'));
+      assert.equal(body.tools, undefined);
+      assert.equal(body.store, false);
+      return response('Synthetic reply');
+    });
+    assert.equal((await runtime.run(fresh, signal)).result.outcome, 'completed');
+    await assert.rejects(runtime.run(fresh, signal), /api_execution_already_dispatched/);
+    assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});
+
 test('model-requested current weather forwards actual native-reader temperature and humidity data with coordinates confined to the weather source',async()=>{
  const f=fixture();try{await f.configure();await f.authorize();const runtime=(f.core as any).velaApiRuntime as VelaApiRuntime;await runtime.models(1);const query:WeatherQuery={startDate:null,endDate:null,period:'current',metrics:['temperature','humidity'],aggregation:'current'},sourceRequests:string[]=[],now=()=>new Date('2026-11-04T12:30:00Z');let authorizations=0;
   const source:typeof fetch=async url=>{sourceRequests.push(String(url));if(String(url).includes('/points/'))return Response.json({properties:{timeZone:'UTC',forecastHourly:'https://api.weather.gov/gridpoints/BTV/100,30/forecast/hourly'}});return Response.json({properties:{generatedAt:'2026-11-04T12:00:00Z',periods:[{startTime:'2026-11-04T12:00:00Z',endTime:'2026-11-04T13:00:00Z',temperature:55,temperatureUnit:'F',relativeHumidity:{unitCode:'wmoUnit:percent',value:61}}]}});};

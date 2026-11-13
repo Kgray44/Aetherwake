@@ -92,6 +92,8 @@ export interface VelaApiRun {
   lane?: 'mission-specialist';
   oneUse?: true;
   bufferedText?: true;
+  /** Native approval for one conversational personalization disclosure. */
+  memory?: { requestId: string; promptDigest: string; validate(prompt: string): string };
   validate(): void;
   stage?(executionId: string, review: DispatchReview): void | (() => void);
   event?(event: TurnEvent): void;
@@ -294,10 +296,20 @@ export class VelaApiRuntime {
     if(input.advanceContext)check(input.tools&&typeof input.validateResumeContext==='function','vela_tool_context_transition_invalid');
     let currentPrompt=input.prompt,currentContext=input.contextDigest,currentTransition=transition;
     check(this.running.size < VELA_API_RUNTIME_LIMITS.concurrent && !this.running.has(input.requestId) && !this.lifetime.signal.aborted, 'vela_api_busy');
-    this.validate(input.version); input.validate();
+    const memory = input.memory;
+    const validateMemory = () => {
+      if (!memory) return;
+      check(!input.lane && !input.missionCognition && !input.tools && !input.weatherTool && !input.catalog &&
+        !input.outputSchema && !input.resume && !input.resumeContext && !input.resumeReceipt && !input.advanceContext,
+        'vela_memory_requires_conversation');
+      check(input.memory === memory && memory.requestId === input.requestId && memory.promptDigest === digest(currentPrompt),
+        'vela_memory_request_mismatch');
+      memory.validate(currentPrompt);
+    };
+    this.validate(input.version); input.validate(); validateMemory();
     const reasoningEfforts = velaApiReasoningEfforts(input.model);
     check(input.reasoningEffort === undefined || reasoningEfforts.includes(input.reasoningEffort), 'unsupported_reasoning_effort');
-    check(input.resume||!(input.oneUse||input.tools) || !this.options.db.prepare('SELECT 1 FROM vela_api_runs WHERE request_id=?').get(input.requestId), 'api_execution_already_dispatched');
+    check(input.resume||!(input.oneUse||input.tools||memory) || !this.options.db.prepare('SELECT 1 FROM vela_api_runs WHERE request_id=?').get(input.requestId), 'api_execution_already_dispatched');
     const semantic=input.tools,catalog=semantic?validateVelaToolCatalog(semantic.catalog):undefined;
     const selectionDigest=digest(JSON.stringify({prompt:input.prompt,instruction:input.instruction??null,model:input.model,effort:input.reasoningEffort??null}));
     const controlDigest=digest(JSON.stringify({instruction:input.instruction??null,model:input.model,effort:input.reasoningEffort??null})),identityDigest=digest(JSON.stringify({requestId:input.requestId,version:input.version,contextDigest:input.contextDigest,selectionDigest}));
@@ -320,7 +332,7 @@ export class VelaApiRuntime {
       const definition = { type: 'function' as const, name: tool.name, description: tool.description, parameters: parameters as unknown as ApiJsonSchema, strict: true as const };
       definitions.push({ definition, schemaDigest: digest(JSON.stringify(definition)), authorizationRef: 'vela-api-schema:' + input.catalog.projection.digest });
     }
-    const fence = () => {check(identityDigest===digest(JSON.stringify({requestId:input.requestId,version:input.version,contextDigest:input.contextDigest,selectionDigest:digest(JSON.stringify({prompt:input.prompt,instruction:input.instruction??null,model:input.model,effort:input.reasoningEffort??null}))})),'vela_tool_run_binding_changed');if(transition)check(transitionKeys.every(key=>(input.resumeContext as any)?.[key]===(transition as any)[key]),'vela_tool_context_transition_invalid');if(currentTransition)input.validateResumeContext!(currentTransition,{contextDigest:currentContext,promptDigest:digest(currentPrompt)});if(semantic){check(Number.isFinite(deadline)&&Date.now()<deadline,'vela_workflow_budget_exhausted');const budget=semantic.budget;check(Number.isSafeInteger(budget.maxProviderRequests)&&budget.maxProviderRequests>=0&&budget.maxProviderRequests<=12&&Number.isSafeInteger(budget.maxToolCalls)&&budget.maxToolCalls>=0&&budget.maxToolCalls<=16&&Number.isSafeInteger(budget.providerRequests)&&budget.providerRequests>=0&&budget.providerRequests<=budget.maxProviderRequests&&Number.isSafeInteger(budget.toolCalls)&&budget.toolCalls>=0&&budget.toolCalls<=budget.maxToolCalls&&Date.parse(budget.deadline)>=deadline,'vela_workflow_budget_invalid');check(semantic.catalog.digest===catalog!.digest&&semantic.catalog.scopeDigest===catalog!.scopeDigest&&velaToolCatalogDigest(semantic.catalog)===catalog!.digest,'vela_tool_catalog_changed');semantic.validate();}check(!combined.aborted, 'vela_execution_cancelled'); this.validate(input.version); input.validate(); };
+    const fence = () => {check(identityDigest===digest(JSON.stringify({requestId:input.requestId,version:input.version,contextDigest:input.contextDigest,selectionDigest:digest(JSON.stringify({prompt:input.prompt,instruction:input.instruction??null,model:input.model,effort:input.reasoningEffort??null}))})),'vela_tool_run_binding_changed');if(transition)check(transitionKeys.every(key=>(input.resumeContext as any)?.[key]===(transition as any)[key]),'vela_tool_context_transition_invalid');if(currentTransition)input.validateResumeContext!(currentTransition,{contextDigest:currentContext,promptDigest:digest(currentPrompt)});if(semantic){check(Number.isFinite(deadline)&&Date.now()<deadline,'vela_workflow_budget_exhausted');const budget=semantic.budget;check(Number.isSafeInteger(budget.maxProviderRequests)&&budget.maxProviderRequests>=0&&budget.maxProviderRequests<=12&&Number.isSafeInteger(budget.maxToolCalls)&&budget.maxToolCalls>=0&&budget.maxToolCalls<=16&&Number.isSafeInteger(budget.providerRequests)&&budget.providerRequests>=0&&budget.providerRequests<=budget.maxProviderRequests&&Number.isSafeInteger(budget.toolCalls)&&budget.toolCalls>=0&&budget.toolCalls<=budget.maxToolCalls&&Date.parse(budget.deadline)>=deadline,'vela_workflow_budget_invalid');check(semantic.catalog.digest===catalog!.digest&&semantic.catalog.scopeDigest===catalog!.scopeDigest&&velaToolCatalogDigest(semantic.catalog)===catalog!.digest,'vela_tool_catalog_changed');semantic.validate();}check(!combined.aborted, 'vela_execution_cancelled'); this.validate(input.version); input.validate(); validateMemory(); };
     const checkpoint=(phase:VelaWorkflowPhase,reason?:string)=>{semantic?.checkpoint(phase,reason);};
     const outputFinal=(phase:VelaWorkflowPhase,reason?:string,ref?:VelaApiToolContinuationRef):VelaApiRunResult=>{check(final,'vela_workflow_budget_exhausted');checkpoint(phase,reason);return {...final,workflow:{workflowId:semantic!.workflowId,phase,...(reason?{reason}:{}),...(ref?{continuation:ref,pendingReceiptIds:pending.map(item=>item.receipt.id)}:{})}};};
     const pause=()=>{check(semantic&&continuation&&final&&pending.length,'vela_tool_continuation_invalid');const state:VelaApiToolContinuation={contract:'aerynth.vela.tool-continuation@1',workflowId:semantic.workflowId,requestId:input.requestId,version:input.version,contextDigest:currentContext,selectionDigest:digest(JSON.stringify({prompt:currentPrompt,instruction:input.instruction??null,model:input.model,effort:input.reasoningEffort??null})),controlDigest,catalogDigest:catalog!.digest,deadline,providerRequests:semantic.budget.providerRequests,toolCalls:semantic.budget.toolCalls,maxProviderRequests:semantic.budget.maxProviderRequests,maxToolCalls:semantic.budget.maxToolCalls,budgetDeadline:semantic.budget.deadline,fetchedSchemas:[...fetchedSchemas],invokedIds:[...invokedIds],outputBytes,items:structuredClone(items),receipts:[...receipts.values()],fetchedIds:[...fetched],continuation,final,pending};const ref=this.retainContinuation(semantic.workflowId,state);return outputFinal(pending.some(item=>item.receipt.pause==='native-review')?'awaiting-review':'waiting-job',undefined,ref);};

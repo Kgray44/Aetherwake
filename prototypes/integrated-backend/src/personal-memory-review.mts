@@ -152,7 +152,7 @@ export function createPersonalMemoryReview(options: Options) {
         if (Buffer.byteLength(prompt) > 16384) throw new PersonalContextError('planning_prompt_capacity_exceeded');
         const promptDigest = createHash('sha256').update(prompt).digest('hex');
         return {
-          prompt, promptDigest, manifestDigest: manifest.digest,
+          requestId, prompt, promptDigest, manifestDigest: manifest.digest,
           approve(reviewedPromptDigest: string) { disclosure.approve(promptDigest, reviewedPromptDigest); },
           validate(currentPrompt: string) {
             return disclosure.validate(() => {
