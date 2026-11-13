@@ -8,6 +8,9 @@ on:
       timeout:
         required: true
         type: number
+      windows-shard:
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -49,35 +52,43 @@ jobs:
         run: npm ci --no-audit --no-fund
         working-directory: prototypes/visual-experience/cinematic-v3
       - name: Typecheck the backend
+        if: inputs.windows-shard != '1'
         run: npm run typecheck
         working-directory: prototypes/integrated-backend
       - name: Typecheck Vela Core
+        if: inputs.windows-shard != '1'
         run: node prototypes/integrated-backend/node_modules/typescript/bin/tsc --project prototypes/vela-core/tsconfig.json --typeRoots prototypes/integrated-backend/node_modules/@types
       - name: Typecheck the desktop application
         if: runner.os != 'Windows'
         run: npm run typecheck
         working-directory: prototypes/visual-experience/cinematic-v3
       - name: Build the desktop application and Windows native helpers
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.windows-shard != '1'
         run: npm run build
         working-directory: prototypes/visual-experience/cinematic-v3
       - name: Test the review build and runtime source contracts
+        if: inputs.windows-shard != '1'
         run: node --test "scripts/review-*.test.mjs"
       - name: Test verification tooling and architecture boundaries
         if: runner.os == 'Linux'
-        run: node --test scripts/aerynth-ci.test.mjs scripts/aerynth-boundaries.test.mjs
+        run: node --test scripts/aerynth-ci.test.mjs scripts/aerynth-boundaries.test.mjs scripts/aerynth-backend-shards.test.mjs
+      - name: Test the Windows shard runner
+        if: inputs.windows-shard == '0'
+        run: node --test scripts/aerynth-backend-shards.test.mjs
       - name: Check native journey script syntax
+        if: inputs.windows-shard != '1'
         run: node --check scripts/verify-living-instruments-native.mjs
       - name: Exercise the cross-package acceptance fixtures
         id: acceptance
         env:
           AERYNTH_ACCEPTANCE_OUTPUT: ${{ runner.temp }}/aerynth-acceptance
+          AERYNTH_WINDOWS_SHARD: ${{ inputs.windows-shard }}
         run: node scripts/run-aerynth-acceptance.mts
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: aerynth-acceptance-${{ inputs.runner }}-${{ github.run_attempt }}
+          name: aerynth-acceptance-${{ inputs.runner }}${{ inputs.windows-shard != '' && format('-shard-{0}', inputs.windows-shard) || '' }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/aerynth-acceptance/acceptance.json
           if-no-files-found: ${{ steps.acceptance.outcome == 'success' && 'error' || 'warn' }}
           retention-days: 14
