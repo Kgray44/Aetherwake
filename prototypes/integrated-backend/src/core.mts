@@ -20,6 +20,7 @@ import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS, MISSION_PROPOSAL
 import { describeMissionObjectiveReview, provisionalObjectiveCoverage, reviewableMissionObjective } from './mission-objective-review.mts';
 import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, reassignMissionSpecialist, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
 import { MissionTeams } from './mission-teams.mts';
+import { parseReviewedArtifactMission, resolveReviewedArtifactMission, specialistMissionObjective } from './mission-reviewed-composition.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
 import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningEvidenceSelection, MissionPlanningOffer, MissionPlanningSourceRef, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import { ARTIFACT_MISSION_PREFIX, EXPLICIT_MISSION_PREFIX, MISSION_LIMITS } from './mission-contracts.mts';
@@ -1375,7 +1376,8 @@ export class BackendCore {
           (agentProfileId === undefined || identifier(agentProfileId)) &&
           (teamId === undefined || identifier(teamId) && agentProfileId === undefined && proposalId === undefined), 'invalid_mission_command');
         const artifactRequest = typeof objective === 'string' ? ARTIFACT_MISSION_PREFIX.exec(objective.trim()) : null;
-        if (artifactRequest) ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
+        const mixedArtifact = artifactRequest ? null : parseReviewedArtifactMission(objective);
+        if (artifactRequest || mixedArtifact) ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
           noteIds === undefined && fileIds === undefined && projectEvidence === undefined, 'mission_artifact_context_unsupported');
         if (noteIds !== undefined || fileIds !== undefined || projectEvidence !== undefined) {
           ensure(agentProfileId === undefined && proposalId === undefined && teamId === undefined &&
@@ -1390,10 +1392,13 @@ export class BackendCore {
         if (stored) ensure(this.missionPlanningContextCurrent(stored.plan), 'mission_planning_context_changed');
         const artifactPlan = artifactRequest ? this.missionArtifactPlan(objective, scope,
           objective.trim().slice(artifactRequest[0].length), artifactRequest[1]?.trim()) : undefined;
+        const mixedPlan = mixedArtifact ? resolveReviewedArtifactMission(objective,
+          work => nativeMissionPlan(work, scope) ?? specialistMissionPlan(work, scope, this.missionSpecialistSelection(scope)),
+          (prompt, options) => this.missionArtifactPlan(objective, scope, prompt, options), mixedArtifact) : undefined;
         const plan = teamId !== undefined ? teamMissionPlan(objective, scope, this.missionTeams.read(teamId, scope), id => {
           const profile = this.missionAgentProfile(scope, id);
           return profile ? { title: profile.resource.title, selection: this.missionSpecialistSelection(scope, id) } : undefined;
-        }) : (stored ? structuredClone(stored.plan) : undefined) ?? artifactPlan ??
+        }) : (stored ? structuredClone(stored.plan) : undefined) ?? artifactPlan ?? mixedPlan ??
           (agentProfileId === undefined ? nativeMissionPlan(objective, scope) : null) ??
           specialistMissionPlan(objective, scope, this.missionSpecialistSelection(scope),
             agentProfileId === undefined ? undefined : { selection: this.missionSpecialistSelection(scope, agentProfileId) });
@@ -1423,7 +1428,8 @@ export class BackendCore {
             ...artifactImage.settings, width: missionImageSize, height: missionImageSize,
             rates: missionImageRates, files: missionArtifactFiles } } : {}),
           ...(remote.length ? { externalReview: { provider: [...new Set(remote.map(task => task.specialist?.provider === VELA_API_PROVIDER ? 'Vela dedicated API' : 'ChatGPT plan'))].join(' + '), model: selected?.model ?? 'Unavailable',
-            effort: selected?.effort, calls: remote.length } } : {}) };
+            effort: selected?.effort, calls: remote.length,
+            ...(mixedArtifact ? { objective: specialistMissionObjective(plan) } : {}) } } : {}) };
         ensure(request.input.fingerprint === fingerprint, 'mission_preview_changed');
         if (approvedObjectiveDigest !== undefined)
           ensure(reviewed && objectiveReview && approvedObjectiveDigest === objectiveReview.digest, 'mission_objective_review_changed');
