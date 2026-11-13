@@ -423,6 +423,25 @@ test('a later assessment cannot erase an earlier sourced conflict by dropping a 
   }
 });
 
+test('an unresolved follow-up retains earlier conflicting passages alongside new evidence', async () => {
+  const accounts = ['Inspection is Monday.', 'Inspection is Tuesday.', 'Inspection is Wednesday.']
+    .map((text, index) => ({ ...candidate, sourceId: String(index), text }));
+  const result = await investigateSemanticHistory(request, {
+    search: query => ({ sources: query === evidence.query ? accounts.slice(0, 2) : accounts.slice(2), scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => {
+      if (call.stage === 'interpret') return proposal;
+      const cited = call.round === 1 ? [0, 1] : [1, 2];
+      return { version: 3, clarification: '', assessment: [{
+        key: 's1', status: 'contradicted', query: call.round === 1 ? 'inspection correction' : '',
+        passages: cited.map(index => ({ source: 'e' + (index + 1), quote: accounts[index].text })),
+      }] };
+    },
+  });
+  assert.equal(result.coverage[0].status, 'contradicted');
+  assert.deepEqual(result.coverage[0].passages, accounts.map(({ sourceId, text }) => ({ sourceId, quote: text })));
+});
+
 test('distinguishes cancelling a reviewed assessment from an invalid model response', async () => {
   const controller = new AbortController();
   const result = await investigateSemanticHistory(request, {

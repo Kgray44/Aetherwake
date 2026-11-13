@@ -360,7 +360,18 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         const disputed = new Map(priorAssessment.rows.filter(row => row.status === 'contradicted').map(row => [row.key, row]));
         assessment.rows = assessment.rows.map(row => {
           const prior = disputed.get(row.key);
-          if (!prior || row.status === 'contradicted') return row;
+          if (!prior) return row;
+          if (row.status === 'contradicted') {
+            if (!prior.passages || !row.passages) return row;
+            const passages = [...prior.passages];
+            for (const passage of row.passages) {
+              if (passages.length >= maxPassagesPerNeed) break;
+              if (!passages.some(previous => previous.source === passage.source && previous.quote === passage.quote)) {
+                passages.push(passage);
+              }
+            }
+            return { ...row, passages, sources: [...new Set(passages.map(passage => passage.source))] };
+          }
           // A new citation can support a model-proposed resolution. Picking one
           // side of the already cited conflict cannot establish a resolution.
           if (row.status === 'supported' && row.passages?.some(passage =>
