@@ -2505,7 +2505,9 @@ test('private CIE evaluation binds an explicit empty selection to one canonical 
   const f = fixture(true, true);
   try {
     await f.ready();
-    const profile = f.core.readVelaEvaluationProfile()!;
+    const profile = f.core.readVelaEvaluationProfile();
+    assert.ok(profile);
+    assert.equal(profile.configurationVersion, 1);
     const claim = { profileId: profile.profileId, configurationVersion: profile.configurationVersion,
       claimToken: 'a'.repeat(64), bindingDigest: 'b'.repeat(64) };
     const intent = 'Which date is supported by the supplied evidence?';
