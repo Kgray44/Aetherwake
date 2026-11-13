@@ -200,16 +200,22 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           if (askVela.disabled || stagingForVela || !root.contains(askVela)) return;
           const inScope = options.captureDocumentHandoffScope?.();
           // A save can replace the rendered chip while preserving the same selected attachment.
-          const isCurrent = () => !retiring && !disposed && !accessRevoked && (inScope?.() ?? true) &&
-            session.snapshot().documents.some(item => item.id === document.id && item.version === document.version && !item.unavailable);
+          const hasAttachment = (snapshot: DraftSessionSnapshot) =>
+            snapshot.documents.some(item => item.id === document.id && item.version === document.version && !item.unavailable);
+          let attachmentRetired = false;
+          const isCurrent = () => !attachmentRetired && !retiring && !disposed && !accessRevoked &&
+            (inScope?.() ?? true) && hasAttachment(session.snapshot());
           if (!isCurrent()) return;
+          const unsubscribe = session.subscribe(snapshot => {
+            if (!hasAttachment(snapshot)) attachmentRetired = true;
+          });
           stagingForVela = true;
-          renderDraft();
           try {
+            renderDraft();
             await session.flush();
             if (isCurrent()) await options.askVelaAboutDocument!(document,isCurrent);
           } catch (error) { if (isCurrent()) report(errorText(error)); }
-          finally { stagingForVela = false; if (!disposed) renderDraft(); }
+          finally { unsubscribe(); stagingForVela = false; if (!disposed) renderDraft(); }
         });
         return [open, askVela, remove];
       }

@@ -1625,6 +1625,33 @@ for (const action of ['close', 'switch', 'switch during save'] as const) test('c
  } finally { releaseSave(); release(); await manager?.dispose(); f.restore(); }
 });
 
+test('removing and reattaching a document retires the pending Ask Vela action', async () => {
+ const f=fixture('chatgpt-plan-responses');
+ const document={id:'file:brief',version:3,title:'Brief.pdf'};
+ const session=new ConversationDraftSession({port:f.port,resourceId:f.draft.resourceId});
+ let chat, isCurrent:(()=>boolean)|undefined, release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ try {
+  chat=mountConversationChat(f.view.root,{
+   port:f.port,resourceId:f.draft.resourceId,draftSession:session,
+   openDocument:async()=>'opened',
+   askVelaAboutDocument:async(_document,current)=>{isCurrent=current;await gate;},
+  });
+  await chat.ready;
+  session.updateDocuments([document]);
+  named(f.view.root,'Ask Vela').fire('click');
+  await until(()=>!!isCurrent);
+  assert.equal(isCurrent?.(),true);
+  session.updateDocuments([]);
+  assert.equal(isCurrent?.(),false);
+  session.updateDocuments([document]);
+  assert.equal(isCurrent?.(),false);
+  release();
+  await chat.flush();
+  assert.deepEqual(f.draft.documents,[document]);
+ } finally {release();await chat?.dispose();await session.dispose();f.restore();}
+});
+
 for (const closeDuringHandoff of [false, true]) test('saved document picker reuses an exact current resource (close during handoff: '+closeDuringHandoff+')', async () => {
  const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
  let chat;
