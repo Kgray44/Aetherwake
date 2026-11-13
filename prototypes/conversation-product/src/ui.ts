@@ -161,12 +161,12 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   switchStatus.textContent='Finding conversations…';
   return ++switchGeneration;
  };
- let switchOpenGeneration:number|undefined;
+ let switchOpen:{generation:number;intent:number}|undefined;
  let switchFailedGeneration:number|undefined;
  let switchComposing=false;
  const loadSwitcher=async(openFirst=false)=>{
   const generation=invalidateSwitcher(),text=switchQuery.value.trim(),mode=switchMode.value;
-  if(openFirst)switchOpenGeneration=generation;
+  if(openFirst)switchOpen={generation,intent:openIntent};
   const stillCurrent=()=>!disposed&&!closing&&generation===switchGeneration&&switcher.node.open;
   const scope:SearchQuery={projectId:state.query.projectId,...(mode==='favorite'?{favorite:true}:{}),sort:mode==='running'?'active':'activity',limit:12};
   switchLoading=true;
@@ -205,7 +205,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    });
    switchResults.replaceChildren(...rows);
    switchStatus.textContent=rows.length?`${rows.length} ${exact?'matches':'conversations'}${page.hasMore?' · more in history':''}`:text?'No matches in this group.':'No conversations in this group.';
-   if(switchOpenGeneration===generation)rows[0]?.click();
+   if(switchOpen?.generation===generation&&switchOpen.intent===openIntent)rows[0]?.click();
   }catch{
    if(stillCurrent()){
     switchFailedGeneration=generation;
@@ -226,7 +226,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   finally{if(generation===switchGeneration)switchLoading=false;}
  };
  const openSwitcher=()=>{if(disposed)return Promise.reject(new Error('conversation_manager_closed'));switcher.node.open=true;switchQuery.focus();return loadSwitcher();};
- const resetSwitcher=()=>{invalidateSwitcher();switchLoading=false;switchOpenGeneration=undefined;switchComposing=false;};
+ const resetSwitcher=()=>{invalidateSwitcher();switchLoading=false;switchOpen=undefined;switchComposing=false;};
  switcher.node.addEventListener('toggle',()=>{if(switcher.node.open){switchQuery.focus();if(!switchLoading&&switchTimer===undefined&&!switchComposing)void loadSwitcher();}else resetSwitcher();});
  const scheduleSwitcher=()=>{invalidateSwitcher();if(switcher.node.open&&!switchComposing)switchTimer=setTimeout(()=>void loadSwitcher(),120);};
  const setHistoryQuery=(next:SearchQuery)=>{
@@ -259,7 +259,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   if(switchFailedGeneration===switchGeneration)void loadSwitcher(true);
   else if(first)first.click();
   else if(switchTimer!==undefined)void loadSwitcher(true);
-  else if(switchLoading)switchOpenGeneration=switchGeneration;
+  else if(switchLoading)switchOpen={generation:switchGeneration,intent:openIntent};
  });
  const renderBranchNavigator=(d:Detail)=>{
   const view=disclosure('Branch lineage','cp-branch-navigator');view.node.dataset.resourceId=d.conversation.resourceId;let generation=0;
