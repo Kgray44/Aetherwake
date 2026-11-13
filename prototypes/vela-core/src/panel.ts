@@ -645,6 +645,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   shell.addEventListener('keydown', event => { if (event.key !== 'Escape') return; const target = event.target as HTMLElement, opened = target.closest<HTMLDetailsElement>('details[open]') ?? (lastDisclosure?.open && shell.contains(lastDisclosure) && !lastDisclosure.closest('[hidden]') ? lastDisclosure : null); if (!more.hidden && (!opened || opened === contextPanels.get(activeContext!)?.panel.node)) { event.preventDefault(); event.stopPropagation(); closeContext(); } else if (opened) { event.preventDefault(); event.stopPropagation(); opened.open = false; opened.querySelector('summary')?.focus(); } });
   function renderSelection() {
     updateSemanticContext();
+    for(const [id,control] of sourceControls)control.checked=selected.has(id);
     selection.replaceChildren(); selection.hidden = !selected.size && !handoffSelection && !routingAgentSelection;
     routeHistory.disabled = !!handoffSelection;
     if (handoffSelection) {

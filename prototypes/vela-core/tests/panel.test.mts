@@ -479,10 +479,18 @@ for (const closeDuringPick of [false,true]) test('Vela waits for the file select
   let picks = 0;
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
     pickSources: async () => { picks++; return pending; },
+    search: async () => [{ ...file, kind: 'resource', resourceKind: 'file' }],
     request: async input => { turns.push(input); return request({ state: 'responded' }); },
   }));
   try {
     await panel.open();
+    const sourceSearch = root.find(node => node.getAttribute('aria-label') === 'Search your work')!;
+    sourceSearch.value = 'Pending';
+    sourceSearch.closest('form')!.fire('submit');
+    const searchResults = root.find(node => node.className === 'vela-core-results')!;
+    await settles(() => !!searchResults.querySelector('input'));
+    const include = searchResults.querySelector('input')!;
+    assert.equal(include.checked,false);
     const editor = root.querySelector('textarea')!;
     editor.value = 'Summarize the selected file.';
     editor.fire('input');
@@ -508,6 +516,7 @@ for (const closeDuringPick of [false,true]) test('Vela waits for the file select
       return;
     }
     await settles(() => !!named(root, 'Remove source Pending.docx'));
+    assert.equal(include.checked,true);
     assert.equal(notice.textContent, '');
     assert.equal(turns.length, 0);
     editor.fire('keydown', { key: 'Enter' });
