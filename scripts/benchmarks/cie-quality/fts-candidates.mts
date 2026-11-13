@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { canonicalRetrievalQuery, rankCanonicalRetrieval } from '../../../prototypes/vela-core/src/history-retrieval.mts';
+import { fuseCandidates } from './fuse-candidates.mts';
 
 interface Fixture {
   id: string;
@@ -22,14 +23,14 @@ if (inputSha256 !== '9b79a3aa96aa1493fd2655f823654b42454419dfb4f92aeb1c4506eceef
 const { cases }: { cases: Fixture[] } = JSON.parse(input.toString('utf8'));
 const time = (rank: () => string[]) => {
   const start = performance.now();
-  const candidateIds = rank().slice(0, 3);
+  const candidateIds = rank();
   return { candidateIds, elapsedMs: performance.now() - start };
 };
 const predictions = cases.map(({ id, request, sources }) => {
   const eligible = sources.filter(source => source.eligibility === 'eligible');
   const query = canonicalRetrievalQuery(request);
   const lexical = time(() => query ? rankCanonicalRetrieval(query,
-    eligible.map(source => ({ id: source.id, text: source.title + '\n' + source.text }))).ids : []);
+    eligible.map(source => ({ id: source.id, text: source.title + '\n' + source.text }))).ids.slice(0, 3) : []);
   const fts = time(() => {
     if (!query) return [];
     const db = new DatabaseSync(':memory:');
@@ -42,9 +43,14 @@ const predictions = cases.map(({ id, request, sources }) => {
         .all(expression).map(row => String(row.id));
     } finally { db.close(); }
   });
-  return { id, lexical, fts };
+  const fusion = time(() => {
+    const exact = query ? eligible.filter(source => query.terms.includes(source.id.toLowerCase())).map(source => source.id) : [];
+    return fuseCandidates(lexical.candidateIds, fts.candidateIds, exact);
+  });
+  fusion.elapsedMs += lexical.elapsedMs + fts.elapsedMs;
+  return { id, lexical, fts, fusion };
 });
-const output = JSON.stringify({ contract: 'aerynth.cie-fts-shadow-predictions@1', inputSha256, candidateCommit,
+const output = JSON.stringify({ contract: 'aerynth.cie-fts-shadow-predictions@2', inputSha256, candidateCommit,
   cases: predictions });
 writeFileSync(outputPath, output, { flag: 'wx' });
 console.log(JSON.stringify({ cases: cases.length, inputSha256, candidateCommit, predictionSha256: sha(output), paidCalls: 0 }));
