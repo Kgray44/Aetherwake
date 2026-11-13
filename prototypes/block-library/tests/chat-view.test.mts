@@ -8,7 +8,7 @@ import type {
 } from "../../conversation-product/src/contracts.ts";
 import type { ConversationExecutionObservation } from "../../conversation-product/src/chat.ts";
 import { blockDocument, card } from "./component-dom.mts";
-import { until } from "../../conversation-product/test/component-dom.mts";
+import { named, until } from "../../conversation-product/test/component-dom.mts";
 
 // Synthetic port, actual shared component/session. No provider, layout or native claim.
 function fixture(t: any) {
@@ -331,5 +331,35 @@ test("leaving an inline block does not wait for a provider RPC or dispose its ca
   } finally {
     await controller.dispose();
     await session.dispose();
+  }
+});
+
+test("workspace chat can review memory from its exact user message", async (t) => {
+  const f = fixture(t);
+  const reviews: unknown[] = [];
+  const session = new ConversationDraftSession({ port: f.port, resourceId: f.draft.resourceId });
+  const controller = mountBlockChat(f.view.root, {
+    presentation: "workspace",
+    port: f.port,
+    resourceId: f.draft.resourceId,
+    draftSession: session,
+    async onRememberMessage(request) { reviews.push(request); return false; },
+    openHistory() {},
+    failed(error) { throw error; },
+  });
+  try {
+    await controller.ready;
+    const actions = f.view.root.querySelector(".cp-message-actions");
+    named(actions, "Remember message").fire("click");
+    assert.deepEqual(reviews, []);
+    actions.querySelector(".cp-memory-editor").fire("submit");
+    await until(() => reviews.length === 1);
+    assert.deepEqual(reviews, [{
+      conversationId: f.draft.resourceId, messageId: "message:actual",
+      text: "Actual saved text", scope: "conversation", category: "technical",
+      keywords: ["actual", "saved", "text"],
+    }]);
+  } finally {
+    await controller.dispose();
   }
 });

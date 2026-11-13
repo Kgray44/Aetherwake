@@ -1,3 +1,4 @@
+import type { MemoryCaptureRequest } from './memory-capture-editor.ts';
 import type { BranchPolicy, Collection, ConversationProductPort, ConversationSummary, ConversationView, Detail, FidelityStatus, NativeChatGPTFidelityDescriptor, ProductCommandMap, SearchHit, SearchQuery, Share } from './contracts.ts';
 import { ConversationDraftSession, flushConversationDraftSessions } from './draft-session.ts';
 import { mountConversationChat, decorateConversationControl, decorateConversationDisclosure, type ConversationChat, type ConversationExecutionPort, type ConversationControlIdentity, type ConversationControlPresentation, type ConversationProviderChange, type ConversationModelControls } from './chat.ts';
@@ -44,7 +45,8 @@ const renderChatGPTCompatibility=(report:NativeChatGPTFidelityDescriptor,onOpenE
 };
 
 /** Temporary surface: the host decides placement, focus transition, and shared Motion Coordinator. */
-export function mountConversationManager(container: HTMLElement, port: ConversationProductPort, options: ManagerOptions = {}) {
+export function mountConversationManager(container: HTMLElement, port: ConversationProductPort,
+  options: ManagerOptions & { onRememberMessage?: (request: MemoryCaptureRequest) => Promise<boolean>; memoryView?: HTMLElement } = {}) {
  if(options.motion&&!options.viewId?.trim())throw new Error('conversation_motion_identity_required');
  const state=options.state??createManagerState();if(options.resourceId)state.selectedResourceId=options.resourceId;
  const root=el('section',undefined,'cp-manager aw-optical-controls'+(options.embedded===false?' cp-standalone':' cp-embedded'));root.dataset.awOptics='workspace';root.setAttribute('role','region');root.setAttribute('aria-label','Conversations');
@@ -57,6 +59,11 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const switchQuery=el('input'),switchMode=select([{value:'recent',label:'Recent chats'},{value:'favorite',label:'Favorites'},{value:'running',label:'Running chats'}]),switchStatus=el('p','', 'cp-switcher-status'),switchResults=el('div',undefined,'cp-switcher-results');switchQuery.type='search';switchQuery.placeholder='Find a conversation';switchQuery.maxLength=1000;switchQuery.setAttribute('aria-label','Find a conversation to switch to');switchMode.setAttribute('aria-label','Quick conversation group');switchStatus.setAttribute('role','status');switcher.panel.append(switchQuery,switchMode,switchStatus,switchResults);
  const toolbar=el('div',undefined,'cp-toolbar'),query=el('input'),project=el('select'),collection=el('select'),archive=select([{value:'active',label:'Active'},{value:'archived',label:'Archived'}],state.query.archived?'archived':'active'),favorite=el('input');
  const sort=select([{value:'activity',label:'Recent activity'},{value:'created',label:'Newest created'},{value:'title',label:'Title'},{value:'active',label:'Running first'}],state.query.sort??'activity'),searchMode=select([{value:'all',label:'All matches'},{value:'conversations',label:'Conversations'},{value:'messages',label:'Messages'},{value:'resources',label:'Resources'}],state.query.searchMode??'all');sort.setAttribute('aria-label','Sort conversations');searchMode.setAttribute('aria-label','Search result type');
+ if (options.memoryView) {
+   const memories = disclosure('Saved memories', 'cp-memory');
+   memories.panel.append(options.memoryView);
+   headerActions.insertBefore(memories.node, close);
+ }
  query.type='search';query.placeholder='Search chats';query.value=state.query.text??'';query.setAttribute('aria-label','Search conversation history');favorite.type='checkbox';favorite.checked=!!state.query.favorite;
  const clearSearch=button('Clear history search',()=>{clearTimeout(searchTimer);query.value='';filter();query.focus();},{identity:'clear-search'});clearSearch.hidden=!query.value;query.dataset.cpControl='search';clearSearch.setAttribute('aria-label','Clear history search');
  const filters=disclosure('Filters','cp-filters');filters.panel.append(field('Project',project),field('Folder or collection',collection),field('History',archive),field('Favorites',favorite),field('Search result type',searchMode));toolbar.dataset.cpGroup='search';toolbar.append(query,clearSearch,sort,filters.node);
@@ -124,6 +131,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   const initialView=restoredView?.resourceId===resourceId?restoredView:undefined;restoredView=null;
   chatResource=resourceId;chat=mountConversationChat(chatHost,{port,resourceId,draftSession:session,execution:options.execution,copy:options.copy,motion:options.motion,models:options.models,viewId:options.viewId?options.viewId+':chat:'+resourceId:undefined,onProviderChange:requestProviderChange,initialScroll:options.viewPersistence?undefined:state.scroll[resourceId],initialOffset:options.viewPersistence?undefined:state.messageOffset[resourceId],viewPersistence:options.viewPersistence,initialView,initialAroundMessageId:aroundMessageId,
    onViewState:view=>{state.drafts[view.resourceId]=view.content;state.scroll[view.resourceId]=view.scroll;state.messageOffset[view.resourceId]=view.offset;save();},onDetail:renderDetail,onUnavailable:()=>{current=null;detailHeader.replaceChildren();secondary.replaceChildren();extras.open=false;},onChanged:refresh,
+   onRememberMessage:options.onRememberMessage,
    onMessageAction:async event=>{if(event.action==='source'){options.onResource?.(event.message.resourceId,event.message.id);return;}if(event.action==='branch'){if(current)showBranch(current,event.message.id);return;}
     const selection=event.selection;if(!selection||event.message.content.slice(selection.start,selection.end)!==selection.text)throw new Error('Select a current source excerpt');
     await run(async()=>{await call('publish',{sourceResourceId:event.message.resourceId,sourceMessageId:event.message.id,range:{start:selection.start,end:selection.end},evidence:'excerpt'});status.textContent='Excerpt published for authorized branch discovery';await loadDetail();});
