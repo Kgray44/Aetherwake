@@ -596,6 +596,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       report('Connection unavailable. '+(execution?'Last observed: '+execution.state+'. Outcome unconfirmed.':'Execution state is unavailable.'));renderDraft();
     }
     const next=observation.execution??execution;if(!next)return;
+    if(webSearchCommandId&&(next.commandId!==webSearchCommandId||next.providerId!=='chatgpt-plan-responses'))return;
     if(execution&&next.id!==execution.id&&next.startedAt<execution.startedAt)return;
     if(execution?.id===next.id&&!['dispatching','running'].includes(execution.state)&&['dispatching','running'].includes(next.state))return;
     execution=next;

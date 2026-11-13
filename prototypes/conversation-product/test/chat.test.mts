@@ -965,8 +965,10 @@ test('research status distinguishes preparation, matching execution, and streame
   assert.match(status.textContent,/Preparing web search/);
   const execution={id:'execution:research',resourceId:f.draft.resourceId,commandId:f.pending!.input.commandId,
    providerId:'chatgpt-plan-responses',state:'running' as const,startedAt:'2026-11-02T01:00:00Z',endedAt:null,taskVerified:false as const};
-  observe({execution:{...execution,commandId:'another-turn'}});
-  assert.doesNotMatch(status.textContent,/Web research is running/);
+  observe({execution:{...execution,id:'execution:other',commandId:'another-turn',
+   startedAt:'2026-11-02T01:00:01Z'},delta:{eventId:'delta:other',cursor:1,text:'Unrelated output'}});
+  assert.match(status.textContent,/Preparing web search/);
+  assert.doesNotMatch(f.view.root.textContent,/Unrelated output/);
   observe({execution});
   assert.equal(status.textContent,'Web research is running.');
   observe({execution,delta:{eventId:'delta:research',cursor:1,text:'Synthetic answer'}});
