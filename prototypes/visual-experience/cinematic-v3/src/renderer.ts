@@ -1258,6 +1258,7 @@ export class Environment {
       frame.sceneWeights?.living ?? (frame.study === "living" ? 1 : 0);
     this.instrumentStudy = study;
     this.frameSlabs.clear();
+    this.surfaceOrder.length = 0;
     for (const visual of this.folios) {
       visual.root.visible = false;
       visual.contact.visible = false;
@@ -1267,7 +1268,11 @@ export class Environment {
         this.canvas.dataset.materials = "opaque";
       return;
     }
-    const live = new Set(surfaces.map((pose) => pose.id));
+    const live = new Set<string>();
+    for (const pose of surfaces) {
+      live.add(pose.id);
+      this.surfaceOrder.push(pose);
+    }
     for (const visual of this.folios)
       if (visual.id && !live.has(visual.id)) {
         this.folioById.delete(visual.id);
@@ -1275,9 +1280,10 @@ export class Environment {
       }
     if (surfaces.length > this.folios.length)
       this.buildFolios(surfaces.length - this.folios.length);
-    this.surfaceOrder.length = 0;
-    for (const pose of surfaces) this.surfaceOrder.push(pose);
     this.surfaceOrder.sort(compareSurfaceStack);
+    const viewOpacity = Number.isFinite(this.surfaceView.opacity)
+      ? THREE.MathUtils.clamp(this.surfaceView.opacity!, 0, 1)
+      : 1;
     for (let i = 0; i < this.surfaceOrder.length; i++) {
       const pose = this.surfaceOrder[i];
       if (
@@ -1300,9 +1306,6 @@ export class Environment {
       }
       visual.root.visible = true;
       visual.contact.visible = livingWeight > 0.001;
-      const viewOpacity = Number.isFinite(this.surfaceView.opacity)
-        ? THREE.MathUtils.clamp(this.surfaceView.opacity!, 0, 1)
-        : 1;
       const opacity =
         (Number.isFinite(pose.opacity)
           ? THREE.MathUtils.clamp(pose.opacity!, 0, 1)
