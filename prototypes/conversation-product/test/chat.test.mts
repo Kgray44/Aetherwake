@@ -30,6 +30,134 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('a reopened chat ignores active observations older than its canonical turn', async () => {
+ const f=fixture('chatgpt-plan-responses'), resourceId=f.draft.resourceId;
+ const latest={id:'execution:latest',resourceId,providerId:'chatgpt-plan-responses',commandId:'send:latest',
+  state:'provider_completed' as const,startedAt:'2026-11-02T00:00:04Z',endedAt:'2026-11-02T00:00:05Z',taskVerified:false as const};
+ f.detail.conversation.execution=latest;
+ let chat, observe!: (value:ConversationExecutionObservation)=>void;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId,execution:{
+   observe(_id,listener){observe=listener;return()=>{};},async cancel(){throw Error('Unexpected Stop');},
+  }});
+  await chat.ready;
+  observe({execution:{...latest,id:'execution:old',commandId:'send:old',state:'running',startedAt:'2026-11-02T00:00:02Z',endedAt:null}});
+  assert.equal(named(f.view.root,'Send').disabled,false);
+  assert.equal(named(f.view.root,'Stop').hidden,true);
+  observe({execution:{...latest,id:'execution:new',commandId:'send:new',state:'running',startedAt:'2026-11-02T00:00:06Z',endedAt:null}});
+  assert.equal(named(f.view.root,'Send').disabled,true);
+  assert.equal(named(f.view.root,'Stop').hidden,false);
+ } finally {await chat?.dispose();f.restore();}
+});
+
+test('reopening an ordinary chat with an unresolved turn requires explicit review before another send', async () => {
+ const f=fixture('chatgpt-plan-responses'), resourceId=f.draft.resourceId;
+ const execution={id:'execution:unknown',resourceId,providerId:'chatgpt-plan-responses',commandId:'send:unknown',state:'unknown' as const,startedAt:'2026-11-02T00:00:02Z',endedAt:null,taskVerified:false as const};
+ f.detail.conversation.execution=execution;
+ let chat;
+ try {
+  const mount=()=>mountConversationChat(f.view.root,{port:f.port,resourceId});
+  chat=mount();await chat.ready;
+  assert.equal(named(f.view.root,'Send').disabled,true);
+  named(f.view.root,'I reviewed the send outcome').fire('click');
+  await chat.refresh();
+  assert.equal(named(f.view.root,'Send').disabled,false);
+  await chat.dispose();
+  chat=mount();await chat.ready;
+  assert.equal(named(f.view.root,'Send').disabled,true);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+ } finally {await chat?.dispose();f.restore();}
+});
+
+test('a matching confirmed interruption keeps the draft and allows an explicit next send',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;
+  const form=f.view.root.querySelector('.cp-composer'),send=named(form,'Send'),editor=form.querySelector('textarea');
+  form.fire('submit');await until(()=>!!f.pending);
+  editor.value='New draft after stopping';editor.fire('input');
+  f.pending!.resolve({id:'execution:stopped',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:f.pending!.input.commandId,state:'interrupted'});
+  await chat.whenSubmissionSettled();await chat.flush();
+  assert.equal(send.disabled,false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Reply stopped/);
+  assert.equal(f.draft.content,'New draft after stopping');
+  assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+  form.fire('submit');await until(()=>!!f.pending);
+  assert.equal(f.pending!.input.content,'New draft after stopping');
+  f.accept(true);await chat.whenSubmissionSettled();
+ }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.dispose();f.restore();}
+});
+
+for (const observedBeforeLoss of [true,false]) test(`an observed interruption recovers a draft when the matching send response is lost (observation first: ${observedBeforeLoss})`, async () => {
+ const f=fixture('chatgpt-plan-responses');
+ let chat, observe!: (value: ConversationExecutionObservation) => void;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+   observe(_id,listener){observe=listener;return()=>{};},
+   async cancel(){},
+  }});
+  await chat.ready;
+  const form=f.view.root.querySelector('.cp-composer'), send=named(form,'Send');
+  form.fire('submit');
+  await until(()=>!!f.pending);
+  const stopped={
+   id:'execution:confirmed-stop',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',
+   commandId:f.pending!.input.commandId,state:'interrupted' as const,taskVerified:false as const,
+   startedAt:'2026-11-02T00:00:02Z',endedAt:'2026-11-02T00:00:03Z',
+  };
+  if(observedBeforeLoss)observe({execution:stopped});
+  f.pending!.reject(Error('synthetic transport response lost'));
+  await chat.whenSubmissionSettled();
+  if(!observedBeforeLoss){
+   observe({execution:{...stopped,id:'execution:unrelated',commandId:'command:unrelated'}});
+   assert.equal(send.disabled,true,'An unrelated stop cannot release recovery');
+   observe({execution:stopped});
+  }
+  assert.equal(send.disabled,false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Reply stopped/);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+ } finally {f.pending?.reject(Error('synthetic cleanup'));await chat?.dispose();f.restore();}
+});
+
+test('Stop follows the observed turn through acknowledgment, settlement and a subsequent turn',async()=>{
+  for(const settleBeforeAck of [true,false]){
+    const f=fixture('chatgpt-plan-responses');
+    let chat, observe:(value:ConversationExecutionObservation)=>void;
+    let acknowledge!:()=>void, requests=0;
+    const pending=new Promise<void>(resolve=>{acknowledge=resolve;});
+    const turn={id:'execution:first',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:'command:first',state:'running' as const,startedAt:'2026-11-02T00:00:02Z',endedAt:null,taskVerified:false};
+    try{
+      chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+        observe(_id,listener){observe=listener;return()=>{};},
+        cancel(id){assert.equal(id,turn.id);requests++;return pending;},
+      }});
+      await chat.ready;
+      const stop=named(f.view.root,'Stop'),status=f.view.root.querySelector('.cp-chat-status');
+      observe!({execution:turn});
+      stop.fire('click');
+      assert.equal(stop.disabled,true);
+      const settle=()=>observe!({execution:{...turn,state:'interrupted',endedAt:'2026-11-02T00:00:03Z'}});
+      if(settleBeforeAck)settle();
+      acknowledge();
+      await new Promise<void>(resolve=>setImmediate(resolve));
+      if(!settleBeforeAck){
+        observe!({execution:turn});
+        assert.equal(stop.disabled,true,'Acknowledgment and later activity must not re-enable Stop');
+        assert.match(status.textContent,/Stop requested/);
+        stop.fire('click');
+        settle();
+      }
+      assert.equal(requests,1);
+      assert.match(status.textContent,/confirmed the turn stopped/);
+      observe!({execution:{...turn,id:'execution:second',startedAt:'2026-11-02T00:00:04Z'}});
+      assert.equal(stop.disabled,false);
+      assert.match(status.textContent,/is running/);
+    }finally{acknowledge();await chat?.dispose();f.restore();}
+  }
+});
+
 function viewPort(f:ReturnType<typeof fixture>){
  const time='2026-11-03T00:00:00Z',resourceId=f.draft.resourceId,trace:{name:string;input:any}[]=[];let selected:ConversationViewSelected={version:2,resourceId,updatedAt:time},view:ConversationView={resourceId,version:4,position:{conversationRevision:2,anchor:{messageId:'message:user',offsetY:-20}},selection:{draftVersion:f.draft.version,start:2,end:6,direction:'backward'},positionStatus:'current',selectionStatus:'current',updatedAt:time};
  let before:((name:string,input:any)=>void|Promise<void>)|undefined;
