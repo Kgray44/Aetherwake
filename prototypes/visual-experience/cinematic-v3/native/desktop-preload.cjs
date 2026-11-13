@@ -103,9 +103,12 @@ contextBridge.exposeInMainWorld(
           "missions",
           "workspaceRecovery",
           "firstPartyChat",
+          "personalMemoryCapture",
         ].includes(name)
       )
         throw new Error("unsupported_command");
+      if (name === "personalMemoryCapture" && navigator.userActivation?.isActive !== true)
+        throw new Error("personal_memory_user_gesture_required");
       if ((name === 'clockTimers' && ['create', 'mutate'].includes(input?.name) ||
            name === 'library' && input?.name === 'createBlock' && input?.input?.kind === 'clock_timer' ||
            name === 'desktop' && input?.type === 'createResource' && input?.kind === 'clock_timer') &&
