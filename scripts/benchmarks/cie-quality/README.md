@@ -51,6 +51,8 @@ Set `AERYNTH_BENCHMARK_SYNTHETIC_CIE_PROJECT=1` as well to exercise four excerpt
 
 These observations come from 12 profiles per revision on Windows. The candidate ran first and the baseline second in separate runs, so background load and run order may affect the difference. Both used synthetic transport.
 
+A later full-request run at runtime revision `77ffef48` passed all 24 canonical answer checks. The 12 cold samples measured 8,574 ms p50 and 16,151 ms p95 with five simulated calls each. The 12 warm samples measured 6,591 ms p50 and 8,823 ms p95 with three simulated calls each. Absolute timings were materially higher than the earlier run. These separate runs leave the cause of the difference unmeasured. The fixture always runs cold before warm, so the difference within each pair includes profile warmup. Catalog integration tests separately verify that an unchanged refresh reuses both current stage qualifications and that consent revocation and expiry require fresh probes.
+
 ## Independent blind corpus
 
 `cases.public.json` is the independently authored, frozen input-only 48-case corpus (six examples in each of eight categories). Its exact SHA-256 is pinned in `blind-runner.mts`. Labels and adjudication rationales are deliberately not checked in and have not been consulted by the implementer. The fixture file expands semantic evaluation inputs sixfold over the original eight-case set; **that is corpus expansion, not a claimed measured accuracy gain**.
