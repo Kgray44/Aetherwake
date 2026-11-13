@@ -5,6 +5,8 @@ import { dirname, relative, resolve, isAbsolute,sep,extname } from 'node:path';
 import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, type ApiFileProposalProvenance } from './mission-file-edits.mts';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
+import { NativePersonalMemory } from './personal-memory.mts';
+import { createPersonalMemorySourceReader } from './personal-memory-sources.mts';
 import { createIntelligenceJournalProjection, missionStreamFields, streamScopeMatches } from './intelligence-journal-projection.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
 import { compareNativeSamples, observeConversationProvider, observeProviderStream, projectMissionExecution, resolveMissionHypothesis, type ProviderStreamObserver, type ReportDelivery, type ReportPublication } from './execution-profiler.mts';
@@ -254,6 +256,7 @@ export class BackendCore {
   private readonly privateRoot?: string;
   private conversations!: ConversationProduct;
   private nativeHostServices?:NativeHostServices;
+  private personalMemory?: NativePersonalMemory;
   private weatherPermissions?:WeatherPermissionStore;
   private weatherRequest:AbortController|null=null;
   private ordinaryConnections!:OrdinaryConnectionPort;
@@ -441,6 +444,27 @@ export class BackendCore {
       this.initializeConversations();
       this.recoverCompletedConversationDrafts();
       this.initializeLibrary();
+      if (this.privateMode && nativeHostServices) {
+        const sources = createPersonalMemorySourceReader({
+          db: this.db,
+          projectAccess: id => !this.closed && this.libraryAuthorized({ kind: 'project', id }),
+          conversationAccess: (id, messageId) => !this.closed && this.productResourceAccess(id, messageId),
+          readOwnMessage: (id, messageId) => {
+            const graphId = this.state.resources[id];
+            return graphId ? this.graph.readOwnMessage(graphId, messageId) : null;
+          },
+        });
+        this.personalMemory = new NativePersonalMemory({
+          kernel: this.kernel,
+          secrets: nativeHostServices.secrets,
+          host: {
+            ...sources,
+            identity: () => ({ userId: 'local-owner', policyVersion: 'aerynth.local-owner@1' }),
+            // Native consent and provider dispatch entry points supply authorization in a separate slice.
+            authorize: () => ({ decision: 'deny' }),
+          },
+        });
+      }
       ensure(!options.velaPlanningPort||!this.privateMode,'synthetic_vela_planner_forbidden');
       this.initializeVela(options.velaPlanningPort);
       this.ordinaryConnections=ordinaryTest?.connection??new OpenAIConnections({db:this.db,transaction:work=>this.kernel.withTransaction(()=>work(this.db)),nativeHost:this.nativeHostServices,localEligibility:{kind:'local-personal-project',scope:'current-owner-local-installation',decisionRef:'aerynth.owner-local-personal-inference'}});
@@ -667,7 +691,7 @@ export class BackendCore {
       if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='timer_documents'").get() &&
           this.db.prepare('SELECT 1 FROM timer_documents LIMIT 1').get())
         void this.ensureTimerDomain().ready.catch(() => {});
-    } catch (error) { this.kernel.close(); throw error; }
+    } catch (error) { this.personalMemory?.close(); this.kernel.close(); throw error; }
   }
   private missionScopeAllowed(scope: MissionScope): boolean {
     if (this.closed || !this.libraryAuthorized({ kind: 'workspace', id: scope.workspaceId })) return false;
@@ -7156,6 +7180,7 @@ export class BackendCore {
       case 'rendererEventPage': return this.intelligenceJournal.rendererPage(a) as CommandMap[K]['output'];
       case 'replay': return this.intelligenceJournal.replay(a) as CommandMap[K]['output'];
       case 'close': {
+        this.personalMemory?.close();
         this.velaVoiceRuntime.closeSpeechAdmission();
         let cleanupError: unknown, cleanupFailed = false;
         const cleanup = async (work: () => unknown | Promise<unknown>) => {
