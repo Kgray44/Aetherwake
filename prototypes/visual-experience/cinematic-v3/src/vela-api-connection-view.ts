@@ -38,8 +38,8 @@ export function mountVelaApiConnection(root: HTMLElement, command: VelaApiContro
     const authorized = authorization?.enabled === true;
     usage.textContent = authorized ? 'Disable Vela API usage' : 'Enable Vela API usage';
     usageLabel.textContent = authorized
-      ? `Vela can send eligible requests with this API key without asking again. Requests with new sources or permissions still require review. ${authorization.usedToday} of ${authorization.requestsPerDay} daily requests used; up to ${authorization.maxOutputTokens} output tokens per request. API charges apply.`
-      : 'Vela API usage is disabled. Enabling allows eligible requests without a separate approval each time. API charges apply: up to 64 requests per day and 2,048 output tokens per request. No request starts just by enabling.';
+      ? `Vela can send eligible requests with this API key without asking again, including read-only analysis of notes or files you explicitly select. Broader evidence and new permissions still require review. ${authorization.usedToday} of ${authorization.requestsPerDay} daily requests used. Up to ${authorization.maxOutputTokens} output tokens per request. API charges apply.`
+      : 'Vela API usage is disabled. Enabling allows eligible requests without a separate approval each time, including read-only analysis of notes or files you explicitly select. API charges apply up to 64 requests per day and 2,048 output tokens per request.';
     setup.textContent = current?.configured ? 'Replace API connection' : 'Set up API connection';
     if (failed) status.textContent = 'The Vela API connection could not be updated. Check the connection and try again.';
     else if (busy) status.textContent = 'Updating Vela API connection…';

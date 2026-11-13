@@ -383,7 +383,10 @@ exports.velaCommand = async ({
     const standingEvidence = preview.sendDisposition === "standing-selected-evidence" &&
       preview.providerId === "openai-api-vela" && preview.semanticContext === true &&
       review.semanticContext === true && !review.handoff && !review.routingAgent &&
-      !review.projectEvidence && !review.workspaceState && !review.missionCheckpoint;
+      !review.projectEvidence && !review.workspaceState && !review.missionCheckpoint && !review.history &&
+      Array.isArray(request.resourceRefs) && request.resourceRefs.length === review.context.included.length &&
+      request.resourceRefs.every(ref => review.context.included.some(source =>
+        source.id === ref?.id && source.version === ref.version));
     const direct = directMessageSend && (standingEvidence || (preview.sendDisposition === "routine" &&
       (preview.providerId === "chatgpt-plan-responses" && (!preview.route || preview.route.kind === "conversational") ||
         preview.providerId === "openai-api-vela" && ['conversational', 'app-planning'].includes(preview.route?.kind)) &&
