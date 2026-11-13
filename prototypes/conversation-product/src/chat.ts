@@ -350,17 +350,26 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       label: 'Attach saved note or document', identity: 'source',
       itemsOnOpen: () => {
         const attached = session.snapshot().documents;
-        return list().map(item => ({
-          value: key(item), label: item.title, disabled: attached.some(ref => key(ref) === key(item)),
-        }));
+        return list().map(item => {
+          const existing = attached.find(ref => ref.id === item.id);
+          return { value: key(item), label: item.title,
+            ...(existing && existing.version !== item.version ? { description: 'Update the attached version' } : {}),
+            disabled: existing ? existing.version === item.version : attached.length >= 4 };
+        });
       },
       onSelect(value) {
         const { documents, phase } = session.snapshot();
-        if (disposed || !canStageDocuments() || sending || choosingDocument ||
-            documents.length >= 4 || ['loading', 'conflict', 'error'].includes(phase)) return;
+        if (disposed || retiring || !canStageDocuments() || sending || choosingDocument || stagingForVela ||
+            changingProvider || ['loading', 'conflict', 'error'].includes(phase)) return;
         const selected = list().find(item => key(item) === value);
         if (!selected) { report('This document is no longer available.'); return; }
-        session.updateDocuments([...documents.filter(item => item.id !== selected.id), selected]);
+        const existing = documents.find(item => item.id === selected.id);
+        if (existing?.version === selected.version) return;
+        if (!existing && documents.length >= 4) {
+          report('This draft already has four attachments. Remove one before adding another.');
+          return;
+        }
+        session.updateDocuments(existing ? documents.map(item => item.id === selected.id ? selected : item) : [...documents, selected]);
         textarea.focus();
       },
     });
@@ -589,10 +598,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     send.title = documentStatus.textContent || (connection === 'unavailable' ? 'Reconnect to send this draft.' : planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : missingPinnedModel ? 'The selected model is no longer available. Choose another model or use Automatic.' : '');
     web.disabled = send.disabled || web.hidden || !plan?.available || documents.length > 0;
     attachDocument.hidden = !mayStageDocuments || !options.chooseDocument;
-    attachDocument.disabled = !mayStageDocuments || choosingDocument || stagingForVela || sending || changingProvider || draftNeedsAttention || documents.length >= 4;
+    const attachmentControlsDisabled = !mayStageDocuments || choosingDocument || stagingForVela || sending || changingProvider || draftNeedsAttention;
+    attachDocument.disabled = attachmentControlsDisabled || documents.length >= 4;
     if (documentPicker) {
       documentPicker.element.hidden = !mayStageDocuments;
-      documentPicker.update({ items: [], value: '', disabled: attachDocument.disabled });
+      documentPicker.update({ items: [], value: '', disabled: attachmentControlsDisabled });
     }
     renderDocuments(documents);
     documentList.hidden = !documents.length;
