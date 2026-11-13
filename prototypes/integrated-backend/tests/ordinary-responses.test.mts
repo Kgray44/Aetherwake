@@ -228,6 +228,10 @@ test('a captured chat reply retains the edited note, workspace placement and sav
   const sent=await conversationCommand({call,input:send(),reviewSources:async({review}:any)=>{
    assert.equal(review.context.included[0].id,receipt.noteId);
    assert.equal(review.context.included[0].content,edited);
+   const {reviewPage}=createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+   const html=reviewPage(review,draft.content);
+   assert.ok(html.includes('Saved note · version '+updated.resource.version));
+   assert.ok(html.includes(edited));
    return true;
   }});
   assert.equal(sent.state,'provider_completed');
