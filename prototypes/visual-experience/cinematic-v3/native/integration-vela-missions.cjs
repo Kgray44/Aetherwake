@@ -933,6 +933,13 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         })()`));
         assert.equal(measuredAttempts, [profile.work.intervalCoverage.measured, profile.work.intervalCoverage.attempts].join(" / "));
         receipt.workroomInspection = { missionId: profile.missionId, revision: profile.revision, measuredAttempts };
+        const trace = selector + ' .aw-execution-trace';
+        const attempt = profile.attempts.find(value => value.interval && value.verifiedEvidenceIds.length);
+        assert(attempt, "native_trace_attempt_required");
+        await click(trace + ' [data-trace-attempt=' + quote(attempt.id) + ']');
+        const detail = await js(`document.querySelector(${quote(trace + ' > dl')}).textContent`);
+        assert(detail.includes(attempt.id) && attempt.verifiedEvidenceIds.every(id => detail.includes(id)));
+        receipt.workroomInspection.traceAttempt = { id: attempt.id, verifiedEvidenceCount: attempt.verifiedEvidenceIds.length };
         await capture("01-adaptive-intelligence-profiler");
         receipt.workroomInspection.renderer = await js(`new Promise(resolve => {
           requestAnimationFrame(start => {

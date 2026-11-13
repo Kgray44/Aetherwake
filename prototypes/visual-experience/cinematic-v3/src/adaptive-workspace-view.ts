@@ -1,5 +1,6 @@
 import type { MissionExecutionProfile } from '../../../integrated-backend/src/execution-profiler.mts';
 import { intelligenceZones, projectIntelligence, type IntelligenceBinding, type IntelligenceRegion } from './adaptive-workspace.ts';
+import { mountExecutionTrace } from './execution-trace-view.ts';
 import { mountResourcePolicy, type ResourcePolicyPort } from './resource-policy-view.ts';
 import type { MissionProjection } from '../../../integrated-backend/src/mission-contracts.mts';
 
@@ -19,6 +20,9 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
   let regions: IntelligenceRegion[] = [], selected = 0, binding: IntelligenceBinding | null = null, disposed = false;
   const policy = resourcePolicy && mountResourcePolicy(doc, resourcePolicy);
   if (policy) panel.insertBefore(policy.element, limitation);
+  const trace = mountExecutionTrace(doc);
+  panel.insertBefore(trace.element, readings);
+  let executionProfile: MissionExecutionProfile | null = null;
   let profileEpoch = 0, requestProfile: (() => Promise<void>) | undefined;
   const buttons = intelligenceZones.map(([id, label], index) => {
     const button = doc.createElement('button'); button.type = 'button'; button.textContent = label;
@@ -44,6 +48,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
     const region = regions[selected]; heading.textContent = intelligenceZones[selected][1];
     limitation.textContent = region?.limitation ?? 'Unavailable: authorized mission evidence is not currently bound.';
     policy?.setVisible(details.open && !!binding && !!region && region.id === 'resource');
+    trace.update(details.open && region?.id === 'profiler' ? executionProfile : null);
     readings.replaceChildren();
     for (const reading of region?.readings ?? []) {
       const term = doc.createElement('dt'), value = doc.createElement('dd');
@@ -62,6 +67,8 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
     event.preventDefault(); event.stopPropagation(); details.open = false; policy?.setVisible(false); summary.focus({ preventScroll: true });
   };
   function invalidate(message: string, close = false) {
+    executionProfile = null;
+    trace.update(null, close);
     profileEpoch++; requestProfile = undefined; regions = []; status.textContent = message;
     if (close) {
       const ownsFocus = details.contains(doc.activeElement);
@@ -98,6 +105,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
             status.textContent = 'Execution profile unavailable for this mission revision. Showing mission summary.';
             return;
           }
+          executionProfile = profile;
           regions = projectIntelligence(mission, expected, profile) ?? [];
           render();
         } catch {
@@ -109,6 +117,6 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
       if (details.open) void requestProfile();
     },
     invalidate,
-    dispose() { disposed = true; regions = []; binding = null; policy?.setVisible(false); details.remove(); },
+    dispose() { disposed = true; regions = []; binding = null; executionProfile = null; trace.update(null, true); policy?.setVisible(false); details.remove(); },
   };
 }
