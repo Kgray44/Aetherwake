@@ -1,3 +1,4 @@
+import { personalMemorySearchTerms } from '../../application-contract/personal-memory.ts';
 import type { MemoryCaptureRequest as CaptureRequest } from '../../application-contract/personal-memory.ts';
 
 export type MemoryCaptureRequest = CaptureRequest;
@@ -68,7 +69,8 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     ['preferences', 'Preference'], ['projects', 'Project detail']]);
   if (candidate?.category) category.value = candidate.category;
   const keywords = document.createElement('input');
-  keywords.value = [...new Set(text.value.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]{2,64}/gu) ?? [])].filter(term => term !== 'prefer').slice(0, 8).join(', ');
+  const suggested = personalMemorySearchTerms(text.value).filter(term => term !== 'prefer' && term.length <= 64);
+  keywords.value = suggested.slice(0, 8).join(', ');
   keywords.maxLength = 1056;
   keywords.required = true;
   field('Search terms, separated by commas', keywords);
