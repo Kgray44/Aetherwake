@@ -3,10 +3,6 @@ const { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } = re
 const { spawnSync } = require('node:child_process');
 const { join } = require('node:path');
 const { setTimeout: pause } = require('node:timers/promises');
-const { app, BrowserWindow, safeStorage } = require('electron');
-const { createProtectedStorageBroker } = require('./protected-storage.cjs');
-const { capturePersonalMemory } = require('./personal-memory-capture.cjs');
-const { showVelaReview, isOwnedVelaReviewWindow } = require('./vela-review.cjs');
 const { createMemoryReviewGuard, memoryWitnessDeadline } = require('./personal-memory-review-guard.cjs');
 
 const mode = process.argv[3];
@@ -17,9 +13,13 @@ try {
   deadline = memoryWitnessDeadline(JSON.parse(process.env.AERYNTH_MEMORY_WITNESS_ADMISSION ?? 'null'), mode);
 } catch {
   console.error(JSON.stringify({ result: 'fail', mode, error: 'native_memory_admission_required' }));
-  app.exit(1);
+  process.exitCode = 1;
   return;
 }
+const { app, BrowserWindow, safeStorage } = require('electron');
+const { createProtectedStorageBroker } = require('./protected-storage.cjs');
+const { capturePersonalMemory } = require('./personal-memory-capture.cjs');
+const { showVelaReview, isOwnedVelaReviewWindow } = require('./vela-review.cjs');
 const root = realpathSync(process.argv[2]);
 const drive = root[0].toUpperCase();
 assert(['C', 'D'].includes(drive));

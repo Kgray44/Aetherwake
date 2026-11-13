@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { spawnSync } = require('node:child_process');
+const { join } = require('node:path');
 const { createMemoryReviewGuard, memoryWitnessDeadline } = require('./personal-memory-review-guard.cjs');
 
 test('memory approval accepts only the current authenticated review child', () => {
@@ -46,4 +48,17 @@ test('a foreign focus event latches even if the authenticated dialog regains foc
   guard.observeFocus(foreign);
   guard.observeFocus(review);
   assert.throws(() => guard.checkReview(review), /native_memory_foreground_lost/);
+});
+
+test('the unadmitted witness exits before importing Electron or touching the profile', () => {
+  const env = { ...process.env };
+  delete env.AERYNTH_MEMORY_WITNESS_ADMISSION;
+  const witness = join(__dirname, 'personal-memory-native-verify.cjs');
+  const result = spawnSync(process.execPath, [witness, 'unused-profile', 'save'],
+    { env, encoding: 'utf8', windowsHide: true, timeout: 3000 });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1);
+  assert.deepEqual(JSON.parse(result.stderr), {
+    result: 'fail', mode: 'save', error: 'native_memory_admission_required',
+  });
 });
