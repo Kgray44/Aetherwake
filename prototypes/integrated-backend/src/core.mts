@@ -6070,11 +6070,14 @@ export class BackendCore {
   }
   private validateState() {
     ensure(this.state.resources && this.state.revisions && this.state.bindings && this.state.reviews && this.state.executions && this.state.receipts, 'corrupt_state');
-    const graphs = this.graph.snapshot().conversations;
-    ensure(Object.values(this.state.resources).length === graphs.length, 'corrupt_resource_mapping');
-    ensure(new Set(Object.values(this.state.resources)).size === graphs.length, 'corrupt_resource_mapping');
+    const graph = this.graph.snapshot();
+    const conversationIds = new Set(graph.conversations.map(conversation => conversation.id));
+    const handoffIds = new Set(graph.handoffs.map(handoff => handoff.id));
+    const resourceGraphIds = Object.values(this.state.resources);
+    ensure(resourceGraphIds.length === conversationIds.size, 'corrupt_resource_mapping');
+    ensure(new Set(resourceGraphIds).size === conversationIds.size, 'corrupt_resource_mapping');
     for (const [resourceId, graphId] of Object.entries(this.state.resources)) {
-      ensure(graphs.some(c => c.id === graphId), 'corrupt_resource_mapping');
+      ensure(conversationIds.has(graphId), 'corrupt_resource_mapping');
       ensure(this.kernel.getResource(resourceId).resource.kind === 'conversation', 'corrupt_resource_mapping');
       ensure(Number.isInteger(this.state.revisions[resourceId]) && this.state.revisions[resourceId] > 0, 'corrupt_revision');
     }
@@ -6091,7 +6094,7 @@ export class BackendCore {
     }
     for (const r of Object.values(this.state.reviews)) {
       ensure(this.state.resources[r.resourceId] && this.state.resources[r.sourceResourceId], 'corrupt_handoff');
-      ensure(this.graph.snapshot().handoffs.some(h => h.id === r.id), 'corrupt_handoff');
+      ensure(handoffIds.has(r.id), 'corrupt_handoff');
     }
     for(const [executionId,receipt] of Object.entries(this.state.contextSupplies??{})){
       const execution=this.state.executions[executionId];ensure(execution&&execution.resourceId===receipt.resourceId&&(typeof receipt.turnId==='string'&&receipt.turnId.length>0&&execution.turnId===receipt.turnId||typeof receipt.responseId==='string'&&receipt.responseId.length>0&&execution.responseId===receipt.responseId)&&typeof receipt.suppliedAt==='string'&&Array.isArray(receipt.items),'corrupt_context_supply');
