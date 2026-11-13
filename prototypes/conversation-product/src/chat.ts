@@ -275,6 +275,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   if (options.chooseDocument) {
     attachDocument.type = 'button';
     attachDocument.hidden = true;
+    attachDocument.title = 'Attach a PDF, Word document or text file';
+    attachDocument.setAttribute('aria-description', attachDocument.title);
     decorateConversationControl(attachDocument,{identity:'source',emphasis:'secondary'});
     tools.insertBefore(attachDocument, hint);
     attachDocument.addEventListener('click', () => {
@@ -1019,7 +1021,9 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           // Refresh the canonical projection of the saved versions without replacing them.
           await session.reload().catch(() => {});
         }
-        report('A selected document could not be read. Remove or reattach it before sending.');
+        report(code === 'unsupported_document_attachment'
+          ? 'Chat can send PDFs, Word documents and text files. Remove the unsupported attachment before sending.'
+          : 'A selected document could not be read. Remove or reattach it before sending.');
       }
       else { uncertain=true;report('Send could not be confirmed: '+code); }
     }).finally(()=>{if(!uncertain){submittedTurn=undefined;reconcileSubmittedTurn=undefined;}sending=false;sendTask=null;webSearchCommandId=undefined;renderDraft();if(execution)reconcileLateCompletion(execution);});
