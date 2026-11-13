@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { nodeClosure } from "./review-build.mjs";
 import artifact from "../prototypes/visual-experience/cinematic-v3/native/memory-inspector-artifact.cjs";
 
-const { paths } = artifact;
+const { paths, migrations } = artifact;
 
 // Inventory input for the acceptance-only package. The caller supplies its
 // exact source inventory and selected Node binary, as for the review build.
@@ -14,8 +14,11 @@ export async function planMemoryInspectorArtifact({ sourceRoot, tracked, rendere
     paths.executable, paths.adapter, paths.startup, paths.preload, paths.host, paths.worker, paths.protector, paths.wire,
   ]);
   if (closure.excludedVerificationImports.length) throw Error("memory_fixture_unbound_runtime_import");
+  const trackedMigrations = [...tracked].filter(path => /^prototypes\/workspace-(?:kernel|engine)\/migrations\/[^/]+\.sql$/u.test(path));
+  if (trackedMigrations.length !== migrations.length || migrations.some(path => !tracked.has(path)))
+    throw Error("memory_fixture_unbound_migration");
   const files = [
-    ...closure.files.map(path => ({ path, source: join(sourceRoot, path) })),
+    ...[...new Set([...closure.files, ...migrations])].map(path => ({ path, source: join(sourceRoot, path) })),
     ...closure.vendorFiles.map(file => ({ path: file.target.slice("resources/app/".length), source: file.file })),
     { path: paths.renderer, source: join(rendererDirectory, "memory-inspector.html") },
     { path: paths.bundle, source: join(rendererDirectory, "memory-inspector.js") },

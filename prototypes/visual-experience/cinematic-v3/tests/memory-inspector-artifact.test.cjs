@@ -6,7 +6,7 @@ const { EventEmitter, once } = require("node:events");
 const { PassThrough, Writable } = require("node:stream");
 const test = require("node:test");
 const { digest } = require("../native/memory-fixture-entry.cjs");
-const { manifestName, paths, resolveMemoryInspectorArtifact } = require("../native/memory-inspector-artifact.cjs");
+const { manifestName, paths, migrations, resolveMemoryInspectorArtifact } = require("../native/memory-inspector-artifact.cjs");
 const { startIsolatedMemoryInspector } = require("../native/memory-inspector-electron-adapter.cjs");
 const { createAdmission } = require("../native/native-test-admission.cjs");
 const { superviseMemoryInspectorExecutable } = require("../native/memory-fixture-supervisor.cjs");
@@ -17,7 +17,7 @@ test("acceptance artifact verifies exact inventory and refuses mutations, missin
   const artifactRoot = join(root, "artifact");
   const profileRoot = join(root, "memory-witness-stub");
   const dependency = "prototypes/integrated-backend/src/service.mts";
-  const inventory = [...Object.values(paths), dependency].map(path => ({ path, sha256: digest(path) }));
+  const inventory = [...Object.values(paths), ...migrations, dependency].map(path => ({ path, sha256: digest(path) }));
   for (const { path } of inventory) {
     const target = join(artifactRoot, path);
     mkdirSync(dirname(target), { recursive: true });
@@ -28,6 +28,18 @@ test("acceptance artifact verifies exact inventory and refuses mutations, missin
   writeFileSync(artifactPath, manifest);
   const input = { artifactPath, artifactSha256: digest(manifest), profileRoot, check() {} };
   assert.equal(resolveMemoryInspectorArtifact(input).hostPath, join(artifactRoot, paths.host));
+  const migration = migrations[0];
+  writeFileSync(join(artifactRoot, migration), "mutation");
+  assert.throws(() => resolveMemoryInspectorArtifact(input), /artifact_unverified/);
+  writeFileSync(join(artifactRoot, migration), migration);
+  rmSync(join(artifactRoot, migration));
+  const incompleteManifest = JSON.stringify({
+    contract: "aerynth.memory-inspector-artifact@1", files: inventory.filter(item => item.path !== migration),
+  });
+  writeFileSync(artifactPath, incompleteManifest);
+  assert.throws(() => resolveMemoryInspectorArtifact({ ...input, artifactSha256: digest(incompleteManifest) }), /artifact_unverified/);
+  writeFileSync(join(artifactRoot, migration), migration);
+  writeFileSync(artifactPath, manifest);
   writeFileSync(join(artifactRoot, dependency), "mutation");
   assert.throws(() => resolveMemoryInspectorArtifact(input), /artifact_unverified/);
   writeFileSync(join(artifactRoot, dependency), dependency);
@@ -46,7 +58,7 @@ for (const outcome of ["ready", "unresolved", "unready", "missing-seed", "invali
   const artifactRoot = join(root, "artifact");
   const profileRoot = join(root, "memory-witness-stub");
   mkdirSync(profileRoot);
-  const files = Object.values(paths).map(path => ({ path, sha256: digest(path) }));
+  const files = [...Object.values(paths), ...migrations].map(path => ({ path, sha256: digest(path) }));
   for (const { path } of files) {
     const target = join(artifactRoot, path);
     mkdirSync(dirname(target), { recursive: true });

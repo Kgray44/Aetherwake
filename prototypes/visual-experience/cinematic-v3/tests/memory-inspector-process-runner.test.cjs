@@ -5,7 +5,7 @@ const { dirname, join } = require("node:path");
 const test = require("node:test");
 const { createAdmission } = require("../native/native-test-admission.cjs");
 const { digest, enterMemoryFixture } = require("../native/memory-fixture-entry.cjs");
-const { paths, manifestName } = require("../native/memory-inspector-artifact.cjs");
+const { paths, manifestName, migrations } = require("../native/memory-inspector-artifact.cjs");
 const { runMemoryInspectorProcess } = require("../native/memory-inspector-process-runner.cjs");
 
 test("fixture runner verifies both inventories, privately transfers once and preserves unresolved custody", async t => {
@@ -14,7 +14,7 @@ test("fixture runner verifies both inventories, privately transfers once and pre
   const artifact = join(root, "artifact"), vendor = join(root, "vendor"), directory = join(root, "slot");
   const artifactPath = join(artifact, manifestName), manifestPath = join(vendor, "manifest.json");
   const executable = join(vendor, "AerynthReview.exe");
-  const files = Object.values(paths).map(path => {
+  const files = [...Object.values(paths), ...migrations].map(path => {
     const target = join(artifact, path);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, path);

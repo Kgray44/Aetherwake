@@ -17,6 +17,15 @@ const paths = Object.freeze({
   node: "vendor/node.exe",
 });
 const manifestName = "memory-inspector-artifact.json";
+const migrations = Object.freeze([
+  "prototypes/workspace-kernel/migrations/001-initial.sql",
+  "prototypes/workspace-kernel/migrations/002-external-refs.sql",
+  "prototypes/workspace-kernel/migrations/003-block-subjects.sql",
+  "prototypes/workspace-engine/migrations/001-presentation.sql",
+  "prototypes/workspace-engine/migrations/002-history.sql",
+  "prototypes/workspace-engine/migrations/003-presence.sql",
+  "prototypes/workspace-engine/migrations/004-organization.sql",
+]);
 const invalid = () => { throw Error("memory_fixture_artifact_unverified"); };
 
 function resolveMemoryInspectorArtifact({ artifactPath, artifactSha256, profileRoot, check }) {
@@ -40,7 +49,8 @@ function resolveMemoryInspectorArtifact({ artifactPath, artifactSha256, profileR
         !/^[a-f0-9]{64}$/u.test(item.sha256 ?? "")) invalid();
     inventory.set(item.path.toLowerCase(), item);
   }
-  for (const name of Object.values(paths)) if (inventory.get(name.toLowerCase())?.path !== name) invalid();
+  for (const name of [...Object.values(paths), ...migrations])
+    if (inventory.get(name.toLowerCase())?.path !== name) invalid();
   let total = 0, entries = 0;
   function verifyDirectory(directory, prefix = "", depth = 0) {
     if (depth > 24) invalid();
@@ -77,4 +87,4 @@ function resolveMemoryInspectorArtifact({ artifactPath, artifactSha256, profileR
   };
 }
 
-module.exports = { resolveMemoryInspectorArtifact, paths, manifestName };
+module.exports = { resolveMemoryInspectorArtifact, paths, manifestName, migrations };
