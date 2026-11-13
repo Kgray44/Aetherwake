@@ -464,12 +464,15 @@ test('the animated model picker refreshes explicitly and sends the selected cata
 test('the mounted chat submits an explicit web lookup and opens only canonical citation references',async()=>{
  const f=fixture('chatgpt-plan-responses');let chat;
  try{
-  f.detail.providers[0].modelOptions=[{id:'gpt-6.1-sol',label:'Synthetic Sol catalog entry',eligibleTools:['web_search']}];
+  f.detail.providers[0].modelOptions=[{id:'ordinary-only',label:'Synthetic text-only model'},{id:'gpt-6.1-sol',label:'Synthetic Sol catalog entry',eligibleTools:['web_search']}];
   const message=f.detail.messages.items[1];
   message.webSearch={completed:true,citations:[{url:'https://science.example.org/moon',title:'Moon facts',start:0,end:1},{url:'https://science.example.org/second',title:'Second source',start:1,end:message.content.length-1}]};
   const port={command:async(name:string,input:any)=>name==='openCitation'?(f.calls.push({name,input}),{requested:true}):(f.port.command as any)(name,input)} as ConversationProductPort;
-  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId});await chat.ready;
+  const selections=new Map([[f.draft.resourceId,{id:'ordinary-only',label:'Synthetic text-only model'}]]);
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,models:{selections,async refresh(){}}});await chat.ready;
   const form=f.view.root.querySelector('form'),web=named(form,'Search web'),refs=f.view.root.querySelectorAll('.cp-web-citation');
+  assert.equal(web.hidden,true,'An explicitly selected model must be respected');
+  selections.clear();await chat.refresh();
   assert(web && !web.hidden && !web.disabled);
   assert.equal(refs.length,2);
   assert.equal(refs[0].parentNode?.tagName,'P','ordinary annotated text has an inline source');
@@ -673,6 +676,34 @@ test('revoked detail is removed from view without erasing the retained unsent dr
 test('global manager mounts the same chat component with contextual extras and stable canonical identity',async()=>{
   const f=fixture();let manager;try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;assert.equal(f.view.root.querySelectorAll('.cp-chat').length,1);assert.equal(f.view.root.querySelectorAll('.cp-composer').length,1);assert.equal(f.view.root.querySelector('.cp-chat-extras').open,false);assert.equal(f.view.root.querySelector('.cp-chat-extras').parentElement,f.view.root.querySelector('.cp-detail-header'),'Context extras share the identity header, without a permanent separate transcript row');const editor=f.view.root.querySelector('textarea');await manager.refresh();assert.equal(f.view.root.querySelector('textarea'),editor);assert.equal(f.view.root.querySelector('.cp-chat').dataset.resourceId,f.draft.resourceId);assert.equal(f.calls.some(c=>c.name==='send'),false);}
   finally{await manager?.dispose();f.restore();}
+});
+
+test('resize keeps the followed reply visible and respects manual reading scroll',async()=>{
+ const f=fixture();let chat,notify!:ResizeObserverCallback,runFrame!:FrameRequestCallback;
+ const before={ResizeObserver:globalThis.ResizeObserver,requestAnimationFrame:globalThis.requestAnimationFrame};
+ globalThis.ResizeObserver=class {constructor(callback:ResizeObserverCallback){notify=callback;}observe(){}disconnect(){}} as unknown as typeof ResizeObserver;
+ globalThis.requestAnimationFrame=callback=>{runFrame=callback;return 1;};
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,layoutHost:f.view.root});await chat.ready;
+  const list=f.view.root.querySelector('.cp-messages');
+  const last=f.view.root.querySelector('.cp-message-assistant').querySelector('.cp-message-content');
+  list.scrollHeight=1200;list.scrollTop=700;
+  last.getBoundingClientRect=()=>({bottom:1080-list.scrollTop,height:24});
+  const resize=(width:number)=>{notify([{target:f.view.root,contentRect:{height:300,width}} as unknown as ResizeObserverEntry],{} as ResizeObserver);runFrame(0);};
+  resize(400);
+  assert.equal(list.scrollTop,780);
+  list.fire('wheel');list.scrollTop=250;
+  resize(360);
+  assert.equal(list.scrollTop,250);
+  f.detail.messages.offset=50;f.detail.messages.total=52;f.detail.conversation.messageCount=52;
+  await chat.refresh();
+  list.scrollTop=900;
+  named(f.view.root,'Earlier messages').fire('click');
+  await until(()=>f.calls.at(-1)?.input.offset===0);
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  resize(340);
+  assert.equal(list.scrollTop,900,'Paging takes precedence over following the latest message');
+ }finally{await chat?.dispose();Object.assign(globalThis,before);f.restore();}
 });
 
 test('measured short chat hosts compact the stable editor and consolidate feedback before the final composer without mutating its draft',async()=>{

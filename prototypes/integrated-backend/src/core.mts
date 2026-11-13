@@ -30,7 +30,7 @@ import { missionArtifactFiles, missionArtifactPath, missionArtifactSource, readM
 import { createMissionAdmission } from './mission-admission.mts';
 import { createResourcePolicyStore } from './resource-policy-store.mts';
 import { isResourceSignal } from './resource-signals.mts';
-import { MissionPublication } from './mission-publication.mts';
+import { MissionPublication, lastMissionVerificationEvent } from './mission-publication.mts';
 import { MissionConversationReceipts } from './mission-conversation.mts';
 import { WorkspaceRecoveryService } from './workspace-recovery.mts';
 import { VelaWorkspaceConstruction, matchWorkspaceConstruction } from './vela-workspace-construction.mts';
@@ -798,7 +798,7 @@ export class BackendCore {
   private projectMissionReport(missionId: string, seq: number, acknowledge: () => void): boolean {
     const { mission, event } = this.missions.publicationEvent(missionId, seq);
     const origin = mission.originConversationId;
-    if (!origin || event.kind !== 'settled' || event.detail !== 'verified' || !this.missionScopeAllowed(mission.scope) ||
+    if (!origin || lastMissionVerificationEvent(mission, [event]) !== event || !this.missionScopeAllowed(mission.scope) ||
       mission.disposition === 'cancelled' || !mission.tasks.every(task => task.state === 'verified')) return false;
     const verified = this.missions.read(mission.id, mission.scope);
     if (!missionResultAvailable(verified)) return false;
