@@ -74,3 +74,40 @@ test('reentrant canonical observers preserve committed cursor order', async () =
     rmSync(dir, {recursive: true, force: true});
   }
 });
+
+test('SQLite rejection rolls back canonical writes and a corrected retry commits once across reopen', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'aerynth-event-commit-'));
+  const options = { path: join(directory, 'canonical.sqlite'), provider: 'fixture', contentPolicy: 'synthetic-only' } as const;
+  const delivered: string[] = [];
+  const eventType = 'vela.synthetic.db-recovery';
+  let core = new BackendCore(options, event => {
+    if (event.type === eventType) delivered.push(event.eventId);
+  });
+  t.after(async () => {
+    await core.command('close', {});
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const owner = core as any;
+  const label = 'Synthetic SQLite recovery resource';
+  const write = () => owner.atomic(() => {
+    const resource = owner.kernel.createGenericResource(label);
+    owner.record(eventType, 'observed', undefined, 'synthetic-db-recovery', { resourceId: resource.id });
+    return resource.id as string;
+  });
+  const count = () => owner.db.prepare('SELECT count(*) AS n FROM resources WHERE title = ?').get(label).n;
+  owner.db.exec(`CREATE TEMP TRIGGER fixture_reject_integration_state BEFORE UPDATE ON integration_state
+    BEGIN SELECT RAISE(ABORT, 'synthetic SQLite write rejection'); END`);
+  assert.throws(write, /synthetic SQLite write rejection/);
+  assert.equal(count(), 0);
+  assert.deepEqual(delivered, []);
+  assert.ok(!(await core.command('replay', {})).events.some(event => event.type === eventType));
+
+  owner.db.exec('DROP TRIGGER fixture_reject_integration_state');
+  const id = write();
+  assert.equal(count(), 1);
+  assert.equal(delivered.length, 1);
+  await core.command('close', {});
+  core = new BackendCore(options);
+  const replay = (await core.command('replay', {})).events.filter(event => event.type === eventType);
+  assert.deepEqual(replay.map(event => [event.eventId, event.resourceId]), [[delivered[0], id]]);
+});
