@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, unlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -57,14 +57,42 @@ assert.equal(JSON.parse(admission.stdout).allowed, true);
 await mkdir(profile);
 const catalogFixture = join(profile, 'catalog-fixture.mjs');
 const unexpectedFetch = join(profile, 'unexpected-provider-fetch');
-await writeFile(catalogFixture, `import { writeFileSync } from 'node:fs';
-globalThis.fetch = async input => {
+const expectedPrompt = join(profile, 'expected-prompt.json');
+const acceptedFetch = join(profile, 'accepted-provider-fetch');
+const transportFixture = `const expected = ${JSON.stringify(expectedPrompt)};
+const accepted = ${JSON.stringify(acceptedFetch)};
+const unexpected = ${JSON.stringify(unexpectedFetch)};
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+globalThis.fetch = async (input, options) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   if (url === 'https://api.openai.com/v1/models')
     return Response.json({ data: [{ id: 'gpt-6-luna' }] });
-  writeFileSync(${JSON.stringify(unexpectedFetch)}, 'unexpected fetch\\n');
+  if (url === 'https://api.openai.com/v1/responses' && existsSync(expected)) {
+    const body = JSON.parse(options.body);
+    const prompt = JSON.parse(readFileSync(expected, 'utf8'));
+    const role = body.input?.[0];
+    if (body.model === 'gpt-6-luna' && body.store === false && !body.tools?.length &&
+        body.input?.length === 1 && role.role === 'user' && role.content === prompt) {
+      writeFileSync(accepted, 'accepted', { flag: 'wx' });
+      const id = 'resp-synthetic-memory-witness';
+      const text = 'The reviewed synthetic decision is recorded.';
+      const events = [
+        { type: 'response.created', response: { id, status: 'in_progress' } },
+        { type: 'response.output_text.delta', delta: text },
+        { type: 'response.completed', response: { id, status: 'completed', model: 'gpt-6-luna',
+          output: [{ type: 'message', id: 'msg-synthetic-memory-witness', role: 'assistant', status: 'completed',
+            content: [{ type: 'output_text', text, annotations: [] }] }],
+          usage: { input_tokens: 32, output_tokens: 8, total_tokens: 40 } } },
+      ];
+      return new Response(events.map(event => 'data: ' + JSON.stringify(event) + '\\n\\n').join(''),
+        { headers: { 'Content-Type': 'text/event-stream' } });
+    }
+  }
+  writeFileSync(unexpected, 'unexpected fetch');
   throw Error('unexpected_provider_dispatch');
-};\n`, { flag: 'wx' });
+};
+`;
+await writeFile(catalogFixture, transportFixture, { flag: 'wx' });
 
 function protect(operation, input) {
   const method = operation === 'seal' ? 'Protect' : 'Unprotect';
@@ -231,6 +259,20 @@ const correctedId = await withWorker(false, async call => {
   assert(!exportedBody.includes(factText));
   await assert.rejects(previewRecall(call), /personal_memory_no_eligible_context/u);
   const correctedIntent = 'Which basalt part?';
+  const sendPreview = await previewRecall(call, correctedIntent);
+  const sendBinding = { previewId: sendPreview.id, signature: sendPreview.signature };
+  const sendReview = await call('velaNativeReview', sendBinding);
+  const sendGrant = await call('authorizeVelaRequest', { ...sendBinding, reviewDigest: sendReview.reviewDigest });
+  await writeFile(expectedPrompt, JSON.stringify(sendReview.prompt), { flag: 'wx' });
+  try {
+    const reply = await call('vela', { name: 'request', input: {
+      ...sendBinding, intent: correctedIntent, resourceIds: [], authorizeProvider: true, grantId: sendGrant.grantId,
+    } });
+    assert.equal(reply.state, 'responded', reply.errorCode);
+    assert.equal(await readFile(acceptedFetch, 'utf8'), 'accepted');
+  } finally {
+    await unlink(expectedPrompt);
+  }
   const beforeRevocation = await previewRecall(call, correctedIntent);
   const binding = { previewId: beforeRevocation.id, signature: beforeRevocation.signature };
   const nativeReview = await call('velaNativeReview', binding);
@@ -256,7 +298,7 @@ await withWorker(false, async call => {
 await assert.rejects(readFile(unexpectedFetch), { code: 'ENOENT' });
 const receipt = { result: 'pass', candidate: inventory.candidate, manifestSha256: manifestHash, verifiedFiles: files.size,
   workerStarts: 4, correctedRecall: true, attributedExport: true, crossConversationRecall: true, foreignProjectDenied: true, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true, revokedApprovedRequestDenied: true,
-  custody: 'Windows DPAPI CurrentUser through test adapter', approval: 'simulated', providerDispatch: false };
+  custody: 'Windows DPAPI CurrentUser through test adapter', approval: 'simulated', simulatedProviderRequests: 1, liveProviderDispatch: false };
 await writeFile(join(profile, 'worker-receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify(receipt));
 
