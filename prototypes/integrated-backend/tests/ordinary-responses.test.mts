@@ -95,6 +95,15 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     const nextApproval = await f.core.command('authorizeConversationSend', { ...nextBinding, reviewedBodyDigest: next.responses.bodyDigest });
     sourceAvailable = false;
     await assert.rejects(f.core.command('conversationSend', { ...nextBinding, grantId: nextApproval.grantId }), /personal_memory_no_eligible_context|stale_send_preview/);
+    sourceAvailable = true;
+    const pending = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
+      content: 'Which quartz part?', expectedRevision: detail.conversation.revision, commandId: randomUUID(), useMemory: true });
+    const pendingBinding = { previewId: pending.id, fingerprint: pending.fingerprint, commandId: pending.commandId };
+    const pendingApproval = await f.core.command('authorizeConversationSend', { ...pendingBinding, reviewedBodyDigest: pending.responses!.bodyDigest });
+    const policy = await f.core.command('personalMemoryPolicyNative', {});
+    await assert.rejects(f.core.command('personalMemoryPolicyNative', { enable: false, expectedVersion: policy.version - 1 }), /stale_personal_context_version/);
+    assert.equal((await f.core.command('personalMemoryPolicyNative', { enable: false, expectedVersion: policy.version })).ordinaryEnabled, false);
+    await assert.rejects(f.core.command('conversationSend', { ...pendingBinding, grantId: pendingApproval.grantId }), /personal_memory_no_eligible_context|stale_send_preview/);
     assert.equal(f.requests.length, 1);
   } finally { await f.close(); }
 });

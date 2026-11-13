@@ -267,7 +267,7 @@ export interface CommandMap {
   personalMemoryCapturePreviewNative: { input: import('./personal-memory-review.mts').CaptureRequest; output: import('./personal-memory-review.mts').CaptureReview };
   personalMemoryCaptureCommitNative: { input: import('./personal-memory-review.mts').CaptureReview; output: { id: string } };
   personalMemoryCaptureCancelNative: { input: { id: string }; output: null };
-  personalMemoryPolicyNative: { input: { enable?: true; expectedVersion?: number }; output: import('../../personal-context/src/contracts.ts').PersonalPolicy };
+  personalMemoryPolicyNative: { input: { enable?: boolean; expectedVersion?: number }; output: import('../../personal-context/src/contracts.ts').PersonalPolicy };
   personalMemoryManagementNative: {
     input: { type: 'list'; after: string | null } | { type: 'read'; id: string }
       | { type: 'preview'; request: import('./personal-memory-review.mts').ManagementRequest }

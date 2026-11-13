@@ -78,6 +78,12 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.throws(() => recall.approve('0'.repeat(64)), /personal_memory_body_changed/);
     recall.approve(recall.bodyDigest);
     assert.doesNotThrow(() => recall.validate(recall.turn));
+    const enabledPolicy = (await review.inspect({ after: null, limit: 1 })).policy;
+    await review.setProviderUse('ordinary', false, enabledPolicy.version);
+    assert.throws(() => recall.validate(recall.turn), /stale_personal_context/);
+    assert.equal(await review.prepareOrdinaryRecall('other-chat', turn), null);
+    await review.setProviderUse('ordinary', true, enabledPolicy.version + 1);
+    assert.throws(() => recall.validate(recall.turn), /stale_personal_context/);
     assert.equal(await review.prepareOrdinaryRecall('foreign-chat', turn), null);
     assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...turn, webSearch: true }), null);
     assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...turn, messages: [{ role: 'user', content: 'Weather tomorrow' }] }), null);
