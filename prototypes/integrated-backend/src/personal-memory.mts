@@ -38,6 +38,13 @@ export class NativePersonalMemory {
     return this.opening;
   }
 
+  /** Fresh profiles can report default consent without initializing OS custody. */
+  hasStorage(): boolean {
+    return this.transaction(db => !!db.prepare(
+      "SELECT 1 FROM sqlite_schema WHERE type='table' AND name IN ('personal_context_key','personal_context_schema','personal_context_heads','personal_context_revisions','personal_context_dependencies','personal_context_conversation_sources') LIMIT 1",
+    ).get());
+  }
+
   /** Called inside the source owner's synchronous transaction after source
    * authority is established. Erasure needs metadata, including when locked. */
   eraseConversationSource(source: ConversationSourceRef) {

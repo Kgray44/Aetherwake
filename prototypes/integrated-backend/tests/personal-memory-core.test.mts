@@ -31,6 +31,12 @@ test('Core composes a lazy private memory owner only in a native private profile
     assert.equal(memoryOwner(fixtureCore), undefined);
     const owner = memoryOwner(privateCore);
     assert.ok(owner);
+    assert.deepEqual(await privateCore.command('personalMemoryPolicyNative', {}), {
+      version: 0, storageEnabled: false, ordinaryEnabled: false, velaEnabled: false,
+      sharingEnabled: false, sensitiveEnabled: false,
+    });
+    assert.equal(availabilityChecks, 0);
+    assert.equal(owner.hasStorage(), false);
     const beforeOpen = availabilityChecks;
     await assert.rejects(owner.open(), /private_key_unavailable/);
     assert.equal(availabilityChecks, beforeOpen + 1);

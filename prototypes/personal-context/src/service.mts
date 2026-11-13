@@ -19,7 +19,7 @@ const categories: Category[] = ['identity', 'preferences', 'projects', 'people',
 const certainties: Certainty[] = ['explicit-statement', 'user-preference', 'imported-summary', 'historical-observation', 'inference', 'conflicting', 'unknown'];
 const LIMITS = Object.freeze({ imports: 64, facts: 4096, revisions: 16384, revisionsPerRecord: 128, cipherBytes: 16 * 1024 * 1024, importBytes: 256 * 1024, factBytes: 16384, contextBytes: 65536, exportBytes: 2 * 1024 * 1024 });
 export const PERSONAL_CONTEXT_LIMITS = LIMITS;
-const defaultPolicy = (): PersonalPolicy => ({ version: 0, storageEnabled: false, ordinaryEnabled: false, velaEnabled: false, sharingEnabled: false, sensitiveEnabled: false });
+export const defaultPersonalMemoryPolicy = (): PersonalPolicy => ({ version: 0, storageEnabled: false, ordinaryEnabled: false, velaEnabled: false, sharingEnabled: false, sensitiveEnabled: false });
 type Stored = OriginalImport | ReviewedFact | PersonalPolicy;
 type Kind = 'import' | 'fact' | 'policy';
 interface Head { id: string; version: number; kind: Kind; scope: PersonalScope | null; state: string }
@@ -204,7 +204,7 @@ export class PersonalContextService {
         this.opts.db.prepare('INSERT OR IGNORE INTO personal_context_conversation_sources VALUES(?,?,?,?)').run(owner, provenance.conversationId, provenance.messageId, valueId);
     }
   }
-  private policyValue(): PersonalPolicy { const head = this.head('policy'); return head ? this.decode<PersonalPolicy>(head) : defaultPolicy(); }
+  private policyValue(): PersonalPolicy { const head = this.head('policy'); return head ? this.decode<PersonalPolicy>(head) : defaultPersonalMemoryPolicy(); }
   policy(): PersonalPolicy { return this.read(() => { this.authorize('policy.read', null); return this.policyValue(); }); }
   setPolicy(input: { expectedVersion: number; patch: PolicyPatch }): PersonalPolicy {
     check(record(input) && exact(input, ['expectedVersion', 'patch']) && Number.isSafeInteger(input.expectedVersion) && input.expectedVersion >= 0 && record(input.patch) && Object.keys(input.patch).length > 0 && Object.entries(input.patch).every(([k, v]) => ['storageEnabled', 'ordinaryEnabled', 'velaEnabled', 'sharingEnabled', 'sensitiveEnabled'].includes(k) && typeof v === 'boolean'), 'invalid_privacy_policy');

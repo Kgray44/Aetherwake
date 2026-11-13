@@ -7,6 +7,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { NativePersonalMemory } from './personal-memory.mts';
+import { defaultPersonalMemoryPolicy } from '../../personal-context/src/service.mts';
 import { createPersonalMemoryReview } from './personal-memory-review.mts';
 import { createPersonalMemorySourceReader } from './personal-memory-sources.mts';
 import { createIntelligenceJournalProjection, missionStreamFields, streamScopeMatches } from './intelligence-journal-projection.mts';
@@ -6766,6 +6767,7 @@ export class BackendCore {
         ensure(typeof policy.enable === 'boolean' && Number.isSafeInteger(policy.expectedVersion), 'invalid_privacy_policy');
         return await review.setProviderUse(policy.assistant ?? 'ordinary', policy.enable, policy.expectedVersion!) as CommandMap[K]['output'];
       }
+      if (!this.personalMemory?.hasStorage()) return defaultPersonalMemoryPolicy() as CommandMap[K]['output'];
       return (await review.inspect({ after: null, limit: 1 })).policy as CommandMap[K]['output'];
     }
     if (name === 'personalMemoryCapturePreviewNative' || name === 'personalMemoryCaptureCommitNative' || name === 'personalMemoryCaptureCancelNative') {
