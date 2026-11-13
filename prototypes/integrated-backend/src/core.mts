@@ -1,8 +1,8 @@
 import { createAepNativeHost } from './aep-native-host.mts';
 import { resolveAepEvaluationReference } from './aep-evaluation-reference.mts';
 import { randomUUID, createHash } from 'node:crypto';
-import { realpathSync,openSync,closeSync,lstatSync,fstatSync } from 'node:fs';
-import { dirname, relative, resolve, isAbsolute,sep,extname } from 'node:path';
+import { realpathSync,openSync,closeSync,lstatSync,fstatSync,readdirSync,writeFileSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve, isAbsolute,sep,extname } from 'node:path';
 import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, type ApiFileProposalProvenance } from './mission-file-edits.mts';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
@@ -229,7 +229,82 @@ interface PrivateVelaPreview extends VelaRequestPreview {
 type OrdinaryMemoryRecall = NonNullable<Awaited<ReturnType<ReturnType<typeof createPersonalMemoryReview>['prepareOrdinaryRecall']>>>;
 type VelaMemoryRecall = NonNullable<Awaited<ReturnType<ReturnType<typeof createPersonalMemoryReview>['prepareVelaRecall']>>>;
 
+export interface MemoryFixtureBootstrap {
+  contract: 'aerynth.memory-fixture-bootstrap@1';
+  profileRoot: string;
+  expiresAt: number;
+}
+
+type MemoryFixture = {
+  descriptor: MemoryFixtureBootstrap;
+  protector: NativeHostServices['secrets'];
+};
+
+/** Called only after the desktop supervisor consumes its lease. Recheck at the
+ * worker boundary before claiming the database. No caller-supplied DB path. */
+export function memoryFixtureOptions(descriptor: MemoryFixtureBootstrap): Options {
+  const time = Date.now();
+  const invalid = 'memory_fixture_bootstrap_invalid';
+  ensure(descriptor && Object.keys(descriptor).length === 3 &&
+    descriptor.contract === 'aerynth.memory-fixture-bootstrap@1' &&
+    Number.isSafeInteger(descriptor.expiresAt) && descriptor.expiresAt > time && descriptor.expiresAt <= time + 45_000 &&
+    typeof descriptor.profileRoot === 'string' && isAbsolute(descriptor.profileRoot) &&
+    resolve(descriptor.profileRoot) === descriptor.profileRoot &&
+    /^memory-witness-[a-z0-9-]+$/u.test(basename(descriptor.profileRoot)), invalid);
+  const root = descriptor.profileRoot;
+  try {
+    const source = realpathSync.native(resolve(dirname(fileURLToPath(import.meta.url)), '../../..'));
+    const fromSource = relative(source, root);
+    ensure(fromSource.startsWith('..' + sep) || isAbsolute(fromSource), invalid);
+    ensure(lstatSync(root).isDirectory() && realpathSync.native(root) === root, invalid);
+    const names = readdirSync(root).sort();
+    ensure(names.length === 2 && names[0] === 'synthetic-packaged.consumed' &&
+      names[1] === 'synthetic-packaged.started', invalid);
+    for (const [name, maxBytes] of [[names[0], 0], [names[1], 8192]] as const) {
+      const stat = lstatSync(join(root, name));
+      ensure(stat.isFile() && stat.nlink === 1 && stat.size <= maxBytes, invalid);
+    }
+  } catch {
+    throw new ServiceError(invalid);
+  }
+  return { path: join(root, 'aerynth.sqlite'), provider: 'fixture', contentPolicy: 'synthetic-only',
+    rendererEventTransport: true };
+}
+
+function memoryFixtureAllows(name: string, input: unknown): boolean {
+  const value = input as { type?: string; name?: string; providerId?: unknown; provider?: unknown;
+    role?: string; kind?: string; input?: { providerId?: unknown; webSearch?: unknown } } | undefined;
+  switch (name) {
+    case 'desktop':
+      return ['snapshot', 'createProject', 'createWorkspace', 'navigate'].includes(value?.type ?? '') ||
+        (value?.type === 'createResource' && value.kind === 'conversation' && value.provider === 'local');
+    case 'conversation':
+      if (value?.name === 'create') return value.input?.providerId === undefined || value.input.providerId === 'local';
+      if (value?.name === 'send') return value.input?.webSearch === undefined;
+      return ['list', 'search', 'collections', 'detail', 'providers', 'projects',
+        'readDraft', 'saveDraft', 'readViewState', 'saveViewState', 'selectView'].includes(value?.name ?? '');
+    case 'createConversation': return value?.providerId === undefined || value.providerId === 'local';
+    case 'addMessage': return value?.role === 'user';
+    case 'vela': return value?.name === 'state' || value?.name === 'open';
+    case 'personalMemoryPolicyNative': return !!value && Object.keys(value).length === 0;
+    case 'personalMemoryCapturePreviewNative':
+    case 'personalMemoryCaptureCommitNative':
+    case 'personalMemoryCaptureCancelNative':
+    case 'personalMemoryManagementNative':
+    case 'personalMemoryRevokeSourceNative':
+    case 'snapshot':
+    case 'rendererEventPage':
+    case 'capabilities':
+    case 'providerActivity':
+    case 'viewState':
+    case 'close':
+      return true;
+    default: return false;
+  }
+}
+
 export class BackendCore {
+  private readonly fixtureMemory: boolean;
   private kernel: WorkspaceKernel;
   private db!: DatabaseSync;
   private graph!: ConversationGraph;
@@ -362,7 +437,24 @@ export class BackendCore {
   private syntheticTimerClock?: TimerClockReading;
   private timerResumeTask?: Promise<void>;
   private timerResumeRequired = false;
-  constructor(options: Options, emit: (event: StreamEvent) => void = () => {}, nativeHostServices?:NativeHostServices,ordinaryTest?:OrdinaryResponsesTestServices,velaApiTest?:VelaApiRuntimeTestServices) {
+  constructor(options: Options, emit: (event: StreamEvent) => void = () => {}, nativeHostServices?:NativeHostServices,ordinaryTest?:OrdinaryResponsesTestServices,velaApiTest?:VelaApiRuntimeTestServices,memoryFixture?:MemoryFixture) {
+    this.fixtureMemory = memoryFixture !== undefined;
+    if (memoryFixture) {
+      const expected = memoryFixtureOptions(memoryFixture.descriptor);
+      const protector = memoryFixture.protector;
+      ensure(!nativeHostServices && !ordinaryTest && !velaApiTest && protector &&
+        typeof protector.available === 'function' && typeof protector.seal === 'function' &&
+        typeof protector.open === 'function' &&
+        Object.keys(options).every(key => ['path', 'provider', 'contentPolicy', 'rendererEventTransport'].includes(key)) &&
+        options.path === expected.path && options.provider === 'fixture' && options.contentPolicy === 'synthetic-only',
+        'memory_fixture_bootstrap_invalid');
+      try {
+        writeFileSync(join(memoryFixture.descriptor.profileRoot, 'synthetic-backend.started'), '',
+          { flag: 'wx', mode: 0o600 });
+      } catch {
+        throw new ServiceError('memory_fixture_bootstrap_invalid');
+      }
+    }
     this.nativeHostServices=nativeHostServices;
     this.nativeMedia = options.nativeMedia === true;
     this.rendererEventTransport = options.rendererEventTransport === true;
@@ -455,7 +547,8 @@ export class BackendCore {
       this.desktop = new DesktopState(this.kernel, this.db,{allowSubjectAttachment:(subject,workspaceId)=>this.librarySubjectAllowed(subject,workspaceId)});
       this.initializeConversations();
       this.initializeLibrary();
-      if (this.privateMode && nativeHostServices) {
+      const memoryProtector = memoryFixture?.protector ?? (this.privateMode ? nativeHostServices?.secrets : undefined);
+      if (memoryProtector) {
         const readOwnMessage = (id: string, messageId: string) => {
           const graphId = this.state.resources[id];
           return graphId ? this.graph.readOwnMessage(graphId, messageId) : null;
@@ -478,7 +571,7 @@ export class BackendCore {
         });
         this.personalMemory = new NativePersonalMemory({
           kernel: this.kernel,
-          secrets: nativeHostServices.secrets,
+          secrets: memoryProtector,
           host: {
             ...sources,
             identity: () => ({ userId: 'local-owner', policyVersion: 'aerynth.local-owner@1' }),
@@ -490,7 +583,7 @@ export class BackendCore {
       }
       ensure(!options.velaPlanningPort||!this.privateMode,'synthetic_vela_planner_forbidden');
       this.initializeVela(options.velaPlanningPort);
-      this.ordinaryConnections=ordinaryTest?.connection??new OpenAIConnections({db:this.db,transaction:work=>this.kernel.withTransaction(()=>work(this.db)),nativeHost:this.nativeHostServices,localEligibility:{kind:'local-personal-project',scope:'current-owner-local-installation',decisionRef:'aerynth.owner-local-personal-inference'}});
+      if (!this.fixtureMemory) this.ordinaryConnections=ordinaryTest?.connection??new OpenAIConnections({db:this.db,transaction:work=>this.kernel.withTransaction(()=>work(this.db)),nativeHost:this.nativeHostServices,localEligibility:{kind:'local-personal-project',scope:'current-owner-local-installation',decisionRef:'aerynth.owner-local-personal-inference'}});
       this.kernel.withTransaction(() => { VelaApiConnection.migrate(this.db); VelaApiRuntime.migrate(this.db); VelaVoiceRuntime.migrate(this.db); VelaWakeRuntime.migrate(this.db); VelaFileProposals.migrate(this.db); FolderSources.migrate(this.db); MissionFileEdits.migrate(this.db); VelaToolWorkflows.migrate(this.db);
         this.db.exec(`CREATE TABLE IF NOT EXISTS mission_file_requests(request_id TEXT PRIMARY KEY,json TEXT NOT NULL,state TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS mission_file_read_grants(id TEXT PRIMARY KEY,resource_id TEXT NOT NULL,json TEXT NOT NULL,state TEXT NOT NULL);
@@ -500,58 +593,62 @@ export class BackendCore {
         this.db.prepare("UPDATE mission_file_requests SET state='unknown' WHERE state='dispatching'").run(); });
       this.folderSources=new FolderSources(this.db,{privateRoot:this.privateRoot});
       this.selectedDocumentContext=new SelectedDocumentContext({scopeStamp:()=>this.velaScopeStamp(),documents:this.nativeHostServices?.documents,source:id=>{const scope=this.velaHost.scope(),ref=this.velaHost.resolve({id,kind:'resource'},scope);if(!ref||ref.resourceKind!=='file'||!this.productResourceAccess(id)||!this.conversationAccess.resource(id,'read'))return null;const source=readMediaSource(this.db,id);return source?{ref,source}:null;}});
-      this.velaApiConnection = new VelaApiConnection({ db: this.db, transaction: work => this.kernel.withTransaction(() => work(this.db)), nativeHost: this.nativeHostServices, ...(velaApiTest ? { fetch: velaApiTest.fetch } : {}) });
-      this.velaApiRuntime = new VelaApiRuntime({ db: this.db, transaction: work => this.kernel.withTransaction(work), executionTransaction: work => this.atomic(work), connection: this.velaApiConnection, test: velaApiTest,
-        observe: {
-          stage: (executionId, requestId, review) => {
-            ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
-            this.atomic(() => {
-              const execution: Execution = { id:executionId,resourceId:this.ensureVelaConversation(),providerId:VELA_API_PROVIDER,
-                commandId:'vela-api-scoped:'+requestId,state:'dispatching',binding:null,turnId:null,startedAt:now(),endedAt:null,
-                taskVerified:false,connectionVersion:review.api!.configurationVersion,requestedModel:review.model,requestBodyDigest:review.bodyDigest,
-                contextDigest:review.contextDigest,instructionVersion:review.api!.instructionVersion };
-              this.admitVelaAttempt(execution); this.state.executions[executionId] = execution;
-            });
-            this.record('vela.api/scoped-dispatch','observed',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,detached:true,correlationId:requestId,
-              payload:{redacted:true,api:{executionId,bodyDigest:review.bodyDigest,contextDigest:review.contextDigest,maxOutputTokens:2048}}});
-            return () => { this.providerActivity.providerRequests++; };
-          },
-          event: (event,requestId) => {
-            if (event.type === 'provider/usage') this.record('provider/usage',this.velaApiTest?'simulated':'reported',undefined,randomUUID(),{
-              providerId:VELA_API_PROVIDER,detached:true,correlationId:requestId,payload:{redacted:true,usage:event.usage,api:{executionId:event.executionId}}});
-          },
-          completed: (executionId,requestId,result,elapsedMs) => {
-            this.atomic(() => {
-              const execution = this.state.executions[executionId]; ensure(execution,'invalid_provider_response');
-              execution.state = result.outcome === 'completed' ? 'provider_completed' : result.outcome === 'unknown' ? 'unknown' : result.outcome === 'cancelled-before-dispatch' ? 'interrupted' : 'failed';
-              execution.endedAt = now(); execution.responseOutcome = result.outcome;
-              if (result.responseId) execution.responseId = result.responseId; if (result.usage) execution.usage = result.usage;
-              if (result.errorCode) execution.errorCode = result.errorCode;
-            });
-            this.record('vela.api/scoped-'+result.outcome,this.velaApiTest?'simulated':'reported',undefined,randomUUID(),{
-              providerId:VELA_API_PROVIDER,detached:true,correlationId:requestId,payload:{redacted:true,api:{executionId,elapsedMs},...(result.usage?{usage:result.usage}:{})}});
-          },
-        } });
+      if (!this.fixtureMemory) {
+        this.velaApiConnection = new VelaApiConnection({ db: this.db, transaction: work => this.kernel.withTransaction(() => work(this.db)), nativeHost: this.nativeHostServices, ...(velaApiTest ? { fetch: velaApiTest.fetch } : {}) });
+        this.velaApiRuntime = new VelaApiRuntime({ db: this.db, transaction: work => this.kernel.withTransaction(work), executionTransaction: work => this.atomic(work), connection: this.velaApiConnection, test: velaApiTest,
+          observe: {
+            stage: (executionId, requestId, review) => {
+              ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
+              this.atomic(() => {
+                const execution: Execution = { id:executionId,resourceId:this.ensureVelaConversation(),providerId:VELA_API_PROVIDER,
+                  commandId:'vela-api-scoped:'+requestId,state:'dispatching',binding:null,turnId:null,startedAt:now(),endedAt:null,
+                  taskVerified:false,connectionVersion:review.api!.configurationVersion,requestedModel:review.model,requestBodyDigest:review.bodyDigest,
+                  contextDigest:review.contextDigest,instructionVersion:review.api!.instructionVersion };
+                this.admitVelaAttempt(execution); this.state.executions[executionId] = execution;
+              });
+              this.record('vela.api/scoped-dispatch','observed',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,detached:true,correlationId:requestId,
+                payload:{redacted:true,api:{executionId,bodyDigest:review.bodyDigest,contextDigest:review.contextDigest,maxOutputTokens:2048}}});
+              return () => { this.providerActivity.providerRequests++; };
+            },
+            event: (event,requestId) => {
+              if (event.type === 'provider/usage') this.record('provider/usage',this.velaApiTest?'simulated':'reported',undefined,randomUUID(),{
+                providerId:VELA_API_PROVIDER,detached:true,correlationId:requestId,payload:{redacted:true,usage:event.usage,api:{executionId:event.executionId}}});
+            },
+            completed: (executionId,requestId,result,elapsedMs) => {
+              this.atomic(() => {
+                const execution = this.state.executions[executionId]; ensure(execution,'invalid_provider_response');
+                execution.state = result.outcome === 'completed' ? 'provider_completed' : result.outcome === 'unknown' ? 'unknown' : result.outcome === 'cancelled-before-dispatch' ? 'interrupted' : 'failed';
+                execution.endedAt = now(); execution.responseOutcome = result.outcome;
+                if (result.responseId) execution.responseId = result.responseId; if (result.usage) execution.usage = result.usage;
+                if (result.errorCode) execution.errorCode = result.errorCode;
+              });
+              this.record('vela.api/scoped-'+result.outcome,this.velaApiTest?'simulated':'reported',undefined,randomUUID(),{
+                providerId:VELA_API_PROVIDER,detached:true,correlationId:requestId,payload:{redacted:true,api:{executionId,elapsedMs},...(result.usage?{usage:result.usage}:{})}});
+            },
+          } });
+      }
       this.initializeMissionFileEdits();
       this.toolWorkflows=new VelaToolWorkflows({db:this.db,atomic:work=>this.atomic(work),allowed:binding=>this.toolWorkflowAllowed(binding),ownerCurrent:binding=>this.toolOwnerCurrent(binding),ownerNegativeCurrent:(binding,proof)=>this.toolOwnerNegativeProof(binding,proof.kind)?.sourceDigest===proof.sourceDigest,observe:event=>this.record('vela.tools/'+event.phase,'observed',undefined,randomUUID(),{providerId:'aerynth-native',correlationId:event.requestId,detached:true,payload:{redacted:true,tools:{workflowId:event.workflowId,...(event.receiptId?{receiptId:event.receiptId}:{})}}})});
-      this.velaVoiceRuntime = new VelaVoiceRuntime({ db:this.db,atomic:work=>this.atomic(work),storageAllowed:()=>this.missionStorageAdmitted,connection:this.velaApiConnection,api:this.velaApiRuntime,media:this.nativeHostServices?.liveMedia,
-        ...(velaApiTest?{test:velaApiTest.voice??{fetch:velaApiTest.fetch}}:{}),host:{
-          context:input=>this.voiceContext(input.conversationId,input.purpose),validateContext:async(ref,digest)=>this.validateVoiceContext(ref,digest),
-          conversationId:()=>this.vela.ensureMissionConversation(),fragment:(fragment,id)=>this.appendVoiceFragment(fragment,id),
-          message:id=>{const conversation=this.state.vela!.conversationId;if(!conversation)return null;return this.readVelaConversation(conversation).messages.find(message=>message.id===id)??null;},
-          readReply:async(messageId,contentDigest)=>this.readCurrentVelaReply(messageId,contentDigest),
-          seal:(messageId,sessionId)=>{const meta=this.state.vela!.messages[messageId];ensure(meta?.voice?.sessionId===sessionId,'live_canonical_intent_unavailable');meta.voice.sealed=true;},
-          acceptIntent:(intent,attemptId)=>this.atomic(()=>this.once('voice-intent:'+attemptId,{intent},()=>{const id=this.ensureVelaConversation();return this.appendVelaMessage(id,{role:'user',content:intent,source:'user',classification:'observed'}).id;})),
-          delegate:(binding,intent,messageId)=>this.delegateVoice(binding,intent,messageId),observe:(type,details)=>{
-            if(type==='start'||type==='reconnect'||type==='audition'||type==='speak'||type==='voice-create')this.providerActivity.providerRequests++;
-            this.record('vela.voice/'+type,type==='transcript'||details.usageSeconds!==undefined?'reported':'observed',undefined,randomUUID(),{
-              providerId:'gpt-live-1',detached:true,...(details.sessionId?{correlationId:details.sessionId}:{}),payload:{redacted:true,voice:details}});
-          },
-        }});
-      this.velaWakeRuntime = new VelaWakeRuntime({db:this.db,atomic:work=>this.atomic(work),api:this.velaApiRuntime,voice:this.velaVoiceRuntime,
-        capture:this.nativeHostServices?.wakeCapture,privateRoot:this.privateRoot,...(velaApiTest?.wake??{}),storageAllowed:()=>this.missionStorageAdmitted,
-        observe:view=>this.atomic(()=>this.record('vela.wake/state','observed',undefined,randomUUID(),{providerId:'aerynth-native',detached:true,
-          ...(view.sessionId?{correlationId:view.sessionId}:{}),payload:{redacted:true,wake:view}}))});
+      if (!this.fixtureMemory) {
+        this.velaVoiceRuntime = new VelaVoiceRuntime({ db:this.db,atomic:work=>this.atomic(work),storageAllowed:()=>this.missionStorageAdmitted,connection:this.velaApiConnection,api:this.velaApiRuntime,media:this.nativeHostServices?.liveMedia,
+          ...(velaApiTest?{test:velaApiTest.voice??{fetch:velaApiTest.fetch}}:{}),host:{
+            context:input=>this.voiceContext(input.conversationId,input.purpose),validateContext:async(ref,digest)=>this.validateVoiceContext(ref,digest),
+            conversationId:()=>this.vela.ensureMissionConversation(),fragment:(fragment,id)=>this.appendVoiceFragment(fragment,id),
+            message:id=>{const conversation=this.state.vela!.conversationId;if(!conversation)return null;return this.readVelaConversation(conversation).messages.find(message=>message.id===id)??null;},
+            readReply:async(messageId,contentDigest)=>this.readCurrentVelaReply(messageId,contentDigest),
+            seal:(messageId,sessionId)=>{const meta=this.state.vela!.messages[messageId];ensure(meta?.voice?.sessionId===sessionId,'live_canonical_intent_unavailable');meta.voice.sealed=true;},
+            acceptIntent:(intent,attemptId)=>this.atomic(()=>this.once('voice-intent:'+attemptId,{intent},()=>{const id=this.ensureVelaConversation();return this.appendVelaMessage(id,{role:'user',content:intent,source:'user',classification:'observed'}).id;})),
+            delegate:(binding,intent,messageId)=>this.delegateVoice(binding,intent,messageId),observe:(type,details)=>{
+              if(type==='start'||type==='reconnect'||type==='audition'||type==='speak'||type==='voice-create')this.providerActivity.providerRequests++;
+              this.record('vela.voice/'+type,type==='transcript'||details.usageSeconds!==undefined?'reported':'observed',undefined,randomUUID(),{
+                providerId:'gpt-live-1',detached:true,...(details.sessionId?{correlationId:details.sessionId}:{}),payload:{redacted:true,voice:details}});
+            },
+          }});
+        this.velaWakeRuntime = new VelaWakeRuntime({db:this.db,atomic:work=>this.atomic(work),api:this.velaApiRuntime,voice:this.velaVoiceRuntime,
+          capture:this.nativeHostServices?.wakeCapture,privateRoot:this.privateRoot,...(velaApiTest?.wake??{}),storageAllowed:()=>this.missionStorageAdmitted,
+          observe:view=>this.atomic(()=>this.record('vela.wake/state','observed',undefined,randomUUID(),{providerId:'aerynth-native',detached:true,
+            ...(view.sessionId?{correlationId:view.sessionId}:{}),payload:{redacted:true,wake:view}}))});
+      }
       this.velaFileProposals=new VelaFileProposals({db:this.db,atomic:work=>this.atomic(work),privateRoot:this.privateRoot,scopeStamp:()=>this.velaScopeStamp(),
         rootScopeStamp:()=>{const c=this.velaContext();return planningDigest({principalId:c.principalId,policyVersion:c.policyVersion,workspaceId:c.currentWorkspaceId,projectId:c.currentProjectId});},
         target:()=>this.fileProposalTarget(),allowed:target=>{const current=this.fileProposalTarget();return !!current&&current.workspaceId===target.workspaceId&&current.projectId===target.projectId;},
@@ -612,7 +709,7 @@ export class BackendCore {
         planningContextCurrent: mission => this.missionPlanningContextCurrent(mission),
         executors: this.missionExecutors, laneLimit: lane => lane === 'codex-local-check' ? 1 :
           lane === CHATGPT_PLAN_PROVIDER ? 2 - Number(this.active?.providerId === lane) - Number(!!this.missionPlanningRun) :
-          lane === VELA_API_PROVIDER ? VELA_API_RUNTIME_LIMITS.concurrent - this.velaApiRuntime.nonMissionInFlight() : 2,
+          lane === VELA_API_PROVIDER ? VELA_API_RUNTIME_LIMITS.concurrent - (this.velaApiRuntime?.nonMissionInFlight() ?? 0) : 2,
         underPressure: () => !this.missionStorageAdmitted,
         resources: {
           canAcquire: (lane, executorId) => this.missionStorageAdmitted && (executorId === gpuReadbackExecutor ?
@@ -5581,7 +5678,7 @@ export class BackendCore {
     this.updateOrdinaryAdapter();return structuredClone(status);
   }
   private async refreshOrdinaryStatus():Promise<ProviderConnectionStatus> {
-    return this.setOrdinaryStatus(await this.ordinaryConnections.status());
+    return this.fixtureMemory ? structuredClone(this.ordinaryStatus) : this.setOrdinaryStatus(await this.ordinaryConnections.status());
   }
   private maintainOrdinarySession():Promise<ProviderConnectionStatus> {
     if(this.ordinaryRenewal)return this.ordinaryRenewal;
@@ -6813,6 +6910,7 @@ export class BackendCore {
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
+    if (this.fixtureMemory) ensure(memoryFixtureAllows(name, input), 'memory_fixture_command_denied');
     if (name === 'personalMemoryRevokeSourceNative') {
       const memory = this.personalMemory, review = this.personalMemoryReview;
       ensure(memory && review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
@@ -7416,7 +7514,7 @@ export class BackendCore {
       case 'close': {
         this.personalMemoryReview?.close();
         this.personalMemory?.close();
-        this.velaVoiceRuntime.closeSpeechAdmission();
+        this.velaVoiceRuntime?.closeSpeechAdmission();
         let cleanupError: unknown, cleanupFailed = false;
         const cleanup = async (work: () => unknown | Promise<unknown>) => {
           try { await work(); } catch (error) { if (!cleanupFailed) { cleanupFailed = true; cleanupError = error; } }
@@ -7426,8 +7524,8 @@ export class BackendCore {
         await cleanup(() => this.toolWorkflows.dispose());
         await cleanup(() => this.selectedDocumentContext.close());
         await cleanup(() => this.folderSources.dispose());
-        await cleanup(() => this.velaWakeRuntime.dispose());
-        await cleanup(() => this.velaVoiceRuntime.dispose());
+        await cleanup(() => this.velaWakeRuntime?.dispose());
+        await cleanup(() => this.velaVoiceRuntime?.dispose());
         await Promise.allSettled([...this.missionFileApiTasks]);
         await cleanup(() => fileEditsClosing);
         await cleanup(() => this.timerDomain?.dispose());
@@ -7446,10 +7544,10 @@ export class BackendCore {
         await planning?.settled.catch(() => {});
         if(this.ordinaryTask)await this.ordinaryTask.catch(()=>{});
         if(this.velaProjectCheckTask)await this.velaProjectCheckTask.task.catch(()=>{});
-        await cleanup(() => this.ordinaryConnections.close());
-        await cleanup(() => this.velaApiRuntime.close());
+        await cleanup(() => this.ordinaryConnections?.close());
+        await cleanup(() => this.velaApiRuntime?.close());
         await this.velaApiTask?.catch(() => {});
-        await cleanup(() => this.velaApiConnection.close());
+        await cleanup(() => this.velaApiConnection?.close());
         await Promise.allSettled([...this.ordinaryAuth.values()]);
         for(const id of this.velaCatalogLeases.keys())await cleanup(() => this.finishVelaCatalog(id));
         await cleanup(() => this.stopEvents());

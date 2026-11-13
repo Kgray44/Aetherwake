@@ -1,6 +1,8 @@
 import { createInterface } from "node:readline";
 import { basename } from "node:path";
 import { Backend } from "./service.mts";
+import type { Options } from "./contracts.mts";
+import type { MemoryFixtureBootstrap } from "./core.mts";
 import {createNativeHostClient,isNativeHostEnvelope} from './native-host.mts';
 import {createNativeLiveHostClient,isNativeLiveHostEnvelope} from './live-media-host.mts';
 import {createSystemFactsClient,isSystemFactsEnvelope} from './system-facts-host.mts';
@@ -8,7 +10,21 @@ import {createDocumentTextClient,isDocumentTextEnvelope} from './document-text-h
 import {createNativeWakeCaptureClient,isNativeWakeCaptureMessage} from './wake-capture-host.mts';
 import {createWindowsMaintenanceClient,isWindowsMaintenanceEnvelope} from './windows-maintenance-host.mts';
 import {createWindowsComputerClient,isWindowsComputerEnvelope} from './windows-computer-host.mts';
-const [path, privateRoot, cwd,...flags] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const [path, privateRoot, cwd,...flags] = argv;
+const fixtureFlag = '--memory-fixture-bootstrap-v1';
+const fixtureLaunch = path === fixtureFlag;
+let fixtureStartup: { descriptor: MemoryFixtureBootstrap; options: Options } | undefined;
+if (fixtureLaunch) {
+  if (argv.length !== 2 || Buffer.byteLength(privateRoot) > 8192) throw Error('memory_fixture_bootstrap_invalid');
+  try {
+    const descriptor: MemoryFixtureBootstrap = JSON.parse(privateRoot);
+    const { memoryFixtureOptions } = await import('./core.mts');
+    fixtureStartup = { descriptor, options: memoryFixtureOptions(descriptor) };
+  } catch { throw Error('memory_fixture_bootstrap_invalid'); }
+} else if (argv.some(arg => arg.startsWith('--memory-fixture'))) {
+  throw Error('memory_fixture_bootstrap_invalid');
+}
 const write = (v: unknown) => process.stdout.write(JSON.stringify(v) + "\n");
 const profilerFlags = flags.filter(flag => flag.startsWith('--mission-profiler-benchmark='));
 const profilerMode = profilerFlags[0]?.slice('--mission-profiler-benchmark='.length);
@@ -17,6 +33,7 @@ if (profilerFlags.length && (profilerFlags.length !== 1 || !/^review-vela-missio
   throw Error('invalid_mission_profiler_benchmark');
 if (flags.some(flag => !profilerFlags.includes(flag) && !["--native-secrets", "--native-media", "--native-system-facts", "--native-wake-capture","--native-documents","--native-maintenance","--native-computer"].includes(flag)) || new Set(flags).size !== flags.length)
   throw Error("invalid_native_host_flags");
+const fixtureCustody = fixtureStartup ? createNativeHostClient(write) : undefined;
 const nativeClient=flags.includes('--native-secrets')?createNativeHostClient(write):undefined;
 const liveClient=flags.includes('--native-media')?createNativeLiveHostClient(write):undefined;
 const systemClient=flags.includes('--native-system-facts')?createSystemFactsClient(write):undefined;
@@ -24,7 +41,11 @@ const documentClient=flags.includes('--native-documents')?createDocumentTextClie
 const wakeClient=flags.includes('--native-wake-capture')?createNativeWakeCaptureClient(write):undefined;
 const maintenanceClient=flags.includes('--native-maintenance')?createWindowsMaintenanceClient(write):undefined;
 const computerClient=flags.includes('--native-computer')?createWindowsComputerClient(write):undefined;
-const backend = new Backend({
+const backend = fixtureStartup
+  ? new Backend(fixtureStartup.options, undefined, {
+      descriptor: fixtureStartup.descriptor, protector: fixtureCustody!.services.secrets,
+    })
+  : new Backend({
   path,
   privateRoot,
   cwd,
@@ -38,7 +59,7 @@ const backend = new Backend({
 let closeTask:Promise<void>|null=null;
 const closeBackend=()=>{
   if(closeTask)return closeTask;
-  const task=backend.close().then(()=>{computerClient?.close();maintenanceClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();});closeTask=task;
+  const task=backend.close().then(()=>{computerClient?.close();maintenanceClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();fixtureCustody?.close();});closeTask=task;
   void task.catch(()=>{if(closeTask===task)closeTask=null;});
   return task;
 };
@@ -56,7 +77,7 @@ lines.on("line", async (line) => {
     if(isSystemFactsEnvelope(request)){systemClient?.handle(request);return;}
     if(isDocumentTextEnvelope(request)){documentClient?.handle(request);return;}
     if(isNativeLiveHostEnvelope(request)){liveClient?.handle(request);return;}
-    if(isNativeHostEnvelope(request)){nativeClient?.handle(request);return;}
+    if(isNativeHostEnvelope(request)){(fixtureCustody ?? nativeClient)?.handle(request);return;}
     if (request && Object.hasOwn(request, 'missionHostSignal')) {
       if (nativeClient && Object.keys(request).length === 1)
         backend.observeMissionHostSignal(request.missionHostSignal);
@@ -65,7 +86,7 @@ lines.on("line", async (line) => {
     id = request.id;
     if (['personalMemoryCapturePreviewNative', 'personalMemoryCaptureCommitNative', 'personalMemoryCaptureCancelNative',
       'personalMemoryManagementNative', 'personalMemoryPolicyNative', 'personalMemoryRevokeSourceNative'].includes(request.command)) {
-      if (!nativeClient || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
+      if ((!nativeClient && !fixtureCustody) || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
         throw new Error('personal_memory_native_required');
       write({ id, result: await backend.call(request.command, request.input) });
       return;
@@ -101,6 +122,10 @@ lines.on("line", async (line) => {
           Object.keys(request.input).length !== 0 || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
         throw new Error('native_timer_resume_required');
       write({ id, result: await backend.call('timerHostResume', {}) });
+      return;
+    }
+    if (fixtureStartup && request.command === 'createConversation') {
+      write({ id, result: await backend.call('createConversation', request.input) });
       return;
     }
     if (request.command === "metrics") {
@@ -197,5 +222,5 @@ lines.on(
   () =>
     {void closeBackend()
       .then(()=>process.exit())
-      .catch(async()=>{computerClient?.close();maintenanceClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();await backend.terminate().catch(()=>{});process.exit(1);});},
+      .catch(async()=>{computerClient?.close();maintenanceClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();fixtureCustody?.close();await backend.terminate().catch(()=>{});process.exit(1);});},
 );
