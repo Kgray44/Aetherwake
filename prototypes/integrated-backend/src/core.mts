@@ -292,7 +292,7 @@ export class BackendCore {
   private liveVelaAnswer?: { requestId: string; scopeStamp: string };
   private ordinaryGraphAdapter?:GraphAdapter;
   /** One synchronous canonical read only; never retained view authority. */
-  private conversationBatch:{active:boolean;access:Map<string,boolean>}|null=null;
+  private conversationBatch:{active:boolean;access:Map<string,boolean>;resources:Map<string,boolean>}|null=null;
   private conversationAccess!: ReturnType<typeof createCanonicalAccessHelper>;
   private capabilityCache = createObservedCapabilityCache();
   private sendPreviews = new Map<string,{input:ConversationSendInput;preview:ConversationSendPreview}>();
@@ -5445,13 +5445,13 @@ export class BackendCore {
     ensure(batch.active,'conversation_read_batch_closed');
     const key=JSON.stringify([id,messageId??null]);
     if(batch.access.has(key))return batch.access.get(key)!;
-    const allowed=this.conversationAccess.access(id,messageId);batch.access.set(key,allowed);return allowed;
+    const allowed=this.conversationAccess.access(id,messageId,batch.resources);batch.access.set(key,allowed);return allowed;
   }
   private canonicalConversationReadBatch<T>(read:(view:ConversationReadView)=>T):T {
     ensure(typeof read==='function'&&!this.conversationBatch,'conversation_read_batch_active');
     ensure(read.constructor.name!=='AsyncFunction','synchronous_conversation_read_required');
     return this.kernel.withTransaction(()=>{
-      const batch={active:true,access:new Map<string,boolean>()};this.conversationBatch=batch;
+      const batch={active:true,access:new Map<string,boolean>(),resources:new Map<string,boolean>()};this.conversationBatch=batch;
       const assertOpen=()=>ensure(batch.active&&this.conversationBatch===batch,'conversation_read_batch_closed');
       try{
         const result=read(this.conversationReadView(assertOpen));
@@ -5460,7 +5460,7 @@ export class BackendCore {
           throw new ServiceError('synchronous_conversation_read_required');
         }
         return result;
-      }finally{batch.active=false;batch.access.clear();this.conversationBatch=null;}
+      }finally{batch.active=false;batch.access.clear();batch.resources.clear();this.conversationBatch=null;}
     });
   }
   private conversationReadView(assertOpen?:()=>void):ConversationReadView {
@@ -5489,6 +5489,17 @@ export class BackendCore {
           visibleMessages:gid=>{ensure(currentSource(gid),'source_unavailable');return this.graph.visibleMessages(gid).filter(m=>currentSource(m.conversationId,m.id));},
           visibleMessageMetadata:(gid,options)=>{ensure(currentSource(gid),'source_unavailable');return this.graph.visibleMessageMetadata(gid,{...options,allow:m=>currentSource(m.conversationId,m.id)&&options.allow(m)});},
         },
+        ...(assertOpen ? {pageVisibleMessages: (...[gid, select, allow]: Parameters<NonNullable<ConversationReadView['pageVisibleMessages']>>) => {
+          assertOpen();
+          ensure(currentSource(gid), 'source_unavailable');
+          return this.graph.pageVisibleMessages(gid, select, (source, messageId) =>
+            currentSource(source, messageId) && allow(source, messageId));
+        }, searchVisibleMessages: (ids: readonly string[], needle: string, allow: (gid: string, messageId: string) => boolean) => {
+          assertOpen();
+          for (const gid of ids) ensure(currentSource(gid), 'source_unavailable');
+          return this.graph.searchVisibleMessages(ids, needle, (gid, messageId) =>
+            currentSource(gid, messageId) && allow(gid, messageId));
+        }} : {}),
         messageMetadata:messageId=>{
           assertOpen?.();
           const m=this.mutationDepth ? this.state.graph.messages.find(value=>value.id===messageId) : this.graph.messageHeader(messageId);

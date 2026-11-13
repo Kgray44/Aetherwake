@@ -54,14 +54,20 @@ function parseViewSelection(value:unknown,code='invalid_conversation_view_select
  if(value===null)return null;const a=fields(value,['draftVersion','start','end','direction'],code),draftVersion=viewVersion(a.draftVersion,code),start=viewVersion(a.start,code),end=viewVersion(a.end,code),direction=a.direction;
  check(start<=end&&end<=CONVERSATION_DRAFT_LIMITS.contentUnits&&(direction==='forward'||direction==='backward'||direction==='none'),code);return {draftVersion,start,end,direction};
 }
-const page = <T,>(items: T[], q: { offset?: number; limit?: number }): Page<T> => {
+const pageWindow = (q: { offset?: number; limit?: number }) => {
  const offset = q.offset ?? 0, limit = q.limit ?? 50;
  check(Number.isInteger(offset) && offset >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 200, 'invalid_page');
+ return {offset,limit};
+};
+const page = <T,>(items: T[], q: { offset?: number; limit?: number }): Page<T> => {
+ const {offset,limit}=pageWindow(q);
  return { items: items.slice(offset, offset + limit), total: items.length, offset, limit, hasMore: offset + limit < items.length };
 };
 export interface ConversationReadView {
  readonly conversations: readonly Snapshot['conversations'][number][]; readonly resourceMap: Readonly<Snapshot['resourceMap']>;
  readonly graph: Pick<ConversationGraph,'visibleMessages'|'visibleMessageMetadata'>;
+ readonly searchVisibleMessages?: ConversationGraph['searchVisibleMessages'];
+ readonly pageVisibleMessages?: ConversationGraph['pageVisibleMessages'];
  readonly graphMetadata: Readonly<Pick<GraphData,'providers'|'conversations'|'edges'|'unavailableMessageIds'>>;
  readonly executions: Readonly<Record<string,PublicConversationExecution>>;
  readonly messageEvidence?:Readonly<Record<string,{executionId:string;outputState?:'complete'|'partial';webSearch?:MessageView['webSearch']}>>;
@@ -272,16 +278,33 @@ export class ConversationProduct implements ConversationProductPort {
   });
  }
  private summaries(v: View, q: SearchQuery = {}, ignoreCollection = false): ConversationSummary[] {
-  return this.candidates(v,q,ignoreCollection).filter(c=>!q.text||this.matches(v,{title:v.indices.resources.get(c.resourceId)!.title,conversationId:v.resourceMap[c.resourceId]},q.text,!!q.archived)).map(c=>this.summary(v,c.resourceId,!!q.archived))
-   .sort((a,b) => (q.sort==='active'?Number(!!b.execution&&['dispatching','running'].includes(b.execution.state))-Number(!!a.execution&&['dispatching','running'].includes(a.execution.state)):0)||(q.sort==='title'?a.title.localeCompare(b.title):q.sort==='created'?b.createdAt.localeCompare(a.createdAt):(b.lastActivityAt??b.createdAt).localeCompare(a.lastActivityAt??a.createdAt))||a.resourceId.localeCompare(b.resourceId));
+  const candidates = this.matchingCandidates(v, q, ignoreCollection);
+  return this.sortSummaries(candidates.map(c=>this.summary(v,c.resourceId,!!q.archived)), q);
+ }
+ private matchingCandidates(v: View, q: SearchQuery, ignoreCollection = false) {
+  const candidates = this.candidates(v, q, ignoreCollection);
+  if (!q.text) return candidates;
+  const needle = q.text.toLocaleLowerCase();
+  const titleMatches = (id: string) => v.indices.resources.get(id)!.title.toLocaleLowerCase().includes(needle);
+  if (!v.searchVisibleMessages) return candidates.filter(c => titleMatches(c.resourceId) ||
+   v.graph.visibleMessages(v.resourceMap[c.resourceId]).some(m =>
+    this.readable(v, v.publicIds.get(m.conversationId)!, m.id, !!q.archived) && m.content.toLocaleLowerCase().includes(needle)));
+  const bodyCandidates = candidates.filter(c => !titleMatches(c.resourceId));
+  const matches = this.searchBodies(v, bodyCandidates, needle, !!q.archived);
+  return candidates.filter(c => titleMatches(c.resourceId) || matches.has(v.resourceMap[c.resourceId]));
+ }
+ private sortSummaries(summaries: ConversationSummary[], q: SearchQuery) {
+  return summaries.sort((a,b) => (q.sort==='active'?Number(!!b.execution&&['dispatching','running'].includes(b.execution.state))-Number(!!a.execution&&['dispatching','running'].includes(a.execution.state)):0)||(q.sort==='title'?a.title.localeCompare(b.title):q.sort==='created'?b.createdAt.localeCompare(a.createdAt):(b.lastActivityAt??b.createdAt).localeCompare(a.lastActivityAt??a.createdAt))||a.resourceId.localeCompare(b.resourceId));
  }
  private validateQuery(q:SearchQuery) {
   check(!q.text || typeof q.text === 'string' && q.text.length <= 1000, 'invalid_query');
-  check(q.sort===undefined||['activity','created','title','active'].includes(q.sort),'invalid_sort');check(q.searchMode===undefined||['conversations','messages','resources','all'].includes(q.searchMode),'invalid_search_mode');
+  check(q.sort===undefined||['activity','created','title','active'].includes(q.sort),'invalid_sort');check(q.searchMode===undefined||['conversations','messages','chat-history','resources','all'].includes(q.searchMode),'invalid_search_mode');
  }
- private matches(v: View, c: Pick<ConversationSummary,'title'|'conversationId'>, query: string, archived=false) {
-  const needle = query.toLocaleLowerCase();
-  return c.title.toLocaleLowerCase().includes(needle) || v.graph.visibleMessages(c.conversationId).some(m => this.readable(v, v.publicIds.get(m.conversationId)!, m.id,archived) && m.content.toLocaleLowerCase().includes(needle));
+ private searchBodies(v: View, candidates: readonly {resourceId: string}[], needle: string, archived: boolean) {
+  return v.searchVisibleMessages!(
+   candidates.map(c => v.resourceMap[c.resourceId]), needle,
+   (gid, messageId) => this.readable(v, v.publicIds.get(gid)!, messageId, archived),
+  );
  }
  private collections(v: View): Collection[] {
   if(v.projection?.collections)return v.projection.collections;
@@ -293,7 +316,7 @@ export class ConversationProduct implements ConversationProductPort {
    // Membership needs matching canonical IDs, not activity/count projections.
    // Body queries remain explicit, authorized canonical reads, independently
    // measured from empty metadata browse and never indexed in another store.
-   const derived = rule ? this.candidates(v,{...rule,collectionId:undefined},true).filter(c=>!rule.text||this.matches(v,{title:v.indices.resources.get(c.resourceId)!.title,conversationId:v.resourceMap[c.resourceId]},rule.text,!!rule.archived)).map(c=>c.resourceId) : [];
+   const derived = rule ? this.matchingCandidates(v, {...rule,collectionId:undefined}, true).map(c=>c.resourceId) : [];
    return { id: String(r.id), title: String(r.title), projectId: r.project_id === null ? null : String(r.project_id), version: Number(r.version), ruleRevision:Number(r.rule_revision??0), state: String(r.state), parentId: r.parent_id ? String(r.parent_id) : null, rule, memberIds: [...new Set([...pinnedIds,...derived])], pinnedIds };
   });
   if(v.projection)v.projection.collections=result;return result;
@@ -301,12 +324,38 @@ export class ConversationProduct implements ConversationProductPort {
  private readProjection(v:View,name:'list'|'search'|'collections',a:SearchQuery):unknown {
   if(name==='list')return page(this.summaries(v,a),a);
   if(name==='collections')return this.collections(v);
-  const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const hits: SearchHit[] = [],mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','resources','all'].includes(mode),'invalid_search_mode');
+  const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','chat-history','resources','all'].includes(mode),'invalid_search_mode');
+  const titlesAndMessages = mode === 'all' || mode === 'chat-history';
+  const {offset,limit}=pageWindow(a);
+  const items:SearchHit[]=[];
+  const end=offset+limit;
+  let total=0;
+  const takeHit=()=>{
+   const index=total++;
+   return index>=offset&&index<end;
+  };
   // A conversation-only search can authorize/match first and summarize just
   // the matching IDs. It needs no activity/count scan of every non-match.
-  if(mode!=='resources')for (const c of this.summaries(v,{...a,text:mode==='conversations'&&needle?needle:undefined})) {
-   if (mode==='conversations'||mode==='all'&&(!needle||c.title.toLocaleLowerCase().includes(needle))) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
-   if(needle&&(mode==='all'||mode==='messages'))for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (index >= 0) hits.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt,providerId:c.providerId}); }
+  if (needle && (titlesAndMessages || mode === 'messages') && v.searchVisibleMessages) {
+   const candidates = this.candidates(v, {...a, text: undefined});
+   const matches = this.searchBodies(v, candidates, needle, !!a.archived);
+   const matching = candidates.filter(c => matches.has(v.resourceMap[c.resourceId]) ||
+    (titlesAndMessages && v.indices.resources.get(c.resourceId)!.title.toLocaleLowerCase().includes(needle)));
+   const summaries = this.sortSummaries(matching.map(c => this.summary(v, c.resourceId, !!a.archived)), a);
+   for (const c of summaries) {
+    if (titlesAndMessages && c.title.toLocaleLowerCase().includes(needle) && takeHit()) items.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
+    const messages=matches.get(c.conversationId);
+    if(!messages)continue;
+    const start=Math.max(0,offset-total),stop=Math.min(messages.length,end-total);
+    for(let i=start;i<stop;i++){
+     const message=messages[i];
+     items.push({kind:'message',resourceId:c.resourceId,messageId:message.id,title:c.title,excerpt:message.excerpt,sourceTime:message.createdAt,providerId:c.providerId});
+    }
+    total+=messages.length;
+   }
+  } else if(mode!=='resources')for (const c of this.summaries(v,{...a,text:mode==='conversations'&&needle?needle:undefined})) {
+   if ((mode==='conversations'||titlesAndMessages&&(!needle||c.title.toLocaleLowerCase().includes(needle))) && takeHit()) items.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
+   if(needle&&(titlesAndMessages||mode==='messages'))for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (index >= 0 && takeHit()) items.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt,providerId:c.providerId}); }
   }
   const resourceCollection=a.collectionId?this.collections(v).find(c=>c.id===a.collectionId):undefined;
   if ((mode==='all'||mode==='resources')&&!a.familyOf && !a.providerId && !a.favorite) for (const r of v.desktop.resources) {
@@ -314,9 +363,9 @@ export class ConversationProduct implements ConversationProductPort {
    const scopes=this.projectIds(v,r.id);if(a.projectId!==undefined&&(a.projectId===null?scopes.length>0:!scopes.includes(a.projectId)))continue;
    if(resourceCollection&&!resourceCollection.memberIds.includes(r.id))continue;
    const created=String(this.db.prepare('SELECT created_at FROM resources WHERE id=?').get(r.id)?.created_at??'');if(a.after&&created<a.after||a.before&&created>a.before)continue;
-   const content=needle?r.title+'\n'+v.resourceContent(r.id):r.title,index=content.toLocaleLowerCase().indexOf(needle);if(index>=0)hits.push({kind:'resource',resourceId:r.id,title:r.title,excerpt:content.slice(Math.max(0,index-60),index+160)});
+   const content=needle?r.title+'\n'+v.resourceContent(r.id):r.title,index=content.toLocaleLowerCase().indexOf(needle);if(index>=0&&takeHit())items.push({kind:'resource',resourceId:r.id,title:r.title,excerpt:content.slice(Math.max(0,index-60),index+160)});
   }
-  return page(hits,a);
+  return {items,total,offset,limit,hasMore:end<total};
  }
  private policy(id: string): BranchPolicy {
   const row = this.db.prepare('SELECT json FROM cp_policy WHERE resource_id=?').get(id);
@@ -360,7 +409,7 @@ export class ConversationProduct implements ConversationProductPort {
  nativeAuthorizeContextSources(target:string,sources:readonly {resourceId:string;messageId:string;sensitivity:string;evidence?:Evidence}[]):void {
   check(this.host.canonicalReadBatch,'canonical_read_batch_required');this.host.canonicalReadBatch(view=>this.contextSources(this.indexed(view,true),target,sources));
  }
- private async providers(v: View): Promise<ProviderCapability[]> {
+ private async providers(v: ConversationReadView): Promise<ProviderCapability[]> {
   let live: CommandMap['capabilities']['output'] | undefined; try { live = this.host.capabilitySnapshot ? this.host.capabilitySnapshot() : await this.host.command('capabilities',{}); } catch { /* catalog is not proof of a connected provider */ }
   const local = v.graphMetadata.providers.find(p => p.id === 'local') ?? v.graphMetadata.providers.find(p=>p.id==='mock-ordinary');
   const items: ProviderCapability[] = [{ id: local?.id ?? 'local', label: 'Local transcript', available: true, record: true, execute: false, nativeFork:false, history:'local', simulated:false, models:[], reason:'Save messages in Aerynth without AI replies.' }];
@@ -383,8 +432,46 @@ export class ConversationProduct implements ConversationProductPort {
   const s = this.allowedShare(v,row,resourceId); check(this.host.contextReceipt?.(executionId,resourceId,shareId,s.digest) === true,'execution_context_receipt_required');
   const result = this.db.prepare('UPDATE cp_adoptions SET sent_at=?,execution_id=? WHERE share_id=? AND target_id=? AND attached_at IS NOT NULL').run(stamp(),executionId,shareId,resourceId); check(Number(result.changes) === 1,'share_not_attached');
  }
+ private readDetail(v: View, a: ProductCommandMap['detail']['input']): Omit<Detail, 'providers'> {
+  this.resource(v, a.resourceId, undefined, true);
+  const c = this.summary(v, a.resourceId, true);
+  const allow = (gid: string, messageId: string) => this.readable(v, v.publicIds.get(gid)!, messageId, true);
+  const select = (ids: readonly string[]) => {
+   const limit = a.limit ?? 50;
+   if (!a.aroundMessageId) return { offset: a.offset ?? 0, limit };
+   const index = ids.indexOf(a.aroundMessageId);
+   check(index >= 0, 'message_unavailable');
+   return { offset: Math.max(0, index - Math.min(10, Math.floor(limit / 2))), limit };
+  };
+  const messages = v.pageVisibleMessages
+   ? v.pageVisibleMessages(c.conversationId, select, allow)
+   : (() => {
+     const records = v.graph.visibleMessages(c.conversationId).filter(m => allow(m.conversationId, m.id));
+     return page(records, select(records.map(m => m.id)));
+    })();
+  const items = messages.items.map(m => ({
+   id:m.id,resourceId:v.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,
+   provenance:m.provenance,inherited:m.conversationId!==c.conversationId,sensitivity:m.sensitivity,...v.messageEvidence?.[m.id],
+  }));
+  const family=this.family(v,a.resourceId);
+  const lineage=v.graphMetadata.edges.filter(e=>family.has(v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.childId)!)).filter(e=>{if(v.graphMetadata.unavailableMessageIds.includes(e.sourceMessageId))return false;const source=v.messageMetadata(e.sourceMessageId);return !!source&&this.readable(v,v.publicIds.get(source.conversationId)!,e.sourceMessageId);}).map(e=>({id:e.id,parentResourceId:v.publicIds.get(e.parentId)!,childResourceId:v.publicIds.get(e.childId)!,sourceMessageId:e.sourceMessageId,mode:e.mode,createdAt:e.createdAt}));
+  return {
+   conversation:{...c,messageCount:messages.total},
+   messages:{...messages,items},
+   lineage,
+   policy:this.policy(a.resourceId),
+   shares:this.db.prepare('SELECT * FROM cp_shares WHERE source_resource_id=? OR id IN(SELECT share_id FROM cp_adoptions WHERE target_id=?)').all(a.resourceId,a.resourceId).map(row=>this.share(v,row,a.resourceId)),
+  };
+ }
  async command<K extends keyof ProductCommandMap>(name: K, input: ProductCommandMap[K]['input']): Promise<ProductCommandMap[K]['output']> {
   const a = input as any;
+  if (name === 'detail' && this.host.canonicalReadBatch && this.host.capabilitySnapshot) {
+   const snapshot = this.host.canonicalReadBatch(view => ({
+    detail: this.readDetail(this.indexed(view, true), a),
+    providers: this.providers(view),
+   }));
+   return {...snapshot.detail, providers: await snapshot.providers} as ProductCommandMap[K]['output'];
+  }
   if(this.host.canonicalReadBatch&&(name==='list'||name==='search'||name==='collections'||name==='readViewState')){
    const result=this.host.canonicalReadBatch(view=>name==='readViewState'?this.readViewState(this.indexed(view,true),a):this.readProjection(this.indexed(view,true),name,a));
    check(!result||typeof (result as {then?:unknown}).then!=='function','synchronous_canonical_callback_required');
@@ -394,10 +481,7 @@ export class ConversationProduct implements ConversationProductPort {
   switch(name) {
    case 'list': case 'search': case 'collections': result=this.readProjection(v,name,a);break;
    case 'detail': {
-    this.resource(v,a.resourceId,undefined,true); const c = this.summary(v,a.resourceId,true), all = v.graph.visibleMessages(c.conversationId).filter(m => this.readable(v,v.publicIds.get(m.conversationId)!,m.id,true)).map(m => ({id:m.id,resourceId:v.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==c.conversationId,sensitivity:m.sensitivity,...v.messageEvidence?.[m.id]}));
-    const around = a.aroundMessageId ? all.findIndex(m => m.id === a.aroundMessageId) : -1; if (a.aroundMessageId) check(around>=0,'message_unavailable');
-    const family=this.family(v,a.resourceId); const lineage=v.graphMetadata.edges.filter(e=>family.has(v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.childId)!)).filter(e=>{if(v.graphMetadata.unavailableMessageIds.includes(e.sourceMessageId))return false;const source=v.messageMetadata(e.sourceMessageId);return !!source&&this.readable(v,v.publicIds.get(source.conversationId)!,e.sourceMessageId);}).map(e=>({id:e.id,parentResourceId:v.publicIds.get(e.parentId)!,childResourceId:v.publicIds.get(e.childId)!,sourceMessageId:e.sourceMessageId,mode:e.mode,createdAt:e.createdAt}));
-    result={conversation:{...c,messageCount:all.length},messages:page<MessageView>(all,{...a,...(around>=0?{offset:Math.max(0,around-Math.min(10,Math.floor((a.limit??50)/2)))}:{})}),lineage,policy:this.policy(a.resourceId),shares:this.db.prepare('SELECT * FROM cp_shares WHERE source_resource_id=? OR id IN(SELECT share_id FROM cp_adoptions WHERE target_id=?)').all(a.resourceId,a.resourceId).map(row=>this.share(v,row,a.resourceId)),providers:await this.providers(v)} satisfies Detail; break;
+    result={...this.readDetail(v, a),providers:await this.providers(v)} satisfies Detail; break;
    }
    case 'readDraft': this.draftResource(v,a.resourceId);result=this.draft(a.resourceId);break;
    case 'saveDraft': result=this.saveDraft(v,a);break;
