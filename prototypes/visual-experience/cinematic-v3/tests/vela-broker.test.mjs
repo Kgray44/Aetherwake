@@ -2,10 +2,37 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-const { velaCommand, isVelaRead } = createRequire(import.meta.url)(
+const { velaCommand, isVelaRead, prepareAppOwnedVelaRequest } = createRequire(import.meta.url)(
   "../native/vela-broker.cjs",
 );
 const { reviewPage } = createRequire(import.meta.url)("../native/vela-review.cjs");
+
+test("app-owned Vela rejects a reviewed source of the wrong kind before minting a grant", async () => {
+  const ref = { id: "selected", kind: "resource", version: 3 };
+  const preview = {
+    id: "preview", signature: "backend-signature", intent: "Review the selected document",
+    providerId: "openai-api-vela", semanticContext: true,
+    sendDisposition: "standing-selected-evidence", resourceIds: [ref.id],
+  };
+  const prompt = "Synthetic document review";
+  const calls = [];
+  const send = prepareAppOwnedVelaRequest({
+    preview, resourceRefs: [ref], isCurrent: () => true,
+    async call(name) {
+      calls.push(name);
+      if (name !== "velaNativeReview") return { grantId: "fixture-only" };
+      return {
+        previewId: preview.id, signature: preview.signature, providerId: preview.providerId,
+        semanticContext: true, prompt, reviewDigest: "a".repeat(64),
+        promptDigest: createHash("sha256").update(JSON.stringify(prompt)).digest("hex"),
+        context: { included: [{ ...ref, kind: "message", resourceKind: "note", title: "Synthetic", content: prompt }] },
+      };
+    },
+  });
+  await assert.rejects(send(), /vela_app_request_scope_required/);
+  assert.deepEqual(calls, ["velaNativeReview"]);
+});
+
 function fixture(choice = 1) {
   const calls = [],
     dialogs = [],

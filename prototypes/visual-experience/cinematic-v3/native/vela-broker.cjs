@@ -153,7 +153,8 @@ function isStandingSelectedEvidence(preview, review, refs) {
     review.semanticContext === true && !review.handoff && !review.routingAgent &&
     !review.projectEvidence && !review.workspaceState && !review.missionCheckpoint && !review.history &&
     Array.isArray(refs) && refs.length === review.context.included.length &&
-    refs.every(ref => review.context.included.some(source => source.id === ref?.id && source.version === ref.version));
+    refs.every(ref => ref?.kind === "resource" && review.context.included.some(source =>
+      source.kind === ref.kind && source.id === ref.id && source.version === ref.version));
 }
 
 async function dispatchReviewedVelaRequest({ call, stage, preview, review, request, direct, checkOwner }) {
