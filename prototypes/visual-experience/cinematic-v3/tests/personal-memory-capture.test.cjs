@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { capturePersonalMemory } = require('./personal-memory-capture.cjs');
+const { capturePersonalMemory } = require('../native/personal-memory-capture.cjs');
 
 test('native capture rechecks the trusted frame and storage after review', async () => {
   const input = { conversationId: 'chat', messageId: 'message' };
