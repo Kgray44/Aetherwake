@@ -113,3 +113,35 @@ test("artifact substitution, expiry and revoked permit never consume the descrip
   assert.throws(() => enterMemoryFixture(input), /slot_closed/);
   assert.deepEqual(readdirSync(profileRoot), ["synthetic-packaged.started"]);
 });
+
+test("consumer refuses aliased paths and releases its lease after reserve denial", t => {
+  const { options, admission, profileRoot } = setup(t);
+  const handoff = superviseMemoryFixture({ ...options, startFixture: value => value });
+  const input = { ...options, descriptorDigest: handoff.descriptorDigest, pid: 123 };
+  const { sep } = require("node:path");
+  assert.throws(() => enterMemoryFixture({ ...input, profileRoot: profileRoot + sep + "." }), /path_mismatch/);
+  assert.throws(() => enterMemoryFixture({
+    ...input, artifactPath: options.artifactPath + sep + ".",
+  }), /descriptor_invalid/);
+  assert.equal(admission.status().lease, null);
+  assert.throws(() => enterMemoryFixture({
+    ...input,
+    allowWrite() {
+      assert.equal(admission.status().lease.pid, 123);
+      return false;
+    },
+  }), /storage_reserve_admission_denied/);
+  assert.equal(admission.status().lease, null);
+  assert.deepEqual(readdirSync(profileRoot), ["synthetic-packaged.started"]);
+});
+
+test("consumer releases its lease if the permit is revoked during reserve admission", t => {
+  const { options, admission, profileRoot } = setup(t);
+  const handoff = superviseMemoryFixture({ ...options, startFixture: value => value });
+  assert.throws(() => enterMemoryFixture({
+    ...options, descriptorDigest: handoff.descriptorDigest,
+    allowWrite() { admission.close(); return true; },
+  }), /slot_closed/);
+  assert.equal(admission.status().lease, null);
+  assert.deepEqual(readdirSync(profileRoot), ["synthetic-packaged.started"]);
+});
