@@ -226,7 +226,12 @@ if (!startupReserve()) {
   app.exit(1);
 }
 if (process.argv.includes("--chat-search-seeded")) {
-  require("./integration-chat-motion.cjs").preflightSearchSeed(privateRoot, process.argv, source);
+  try {
+    require("./integration-chat-motion.cjs").preflightSearchSeed(privateRoot, process.argv, source);
+  } catch (error) {
+    console.error("seeded_search_preflight_failed", String(error.message).slice(0, 300));
+    process.exit(2);
+  }
 }
 mkdirSync(privateRoot, { recursive: true });
 app.commandLine.appendSwitch("disk-cache-size", "33554432");
