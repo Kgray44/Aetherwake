@@ -65,8 +65,10 @@ exports.conversationCommand = async ({
     return { requested: true };
   }
   if (input.name !== "send") return call("conversation", input);
-  const { resourceId, content, expectedRevision, commandId, model, reasoningEffort, webSearch, documents } =
+  const { resourceId, content, expectedRevision, commandId, draftVersion, model, reasoningEffort, webSearch, documents } =
     input.input;
+  if (draftVersion !== undefined && (!Number.isSafeInteger(draftVersion) || draftVersion < 1))
+    throw Error("invalid_draft_version");
   if (documents !== undefined && (
     !Array.isArray(documents) || !documents.length || documents.length > 4 ||
     !documents.every(ref => ref && typeof ref.id === "string" && ref.id.length <= 256 &&
@@ -83,6 +85,7 @@ exports.conversationCommand = async ({
     content,
     expectedRevision,
     commandId,
+    ...(draftVersion === undefined ? {} : { draftVersion }),
     ...(model ? { model } : {}),
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     ...(webSearch ? { webSearch: true } : {}),
@@ -111,6 +114,7 @@ exports.conversationCommand = async ({
       !r ||
       preview.providerId !== PLAN ||
       preview.resourceId !== resourceId ||
+      preview.draftVersion !== draftVersion ||
       preview.commandId !== commandId ||
       typeof r.model !== "string" ||
       !r.model ||

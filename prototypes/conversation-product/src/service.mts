@@ -194,6 +194,21 @@ export class ConversationProduct implements ConversationProductPort {
     new Set(value.map(ref=>ref.id)).size===value.length,'invalid_draft_documents');
   return value.map(({id,version})=>({id,version}));
  }
+ /** Reconcile a completed turn's durable checkpoint before any editor opens. */
+ clearCompletedDraft(input: Pick<ProductCommandMap['send']['input'],'resourceId'|'draftVersion'|'content'|'documents'>): void {
+  const {resourceId, draftVersion, content, documents} = input;
+  if (draftVersion === undefined || !Number.isSafeInteger(draftVersion) || draftVersion < 1 || draftVersion >= Number.MAX_SAFE_INTEGER ||
+      this.host.access?.(resourceId) !== true) return;
+  this.db.prepare(`UPDATE cp_drafts SET version=version+1,content='',content_bytes=0,documents_json='[]',updated_at=?
+   WHERE resource_id=? AND version=? AND content=? AND documents_json=?
+     AND EXISTS(SELECT 1 FROM resources WHERE id=cp_drafts.resource_id AND kind='conversation' AND state='active')`)
+   .run(stamp(),resourceId,draftVersion,content,JSON.stringify(this.draftDocumentRefs(documents??[])));
+ }
+ matchesSendDraft(input: ProductCommandMap['send']['input']): boolean {
+  if (input.draftVersion === undefined) return false;
+  return !!this.db.prepare('SELECT 1 FROM cp_drafts WHERE resource_id=? AND version=? AND content=? AND documents_json=?')
+   .get(input.resourceId,input.draftVersion,input.content,JSON.stringify(this.draftDocumentRefs(input.documents??[])));
+ }
  private saveDraft(v: View, input: ProductCommandMap['saveDraft']['input']): ConversationDraft {
   this.draftResource(v,input.resourceId);
   check(Number.isSafeInteger(input.expectedVersion)&&input.expectedVersion>=0,'invalid_draft_version');
