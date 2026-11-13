@@ -4904,8 +4904,20 @@ export class BackendCore {
     if (input.useMemory) {
       ensure(usingApi && route?.kind === 'conversational' && !route.nativeMetric && !route.nativeLog && !nativeStage &&
         !workflowScope && !context.included.length && !context.activeResourceId && conversationId, 'vela_memory_requires_conversation');
+      const projectId = this.velaContext().currentProjectId;
+      const query = canonicalRetrievalQuery(input.intent);
+      const sourceTerms = (query?.terms ?? []).filter(term => /^message:msg-\d+$/u.test(term)).slice(0, 8);
+      const owners = sourceTerms.length ? Object.entries(this.state.resources) : [];
+      const sourceAnchors = sourceTerms.flatMap(term => {
+        const messageId = term.slice('message:'.length);
+        const header = this.graph.messageHeader(messageId);
+        if (!header || header.unavailable) return [];
+        const owner = owners.find(([, graphId]) => graphId === header.conversationId)?.[0];
+        if (!owner || !this.graph.ownsMessage(header.conversationId, messageId) || !this.productResourceAccess(owner, messageId)) return [];
+        return [{ kind: 'conversation-message' as const, conversationId: owner, messageId }];
+      });
       const memoryRecall = await this.personalMemoryReview!.prepareVelaRecall({ conversationId,
-        projectId: this.velaContext().currentProjectId, requestId: preview.id, intent: input.intent, prompt: preview.prompt });
+        projectId, requestId: preview.id, intent: input.intent, prompt: preview.prompt, sourceAnchors });
       ensure(memoryRecall, 'personal_memory_no_eligible_context');
       preview.memoryRecall = memoryRecall;
       preview.memoryBasePrompt = preview.prompt;

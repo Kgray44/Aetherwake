@@ -140,11 +140,19 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     const reviewed = await core.command('velaNativeReview', binding);
     assert.match(reviewed.prompt, /synthetic quartz relay is the approved part/);
     assert.match(reviewed.prompt, new RegExp(saved.id));
+    const bySource = () => core.command('velaRequestPreview', { ...input, resourceIds: [],
+      intent: `What was decided in message:${message.id}?`, includeRecentHistory: false });
+    const exact = await bySource();
+    const exactReview = await core.command('velaNativeReview', { previewId: exact.id, signature: exact.signature });
+    assert.match(exactReview.prompt, new RegExp(saved.id));
+    await assert.rejects(core.command('velaRequestPreview', { ...input, resourceIds: [],
+      intent: 'What was decided in message:msg-999999999?', includeRecentHistory: false }), /personal_memory_no_eligible_context/);
     const other = (await core.command('desktop', { type: 'createProject', title: 'Synthetic unrelated project' })).projects.find(item => item.id !== project.id)!;
     const otherWorkspace = (await core.command('desktop', { type: 'createWorkspace', title: 'Synthetic unrelated workspace', projectId: other.id })).workspaces.find(item => item.id !== workspace.id)!;
     await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: otherWorkspace.id } });
     await assert.rejects(core.command('authorizeVelaRequest', { ...binding, reviewDigest: reviewed.reviewDigest }), /stale_vela_preview/);
     await assert.rejects(recall(), /personal_memory_no_eligible_context/);
+    await assert.rejects(bySource(), /personal_memory_no_eligible_context/);
   } finally {
     await core.command('close', {});
     rmSync(root, { recursive: true, force: true });
