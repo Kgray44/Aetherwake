@@ -277,7 +277,7 @@ export class ConversationProduct implements ConversationProductPort {
  }
  private validateQuery(q:SearchQuery) {
   check(!q.text || typeof q.text === 'string' && q.text.length <= 1000, 'invalid_query');
-  check(q.sort===undefined||['activity','created','title','active'].includes(q.sort),'invalid_sort');check(q.searchMode===undefined||['conversations','messages','resources','all'].includes(q.searchMode),'invalid_search_mode');
+  check(q.sort===undefined||['activity','created','title','active'].includes(q.sort),'invalid_sort');check(q.searchMode===undefined||['conversations','messages','chat-history','resources','all'].includes(q.searchMode),'invalid_search_mode');
  }
  private matches(v: View, c: Pick<ConversationSummary,'title'|'conversationId'>, query: string, archived=false) {
   const needle = query.toLocaleLowerCase();
@@ -301,12 +301,13 @@ export class ConversationProduct implements ConversationProductPort {
  private readProjection(v:View,name:'list'|'search'|'collections',a:SearchQuery):unknown {
   if(name==='list')return page(this.summaries(v,a),a);
   if(name==='collections')return this.collections(v);
-  const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const hits: SearchHit[] = [],mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','resources','all'].includes(mode),'invalid_search_mode');
+  const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const hits: SearchHit[] = [],mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','chat-history','resources','all'].includes(mode),'invalid_search_mode');
+  const titlesAndMessages = mode === 'all' || mode === 'chat-history';
   // A conversation-only search can authorize/match first and summarize just
   // the matching IDs. It needs no activity/count scan of every non-match.
   if(mode!=='resources')for (const c of this.summaries(v,{...a,text:mode==='conversations'&&needle?needle:undefined})) {
-   if (mode==='conversations'||mode==='all'&&(!needle||c.title.toLocaleLowerCase().includes(needle))) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
-   if(needle&&(mode==='all'||mode==='messages'))for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (index >= 0) hits.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt,providerId:c.providerId}); }
+   if (mode==='conversations'||titlesAndMessages&&(!needle||c.title.toLocaleLowerCase().includes(needle))) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
+   if(needle&&(titlesAndMessages||mode==='messages'))for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (index >= 0) hits.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt,providerId:c.providerId}); }
   }
   const resourceCollection=a.collectionId?this.collections(v).find(c=>c.id===a.collectionId):undefined;
   if ((mode==='all'||mode==='resources')&&!a.familyOf && !a.providerId && !a.favorite) for (const r of v.desktop.resources) {

@@ -124,6 +124,7 @@ test('quick search opens the exact message from the keyboard and never activates
     }
     if(name==='search'&&input.text==='readable'){
       assert.equal(input.limit,12);
+      assert.equal(input.searchMode,'chat-history');
       return {items:[{kind:'message',resourceId,messageId,title:summary.title,excerpt:'A readable response.'}],total:1,offset:0,limit:12,hasMore:false};
     }
     return (f.port.command as any)(name,input);

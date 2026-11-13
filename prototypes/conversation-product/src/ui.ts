@@ -167,7 +167,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   try{
    // The Running group uses the canonical execution summary from the list projection.
    const exact=!!text&&mode!=='running';
-   const page=exact?await call('search',{...scope,text,searchMode:'all'}):await call('list',{...scope,...(text?{text}:{})});
+   const page=exact?await call('search',{...scope,text,searchMode:'chat-history'}):await call('list',{...scope,...(text?{text}:{})});
    if(!stillCurrent())return;
    const hits:SearchHit[]=(page.items as (SearchHit|ConversationSummary)[]).flatMap(item=>{
     if('kind' in item)return item.kind==='resource'?[]:[item];
