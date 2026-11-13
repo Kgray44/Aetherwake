@@ -249,7 +249,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   resetSwitcher();
   switcher.summary.focus();
  });
- switchMode.addEventListener('change',()=>void loadSwitcher());
+ switchMode.addEventListener('change',()=>{if(!switchComposing)void loadSwitcher();});
  switchQuery.addEventListener('keydown',event=>{
   if(event.isComposing||switchComposing||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
   const first=switchResults.querySelector('button');
