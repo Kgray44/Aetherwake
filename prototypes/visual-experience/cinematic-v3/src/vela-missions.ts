@@ -811,14 +811,10 @@ export function createVelaMissionView(
       "Start opens a native picker for up to four tracked Node tests. You will review the exact checkout and command before it runs."));
     if (plan.planning) section.append(el("p", "vela-core-meta",
       `Proposed by ${plan.planning.model}. Review the tasks and dependencies before starting.`));
-    section.append(
-      artifactReview
-        ? el(
-            "p",
-            "vela-core-meta",
-            `Start opens native review for one billable image request to OpenAI using ${artifactReview.model} at ${artifactReview.quality} quality. Approval saves a ${artifactReview.width} × ${artifactReview.height} PNG and text notes as managed workspace files ${artifactReview.files.join(" and ")}.`,
-          )
-        : externalReview
+    if (artifactReview) section.append(el("p", "vela-core-meta",
+      `Start opens native review for one billable image request to OpenAI using ${artifactReview.model} at ${artifactReview.quality} quality. Approval saves a ${artifactReview.width} × ${artifactReview.height} PNG and text notes as managed workspace files ${artifactReview.files.join(" and ")}.`));
+    if (externalReview || !artifactReview) section.append(
+      externalReview
         ? el(
             "p",
             "vela-core-meta",
