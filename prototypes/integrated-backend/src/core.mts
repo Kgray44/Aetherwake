@@ -6086,7 +6086,7 @@ export class BackendCore {
     if (memory) captureMemory?.(memory);
     const exact = memory?.turn ?? baseTurn;
     const prepared = prepareResponsesTurn(exact);
-    return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions, instructionVersion: packet.version, messages: exact.messages, history, contextDigest: exact.contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview: requiresSourceReview || !!memory, ...(memory ? { memoryDigest: memory.manifest.digest } : {}) };
+    return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions: exact.instructions, instructionVersion: packet.version, messages: exact.messages, history, contextDigest: exact.contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview: requiresSourceReview || !!memory, ...(memory ? { memoryDigest: memory.manifest.digest } : {}) };
   }
   private personalMemorySourceAnchors(intent: string) {
     const query = canonicalRetrievalQuery(intent);
