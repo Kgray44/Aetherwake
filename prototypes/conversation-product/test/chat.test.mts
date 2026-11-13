@@ -427,6 +427,36 @@ for (const focusResult of [false,true]) test('Switch chat refreshes its exact qu
  } finally {await manager?.dispose();f.restore();}
 });
 
+for (const moveFocus of [false,true]) test('Switch chat ArrowDown reaches a pending result only while the query retains focus (moved: '+moveFocus+')', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId;
+ const started=Promise.withResolvers<void>(), response=Promise.withResolvers<void>();
+ const opened:string[]=[];
+ const port={async command(name:string,input:any){
+  if(name==='search'&&input.searchMode==='chat-history'){
+   started.resolve();
+   await response.promise;
+   return {items:[{kind:'conversation',resourceId,title:'Pending match',excerpt:''}],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ let manager;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:id=>opened.push(id)});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
+  const filter=switcher.querySelector('select');
+  input.value='Pending';input.fire('input');input.fire('keydown',{key:'ArrowDown'});
+  await started.promise;
+  if(moveFocus)filter.focus();
+  response.resolve();
+  const results=switcher.querySelector('.cp-switcher-results');
+  await until(()=>!!results.querySelector('button'));
+  assert.ok(f.view.doc.activeElement===(moveFocus?filter:results.querySelector('button')));
+  assert.deepEqual(opened,[]);
+ } finally {response.resolve();await manager?.dispose();f.restore();}
+});
+
 test('Switch chat waits for composed text and Escape invalidates a pending open', async () => {
  const f=fixture();
  const searches:string[]=[], opened:string[]=[];
