@@ -1565,6 +1565,28 @@ test('replace at the attachment limit preserves the old selection on cancellatio
  } finally { f.pending?.reject(Error('synthetic cleanup')); await chat?.dispose(); f.restore(); }
 });
 
+test('closing the chat manager immediately invalidates a pending attachment handoff', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const resourceId = f.draft.resourceId;
+ const document = { id: 'file:brief', version: 1, title: 'Brief.pdf' };
+ let manager, isCurrent: (() => boolean) | undefined, closed = false;
+ let release!: () => void;
+ const gate = new Promise<void>(resolve => { release = resolve; });
+ try {
+  await f.port.command('saveDraft',{resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:[document]});
+  manager = mountConversationManager(f.view.root,f.port,{resourceId,onClose:()=>{closed=true;},openDocument:async ()=>'opened',
+   askVelaAboutDocument:async (_document, current)=>{isCurrent=current;await gate;}});
+  await manager.ready;
+  named(f.view.root,'Ask Vela').fire('click');
+  await until(()=>!!isCurrent);
+  assert.equal(isCurrent?.(),true);
+  named(f.view.root,'Close').fire('click');
+  assert.equal(isCurrent?.(),false);
+  await until(()=>closed);
+  assert.deepEqual(f.draft.documents,[document]);
+ } finally { release(); await manager?.dispose(); f.restore(); }
+});
+
 for (const closeDuringHandoff of [false, true]) test('saved document picker reuses an exact current resource (close during handoff: '+closeDuringHandoff+')', async () => {
  const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
  let chat;
