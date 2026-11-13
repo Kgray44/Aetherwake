@@ -2556,6 +2556,10 @@ export function installApplication(hooks: Hooks) {
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
+      onRememberMessage: async (request) => {
+        const result = await host.command!("personalMemoryCapture", request) as { status: "saved" | "cancelled" };
+        return result.status === "saved";
+      },
       onOpenChatGPT: async (reference) => {
         const receipt = (await host.command!(
           "firstPartyChat",
