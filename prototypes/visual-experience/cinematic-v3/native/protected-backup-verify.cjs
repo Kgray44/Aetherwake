@@ -22,11 +22,19 @@ async function verify() {
   const { WorkspaceKernel } = await import('../../../workspace-kernel/kernel.mts');
   const { createNativeHostClient } = await import('../../../integrated-backend/src/native-host.mts');
   const { VelaApiConnection } = await import('../../../integrated-backend/src/vela-api-connection.mts');
+  const { NativePersonalMemory } = await import('../../../integrated-backend/src/personal-memory.mts');
   const sourcePath = join(scratch, 'source.sqlite');
   const copyPath = join(scratch, 'restored.sqlite');
   const proofPath = join(scratch, 'synthetic-proof.json');
+  const project = { kind: 'project', id: 'synthetic-backup-project' };
+  const origin = { kind: 'conversation-message', conversationId: 'synthetic-origin', messageId: 'synthetic-message',
+    version: '1', contentDigest: digest('Synthetic source message') };
+  const request = { requestId: 'synthetic-recall', assistant: 'ordinary', providerId: 'synthetic-provider',
+    query: 'What is the synthetic preference?', projectId: project.id, conversationId: 'synthetic-other-chat',
+    sharedFactIds: [], includeBehavior: false, maxBytes: 4096, maxItems: 4 };
   let stage = 'initialization';
   let store;
+  let sourceAvailable = true;
   function open(path, nativeStorage, existing = false) {
     const kernel = existing ? WorkspaceKernel.openExisting(path) : WorkspaceKernel.open(path);
     const client = createNativeHostClient(message => broker.handle(message));
@@ -39,7 +47,24 @@ async function verify() {
         db, nativeHost: client.services, transaction: work => kernel.withTransaction(work),
       });
     });
-    return { kernel, connection, close() { connection.close(); client.close(); broker.close(); kernel.close(); } };
+    const memory = new NativePersonalMemory({
+      kernel, secrets: client.services.secrets,
+      host: {
+        identity: () => ({ userId: 'synthetic-backup-owner', policyVersion: '1' }),
+        resolveScope: scope => ({ scope, version: '1' }),
+        authorize: () => ({ decision: 'allow', policyVersion: '1', authorizationRef: 'synthetic-backup-review' }),
+        resolveConversationSource: ({ conversationId, messageId }) =>
+          sourceAvailable && conversationId === origin.conversationId && messageId === origin.messageId
+            ? { conversationId, messageId, projectId: project.id, version: origin.version,
+              contentDigest: origin.contentDigest, role: 'user', sensitive: false }
+            : null,
+      },
+    });
+    return {
+      kernel, connection,
+      openMemory: () => memory.open(),
+      close() { memory.close(); connection.close(); client.close(); broker.close(); kernel.close(); },
+    };
   }
   try {
     if (mode === 'seed') {
@@ -50,12 +75,22 @@ async function verify() {
       assert.equal(configured.state, 'configured');
       assert.equal(configured.version, 1);
       assert(!JSON.stringify(configured).includes(syntheticKey));
+      const memory = await store.openMemory();
+      memory.setPolicy({ expectedVersion: 0, patch: { storageEnabled: true, ordinaryEnabled: true } });
+      const fact = memory.reviewFact({
+        scope: project, purpose: 'knowledge', category: 'preferences',
+        text: 'synthetic-memory-' + randomUUID(), keywords: ['synthetic'], certainty: 'explicit-statement',
+        sensitive: false, expiresAt: null, source: origin,
+      });
       await store.kernel.backupTo(copyPath);
-      assert(!readFileSync(copyPath).includes(Buffer.from(syntheticKey)));
+      const backupBytes = readFileSync(copyPath);
+      assert(!backupBytes.includes(Buffer.from(syntheticKey)));
+      assert(!backupBytes.includes(Buffer.from(fact.text)));
       const receipt = await store.connection.resolveNativeCredential(1);
       assert.equal((await store.connection.disconnect(1)).state, 'disconnected');
       writeFileSync(proofPath, JSON.stringify({
         syntheticDigest: digest(syntheticKey), boundaryDigest: receipt.boundaryDigest, seedProcess: process.pid,
+        memoryId: fact.id, memoryDigest: digest(fact.text),
       }), { flag: 'wx' });
       console.log(JSON.stringify({ result: 'pass', mode, sqliteBackupBytes: statSync(copyPath).size }));
       return;
@@ -69,6 +104,18 @@ async function verify() {
     assert(digest(recovered.bearer) === expected.syntheticDigest);
     assert.equal(recovered.boundaryDigest, expected.boundaryDigest);
     assert.equal((await store.connection.status()).state, 'configured');
+    const memory = await store.openMemory();
+    assert.equal(digest(memory.readFact(expected.memoryId).text), expected.memoryDigest);
+    const recalled = memory.previewContext(request);
+    assert.deepEqual(recalled.items.map(item => item.factId), [expected.memoryId]);
+    assert.equal(digest(memory.validateContext(recalled, request).context.items[0].text), expected.memoryDigest);
+    assert.equal(memory.previewContext({ ...request, projectId: 'synthetic-foreign-project' }).items.length, 0);
+    sourceAvailable = false;
+    assert.throws(() => memory.validateContext(recalled, request), /stale_personal_context/);
+    assert.equal(memory.previewContext(request).items.length, 0);
+    sourceAvailable = true;
+    memory.revoke({ id: expected.memoryId, expectedVersion: 1 });
+    assert.equal(memory.previewContext(request).items.length, 0);
     store.close();
     store = undefined;
 
@@ -78,9 +125,12 @@ async function verify() {
     assert.equal(denied.state, 'unavailable');
     assert.equal(denied.version, 1);
     await assert.rejects(store.connection.resolveNativeCredential(1), /api_secret_unavailable/);
+    await assert.rejects(store.openMemory(), /private_key_unavailable/);
     console.log(JSON.stringify({
       result: 'pass', mode, platform: process.platform, electron: process.versions.electron,
       sqliteBackupBytes: statSync(copyPath).size, restoredVersion: 1, unavailableCustodyDenied: true,
+      protectedMemoryRestored: true,
+      sameProjectCrossConversationRecall: true, foreignProjectDenied: true, sourceLossDenied: true, revocationDenied: true,
     }));
   } catch (error) {
     // Assertion errors can carry actual values. Report only a stage and error class.

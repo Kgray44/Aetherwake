@@ -82,8 +82,12 @@ test('native mission lifecycle events replay in the originating workspace and hi
     core = new BackendCore(options);
     closed = false;
     assert.deepEqual(await replay(), retained, 'Legacy replay uses the exact durable lifecycle record and drops an unproven row');
+    const rendererReplay = async () => (await core.command('rendererEventPage', { recent: true, limit: 250 }))
+      .events.filter(event => event.type.startsWith('vela.mission/'));
+    assert.deepEqual(await rendererReplay(), retained, 'Renderer replay applies the same legacy proof and scope');
     await navigate(sibling);
     assert.deepEqual(await replay(), []);
+    assert.deepEqual(await rendererReplay(), []);
   } finally {
     releaseCpu();
     if (!closed) await core.command('close', {});
