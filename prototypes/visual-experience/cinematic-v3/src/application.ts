@@ -12,8 +12,6 @@ import type { MotionCoordinator } from "./motion";
 import { footprint } from "../../../workspace-engine/collisions.mts";
 import { previewLayout } from "../../../workspace-engine/organization.mts";
 import type {
-  LayoutState,
-  LayoutPreview,
   LayoutPreviewRequest,
 } from "../../../workspace-engine/contracts.mts";
 import { LAYOUT_OPTIMIZATION_LIMITS } from "../../../workspace-engine/contracts.mts";
@@ -22,7 +20,9 @@ import {
   previewBlock as desktopPreviewBlock,
 } from "./organization-preview";
 import "./application.css";
+import { mountApplicationShell } from "./application-shell.ts";
 import "./workspace-grid.css";
+import { mountWorkspacePreview } from "./workspace-preview.ts";
 import { createWorkspaceGrid } from "./workspace-grid.ts";
 import {
   mountDirectManipulation,
@@ -40,10 +40,7 @@ import {
   createManagerState,
   mountConversationManager,
 } from "../../../conversation-product/src/ui.ts";
-import {
-  ConversationDraftSession,
-  flushConversationDraftSessions,
-} from "../../../conversation-product/src/draft-session.ts";
+import { createConversationDrafts } from "./conversation-drafts.ts";
 import { ConversationViewPersistence } from "../../../conversation-product/src/view-persistence.ts";
 import type {
   ConversationProductPort,
@@ -62,16 +59,20 @@ import { createVelaWakeView } from "./vela-wake-view.ts";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
+import { createVelaObservationRefresh } from "./vela-observation-refresh.ts";
 import type { VelaPlan, VelaRequest, VelaState } from "../../../vela-core/src/contracts.ts";
 import { createVelaExperience } from "./vela-experience";
 import { velaVisualState, velaVisualLabels, type VelaVisualEvidence } from './vela-visual-state.ts';
 import { createVelaManifestation } from "./vela-manifestation.ts";
 import { createVelaOutputObservation } from "./vela-output-observation.ts";
 import { createVelaMissionView } from "./vela-missions.ts";
+import { mountAdaptiveWorkspace } from "./adaptive-workspace-surface.ts";
 import { mountMissionWorkroomView, type MissionWorkroomView } from "./mission-workroom-view.ts";
-import type { MissionResponse, MissionProjection } from "../../../integrated-backend/src/mission-contracts.mts";
+import type { MissionResponse, MissionProjection, MissionSummary } from "../../../integrated-backend/src/mission-contracts.mts";
+import { createMissionWorkrooms } from "./mission-workrooms.ts";
 import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
+import { createWorkspaceStage } from "./workspace-stage.ts";
 import { returnFocusAfterDialogClose } from "./focus-return";
 import {
   createContextualSurfaces,
@@ -104,6 +105,7 @@ import type {FolderBrowseResponse} from '../../../application-contract/folder.ts
 import "../../../block-library/resource-links-view.css";
 import { createRelatedResourcesPort } from "./related-resources";
 import { createResourceOpener } from "./resource-opening.ts";
+import { createResourcePresenter } from "./resource-presentation.ts";
 import { createResourceSurface } from "./resource-surface.ts";
 import { mountProviderConnections } from "./provider-connections.ts";
 import { mountEnvironmentNavigator } from "./environment-navigator.ts";
@@ -331,9 +333,6 @@ export function installApplication(hooks: Hooks) {
   document.addEventListener("visibilitychange", velaMissions.observe);
   let velaOpen = false;
   let velaOpening = 0;
-  let velaRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-  let velaStateRead: Promise<unknown> | undefined;
-  let velaActive = false;
   const velaContent = document.createElement("div");
   velaContent.className = "application-vela-content";
   const velaManifestation = createVelaManifestation({
@@ -341,6 +340,16 @@ export function installApplication(hooks: Hooks) {
     root: velaContent,
     wake: hooks.wake,
     resize: (size) => surfaces.resize("vela", size),
+  });
+  const velaObservation = createVelaObservationRefresh({
+    available: () => !!velaPanel && !eventClosed && !eventDisconnected && !document.hidden,
+    read: () => {
+      // Preserve the editor while continuing to observe the canonical state.
+      const focused = document.activeElement;
+      const editing = velaContent.contains(focused) && focused?.matches("input,textarea,select");
+      return velaOpen && !editing ? velaPanel!.refresh() : velaClient.state();
+    },
+    failed: report,
   });
   const observeVelaOutput = createVelaOutputObservation(async output => host.command?.("rendererVelaOutput", output));
   const velaExperience = createVelaExperience({
@@ -455,9 +464,10 @@ export function installApplication(hooks: Hooks) {
       visualEvidence.pendingRequest = value.requests.some(request => request.state === 'checking');
       visualEvidence.applying = value.receipts.some(receipt => receipt.state === 'started');
       visualEvidence.needsInput = value.requests.some(request => request.state === 'awaiting-review');
-      velaActive = !!value.activeAnswer || !!visualEvidence.planning ||
-        !!visualEvidence.pendingRequest || !!visualEvidence.applying;
-      if (velaActive) refreshVelaFromEvent(1000);
+      velaObservation.observeActivity(
+        !!value.activeAnswer || !!visualEvidence.planning ||
+        !!visualEvidence.pendingRequest || !!visualEvidence.applying,
+      );
       if (velaOpen) velaPanel?.observeLiveAnswer(value.activeAnswer);
       if (
         value.requests.some((r) => r.state === "planning") ||
@@ -530,9 +540,8 @@ export function installApplication(hooks: Hooks) {
     pending: boolean;
     resourceId?: string;
   } | null = null;
-  let missionWorkroomScope: string | null = null;
+  const missionWorkrooms = createMissionWorkrooms(document);
   let missionWorkroomCardIds = new Set<string>();
-  const missionWorkroomViews = new Set<MissionWorkroomView>();
   const missionDashboardViews = new Map<string, MissionWorkroomView>();
   const checklistViews = new Map<
     string,
@@ -562,11 +571,73 @@ export function installApplication(hooks: Hooks) {
     }
   >();
   const timelineProjections = new Map<string, NonNullable<Parameters<typeof blockIdentity>[0]["timeline"]>>();
+  let adaptiveWorkspace: ReturnType<typeof mountAdaptiveWorkspace> | undefined;
   function refreshMissionWorkroomCards(accessChanged = false) {
-    for (const view of missionWorkroomViews) view.observe(accessChanged);
+    missionWorkrooms.observe(accessChanged);
+    adaptiveWorkspace?.refresh(accessChanged);
   }
-  const restoreMissionWorkroomCards = () => refreshMissionWorkroomCards();
+  const restoreMissionWorkroomCards = () => {
+    if (document.hidden) closeAdaptiveWorkspace();
+    refreshMissionWorkroomCards();
+  };
   document.addEventListener("visibilitychange", restoreMissionWorkroomCards);
+  async function readMissionProfile(id: string) {
+    const result = await host.command!("missions", { name: "execution-profile", input: { id } }) as MissionResponse;
+    return result && "kind" in result && result.kind === "execution-profile" ? result : null;
+  }
+  async function readAuthorizedMission(id: string) {
+    const result = await host.command!("missions", { name: "read", input: { id } }) as MissionResponse;
+    if (result === null) return null;
+    if (result && "tasks" in result && "outcome" in result && "scope" in result && result.id === id) return result;
+    throw new Error("mission_projection_unavailable");
+  }
+  function closeAdaptiveWorkspace() {
+    adaptiveWorkspace?.dispose();
+    adaptiveWorkspace = undefined;
+    surfaces.close("adaptive-intelligence-workspace");
+  }
+  function adaptiveWorkspaceAction() {
+    const anchor = document.createElement("button");
+    anchor.type = "button";
+    anchor.textContent = "Inspect intelligence";
+    anchor.className = "aw-adaptive-workspace-entry";
+    anchor.setAttribute("aria-haspopup", "dialog");
+    anchor.onclick = () => {
+      closeAdaptiveWorkspace();
+      const content = document.createElement("div");
+      const workspace = state?.navigation.kind === "workspace"
+        ? state.workspaces.find(item => item.id === state?.activeWorkspaceId) : undefined;
+      const view = mountAdaptiveWorkspace(content, {
+        experience: workspace ? {
+          scope: { workspaceId: workspace.id, projectId: workspace.project_id },
+          read: (name, input) => host.command!("missions", { name, input }),
+        } : undefined,
+        viewId: "adaptive-intelligence-workspace",
+        list: async () => {
+          const result = await host.command!("missions", { name: "list", input: {} });
+          if (!Array.isArray(result)) throw new Error("mission_list_unavailable");
+          return result as MissionSummary[];
+        },
+        readMission: readAuthorizedMission,
+        readProfile: readMissionProfile,
+        resourcePolicy: host.resourcePolicyInspection,
+      });
+      adaptiveWorkspace = view;
+      surfaces.open({
+        id: "adaptive-intelligence-workspace", anchor, content,
+        label: "Adaptive Intelligence Workspace", placement: "bottom",
+        minSize: { width: 350, height: 230 },
+        maxSize: { width: 770, height: 760 },
+        preferredSize: { width: 660, height: 620 },
+        initialFocus: view.focus,
+        onClose: () => {
+          view.dispose();
+          if (adaptiveWorkspace === view) adaptiveWorkspace = undefined;
+        },
+      });
+    };
+    return anchor;
+  }
   let missionWorkroomSerial = 0;
   function mountWorkroomCard(
     root: HTMLElement,
@@ -574,7 +645,7 @@ export function installApplication(hooks: Hooks) {
     kind: "checklist" | "timeline" | "dashboard" | "stream",
     mountDefault?: (container: HTMLElement) => ReturnType<typeof mountTimelineExperience>,
   ): MissionWorkroomView {
-    const view = mountMissionWorkroomView(root, kind, missionWorkroomScope, async () => {
+    const view = mountMissionWorkroomView(root, kind, missionWorkrooms.scope, async () => {
       try {
         const result = await host.command!("missions", { name: "workroom-resource", input: { resourceId } }) as MissionResponse;
         if (result === null) return null;
@@ -590,15 +661,11 @@ export function installApplication(hooks: Hooks) {
     }, (id) => { openCanonicalResource(id); }, {
       motion: experienceMotion,
       viewId: `mission-workroom:${resourceId}:${++missionWorkroomSerial}`,
-      readMission: async (id) => {
-        const result = await host.command!("missions", { name: "read", input: { id } }) as MissionResponse;
-        if (result === null) return null;
-        if (result && "tasks" in result && "outcome" in result && "scope" in result && result.id === id) return result;
-        throw new Error("mission_projection_unavailable");
-      },
+      resourcePolicy: host.resourcePolicyInspection,
+      readProfile: readMissionProfile,
+      readMission: readAuthorizedMission,
     });
-    missionWorkroomViews.add(view);
-    return { ...view, dispose() { missionWorkroomViews.delete(view); view.dispose(); } };
+    return missionWorkrooms.track(view);
   }
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
@@ -690,9 +757,6 @@ export function installApplication(hooks: Hooks) {
   let workspaceActionsSurface: (ContextualSurfaceRequest & { id: "workspace-actions" }) | null = null;
   let offset = { x: 0, y: 0 };
   let zoom = 1;
-  let previewBase: LayoutState | undefined;
-  let preview: LayoutPreview | undefined;
-  let previewRequest: LayoutPreviewRequest | undefined;
   let previewCommitting = false;
   let optimizationReview: { review: WorkspaceOptimizationReview; viewStamp: string } | null = null;
   let cancelResize: (() => void) | undefined;
@@ -702,22 +766,16 @@ export function installApplication(hooks: Hooks) {
     ReturnType<typeof mountDirectManipulation>
   >();
   const directGestures = new Map<string, DirectGesturePresentation>();
-  const previewGuides = document.createElement("div");
-  previewGuides.className = "layout-preview-guides";
-  previewGuides.setAttribute("aria-hidden", "true");
-  el("#stage").append(previewGuides);
-  const previewGuideId = "application:preview-guides";
-  const previewGuidePose = {
-    x: 0,
-    y: 0,
-    w: 0,
-    h: 0,
-    lift: 0,
-    yaw: 0,
-    opacity: 0,
-  };
-  hooks.motion.add(previewGuideId, previewGuidePose);
-  previewGuides.style.opacity = "0";
+  const workspacePreview = mountWorkspacePreview({
+    stage: el("#stage"),
+    motion: hooks.motion,
+    camera,
+    layout: hooks.layout,
+    wake: hooks.wake,
+    failed: (error) => hooks.status(
+      `Placement preview unavailable: ${(error as Error).message}. Saved layout retained.`,
+    ),
+  });
   const gridRoot = document.createElement("div");
   gridRoot.className = "workspace-grid-host";
   el("#stage").prepend(gridRoot);
@@ -732,7 +790,6 @@ export function installApplication(hooks: Hooks) {
     string,
     { content: string; timer?: ReturnType<typeof setTimeout> }
   >();
-  const composerSessions = new Map<string, ConversationDraftSession>();
   const chatViews = new Map<string, ReturnType<typeof mountBlockChat>>();
   const chatRefreshKeys = new Map<string, string>();
   const ordinaryModelControls = {
@@ -758,6 +815,21 @@ export function installApplication(hooks: Hooks) {
       })) as ProductCommandMap[K]["output"];
     },
   };
+  const conversationDrafts = createConversationDrafts({
+    port: composerPort,
+    available: (resourceId) => !!state?.resources.some(
+      (resource) => resource.id === resourceId &&
+        resource.kind === "conversation" && resource.available !== false,
+    ),
+    changed: (resourceId) => {
+      for (const block of state?.blocks.filter(
+        (block) => block.resource_id === resourceId,
+      ) ?? []) {
+        const article = document.querySelector<HTMLElement>(`[data-block="${block.id}"]`);
+        if (article) refreshBlockIdentity(article, block.id);
+      }
+    },
+  });
   const chatViewPersistence = new ConversationViewPersistence({
     port: composerPort,
     onError: (error) => report(error),
@@ -879,66 +951,31 @@ export function installApplication(hooks: Hooks) {
         input,
       )) as ResourceOpeningResult;
     },
-    present: async (result, input, current) => {
-      if (!current()) return;
-      const resource = result.resource;
-      const projection = input.origin?.nodeKey
-        ? constellation?.layer.screenBodyProjection?.(input.origin.nodeKey)
-        : null;
-      const body =
-        projection?.resourceId === resource.id
-          ? projection.clippedBounds
-          : null;
-      const anchor =
-        body && body.right > body.left && body.bottom > body.top
-          ? {
-              x: body.left,
-              y: body.top,
-              width: body.right - body.left,
-              height: body.bottom - body.top,
-            }
-          : undefined;
-      if (state)
-        state = {
-          ...state,
-          resources: state.resources.some((item) => item.id === resource.id)
-            ? state.resources.map((item) =>
-                item.id === resource.id ? resource : item,
-              )
-            : [...state.resources, resource],
-        };
-      if (
-        result.presentation.mode === "existing-placement" &&
-        result.placement
-      ) {
-        const placement = result.placement;
-        await enqueueResult(async () => {
-          if (!current()) return;
-          await command({
-            type: "navigate",
-            target: { kind: "workspace", workspaceId: placement.workspaceId },
-          });
-          if (!current()) return;
-          surfaces.close("canonical-resource");
-          surfaces.close("conversations");
-          reveal(placement.blockId);
-          hooks.focus(placement.blockId);
-        });
-      } else if (result.presentation.kind === "agent") {
-        await showAgents(resource.id);
-      } else if (result.presentation.kind === "conversation") {
-        surfaces.close("canonical-resource");
-        await showConversations(
-          resource.id,
-          result.selection?.messageId,
-          current,
-          anchor,
-        );
-      } else {
-        surfaces.close("conversations");
-        directResources.show(resource, anchor);
-      }
-    },
+    present: createResourcePresenter({
+      remember: (resource) => {
+        if (state)
+          state = {
+            ...state,
+            resources: state.resources.some((item) => item.id === resource.id)
+              ? state.resources.map((item) => item.id === resource.id ? resource : item)
+              : [...state.resources, resource],
+          };
+      },
+      project: (nodeKey) => constellation?.layer.screenBodyProjection?.(nodeKey),
+      enqueue: enqueueResult,
+      navigate: (workspaceId) => command({
+        type: "navigate",
+        target: { kind: "workspace", workspaceId },
+      }),
+      close: (id) => surfaces.close(id),
+      focusPlacement: (blockId) => {
+        reveal(blockId);
+        hooks.focus(blockId);
+      },
+      showAgent: showAgents,
+      showConversation: showConversations,
+      showResource: directResources.show,
+    }),
     unavailable: (result) => {
       directResources.unavailable(result.resourceId);
       hooks.status(
@@ -954,7 +991,7 @@ export function installApplication(hooks: Hooks) {
       eventClosed = true;
       eventRefreshGeneration++;
       clearTimeout(eventRefreshTimer);
-      clearTimeout(velaRefreshTimer);
+      velaObservation.stop();
       stopApplicationEvents?.();
       conversationExecution.dispose();
       window.removeEventListener("focus", recoverEventProjection);
@@ -988,17 +1025,15 @@ export function installApplication(hooks: Hooks) {
       controlMotion.dispose();
       resourceOpener.cancel();
       directResources.dispose();
-      document.removeEventListener("visibilitychange", restoreMissionWorkroomCards);
+      missionWorkrooms.dispose();
     },
     { once: true },
   );
   let policyKey = "";
-  const arrivalId = "application:arrival";
-  let departingWorkspace = false;
-  let waitingForVela = false;
-  let arrivalOrigin = { x: innerWidth / 2, y: innerHeight / 2 };
-  const arrivalPose = { x: 1, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 1 };
-  hooks.motion.add(arrivalId, arrivalPose);
+  const workspaceStage = createWorkspaceStage(el("#stage"), hooks.motion, hooks.wake, {
+    x: innerWidth / 2,
+    y: innerHeight / 2,
+  });
   const presenceId = "application:vela-presence";
   let presenceDrag: {
     pointerId: number;
@@ -1012,7 +1047,7 @@ export function installApplication(hooks: Hooks) {
   let suppressPresenceClick = false;
   let overviewBarBottom = 201;
   function camera() {
-    const viewport = optimizationReview ? undefined : preview?.viewport;
+    const viewport = optimizationReview ? undefined : workspacePreview.current?.viewport;
     return viewport
       ? {
           zoom: viewport.zoom,
@@ -1031,7 +1066,7 @@ export function installApplication(hooks: Hooks) {
         yaw: 0,
         opacity: 1,
       };
-    const p = preview?.presence ?? state?.presence;
+    const p = workspacePreview.current?.presence ?? state?.presence;
     if (!p) return;
     const { zoom, offset } = camera();
     return {
@@ -1047,11 +1082,7 @@ export function installApplication(hooks: Hooks) {
   function velaCrossesWorkspace(target: NonNullable<ReturnType<typeof presenceTarget>>) {
     const current = hooks.motion.pose(presenceId);
     const { zoom, offset } = camera();
-    const stage = {
-      scale: hooks.motion.pose(arrivalId).x,
-      originX: arrivalOrigin.x,
-      originY: arrivalOrigin.y,
-    };
+    const stage = workspaceStage.view();
     return state?.blocks.some((block) => {
       const box = footprint({ ...block, locked: !!block.locked });
       return presenceTravelOccludes(current, target, {
@@ -1061,12 +1092,6 @@ export function installApplication(hooks: Hooks) {
         height: box.height * zoom,
       }, stage);
     });
-  }
-  function revealWorkspace() {
-    waitingForVela = false;
-    el("#stage").inert = false;
-    hooks.motion.target(arrivalId, arrivalPose, "Vela cleared the workspace arrival");
-    hooks.wake();
   }
   function presenceCard() {
     if (
@@ -1108,44 +1133,9 @@ export function installApplication(hooks: Hooks) {
           target.id === "app" || target.closest("#stage"))) return null;
     return point;
   }
-  const dialog = document.createElement("dialog");
-  dialog.id = "command-surface";
-  dialog.className = "command-surface";
-  dialog.setAttribute("aria-label", "Aerynth commands");
-  document.body.append(dialog);
-  const universe = document.createElement("section");
-  universe.id = "constellation-view";
-  universe.className = "constellation-host";
-  universe.hidden = true;
-  universe.setAttribute("aria-label", "Constellation navigation");
-  // Share the existing isolated application stack with scene controls and Vela.
-  el("#app").append(universe);
-  el(".brand small").textContent = "LIQUID INTELLIGENCE / WORKING REVIEW";
-  el(".brand img").setAttribute("alt", "Aerynth");
-  el("#settings-button").setAttribute("aria-label", "Scene controls");
-  el("#settings-button").setAttribute("title", "Scene controls");
-  el(".provenance").textContent = "LOCAL DATA · Codex connects only on request";
-  el(".study-caption small").textContent = "Your resources. Your space.";
-  el("#vela-state").textContent = "Idle · no background execution";
-  el("#vela-dialog").setAttribute("aria-hidden", "true");
-  el("#vela-expression")
-    .closest("section")!
-    .querySelector('label[for="vela-expression"]')!.textContent =
-    "Visual expression preview (synthetic)";
-  el("#demo").hidden = true;
-  el("#status").textContent = "Ready.";
-  el(".place").innerHTML =
-    '<button id="workspace-manager" title="Projects and workspaces (Ctrl+K)">Workspaces ↗</button><button id="application-new-chat">＋ Chat</button><button id="application-agents" data-aerynth-motion-control="true">Agents</button><button id="application-resources" data-aerynth-motion-control="true">Resources</button><button id="application-stream" data-aerynth-motion-control="true" aria-label="Intelligence Stream" aria-expanded="false" title="Intelligence Stream"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"><path d="M3 12h4l3-6 4 12 3-6h4"/></svg></button><button id="application-connections" aria-label="Connections" title="Connections">⌁</button>';
-  const dock = el(".dock");
-  dock.insertAdjacentHTML(
-    "afterbegin",
-    '<button id="add-block">＋ <span>Add</span></button><button id="resource-picker">◌ <span>Resources</span></button><button id="layout-manager">▣ <span>Layout</span></button><button id="zoom-out">⤢ <span>Constellation</span></button><button id="nav-back">↶ <span>Back</span></button>',
-  );
-  dock.insertAdjacentHTML(
-    "beforeend",
-    '<button id="connections">⌁ <span>Connections</span></button>',
-  );
-  const layoutControls = mountWorkspaceLayoutControls(el(".place"), {
+  const shell = mountApplicationShell(document);
+  const { dialog, universe } = shell;
+  const layoutControls = mountWorkspaceLayoutControls(shell.place, {
     mode: () => state?.organization?.mode ?? "fluid",
     change: async (mode) => {
       if (!state?.activeWorkspaceId || !state.organization) return;
@@ -1239,7 +1229,7 @@ export function installApplication(hooks: Hooks) {
     if (
       changed ||
       navigated ||
-      (previewBase && previewBase.revision !== next.layoutVersion)
+      (workspacePreview.revision !== undefined && workspacePreview.revision !== next.layoutVersion)
     )
       cancelPreview();
     state = next;
@@ -1358,10 +1348,8 @@ export function installApplication(hooks: Hooks) {
         timelineViews.delete(id);
         timelineProjections.delete(id);
       }
-    if (missionWorkroomScope !== workroomScope) {
-      missionWorkroomScope = workroomScope;
-      for (const view of missionWorkroomViews) view.setScope(workroomScope);
-    }
+    if (missionWorkrooms.scope !== workroomScope) closeAdaptiveWorkspace();
+    missionWorkrooms.setScope(workroomScope);
     for (const [id, entry] of taskTrackerViews)
       if (!next.blocks.some((block) => block.id === id)) {
         entry.view.dispose();
@@ -1442,54 +1430,17 @@ export function installApplication(hooks: Hooks) {
         hooks.motion.target(presenceId, presence, "saved Vela placement");
     }
     hooks.replace(next);
-    el("#workspace-manager").textContent =
-      `${next.workspaces.find((w) => w.id === next.activeWorkspaceId)?.title ?? "Workspaces"} ↗`;
-    el<HTMLButtonElement>("#undo").disabled = !next.canUndo;
-    el("#undo span").textContent = "Undo layout";
-    el("#layout-manager").innerHTML =
-      `▣ <span>${next.organization?.mode ? next.organization.mode[0].toUpperCase() + next.organization.mode.slice(1) : "Layout"}</span>`;
-    el("#layout-manager").title =
-      "Organization mode, layout history and block access";
-    universe.hidden = false;
+    shell.refresh(next);
     const overview = next.navigation.kind === "constellation";
-    document.body.classList.toggle("constellation-overview", overview);
-    universe.classList.toggle("overview", overview);
-    if (navigated) {
-      waitingForVela = arrivingWorkspace &&
-        hooks.motion.pose(arrivalId).opacity <= 0.003 &&
-        !hooks.motion.reduced &&
-        !constellation?.controller.policy.quiet &&
-        !!presence && !!velaCrossesWorkspace(presence);
-    }
-    el("#stage").inert = overview || waitingForVela;
-    if (leavingWorkspace) {
-      departingWorkspace = true;
-      arrivalOrigin = { x: innerWidth / 2, y: innerHeight / 2 };
-      el("#stage").style.transformOrigin =
-        `${arrivalOrigin.x}px ${arrivalOrigin.y}px`;
-      hooks.motion.target(
-        arrivalId,
-        { ...arrivalPose, x: 0.78, opacity: 0 },
-        "workspace departure to celestial overview",
-      );
-      if (hooks.motion.reduced || constellation?.controller.policy.quiet)
-        hooks.motion.snap(arrivalId);
-    } else if (!overview) {
-      departingWorkspace = false;
-      // Direct navigation and interrupted graph travel still apply a canonical
-      // workspace. The graph callback can refine the origin when it has one.
-      if (arrivingWorkspace) {
-        hooks.motion.target(
-          arrivalId,
-          waitingForVela ? { ...arrivalPose, opacity: 0 } : arrivalPose,
-          "canonical workspace arrival",
-          true,
-        );
-        hooks.wake();
-      }
-    }
-    el("#stage").style.visibility =
-      !overview || departingWorkspace ? "" : "hidden";
+    workspaceStage.reconcile({
+      overview,
+      leaving: leavingWorkspace,
+      arriving: arrivingWorkspace,
+      navigated,
+      quiet: constellation?.controller.policy.quiet ?? false,
+      center: { x: innerWidth / 2, y: innerHeight / 2 },
+      velaOccludes: presence && (() => !!velaCrossesWorkspace(presence)),
+    });
     const navigationSnapshot = {
       ...next,
       blocks: next.navigationBlocks ?? next.blocks,
@@ -1564,7 +1515,7 @@ export function installApplication(hooks: Hooks) {
               universe.querySelector(".aw-spatial-field") ?? universe
             ).getBoundingClientRect(),
             c = transition.camera;
-          arrivalOrigin = transition.screenOrigin ?? {
+          const origin = transition.screenOrigin ?? {
             x:
               bounds.left +
               bounds.width / 2 +
@@ -1574,25 +1525,7 @@ export function installApplication(hooks: Hooks) {
               bounds.height / 2 +
               (transition.origin.y - c.y) * c.zoom,
           };
-          el("#stage").style.transformOrigin =
-            `${arrivalOrigin.x}px ${arrivalOrigin.y}px`;
-          if (waitingForVela) return;
-          const body = hooks.motion.bodies.get(arrivalId)!;
-          if (
-            !body.transitioning &&
-            !hooks.motion.reduced &&
-            !constellation?.controller.policy.quiet
-          ) {
-            body.channels.x.value = 0.92;
-            body.channels.opacity.value = 0.45;
-          }
-          hooks.motion.target(
-            arrivalId,
-            arrivalPose,
-            "workspace arrival from canonical anchor",
-            true,
-          );
-          hooks.wake();
+          workspaceStage.approach(origin, constellation?.controller.policy.quiet ?? false);
         },
       };
       constellation = mountConstellation(universe, options);
@@ -1650,6 +1583,7 @@ export function installApplication(hooks: Hooks) {
   }
   function syncWorkspacePanels(workspaceId: string | null) {
     if ((panelScope?.workspaceId ?? null) === workspaceId) return;
+    closeAdaptiveWorkspace();
     for (const panel of WORKSPACE_PANELS) surfaces.close(panel);
     const scope = workspaceId ? { workspaceId, preferences: {} as WorkspacePanelPreferences } : null;
     panelScope = scope;
@@ -1688,7 +1622,7 @@ export function installApplication(hooks: Hooks) {
     for (const entry of timelineViews.values()) await entry.view.flush();
     await directResources.flush();
     for (;;) {
-      await flushConversationDraftSessions(() => composerSessions.values());
+      await conversationDrafts.flush();
       await chatViewPersistence.flush();
       await conversationManager?.flush();
       const ids = new Set([
@@ -1698,12 +1632,7 @@ export function installApplication(hooks: Hooks) {
           .map(([id]) => id),
       ]);
       if (!ids.size) {
-        if (
-          [...composerSessions.values()].every(
-            (session) => session.snapshot().phase === "clean",
-          )
-        )
-          break;
+        if (conversationDrafts.isClean()) break;
         continue;
       }
       for (const resourceId of ids) {
@@ -1737,67 +1666,19 @@ export function installApplication(hooks: Hooks) {
   function queuePreview(request: LayoutPreviewRequest) {
     if (!state || previewCommitting) return;
     if (optimizationReview) cancelPreview();
-    previewBase ??= layoutState(state);
-    if (!previewBase) return;
-    previewRequest = {
-      ...request,
-      expectedRevision: previewBase.revision,
-      bounds: request.bounds ?? viewBounds(),
-    };
-    hooks.wake();
-  }
-  function paintPreview() {
-    if (!previewRequest || !previewBase) return;
-    const request = previewRequest;
-    previewRequest = undefined;
-    try {
-      presentPreview(previewLayout(previewBase, request), request.intent);
-    } catch (error) {
-      hooks.status(
-        `Placement preview unavailable: ${(error as Error).message}. Saved layout retained.`,
-      );
-    }
-  }
-  function presentPreview(result: LayoutPreview, intent?: LayoutPreviewRequest["intent"]) {
-    preview = result;
-    const { zoom, offset } = camera();
-    const gridOnly = result.organization.mode === "structured" && ["mode", "move", "resize"].includes(intent ?? "");
-    const guides = (gridOnly ? [] : result.guides).map(
-      (g) =>
-        `<i class="alignment-guide" style="left:${(g.axis === "x" ? g.position : g.from) * zoom + offset.x}px;top:${(g.axis === "y" ? g.position : g.from) * zoom + offset.y}px;width:${g.axis === "x" ? 1 : (g.to - g.from) * zoom}px;height:${g.axis === "y" ? 1 : (g.to - g.from) * zoom}px"></i>`,
-    );
-    const areas = result.placementAreas.map(
-      (a) =>
-        `<i class="placement-area" style="left:${a.x * zoom + offset.x}px;top:${a.y * zoom + offset.y}px;width:${a.width * zoom}px;height:${a.height * zoom}px"></i>`,
-    );
-    previewGuides.innerHTML = [...guides, ...areas].join("");
-    hooks.motion.target(
-      previewGuideId,
-      { ...previewGuidePose, opacity: guides.length || areas.length ? 1 : 0 },
-      "placement guide reveal",
-    );
-    document.body.dataset.layoutPreview = result.organization.mode;
-    hooks.layout();
+    workspacePreview.queue(() => layoutState(state!), request, viewBounds);
   }
   function cancelPreview(invalidateOptimization = true) {
     const hadOptimization = !!optimizationReview;
     optimizationReview = null;
-    previewRequest = undefined;
-    preview = undefined;
-    previewBase = undefined;
-    hooks.motion.target(
-      previewGuideId,
-      previewGuidePose,
-      "placement guide dismissal",
-    );
-    delete document.body.dataset.layoutPreview;
+    workspacePreview.cancel();
     if (hadOptimization && invalidateOptimization) workspaceActions?.invalidateOptimization();
     hooks.layout();
     hooks.wake();
   }
   function commitLayout(a: DesktopCommand, requireAcknowledgement = false) {
-    paintPreview();
-    const revision = previewBase?.revision;
+    workspacePreview.paint();
+    const revision = workspacePreview.revision;
     previewCommitting = true;
     const action = {
       ...a,
@@ -1830,10 +1711,9 @@ export function installApplication(hooks: Hooks) {
       }),
       unresolvedPlacementIds: result.unresolvedPlacementIds ?? [],
     };
-    if (previewBase) cancelPreview(false);
+    if (workspacePreview.revision !== undefined) cancelPreview(false);
     optimizationReview = { review, viewStamp: optimizationViewStamp() };
-    previewBase = base;
-    presentPreview(result, "optimize");
+    workspacePreview.showReview(base, result);
     return review;
   }
   function applyOptimization(review: WorkspaceOptimizationReview) {
@@ -1863,8 +1743,7 @@ export function installApplication(hooks: Hooks) {
     if (!previewCommitting) cancelPreview();
     cardConfiguration?.dispose();
     cardConfiguration = null;
-    for (const session of composerSessions.values())
-      void session.reload().catch(report);
+    conversationDrafts.reload(report);
   });
   addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || (!presenceDrag && !cancelResize)) return;
@@ -2576,7 +2455,7 @@ export function installApplication(hooks: Hooks) {
         };
       },
       execution: conversationExecution,
-      draftSession: composerSession,
+      draftSession: conversationDrafts.get,
       state: conversationView,
       ...(resourceId ? { resourceId, initialMessageId: messageId } : {}),
       onClose: () => surfaces.close("conversations"),
@@ -2646,6 +2525,7 @@ export function installApplication(hooks: Hooks) {
       anchor: el("#vela"),
       content: velaContent,
       label: "Vela",
+      headerActions: adaptiveWorkspaceAction(),
       placement: "left",
       minSize: { width: 280, height: 110 },
       maxSize: { width: 560, height: 640 },
@@ -2663,28 +2543,6 @@ export function installApplication(hooks: Hooks) {
     el("#vela").setAttribute("aria-controls", surface.id);
     el("#vela").setAttribute("aria-expanded", "true");
     void velaPanel.open().catch(report);
-  }
-  function refreshVelaFromEvent(delay = 150) {
-    if (!velaPanel || velaRefreshTimer || velaStateRead ||
-        eventClosed || eventDisconnected || document.hidden) return;
-    velaRefreshTimer = setTimeout(() => {
-      velaRefreshTimer = undefined;
-      if (eventClosed || eventDisconnected || document.hidden) return;
-      // Keep an in-progress settings edit intact while still observing real presence.
-      const editing =
-        velaContent.contains(document.activeElement) &&
-        document.activeElement?.matches("input,textarea,select");
-      velaStateRead = (velaOpen && !editing ? velaPanel!.refresh() : velaClient.state())
-        .catch(error => {
-          if (error instanceof Error && error.message === "vela_observation_superseded") {
-            velaActive = true;
-          } else report(error);
-        })
-        .finally(() => {
-          velaStateRead = undefined;
-          if (velaActive) refreshVelaFromEvent(1000);
-        });
-    }, delay);
   }
   dialog.addEventListener("close", () =>
     returnFocusAfterDialogClose(dialog, lastTrigger),
@@ -3360,7 +3218,7 @@ export function installApplication(hooks: Hooks) {
         return Promise.reject(Error("workspace_unavailable"));
       const workspaceId = state.activeWorkspaceId;
       queuePreview({ organization, intent: "mode" });
-      paintPreview();
+      workspacePreview.paint();
       previewCommitting = true;
       return mutate({
         type: "setOrganization",
@@ -3427,7 +3285,7 @@ export function installApplication(hooks: Hooks) {
           return Promise.reject(Error("workspace_unavailable"));
         const workspaceId = state.activeWorkspaceId;
         queuePreview({ structuredPreset: preset, intent: "mode" });
-        paintPreview();
+        workspacePreview.paint();
         previewCommitting = true;
         return mutate({
           type: "applyStructuredPreset",
@@ -3565,7 +3423,7 @@ export function installApplication(hooks: Hooks) {
         state.navigation.kind !== "workspace" ||
         !block ||
         !body ||
-        preview ||
+        workspacePreview.current ||
         unavailableBlocks.has(id) ||
         !blockPresentations.get(id)?.visible
       )
@@ -3682,36 +3540,6 @@ export function installApplication(hooks: Hooks) {
           viewport: { x: -offset.x / zoom, y: -offset.y / zoom, zoom },
         })
       : Promise.resolve();
-  }
-  function composerSession(resourceId: string) {
-    let session = composerSessions.get(resourceId);
-    if (!session) {
-      if (
-        !state?.resources.some(
-          (resource) =>
-            resource.id === resourceId &&
-            resource.kind === "conversation" &&
-            resource.available !== false,
-        )
-      )
-        throw new Error("conversation_unavailable");
-      session = new ConversationDraftSession({
-        resourceId,
-        port: composerPort,
-        onChange: () => {
-          for (const block of state?.blocks.filter(
-            (block) => block.resource_id === resourceId,
-          ) ?? []) {
-            const article = document.querySelector<HTMLElement>(
-              `[data-block="${block.id}"]`,
-            );
-            if (article) refreshBlockIdentity(article, block.id);
-          }
-        },
-      });
-      composerSessions.set(resourceId, session);
-    }
-    return session;
   }
   function noteSession(resourceId: string) {
     let session = noteSessions.get(resourceId);
@@ -4385,7 +4213,7 @@ export function installApplication(hooks: Hooks) {
       const surface = el(".working-content", article);
       let view = chatViews.get(b.id);
       if (!view && activeBlocks.get(b.id)) {
-        const session = composerSession(r.id);
+        const session = conversationDrafts.get(r.id);
         view = mountBlockChat(surface, {
           copy: copyText,
           motion: experienceMotion,
@@ -4858,7 +4686,7 @@ export function installApplication(hooks: Hooks) {
   function recoverEventProjection() {
     if (document.hidden || eventClosed || eventDisconnected) return;
     requestEventRefresh();
-    refreshVelaFromEvent();
+    velaObservation.request();
     void conversationExecution.refresh();
   }
   function refreshEvents(): Promise<void> {
@@ -4914,7 +4742,7 @@ export function installApplication(hooks: Hooks) {
         eventScannedThrough = result.cursor;
         if (sourceChanged) await enqueueResult(() => command({ type: "snapshot" }));
         if (executionChanged) void conversationExecution.refresh();
-        if (replayed) refreshVelaFromEvent();
+        if (replayed) velaObservation.request();
         scheduleStreamRefresh();
         if (result.status === "more") {
           requestEventRefresh();
@@ -4953,6 +4781,7 @@ export function installApplication(hooks: Hooks) {
       anchor,
       content,
       label: "Intelligence Stream",
+      headerActions: adaptiveWorkspaceAction(),
       placement: "bottom",
       minSize: { width: 360, height: 320 },
       maxSize: { width: 810, height: 760 },
@@ -4991,7 +4820,7 @@ export function installApplication(hooks: Hooks) {
     });
   }
   stopApplicationEvents = host.onEvent?.((event) => {
-    refreshVelaFromEvent();
+    velaObservation.request();
     const e = event as Activity & {
       resourceId?: string;
       payload?: { delta?: string };
@@ -5029,19 +4858,7 @@ export function installApplication(hooks: Hooks) {
       velaMissions.observe();
       refreshMissionWorkroomCards();
       hooks.status("Storage check passed. Saving is available again.");
-      void enqueue(async () => {
-        for (const session of composerSessions.values()) {
-          if (session.snapshot().error !== "storage_reserve_admission_denied") continue;
-          // Re-read before retrying so an intervening draft becomes a conflict,
-          // while the retained local text and the canonical version stay intact.
-          try {
-            await session.reload();
-            if (session.snapshot().phase === "dirty") await session.flush();
-          } catch (error) {
-            report(error);
-          }
-        }
-      });
+      void enqueue(() => conversationDrafts.recoverStorage(report));
       return;
     }
     // Assistant text is handled by the one shared execution adapter. It is not
@@ -5066,8 +4883,7 @@ export function installApplication(hooks: Hooks) {
     if (e.type === "backend/disconnected") {
       eventDisconnected = true;
       resetEventProjection();
-      clearTimeout(velaRefreshTimer);
-      velaRefreshTimer = undefined;
+      velaObservation.stop();
       velaPanel?.observeLiveAnswer(undefined);
       hooks.status(
         "Backend disconnected. Current surfaces are retained; restart to recover persisted data. Execution outcomes may be unknown.",
@@ -5114,7 +4930,7 @@ export function installApplication(hooks: Hooks) {
           target as HTMLElement,
         ),
         blocked:
-          !!preview ||
+          !!workspacePreview.current ||
           previewCommitting ||
           !!presenceDrag ||
           !!cancelResize ||
@@ -5206,12 +5022,7 @@ export function installApplication(hooks: Hooks) {
     if (
       drafts.size ||
       [...noteSessions.values()].some((session) => session.hasPendingEdits) ||
-      [...composerSessions.values()].some(
-        (session) =>
-          ["dirty", "saving", "conflict"].includes(session.snapshot().phase) ||
-          (session.snapshot().phase === "error" &&
-            session.snapshot().editRevision > 0),
-      )
+      conversationDrafts.hasPendingEdits()
     ) {
       event.preventDefault();
       event.returnValue = "";
@@ -5415,39 +5226,22 @@ export function installApplication(hooks: Hooks) {
       controlMotion.frame();
       velaExperience.frame(policy);
       velaManifestation.frame(policy);
-      paintPreview();
+      workspacePreview.paint();
       const gridCamera = camera();
       workspaceGrid.update({
         visible:
           state?.navigation.kind === "workspace" &&
-          (preview?.organization ?? state?.organization)?.mode === "structured",
+          (workspacePreview.current?.organization ?? state?.organization)?.mode === "structured",
         zoom: gridCamera.zoom,
         offset: gridCamera.offset,
       });
       workspaceGrid.frame(policy);
-      if (
-        policy.reduced ||
-        policy.quiet ||
-        policy.hidden ||
-        !policy.graphicsAvailable
-      )
-        hooks.motion.snap(previewGuideId);
-      const guideReveal = Math.max(
-        0,
-        Math.min(1, hooks.motion.pose(previewGuideId).opacity),
+      workspacePreview.frame(
+        policy.reduced || policy.quiet || policy.hidden || !policy.graphicsAvailable,
       );
-      if (previewGuides.style.opacity !== String(guideReveal))
-        previewGuides.style.opacity = String(guideReveal);
-      if (
-        !preview &&
-        !previewRequest &&
-        guideReveal === 0 &&
-        previewGuides.childElementCount
-      )
-        previewGuides.replaceChildren();
       const target = presenceTarget();
       if (target) {
-        const dragging = presenceDrag?.moved === true && !!preview;
+        const dragging = presenceDrag?.moved === true && !!workspacePreview.current;
         hooks.motion.target(
           presenceId,
           dragging ? { ...target, lift: 8 } : target,
@@ -5459,8 +5253,8 @@ export function installApplication(hooks: Hooks) {
         (policy.reduced || policy.quiet || policy.hidden)
       )
         hooks.motion.snap(presenceId);
-      if (waitingForVela && (policy.reduced || policy.quiet || policy.hidden || !target))
-        revealWorkspace();
+      if (workspaceStage.waiting && (policy.reduced || policy.quiet || policy.hidden || !target))
+        workspaceStage.reveal();
       velaCard.classList.toggle("vela-card", !!presenceCard());
       const card = presenceCard();
       if (card) {
@@ -5473,37 +5267,24 @@ export function installApplication(hooks: Hooks) {
         policyKey = key;
         constellation?.setPolicy(policy);
       }
-      if (policy.reduced || policy.quiet || policy.hidden)
-        hooks.motion.snap(arrivalId);
-      const pose = hooks.motion.pose(arrivalId);
-      el("#stage").style.visibility =
-        state?.navigation.kind !== "constellation" ||
-        (departingWorkspace && pose.opacity > 0.003)
-          ? ""
-          : "hidden";
-      el("#stage").style.transform = `scale(${pose.x})`;
-      el("#stage").style.opacity = String(pose.opacity);
+      workspaceStage.frame(
+        state?.navigation.kind === "constellation",
+        policy.reduced || policy.quiet || policy.hidden,
+      );
       constellation?.frame(now);
     },
     ready,
     completeWorkspaceArrival: (unclipped: (pose: ReturnType<MotionCoordinator["pose"]>) => boolean) => {
-      if (!waitingForVela) return;
+      if (!workspaceStage.waiting) return;
       const target = presenceTarget();
       // A previously saved overlap must still be reachable after travel settles.
       if (!target || !hooks.motion.bodies.get(presenceId)?.transitioning ||
           (!velaCrossesWorkspace(target) && unclipped(hooks.motion.pose(presenceId))))
-        revealWorkspace();
+        workspaceStage.reveal();
     },
     workspaceSurfacesVisible: () =>
-      !waitingForVela &&
-      (state?.navigation.kind !== "constellation" ||
-        (departingWorkspace && hooks.motion.pose(arrivalId).opacity > 0.003)),
-    surfaceView: () => ({
-      scale: hooks.motion.pose(arrivalId).x,
-      opacity: hooks.motion.pose(arrivalId).opacity,
-      originX: arrivalOrigin.x,
-      originY: arrivalOrigin.y,
-    }),
+      workspaceStage.surfacesVisible(state?.navigation.kind === "constellation"),
+    surfaceView: workspaceStage.view,
     spatialLayer: () =>
       (
         constellation as
@@ -5541,7 +5322,7 @@ export function installApplication(hooks: Hooks) {
     offset: () => camera().offset,
     zoom: () => camera().zoom,
     previewBlock: (id: string) => {
-      const b = preview?.blocks.find((b) => b.blockId === id);
+      const b = workspacePreview.current?.blocks.find((b) => b.blockId === id);
       return b ? desktopPreviewBlock(b) : undefined;
     },
     previewMove(id: string, dx: number, dy: number) {
@@ -5580,16 +5361,7 @@ export function installApplication(hooks: Hooks) {
     block: (id: string) => state?.blocks.find((b) => b.id === id),
     directGesture: (id: string) => directGestures.get(id) ?? null,
     directOutline: (id: string) => {
-      if (!directGestures.has(id) || preview?.placementAreas.length !== 1)
-        return null;
-      const area = previewGuides.querySelector<HTMLElement>(".placement-area");
-      const opacity =
-        area && area.getClientRects().length
-          ? Number(getComputedStyle(previewGuides).opacity) *
-            Number(getComputedStyle(area).opacity) *
-            Number(getComputedStyle(el("#stage")).opacity)
-          : 0;
-      return { ...preview.placementAreas[0], opacity };
+      return directGestures.has(id) ? workspacePreview.outline() : null;
     },
     workspaceGrid: () => workspaceGrid.diagnostics(),
     directDragging: () =>
