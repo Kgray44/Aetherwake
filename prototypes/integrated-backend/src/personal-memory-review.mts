@@ -28,8 +28,13 @@ export interface CaptureReview {
   expiresAt: string;
 }
 
-export type ManagementRequest = { action: 'correct' | 'revoke' | 'delete' | 'export'; id: string; version: number; text?: string };
+export type ManagementRequest = { action: 'correct' | 'revoke' | 'delete' | 'export'; id: string; version: number; text?: string; keywords?: readonly string[] };
 export type ManagementReview = ManagementRequest & { ticket: string; fact: ReviewedFact | null; target: RecordRef; expiresAt: string };
+
+const validKeywords = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.length > 0 && value.length <= 16 &&
+  value.every(keyword => typeof keyword === 'string' && keyword.trim() && keyword.length <= 64) &&
+  new Set(value).size === value.length;
 
 const identifier = (value: unknown): value is string =>
   typeof value === 'string' && value.length <= 200 && value.trim().length > 0 && !/[\x00-\x1f]/.test(value);
@@ -216,9 +221,10 @@ export function createPersonalMemoryReview(options: Options) {
       requireOpen();
       if (!input || !identifier(input.id) || !Number.isSafeInteger(input.version) || input.version < 1 ||
         !['correct', 'revoke', 'delete', 'export'].includes(input.action) ||
-        (input.action === 'correct' ? typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4096 : input.text !== undefined))
+        (input.action === 'correct' ? typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4096 : input.text !== undefined) ||
+        (input.keywords !== undefined && (input.action !== 'correct' || !validKeywords(input.keywords))))
         throw new PersonalContextError('invalid_personal_memory_management');
-      const { action, id, version, text } = input;
+      const { action, id, version, text, keywords } = structuredClone(input);
       const service = await options.open();
       requireOpen();
       return options.transaction(() => {
@@ -231,7 +237,7 @@ export function createPersonalMemoryReview(options: Options) {
         const timestamp = now();
         for (const [key, entry] of management) if (Date.parse(entry.expiresAt) <= timestamp) management.delete(key);
         if (management.size >= 16) throw new PersonalContextError('personal_memory_review_busy');
-        const review = { action, id, version, ...(text === undefined ? {} : { text }), fact, target,
+        const review = { action, id, version, ...(text === undefined ? {} : { text }), ...(keywords ? { keywords } : {}), fact, target,
           ticket: randomUUID(), expiresAt: new Date(timestamp + 300_000).toISOString() };
         management.set(review.ticket, structuredClone(review));
         return review;
@@ -275,7 +281,7 @@ export function createPersonalMemoryReview(options: Options) {
           request.operation === 'record.read' && (request.subject?.id === id || source.kind === 'import' && request.subject?.id === source.id) ||
           request.operation === 'fact.review' && (request.subject?.id === id || request.subject === null) &&
             JSON.stringify(request.scope) === JSON.stringify(scope),
-        () => service.correctFact({ ...expected, replacement: { scope, purpose, category, keywords, certainty, sensitive,
+        () => service.correctFact({ ...expected, replacement: { scope, purpose, category, keywords: [...(approved.keywords ?? keywords)], certainty, sensitive,
           expiresAt, source, text: approved.text! } }));
         return { action, id: corrected.replacement.id };
       });
@@ -286,9 +292,7 @@ export function createPersonalMemoryReview(options: Options) {
       if (!input || !identifier(input.conversationId) || !identifier(input.messageId) ||
         !['conversation', 'project', 'assistant.ordinary'].includes(input.scope) || !['preferences', 'projects', 'technical', 'decisions'].includes(input.category) ||
         typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4096 ||
-        !Array.isArray(input.keywords) || !input.keywords.length || input.keywords.length > 16 ||
-        !input.keywords.every(keyword => typeof keyword === 'string' && keyword.trim() && keyword.length <= 64) ||
-        new Set(input.keywords).size !== input.keywords.length) throw new PersonalContextError('invalid_personal_memory_capture');
+        !validKeywords(input.keywords)) throw new PersonalContextError('invalid_personal_memory_capture');
       const { conversationId, messageId, scope, category, text, keywords } = structuredClone(input);
       const service = await options.open();
       requireOpen();

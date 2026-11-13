@@ -166,7 +166,7 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     const message = await core.command('addMessage', { resourceId: chat.resourceId, role: 'user',
       content, expectedRevision: detail.conversation.revision, commandId: 'message' });
     const saved = await core.command('personalMemoryCaptureCommitNative', await core.command('personalMemoryCapturePreviewNative', {
-      conversationId: chat.resourceId, messageId: message.id, scope: 'project', category: 'decisions', text: content, keywords: ['quartz'],
+      conversationId: chat.resourceId, messageId: message.id, scope: 'project', category: 'decisions', text: content, keywords: ['quartz', 'relay'],
     }));
     const policy = await core.command('personalMemoryPolicyNative', {});
     assert.equal(policy.velaEnabled, false);
@@ -236,16 +236,54 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     await assert.rejects(recall(), /personal_memory_no_eligible_context/);
     await assert.rejects(bySource(), /personal_memory_no_eligible_context/);
     await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
-    const beforeRevocation = await recall();
+    // Two independently captured claims remain separately attributable until the user resolves them.
+    const competingText = 'Use the synthetic cobalt relay for the fixture.';
+    const competingSource = await core.command('addMessage', { resourceId: chat.resourceId, role: 'user',
+      content: competingText, expectedRevision: message.revision, commandId: 'competing-message' });
+    const competing = await core.command('personalMemoryCaptureCommitNative', await core.command('personalMemoryCapturePreviewNative', {
+      conversationId: chat.resourceId, messageId: competingSource.id, scope: 'project', category: 'decisions',
+      text: competingText, keywords: ['relay', 'cobalt'],
+    }));
+    const reviewRecall = async (intent: string) => {
+      const preview = await core.command('velaRequestPreview', { ...input, resourceIds: [], intent });
+      return core.command('velaNativeReview', { previewId: preview.id, signature: preview.signature });
+    };
+    const conflict = await reviewRecall('Which relay should I use?');
+    assert.match(conflict.prompt, new RegExp(saved.id));
+    assert.match(conflict.prompt, new RegExp(competing.id));
+    assert.match(conflict.prompt, new RegExp(message.id));
+    assert.match(conflict.prompt, new RegExp(competingSource.id));
+    const correction = await core.command('personalMemoryManagementNative', {
+      type: 'preview', request: { action: 'correct', id: saved.id, version: 1,
+        text: 'The synthetic basalt relay is the approved part.', keywords: ['relay', 'basalt'] },
+    }) as import('../src/personal-memory-review.mts').ManagementReview;
+    await assert.rejects(core.command('personalMemoryManagementNative', { type: 'commit',
+      review: { ...correction, keywords: ['tampered'] } }), /personal_memory_review_mismatch/);
+    const replacement = await core.command('personalMemoryManagementNative', { type: 'commit', review: correction }) as { id: string };
+    await assert.rejects(core.command('authorizeVelaRequest', { previewId: conflict.previewId, signature: conflict.signature,
+      reviewDigest: conflict.reviewDigest }), /stale_personal_context|personal_record_unavailable/);
+    const revokeCompeting = await core.command('personalMemoryManagementNative', {
+      type: 'preview', request: { action: 'revoke', id: competing.id, version: 1 },
+    }) as import('../src/personal-memory-review.mts').ManagementReview;
+    await core.command('personalMemoryManagementNative', { type: 'commit', review: revokeCompeting });
+    await core.command('close', {});
+    core = open();
+    await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
+    const current = await reviewRecall('Which basalt relay should I use?');
+    assert.match(current.prompt, new RegExp(replacement.id));
+    assert.doesNotMatch(current.prompt, new RegExp(saved.id));
+    assert.doesNotMatch(current.prompt, new RegExp(competing.id));
+    await assert.rejects(reviewRecall('What about quartz?'), /personal_memory_no_eligible_context/);
+    const beforeRevocation = await core.command('velaRequestPreview', { ...input, resourceIds: [], intent: 'Which basalt relay should I use?' });
     const revocationBinding = { previewId: beforeRevocation.id, signature: beforeRevocation.signature };
     const revocationReview = await core.command('velaNativeReview', revocationBinding);
     const { grantId } = await core.command('authorizeVelaRequest', { ...revocationBinding, reviewDigest: revocationReview.reviewDigest });
     await core.command('personalMemoryRevokeSourceNative', {
-      conversationId: chat.resourceId, messageId: message.id, expectedRevision: message.revision,
+      conversationId: chat.resourceId, messageId: message.id, expectedRevision: competingSource.revision,
     });
     await assert.rejects(core.command('vela', { name: 'request', input: { ...revocationBinding,
-      intent: input.intent, resourceIds: [], authorizeProvider: true, grantId } }), /stale_personal_context|personal_record_unavailable/);
-    await assert.rejects(recall(), /personal_memory_no_eligible_context/);
+      intent: beforeRevocation.intent, resourceIds: [], authorizeProvider: true, grantId } }), /stale_personal_context|personal_record_unavailable/);
+    await assert.rejects(reviewRecall(beforeRevocation.intent), /personal_memory_no_eligible_context/);
   } finally {
     await core.command('close', {});
     rmSync(root, { recursive: true, force: true });
