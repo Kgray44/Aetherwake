@@ -1368,6 +1368,11 @@ for (const interruption of ['revoked','restored','disconnected']) test('a send c
       observe(_id,listener){observe=listener;return()=>{};},async cancel(){},
     }});
     await chat.ready;
+    if (interruption==='disconnected') {
+      observe({connection:'unavailable'});
+      observe({connection:'available'});
+      assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/^Connection restored\.$/);
+    }
     f.view.root.querySelector('form').fire('submit');
     await until(()=>started);
     if (interruption==='disconnected') observe({connection:'unavailable'});
@@ -1382,8 +1387,10 @@ for (const interruption of ['revoked','restored','disconnected']) test('a send c
     if (interruption==='disconnected') {
       const send=f.view.root.querySelector('[data-cp-control="send"]');
       assert.equal(send.disabled,true);
+      observe({connection:'unavailable'});
       observe({connection:'available'});
       assert.equal(send.disabled,false);
+      assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/connection restored.*press send/i);
       assert.equal(f.calls.filter(call=>call.name==='send').length,0);
     }
   } finally {checkpoint.resolve();await chat?.dispose();f.restore();}

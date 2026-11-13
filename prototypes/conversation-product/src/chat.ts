@@ -439,7 +439,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   }
   const session = options.draftSession ?? new ConversationDraftSession({ resourceId, port, ...(options.initialDraft === undefined ? {} : { initialContent: options.initialDraft }) });
   const copy = options.copy ?? (text => navigator.clipboard.writeText(text));
-  const report = (text: string,kind:'notice'|'send-accepted'='notice') => {
+  const report = (text: string,kind:'notice'|'send-accepted'|'connection-unavailable'|'send-held-offline'='notice') => {
     if (disposed) return;
     if (status.textContent !== text) status.textContent = statusDetail.textContent = text;
     else if (status.dataset.statusKind === kind) return;
@@ -875,7 +875,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         return;
       }
       if (connection === 'unavailable') {
-        report('Your draft is saved. Reconnect, then press Send again.');
+        report('Your draft is saved. Reconnect, then press Send again.', 'send-held-offline');
         return;
       }
       if (model) {
@@ -1045,10 +1045,21 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(observation.connection)connection=observation.connection;
     if(connection==='unavailable'){
       streamText.textContent='';stream.hidden=true;lastCursor=-1;seenEvents.clear();streamLimited=false;liveFollow=false;
-      report('Connection unavailable. '+(execution?'Last observed: '+execution.state+'. Outcome unconfirmed.':'Execution state is unavailable.'));renderDraft();
+      if(execution||status.dataset.statusKind!=='send-held-offline') {
+        report('Connection unavailable. '+(execution?'Last observed: '+execution.state+'. Outcome unconfirmed.':'Execution state is unavailable.'), 'connection-unavailable');
+      }
+      renderDraft();
     }
     const next=observation.execution??execution;
-    if(!next){if(observation.connection==='available')renderDraft();return;}
+    if(!next){
+      if(observation.connection==='available'){
+        renderDraft();
+        if(status.dataset.statusKind==='send-held-offline') {
+          report(send.disabled?'Connection restored. Your draft is saved.':'Connection restored. Press Send to submit your saved draft.');
+        } else if(status.dataset.statusKind==='connection-unavailable') report('Connection restored.');
+      }
+      return;
+    }
     if(webSearchCommandId&&(next.commandId!==webSearchCommandId||next.providerId!=='chatgpt-plan-responses'))return;
     const canonical = current?.conversation.execution;
     if(canonical && (next.id !== canonical.id && next.startedAt < canonical.startedAt ||
