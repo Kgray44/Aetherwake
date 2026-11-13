@@ -59,6 +59,32 @@ async function settles(check: () => boolean) { for (let i = 0; i < 50 && !check(
 const named = (root: Node, text: string) => root.find(node => node.tagName === 'button' && (node.getAttribute('aria-label') === text || node.textContent === text))!;
 function displayed(node: Node) { for (let parent: Node | null = node; parent; parent = parent.parent) { if (parent.hidden) return false; if (parent.tagName === 'details' && !parent.open && !parent.children[0]?.contains(node)) return false; } return true; }
 
+test('a document opened from the viewer enters Vela’s existing draft and waits for Send', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => { turns.push(input); return request(); },
+  }));
+  try {
+    await panel.open();
+    const form = root.find(node => node.className === 'vela-core-compose')!;
+    const editor = form.querySelector('textarea')!;
+    editor.value = 'Explain the findings in this document.';
+    editor.fire('input');
+    const ref = { id: 'file:brief', kind: 'resource' as const, resourceKind: 'file', title: 'Brief.pdf', version: 3 };
+    panel.addDocumentSource(ref);
+    panel.addDocumentSource(ref);
+    assert.equal(doc.activeElement, editor);
+    assert.equal(editor.value, 'Explain the findings in this document.');
+    assert.equal(root.querySelectorAll('button').filter(node => node.getAttribute('aria-label') === 'Remove source Brief.pdf').length, 1);
+    assert.deepEqual(turns, []);
+    form.fire('submit');
+    await settles(() => turns.length === 1);
+    assert.deepEqual(turns[0].resourceIds, [ref.id]);
+    assert.deepEqual(turns[0].resourceRefs, [ref]);
+  } finally { panel.dispose(); }
+});
+
 test('a verified result is concise, counts only this request and opens its canonical plan and workspace', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(), opened: unknown[] = [];
   const plan: VelaPlan = { id: 'plan:result', requestId: 'request:synthetic', version: 1, fingerprint: 'synthetic',

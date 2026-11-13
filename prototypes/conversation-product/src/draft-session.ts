@@ -1,20 +1,24 @@
 /** Browser-only recovery coordinator. The injected canonical API owns all persistence and access policy. */
-export interface ConversationDraftRecord { resourceId: string; version: number; content: string; updatedAt: string | null }
+import type { DraftDocument } from './contracts.ts';
+export interface ConversationDraftRecord { resourceId: string; version: number; content: string; updatedAt: string | null; documents?: DraftDocument[] }
 export interface ConversationDraftPort {
   command(name: 'readDraft', input: { resourceId: string }): Promise<ConversationDraftRecord>;
-  command(name: 'saveDraft', input: { resourceId: string; expectedVersion: number; content: string }): Promise<ConversationDraftRecord>;
+  command(name: 'saveDraft', input: { resourceId: string; expectedVersion: number; content: string; documents?: DraftDocument[] }): Promise<ConversationDraftRecord>;
 }
 export type DraftPhase = 'loading' | 'clean' | 'dirty' | 'saving' | 'conflict' | 'error';
 export interface DraftSessionSnapshot {
   resourceId: string; content: string; version: number | null; editRevision: number;
+  documents: readonly DraftDocument[];
   phase: DraftPhase; remote: ConversationDraftRecord | null; error: string | null;
 }
 export interface DraftCheckpoint { record: ConversationDraftRecord; editRevision: number }
 type Task =
-  | { kind: 'checkpoint'; content: string; editRevision: number; resolve: (value: DraftCheckpoint) => void; reject: (error: Error) => void }
+  | { kind: 'checkpoint'; content: string; documents: DraftDocument[]; editRevision: number; resolve: (value: DraftCheckpoint) => void; reject: (error: Error) => void }
   | { kind: 'acknowledge'; checkpoint: DraftCheckpoint; resolve: (cleared: boolean) => void; reject: (error: Error) => void };
 const failure = (error: unknown) => error instanceof Error ? error.message : String(error);
 const validContent = (content: string) => content.length <= 16384 && new TextEncoder().encode(content).byteLength <= 65536;
+const sameDocuments = (left: readonly DraftDocument[] = [], right: readonly DraftDocument[] = []) =>
+  left.length === right.length && left.every((ref, index) => ref.id === right[index].id && ref.version === right[index].version);
 
 /**
  * Use with the canonical ConversationProduct command port for any physical composer:
@@ -33,6 +37,7 @@ export class ConversationDraftSession {
   private readonly delay: number;
   private readonly initialLocal: boolean;
   private content: string;
+  private documents: DraftDocument[] = [];
   private editRevision = 0;
   private known: ConversationDraftRecord | null = null;
   private remote: ConversationDraftRecord | null = null;
@@ -51,7 +56,7 @@ export class ConversationDraftSession {
     this.ready = this.load(options.initialContent !== undefined);
   }
   snapshot(): DraftSessionSnapshot {
-    return { resourceId: this.resourceId, content: this.content, version: this.known?.version ?? null, editRevision: this.editRevision,
+    return { resourceId: this.resourceId, content: this.content, documents: this.documents, version: this.known?.version ?? null, editRevision: this.editRevision,
       phase: this.loading ? 'loading' : this.remote ? 'conflict' : this.error ? 'error' : this.saving ? 'saving' : this.dirty() || this.tasks.length ? 'dirty' : 'clean',
       remote: this.remote ? { ...this.remote } : null, error: this.error };
   }
@@ -60,9 +65,12 @@ export class ConversationDraftSession {
     this.listeners.add(listener); return () => { this.listeners.delete(listener); };
   }
   private emit() { this.onChange?.(this.snapshot()); for (const listener of this.listeners) listener(this.snapshot()); }
-  private dirty() { return !!this.known && this.content !== this.known.content; }
+  private dirty() { return !!this.known && (this.content !== this.known.content || !sameDocuments(this.documents, this.known.documents)); }
   private checkRecord(record: ConversationDraftRecord) {
     if (!record || record.resourceId !== this.resourceId || !Number.isSafeInteger(record.version) || record.version < 0 || typeof record.content !== 'string' || !validContent(record.content) || (record.updatedAt !== null && typeof record.updatedAt !== 'string')) throw new Error('invalid_draft_response');
+    if (record.documents !== undefined && (!Array.isArray(record.documents) || record.documents.length > 4 ||
+        record.documents.some(ref => !ref || typeof ref.id !== 'string' || typeof ref.title !== 'string' ||
+          !Number.isSafeInteger(ref.version) || ref.version < 1))) throw new Error('invalid_draft_response');
     return { ...record };
   }
   private async load(hasLocal: boolean) {
@@ -72,6 +80,7 @@ export class ConversationDraftSession {
       if ((hasLocal || this.editRevision !== revision) && this.content !== record.content) {
         if (record.version > 0) this.remote = record;
       } else this.content = record.content;
+      this.documents = record.documents ?? [];
     } catch (error) { this.error = failure(error); }
     this.loading = false; this.emit(); if (this.dirty() && !this.remote && !this.error) this.schedule();
   }
@@ -85,6 +94,14 @@ export class ConversationDraftSession {
   }
   private schedule() {
     clearTimeout(this.timer); this.timer = setTimeout(() => { this.timer = undefined; void this.start(); }, this.delay);
+  }
+  updateDocuments(documents: readonly DraftDocument[]) {
+    if (this.stopped || this.loading) throw new Error('draft_session_unavailable');
+    if (sameDocuments(this.documents, documents)) return;
+    this.documents = documents.map(ref => ({ ...ref }));
+    this.editRevision++;
+    this.emit();
+    if (!this.remote && !this.error) this.schedule();
   }
   private blocked() { return this.remote ? 'stale_draft_version' : this.error ?? (!this.known ? 'draft_not_loaded' : null); }
   private rejectTasks(error: Error) { for (const task of this.tasks.splice(0)) task.reject(error); }
@@ -107,17 +124,21 @@ export class ConversationDraftSession {
       const task = this.tasks.shift();
       if (task?.kind === 'acknowledge' && (this.editRevision !== task.checkpoint.editRevision || this.content !== task.checkpoint.record.content || this.known!.version !== task.checkpoint.record.version)) { task.resolve(false); continue; }
       const content = task?.kind === 'checkpoint' ? task.content : task?.kind === 'acknowledge' ? '' : this.content;
+      const documents = task?.kind === 'checkpoint' ? task.documents : task?.kind === 'acknowledge' ? [] : this.documents;
       if (!validContent(content)) { this.error = 'draft_limit_exceeded'; task?.reject(new Error(this.error)); this.rejectTasks(new Error(this.error)); this.emit(); return; }
       const expectedVersion = task?.kind === 'acknowledge' ? task.checkpoint.record.version : this.known!.version;
       this.saving = true; this.emit();
       try {
-        const record = this.checkRecord(await this.port.command('saveDraft', { resourceId: this.resourceId, expectedVersion, content }));
-        if (record.version !== expectedVersion + 1 || record.content !== content) throw new Error('invalid_draft_response');
+        const record = this.checkRecord(await this.port.command('saveDraft', { resourceId: this.resourceId, expectedVersion, content,
+          ...(documents.length || this.known!.documents?.length ? { documents } : {}) }));
+        if (record.version !== expectedVersion + 1 || record.content !== content || !sameDocuments(record.documents, documents)) throw new Error('invalid_draft_response');
         this.known = record;
+        if (task?.kind !== 'acknowledge' && sameDocuments(this.documents, record.documents))
+          this.documents = record.documents ?? this.documents;
         if (task?.kind === 'checkpoint') task.resolve({ record: { ...record }, editRevision: task.editRevision });
         if (task?.kind === 'acknowledge') {
           const unchanged = this.editRevision === task.checkpoint.editRevision && this.content === task.checkpoint.record.content;
-          if (unchanged) { this.content = ''; this.editRevision++; } task.resolve(unchanged);
+          if (unchanged) { this.content = ''; this.documents = []; this.editRevision++; } task.resolve(unchanged);
         }
       } catch (error) {
         await this.recordError(error); const errorValue = new Error(this.blocked() ?? failure(error)); task?.reject(errorValue); this.rejectTasks(errorValue); return;
@@ -133,7 +154,7 @@ export class ConversationDraftSession {
   checkpoint(): Promise<DraftCheckpoint> {
     if (this.stopped) return Promise.reject(new Error('draft_session_closed'));
     clearTimeout(this.timer); this.timer = undefined;
-    const result = new Promise<DraftCheckpoint>((resolve, reject) => this.tasks.push({ kind: 'checkpoint', content: this.content, editRevision: this.editRevision, resolve, reject })); void this.start(); return result;
+    const result = new Promise<DraftCheckpoint>((resolve, reject) => this.tasks.push({ kind: 'checkpoint', content: this.content, documents: this.documents, editRevision: this.editRevision, resolve, reject })); void this.start(); return result;
   }
   /** Call only after canonical submission acceptance is established. This does not assert provider/task completion. */
   acknowledgeSent(checkpoint: DraftCheckpoint): Promise<boolean> {
@@ -151,9 +172,9 @@ export class ConversationDraftSession {
       let record: ConversationDraftRecord;
       try { record = this.checkRecord(await this.port.command('readDraft', { resourceId: this.resourceId })); }
       catch (error) { this.error = failure(error); this.remote = null; this.emit(); throw error; }
-      if (record.version !== expectedRemoteVersion || record.content !== this.remote.content || this.editRevision !== revision) { this.remote = record; this.emit(); throw new Error('draft_resolution_stale'); }
+      if (record.version !== expectedRemoteVersion || record.content !== this.remote.content || !sameDocuments(record.documents, this.remote.documents) || this.editRevision !== revision) { this.remote = record; this.emit(); throw new Error('draft_resolution_stale'); }
       this.known = record; this.remote = null; this.error = null;
-      if (choice === 'use-stored') { this.content = record.content; this.editRevision++; }
+      if (choice === 'use-stored') { this.content = record.content; this.documents = record.documents ?? []; this.editRevision++; }
       this.emit(); await this.flush();
     } finally { this.resolving = false; }
   }
@@ -169,11 +190,14 @@ export class ConversationDraftSession {
     // may have completed while awaiting it; never roll back either observed revision.
     while (this.worker) await this.worker;
     if (record.version < Math.max(this.known?.version ?? 0, this.remote?.version ?? 0)) { this.emit(); return; }
-    if ((record.version === this.known?.version && record.content !== this.known.content) || (record.version === this.remote?.version && record.content !== this.remote.content)) { this.error = 'invalid_draft_response'; this.emit(); throw new Error(this.error); }
+    const differs = (other: Pick<ConversationDraftRecord,'content'|'documents'>) =>
+      record.content !== other.content || !sameDocuments(record.documents, other.documents);
+    if ((record.version === this.known?.version && differs(this.known)) || (record.version === this.remote?.version && differs(this.remote))) { this.error = 'invalid_draft_response'; this.emit(); throw new Error(this.error); }
     const localIntent = this.dirty() || this.editRevision !== readRevision || (!this.known && (this.initialLocal || this.editRevision > 0));
-    if (this.remote && record.content !== this.content) { this.remote = record; this.error = null; }
-    else if (localIntent && record.content !== this.content && record.version > (this.known?.version ?? 0)) this.remote = record;
-    else { if (!localIntent) this.content = record.content; this.known = record; this.remote = null; this.error = null; }
+    const differsLocally = differs({content:this.content,documents:this.documents});
+    if (this.remote && differsLocally) { this.remote = record; this.error = null; }
+    else if (localIntent && differsLocally && record.version > (this.known?.version ?? 0)) this.remote = record;
+    else { if (!localIntent) { this.content = record.content; this.documents = record.documents ?? []; } this.known = record; this.remote = null; this.error = null; }
     this.emit(); if (this.dirty() && !this.blocked()) this.schedule();
   }
   /** The owner must await flush before unmount/shutdown; a conflict prevents disposal instead of losing text. */
