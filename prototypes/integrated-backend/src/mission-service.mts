@@ -78,11 +78,9 @@ function workroomEvidence(task: MissionTask, attempt?: MissionAttempt): Pick<Mis
     ...(findings.length ? { findings } : {}), ...(citations.length ? { citations } : {}) };
 }
 const blockedState = (task: MissionTask) => ['failed', 'uncertain', 'cancelled', 'blocked'].includes(task.state);
-const scheduled = (m: Mission) => m.disposition === 'active' && m.tasks.some(task => task.state === 'queued');
 const taskOf = (m: Mission, id: string) => m.tasks.find(task => task.id === id);
 const sameScope = (a: MissionScope, b: MissionScope) => a.workspaceId === b.workspaceId && a.projectId === b.projectId;
 const busy = (m: Mission) => m.tasks.some(task => task.state === 'running' || task.state === 'cancelling');
-const active = (m: Mission) => busy(m) || m.disposition !== 'cancelled' && m.tasks.some(task => task.state === 'queued');
 const recordLimitBytes = 160 * 1024;
 const admissionLimitBytes = 1024;
 const priorityAgingMs = 30_000;
@@ -93,6 +91,11 @@ function readyTasks(mission: Mission): MissionTask[] {
   return mission.tasks.filter(task => task.state === 'queued' &&
     task.dependencies.every(id => tasks.get(id)?.state === 'verified'));
 }
+
+// A valid DAG can advance only through running work or a ready root. Keep
+// dependency-blocked tasks in the journal without reserving an admission slot.
+const scheduled = (m: Mission) => m.disposition === 'active' && readyTasks(m).length > 0;
+const active = (m: Mission) => busy(m) || m.disposition !== 'cancelled' && readyTasks(m).length > 0;
 
 function orderReadyTasks(mission: Mission, ready: MissionTask[], now: number): MissionTask[] {
   const tasks = new Map(mission.tasks.map(task => [task.id, task]));
@@ -276,7 +279,9 @@ export class MissionService {
     const m = this.host.atomic(() => {
       const value = this.lookup(id);
       before = value.events.length;
+      const occupiedSlot = active(value);
       change(value);
+      if (!occupiedSlot && active(value)) this.capacity();
       this.store(value, before);
       return value;
     });
@@ -533,7 +538,6 @@ export class MissionService {
         case 'retry': {
           check(task && (task.state === 'failed' || task.state === 'blocked' || stale) && task.attempts.length < task.maxAttempts &&
             own(this.host.executors, task.executor) && this.host.executors[task.executor].replaySafe, 'mission_retry_denied');
-          if (!active(value)) this.capacity();
           task.state = 'queued'; task.queuedAt = stamp(); delete task.detail;
           break;
         }
@@ -583,7 +587,6 @@ export class MissionService {
     const mission = this.update(id, current => {
       const { candidate, preview } = this.prepareRevision(current, scope, revision, change);
       check(preview.fingerprint === fingerprint, 'mission_revision_preview_changed');
-      if (!active(current) && candidate.tasks.some(task => task.state === 'queued')) this.capacity();
       current.tasks = candidate.tasks;
       if (candidate.retired) (current.retiredTasks ??= []).push(candidate.retired);
       current.planRevision++;
@@ -629,7 +632,6 @@ export class MissionService {
     }
     const tasks = [...value.tasks.map(task => rewired.get(task.id) ?? task), ...additions.map(makeTask)];
     validateMissionPlan({ ...value, tasks }, this.host.executors);
-    if (!active(value)) this.capacity();
     const amended = { ...value, tasks, planRevision: value.planRevision + 1, events: [...value.events] };
     this.event(amended, { kind: 'revised', detail: reason, ...trigger });
     check(Buffer.byteLength(this.encode(amended)) <= recordLimitBytes, 'mission_record_full');
@@ -730,14 +732,16 @@ export class MissionService {
       m.disposition === 'cancelled' || m.tasks.some(task => task.state !== 'verified'))) delete m.objectiveAssessment;
     if (m.objectiveReview && m.tasks.every(task => task.state === 'verified') &&
       this.host.planningContextCurrent?.(m) === true && reviewedMissionObjectiveVerified(m)) delete m.coverage;
+    const ready = scheduled(m);
     const outcome = m.tasks.some(t => t.state === 'cancelling') ? 'cancelling' :
       busy(m) ? 'running' : m.tasks.some(t => t.state === 'uncertain') ? 'uncertain' :
       m.disposition === 'cancelled' ? 'cancelled' : m.tasks.every(t => t.state === 'verified') ? m.coverage?'blocked':'verified' :
       m.disposition === 'paused' ? 'paused' :
+      ready ? 'queued' :
       m.tasks.some(t => t.state === 'failed') ? 'failed' :
       m.tasks.some(t => t.state === 'blocked' || t.state === 'cancelled') ? 'blocked' : 'queued';
     const waits: MissionProjection['waits'] = {};
-    const admission = m.disposition === 'active' && readyTasks(m).length ? this.admissionSnapshot : undefined;
+    const admission = ready ? this.admissionSnapshot : undefined;
     const pressure = this.host.underPressure?.() || (admission && this.running.size >= admission.workerLimit && admission.workerLimit < L.workers);
     for (const task of m.tasks) if (task.state === 'queued') {
       const executor = own(this.host.executors, task.executor) ? this.host.executors[task.executor] : undefined;
