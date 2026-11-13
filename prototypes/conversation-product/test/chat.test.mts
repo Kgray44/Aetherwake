@@ -218,6 +218,43 @@ test('Switch chat retries a failed query with Enter and keeps the exact text', a
  } finally {await manager?.dispose();f.restore();}
 });
 
+test('Switch chat refreshes its exact query when the history project changes', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId;
+ const scopes:(string|null|undefined)[]=[], opened:string[]=[];
+ const firstSearch=Promise.withResolvers<void>();
+ let manager;
+ const port={async command(name:string,input:any){
+  if(name==='search'&&input.searchMode==='chat-history'){
+   scopes.push(input.projectId);
+   firstSearch.resolve();
+   const items=input.projectId==='project:second'?[]:[{kind:'conversation',resourceId,title:'First project chat',excerpt:''}];
+   return {items,total:items.length,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  f.projects.push({id:'project:first',title:'First',version:1},{id:'project:second',title:'Second',version:1});
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:id=>opened.push(id)});
+  await manager.ready;
+  const project=f.view.root.querySelector('.cp-filters').querySelector('select');
+  project.value='project:first';project.fire('change');
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'),input=switcher.querySelector('input');
+  const results=switcher.querySelector('.cp-switcher-results');
+  input.value='project chat';input.fire('input');
+  await firstSearch.promise;
+  await until(()=>results.querySelector('button')?.textContent==='First project chat');
+  const stale=results.querySelector('button');
+  project.value='project:second';project.fire('change');
+  assert.equal(!!results.querySelector('button'),false);
+  stale.fire('click');
+  await until(()=>scopes.length===2);
+  assert.deepEqual(scopes,['project:first','project:second']);
+  assert.deepEqual(opened,[]);
+  assert.equal(input.value,'project chat');
+ } finally {await manager?.dispose();f.restore();}
+});
+
 test('Switch chat waits for composed text and Escape invalidates a pending open', async () => {
  const f=fixture();
  const searches:string[]=[], opened:string[]=[];
