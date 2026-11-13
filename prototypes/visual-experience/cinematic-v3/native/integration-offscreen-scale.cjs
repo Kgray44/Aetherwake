@@ -10,7 +10,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Uses the real application renderer, host and database with a hidden
  * BrowserWindow. Timings here cannot establish native input or presentation. */
 exports.verify = async ({
-  win, app, privateRoot, call, source, moduleStartedMonotonicMs, startupErrors,
+  win, app, privateRoot, call, source, moduleStartedMonotonicMs, startupErrors, startup,
 }) => {
   const selected = options(process.argv);
   const profile = process.argv.includes("--offscreen-profile");
@@ -36,6 +36,7 @@ exports.verify = async ({
     passed: false,
     samples: [],
     commandElapsedMs: {},
+    ...(startup ? { startup } : {}),
   };
   const seed = JSON.parse(await readFile(path.join(privateRoot, "block-scale-seed.json"), "utf8"));
   const projection = (state) => Object.fromEntries(Object.keys(seed.expected).map((key) => [key, state[key]]));

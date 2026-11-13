@@ -64,6 +64,15 @@ const { createVelaWakeBroker } = require('./vela-wake-broker.cjs');
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
 const moduleStartedMonotonicMs = performance.now();
+const offscreenStartup = process.argv.includes("--integration-benchmark") &&
+  process.argv.includes("--offscreen-renderer") &&
+  process.argv.includes("--offscreen-checkpoints") ? [] : null;
+function markOffscreenStartup(stage) {
+  offscreenStartup?.push({
+    stage,
+    elapsedMs: Math.round(performance.now() - moduleStartedMonotonicMs),
+  });
+}
 const repository = path.resolve(root, "../../..");
 const sourceHashes = {};
 function hashFolder(folder) {
@@ -115,6 +124,7 @@ const source = {
   ),
 };
 const verifyAirPlan = process.argv.includes("--integration-vela-air-plan");
+markOffscreenStartup("source-hashed");
 const verifyMissions = process.argv.includes("--integration-vela-missions");
 const missionProfilerFlags = process.argv.filter(arg => arg.startsWith("--missions-aep-benchmark="));
 const missionProfilerMode = missionProfilerFlags[0]?.slice("--missions-aep-benchmark=".length);
@@ -215,6 +225,7 @@ if (!startupReserve()) {
   console.error("storage_reserve_admission_denied");
   app.exit(1);
 }
+markOffscreenStartup("storage-admitted");
 mkdirSync(privateRoot, { recursive: true });
 app.commandLine.appendSwitch("disk-cache-size", "33554432");
 app.setPath("userData", path.join(privateRoot, "chromium"));
@@ -248,6 +259,7 @@ if (deadlineArgument) {
             deadlineMs,
             at: new Date().toISOString(),
             complete: false,
+            ...(offscreenStartup ? { startup: offscreenStartup } : {}),
           },
           null,
           2,
@@ -368,6 +380,7 @@ function sendMissionHostSignal(missionHostSignal) {
   }
 }
 app.whenReady().then(async () => {
+  markOffscreenStartup("electron-ready");
   nativeTheme.themeSource = "dark";
   const localURL = pathToFileURL(path.join(root, "dist/index.html")).href;
   child = spawn(
@@ -388,6 +401,7 @@ app.whenReady().then(async () => {
     { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
   );
   child.stdin.on("error", failBackend);
+  markOffscreenStartup("backend-spawned");
   child.on("error", failBackend);
   child.on("exit", failBackend);
   powerMonitor?.on?.('resume', () => {
@@ -492,6 +506,7 @@ app.whenReady().then(async () => {
     },
   });
   const owner = win.webContents;
+  markOffscreenStartup("window-created");
   let displayFrameBudget = null;
   const publishDisplayBudget = (force = false) => {
     if (win.isDestroyed() || owner.isDestroyed() || owner.getURL() !== localURL) return;
@@ -1058,7 +1073,9 @@ app.whenReady().then(async () => {
     const denied=await call('velaWeatherPermissionNative',{type:'set',expectedVersion:permission.version,decision:'deny'});
     if(denied.decision!=='deny')throw Error('weather_fixture_deny_required');
   }
+  markOffscreenStartup("load-requested");
   await win.loadURL(localURL);
+  markOffscreenStartup("load-finished");
   // Restores explicit local detection consent only; this command never starts paid voice.
   void call('velaWakeNative',{name:'ready',input:{}}).catch(()=>{});
   if (process.argv.includes('--bootstrap-vela-api')) {
@@ -1073,6 +1090,7 @@ app.whenReady().then(async () => {
   if (offscreenScale) {
     await require("./integration-offscreen-scale.cjs").verify({
       win, app, privateRoot, call, source, moduleStartedMonotonicMs, startupErrors,
+      startup: offscreenStartup,
     });
     return;
   }
