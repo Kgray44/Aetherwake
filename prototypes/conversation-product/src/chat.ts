@@ -141,6 +141,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   feedbackToggle.type='button';feedbackToggle.dataset.aerynthMotionControl='true';feedbackToggle.setAttribute('aria-expanded','false');feedbackToggle.setAttribute('aria-label','Conversation status, context and draft details');feedbackBody.id='cp-chat-inspection-'+ ++chatSerial;feedbackToggle.setAttribute('aria-controls',feedbackBody.id);feedbackBody.hidden=true;feedbackBody.inert=true;feedbackContents.append(statusDetail,capabilityNote,contextNote,draftStatus,recovery);feedbackBody.append(feedbackContents);feedbackLine.append(status,feedbackToggle);feedback.append(feedbackLine);
   root.append(top,messages,paging,feedback,composer);messages.append(stream,feedbackBody);container.append(root);
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
+  let webSearchCommandId: string|undefined;
   let sendTask: Promise<void>|null = null, cancelPending = false, streamLimited = false, accessRevoked = false;
   let pendingFollow:{messageId?:string}|null=null;
   let followingLatest=false;
@@ -406,8 +407,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         const source = sources[index], button = el('button', String(index + 1), 'cp-web-citation');
         button.type = 'button'; button.title = source.title; button.setAttribute('aria-label', 'Open source ' + (index + 1) + ', ' + source.title);
         button.dataset.aerynthMotionControl = 'true';
-        button.addEventListener('click', () => {
-          void port.command('openCitation', { resourceId, messageId: message.id, index }).catch(error => report(errorText(error)));
+        button.addEventListener('click', async () => {
+          if (button.disabled || disposed || accessRevoked || !root.contains(button)) return;
+          button.disabled = true;
+          try {
+            await port.command('openCitation', { resourceId: message.resourceId, messageId: message.id, index });
+            if (!accessRevoked) report('Browser open requested for this source.');
+          } catch {
+            if (!accessRevoked) report('This source could not be opened.');
+          } finally {
+            button.disabled = false;
+          }
         });
         return button;
       },
@@ -586,7 +596,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       : plan && options.models?.selections.get(resourceId)?.id;
     sending = true;
     renderDraft();
-    report(webSearch?'Searching the web…':providerCopy(before.conversation.providerId).pending);
+    webSearchCommandId=webSearch?commandId:undefined;
+    report(webSearch?'Preparing web search. Your draft remains saved.':providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
       if (reasoningEffort !== undefined) thinking = undefined;
@@ -623,7 +634,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       else if (code === 'unsupported_reasoning_effort') report('This model cannot use the requested thinking level. Your draft is still here.');
       else if (code === 'unsupported_web_search_model') report('This model cannot use web search. Your draft is still here.');
       else { uncertain=true;report('Send could not be confirmed: '+code); }
-    }).finally(()=>{sending=false;sendTask=null;renderDraft();});
+    }).finally(()=>{sending=false;sendTask=null;webSearchCommandId=undefined;renderDraft();});
   });
   stop.addEventListener('click',()=>{if(!execution||!options.execution||!active()||cancelPending||connection==='unavailable')return;cancelPending=true;renderDraft();const id=execution.id;void options.execution.cancel(id).then(()=>report('Stop requested. Waiting for the provider to confirm.'),error=>report('Stop could not be requested: '+errorText(error))).finally(()=>{cancelPending=false;renderDraft();});});
   if(options.execution)unsubscribeExecution=options.execution.observe(resourceId,observation=>{
@@ -639,6 +650,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       report('Connection unavailable. '+(execution?'Last observed: '+execution.state+'. Outcome unconfirmed.':'Execution state is unavailable.'));renderDraft();
     }
     const next=observation.execution??execution;if(!next)return;
+    if(webSearchCommandId&&(next.commandId!==webSearchCommandId||next.providerId!=='chatgpt-plan-responses'))return;
     if(execution&&next.id!==execution.id&&next.startedAt<execution.startedAt)return;
     if(execution?.id===next.id&&!['dispatching','running'].includes(execution.state)&&['dispatching','running'].includes(next.state))return;
     execution=next;
@@ -657,7 +669,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(!active())liveFollow=false;
     if(streamText.textContent!==previousPreview&&wasFollowing&&!feedbackOpen&&!stream.hidden){presentationAnchor=null;liveFollow=true;options.motion?.wake();}
     const label=current?.providers.find(p=>p.id===next.providerId)?.label??next.providerId;
-    report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
+    const researchRunning=webSearchCommandId===next.commandId&&next.providerId==='chatgpt-plan-responses'&&next.state==='running';
+    report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':researchRunning?(streamText.textContent?.trim()?'Writing the research reply…':'Web research is running.'):next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
     if(!active())void refresh({latest:true}).catch(error=>report(errorText(error)));
   });

@@ -1031,3 +1031,53 @@ test('Save reply as note sends exact IDs, recovers the same command and preserve
   assert.deepEqual(attempts[2],request,'a fresh view must recover the same canonical capture');
  }finally{await chat?.dispose();f.restore();}
 });
+
+test('an inherited citation opens through its source chat and suppresses repeat requests while pending',async()=>{
+ const f=fixture();let chat,finish!:(value:{requested:true})=>void;
+ try{
+  const message=f.detail.messages.items[1];
+  message.resourceId='chat:source';
+  message.inherited=true;
+  message.webSearch={completed:true,citations:[{url:'https://science.example.org/moon',title:'Moon facts',start:0,end:1}]};
+  const port={async command(name:string,input:any){
+   if(name!=='openCitation')return (f.port.command as any)(name,input);
+   f.calls.push({name,input});
+   return new Promise(resolve=>{finish=resolve;});
+  }} as ConversationProductPort;
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId});
+  await chat.ready;
+  const citation=f.view.root.querySelector('.cp-web-citation');
+  citation.fire('click');citation.fire('click');
+  assert.deepEqual(f.calls.filter(c=>c.name==='openCitation').map(c=>c.input),
+   [{resourceId:'chat:source',messageId:message.id,index:0}]);
+  assert.equal(citation.disabled,true);
+  finish({requested:true});
+  await until(()=>!citation.disabled);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/browser/i);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+test('research status distinguishes preparation, matching execution, and streamed output',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat,observe!:(value:ConversationExecutionObservation)=>void;
+ try{
+  f.detail.providers[0].modelOptions=[{id:'gpt-6.1-sol',label:'Synthetic Sol',eligibleTools:['web_search']}];
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+   observe(_id,listener){observe=listener;return ()=>{};},async cancel(){},
+  }});
+  await chat.ready;
+  const form=f.view.root.querySelector('form'),status=f.view.root.querySelector('.cp-chat-status');
+  form.fire('submit',{submitter:named(form,'Search web')});
+  await until(()=>!!f.pending);
+  assert.match(status.textContent,/Preparing web search/);
+  const execution={id:'execution:research',resourceId:f.draft.resourceId,commandId:f.pending!.input.commandId,
+   providerId:'chatgpt-plan-responses',state:'running' as const,startedAt:'2026-11-02T01:00:00Z',endedAt:null,taskVerified:false as const};
+  observe({execution:{...execution,id:'execution:other',commandId:'another-turn',
+   startedAt:'2026-11-02T01:00:01Z'},delta:{eventId:'delta:other',cursor:1,text:'Unrelated output'}});
+  assert.match(status.textContent,/Preparing web search/);
+  assert.doesNotMatch(f.view.root.textContent,/Unrelated output/);
+  observe({execution});
+  assert.equal(status.textContent,'Web research is running.');
+  observe({execution,delta:{eventId:'delta:research',cursor:1,text:'Synthetic answer'}});
+  assert.equal(status.textContent,'Writing the research reply…');
+ }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();f.restore();}
+});
