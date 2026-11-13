@@ -984,6 +984,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         const eventAction = eventDetails + ' [data-inspect-mission=' + quote(missionId) + ']';
         const beforeEventInspection = await desktop();
         assert.equal(beforeEventInspection.activeWorkspaceId, verifiedMission.scope.workspaceId);
+        await click(stream + ' [aria-label="Stream representation"] button:last-child');
         await click(eventDetails + ' > summary');
         await click(eventAction);
         await wait("Recorded event opens AIW with its mission selected", () => js(`(() => {
