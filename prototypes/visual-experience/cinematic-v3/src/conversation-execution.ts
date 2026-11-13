@@ -427,10 +427,11 @@ export function createConversationExecutionPort(
     async cancel(executionId) {
       await refresh();
       if (
-        ![...latest.values()].some(
+        connected !== true || ![...latest.values()].some(
           (value) =>
             value.id === executionId &&
             active(value) &&
+            availability.get(value.resourceId) === true &&
             watchers.has(value.resourceId),
         )
       )

@@ -194,6 +194,25 @@ test("one shared visible-view poll stops after the last subscriber and cancellat
   f.port.dispose();
 });
 
+test("Stop waits for a fresh authorized activity read after a disconnect", async () => {
+  let disconnected = false;
+  const f = setup(async (name) => {
+    if (name === "interrupt") return { requested: true, confirmed: false };
+    if (disconnected) throw Error("backend_disconnected");
+    return [execution()];
+  });
+  const off = f.port.observe("r", () => {});
+  try {
+    await f.port.refresh();
+    disconnected = true;
+    await assert.rejects(f.port.cancel("e"), /No observed active/);
+    assert.equal(f.calls.filter(call => call.name === "interrupt").length, 0);
+    disconnected = false;
+    await f.port.cancel("e");
+    assert.equal(f.calls.filter(call => call.name === "interrupt").length, 1);
+  } finally { off(); f.port.dispose(); }
+});
+
 test("known backend disconnection fences a pending old read without inventing an execution outcome", async () => {
   let resolveStatus;
   const status = new Promise((resolve) => {
