@@ -9,10 +9,19 @@ const { applicationFrameTrust, nativeReviewBoundary, createPersonalMemoryDesktop
 // verifier and isolated runtime before this can be used as an executable entry.
 async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMemoryInspectorArtifact, runtime, allowWrite }) {
   const entered = enterMemoryFixture({ ...handoff, allowWrite });
-  const { backendDescriptor, check, release } = entered;
+  const { backendDescriptor, release } = entered;
   let backend, protector, surface;
   let closed = false;
+  let starting = true, shutdownRequested = false;
   let cleanup;
+  const check = () => {
+    entered.check();
+    if (closed || shutdownRequested) throw Error("memory_fixture_closed");
+  };
+  const requestClose = () => {
+    shutdownRequested = true;
+    return starting ? Promise.resolve() : close();
+  };
   function close() {
     if (cleanup) return cleanup;
     closed = true;
@@ -32,6 +41,7 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
     if (!assets?.rendererURL?.startsWith("file:") || !assets.preloadPath || !assets.hostPath || !assets.nodePath)
       throw Error("memory_fixture_artifact_unverified");
     check();
+    runtime.prepareStorage?.({ profileRoot: backendDescriptor.profileRoot, check });
     const key = randomBytes(32);
     const policyToken = randomBytes(32).toString("base64url");
     try {
@@ -46,11 +56,11 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
       executable: assets.nodePath,
       args: [assets.hostPath, "--memory-fixture-bootstrap-v1", JSON.stringify(backendDescriptor)],
       env: { AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN: policyToken },
-      protector, wirePath: assets.wirePath, check,
+      protector, wirePath: assets.wirePath, check, close: requestClose,
     });
     check();
     surface = await runtime.createSurface({
-      profileRoot: backendDescriptor.profileRoot, preloadPath: assets.preloadPath, check, close,
+      profileRoot: backendDescriptor.profileRoot, preloadPath: assets.preloadPath, check, close: requestClose,
     });
     check();
     const { win, dialog } = surface;
@@ -92,6 +102,7 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
     };
     await surface.mount({ rendererURL: assets.rendererURL, dispatch, check });
     check();
+    starting = false;
     return { close };
   } catch (error) {
     await close();

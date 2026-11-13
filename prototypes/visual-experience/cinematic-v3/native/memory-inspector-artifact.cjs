@@ -6,6 +6,7 @@ const { artifactDigest, digest } = require("./memory-fixture-entry.cjs");
 const paths = Object.freeze({
   renderer: "renderer/memory-inspector.html",
   bundle: "renderer/memory-inspector.js",
+  adapter: "prototypes/visual-experience/cinematic-v3/native/memory-inspector-electron-adapter.cjs",
   startup: "prototypes/visual-experience/cinematic-v3/native/memory-inspector-fixture-startup.cjs",
   preload: "prototypes/visual-experience/cinematic-v3/native/desktop-preload.cjs",
   host: "prototypes/integrated-backend/src/desktop-host.mts",
