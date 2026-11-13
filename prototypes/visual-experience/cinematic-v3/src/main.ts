@@ -1,3 +1,4 @@
+import { mountRendererLifecycle } from "./renderer-lifecycle.ts";
 import {
   registerResourceMaterial,
   targetResourceMaterial,
@@ -215,9 +216,7 @@ let pointer = { x: 0, y: 0 },
   lastInteraction = performance.now();
 let sceneState: ReturnType<typeof deriveSceneState> | null = null;
 let nativeActive = true,
-  running = true,
-  graphicsFailed = false;
-let environment: Environment | null = null;
+  running = true;
 let ambient = true,
   ambientStrength = 1,
   visualClock = 0,
@@ -1519,6 +1518,8 @@ function tick(now: number) {
     resourceTiming?.reset();
     return;
   }
+  const environment = renderer.current;
+  const graphicsFailed = renderer.graphicsFailed;
   // Synchronous host/layer invalidation requests the next existing frame;
   // it cannot start a second RAF chain while the current frame is executing.
   frameRunning = true;
@@ -1806,7 +1807,7 @@ function controller() {
       scene: sceneState,
       reduced: motion.reduced,
       active: nativeActive,
-      graphicsFailed,
+      graphicsFailed: renderer.graphicsFailed,
       resources: [...resources.values()].map((r) => ({
         id: r.id,
         text: r.text,
@@ -1822,7 +1823,7 @@ function controller() {
         order.map((id) => [id, resourceUnfold(motion, id)]),
       ),
       metrics: { ...metrics },
-      gpu: environment?.stats(),
+      gpu: renderer.current?.stats(),
       compositing: materialCompositor.diagnostics(),
       spatial: (
         application as
@@ -1873,7 +1874,7 @@ function controller() {
       wake();
     },
     setVelaVisualStateForReview: setVisualStudy,
-    presenceMaskForReview: () => environment?.capturePresenceMaskForReview(),
+    presenceMaskForReview: () => renderer.current?.capturePresenceMaskForReview(),
     execute: (command: DesktopCommand) => application?.run(command),
     flush: () => application?.flush(),
     select,
@@ -1934,10 +1935,10 @@ function controller() {
     demo: () => $("#demo").click(),
     stopDemo,
     simulateContextLoss: () => {
-      environment?.loseContextForTest();
+      renderer.current?.loseContextForTest();
     },
     restoreContext: () => {
-      environment?.restoreContextForTest();
+      renderer.current?.restoreContextForTest();
     },
   };
 }
@@ -1972,33 +1973,23 @@ if (desktopMode)
     },
     vela: setVela,
   });
-try {
-  environment = new Environment($<HTMLCanvasElement>("#world"), motion);
-} catch (error) {
-  graphicsFailed = true;
-  metrics.errors.push(String(error));
-  status(
-    "Graphics unavailable. The workspace remains usable in a simplified view.",
-  );
-  document.body.classList.add("graphics-fallback");
-}
-$("#world").addEventListener("webglcontextlost", (e) => {
-  e.preventDefault();
-  graphicsFailed = true;
-  document.body.classList.add("graphics-fallback");
-  status("Graphics interrupted. Your resources and drafts remain available.");
-});
-$("#world").addEventListener("webglcontextrestored", () => {
-  try {
-    environment?.dispose();
-    environment = new Environment($<HTMLCanvasElement>("#world"), motion);
-    graphicsFailed = false;
-    document.body.classList.remove("graphics-fallback");
-    status("Graphics restored. Workspace state retained.");
-    wake();
-  } catch (error) {
-    metrics.errors.push(String(error));
-  }
+const world = $<HTMLCanvasElement>("#world");
+const renderer = mountRendererLifecycle({
+  canvas: world,
+  page: window,
+  create: () => new Environment(world, motion),
+  failed: (error) => metrics.errors.push(String(error)),
+  changed: (change) => {
+    document.body.classList.toggle("graphics-fallback", change !== "restored");
+    if (change === "unavailable")
+      status("Graphics unavailable. The workspace remains usable in a simplified view.");
+    else if (change === "interrupted")
+      status("Graphics interrupted. Your resources and drafts remain available.");
+    else {
+      status("Graphics restored. Workspace state retained.");
+      wake();
+    }
+  },
 });
 renderDOM();
 layout("initial");
