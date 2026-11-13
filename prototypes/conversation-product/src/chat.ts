@@ -550,8 +550,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
       const receipt = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
-      const failed = receipt?.state === 'failed' && receipt.commandId === commandId && receipt.resourceId === resourceId && receipt.providerId === input.providerId;
-      if(!failed&&!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
+      const matchingReceipt = receipt && typeof receipt.id === 'string' && receipt.commandId === commandId && receipt.resourceId === resourceId && receipt.providerId === input.providerId;
+      const failed = matchingReceipt && receipt.state === 'failed';
+      const interrupted = matchingReceipt && receipt.state === 'interrupted';
+      if(!failed&&!interrupted&&!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
       let followMessageId:string|undefined;
       if (receipt && acceptedConversationSubmission(input, result, evidence)) {
         const clockMessageId = typeof receipt.deviceClockMessageId === 'string' ? receipt.deviceClockMessageId : undefined;
@@ -561,6 +563,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         const cleared = await session.acknowledgeSent(checkpoint);
         const accepted = clockMessageId ? 'Answered from this device’s clock.' : 'Message accepted.';
         report(cleared ? accepted : accepted + ' Later draft edits were retained.', 'send-accepted');
+      } else if (interrupted) {
+        report('Reply stopped. Your draft is still here.');
       } else if (failed) {
         const unavailable = receipt?.errorCode === 'subscription_sharing_unsupported_capability';
         const reason = unavailable
@@ -569,7 +573,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         report(reason + ' Your draft is still here.');
       } else { uncertain=true;report('Send acceptance is not confirmed. Inspect the chat before retrying.'); }
       if(!disposed){
-        await refresh({latest:true,...(followMessageId?{followMessageId}:{})}).catch(error => { if (!failed) throw error; });
+        await refresh({latest:true,...(followMessageId?{followMessageId}:{})}).catch(error => { if (!failed&&!interrupted) throw error; });
         if(!disposed)await options.onChanged?.();
       }
     })().catch(error=>{
