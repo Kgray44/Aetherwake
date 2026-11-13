@@ -72,3 +72,25 @@ test('only a scope-matched owner finding can show an effective policy', async ()
   assert.match(view.element.textContent, /Evidence unavailable/);
   assert.doesNotMatch(view.element.textContent, /Version 8/);
 });
+
+test('baseline restoration binds the finding and refreshes canonical evidence', async () => {
+  const { doc } = blockDocument();
+  const requests = [];
+  let policy = { scope, experimentId: summary.id, version: 8, expiresAtMs: Date.parse('2026-11-13T12:00:00Z') };
+  const view = mountExperienceEvidence(doc, scope, async name => name === 'experience-list' ?
+    { kind: 'aep-experiment-list', experiments: [summary] } :
+    { contract: 'aerynth.experience.finding@1', id: 'finding:experiment', scope, experimentId: summary.id,
+      experimentRevision: summary.revision, cohort: summary.cohort, result, lifecycle: 'monitored',
+      disposition: 'recommend-candidate', applicability: 'matched', policy },
+  async request => { requests.push(request); policy = null; return 'restored'; });
+  view.show('learning');
+  await settle();
+  const control = [...view.element.querySelectorAll('button')].find(button => button.textContent === 'Review baseline restoration');
+  assert.ok(control);
+  await control.onclick();
+  await settle();
+  assert.deepEqual(requests, [{ ...scope, experimentId: summary.id, policyVersion: 8 }]);
+  assert.match(view.element.textContent, /Baseline execution policy restored/);
+  assert.match(view.element.textContent, /Effective policyNone/);
+  assert.doesNotMatch(view.element.textContent, /Review baseline restoration/);
+});

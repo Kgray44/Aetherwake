@@ -606,6 +606,7 @@ export function installApplication(hooks: Hooks) {
       experience: workspace ? {
         scope: { workspaceId: workspace.id, projectId: workspace.project_id },
         read: (name, input) => host.command!("missions", { name, input }),
+        rollback: host.experiencePolicyRollback,
       } : undefined,
       viewId: "adaptive-intelligence-workspace",
       initialMissionId,

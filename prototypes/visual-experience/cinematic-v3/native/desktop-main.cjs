@@ -636,6 +636,14 @@ app.whenReady().then(async () => {
     inspect: () => call("resourcePolicyNative", { name: "inspect" }),
     reviewMode, reviewRollback,
   }));
+  ipcMain.handle("application-experience-policy-rollback", require("./experience-policy-review.cjs").experiencePolicyReview({
+    trusted: event => policyReady() && trustedActiveFrame(event),
+    hasGesture: event => !verify && event.senderFrame.executeJavaScript(
+      "navigator.userActivation.isActive && document.hasFocus()", false,
+    ).catch(() => false),
+    call, show: options => reviewDialogs.showMessageBox(win, options),
+    canWrite: () => storage.allowWrite(),
+  }));
   const validateHostOperation=async(binding,{phase='before-dispatch'}={})=>{
       const frame=maintenanceReviewFrames.get(binding.operationId);
       const trusted=()=>!closing&&!backendFailed&&!!frame&&maintenanceReviewFrames.get(binding.operationId)===frame&&(phase==='after-dispatch'?trustedApplicationFrame:trustedActiveFrame)({sender:win.webContents,senderFrame:frame});

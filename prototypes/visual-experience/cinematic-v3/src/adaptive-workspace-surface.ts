@@ -1,5 +1,5 @@
-import type { ExperienceRead } from './experience-evidence-view.ts';
-import type { MissionScope, MissionProjection, MissionSummary } from '../../../integrated-backend/src/mission-contracts.mts';
+import type { ExperienceEvidencePort } from './experience-evidence-view.ts';
+import type { MissionProjection, MissionSummary } from '../../../integrated-backend/src/mission-contracts.mts';
 import type { MissionExecutionProfile } from '../../../integrated-backend/src/execution-profiler.mts';
 import { mountIntelligenceInspection } from './adaptive-workspace-view.ts';
 import type { ResourcePolicyPort } from './resource-policy-view.ts';
@@ -12,7 +12,7 @@ type Options = {
   readMission(id: string): Promise<MissionProjection | null>;
   readProfile?(id: string): Promise<MissionExecutionProfile | null>;
   resourcePolicy?: ResourcePolicyPort;
-  experience?: { scope: MissionScope; read: ExperienceRead };
+  experience?: ExperienceEvidencePort;
 };
 
 export function mountAdaptiveWorkspace(root: HTMLElement, options: Options) {

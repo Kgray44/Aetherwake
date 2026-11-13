@@ -1,4 +1,4 @@
-import type { createAepNativeHost } from '../../../integrated-backend/src/aep-native-host.mts';
+import type { AepRollbackReview, createAepNativeHost } from '../../../integrated-backend/src/aep-native-host.mts';
 import type { MissionScope } from '../../../integrated-backend/src/mission-contracts.mts';
 
 type Owner = ReturnType<typeof createAepNativeHost>;
@@ -7,6 +7,8 @@ type Evidence = ReturnType<Owner['evidence']>;
 type Finding = NonNullable<ReturnType<Owner['finding']>>;
 export type ExperienceZone = 'learning' | 'experiment' | 'timeline';
 export type ExperienceRead = (name: 'experience-list' | 'experience-evidence' | 'experience-finding', input: Record<string, string>) => Promise<unknown>;
+export type ExperiencePolicyRollback = (review: AepRollbackReview) => Promise<'restored' | 'cancelled'>;
+export type ExperienceEvidencePort = { scope: MissionScope; read: ExperienceRead; rollback?: ExperiencePolicyRollback };
 
 const scopeMatches = (source: MissionScope | undefined, expected: MissionScope) =>
   source?.workspaceId === expected.workspaceId && source?.projectId === expected.projectId;
@@ -14,18 +16,21 @@ const label = (value: string) => value.replaceAll('-', ' ');
 const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const candidateLabel = (candidate: Summary['candidate']) => candidate === 'parallel' ? 'Parallel native probes' : 'Omit backend probe';
 
-export function mountExperienceEvidence(doc: Document, scope: MissionScope, read: ExperienceRead) {
+export function mountExperienceEvidence(doc: Document, scope: MissionScope, read: ExperienceRead, rollback?: ExperiencePolicyRollback) {
   const element = doc.createElement('section'), status = doc.createElement('p'), picker = doc.createElement('select');
   const content = doc.createElement('div'), actions = doc.createElement('div'), refreshButton = doc.createElement('button');
+  const actionStatus = doc.createElement('p');
   element.className = 'aw-experience-evidence';
   picker.setAttribute('aria-label', 'Experiment record');
   refreshButton.type = 'button';
   refreshButton.textContent = 'Refresh evidence';
   status.setAttribute('role', 'status');
+  actionStatus.setAttribute('role', 'status');
   actions.append(picker, refreshButton);
-  element.append(status, actions, content);
+  element.append(status, actions, actionStatus, content);
   element.hidden = true;
   let zone: ExperienceZone | undefined, selected = '', epoch = 0;
+  let reviewing = false;
   let summaries = new Map<string, Summary>();
   function fields(rows: readonly (readonly [string, string | number | null | undefined])[], target: HTMLElement = content) {
     const values = doc.createElement('dl');
@@ -104,6 +109,30 @@ export function mountExperienceEvidence(doc: Document, scope: MissionScope, read
           ['Disposition', label(finding.disposition)], ['Applicability', label(finding.applicability)],
           ['Effective policy', finding.policy ? 'Version ' + finding.policy.version : 'None'],
           ['Effective until', finding.policy?.expiresAtMs ? new Date(finding.policy.expiresAtMs).toISOString() : null]]);
+        if (finding.policy && rollback) {
+          const button = doc.createElement('button');
+          const review = { ...scope, experimentId: id, policyVersion: finding.policy.version };
+          button.type = 'button';
+          button.textContent = 'Review baseline restoration';
+          button.onclick = async () => {
+            if (reviewing || token !== epoch) return;
+            reviewing = button.disabled = true;
+            try {
+              if (await rollback(review) === 'restored' && token === epoch) {
+                actionStatus.textContent = 'Baseline execution policy restored. The rollback is recorded in the Adaptation Timeline.';
+                void refresh();
+              }
+            } catch {
+              if (token === epoch) {
+                actionStatus.textContent = 'Restoration could not be confirmed. Check the latest policy and history before trying again.';
+                void refresh();
+              }
+            } finally {
+              reviewing = button.disabled = false;
+            }
+          };
+          content.append(button);
+        }
       } else {
         const evidence = value as Evidence | null, record = evidence?.record;
         if (evidence?.kind !== 'aep-experiment-evidence' || record?.contract !== 'aerynth.aep.native-experiment@1' ||
@@ -149,6 +178,7 @@ export function mountExperienceEvidence(doc: Document, scope: MissionScope, read
     }
   }
   picker.onchange = () => {
+    actionStatus.textContent = '';
     selected = picker.value;
     const summary = summaries.get(selected);
     if (summary) void load(summary);
@@ -158,6 +188,7 @@ export function mountExperienceEvidence(doc: Document, scope: MissionScope, read
     element,
     show(next?: ExperienceZone) {
       if (zone === next) return;
+      actionStatus.textContent = '';
       zone = next;
       element.hidden = !zone;
       if (zone) void refresh();
@@ -172,6 +203,7 @@ export function mountExperienceEvidence(doc: Document, scope: MissionScope, read
       picker.replaceChildren();
       content.replaceChildren();
       status.textContent = '';
+      actionStatus.textContent = '';
       element.hidden = true;
     },
   };

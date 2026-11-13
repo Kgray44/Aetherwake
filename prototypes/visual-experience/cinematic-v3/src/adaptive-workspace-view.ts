@@ -1,13 +1,13 @@
 import type { MissionExecutionProfile } from '../../../integrated-backend/src/execution-profiler.mts';
 import { intelligenceZones, projectIntelligence, type IntelligenceBinding, type IntelligenceRegion } from './adaptive-workspace.ts';
 import type { MissionScope } from '../../../integrated-backend/src/mission-contracts.mts';
-import { mountExperienceEvidence, type ExperienceRead } from './experience-evidence-view.ts';
+import { mountExperienceEvidence, type ExperienceEvidencePort } from './experience-evidence-view.ts';
 import { mountExecutionTrace } from './execution-trace-view.ts';
 import { mountResourcePolicy, type ResourcePolicyPort } from './resource-policy-view.ts';
 import type { MissionProjection } from '../../../integrated-backend/src/mission-contracts.mts';
 
 /** Accessible read-only inspection inside the existing spatial workroom. No camera or task ownership. */
-export function mountIntelligenceInspection(root: HTMLElement, viewId: string, readProfile?: (id: string) => Promise<MissionExecutionProfile | null>, resourcePolicy?: ResourcePolicyPort, expanded = false, experience?: { scope: MissionScope; read: ExperienceRead }) {
+export function mountIntelligenceInspection(root: HTMLElement, viewId: string, readProfile?: (id: string) => Promise<MissionExecutionProfile | null>, resourcePolicy?: ResourcePolicyPort, expanded = false, experience?: ExperienceEvidencePort) {
   const doc = root.ownerDocument, details = doc.createElement('details'), summary = doc.createElement('summary');
   details.className = 'aw-mission-workroom-controls aw-intelligence-inspection';
   details.dataset.noCardDrag = 'true';
@@ -27,7 +27,7 @@ export function mountIntelligenceInspection(root: HTMLElement, viewId: string, r
   const trace = mountExecutionTrace(doc);
   panel.insertBefore(trace.element, readings);
   let executionProfile: MissionExecutionProfile | null = null;
-  const experienceView = experience && mountExperienceEvidence(doc, experience.scope, experience.read);
+  const experienceView = experience && mountExperienceEvidence(doc, experience.scope, experience.read, experience.rollback);
   if (experienceView) panel.insertBefore(experienceView.element, readings);
   let profileEpoch = 0, requestProfile: (() => Promise<void>) | undefined;
   const buttons = intelligenceZones.map(([id, label], index) => {
