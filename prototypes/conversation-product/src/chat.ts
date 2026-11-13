@@ -520,6 +520,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const draftNeedsAttention = ['loading', 'conflict', 'error'].includes(snapshot.phase);
     const planDisconnected = plan?.available === false;
     const selectedModel = effectiveModel();
+    const missingPinnedModel = !!plan && options.models?.selections.has(resourceId) === true && !selectedModel;
     const modelControlsDisabled = !plan?.available || sending || !!active() || accessRevoked || current?.conversation.state !== 'active';
     if(providerPicker){providerPicker.update({items:current?.providers.map(item=>({value:item.id,label:item.label,disabled:!item.available||!item.record,description:item.reason}))??[],value:current?.conversation.providerId??'',disabled:!current||accessRevoked||sending||changingProvider||!!active()||current.conversation.state==='archived'});}
     if (modelPicker) {
@@ -530,7 +531,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         items: [
           { value: 'automatic', label: 'Automatic model' },
           ...catalog.map(item => ({ value: 'model:' + item.id, label: item.label })),
-          ...(chosen && !catalog.some(item => item.id === chosen.id) ? [{ value: 'model:' + chosen.id, label: chosen.label, disabled: true }] : []),
+          ...(chosen && missingPinnedModel ? [{ value: 'model:' + chosen.id, label: chosen.label + ' · unavailable', disabled: true }] : []),
           { value: 'refresh', label: loadingModels ? 'Loading models…' : catalog.length ? 'Refresh model list' : 'Load available models', disabled: loadingModels },
         ],
         value: chosen ? 'model:' + chosen.id : 'automatic',
@@ -569,11 +570,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const codexOutcomeUnknown = execution?.providerId === 'codex-app-server' && execution.state === 'unknown';
     checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
     checkOutcome.disabled = recovering;
-    send.disabled = connection === 'unavailable' || choosingDocument || stagingForVela || changingProvider || planDisconnected || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
+    send.disabled = connection === 'unavailable' || choosingDocument || stagingForVela || changingProvider || planDisconnected || missingPinnedModel || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
     web.hidden = !plan?.execute || !webSearchModel();
     documentStatus.textContent = unavailableDocuments ? 'Remove or replace the unavailable documents to send.'
       : documentsUnsupported ? 'Switch to ChatGPT or remove the documents to send.' : '';
-    send.title = documentStatus.textContent || (connection === 'unavailable' ? 'Reconnect to send this draft.' : planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : '');
+    send.title = documentStatus.textContent || (connection === 'unavailable' ? 'Reconnect to send this draft.' : planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : missingPinnedModel ? 'The selected model is no longer available. Choose another model or use Automatic.' : '');
     web.disabled = send.disabled || web.hidden || !plan?.available || documents.length > 0;
     attachDocument.hidden = !mayStageDocuments || !options.chooseDocument;
     attachDocument.disabled = !mayStageDocuments || choosingDocument || stagingForVela || sending || changingProvider || draftNeedsAttention || documents.length >= 4;

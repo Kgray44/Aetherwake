@@ -918,6 +918,34 @@ test('thinking is bound to the observed model and applies only to the next submi
  } finally { await chat?.dispose(); f.restore(); }
 });
 
+test('a missing pinned model leaves the draft unsent until the model is reset', async () => {
+ const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
+ const selections = new Map([[f.draft.resourceId,{id:'gpt-6.1-sol',label:'Synthetic Sol'}]]);
+ f.detail.providers[0].modelOptions = [{id:'gpt-6.1-sol',label:'Synthetic Sol'}];
+ let chat;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   motion:motion.motion,viewId:'model-stale',models:{selections,async refresh(){}}});
+  await chat.ready;
+  f.detail.providers[0].modelOptions=[{id:'gpt-6.1-luna',label:'Synthetic Luna'}];
+  await chat.refresh();
+  const form=f.view.root.querySelector('form'),send=named(form,'Send');
+  assert.equal(send.disabled,true);
+  assert.match(send.title,/model is no longer available/i);
+  form.fire('submit');
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+  assert.equal(f.draft.content,'Saved unsent text');
+  f.view.root.querySelector('[data-cp-picker-for="Conversation model"]').fire('click');
+  f.view.root.querySelector('[data-cp-option-value="automatic"]').fire('click');
+  assert.equal(send.disabled,false);
+  form.fire('submit');
+  await until(()=>!!f.pending);
+  assert.equal(Object.hasOwn(f.pending!.input,'model'),false);
+  f.accept(true);
+  await chat.whenSubmissionSettled();
+ } finally {f.pending?.reject(Error('fixture cleanup'));await chat?.dispose();f.restore();}
+});
+
 test('an undocumented catalog model offers no tool and a stale thinking choice cannot silently send', async () => {
  const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
  f.detail.providers[0].modelOptions = [{ id: 'gpt-6.1-sol', label: 'Synthetic Sol', reasoningEfforts: ['low'], eligibleTools: ['web_search'] }];
