@@ -1185,12 +1185,12 @@ test('an inherited citation opens through its source chat and suppresses repeat 
  }finally{await chat?.dispose();f.restore();}
 });
 
-test('research status distinguishes preparation, matching execution, and streamed output',async()=>{
- const f=fixture('chatgpt-plan-responses');let chat,observe!:(value:ConversationExecutionObservation)=>void;
+test('research progress yields to Stop and a disconnected turn keeps the draft for explicit retry',async()=>{
+ const f=fixture('chatgpt-plan-responses'),cancelled:string[]=[];let chat,observe!:(value:ConversationExecutionObservation)=>void;
  try{
   f.detail.providers[0].modelOptions=[{id:'gpt-6.1-sol',label:'Synthetic Sol',eligibleTools:['web_search']}];
   chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
-   observe(_id,listener){observe=listener;return ()=>{};},async cancel(){},
+   observe(_id,listener){observe=listener;return ()=>{};},async cancel(id){cancelled.push(id);},
   }});
   await chat.ready;
   const form=f.view.root.querySelector('form'),status=f.view.root.querySelector('.cp-chat-status');
@@ -1207,6 +1207,23 @@ test('research status distinguishes preparation, matching execution, and streame
   assert.equal(status.textContent,'Web research is running.');
   observe({execution,delta:{eventId:'delta:research',cursor:1,text:'Synthetic answer'}});
   assert.equal(status.textContent,'Writing the research reply…');
+  const stop=f.view.root.querySelector('[data-cp-control="stop"]');
+  stop.fire('click');stop.fire('click');
+  observe({execution,delta:{eventId:'delta:research-late',cursor:2,text:' while stopping'}});
+  assert.deepEqual(cancelled,[execution.id]);
+  assert.match(status.textContent,/Stop requested/);
+  observe({execution:{...execution,state:'interrupted'}});
+  Object.assign(f.detail.providers[0],{available:false,execute:false});
+  f.pending!.reject(Error('lost synthetic submit receipt'));
+  await chat.whenSubmissionSettled();
+  await chat.refresh();
+  const editor=f.view.root.querySelector('textarea'),send=f.view.root.querySelector('[data-cp-control="send"]');
+  assert.equal(send.disabled,true);
+  assert.equal(editor.value,'Saved unsent text');
+  Object.assign(f.detail.providers[0],{available:true,execute:true});
+  await chat.refresh();
+  assert.equal(send.disabled,false);
+  assert.equal(f.calls.filter(call=>call.name==='send').length,1);
  }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();f.restore();}
 });
 
