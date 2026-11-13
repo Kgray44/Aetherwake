@@ -227,7 +227,30 @@ test('reviewed conversation memory travels within its project and stops recallin
     assert.throws(() => memory.readFact(saved.id), /conversation_source_unavailable/);
     assert.throws(() => memory.correctFact({ id: saved.id, expectedVersion: 1, replacement: fact() }), /conversation_source_unavailable/);
     assert.throws(() => memory.export({ ids: [saved.id], maxBytes: 8192 }), /conversation_source_unavailable/);
-    assert.deepEqual(memory.hardDelete({ id: saved.id, expectedVersion: saved.version }).deleted.map(value => value.id), [saved.id]);
+    const revised = memory.editFact({ id: saved.id, expectedVersion: saved.version, replacement: fact(undefined, { scope }) });
+    const independent = memory.reviewFact(fact(undefined, { scope }));
+    const sourceRef = { kind: 'conversation-message', conversationId: 'c1', messageId: 'm1' } as const;
+    f.denied.add('source.erase');
+    assert.throws(() => memory.eraseConversationSource(sourceRef), /personal_context_not_authorized/);
+    f.denied.delete('source.erase');
+    f.denied.add('record.delete');
+    assert.throws(() => memory.eraseConversationSource(sourceRef), /personal_context_not_authorized/);
+    assert.equal(memory.readFact(saved.id).version, revised.version);
+    f.denied.delete('record.delete');
+    f.options.transaction(() => {
+      assert.throws(() => f.options.transaction(() => {
+        memory.eraseConversationSource(sourceRef);
+        throw Error('source owner rollback');
+      }), /source owner rollback/);
+      assert.equal(memory.readFact(saved.id).version, revised.version);
+    });
+    const decrypted = f.calls.decrypted;
+    f.lock();
+    assert.deepEqual(memory.eraseConversationSource(sourceRef).deleted.map(value => value.id), [saved.id]);
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM personal_context_revisions WHERE id=?').get(saved.id)?.n, 0);
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM personal_context_revisions WHERE id=?').get(independent.id)?.n, 1);
+    assert.equal(f.calls.decrypted, decrypted);
+    assert.deepEqual(memory.eraseConversationSource(sourceRef).deleted, []);
   } finally { f.close(); }
 });
 

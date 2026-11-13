@@ -37,10 +37,11 @@ export interface PersonalContextManifest {
   omissions: { reason: OmissionReason; count: number }[]; encodedBytes: number; digest: string;
 }
 export interface RecordRef { id: string; version: number; kind: 'import' | 'fact'; scope: PersonalScope }
-export type Operation = 'policy.read' | 'policy.write' | 'import.write' | 'fact.review' | 'record.list' | 'record.read' | 'record.revoke' | 'record.export' | 'record.delete' | 'context.preview' | 'context.disclose';
+export type Operation = 'policy.read' | 'policy.write' | 'import.write' | 'fact.review' | 'record.list' | 'record.read' | 'record.revoke' | 'record.export' | 'record.delete' | 'source.erase' | 'context.preview' | 'context.disclose';
 export interface PersonalAuthorization {
   operation: Operation; ownerId: string; scope: PersonalScope | null; subject: RecordRef | null;
   request?: ContextRequest; manifestDigest?: string; references?: RecordRef[];
+  conversationSource?: ConversationSourceRef;
 }
 export interface PersonalContextHost {
   identity(): { userId: string; policyVersion: string };
