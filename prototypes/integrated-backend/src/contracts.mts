@@ -64,6 +64,7 @@ export type ConversationSendInput = ProductCommandMap['send']['input'];
 export interface ConversationSendPreview {
  id: string; commandId: string; resourceId: string; providerId: string; expectedRevision: number;
  prompt: string; model?: string; context: AttachedContext[];
+ documents?: { id: string; version: number; source: string; sourceRevision: string; content: string; digest: string }[];
  handoff?: { id:string; fingerprint:string; sourceResourceId:string; items:ContextPackage['items'];continued?:true };
  executionText: string; fingerprint: string; expiresAt: string;
  /** Exact stateless Responses egress, without credentials or account identifiers. */

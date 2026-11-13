@@ -1245,6 +1245,32 @@ test('research progress yields to Stop and a disconnected turn keeps the draft f
  }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();f.restore();}
 });
 
+test('an ordinary chat sends only the selected document identity and retains it when review is cancelled', async () => {
+ const f=fixture('chatgpt-plan-responses'); let chat;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   chooseDocument:async()=>({id:'file:brief',version:3,title:'Brief.pdf'}),
+  });
+  await chat.ready;
+  const attach = named(f.view.root,'Attach document');
+  assert.equal(attach.hidden,false);
+  assert.equal(attach.disabled,false);
+  attach.fire('click');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(named(f.view.root,'Brief.pdf ×'),f.view.root.querySelector('.cp-chat-status').textContent);
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+  f.view.root.querySelector('form').fire('submit');
+  await until(()=>!!f.pending);
+  assert.deepEqual(f.pending!.input.documents,[{id:'file:brief',version:3}]);
+  f.pending!.reject(Error('authorization_cancelled'));
+  await chat.whenSubmissionSettled();
+  assert.ok(named(f.view.root,'Brief.pdf ×'));
+  assert.equal(f.draft.content,'Saved unsent text');
+  named(f.view.root,'Brief.pdf ×').fire('click');
+  assert.equal(!!named(f.view.root,'Brief.pdf ×'),false);
+ } finally {f.pending?.reject(Error('synthetic cleanup'));await chat?.dispose();f.restore();}
+});
+
 test('a disconnected ChatGPT plan keeps the draft editable and enables an explicit send after reconnect', async () => {
  const f=fixture('chatgpt-plan-responses');
  let chat;
