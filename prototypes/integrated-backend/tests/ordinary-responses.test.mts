@@ -106,7 +106,10 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     const approval = await f.core.command('authorizeConversationSend', { ...binding, reviewedBodyDigest: preview.responses.bodyDigest });
     assert.equal((await f.core.command('conversationActivity', { resourceIds: [chat.resourceId] }))
       .executions.some(execution => !!execution.memoryDisclosure), false);
-    f.responses.push(async () => {
+    f.responses.push(async init => {
+      const body = String(init.body);
+      assert.equal(createHash('sha256').update(body).digest('hex'), preview.responses!.bodyDigest);
+      assert.equal(Buffer.byteLength(body), preview.responses!.bodyBytes);
       const activity = await f.core.command('conversationActivity', { resourceIds: [chat.resourceId] });
       assert.equal(activity.executions[0].state, 'dispatching');
       assert.equal(activity.executions[0].memoryDisclosure, undefined);
@@ -114,12 +117,16 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
     });
     assert.equal((await f.core.command('conversationSend', { ...binding, grantId: approval.grantId })).state, 'provider_completed');
     assert.deepEqual(f.requests[0].input, preview.responses.messages);
+    await assert.rejects(f.core.command('conversationSend', { ...binding, grantId: approval.grantId }), /native_send_grant_consumed/);
+    assert.equal(f.requests.length, 1);
     const disclosure = { state: 'simulated', manifestDigest: preview.responses.memoryDigest };
     const activity = () => f.core.command('conversationActivity', { resourceIds: [chat.resourceId] });
     assert.deepEqual((await activity()).executions[0].memoryDisclosure, disclosure);
     assert.equal((await f.core.command('conversationActivity', { resourceIds: [origin.resourceId] }))
       .executions.some(execution => !!execution.memoryDisclosure), false);
     const detail = await f.core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as any;
+    assert.equal(detail.messages.items.filter((item: { role: string; content: string }) =>
+      item.role === 'user' && item.content === referencePrompt).length, 1);
     const followup = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
       content: 'Can you explain?', expectedRevision: detail.conversation.revision, commandId: randomUUID() });
     assert.doesNotMatch(JSON.stringify(followup.responses?.messages), /Synthetic memory-derived reply/);
