@@ -177,7 +177,8 @@ test("inspector startup gates all fixture effects and sends policy authority onl
       assert.deepEqual(JSON.parse(args[2]), {
         contract: "aerynth.memory-fixture-bootstrap@1", profileRoot, expiresAt: handoff.expiresAt,
       });
-      assert.deepEqual(Object.keys(env), ["AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN", "AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN"]);
+      assert.deepEqual(Object.keys(env), ["AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN", "AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN", "AERYNTH_MEMORY_FIXTURE_SEED"]);
+      assert.equal(env.AERYNTH_MEMORY_FIXTURE_SEED, "inspector-v1");
       assert.match(env.AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN, /^[a-zA-Z0-9_-]{43}$/u);
       assert.notEqual(env.AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN, env.AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN);
       token = env.AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN;

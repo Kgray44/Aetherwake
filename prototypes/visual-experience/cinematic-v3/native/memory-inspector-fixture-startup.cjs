@@ -66,7 +66,11 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
     backend = await runtime.startBackend({
       executable: assets.nodePath,
       args: [assets.hostPath, "--memory-fixture-bootstrap-v1", JSON.stringify(backendDescriptor)],
-      env: { AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN: policyToken, AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN: detailToken },
+      env: {
+        AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN: policyToken,
+        AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN: detailToken,
+        AERYNTH_MEMORY_FIXTURE_SEED: "inspector-v1",
+      },
       protector, wirePath: assets.wirePath, check, close: requestClose,
     });
     await backend.waitUntilReady?.();

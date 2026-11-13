@@ -40,7 +40,7 @@ test("acceptance artifact verifies exact inventory and refuses mutations, missin
   assert.throws(() => resolveMemoryInspectorArtifact(input), /artifact_unverified/);
 });
 
-for (const outcome of ["ready", "unresolved", "unready"]) test(`isolated Electron adapter handles ${outcome} worker under a fixture permit`, async t => {
+for (const outcome of ["ready", "unresolved", "unready", "missing-seed", "invalid-seed", "duplicate-seed", "seed-failed"]) test(`isolated Electron adapter handles ${outcome} worker under a fixture permit`, async t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "memory-electron-stub-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const artifactRoot = join(root, "artifact");
@@ -117,6 +117,13 @@ for (const outcome of ["ready", "unresolved", "unready"]) test(`isolated Electro
     write(bytes, _encoding, done) {
       const request = JSON.parse(bytes);
       if (request.command === "capabilities") {
+        const line = message => child.stdout.write(JSON.stringify(message) + "\n");
+        const seed = { fixtureSeed: { contract: "aerynth.memory-fixture-seed@1",
+          conversationId: "synthetic-chat", messageId: "synthetic-message", factId: "synthetic-fact" } };
+        if (["ready", "unresolved", "duplicate-seed"].includes(outcome)) line(seed);
+        if (outcome === "duplicate-seed") line(seed);
+        if (outcome === "invalid-seed") line({ ...seed, extra: true });
+        if (outcome === "seed-failed") line({ startupError: "memory_fixture_seed_failed" });
         if (outcome !== "unready") child.stdout.write(JSON.stringify({
           id: request.id, result: { providerId: "fixture-codex" },
         }) + "\n");
@@ -147,7 +154,10 @@ for (const outcome of ["ready", "unresolved", "unready"]) test(`isolated Electro
       assert.equal(executable, join(artifactRoot, paths.node));
       assert.equal(args[0], join(artifactRoot, paths.host));
       assert.equal(options.cwd, storage);
-      assert.deepEqual(Object.keys(options.env), ["AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN", "AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN"]);
+      assert.deepEqual(Object.keys(options.env), [
+        "AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN", "AERYNTH_MEMORY_FIXTURE_DETAIL_TOKEN", "AERYNTH_MEMORY_FIXTURE_SEED",
+      ]);
+      assert.equal(options.env.AERYNTH_MEMORY_FIXTURE_SEED, "inspector-v1");
       effects.push("worker");
       return child;
     },
@@ -158,9 +168,13 @@ for (const outcome of ["ready", "unresolved", "unready"]) test(`isolated Electro
   await assert.rejects(startIsolatedMemoryInspector({ ...config, handoff: { ...handoff, token: "wrong" } }), /slot_closed/);
   assert.deepEqual(effects, []);
   assert.equal(win, undefined);
-  if (outcome === "unready") {
-    await assert.rejects(startIsolatedMemoryInspector(config), /worker_not_ready/);
+  if (!["ready", "unresolved"].includes(outcome)) {
+    await assert.rejects(startIsolatedMemoryInspector(config), {
+      message: outcome === "seed-failed" ? "memory_fixture_seed_failed" :
+        outcome === "invalid-seed" || outcome === "duplicate-seed" ? "memory_fixture_seed_invalid" : "memory_fixture_worker_not_ready",
+    });
     assert.equal(win, undefined);
+    assert.equal(handlers.size, 0);
     assert.equal(admission.status().lease, null);
     return;
   }
