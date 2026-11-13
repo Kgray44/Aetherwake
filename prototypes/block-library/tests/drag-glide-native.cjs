@@ -5,6 +5,8 @@ const {createGuard,options:sharedOptions,captureAllowed,consoleHandler}=require(
 const {compileExpression}=require('./library-native-expressions.cjs');
 const {expressions:x,preflight}=require('./drag-glide-expressions.cjs');
 const hash=b=>createHash('sha256').update(b).digest('hex'),q=JSON.stringify;
+const isBuildAssetName=name=>/^[a-zA-Z0-9_.-]+\.(js|mjs|css)$/.test(name);
+exports.isBuildAssetName=isBuildAssetName;
 const canonical=s=>Object.fromEntries(['projects','workspaces','resources','relationships'].map(k=>[k,s[k]]));
 const workspace=s=>Object.fromEntries(['activeWorkspaceId','layoutVersion','canUndo','canRedo','blocks','viewport','organization','presence'].map(k=>[k,s[k]]));
 exports.canonical=canonical;exports.workspace=workspace;exports.preflight=preflight;
@@ -39,7 +41,15 @@ exports.verify=async({win,app,privateRoot,call,source,moduleStarted,startupError
     assert(source?.hashes&&source?.buildAssets&&Object.keys(source.buildAssets).length>0);assert.equal(typeof call,'function');
     for(const [name,digest]of Object.entries(seed.hashes)){assert(/^prototypes\/[a-zA-Z0-9_./-]+$/.test(name)&&!name.includes('..'));assert.equal(hash(await guard.around(()=>fs.readFile(path.resolve(__dirname,'../../..',name)))),digest,'Preparation source changed: '+name);if(!name.includes('/prepare-'))assert.equal(source.hashes[name],digest,'Host source differs: '+name);}
     const validation={preflightSha256:preflight().sha256};for(const name of ['drag-glide-native.cjs','drag-glide-expressions.cjs','workspace-approach-expressions.cjs','library-native-expressions.cjs','library-native.cjs','native-console.cjs'])validation[name]=hash(await guard.around(()=>fs.readFile(path.join(__dirname,name))));assert.deepEqual(validation,seed.validation);receipt.validation=validation;
-    let assetBytes=0;for(const [name,digest]of Object.entries(source.buildAssets)){assert(/^[a-zA-Z0-9_.-]+\.(js|css)$/.test(name));const file=path.resolve(__dirname,'../../visual-experience/cinematic-v3/dist/assets',name);assetBytes+=(await guard.around(()=>fs.stat(file))).size;assert(assetBytes<=16777216);assert.equal(hash(await guard.around(()=>fs.readFile(file))),digest);}receipt.verifiedAssetBytes=assetBytes;
+    let assetBytes=0;
+    for (const [name,digest] of Object.entries(source.buildAssets)) {
+      assert(isBuildAssetName(name), 'invalid_drag_glide_build_asset');
+      const file=path.resolve(__dirname,'../../visual-experience/cinematic-v3/dist/assets',name);
+      assetBytes+=(await guard.around(()=>fs.stat(file))).size;
+      assert(assetBytes<=16777216);
+      assert.equal(hash(await guard.around(()=>fs.readFile(file))),digest);
+    }
+    receipt.verifiedAssetBytes=assetBytes;
     if(!limits.restore){const marker=Buffer.from(JSON.stringify({seedSha256:prepared.sha256,startedAt:Date.now()}));assert(marker.length<=1024);await guard.around(()=>fs.writeFile(path.join(privateRoot,markerName),marker,{flag:'wx'}));}
     const driver=await guard.around(()=>createDriver(win,{assertActive:guard.check}));
     const js=code=>guard.around(()=>driver.js(compileExpression(code))),wait=code=>guard.around(()=>driver.wait(compileExpression(code),Math.min(6000,Math.max(1,limits.deadlineAt-Date.now())))),snapshot=()=>guard.around(()=>driver.snapshot());
