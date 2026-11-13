@@ -76,7 +76,11 @@ export function projectIntelligence(mission: MissionProjection, binding: Intelli
     add('profiler', mission.id, 'Provider-reported tokens', economics.reportedTotalTokens, 'reported', null, 'tokens');
     if (economics.simulatedTotalTokens != null)
       add('profiler', mission.id, 'Simulated tokens', economics.simulatedTotalTokens, 'simulated', null, 'tokens');
-    add('profiler', mission.id, 'Usage coverage', economics.usageCoverage, 'derived');
+    add('profiler', mission.id, 'Usage receipt coverage', economics.usageCoverage, 'derived');
+    for (const gap of economics.usageGaps) add('profiler', mission.id, 'Usage evidence gap', gap, 'derived');
+    if (economics.unattributedTotalTokens !== null)
+      add('profiler', mission.id, 'Unattributed tokens', economics.unattributedTotalTokens, 'derived', null, 'tokens');
+    add('profiler', mission.id, 'Cost coverage', economics.costCoverage, 'derived');
     add('profiler', mission.id, 'Provider cost', economics.cost, 'reported');
     add('profiler', mission.id, 'Objective verification', quality.objectiveVerified ? 'Verified' : 'Unconfirmed', 'derived');
 

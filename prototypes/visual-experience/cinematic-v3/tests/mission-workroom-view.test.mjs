@@ -255,7 +255,9 @@ test('mounted intelligence inspection preserves spatial task identity, keyboard 
   assert.equal(tabs.length, 6); assert.equal(details.querySelectorAll('[role="tabpanel"]').length, 1);
   for (let i = 0; i < 3; i++) { details.open = true; tabs[3].onclick(); assert.match(details.textContent, /Unavailable: no authorized learning-record projection/);
     tabs[3].focus(); details.onkeydown({ key: 'Escape', preventDefault() {}, stopPropagation() {} });
-    assert.equal(details.open, false); assert.equal(dom.doc.activeElement, summary); }
+    assert.equal(details.open, false); assert.equal(dom.doc.activeElement, summary);
+    details.onkeydown({ key: 'Escape', preventDefault() { assert.fail('Closed inspector trapped Escape'); }, stopPropagation() {} });
+  }
   details.open = true; tabs[0].onkeydown({ key: 'End', preventDefault() {}, stopPropagation() {} });
   assert.equal(dom.doc.activeElement, tabs[5]); assert.equal(tabs[5].getAttribute('aria-selected'), 'true');
   assert.equal(tabs.filter(b => b.tabIndex === 0).length, 1);
