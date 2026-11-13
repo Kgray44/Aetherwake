@@ -4,11 +4,13 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawn,execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {buildDocumentExtraction} from './document-extraction-build.mjs';
-import {pdfFixture,docxFixture} from '../../../block-library/tests/media-fixtures.mts';
 import {checkNativeTestLaunch} from './launch-native-test.cjs';
 const app=path.resolve(fileURLToPath(new URL('..',import.meta.url)));if(process.platform!=='win32')throw Error('native_document_smoke_requires_windows');
 checkNativeTestLaunch();
+const [{buildDocumentExtraction}, {pdfFixture,docxFixture}] = await Promise.all([
+  import('./document-extraction-build.mjs'),
+  import('../../../block-library/tests/media-fixtures.mts'),
+]);
 const guard=path.join(process.env.LOCALAPPDATA,'AeroStorageWatch/ReserveGuard.ps1');const admission=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',guard,'-EstimatedCBytes','134217728','-EstimatedDBytes','0'],{encoding:'utf8',windowsHide:true,maxBuffer:16384}));if(!admission.allowed)throw Error('document_smoke_reserve_denied');
 const root=await mkdtemp(path.join(tmpdir(),'aerynth-document-native-'));try{const built=await buildDocumentExtraction(app);await mkdir(path.join(root,'dist'));await mkdir(path.join(root,'native'));for(const [name,bytes] of Object.entries(built.outputs))await writeFile(path.join(root,'dist',name),bytes);for(const name of ['document-extraction-broker.cjs','document-extraction-smoke.cjs','document-text.html','native-test-admission.cjs'])await copyFile(path.join(app,'native',name),path.join(root,'native',name));await writeFile(path.join(root,'fixtures.json'),JSON.stringify({pdf:Buffer.from(pdfFixture()).toString('base64'),docx:Buffer.from(docxFixture()).toString('base64')}));
   const environment={...process.env};
