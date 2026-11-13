@@ -16,10 +16,10 @@ const same = (a: unknown, b: unknown) => encode(a) === encode(b);
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const exact = (v: Record<string, unknown>, keys: string[]) => Object.keys(v).sort().join(',') === keys.sort().join(',');
 const categories: Category[] = ['identity', 'preferences', 'projects', 'people', 'technical', 'decisions', 'temporary', 'conversation'];
-const certainties: Certainty[] = ['explicit-statement', 'user-preference', 'imported-summary', 'historical-observation', 'inference', 'conflicting', 'unknown'];
+const certainties: Certainty[] = ['explicit-statement', 'user-reviewed-summary', 'user-preference', 'imported-summary', 'historical-observation', 'inference', 'conflicting', 'unknown'];
 const LIMITS = Object.freeze({ imports: 64, facts: 4096, revisions: 16384, revisionsPerRecord: 128, cipherBytes: 16 * 1024 * 1024, importBytes: 256 * 1024, factBytes: 16384, contextBytes: 65536, exportBytes: 2 * 1024 * 1024 });
 export const PERSONAL_CONTEXT_LIMITS = LIMITS;
-const defaultPolicy = (): PersonalPolicy => ({ version: 0, storageEnabled: false, ordinaryEnabled: false, velaEnabled: false, sharingEnabled: false, sensitiveEnabled: false });
+export const defaultPersonalMemoryPolicy = (): PersonalPolicy => ({ version: 0, storageEnabled: false, ordinaryEnabled: false, velaEnabled: false, sharingEnabled: false, sensitiveEnabled: false });
 type Stored = OriginalImport | ReviewedFact | PersonalPolicy;
 type Kind = 'import' | 'fact' | 'policy';
 interface Head { id: string; version: number; kind: Kind; scope: PersonalScope | null; state: string }
@@ -62,10 +62,13 @@ function request(value: ContextRequest) {
 }
 const words = (v: string) => new Set(v.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu)?.filter(w => w.length >= 2).slice(0, 128) ?? []);
 
+const existingSchemaOnly = Symbol('existing personal context schema only');
+
 export class PersonalContextService {
   private opts: PersonalContextServiceOptions;
-  constructor(options: PersonalContextServiceOptions) {
+  constructor(options: PersonalContextServiceOptions, mode?: typeof existingSchemaOnly) {
     this.opts = options;
+    if (mode === existingSchemaOnly) return;
     this.tx(() => {
       options.db.exec('CREATE TABLE IF NOT EXISTS personal_context_schema(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL)');
       const row = options.db.prepare('SELECT version FROM personal_context_schema WHERE id=1').get();
@@ -76,12 +79,59 @@ export class PersonalContextService {
         CREATE TABLE IF NOT EXISTS personal_context_conversation_sources(owner TEXT NOT NULL,conversation_id TEXT NOT NULL,message_id TEXT NOT NULL,dependent TEXT NOT NULL,PRIMARY KEY(owner,conversation_id,message_id,dependent));
         CREATE INDEX IF NOT EXISTS personal_context_conversation_sources_by_fact ON personal_context_conversation_sources(owner,dependent);`);
       if (!row) options.db.prepare('INSERT INTO personal_context_schema VALUES(1,1)').run();
+      this.repairCorrectionLineage();
     });
+  }
+  /** Source-owner cleanup may run before the user has initialized memory. */
+  static eraseExistingConversationSource(options: PersonalContextServiceOptions, source: ConversationSourceRef) {
+    return new PersonalContextService(options, existingSchemaOnly).eraseConversationSource(source);
   }
   private tx<T>(work: () => T): T { return this.opts.transaction(db => { check(db === this.opts.db, 'canonical_database_connection_mismatch'); return work(); }); }
   private read<T>(work: () => T): T { return (this.opts.readTransaction ?? this.opts.transaction)(db => { check(db === this.opts.db, 'canonical_database_connection_mismatch'); return work(); }); }
   private now() { const value = this.opts.now?.() ?? new Date().toISOString(); check(typeof value === 'string' && Number.isFinite(Date.parse(value)), 'invalid_host_time'); return value; }
   private identity() { let value; try { value = this.opts.host.identity(); } catch { throw new PersonalContextError('invalid_host_identity'); } check(value && id(value.userId) && id(value.policyVersion), 'invalid_host_identity'); return value; }
+  private correctionLineageReady(owner: string): boolean {
+    const db = this.opts.db;
+    return !!(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='personal_context_lineage_repair'").get() &&
+      db.prepare('SELECT 1 FROM personal_context_lineage_repair WHERE owner=?').get(owner));
+  }
+  private repairCorrectionLineage(): void {
+    const db = this.opts.db, owner = this.identity().userId;
+    if (this.correctionLineageReady(owner)) return;
+    const rows = db.prepare(`SELECT r.id,r.version FROM personal_context_revisions r
+      JOIN personal_context_heads h ON h.owner=r.owner AND h.id=r.id
+      WHERE r.owner=? AND h.kind='fact' AND r.state='superseded' ORDER BY r.rowid LIMIT ?`).all(owner, LIMITS.revisions + 1);
+    check(rows.length <= LIMITS.revisions, 'personal_context_capacity_reached');
+    const edges = new Map<string, Set<string>>();
+    const incoming = new Map<string, number>();
+    for (const row of rows) {
+      const head = this.required(String(row.id), 'fact');
+      const previous = this.decode<ReviewedFact>(head, Number(row.version));
+      check(previous.state === 'superseded' && previous.supersededBy, 'corrupt_personal_context');
+      const target = this.head(previous.supersededBy);
+      if (!target) continue;
+      check(target.kind === 'fact', 'corrupt_personal_context');
+      const children = edges.get(head.id) ?? new Set<string>();
+      if (children.has(target.id)) continue;
+      children.add(target.id);
+      edges.set(head.id, children);
+      incoming.set(target.id, (incoming.get(target.id) ?? 0) + 1);
+    }
+    // Visit parents before descendants so a correction inherits the entire chain.
+    const ready = [...edges.keys()].filter(source => !incoming.has(source));
+    for (let index = 0; index < ready.length; index++) {
+      const source = ready[index];
+      for (const target of edges.get(source) ?? []) {
+        this.inheritErasureDependencies(owner, source, target);
+        const remaining = incoming.get(target)! - 1;
+        if (remaining) incoming.set(target, remaining);
+        else { incoming.delete(target); ready.push(target); }
+      }
+    }
+    check(incoming.size === 0, 'corrupt_personal_context');
+    db.exec('CREATE TABLE IF NOT EXISTS personal_context_lineage_repair(owner TEXT PRIMARY KEY NOT NULL)');
+    db.prepare('INSERT INTO personal_context_lineage_repair VALUES(?)').run(owner);
+  }
   private crypto() { let available = false; try { available = this.opts.crypto.available() === true; } catch {} check(available, 'private_crypto_unavailable'); }
   private authorize(operation: Operation, scopeValue: PersonalScope | null, subject: RecordRef | null = null, extra: Partial<PersonalAuthorization> = {}) {
     const who = this.identity(); let result; try { result = this.opts.host.authorize({ ...structuredClone(extra), operation, ownerId: who.userId, scope: scopeValue, subject }); } catch { throw new PersonalContextError('personal_context_not_authorized'); }
@@ -94,6 +144,9 @@ export class PersonalContextService {
   private head(idValue: string): Head | null {
     check(id(idValue), 'invalid_record_id'); const row = this.opts.db.prepare('SELECT id,kind,version,scope,state FROM personal_context_heads WHERE owner=? AND id=?').get(this.identity().userId, idValue);
     if (!row) return null;
+    return this.decodeHead(row);
+  }
+  private decodeHead(row: Record<string, unknown>): Head {
     check(['import', 'fact', 'policy'].includes(String(row.kind)) && Number.isSafeInteger(row.version) && Number(row.version) >= 1, 'corrupt_personal_context');
     const value = row.scope === null ? null : JSON.parse(String(row.scope)); if (value !== null) scope(value);
     return { id: String(row.id), kind: row.kind as Kind, version: Number(row.version), scope: value, state: String(row.state) };
@@ -144,7 +197,7 @@ export class PersonalContextService {
         this.opts.db.prepare('INSERT OR IGNORE INTO personal_context_conversation_sources VALUES(?,?,?,?)').run(owner, provenance.conversationId, provenance.messageId, valueId);
     }
   }
-  private policyValue(): PersonalPolicy { const head = this.head('policy'); return head ? this.decode<PersonalPolicy>(head) : defaultPolicy(); }
+  private policyValue(): PersonalPolicy { const head = this.head('policy'); return head ? this.decode<PersonalPolicy>(head) : defaultPersonalMemoryPolicy(); }
   policy(): PersonalPolicy { return this.read(() => { this.authorize('policy.read', null); return this.policyValue(); }); }
   setPolicy(input: { expectedVersion: number; patch: PolicyPatch }): PersonalPolicy {
     check(record(input) && exact(input, ['expectedVersion', 'patch']) && Number.isSafeInteger(input.expectedVersion) && input.expectedVersion >= 0 && record(input.patch) && Object.keys(input.patch).length > 0 && Object.entries(input.patch).every(([k, v]) => ['storageEnabled', 'ordinaryEnabled', 'velaEnabled', 'sharingEnabled', 'sensitiveEnabled'].includes(k) && typeof v === 'boolean'), 'invalid_privacy_policy');
@@ -173,6 +226,14 @@ export class PersonalContextService {
     });
   }
   /** Owner's inspectable metadata index, including retained revoked records. No private body decryption. */
+  describeFact(idValue: string): RecordRef & { state: string } {
+    return this.read(() => {
+      const head = this.required(idValue, 'fact');
+      const ref = this.ref(head);
+      this.authorize('record.list', ref.scope, ref);
+      return { ...ref, state: head.state };
+    });
+  }
   list(input: { kind: 'import' | 'fact'; after: string | null; limit: number }): { records: (RecordRef & { state: string })[]; next: string | null } {
     check(record(input) && exact(input, ['kind', 'after', 'limit']) && (input.kind === 'import' || input.kind === 'fact') && (input.after === null || id(input.after)) && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 100, 'invalid_record_list');
     return this.read(() => { const rows = this.opts.db.prepare('SELECT id FROM personal_context_heads WHERE owner=? AND kind=? AND id>? ORDER BY id LIMIT ?').all(this.identity().userId, input.kind, input.after ?? '', input.limit + 1), records: (RecordRef & { state: string })[] = [];
@@ -229,11 +290,46 @@ export class PersonalContextService {
     return { ...fields, id: previous?.id ?? randomUUID(), version: previous ? previous.version + 1 : 1, state: 'active', createdAt: previous?.createdAt ?? now, updatedAt: now, reviewedAt: now, reviewedBy: this.identity().userId, provenance, supersededBy: null };
   }
   reviewFact(input: FactDraft): ReviewedFact { draft(input); return this.tx(() => { const value = this.reviewed(input); this.put('fact', value, value.scope, value.state, 0); return value; }); }
+  private activeFact(id: string, expectedVersion: number): ReviewedFact {
+    const value = this.readable<ReviewedFact>(this.required(id, 'fact', expectedVersion));
+    check(value.state === 'active', 'personal_fact_inactive');
+    return value;
+  }
   editFact(input: { id: string; expectedVersion: number; replacement: FactDraft }): ReviewedFact {
-    draft(input.replacement); return this.tx(() => { const head = this.required(input.id, 'fact', input.expectedVersion), old = this.readable<ReviewedFact>(head), value = this.reviewed(input.replacement, old); this.put('fact', value, value.scope, value.state, old.version); return value; });
+    draft(input.replacement);
+    return this.tx(() => {
+      const old = this.activeFact(input.id, input.expectedVersion);
+      const value = this.reviewed(input.replacement, old);
+      this.put('fact', value, value.scope, value.state, old.version);
+      return value;
+    });
   }
   correctFact(input: { id: string; expectedVersion: number; replacement: FactDraft }): { previous: ReviewedFact; replacement: ReviewedFact } {
-    draft(input.replacement); return this.tx(() => { const head = this.required(input.id, 'fact', input.expectedVersion), old = this.readable<ReviewedFact>(head); this.requireCurrentConversationSource(old); this.authorize('fact.review', old.scope, this.ref(head)); const replacement = this.reviewed(input.replacement), previous: ReviewedFact = { ...old, version: old.version + 1, state: 'superseded', supersededBy: replacement.id, updatedAt: this.now() }; this.put('fact', replacement, replacement.scope, replacement.state, 0); this.put('fact', previous, previous.scope, previous.state, old.version); return { previous, replacement }; });
+    draft(input.replacement);
+    return this.tx(() => {
+      const old = this.activeFact(input.id, input.expectedVersion);
+      this.requireCurrentConversationSource(old);
+      this.authorize('fact.review', old.scope, { id: old.id, version: old.version, kind: 'fact', scope: old.scope });
+      const replacement = this.reviewed(input.replacement);
+      const previous: ReviewedFact = { ...old, version: old.version + 1, state: 'superseded', supersededBy: replacement.id, updatedAt: this.now() };
+      this.put('fact', replacement, replacement.scope, replacement.state, 0);
+      this.put('fact', previous, previous.scope, previous.state, old.version);
+      this.inheritErasureDependencies(this.identity().userId, old.id, replacement.id);
+      return { previous, replacement };
+    });
+  }
+  private inheritErasureDependencies(owner: string, previousId: string, replacementId: string) {
+    const db = this.opts.db;
+    db.prepare(`INSERT OR IGNORE INTO personal_context_conversation_sources
+      SELECT owner,conversation_id,message_id,? FROM personal_context_conversation_sources WHERE owner=? AND dependent=?`)
+      .run(replacementId, owner, previousId);
+    db.prepare(`INSERT OR IGNORE INTO personal_context_dependencies
+      SELECT owner,?,source,source_version FROM personal_context_dependencies WHERE owner=? AND dependent=?`)
+      .run(replacementId, owner, previousId);
+    const count = db.prepare(`SELECT
+      (SELECT count(*) FROM personal_context_conversation_sources WHERE owner=?) +
+      (SELECT count(*) FROM personal_context_dependencies WHERE owner=?) AS total`).get(owner, owner);
+    check(Number(count?.total) <= LIMITS.revisions * 4, 'personal_context_capacity_reached');
   }
   revoke(input: { id: string; expectedVersion: number }): RecordRef {
     return this.tx(() => { const head = this.head(input.id); check(head && head.kind !== 'policy' && head.version === input.expectedVersion, 'stale_personal_context_version'); this.authorize('record.revoke', head.scope, this.ref(head)); const old = this.decode<OriginalImport | ReviewedFact>(head), value = { ...old, version: old.version + 1, state: 'revoked' as const, updatedAt: this.now() }; this.put(head.kind, value, value.scope, value.state, old.version); return { ...this.ref(head), version: value.version }; });
@@ -252,8 +348,14 @@ export class PersonalContextService {
     return this.tx(() => {
       const owner = this.identity().userId;
       this.authorize('source.erase', null, null, { conversationSource: source });
+      const schema = this.opts.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('personal_context_schema','personal_context_heads','personal_context_revisions','personal_context_dependencies','personal_context_conversation_sources')").all();
+      if (schema.length === 0) return { deleted: [] };
+      check(schema.length === 5 && this.opts.db.prepare('SELECT version FROM personal_context_schema WHERE id=1').get()?.version === 1,
+        'unsupported_personal_context_schema');
       const rows = this.opts.db.prepare('SELECT dependent FROM personal_context_conversation_sources WHERE owner=? AND conversation_id=? AND message_id=? ORDER BY dependent')
         .all(owner, source.conversationId, source.messageId);
+      check(this.correctionLineageReady(owner) || !this.opts.db.prepare("SELECT 1 FROM personal_context_revisions WHERE owner=? AND state='superseded' LIMIT 1").get(owner),
+        'personal_context_lineage_repair_required');
       const heads = rows.map(row => this.required(String(row.dependent), 'fact'));
       return this.deleteHeads(owner, heads, source);
     });
@@ -326,7 +428,7 @@ export class PersonalContextService {
       const omit = (reason: OmissionReason, count = 1) => omissions.set(reason, (omissions.get(reason) ?? 0) + count);
       const base = (reasons = omissions) => this.seal({ contract: PERSONAL_CONTEXT_CONTRACT, id: manifestId, createdAt: created, ownerId: who.userId, hostPolicyVersion: who.policyVersion, policyVersion: policy.version, requestDigest: hash(input), trust: 'untrusted-personalization-data', scopes, items, omissions: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => a.reason.localeCompare(b.reason)) });
       const manifestId = randomUUID(), created = this.now();
-      if (!(input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled)) { omit('disabled'); const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return result; }
+      if (!policy.storageEnabled || !(input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled)) { omit('disabled'); const result = base(); check(result.encodedBytes <= input.maxBytes, 'context_budget_too_small'); return result; }
       const heads = this.opts.db.prepare("SELECT id FROM personal_context_heads WHERE owner=? AND kind='fact' ORDER BY id LIMIT ?").all(who.userId, LIMITS.facts + 1); check(heads.length <= LIMITS.facts, 'personal_context_capacity_reached');
       const query = words(input.query), candidates: { value: ReviewedFact; score: number; proofs: ScopeProof[] }[] = [], sourceCache = new Map<string, OriginalImport>(); let scanned = 0;
       for (const row of heads) {
@@ -364,7 +466,7 @@ export class PersonalContextService {
       const expectedScopes = this.requestProofs(input), sourceCache = new Map<string, OriginalImport>();
       const references: RecordRef[] = []; const seen = new Set<string>();
       for (const item of manifest.items) {
-        check(!seen.has(item.factId), 'invalid_context_item'); seen.add(item.factId); check(input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled, 'personal_disclosure_disabled');
+        check(!seen.has(item.factId), 'invalid_context_item'); seen.add(item.factId); check(policy.storageEnabled && (input.assistant === 'ordinary' ? policy.ordinaryEnabled : policy.velaEnabled), 'personal_disclosure_disabled');
         const head = this.required(item.factId, 'fact', item.version), itemProof = this.proof(head.scope!); this.authorize('record.read', head.scope, this.ref(head));
         const value = this.decode<ReviewedFact>(head); check(!this.usable(value, head, input, policy, sourceCache) && same(this.item(value), item), 'stale_personal_context'); references.push(this.ref(head));
         const required = [itemProof]; if (value.provenance.kind === 'import') { const source = this.required(value.provenance.id, 'import', value.provenance.version); references.push(this.ref(source)); required.push(this.proof(source.scope!)); }

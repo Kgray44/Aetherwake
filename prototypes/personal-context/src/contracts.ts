@@ -3,7 +3,7 @@ export const PERSONAL_CONTEXT_CONTRACT = 'aerynth.personal-context/1' as const;
 export type PersonalScope = { kind: 'user.shared' | 'assistant.ordinary' | 'assistant.vela' } | { kind: 'project' | 'conversation'; id: string };
 export interface ScopeProof { scope: PersonalScope; version: string }
 export type Category = 'identity' | 'preferences' | 'projects' | 'people' | 'technical' | 'decisions' | 'temporary' | 'conversation';
-export type Certainty = 'explicit-statement' | 'user-preference' | 'imported-summary' | 'historical-observation' | 'inference' | 'conflicting' | 'unknown';
+export type Certainty = 'explicit-statement' | 'user-reviewed-summary' | 'user-preference' | 'imported-summary' | 'historical-observation' | 'inference' | 'conflicting' | 'unknown';
 export type ConversationSourceRef = { kind: 'conversation-message'; conversationId: string; messageId: string };
 export type ReviewedConversationSource = ConversationSourceRef & { version: string; contentDigest: string };
 export type ConversationSourceProof = Omit<ConversationSourceRef, 'kind'> & {
