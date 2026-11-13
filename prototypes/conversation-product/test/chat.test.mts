@@ -45,7 +45,22 @@ test('Remember message is limited to an eligible own user message and opens nati
     actions[0].querySelector('.cp-memory-editor').fire('submit');
     await until(() => requests.length === 1);
     assert.deepEqual(requests[0], { conversationId: f.detail.conversation.resourceId, messageId: 'message:user',
+      expectedProjectId: null, expectedSourceText: 'A user message',
       text: 'A user message', scope: 'conversation', category: 'technical', keywords: ['user', 'message'] });
+    f.detail.conversation.projectId = 'project:synthetic';
+    f.detail.conversation.projectIds = ['project:synthetic'];
+    f.detail.conversation.revision++;
+    await until(() => !actions[0].querySelector('.cp-memory-editor'));
+    await chat.refresh();
+    const [projectMessageActions] = f.view.root.querySelectorAll('.cp-message-actions');
+    named(projectMessageActions, 'Remember message').fire('click');
+    const editor = projectMessageActions.querySelector('.cp-memory-editor');
+    editor.querySelector('select').value = 'project';
+    editor.fire('submit');
+    await until(() => requests.length === 2);
+    assert.deepEqual(requests[1], { conversationId: f.detail.conversation.resourceId, messageId: 'message:user',
+      expectedProjectId: 'project:synthetic', expectedSourceText: 'A user message',
+      text: 'A user message', scope: 'project', category: 'technical', keywords: ['user', 'message'] });
   } finally { await chat.dispose(); f.restore(); }
 });
 

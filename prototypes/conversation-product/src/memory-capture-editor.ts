@@ -6,13 +6,14 @@ interface EditorOptions {
   conversationId: string;
   messageId: string;
   content: string;
-  projectAvailable: boolean;
+  projectId: string | null;
   review(request: CaptureRequest): Promise<boolean>;
   report(message: string): void;
   returnFocus?(): void;
 }
 
 export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormElement {
+  const { content: expectedSourceText, projectId: expectedProjectId } = options;
   const form = document.createElement('form');
   form.className = 'cp-memory-editor';
   form.setAttribute('aria-label', 'Remember message');
@@ -37,12 +38,12 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     return input;
   };
   const text = document.createElement('textarea');
-  text.value = options.content;
+  text.value = expectedSourceText;
   text.maxLength = 4096;
   text.rows = 3;
   text.required = true;
   field('Memory', text);
-  const scope = select('Scope', options.projectAvailable
+  const scope = select('Scope', expectedProjectId !== null
     ? [['conversation', 'This conversation'], ['project', 'This project']]
     : [['conversation', 'This conversation']]);
   const category = select('Category', [['technical', 'Technical fact'], ['decisions', 'Decision'],
@@ -72,6 +73,7 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     review.disabled = cancel.disabled = true;
     const request: CaptureRequest = {
       conversationId: options.conversationId, messageId: options.messageId,
+      expectedProjectId, expectedSourceText,
       text: text.value, keywords: terms, scope: scope.value as CaptureRequest['scope'],
       category: category.value as CaptureRequest['category'],
     };
