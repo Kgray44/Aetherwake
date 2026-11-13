@@ -970,3 +970,40 @@ test('chat distinguishes a simulated memory acknowledgement from an unconfirmed 
     assert.doesNotMatch(status.textContent, /Provider acknowledged/);
   } finally { await chat?.dispose(); f.restore(); }
 });
+
+test('Remember message uses only eligible local sources and refreshes scope after a project move', async () => {
+  const f = fixture();
+  const original = f.detail.messages.items[0];
+  f.detail.messages.items.push(
+    { ...original, id: 'message:sensitive', sensitivity: 'sensitive' },
+    { ...original, id: 'message:inherited', inherited: true },
+    { ...original, id: 'message:foreign', resourceId: 'chat:foreign' },
+    { ...original, id: 'message:empty', content: '  ' },
+  );
+  let chat;
+  try {
+    chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId,
+      async onRememberMessage() { throw Error('unexpected memory submission'); } });
+    await chat.ready;
+    const row = (id: string) => f.view.root.querySelector(`[data-message-id="${id}"]`);
+    const remember = (id: string) => named(row(id), 'Remember message');
+    assert.ok(remember(original.id));
+    for (const id of ['message:sensitive', 'message:inherited', 'message:foreign', 'message:empty', 'message:assistant']) {
+      assert.ok(row(id), id);
+      assert.equal(remember(id), undefined, id);
+    }
+    remember(original.id)!.fire('click');
+    assert.ok(row(original.id).querySelector('.cp-memory-editor'));
+    f.detail.conversation.projectId = 'project:synthetic';
+    f.detail.conversation.projectIds = ['project:synthetic'];
+    f.detail.conversation.revision++;
+    await chat.refresh();
+    assert.equal(row(original.id).querySelector('.cp-memory-editor'), null);
+    remember(original.id)!.fire('click');
+    const scope = row(original.id).querySelector('.cp-memory-editor').querySelector('select');
+    assert.ok(Array.from(scope.options).some((option: any) => option.value === 'project'));
+  } finally {
+    await chat?.dispose();
+    f.restore();
+  }
+});

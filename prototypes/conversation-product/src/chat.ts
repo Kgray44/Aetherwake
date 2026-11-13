@@ -392,7 +392,14 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   messages.addEventListener('keydown',event=>{if(event.target===messages&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)){pendingFollow=pendingAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;beginTranscriptScroll();}});
   const doAction = (event: ConversationMessageAction) => { Promise.resolve(options.onMessageAction?.(event)).catch(error=>report(errorText(error))); };
   function messageNode(message: MessageView,clock:ReturnType<typeof canonicalClock>): HTMLElement {
-    const signature = JSON.stringify([message,clock]), cached = cache.get(message.id); if (cached?.signature === signature) return cached.node;
+    const remember = options.onRememberMessage;
+    const canRemember = remember && message.role === 'user' && message.provenance === 'user' &&
+      !message.inherited && message.resourceId === resourceId && ['internal', 'public'].includes(message.sensitivity) &&
+      message.content.length <= 4096 && !!message.content.trim();
+    const projectId = canRemember ? current?.conversation.projectId ?? null : null;
+    const signature = JSON.stringify([message, clock, projectId]);
+    const cached = cache.get(message.id);
+    if (cached?.signature === signature) return cached.node;
     const article = el('article', undefined, 'cp-message cp-message-'+message.role); article.dataset.messageId = message.id; article.dataset.sourceResourceId = message.resourceId;article.dataset.aerynthMotionControl='true';
     // MessageView has no per-message provider binding: never relabel old assistant output after a provider change.
     const attribution = message.role === 'user' ? 'You' : message.role === 'assistant' ? (message.provenance==='device_clock'?'Device clock':message.provenance==='mock_adapter'?'Assistant · simulated source':'Assistant') : message.role;
@@ -437,14 +444,12 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       };
       source.addEventListener('mouseup',capture);source.addEventListener('keyup',capture);publish.addEventListener('pointerdown',capture);
     }
-    const remember = options.onRememberMessage;
-    if (remember && message.role === 'user' && message.provenance === 'user' && !message.inherited &&
-        ['internal', 'public'].includes(message.sensitivity) && message.content.length <= 4096) {
+    if (canRemember) {
       const button = action('Remember message', () => {
         if (panel.querySelector('.cp-memory-editor')) return;
         const editor = createMemoryCaptureEditor({
           conversationId: resourceId, messageId: message.id, content: message.content,
-          projectAvailable: !!current?.conversation.projectId,
+          projectAvailable: projectId !== null,
           review: remember, report, returnFocus: () => button.focus(),
         });
         panel.append(editor);
