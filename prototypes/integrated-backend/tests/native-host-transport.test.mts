@@ -119,7 +119,7 @@ test("actual Backend worker supports native injection without serializing functi
     }
   }
 });
-test("actual desktop-host three-argument and opt-in processes suppress mixed/malformed native envelopes before RPC/events", async () => {
+test("actual desktop-host three-argument and opt-in processes suppress mixed/malformed native envelopes before RPC/events", { timeout: 100_000 }, async () => {
   for (const native of [false, true]) {
     const temp = temporary(),
       args = [
@@ -134,7 +134,7 @@ test("actual desktop-host three-argument and opt-in processes suppress mixed/mal
         windowsHide: true,
       });
     const exit = new Promise<void>((resolve) =>
-      child.once("exit", () => resolve()),
+      child.once("close", () => resolve()),
     );
     const replies: unknown[] = [],
       lines = createInterface({ input: child.stdout });
@@ -142,37 +142,63 @@ test("actual desktop-host three-argument and opt-in processes suppress mixed/mal
       diagnostics = 0;
     child.stderr.on("data", (chunk) => {
       diagnostics += chunk.length;
-      if (diagnostics > 65536) child.kill();
+      if (diagnostics > 65536) {
+        fail(Error("desktop_fixture_diagnostic_limit"));
+        child.kill();
+      }
     });
-    const waiting = new Map<number, (value: Record<string, unknown>) => void>();
+    const waiting = new Map<number, {
+      reply(value: Record<string, unknown>): void;
+      fail(error: Error): void;
+    }>();
+    let failure: Error | undefined;
+    const fail = (error: Error) => {
+      failure ??= error;
+      for (const pending of waiting.values()) pending.fail(failure);
+      waiting.clear();
+    };
+    child.on("error", () => fail(Error("desktop_fixture_spawn_failed")));
+    child.stdin.on("error", () => fail(Error("desktop_fixture_stdin_failed")));
+    child.once("close", (code, signal) => fail(Error(`desktop_fixture_exited:${code ?? signal}`)));
     lines.on("line", (line) => {
       bytes += Buffer.byteLength(line);
       if (bytes > 1024 * 1024) {
+        fail(Error("desktop_fixture_output_limit"));
         child.kill();
         return;
       }
-      const message = JSON.parse(line);
-      assert.equal(isNativeHostEnvelope(message), false);
+      let message;
+      try {
+        message = JSON.parse(line);
+        assert.equal(isNativeHostEnvelope(message), false);
+      } catch (error) {
+        fail(error as Error);
+        return;
+      }
       replies.push(message);
       if (typeof message.id === "number") {
-        waiting.get(message.id)?.(message);
+        waiting.get(message.id)?.reply(message);
         waiting.delete(message.id);
       }
     });
-    const call = (id: number, command: string, input: object) =>
+    const call = (id: number, command: string, input: object, timeoutMs = 5000) =>
       new Promise<Record<string, unknown>>((resolve, reject) => {
+        if (failure) { reject(failure); return; }
         const timer = setTimeout(() => {
           waiting.delete(id);
-          reject(Error("desktop_fixture_timeout"));
-        }, 5000);
-        waiting.set(id, (result) => {
-          clearTimeout(timer);
-          resolve(result);
+          reject(Error(`desktop_fixture_timeout:${native ? "native" : "legacy"}:${command}:${id}`));
+        }, timeoutMs);
+        waiting.set(id, {
+          reply(result) { clearTimeout(timer); resolve(result); },
+          fail(error) { clearTimeout(timer); reject(error); },
         });
         child.stdin.write(JSON.stringify({ id, command, input }) + "\n");
       });
-    const deadline = setTimeout(() => child.kill(), 8000);
+    const deadline = setTimeout(() => child.kill(), 45_000);
     try {
+      // Metrics are answered by the parent immediately. A successful snapshot
+      // is the readiness barrier for the actual worker and its SQLite startup.
+      assert.ok((await call(0, "snapshot", {}, 30_000)).result);
       const metric = await call(1, "metrics", {});
       assert.ok(metric.result);
       child.stdin.write(
@@ -193,6 +219,10 @@ test("actual desktop-host three-argument and opt-in processes suppress mixed/mal
       );
       const snapshot = await call(2, "snapshot", {});
       assert.ok(snapshot.result);
+      await call(3, "close", {});
+      await exit;
+      assert.equal(child.exitCode, 0);
+      assert.equal(failure?.message, "desktop_fixture_exited:0");
       assert.ok(
         !replies.some(
           (value) =>
@@ -201,8 +231,6 @@ test("actual desktop-host three-argument and opt-in processes suppress mixed/mal
         ),
       );
       assert.ok(!JSON.stringify(replies).includes(marker));
-      await call(3, "close", {});
-      await exit;
     } finally {
       clearTimeout(deadline);
       child.stdin.end();
