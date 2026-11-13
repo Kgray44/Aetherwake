@@ -1,4 +1,5 @@
 import type { ConversationProductPort, ConversationView, ConversationViewPosition, Detail, MessageView } from './contracts.ts';
+import { createMemoryCaptureEditor, type MemoryCaptureRequest } from './memory-capture-editor.ts';
 import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-session.ts';
 import { renderMarkdown } from './markdown.ts';
@@ -52,6 +53,7 @@ export interface ConversationModelControls {
   selections: Map<string, { id: string; label: string }>;
 }
 export interface ConversationChatOptions {
+  onRememberMessage?: (request: MemoryCaptureRequest) => Promise<boolean>;
   port: ConversationProductPort; resourceId: string;
   presentation?: ConversationChatPresentation;
   /** Externally sized ancestor (for example the canonical folio), never an auto-sized chat/content node. */
@@ -125,6 +127,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   composer.dataset.aerynthMotionControl='true';
   textarea.setAttribute('aria-label', 'Message'); textarea.placeholder = 'Ask anything, or share an idea'; textarea.rows = 2;
   send.type = 'submit'; send.setAttribute('aria-label', 'Send message'); stop.type = 'button'; stop.hidden = true; web.type = 'submit'; web.hidden = true; web.title = 'Search the public web using only this message'; web.setAttribute('aria-label', web.title); tools.append(hint, stop, send, web); composer.append(textarea, tools);providerSlot.append(provider);provider.classList.add('cp-chat-provider-label');
+  const sendWithMemory = el('button', 'Send with memory');
+  sendWithMemory.type = 'submit';
+  sendWithMemory.hidden = true;
+  decorateConversationControl(sendWithMemory, { identity: 'action', emphasis: 'secondary' });
+  tools.append(sendWithMemory);
   decorateConversationControl(send,{identity:'send',emphasis:'primary'});decorateConversationControl(stop,{identity:'stop',emphasis:'secondary'});decorateConversationControl(web,{identity:'search',emphasis:'secondary'});tools.dataset.cpGroup='composer';tools.setAttribute('role','group');tools.setAttribute('aria-label','Message controls');
   const capabilityNote=el('p','','cp-capability-note'),contextNote=el('p','','cp-context-note'),draftStatus = el('p', '', 'cp-draft-status'), recovery = el('div', undefined, 'cp-draft-recovery'); draftStatus.setAttribute('role', 'status');
   const recoveryDetails = el('details', undefined, 'cp-draft-conflict'), recoverySummary = el('summary', 'Review draft conflict'), localText = el('pre'), storedText = el('pre');
@@ -140,6 +147,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
   let sendTask: Promise<void>|null = null, cancelPending = false, streamLimited = false, accessRevoked = false;
   let pendingFollow:{messageId?:string}|null=null;
+  let followingLatest=false;
   let pendingAnchor:NonNullable<ConversationViewPosition['anchor']>|null=null,viewIntent=0,viewWanted=false,userScroll=false,preferredViewAnchor:string|undefined,persistenceIntent:number|undefined;
   let presentationAnchor: NonNullable<ConversationViewPosition['anchor']> | null = null;
   const tracksView=!!(options.viewPersistence||options.initialView);
@@ -170,6 +178,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const catalog = ordinaryPlan()?.modelOptions ?? [];
     const selected = options.models?.selections.get(resourceId);
     return selected ? catalog.find(item => item.id === selected.id) : catalog[0];
+  };
+  const webSearchModel = () => {
+    const selected = effectiveModel();
+    // A pinned model or a one-turn thinking choice binds the current draft.
+    if (options.models?.selections.has(resourceId) || thinking)
+      return selected?.eligibleTools?.includes('web_search') ? selected : undefined;
+    return ordinaryPlan()?.modelOptions?.find(model => model.eligibleTools?.includes('web_search'));
   };
   if(options.motion&&options.onProviderChange){provider.hidden=true;providerPicker=mountConversationPicker(providerSlot,{motion:options.motion,viewId:options.viewId!+':provider',label:'Conversation provider',identity:'providers',async onSelect(targetProviderId){
     const before=current;if(!before||accessRevoked||sending||active()||before.conversation.state==='archived')return;
@@ -259,7 +274,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       resizeFrame=undefined;resizeTimer=undefined;
       if(options.deferHostResize?.()===true){layoutDeferred=true;return;}
       resize();
-      if(!layoutDeferred){drainPendingFollow();drainAnchor();}
+      if(!layoutDeferred){
+        if(followingLatest&&!pendingFollow&&!pendingAnchor&&!presentationAnchor&&!feedbackOpen&&stream.hidden)
+          followLatestContent(current?.messages.items.at(-1)?.id);
+        drainPendingFollow();drainAnchor();
+      }
     };
     if(typeof requestAnimationFrame==='function')resizeFrame=requestAnimationFrame(reconcile);else resizeTimer=setTimeout(reconcile,0);
   };
@@ -271,6 +290,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   });
   if(layoutHost)resizeObserver?.observe(layoutHost);
   function revokeView() {
+    followingLatest=false;
     const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=pendingAnchor=presentationAnchor=null;viewWanted=userScroll=false;inspectionFollow=liveFollow=false;inspectionReturn=null;root.dataset.resourceAvailable='false';current=null;thinking=undefined;cache.clear();days.clear();messages.replaceChildren(stream,feedbackBody);
     streamText.textContent='';stream.hidden=true;paging.hidden=true;capabilityNote.textContent=contextNote.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;
     renderDraft();if(notify)options.onUnavailable?.();report('This conversation is no longer available. Its draft is retained.');
@@ -327,7 +347,9 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
     checkOutcome.disabled = recovering;
     send.disabled = sending || !!active() || codexOutcomeUnknown || uncertain || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
-    web.hidden = !plan?.execute || !selectedModel?.eligibleTools?.includes('web_search');
+    web.hidden = !plan?.execute || !webSearchModel();
+    sendWithMemory.hidden = !options.onRememberMessage || !plan?.execute;
+    sendWithMemory.disabled = send.disabled;
     web.disabled = send.disabled || web.hidden || !plan?.available;
     send.dataset.state=uncertain?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=cancelPending?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = cancelPending || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
@@ -361,6 +383,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   textarea.addEventListener('keydown', event => { if (!composing && composerShouldSubmit(event)) { event.preventDefault(); if (!send.disabled) composer.requestSubmit(); } });
   messages.addEventListener('scroll',()=>{if(userScroll)markViewIntent();viewState();},{passive:true});
   const beginTranscriptScroll = () => {
+    followingLatest = false;
     presentationAnchor = null;
     userScroll = true;
     if (tracksView) viewIntent++;
@@ -414,11 +437,25 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       };
       source.addEventListener('mouseup',capture);source.addEventListener('keyup',capture);publish.addEventListener('pointerdown',capture);
     }
+    const remember = options.onRememberMessage;
+    if (remember && message.role === 'user' && message.provenance === 'user' && !message.inherited &&
+        ['internal', 'public'].includes(message.sensitivity) && message.content.length <= 4096) {
+      const button = action('Remember message', () => {
+        if (panel.querySelector('.cp-memory-editor')) return;
+        const editor = createMemoryCaptureEditor({
+          conversationId: resourceId, messageId: message.id, content: message.content,
+          projectAvailable: !!current?.conversation.projectId,
+          review: remember, report, returnFocus: () => button.focus(),
+        });
+        panel.append(editor);
+        editor.querySelector('textarea')?.focus();
+      });
+    }
     article.append(by,content,actions); cache.set(message.id,{signature,node:article});return article;
   }
   function followLatestContent(messageId?:string):boolean {
     const viewport=messages.getBoundingClientRect();if(messages.clientHeight<=0||viewport.height<=0)return false;
-    if(presentation!=='workspace'&&!messageId){setScroll(messages.scrollHeight);return true;}
+    if(presentation!=='workspace'&&!messageId){followingLatest=true;setScroll(messages.scrollHeight);return true;}
     const content=messageId?messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`)?.querySelector<HTMLElement>('.cp-message-content'):[...messages.querySelectorAll<HTMLElement>('.cp-message-content')].at(-1);if(!content)return !messageId&&current?.messages.items.length===0;
     const box=content.getBoundingClientRect(),scale=viewport.height/(messages.offsetHeight||messages.clientHeight);
     if(!Number.isFinite(scale)||scale<=0||box.height<=0)return false;
@@ -426,6 +463,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     // that footer in a short card. Move this scroller alone to the canonical content's end.
     const bottom=viewport.top+((messages.clientTop||0)+messages.clientHeight)*scale;
     setScroll(Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(box.bottom-bottom)/scale)));
+    followingLatest=true;
     return true;
   }
   function drainPendingFollow(){if(pendingFollow&&followLatestContent(pendingFollow.messageId))pendingFollow=null;}
@@ -449,8 +487,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   function drainAnchor(){
     if (pendingAnchor && alignReadingAnchor(pendingAnchor)) pendingAnchor = null;
   }
-  function render(detail: Detail, around?:string,followMessageId?:string,restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>) {
-    const nearBottom = messages.scrollHeight-messages.scrollTop-messages.clientHeight < 80, scroll = messages.scrollTop;
+  function render(detail: Detail, around?:string,followMessageId?:string,restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>,preserveReading=false) {
+    const nearBottom = !preserveReading && messages.scrollHeight-messages.scrollTop-messages.clientHeight < 80, scroll = messages.scrollTop;
     userScroll=false;
     if (current?.conversation.providerId !== detail.conversation.providerId) thinking = undefined;
     current=detail; const nodes:HTMLElement[]=[],formats={parts:new Intl.DateTimeFormat('en-CA',{year:'numeric',month:'2-digit',day:'2-digit'}),day:new Intl.DateTimeFormat(undefined,{year:'numeric',month:'long',day:'numeric'}),time:new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'})};let previousDay:string|undefined;
@@ -472,13 +510,19 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const attached=detail.shares.filter(s=>s.attached&&s.status==='current').length;contextNote.textContent=attached?`${attached} source excerpt${attached===1?'':'s'} attached for send review. Attachment is not proof of model supply.`:'';
     const before=el('button','Earlier messages'),after=el('button','Later messages');before.type=after.type='button';before.disabled=detail.messages.offset===0;after.disabled=!detail.messages.hasMore;
     decorateConversationControl(before,{identity:'previous'});decorateConversationControl(after,{identity:'next'});paging.dataset.cpGroup='transcript-navigation';
-    const movedPage=()=>{markViewIntent();viewState();};before.addEventListener('click',()=>{offset=Math.max(0,detail.messages.offset-50);void refresh().then(movedPage).catch(error=>report(errorText(error)));});after.addEventListener('click',()=>{offset=detail.messages.offset+50;void refresh().then(movedPage).catch(error=>report(errorText(error)));});
+    const movePage=(nextOffset:number)=>{
+      followingLatest=false;pendingFollow=pendingAnchor=presentationAnchor=null;
+      offset=nextOffset;
+      void refresh({preserveReading:true}).then(()=>{markViewIntent();viewState();}).catch(error=>report(errorText(error)));
+    };
+    before.addEventListener('click',()=>movePage(Math.max(0,detail.messages.offset-50)));
+    after.addEventListener('click',()=>movePage(detail.messages.offset+50));
     paging.replaceChildren(before,el('span',`${detail.messages.total?detail.messages.offset+1:0}–${detail.messages.offset+detail.messages.items.length} of ${detail.messages.total}`),after);paging.hidden=detail.messages.total<=detail.messages.limit;
     disclosures?.sync();renderDraft();options.onDetail?.(detail);
     if (restoreAnchor || followMessageId || around) presentationAnchor = null;
-    if(restoreAnchor){pendingFollow=null;pendingAnchor=restoreAnchor;drainAnchor();}
+    if(restoreAnchor){followingLatest=false;pendingFollow=null;pendingAnchor=restoreAnchor;drainAnchor();}
     else if(followMessageId){pendingAnchor=null;pendingFollow={messageId:followMessageId};drainPendingFollow();}
-    else if(around){pendingFollow=pendingAnchor=null;messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(around)}"]`)?.scrollIntoView({block:'center'});markViewIntent(around);viewState();}
+    else if(around){followingLatest=false;pendingFollow=pendingAnchor=null;messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(around)}"]`)?.scrollIntoView({block:'center'});markViewIntent(around);viewState();}
     else if(pendingAnchor&&detail.messages.items.some(item=>item.id===pendingAnchor?.messageId))drainAnchor();
     else {
       pendingAnchor = null;
@@ -486,11 +530,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       else if (!presentationAnchor || !alignReadingAnchor(presentationAnchor)) {
         presentationAnchor = null;
         if (nearBottom) followLatestContent();
-        else setScroll(scroll);
+        else {followingLatest=false;setScroll(scroll);}
       }
     }
   }
-  async function refresh(input: {aroundMessageId?:string;latest?:boolean;followMessageId?:string;restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>;restoreIntent?:number}={}) {
+  async function refresh(input: {aroundMessageId?:string;latest?:boolean;followMessageId?:string;restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>;restoreIntent?:number;preserveReading?:boolean}={}) {
     const request=++generation;
     const around=input.followMessageId??input.aroundMessageId??input.restoreAnchor?.messageId;
     let d: Detail;
@@ -500,14 +544,16 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(input.restoreAnchor&&input.restoreIntent!==viewIntent){await refresh({latest:true});return;}
     // Opening uses a bounded page, then fetches the actual latest page when count was not known.
     if((offset===undefined||input.latest)&&!around&&d.messages.hasMore){offset=Math.max(0,d.conversation.messageCount-50);await refresh();return;}
-    accessRevoked=false;root.dataset.resourceAvailable='true';offset=d.messages.offset;render(d,input.aroundMessageId,input.followMessageId,input.restoreAnchor);
+    accessRevoked=false;root.dataset.resourceAvailable='true';offset=d.messages.offset;render(d,input.aroundMessageId,input.followMessageId,input.restoreAnchor,input.preserveReading);
   }
   composer.addEventListener('submit',event=>{
     event.preventDefault();
     const webSearch = event.submitter === web;
-    if (send.disabled || !current || webSearch && web.disabled) return;
+    const useMemory = event.submitter === sendWithMemory;
+    if (send.disabled || !current || webSearch && web.disabled || useMemory && sendWithMemory.hidden) return;
     const before = current, content = textarea.value, commandId = crypto.randomUUID();
-    const plan = ordinaryPlan(), selectedModel = effectiveModel();
+    const plan = ordinaryPlan(), selectedModel = webSearch ? webSearchModel() : effectiveModel();
+    if (webSearch && !selectedModel) return;
     const reasoningEffort = plan ? thinking?.effort : undefined;
     if (reasoningEffort !== undefined && (selectedModel?.id !== thinking?.modelId ||
         !selectedModel?.reasoningEfforts?.includes(reasoningEffort))) {
@@ -523,7 +569,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
       if (reasoningEffort !== undefined) thinking = undefined;
-      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{})});
+      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{}),...(useMemory?{useMemory:true}:{})});
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
       const receipt = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
@@ -552,6 +598,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     })().catch(error=>{
       const code = errorText(error);
       if (code === 'authorization_cancelled') report('Send cancelled. Your saved draft was retained.');
+      else if (code === 'personal_memory_search_incomplete') report('Memory search reached its limit. Try a more specific query or include the original message reference. Your draft is still here.');
       else if (code === 'unsupported_model') report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');
       else if (code === 'unsupported_reasoning_effort') report('This model cannot use the requested thinking level. Your draft is still here.');
       else if (code === 'unsupported_web_search_model') report('This model cannot use web search. Your draft is still here.');
@@ -591,6 +638,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(streamText.textContent!==previousPreview&&wasFollowing&&!feedbackOpen&&!stream.hidden){presentationAnchor=null;liveFollow=true;options.motion?.wake();}
     const label=current?.providers.find(p=>p.id===next.providerId)?.label??next.providerId;
     report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
+    if (next.memoryDisclosure) report(status.textContent + (next.memoryDisclosure.state === 'simulated'
+      ? ' · Simulated saved-memory delivery.' : ' · Provider acknowledged the reviewed request with saved memory.'));
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
     if(!active())void refresh({latest:true}).catch(error=>report(errorText(error)));
   });
@@ -602,7 +651,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     else await refresh(options.initialAroundMessageId?{aroundMessageId:options.initialAroundMessageId}:{});
     if(disposed)return;resize();
     if(intent===viewIntent){const snapshot=session.snapshot(),selection=view?.selection;if(selection&&snapshot.phase==='clean'&&snapshot.version===selection.draftVersion&&snapshot.content===textarea.value&&selection.end<=textarea.value.length)textarea.setSelectionRange(selection.start,selection.end,selection.direction);
-      if(options.initialScroll!==undefined&&!options.initialAroundMessageId){pendingFollow=pendingAnchor=null;setScroll(options.initialScroll);}else if(anchor)drainAnchor();else if(!options.initialAroundMessageId){pendingFollow={};drainPendingFollow();}}
+      if(options.initialScroll!==undefined&&!options.initialAroundMessageId){followingLatest=false;pendingFollow=pendingAnchor=null;setScroll(options.initialScroll);}else if(anchor)drainAnchor();else if(!options.initialAroundMessageId){pendingFollow={};drainPendingFollow();}}
   })().catch(error=>{report(errorText(error));throw error;});
   root.addEventListener('keydown',event=>{if(event.key!=='Escape')return;const details=(event.target as HTMLElement).closest<HTMLDetailsElement>('details[open]');if(details&&root.contains(details)){event.preventDefault();event.stopPropagation();details.open=false;details.querySelector('summary')?.focus();}});
   // The send RPC can remain pending through the entire native provider turn. Draft durability

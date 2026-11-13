@@ -1,3 +1,4 @@
+import type { MemoryCaptureRequest } from './memory-capture-editor.ts';
 import type { BranchPolicy, Collection, ConversationProductPort, ConversationSummary, ConversationView, Detail, FidelityStatus, NativeChatGPTFidelityDescriptor, ProductCommandMap, SearchHit, SearchQuery, Share } from './contracts.ts';
 import { ConversationDraftSession, flushConversationDraftSessions } from './draft-session.ts';
 import { mountConversationChat, decorateConversationControl, decorateConversationDisclosure, type ConversationChat, type ConversationExecutionPort, type ConversationControlIdentity, type ConversationControlPresentation, type ConversationProviderChange, type ConversationModelControls } from './chat.ts';
@@ -44,7 +45,8 @@ const renderChatGPTCompatibility=(report:NativeChatGPTFidelityDescriptor,onOpenE
 };
 
 /** Temporary surface: the host decides placement, focus transition, and shared Motion Coordinator. */
-export function mountConversationManager(container: HTMLElement, port: ConversationProductPort, options: ManagerOptions = {}) {
+export function mountConversationManager(container: HTMLElement, port: ConversationProductPort,
+  options: ManagerOptions & { onRememberMessage?: (request: MemoryCaptureRequest) => Promise<boolean>; memoryView?: HTMLElement } = {}) {
  if(options.motion&&!options.viewId?.trim())throw new Error('conversation_motion_identity_required');
  const state=options.state??createManagerState();if(options.resourceId)state.selectedResourceId=options.resourceId;
  const root=el('section',undefined,'cp-manager aw-optical-controls'+(options.embedded===false?' cp-standalone':' cp-embedded'));root.dataset.awOptics='workspace';root.setAttribute('role','region');root.setAttribute('aria-label','Conversations');
@@ -57,6 +59,11 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const switchQuery=el('input'),switchMode=select([{value:'recent',label:'Recent chats'},{value:'favorite',label:'Favorites'},{value:'running',label:'Running chats'}]),switchStatus=el('p','', 'cp-switcher-status'),switchResults=el('div',undefined,'cp-switcher-results');switchQuery.type='search';switchQuery.placeholder='Find a conversation';switchQuery.maxLength=1000;switchQuery.setAttribute('aria-label','Find a conversation to switch to');switchMode.setAttribute('aria-label','Quick conversation group');switchStatus.setAttribute('role','status');switcher.panel.append(switchQuery,switchMode,switchStatus,switchResults);
  const toolbar=el('div',undefined,'cp-toolbar'),query=el('input'),project=el('select'),collection=el('select'),archive=select([{value:'active',label:'Active'},{value:'archived',label:'Archived'}],state.query.archived?'archived':'active'),favorite=el('input');
  const sort=select([{value:'activity',label:'Recent activity'},{value:'created',label:'Newest created'},{value:'title',label:'Title'},{value:'active',label:'Running first'}],state.query.sort??'activity'),searchMode=select([{value:'all',label:'All matches'},{value:'conversations',label:'Conversations'},{value:'messages',label:'Messages'},{value:'resources',label:'Resources'}],state.query.searchMode??'all');sort.setAttribute('aria-label','Sort conversations');searchMode.setAttribute('aria-label','Search result type');
+ if (options.memoryView) {
+   const memories = disclosure('Saved memories', 'cp-memory');
+   memories.panel.append(options.memoryView);
+   headerActions.insertBefore(memories.node, close);
+ }
  query.type='search';query.placeholder='Search chats';query.value=state.query.text??'';query.setAttribute('aria-label','Search conversation history');favorite.type='checkbox';favorite.checked=!!state.query.favorite;
  const clearSearch=button('Clear history search',()=>{clearTimeout(searchTimer);query.value='';filter();query.focus();},{identity:'clear-search'});clearSearch.hidden=!query.value;query.dataset.cpControl='search';clearSearch.setAttribute('aria-label','Clear history search');
  const filters=disclosure('Filters','cp-filters');filters.panel.append(field('Project',project),field('Folder or collection',collection),field('History',archive),field('Favorites',favorite),field('Search result type',searchMode));toolbar.dataset.cpGroup='search';toolbar.append(query,clearSearch,sort,filters.node);
@@ -124,6 +131,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   const initialView=restoredView?.resourceId===resourceId?restoredView:undefined;restoredView=null;
   chatResource=resourceId;chat=mountConversationChat(chatHost,{port,resourceId,draftSession:session,execution:options.execution,copy:options.copy,motion:options.motion,models:options.models,viewId:options.viewId?options.viewId+':chat:'+resourceId:undefined,onProviderChange:requestProviderChange,initialScroll:options.viewPersistence?undefined:state.scroll[resourceId],initialOffset:options.viewPersistence?undefined:state.messageOffset[resourceId],viewPersistence:options.viewPersistence,initialView,initialAroundMessageId:aroundMessageId,
    onViewState:view=>{state.drafts[view.resourceId]=view.content;state.scroll[view.resourceId]=view.scroll;state.messageOffset[view.resourceId]=view.offset;save();},onDetail:renderDetail,onUnavailable:()=>{current=null;detailHeader.replaceChildren();secondary.replaceChildren();extras.open=false;},onChanged:refresh,
+   onRememberMessage:options.onRememberMessage,
    onMessageAction:async event=>{if(event.action==='source'){options.onResource?.(event.message.resourceId,event.message.id);return;}if(event.action==='branch'){if(current)showBranch(current,event.message.id);return;}
     const selection=event.selection;if(!selection||event.message.content.slice(selection.start,selection.end)!==selection.text)throw new Error('Select a current source excerpt');
     await run(async()=>{await call('publish',{sourceResourceId:event.message.resourceId,sourceMessageId:event.message.id,range:{start:selection.start,end:selection.end},evidence:'excerpt'});status.textContent='Excerpt published for authorized branch discovery';await loadDetail();});
@@ -153,9 +161,65 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   resultCount.textContent=query.value?`${list.total} matching locations · ${groups.size} conversations on this page`:`${groups.size}${list.hasMore?' shown':''} conversations${resources.length?' · resources available':''}`;
  };
  const readMatches=async(scope:SearchQuery):Promise<ProductCommandMap['search']['output']>=>{const request={...scope,offset:scope.offset??0,limit:50};if(!scope.text?.trim()&&!scope.collectionId&&(!scope.searchMode||['all','conversations'].includes(scope.searchMode))){const page=await call('list',request);return {...page,items:page.items.map(summary=>({kind:'conversation' as const,resourceId:summary.resourceId,title:summary.title,excerpt:'',providerId:summary.providerId,summary,sourceTime:summary.lastActivityAt??undefined}))};}return call('search',{...request,searchMode:scope.searchMode??'all'});};
- const loadSwitcher=async()=>{const generation=++switchGeneration;switchLoading=true;switchStatus.textContent='Finding conversations…';try{const page=await call('list',{...(state.query.projectId!==undefined?{projectId:state.query.projectId}:{}),...(switchMode.value==='favorite'?{favorite:true}:{}),...(switchQuery.value?{text:switchQuery.value}:{}),sort:switchMode.value==='running'?'active':'activity',limit:12});if(disposed||generation!==switchGeneration||!switcher.node.open)return;const items=page.items.filter(item=>switchMode.value!=='running'||item.execution&&['dispatching','running'].includes(item.execution.state)),rows=items.map(item=>{const row=button(item.title,()=>{switcher.node.open=false;return requestOpen(item.resourceId);},{identity:'history-result'});row.dataset.resourceId=item.resourceId;row.setAttribute('aria-current',String(item.resourceId===state.selectedResourceId));row.title=[item.favorite?'Favorite':'',providerLabels.get(item.providerId)??item.providerId,item.execution?.state??''].filter(Boolean).join(' · ');row.setAttribute('aria-description',row.title);return row;});for(const [index,row]of rows.entries())row.addEventListener('keydown',event=>{if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();rows[Math.max(0,Math.min(rows.length-1,index+(event.key==='ArrowDown'?1:-1)))].focus();}});switchResults.replaceChildren(...rows);switchStatus.textContent=items.length?`${items.length} conversations${page.hasMore?' · more in library':''}`:'No conversations in this group.';}catch(error){if(!disposed&&generation===switchGeneration){switchResults.replaceChildren();switchStatus.textContent=error instanceof Error?error.message:String(error);}}finally{if(generation===switchGeneration)switchLoading=false;}};
+ const invalidateSwitcher=()=>{
+  clearTimeout(switchTimer);
+  switchResults.replaceChildren();
+  switchStatus.textContent='Finding conversations…';
+  return ++switchGeneration;
+ };
+ const loadSwitcher=async()=>{
+  const generation=invalidateSwitcher(),text=switchQuery.value.trim(),mode=switchMode.value;
+  const stillCurrent=()=>!disposed&&!closing&&generation===switchGeneration&&switcher.node.open;
+  const scope:SearchQuery={projectId:state.query.projectId,...(mode==='favorite'?{favorite:true}:{}),sort:mode==='running'?'active':'activity',limit:12};
+  switchLoading=true;
+  try{
+   // The Running group uses the canonical execution summary from the list projection.
+   const exact=!!text&&mode!=='running';
+   const page=exact?await call('search',{...scope,text,searchMode:'all'}):await call('list',{...scope,...(text?{text}:{})});
+   if(!stillCurrent())return;
+   const hits:SearchHit[]=(page.items as (SearchHit|ConversationSummary)[]).flatMap(item=>{
+    if('kind' in item)return item.kind==='resource'?[]:[item];
+    if(mode==='running'&&item.execution?.state!=='dispatching'&&item.execution?.state!=='running')return [];
+    return [{kind:'conversation',resourceId:item.resourceId,title:item.title,excerpt:'',summary:item,providerId:item.providerId}];
+   });
+   const rows=hits.map(hit=>{
+    const row=button(hit.title,()=>{
+     if(!stillCurrent())return;
+     switcher.node.open=false;
+     return requestOpen(hit.resourceId,hit.messageId);
+    },{identity:'history-result'});
+    row.dataset.resourceId=hit.resourceId;
+    if(hit.messageId){
+     row.dataset.messageId=hit.messageId;
+     row.append(el('span',hit.excerpt,'cp-switcher-excerpt'));
+    }
+    row.setAttribute('aria-current',String(hit.resourceId===state.selectedResourceId&&(!hit.messageId||hit.messageId===selectedMessageId)));
+    const providerId=hit.summary?.providerId??hit.providerId;
+    row.title=[hit.summary?.favorite?'Favorite':'',providerId?(providerLabels.get(providerId)??providerId):'',hit.summary?.execution?.state??''].filter(Boolean).join(' · ');
+    row.setAttribute('aria-description',row.title);
+    return row;
+   });
+   for(const [index,row]of rows.entries())row.addEventListener('keydown',event=>{
+    if(event.key!=='ArrowDown'&&event.key!=='ArrowUp')return;
+    event.preventDefault();
+    if(index===0&&event.key==='ArrowUp')switchQuery.focus();
+    else rows[Math.min(rows.length-1,index+(event.key==='ArrowDown'?1:-1))].focus();
+   });
+   switchResults.replaceChildren(...rows);
+   switchStatus.textContent=rows.length?`${rows.length} ${exact?'matches':'conversations'}${page.hasMore?' · more in history':''}`:text?'No matches in this group.':'No conversations in this group.';
+  }catch(error){if(stillCurrent())switchStatus.textContent=error instanceof Error?error.message:String(error);}
+  finally{if(generation===switchGeneration)switchLoading=false;}
+ };
  const openSwitcher=()=>{if(disposed)return Promise.reject(new Error('conversation_manager_closed'));switcher.node.open=true;switchQuery.focus();return loadSwitcher();};
- switcher.node.addEventListener('toggle',()=>{if(switcher.node.open){switchQuery.focus();if(!switchLoading)void loadSwitcher();}else{switchGeneration++;switchLoading=false;clearTimeout(switchTimer);}});switchQuery.addEventListener('input',()=>{switchGeneration++;clearTimeout(switchTimer);switchTimer=setTimeout(()=>void loadSwitcher(),120);});switchMode.addEventListener('change',()=>void loadSwitcher());switchQuery.addEventListener('keydown',event=>{if(event.key==='ArrowDown'){event.preventDefault();switchResults.querySelector('button')?.focus();}});
+ switcher.node.addEventListener('toggle',()=>{if(switcher.node.open){switchQuery.focus();if(!switchLoading)void loadSwitcher();}else{switchGeneration++;switchLoading=false;clearTimeout(switchTimer);}});
+ switchQuery.addEventListener('input',()=>{invalidateSwitcher();switchTimer=setTimeout(()=>void loadSwitcher(),120);});
+ switchMode.addEventListener('change',()=>void loadSwitcher());
+ switchQuery.addEventListener('keydown',event=>{
+  if(event.isComposing||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
+  const first=switchResults.querySelector('button');
+  if(event.key==='ArrowDown'){event.preventDefault();first?.focus();}
+  if(event.key==='Enter'&&first){event.preventDefault();first.click();}
+ });
  const renderBranchNavigator=(d:Detail)=>{
   const view=disclosure('Branch lineage','cp-branch-navigator');view.node.dataset.resourceId=d.conversation.resourceId;let generation=0;
   view.node.addEventListener('toggle',()=>{if(!view.node.open){generation++;return;}const token=++generation;view.panel.replaceChildren(el('p',d.lineage.length?'Loading branch family…':'No linked branches.'));

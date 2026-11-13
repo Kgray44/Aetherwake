@@ -1,5 +1,7 @@
 # M0–M8 implementation roadmap (proposed)
 
+> **Historical record, navigation notice added 2026-11-12.** The pending-charter language and baseline tooling observations below belong to November 1. The later Fluid Intelligence roadmap overlays this plan; neither roadmap certifies milestone completion. See the [documentation index](../../docs/README.md) for later source checkpoints and the current governance registry. Original evidence below is unchanged.
+
 Status: implementation plan, 2026-11-01. **No milestone is claimed complete.** This follows the recommended order and minimum demonstrations in [Engineering and Delivery §5](../../governance/16-ENGINEERING-AND-DELIVERY.md); milestones may overlap at explicit seams. The [Constitution](../../governance/00-AETHERWAKE-CONSTITUTION.md) is established. All specialist charter references below are to **published drafts pending owner acceptance** in the [registry](../../governance/README.md). This plan cannot ratify them. Dates and staffing are deliberately uncommitted; estimate after M0 experiments and real M2 protocol proof. Read with the [reference architecture](../../docs/architecture/REFERENCE-ARCHITECTURE-v0.1.md), [contracts](../../docs/specifications/PROVISIONAL-INTERFACE-CONTRACTS-v0.1.md), [ADR queue](../../docs/decisions/ADR-QUEUE-FOUNDATIONS.md) and [next-cycle work packages](../tasks/NEXT-CYCLE-WORK-PACKAGES.md).
 
 ## Program rules and critical path
