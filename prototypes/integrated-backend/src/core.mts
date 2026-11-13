@@ -6250,10 +6250,14 @@ export class BackendCore {
   }
   private gid(resourceId: string) { ensure(typeof resourceId === 'string' && Object.hasOwn(this.state.resources, resourceId), 'resource_not_found'); return this.state.resources[resourceId]; }
   private publicId(graphId: string) { const id = Object.keys(this.state.resources).find(id => this.state.resources[id] === graphId); ensure(id, 'resource_not_found'); return id; }
-  private once<T>(commandId: string, input: unknown, fn: () => T): T {
+  private once<T>(commandId: string, input: unknown, fn: () => T, authorizeReplay?: (result: T) => void): T {
     ensure(typeof commandId === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,198}$/.test(commandId), 'invalid_command_id');
     const fingerprint = hash(input), previous = Object.hasOwn(this.state.receipts, commandId) ? this.state.receipts[commandId] : undefined;
-    if (previous) { ensure(previous.fingerprint === fingerprint, 'idempotency_conflict'); return structuredClone(previous.result); }
+    if (previous) {
+      ensure(previous.fingerprint === fingerprint, 'idempotency_conflict');
+      authorizeReplay?.(previous.result);
+      return structuredClone(previous.result);
+    }
     const result = fn(); this.state.receipts[commandId] = { fingerprint, result }; return result;
   }
   private conv(resourceId: string) {
@@ -7176,7 +7180,9 @@ export class BackendCore {
         const m = this.graph.addMessage(this.gid(a.resourceId), a.role, a.content, { sensitivity: a.sensitivity });
         this.state.revisions[a.resourceId]++; return { ...m, resourceId: a.resourceId, revision: this.state.revisions[a.resourceId] };
         };
-        return this.atomic(() => a.commandId ? this.once(a.commandId, {name, ...a}, append) : append()) as any;
+        return this.atomic(() => a.commandId ? this.once(a.commandId, {name, ...a}, append, message => {
+          ensure(this.conversationAccess.access(a.resourceId, message.id), 'source_unavailable');
+        }) : append()) as any;
       }
       case 'workspace': return this.atomic(() => { const p = a.projectTitle ? this.kernel.createProject(a.projectTitle) : null; return this.kernel.createWorkspace(a.title, p?.id ?? null); }) as any;
       case 'openWorkspace': return this.kernel.openWorkspace(a.workspaceId) as any;
@@ -7202,6 +7208,9 @@ export class BackendCore {
         const review: HandoffReview = { id: result.handoff.id, resourceId: resource.id, sourceResourceId: a.resourceId, targetProviderId: a.providerId, sourceRevision, fingerprint, estimatedTokens, estimator: 'utf8-bytes-upper-bound', tokenBudget: a.tokenBudget, state: 'prepared', expiresAt: new Date(Date.now() + 3600000).toISOString() };
         this.state.reviews[review.id] = review;
         return { conversation: this.conv(resource.id), handoff: review, context: result.handoff, mode: 'application_continuation' };
+      }, () => {
+        ensure(this.conversationAccess.resource(a.resourceId, 'read') &&
+          [a.messageId, ...a.includeMessageIds].every(id => this.conversationAccess.access(a.resourceId, id)), 'source_unavailable');
       })) as any;
       case 'review': return this.atomic(() => { const r = this.package(a.handoffId); ensure(r.state === 'prepared' || r.state === 'approved', 'handoff_not_reviewable'); ensure(r.fingerprint === a.fingerprint, 'approval_scope_mismatch'); if(a.approve === true)this.validateReview(r); r.state = a.approve === true ? 'approved' : 'rejected'; r.approvedAt = now(); return structuredClone(r); }) as any;
       case 'selectProvider': return this.atomic(() => {
