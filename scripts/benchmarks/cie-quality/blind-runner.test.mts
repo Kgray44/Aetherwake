@@ -8,6 +8,23 @@ import { canStartReviewedCieCase } from './native-budget.mts';
 import { readBlindInputs, runBlindCie } from './blind-runner.mts';
 const bytes = readFileSync(new URL('./cases.public.json', import.meta.url));
 
+test('a route-bound checkpoint rejects changes of model, provider or transport before dispatch', async () => {
+  const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+  const signal = new AbortController().signal;
+  const route = { provider: 'native-provider', model: 'model-a', transport: 'synthetic' as const };
+  let calls = 0;
+  const host = async () => { calls++; return {}; };
+  const resume = await runBlindCie(bytes, identity, host, signal, { route, maxCases: 1 });
+  for (const changed of [{ ...route, model: 'model-b' }, { ...route, provider: 'other-provider' },
+    { ...route, transport: 'live' as const }, undefined]) {
+    await assert.rejects(runBlindCie(bytes, identity, host, signal, { route: changed, resume, maxCases: 1 }), /checkpoint/);
+  }
+  assert.equal(calls, 1);
+  const continued = await runBlindCie(bytes, identity, host, signal, { route, resume, maxCases: 1 });
+  assert.equal(continued.results.length, 2);
+  assert.deepEqual(continued.route, route);
+});
+
 test('a daily budget stop leaves a resumable prefix without claiming the next case', async () => {
   const identity = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
   const journal = openBlindJournal(':memory:');

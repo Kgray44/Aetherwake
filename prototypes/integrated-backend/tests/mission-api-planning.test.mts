@@ -1341,7 +1341,8 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
             return { answer, calls, totalTokens, tokenSamples: tokenSamples.length, settlements, requestedModel: live?.model ?? 'gpt-6-luna',
               transport: live ? 'live' : 'synthetic' };
           } catch (error) { hostError = error; throw error; }
-        }, signal, { journal, maxCases: 1, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
+        }, signal, { journal, maxCases: 1, route: { provider: 'openai-api-vela', model: live?.model ?? 'gpt-6-luna',
+          transport: live ? 'live' : 'synthetic' }, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
         if (hostError) throw hostError;
         assert.equal(checkpoint.stopped, null);
         assert.equal(checkpoint.results.at(-1)?.id, expectedCase);

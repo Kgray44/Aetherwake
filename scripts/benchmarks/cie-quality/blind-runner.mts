@@ -4,11 +4,13 @@ export const BLIND_INPUT_SHA256 = 'bd9fb6898473fb60b3e669d40b097f7e0e231f0ac9899
 export interface BlindCase { id: string; category: string; request: string; sources: { id: string; title: string; text: string }[] }
 export type BlindPayload = Pick<BlindCase, 'id' | 'request' | 'sources'>;
 type Candidate = { commit: string; tree: string };
+type EvaluationRoute = { provider: string; model: string; transport: 'synthetic' | 'live' };
 type Prediction = { id: string; result: unknown; endToEndMs: number };
 interface BlindCheckpoint {
   contract: 'aerynth.cie-blind-predictions@1';
   inputSha256: string;
   candidate: Candidate;
+  route?: EvaluationRoute;
   results: Prediction[];
   stopped: { caseId: string; kind: 'cancelled' | 'host-error' } | null;
   complete: boolean;
@@ -52,13 +54,16 @@ export function readBlindInputs(bytes: Buffer): readonly BlindCase[] {
  * No fallback inference, retries, fabricated predictions, credential reader or promotion. */
 export async function runBlindCie(bytes: Buffer, candidate: Candidate,
   run: (input: Readonly<BlindPayload>, signal: AbortSignal) => Promise<unknown>, signal: AbortSignal,
-  options: { maxCases?: number; resume?: BlindCheckpoint; journal?: BlindJournal;
+  options: { maxCases?: number; resume?: BlindCheckpoint; journal?: BlindJournal; route?: EvaluationRoute;
     canStartCase?: (signal: AbortSignal) => Promise<boolean> } = {}): Promise<BlindCheckpoint> {
   if (![candidate.commit, candidate.tree].every(value => /^[a-f0-9]{40}$/.test(value))) throw new Error('candidate_identity');
   const inputs = readBlindInputs(bytes);
   const maxCases = options.maxCases ?? inputs.length;
   if (!Number.isSafeInteger(maxCases) || maxCases < 1 || maxCases > inputs.length) throw new Error('blind_batch_capacity');
   const results: Prediction[] = [];
+  const route = options.route && { provider: options.route.provider, model: options.route.model, transport: options.route.transport };
+  if (route && (![route.provider, route.model].every(value => typeof value === 'string' && value.trim()) ||
+    (route.transport !== 'synthetic' && route.transport !== 'live'))) throw new Error('blind_route_invalid');
   const journal = options.journal;
   if (journal && options.resume) throw new Error('blind_checkpoint_conflicting_owners');
   let journalState = journal ? await journal.read() : null;
@@ -68,6 +73,8 @@ export async function runBlindCie(bytes: Buffer, candidate: Candidate,
     const { predictionSha256, ...checkpoint } = resume;
     if (checkpoint.contract !== 'aerynth.cie-blind-predictions@1' || checkpoint.inputSha256 !== BLIND_INPUT_SHA256 ||
       checkpoint.candidate?.commit !== candidate.commit || checkpoint.candidate?.tree !== candidate.tree ||
+      checkpoint.route?.provider !== route?.provider || checkpoint.route?.model !== route?.model ||
+      checkpoint.route?.transport !== route?.transport ||
       checkpoint.stopped !== null || !Array.isArray(checkpoint.results) ||
       checkpoint.results.length > inputs.length || checkpoint.complete !== (checkpoint.results.length === inputs.length) ||
       (checkpoint.complete && !journal) || checkpoint.results.some((row, index) =>
@@ -79,7 +86,8 @@ export async function runBlindCie(bytes: Buffer, candidate: Candidate,
   let stopped: BlindCheckpoint['stopped'] = null;
   const snapshot = (): BlindCheckpoint => {
     const payload = { contract: 'aerynth.cie-blind-predictions@1' as const, inputSha256: BLIND_INPUT_SHA256,
-      candidate: { ...candidate }, results: structuredClone(results), stopped, complete: results.length === inputs.length && !stopped };
+      candidate: { ...candidate }, ...(route ? { route: { ...route } } : {}),
+      results: structuredClone(results), stopped, complete: results.length === inputs.length && !stopped };
     return { ...payload, predictionSha256: sha(JSON.stringify(payload)) };
   };
   const persist = async (inFlight: string | null) => {
