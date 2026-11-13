@@ -77,7 +77,7 @@ export interface ConversationChatOptions {
   chooseDocument?: () => Promise<{ id: string; version: number; title: string } | null>;
   listDocuments?: (conversationId: string) => readonly DraftDocument[];
   openDocument?: (document: DraftDocument) => Promise<'opened' | 'unavailable' | 'superseded'>;
-  askVelaAboutDocument?: (document: DraftDocument, isCurrent: () => boolean) => Promise<void>;
+  askVelaAboutDocument?: (document: DraftDocument, isCurrent: () => boolean) => Promise<void | 'unavailable'>;
   captureDocumentHandoffScope?: () => () => boolean;
   onViewState?: (state: { resourceId: string; content: string; scroll: number; offset: number; view?:ConversationViewCapture }) => void;
 }
@@ -213,7 +213,12 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           try {
             renderDraft();
             await session.flush();
-            if (isCurrent()) await options.askVelaAboutDocument!(document,isCurrent);
+            if (!isCurrent()) return;
+            const outcome = await options.askVelaAboutDocument!(document,isCurrent);
+            if (outcome === 'unavailable' && isCurrent()) {
+              report('Vela could not open the selected attachment. Check it before trying again.');
+              await session.reload();
+            }
           } catch (error) { if (isCurrent()) report(errorText(error)); }
           finally { unsubscribe(); stagingForVela = false; if (!disposed) renderDraft(); }
         });

@@ -1676,6 +1676,32 @@ for (const action of ['close', 'switch', 'switch during save'] as const) test('c
  } finally { releaseSave(); release(); await manager?.dispose(); f.restore(); }
 });
 
+test('Ask Vela refreshes the saved attachment when the host refuses the selected version', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const source = { id:'file:brief', version:3, title:'Brief.pdf' };
+ let chat, refused = false;
+ const port = { async command(name:string,input:any) {
+  const result = await (f.port.command as any)(name,input);
+  return name==='readDraft' && refused
+   ? { ...result, documents:[{ ...source, title:'Unavailable document', unavailable:'inaccessible' }] }
+   : result;
+ } } as ConversationProductPort;
+ try {
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:[source]});
+  chat=mountConversationChat(f.view.root,{
+   port,resourceId:f.draft.resourceId,chooseDocument:async()=>null,openDocument:async()=> 'opened',
+   askVelaAboutDocument:async()=>{refused=true;return 'unavailable' as const;},
+  });
+  await chat.ready;
+  named(f.view.root,'Ask Vela').fire('click');
+  await until(()=>!!named(f.view.root,'Replace'));
+  assert.doesNotMatch(f.view.root.querySelector('.cp-composer-documents').textContent,/Brief\.pdf/);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.deepEqual(f.draft.documents,[source]);
+  assert.equal(f.calls.filter(call=>call.name==='send').length,0);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
 test('removing and reattaching a document retires the pending Ask Vela action', async () => {
  const f=fixture('chatgpt-plan-responses');
  const document={id:'file:brief',version:3,title:'Brief.pdf'};

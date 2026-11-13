@@ -2586,7 +2586,7 @@ export function installApplication(hooks: Hooks) {
     }) as ResourceOpeningResult;
     if (!isCurrent()) return;
     if (result.status !== "ready" || result.resource.kind !== "note" && !supportsDocumentQuestion(result.resource))
-      throw Error("The selected attachment is no longer available.");
+      return "unavailable" as const;
     if (!velaOpen) openVela();
     if (!velaPanel) throw Error("Vela could not open.");
     const resource = result.resource;
