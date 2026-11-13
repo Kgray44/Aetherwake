@@ -140,6 +140,19 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
   let sendTask: Promise<void>|null = null, stopRequestedFor: string|null = null, streamLimited = false, accessRevoked = false;
   let submittedTurn: { commandId: string; providerId: string } | undefined;
+  let reviewedExecutionId: string | undefined;
+  const unresolvedOrdinaryExecution = () => {
+    const canonical = current?.conversation.execution;
+    const observed = execution && (!canonical || (execution.id === canonical.id
+      ? canonical.state === 'unknown' || execution.state !== 'unknown'
+      : execution.startedAt >= canonical.startedAt)) ? execution : canonical;
+    return observed?.state === 'unknown' && observed.providerId === current?.conversation.providerId &&
+      observed.providerId !== 'codex-app-server' ? observed : undefined;
+  };
+  const needsSendReview = () => {
+    const unresolved = unresolvedOrdinaryExecution();
+    return uncertain || (unresolved !== undefined && unresolved.id !== reviewedExecutionId);
+  };
   const observedSubmittedStop = () => !!submittedTurn && execution?.state === 'interrupted' &&
     execution.resourceId === resourceId && execution.commandId === submittedTurn.commandId &&
     execution.providerId === submittedTurn.providerId;
@@ -158,7 +171,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const feedbackKey=options.viewId+':feedback',feedbackBarKey=options.viewId+':feedback-bar',feedbackPose=(h:number,opacity:number):ExperiencePose=>({x:0,y:0,w:0,h,lift:0,yaw:0,opacity});
   options.motion?.add(feedbackKey,feedbackPose(0,0));options.motion?.add(feedbackBarKey,feedbackPose(0,0));
   const reconcileFeedback=()=>{if(feedbackOpen){const height=feedbackContents.scrollHeight;if(height!==feedbackHeight){feedbackHeight=height;options.motion?.target(feedbackKey,feedbackPose(height,1),'conversation feedback content');options.motion?.wake();}}};
-  const renderFeedback=()=>{const phase=session.snapshot().phase,notice=!!status.textContent&&status.dataset.statusKind!=='send-accepted';feedbackToggle.textContent=phase==='conflict'?'Review draft conflict':phase==='error'?'Review draft recovery':uncertain?'Review send outcome':'Details';feedbackToggle.hidden=!feedbackOpen&&!uncertain&&phase==='clean'&&!notice&&!contextNote.textContent&&current?.providers.find(p=>p.id===current?.conversation.providerId)?.available!==false;const cap=presentation==='workspace'?22:availableHeight>0&&availableHeight<280?28:48,height=feedbackToggle.hidden&&!status.textContent?0:Math.min(cap,feedbackLine.scrollHeight);if(height!==feedbackBarHeight){feedbackBarHeight=height;options.motion?.target(feedbackBarKey,feedbackPose(height,Number(height>0)),'conversation feedback summary');options.motion?.wake();}reconcileFeedback();};
+  const renderFeedback=()=>{const phase=session.snapshot().phase,review=needsSendReview(),notice=!!status.textContent&&status.dataset.statusKind!=='send-accepted';feedbackToggle.textContent=phase==='conflict'?'Review draft conflict':phase==='error'?'Review draft recovery':review?'Review send outcome':'Details';feedbackToggle.hidden=!feedbackOpen&&!review&&phase==='clean'&&!notice&&!contextNote.textContent&&current?.providers.find(p=>p.id===current?.conversation.providerId)?.available!==false;const cap=presentation==='workspace'?22:availableHeight>0&&availableHeight<280?28:48,height=feedbackToggle.hidden&&!status.textContent?0:Math.min(cap,feedbackLine.scrollHeight);if(height!==feedbackBarHeight){feedbackBarHeight=height;options.motion?.target(feedbackBarKey,feedbackPose(height,Number(height>0)),'conversation feedback summary');options.motion?.wake();}reconcileFeedback();};
   feedbackToggle.addEventListener('click',()=>{presentationAnchor=null;feedbackOpen=!feedbackOpen;feedbackToggle.setAttribute('aria-expanded',String(feedbackOpen));feedbackBody.inert=!feedbackOpen;liveFollow=false;if(feedbackOpen){inspectionReturn=messages.scrollTop;inspectionFollow=true;feedbackBody.hidden=false;feedbackHeight=0;reconcileFeedback();}else{inspectionFollow=false;if(inspectionReturn!==null)setScroll(inspectionReturn);inspectionReturn=null;if(options.motion){options.motion.target(feedbackKey,feedbackPose(0,0),'conversation feedback close');options.motion.wake();}else feedbackBody.hidden=true;}renderFeedback();});
   feedbackBody.addEventListener('focusin',()=>{inspectionFollow=false;inspectionReturn=null;});
   feedbackBody.addEventListener('toggle',()=>{reconcileFeedback();},true);
@@ -338,16 +351,16 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       localText.textContent = snapshot.content; storedText.textContent = snapshot.remote.content;
       if (recoveryDetails.parentNode !== recovery) { recovery.replaceChildren(recoveryDetails); recoveryDetails.open = true; }
     } else if (snapshot.phase === 'error') { if (retry.parentNode !== recovery) recovery.replaceChildren(retry); }
-    else if (!uncertain) recovery.replaceChildren();
-    if (uncertain && reviewed.parentNode !== recovery) recovery.append(el('p','Send acceptance is not confirmed. Your draft is retained; inspect the chat before retrying.'),reviewed);
+    else if (!needsSendReview()) recovery.replaceChildren();
+    if (needsSendReview() && reviewed.parentNode !== recovery) recovery.append(el('p','Send acceptance is not confirmed. Your draft is retained; inspect the chat before retrying.'),reviewed);
     keep.disabled = useStored.disabled = retry.disabled = recovering;
     const codexOutcomeUnknown = execution?.providerId === 'codex-app-server' && execution.state === 'unknown';
     checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
     checkOutcome.disabled = recovering;
-    send.disabled = sending || !!active() || codexOutcomeUnknown || uncertain || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
+    send.disabled = sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
     web.hidden = !plan?.execute || !webSearchModel();
     web.disabled = send.disabled || web.hidden || !plan?.available;
-    send.dataset.state=uncertain?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=stopRequestedFor?'requested':active()?'available':'inactive';
+    send.dataset.state=needsSendReview()?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=stopRequestedFor?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = !!stopRequestedFor || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
   }
   const unsubscribeDraft = session.subscribe(renderDraft);
@@ -355,7 +368,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   keep.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('keep-local',remote.version));} });
   useStored.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('use-stored',remote.version));} });
   retry.addEventListener('click', () => { markViewIntent();void recover(async()=>{await session.reload();await session.flush();}); });
-  reviewed.addEventListener('click', () => { uncertain = false; submittedTurn = undefined; recovery.replaceChildren(); renderDraft(); });
+  reviewed.addEventListener('click', () => { uncertain = false; submittedTurn = undefined; reviewedExecutionId = unresolvedOrdinaryExecution()?.id; recovery.replaceChildren(); renderDraft(); });
   checkOutcome.addEventListener('click', () => {
     const id = execution?.id, port = options.execution;
     if (!id || checkOutcome.hidden || !port?.recoverTurn) return;

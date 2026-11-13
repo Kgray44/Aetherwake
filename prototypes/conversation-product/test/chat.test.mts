@@ -30,6 +30,26 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('reopening an ordinary chat with an unresolved turn requires explicit review before another send', async () => {
+ const f=fixture('chatgpt-plan-responses'), resourceId=f.draft.resourceId;
+ const execution={id:'execution:unknown',resourceId,providerId:'chatgpt-plan-responses',commandId:'send:unknown',state:'unknown' as const,startedAt:'2026-11-02T00:00:02Z',endedAt:null,taskVerified:false as const};
+ f.detail.conversation.execution=execution;
+ let chat;
+ try {
+  const mount=()=>mountConversationChat(f.view.root,{port:f.port,resourceId});
+  chat=mount();await chat.ready;
+  assert.equal(named(f.view.root,'Send').disabled,true);
+  named(f.view.root,'I reviewed the send outcome').fire('click');
+  await chat.refresh();
+  assert.equal(named(f.view.root,'Send').disabled,false);
+  await chat.dispose();
+  chat=mount();await chat.ready;
+  assert.equal(named(f.view.root,'Send').disabled,true);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+ } finally {await chat?.dispose();f.restore();}
+});
+
 test('a matching confirmed interruption keeps the draft and allows an explicit next send',async()=>{
  const f=fixture('chatgpt-plan-responses');let chat;
  try{
