@@ -37,6 +37,7 @@ $ownedProcess=${pid}
 $ownedMain=[IntPtr]${ownerHwnd}
 $target=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encoded}'))
 $deadline=[DateTime]::UtcNow.AddSeconds(4)
+$lastEditIds=@();$sawDialog=$false
 function Assert-ExactOwner([IntPtr]$handle){
  if([SourceOwnedWindow]::GetForegroundWindow() -ne $handle){throw 'source_dialog_not_foreground'}
  $nativeProcess=[uint32]0;[void][SourceOwnedWindow]::GetWindowThreadProcessId($handle,[ref]$nativeProcess)
@@ -56,23 +57,26 @@ try{do{
     continue
    }
    Assert-ExactOwner $handle
+   $sawDialog=$true
    $window=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
    $editType=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Edit)
    $controls=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$editType))
-   $edits=@($controls|Where-Object {$_.Current.AutomationId -ceq '1148' -or $_.Current.AutomationId -ceq '1001'})
-   if($edits.Count -ne 1){$ids=@($controls|ForEach-Object {$_.Current.AutomationId}|Sort-Object -Unique|Select-Object -First 24);throw ('source_dialog_exact_filename_control_unavailable '+(ConvertTo-Json -InputObject $ids -Compress))}
+   $edits=@($controls|Where-Object {$_.Current.IsEnabled -and ($_.Current.AutomationId -ceq '1148' -or $_.Current.AutomationId -ceq '1001' -or $_.Current.Name -match '^(File name|Folder):?$')})
+   if($edits.Count -ne 1){$lastEditIds=@($controls|ForEach-Object {$_.Current.AutomationId}|Sort-Object -Unique|Select-Object -First 24);continue}
+   $buttonMatch=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1'))
+   $buttons=$window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$buttonMatch)
+   if($buttons.Count -ne 1){throw 'source_dialog_primary_button_unavailable'}
    $value=$edits[0].GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
    if($value.Current.IsReadOnly){throw 'source_dialog_filename_readonly'}
    Assert-ExactOwner $handle;$value.SetValue($target)
-   $buttonMatch=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1'))
-   $buttons=$window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$buttonMatch)
-   if($buttons.Count -ne 1 -or !$buttons[0].Current.IsEnabled){throw 'source_dialog_primary_button_unavailable'}
+   if(!$buttons[0].Current.IsEnabled){throw 'source_dialog_primary_button_unavailable'}
    Assert-ExactOwner $handle;$buttons[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
    Write-Output 'EXACT_OWNED_SOURCE_SELECTED';exit 0
   }
  }
  Start-Sleep -Milliseconds 40
 }while([DateTime]::UtcNow -lt $deadline)
+if($sawDialog){throw ('source_dialog_exact_filename_control_unavailable '+(ConvertTo-Json -InputObject $lastEditIds -Compress))}
 throw 'source_dialog_exact_owned_window_unavailable'
 }catch{[Console]::Error.WriteLine('OWNED_SOURCE_WINDOWS '+(ConvertTo-Json -InputObject @([SourceOwnedWindow]::Owned([uint32]$ownedProcess)) -Compress));throw}`;
 }
