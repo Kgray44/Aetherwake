@@ -256,7 +256,7 @@ export function createPersonalMemoryReview(options: Options) {
     async previewCapture(input: CaptureRequest): Promise<CaptureReview> {
       requireOpen();
       if (!input || !identifier(input.conversationId) || !identifier(input.messageId) ||
-        !['conversation', 'project'].includes(input.scope) || !['preferences', 'projects', 'technical', 'decisions'].includes(input.category) ||
+        !['conversation', 'project', 'assistant.ordinary'].includes(input.scope) || !['preferences', 'projects', 'technical', 'decisions'].includes(input.category) ||
         typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4096 ||
         !Array.isArray(input.keywords) || !input.keywords.length || input.keywords.length > 16 ||
         !input.keywords.every(keyword => typeof keyword === 'string' && keyword.trim() && keyword.length <= 64) ||
@@ -269,8 +269,12 @@ export function createPersonalMemoryReview(options: Options) {
         const source = options.resolveConversationSource(reference);
         if (!source || source.role !== 'user' || source.sensitive || source.conversationId !== conversationId || source.messageId !== messageId)
           throw new PersonalContextError('conversation_source_unavailable');
-        const scopeId = scope === 'project' ? source.projectId : conversationId;
-        const proof = scopeId ? options.resolveScope({ kind: scope, id: scopeId }) : null;
+        if (scope === 'assistant.ordinary' && (source.projectId !== null || category !== 'preferences'))
+          throw new PersonalContextError('conversation_source_scope_mismatch');
+        const requestedScope = scope === 'assistant.ordinary' ? { kind: scope } as const :
+          scope === 'conversation' ? { kind: scope, id: conversationId } as const :
+          source.projectId ? { kind: scope, id: source.projectId } as const : null;
+        const proof = requestedScope && options.resolveScope(requestedScope);
         if (!proof) throw new PersonalContextError('canonical_scope_unavailable');
         const sourceText = options.readSourceText(reference);
         if (sourceText === null || Buffer.byteLength(sourceText) > 16384 ||

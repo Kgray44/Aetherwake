@@ -181,20 +181,22 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
   if (experience === "memory-capture") {
     const draft = review?.draft;
     const scope = draft?.scope;
+    const globalPreference = scope?.kind === "assistant.ordinary" && draft.category === "preferences" && scope.id === undefined;
+    const scoped = ["project", "conversation"].includes(scope?.kind) && typeof scope.id === "string" &&
+      scope.id.trim() && scope.id.length <= 200;
     if (typeof review?.sourceText !== "string" || Buffer.byteLength(review.sourceText) > 16384 ||
         typeof draft?.text !== "string" || !draft.text.trim() || draft.text.length > 4096 ||
         !["preferences", "projects", "technical", "decisions"].includes(draft.category) ||
-        !["project", "conversation"].includes(scope?.kind) || typeof scope?.id !== "string" ||
-        !scope.id.trim() || scope.id.length > 200 || typeof review.enableStorage !== "boolean" ||
+        !(globalPreference || scoped) || typeof review.enableStorage !== "boolean" ||
         !Array.isArray(draft.keywords) || !draft.keywords.length || draft.keywords.length > 16 ||
         draft.keywords.some(keyword => typeof keyword !== "string" || !keyword.trim() || keyword.length > 64))
       throw Error("invalid_native_memory_review");
     const styleHash = createHash("sha256").update(css).digest("base64");
-    const scopeName = scope.kind === "project" ? "Project" : "Conversation";
+    const scopeName = globalPreference ? "All ordinary chats" : `${scope.kind === "project" ? "Project" : "Conversation"} ${escape(scope.id)}`;
     const categoryName = { preferences: "Preference", projects: "Project detail", technical: "Technical fact", decisions: "Decision" }[draft.category];
     const storage = review.enableStorage ? "<p>Enable local memory storage and save this fact. Provider sharing settings stay as they are.</p>"
       : "<p>Save this fact to local memory.</p>";
-    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">Save this memory?</h1>${storage}</header><div class="content" tabindex="0" aria-label="Review memory and source"><article><h2>Memory to save</h2><small>${categoryName} · ${scopeName} ${escape(scope.id)}</small><pre>${escape(draft.text)}</pre><p>Search terms: ${escape(draft.keywords.join(", "))}</p></article><article><h2>Original message</h2><pre>${escape(review.sourceText)}</pre></article></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">Save memory</button></footer></main></body></html>`;
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">Save this memory?</h1>${storage}</header><div class="content" tabindex="0" aria-label="Review memory and source"><article><h2>Memory to save</h2><small>${categoryName} · ${scopeName}</small><pre>${escape(draft.text)}</pre><p>Search terms: ${escape(draft.keywords.join(", "))}</p></article><article><h2>Original message</h2><pre>${escape(review.sourceText)}</pre></article></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">Save memory</button></footer></main></body></html>`;
     if (Buffer.byteLength(html) > view.htmlBytes) throw Error("invalid_native_memory_review");
     return html;
   }

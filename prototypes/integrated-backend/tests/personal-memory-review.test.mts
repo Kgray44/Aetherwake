@@ -13,6 +13,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
   const message = { conversationId: 'chat', messageId: 'message', projectId: 'project', role: 'user' as const,
     sensitive: false, version: '1', contentDigest: createHash('sha256').update(sourceText).digest('hex') };
   let enabled = true;
+  let sourceProject: string | null = 'project';
   let activeVelaProject: string | null = 'project';
   let projectReadable = true;
   const resolveScope = (scope: PersonalScope) =>
@@ -24,14 +25,14 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     resolveVelaRecallTarget: () => ({ conversationId: 'vela-chat', projectId: activeVelaProject }),
     resolveRecallTarget: id => id === 'other-chat' ? { projectId: 'project' } :
       id === 'foreign-chat' ? { projectId: 'foreign-project' } : null,
-    resolveConversationSource: () => enabled ? message : null,
+    resolveConversationSource: () => enabled ? { ...message, projectId: sourceProject } : null,
     resolveScope,
   });
   let wrappedValue: string;
   const owner = new NativePersonalMemory({
     kernel, host: {
       identity: () => ({ userId: 'local-owner', policyVersion: '1' }),
-      resolveConversationSource: () => enabled ? message : null,
+      resolveConversationSource: () => enabled ? { ...message, projectId: sourceProject } : null,
       resolveScope,
       authorize: input => review.authorize(input) ? { decision: 'allow', policyVersion: '1', authorizationRef: 'synthetic-review' } : { decision: 'deny' },
     },
@@ -61,6 +62,15 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     await assert.rejects(review.read(saved.id), /canonical_scope_unavailable/);
     projectReadable = true;
     await assert.rejects(review.commitCapture(preview), /personal_memory_review_mismatch/);
+    const globalInput = { ...input, scope: 'assistant.ordinary', category: 'preferences', text: 'I prefer the synthetic quartz finish.', keywords: ['quartz'] } as const;
+    await assert.rejects(review.previewCapture(globalInput), /conversation_source_scope_mismatch/);
+    sourceProject = null;
+    const globalReview = await review.previewCapture(globalInput);
+    const globalFact = await review.commitCapture(globalReview);
+    assert.deepEqual(globalFact.scope, { kind: 'assistant.ordinary' });
+    assert.equal(globalFact.provenance.kind, 'conversation-message');
+    sourceProject = 'project';
+    await assert.rejects(review.read(globalFact.id), /conversation_source_unavailable/);
     const next = await review.previewCapture(input);
     assert.equal(next.enableStorage, false);
     assert.equal(next.policy.ordinaryEnabled, false);
@@ -85,6 +95,15 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.equal(await review.prepareVelaRecall(velaInput), null);
     const policy = (await review.inspect({ after: null, limit: 1 })).policy;
     await review.setProviderUse('vela', true, policy.version);
+    sourceProject = null;
+    const globalTurn = { ...turn, messages: [{ role: 'user', content: 'Which quartz finish?' }] } as const;
+    const globalRecall = await review.prepareOrdinaryRecall('foreign-chat', globalTurn);
+    assert.ok(globalRecall);
+    assert.ok(globalRecall.manifest.items.some(item => item.factId === globalFact.id));
+    globalRecall.approve(globalRecall.bodyDigest);
+    assert.equal(await review.prepareVelaRecall({ ...velaInput, intent: 'Which quartz finish?' }), null);
+    sourceProject = 'project';
+    assert.throws(() => globalRecall.validate(globalRecall.turn), /stale_personal_context/);
     const velaRecall = await review.prepareVelaRecall(velaInput);
     assert.ok(velaRecall);
     assert.match(velaRecall.prompt, /synthetic relay/);
