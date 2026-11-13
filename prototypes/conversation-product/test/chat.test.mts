@@ -338,6 +338,24 @@ for (const scenario of ['copied','declined','copy failed','newer navigation'] as
  finally{await manager?.dispose();assert.equal(m.poses.size,0);f.restore();}
 });
 
+test('newer navigation prevents a queued provider continuation from preparing the source again', async () => {
+ const f=fixture();let manager;
+ try {
+  const target='chatgpt-plan-responses';
+  f.detail.providers.push({id:target,label:'ChatGPT plan',available:true,record:true,execute:true,nativeFork:false,history:'local',simulated:false,models:[]});
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const detailReads=()=>f.calls.filter(call=>call.name==='detail').length;
+  const before=detailReads();
+  const continuation=manager.beginProviderContinuation(target);
+  const navigation=manager.open(f.draft.resourceId);
+  await Promise.all([continuation,navigation]);
+  assert.equal(detailReads()-before,1,'only the newer navigation reads the conversation');
+  assert.equal(f.view.root.querySelector('input[aria-label="Copy unsent draft to the new branch"]'),null);
+  assert.equal(f.draft.content,'Saved unsent text');
+ } finally {await manager?.dispose();f.restore();}
+});
+
 test('unknown send recovery and actual live preview share one transcript scroll owner with a compact MC summary and stable editor',async()=>{
  const f=fixture('codex-app-server'),m=pickerMotion();let chat;try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,motion:m.motion,viewId:'chat:feedback',presentation:'workspace'});await chat.ready;const editor=f.view.root.querySelector('textarea'),messages=f.view.root.querySelector('.cp-messages'),feedback=f.view.root.querySelector('.cp-chat-feedback');f.view.root.querySelector('.cp-composer').fire('submit');await until(()=>!!f.pending);f.pending!.resolve({id:'execution:unknown',resourceId:f.draft.resourceId,state:'unknown'});await chat.whenSubmissionSettled();assert.equal(f.view.root.querySelector('.cp-chat-status').textContent.includes('not confirmed'),true);assert.ok(messages.contains(f.view.root.querySelector('.cp-stream')));assert.ok(messages.contains(f.view.root.querySelector('.cp-draft-recovery')));assert.equal(feedback.querySelectorAll('.cp-draft-status').length,0);assert.equal(feedback.querySelectorAll('.cp-capability-note').length,0);assert.ok((m.targets.get('chat:feedback:feedback-bar')?.h??1000)<=40);const toggle=named(feedback,'Review send outcome'),body=f.view.root.querySelector('.cp-chat-inspection');assert.equal(body.hidden,true);toggle.fire('click');assert.equal(body.hidden,false);assert.equal(body.inert,false);assert.equal(named(f.view.root,'Send').disabled,true,'Opening recovery never acknowledges unknown send');m.step();chat.frame();toggle.fire('click');assert.equal(body.inert,true);assert.equal(body.hidden,false,'Close keeps actual body until shared motion settles');m.step();chat.frame();assert.equal(body.hidden,true);assert.ok(f.view.root.querySelector('textarea')===editor);assert.equal(f.draft.content,editor.value);assert.equal(f.calls.filter(c=>c.name==='send').length,1);}finally{f.pending?.reject(new Error('synthetic cleanup'));await chat?.dispose();assert.equal(m.poses.size,0);f.restore();}
 });

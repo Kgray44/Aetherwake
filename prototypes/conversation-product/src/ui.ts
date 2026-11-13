@@ -232,6 +232,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   });return view.node;
  };
  const showBranch=(d:Detail,messageId:string,targetProviderId=d.conversation.providerId,offerDraftCopy=false)=>{
+  const sourceIntent=openIntent;
   extras.open=true;secondary.replaceChildren();const form=el('form'),title=el('input'),providers=select(d.providers.filter(p=>p.record).map(p=>({value:p.id,label:p.label,disabled:!p.available})),targetProviderId),selection=el('fieldset'),legend=el('legend','Select source messages to prepare for review');title.value=d.conversation.title+' · branch';title.setAttribute('aria-label','Branch title');providers.setAttribute('aria-label','Branch provider');selection.append(legend);
   let reached=false;const chosen=new Set([messageId]);for(const m of d.messages.items){if(reached)break;const box=el('input');box.type='checkbox';box.checked=m.id===messageId;box.addEventListener('change',()=>box.checked?chosen.add(m.id):chosen.delete(m.id));selection.append(field(`${m.role}: ${m.content.slice(0,100)}`,box));if(m.id===messageId)reached=true;}
   const note=el('p','Application continuation: selected source references are prepared for review. Creating a branch does not send a model turn.');
@@ -253,13 +254,16 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    const input={resourceId:d.conversation.resourceId,messageId,includeMessageIds:[...chosen],providerId:providers.value,
     title:title.value,commandId:crypto.randomUUID(),tokenBudget:32768,expectedRevision:d.conversation.revision};
    void run(async()=>{
+    if(sourceIntent!==openIntent||closing||disposed)return;
     if(state.selectedResourceId!==input.resourceId)throw new Error('The selected conversation changed.');
     if(copyDraft)await flush();
+    if(sourceIntent!==openIntent||closing||disposed)return;
     const draft=copyDraft?draftSessions.get(input.resourceId)?.snapshot().content:undefined;
     const b=await call('branch',input);
+    if(sourceIntent!==openIntent||closing||disposed)return;
     let reviewed=false;
     const review=(approve:boolean)=>{
-     const intent=openIntent;
+     const intent=sourceIntent;
      return run(async()=>{
       if(reviewed||intent!==openIntent)return;
       await call('reviewBranch',{handoffId:b.handoffId,fingerprint:b.fingerprint,approve});
@@ -282,7 +286,22 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   });
   secondary.append(form);syncPickers();options.motion?.wake();title.focus();
  };
- const beginProviderContinuation=(targetProviderId:string)=>run(async()=>{await flush();const id=state.selectedResourceId;if(!id)throw new Error('Open a conversation before continuing with another provider.');await loadDetail();const detail=current;if(!detail||detail.conversation.resourceId!==id||!detail.providers.some(p=>p.id===targetProviderId&&p.available&&p.record))throw new Error('That provider is unavailable for this conversation.');const anchor=detail.messages.items.find(m=>m.id===selectedMessageId)??detail.messages.items.at(-1);if(!anchor)throw new Error('No authorized source message is available to continue from. Start a new conversation instead.');showBranch(detail,anchor.id,targetProviderId,true);},true);
+ const beginProviderContinuation=(targetProviderId:string)=>{
+  const intent=openIntent,id=state.selectedResourceId;
+  return run(async()=>{
+   if(intent!==openIntent||closing||disposed)return;
+   if(!id)throw new Error('Open a conversation before continuing with another provider.');
+   await flush();
+   if(intent!==openIntent||closing||disposed)return;
+   await loadDetail();
+   if(intent!==openIntent||closing||disposed)return;
+   const detail=current;
+   if(!detail||detail.conversation.resourceId!==id||!detail.providers.some(p=>p.id===targetProviderId&&p.available&&p.record))throw new Error('That provider is unavailable for this conversation.');
+   const anchor=detail.messages.items.find(m=>m.id===selectedMessageId)??detail.messages.items.at(-1);
+   if(!anchor)throw new Error('No authorized source message is available to continue from. Start a new conversation instead.');
+   showBranch(detail,anchor.id,targetProviderId,true);
+  },true);
+ };
  async function requestProviderChange(event:ConversationProviderChange){if(event.mode==='continuation'){if(state.selectedResourceId!==event.resourceId)throw new Error('The selected conversation changed.');return beginProviderContinuation(event.targetProviderId);}return run(async()=>{if(state.selectedResourceId!==event.resourceId||current?.conversation.revision!==event.expectedRevision)throw new Error('The conversation changed. Refresh before choosing its provider.');await flush();await call('selectProvider',{resourceId:event.resourceId,providerId:event.targetProviderId,expectedRevision:event.expectedRevision});await loadDetail();},true);}
  const renderPolicy=(d:Detail)=>{
   const panel=el('details'),summary=el('summary','Connected Branches and source scopes'),form=el('form'),mode=select([{value:'independent',label:'Independent — explicit discovery only'},{value:'connected',label:'Connected — scoped retrieval allowed'},{value:'collaborative',label:'Collaborative — approved publication categories'}],d.policy.mode),scope=el('input'),sensitivity=select([{value:'public',label:'Public'},{value:'internal',label:'Internal'},{value:'sensitive',label:'Sensitive with explicit publication consent'}],d.policy.maxSensitivity),cross=el('input');scope.value=d.policy.allowedSourceIds.join(', ');scope.placeholder='All authorized family branches';cross.type='checkbox';cross.checked=d.policy.allowCrossProject;
