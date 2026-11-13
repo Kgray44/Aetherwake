@@ -12,7 +12,18 @@ interface EditorOptions {
   returnFocus?(): void;
 }
 
+/** Draft only a single explicitly marked statement. The user still edits and reviews it. */
+function explicitMemoryCandidate(content: string): string | undefined {
+  const marked = content.split(/\r?\n/u)
+    .flatMap(line => {
+      const match = /^Remember:[ \t]+(\S.*)$/iu.exec(line);
+      return match ? [match[1].trimEnd()] : [];
+    });
+  return marked.length === 1 ? marked[0] : undefined;
+}
+
 export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormElement {
+  const candidate = explicitMemoryCandidate(options.content);
   const form = document.createElement('form');
   form.className = 'cp-memory-editor';
   form.setAttribute('aria-label', 'Remember message');
@@ -37,7 +48,7 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     return input;
   };
   const text = document.createElement('textarea');
-  text.value = options.content;
+  text.value = candidate ?? options.content;
   text.maxLength = 4096;
   text.rows = 3;
   text.required = true;
@@ -48,7 +59,7 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
   const category = select('Category', [['technical', 'Technical fact'], ['decisions', 'Decision'],
     ['preferences', 'Preference'], ['projects', 'Project detail']]);
   const keywords = document.createElement('input');
-  keywords.value = [...new Set(options.content.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]{2,64}/gu) ?? [])].slice(0, 8).join(', ');
+  keywords.value = [...new Set(text.value.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]{2,64}/gu) ?? [])].slice(0, 8).join(', ');
   keywords.maxLength = 1056;
   keywords.required = true;
   field('Search terms, separated by commas', keywords);
