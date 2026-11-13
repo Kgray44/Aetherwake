@@ -1285,11 +1285,19 @@ test('sealed CIE cases resume through native review and canonical usage accounti
               resourceIds.push(note.id);
             }
             const quote = input.sources[0].text;
+            const eventCursor = (await f.core.command('replay', { limit: 1 })).latest;
             const before = await usage();
             if (!before.usedToday) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
               reply(assess('day', 'The pump inspection is on Tuesday.')));
             f.replies.push(reply(interpret(input.request, input.sources[0].title)), reply(assess('fact', quote)),
-              body => response(quote, body.model));
+              body => {
+                const packet = JSON.parse(body.input[0].content);
+                assert.deepEqual(packet.evidence.coverage[0].passages, [
+                  { sourceId: resourceIds[0], title: input.sources[0].title, quote },
+                ]);
+                for (const source of input.sources.slice(1)) assert.ok(!JSON.stringify(packet).includes(source.text));
+                return response(quote, body.model);
+              });
             const result = await velaCommand({
               win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
               directMessageSend: true, routeNative: true, dialog: {}, call: f.core.command.bind(f.core),
@@ -1307,7 +1315,12 @@ test('sealed CIE cases resume through native review and canonical usage accounti
             assert.equal(f.replies.length, 0);
             const simulatedCalls = (await usage()).usedToday - before.usedToday;
             assert.equal(simulatedCalls, expectedCase === 'blind-001' ? 5 : 3);
-            return { answer, simulatedCalls };
+            const replay = await f.core.command('replay', { after: eventCursor, limit: 500 });
+            const usageEvents = replay.events.filter(event => event.type === 'provider/usage' && event.classification === 'simulated');
+            assert.equal(usageEvents.length, simulatedCalls);
+            const simulatedTokens = usageEvents.reduce((total, event) => total + (event.payload.usage?.totalTokens ?? 0), 0);
+            assert.equal(simulatedTokens, simulatedCalls * 140);
+            return { answer, simulatedCalls, simulatedTokens };
           } catch (error) { hostError = error; throw error; }
         }, signal, { journal, maxCases: 1, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
         if (hostError) throw hostError;
