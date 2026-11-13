@@ -1,4 +1,4 @@
-import { createPersonalMemoryView } from "./personal-memory-view.ts";
+import { createSavedMemoriesInspector } from "./saved-memories-mount.ts";
 import { createApplicationNavigation } from "./application-navigation.ts";
 import "../../../constellation/style.css";
 import type { Policy } from "../../../constellation/types.ts";
@@ -2420,17 +2420,10 @@ export function installApplication(hooks: Hooks) {
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
-      memoryView: createPersonalMemoryView(
-        request => host.command!("personalMemory", request),
-        async source => {
-          const result = await resourceOpener.open({
-            resourceId: source.conversationId,
-            origin: { source: "application" },
-            selection: { messageId: source.messageId },
-          });
-          if (result.status !== "ready") throw Error("Original message is unavailable.");
-        },
-      ),
+      memoryView: createSavedMemoriesInspector({
+        manageMemory: request => host.command!("personalMemory", request),
+        openResource: resourceOpener.open,
+      }),
       onRememberMessage: async (request) => {
         const result = await host.command!("personalMemoryCapture", request) as { status: "saved" | "cancelled" };
         return result.status === "saved";

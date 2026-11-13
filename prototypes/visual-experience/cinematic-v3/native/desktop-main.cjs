@@ -45,7 +45,7 @@ const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
 const {showVelaReview,projectEvidenceMatches}=require('./vela-review.cjs');
 const {capturePersonalMemory}=require('./personal-memory-capture.cjs');
-const {managePersonalMemory}=require('./personal-memory-management.cjs');
+const { applicationFrameTrust, nativeReviewBoundary, createPersonalMemoryDesktopRoute } = require("./personal-memory-desktop-route.cjs");
 const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
@@ -609,25 +609,19 @@ app.whenReady().then(async () => {
   win.webContents.on("will-navigate", (event, url) => {
     if (url !== localURL) event.preventDefault();
   });
-  const trustedApplicationFrame = (event) =>
-    !win.isDestroyed() &&
-    !win.webContents.isDestroyed() &&
-    event.sender === win.webContents &&
-    event.senderFrame === win.webContents.mainFrame &&
-    event.senderFrame?.url === localURL;
+  const frames = applicationFrameTrust(win, localURL);
+  const { trustedApplicationFrame, trustedActiveFrame } = frames;
   // The renderer has one compose submission at a time. Core still owns its result.
   const velaSubmissions = new WeakMap();
   const isVelaSubmissionId = (id) => typeof id === "string" &&
     /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(id);
-  const trustedActiveFrame = (event) =>
-    trustedApplicationFrame(event) &&
-    win.isVisible() &&
-    !win.isMinimized() &&
-    win.isFocused();
-  let nativeReviewBusy=false;
-  const nativeReviewGate=async work=>{checkDesktopTest();if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
+  const { nativeReviewGate, reviewDialogs } = nativeReviewBoundary({ dialog, checkDesktopTest });
   const reviewProvider=args=>nativeReviewGate(()=>showVelaReview({ ...args, runtime: args.runtime ?? { BrowserWindow, ipcMain, session } }));
-  const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
+  const routePersonalMemory = createPersonalMemoryDesktopRoute({
+    win, frames, backendIdentity: () => child, backendReady: () => !closing && backendWritable(),
+    allowWrite: () => storage.allowWrite(), call, reviewDialogs,
+    writeExport: (path, bundle) => writeFileSync(path, JSON.stringify(bundle, null, 2), { flag: "wx", mode: 0o600 }),
+  });
   const policyReady = () => !closing && backendWritable() && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
   const { reviewMode, reviewRollback, ...performanceMenu } = require("./resource-policy-menu.cjs").resourcePolicyMenu({
     call, show: options => reviewDialogs.showMessageBox(win, options),
@@ -821,46 +815,7 @@ app.whenReady().then(async () => {
         throw new Error("unauthorized_sender");
       let result;
       if (command === "personalMemory") {
-        const memoryBackend = child;
-        const currentFrame = () => !closing && backendWritable() && child === memoryBackend &&
-          trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized();
-        result = await managePersonalMemory({
-          input, trustedFrame: currentFrame,
-          observeGesture: () => trustedActiveFrame(event) &&
-            event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false),
-          allowWrite: () => storage.allowWrite(), call,
-          confirm: async review => {
-            if (review.action === "enableProviderMemory") {
-              const name = review.assistant === "ordinary" ? "ChatGPT" : "Vela’s OpenAI API";
-              const choice = await reviewDialogs.showMessageBox(win, {
-                type: "question", title: "Aerynth memory", message: `Enable saved memory for ${name}?`,
-                detail: "Aerynth can look for relevant saved memories in eligible conversations. You’ll review the exact request before anything is shared. You can turn this off in Saved memories.",
-                buttons: ["Cancel", "Enable memory"], defaultId: 0, cancelId: 0, noLink: true,
-              });
-              return choice.response === 1;
-            }
-            const labels = { correct: "Correct memory", revoke: "Revoke memory", delete: "Delete memory", export: "Export memory", revokeSource: "Revoke original message" };
-            const scope = review.target?.scope;
-            const detail = review.action === "revokeSource"
-              ? "Hide this message and remove saved memories that depend on it. The original remains in local history storage. Previous exports, backups, and provider copies may still contain it.\n\nOriginal message\n" + review.sourceText +
-                "\n\nConversation " + review.binding.conversationId + " · revision " + review.binding.expectedRevision + " · message " + review.binding.messageId
-              : (review.action === "correct" ? "Current memory\n" + review.fact.text + "\n\nReplacement\n" + review.text +
-                (review.keywords ? "\n\nReplacement search terms\n" + review.keywords.join(", ") : "")
-                : review.action === "export" ? "Export this memory and its retained revisions to a readable JSON file.\n\n" + review.fact.text
-                : review.action === "delete" ? "Remove this memory and its retained revisions from the profile."
-                : "Keep the record for inspection and exclude it from future recall.") +
-                "\n\nMemory " + review.id + " · revision " + review.version + " · " + scope.kind + (scope.id ? " " + scope.id : "");
-            const choice = await reviewDialogs.showMessageBox(win, { type: "question", title: "Aerynth memory",
-              message: labels[review.action] + "?", detail, buttons: ["Cancel", labels[review.action]], defaultId: 0, cancelId: 0, noLink: true });
-            return choice.response === 1;
-          },
-          chooseExport: async () => {
-            const choice = await reviewDialogs.showSaveDialog(win, { title: "Export memory", defaultPath: "aerynth-memory.json",
-              filters: [{ name: "JSON", extensions: ["json"] }] });
-            return choice.canceled ? null : choice.filePath ?? null;
-          },
-          writeExport: (path, bundle) => writeFileSync(path, JSON.stringify(bundle, null, 2), { flag: "wx", mode: 0o600 }),
-        });
+        result = await routePersonalMemory(event, input);
       } else if (command === "personalMemoryCapture") {
         result = await capturePersonalMemory({
           input,
