@@ -210,16 +210,31 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       const match = receipt.canonical.messages.items[1];
       await capture('01-local-chat'); win.setContentSize(780, 700); receipt.tightGeometry=await waitForGeometry('Actual tight-width usable latest message and composer', id, match.id);
       await click('.cp-switcher>summary');
-      await fill('.cp-switcher input[type="search"]', 'second local message');
-      const resultSelector = `.cp-switcher-results [data-message-id=${JSON.stringify(match.id)}]`;
-      await wait('Exact canonical message appears in quick search', () => js(`document.querySelector(${JSON.stringify(resultSelector)})?.textContent.includes('second local message')`));
+      const quickInput = '.cp-switcher input[type="search"]';
+      await click(quickInput);
+      await wait('Quick search input focused', () => js(`document.activeElement===document.querySelector(${JSON.stringify(quickInput)})`));
+      const typedAt = performance.now();
+      await bounded(win.webContents.insertText('second local message'), slot.workRemaining(), 'chat_motion_input_deadline');
+      const enterAt = performance.now();
       key('Return');
-      await wait('Enter opens the exact message and keeps the unsent draft', async () => {
+      const insertToEnterMs = enterAt - typedAt;
+      assert(insertToEnterMs < 120, 'enter_must_precede_typeahead_debounce');
+      const timing = receipt.quickSearch = {
+        resourceId: id, messageId: match.id, method: 'software-native-window-keyboard',
+        insertToEnterMs, tier: 'native key dispatch to polled renderer geometry and backend draft/view acknowledgement',
+        pollIntervalMs: 35, fixtureMessages: receipt.canonical.messages.total,
+      };
+      await wait('Enter closes the switcher and reveals the exact message line', async () => {
         if (await js("document.querySelector('.cp-switcher')?.open!==false")) return false;
+        const sample = await js(geometryScript(id));
+        return sample?.lines.some(line => line.messageId === match.id && line.fullyVisible && line.height >= 12);
+      });
+      timing.enterToVisibleMessageMs = performance.now() - enterAt;
+      await wait('Exact message anchor and unchanged draft are acknowledged', async () => {
         const view = await js(viewScript(id, false, match.id));
         return view?.draft === FIXTURE.draft && view.anchorOffsetY !== null && (await savedView(id)).view?.position?.anchor?.messageId === match.id;
       });
-      receipt.quickSearch = { resourceId: id, messageId: match.id, method: 'software-native-window-keyboard' };
+      timing.enterToSavedViewMs = performance.now() - enterAt;
       await click(chat(id) + ' textarea'); await wait('Actual message editor focus', () => js(`document.activeElement===document.querySelector(${JSON.stringify(chat(id) + ' textarea')})`)); key('Home', ['control']); for (let i = 0; i < 3; i++) key('Right'); for (let i = 0; i < 8; i++) key('Right', ['shift']); await wait('Exact native draft selection', () => js(`(()=>{const n=document.querySelector(${JSON.stringify(chat(id) + ' textarea')});return n.selectionStart===3&&n.selectionEnd===11})()`));
       const v = await js(geometryScript(id)), priorScroll = (await js(viewScript(id))).scroll, point = { x: Math.round(v.messages.x + v.messages.width / 2), y: Math.round(v.messages.y + v.messages.height / 2) }; assert(priorScroll > 0, 'long_actual_transcript_required_for_reading_position_test'); assert(await js(`!!document.elementFromPoint(${point.x},${point.y})?.closest('.cp-messages')`), 'actual_transcript_wheel_hit_required'); win.webContents.sendInputEvent({ type: 'mouseMove', ...point }); win.webContents.sendInputEvent({ type: 'mouseWheel', ...point, deltaX: 0, deltaY: 180, canScroll: true }); receipt.actions.push({ method: 'software-native-window-wheel', deltaY: 180, priorScroll }); let previousScroll, stableScroll = 0; await wait('Actual native reading scroll delivery and settling', async () => { const a = await js(viewScript(id)); stableScroll = a?.scroll < priorScroll && a.scroll === previousScroll ? stableScroll + 1 : 0; previousScroll = a?.scroll; return stableScroll >= 2; }); const before = await js(viewScript(id, true));
       if (scope === 'full-chat-motion') {
