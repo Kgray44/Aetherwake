@@ -227,3 +227,32 @@ test('a citation uses the admitted revision when a discovery record has the same
     new AbortController().signal, undefined, { sources: [discovery], partial: false });
   assert.deepEqual(result.coverage[0].passages, [{ sourceId: selected.sourceId, title: selected.title, quote }]);
 });
+
+test('reviewed discovery resolves an exact source ID even when only a distractor mentions it', async () => {
+  const receipt = { model: 'synthetic-model' };
+  const sourceId = 'inspection-record-481';
+  const quote = 'The north gate opens at noon.';
+  const sources = [
+    { sourceId: 'distractor', title: 'Archived draft', text: 'See ' + sourceId + ' for the current record.' },
+    { sourceId, title: 'Access schedule', text: quote },
+  ].map(source => ({ ...source, revision: '1', proofDigest: source.sourceId, sourceKind: 'note' as const }));
+  const api = {
+    qualifiedStructuredRoute: () => receipt,
+    resolveQualifiedStructuredRoute: async () => receipt,
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal(input: any) {
+      input.validate();
+      if (input.payload.stage === 'interpret') return { version: 2, objective: 'Find the schedule', clarification: '',
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+        needs: [{ key: 'schedule', question: 'When does the gate open?', query: sourceId }] };
+      assert.equal(input.payload.round, 1);
+      assert.equal(input.payload.excerpts[0].text, quote);
+      return { version: 3, clarification: '', assessment: [{ key: 'schedule', status: 'supported', query: '',
+        passages: [{ source: 'e1', quote }] }] };
+    },
+  } as unknown as VelaApiRuntime;
+  const result = await investigateReviewedVelaEvidence(api, 'Find the gate schedule in ' + sourceId, [], 1, receipt.model, () => {},
+    new AbortController().signal, undefined, { sources, partial: false });
+  assert.equal(result.state, 'assessed');
+  assert.equal(result.coverage[0].passages[0].sourceId, sourceId);
+});

@@ -182,7 +182,9 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
   if (!assessment) missingStages.push('assess');
   if (missingStages.length) await qualifyVelaHistoryModelWithApi(api, { configurationVersion, model, authorize }, signal, observations, missingStages);
   const candidates = new Map(discovery?.sources.map(source => [source.sourceId, source]));
-  const searchable = [...candidates.values()].map(source => ({ id: source.sourceId, text: source.title + '\n' + source.text }));
+  const searchable = [...candidates.values()].map(source => ({
+    id: source.sourceId, identities: [source.sourceId], text: source.title + '\n' + source.text,
+  }));
   const approved = new Set([...sources, ...candidates.values()]);
   const scan = discovery?.partial ? 'partial' as const : 'bounded' as const;
   const reviewedSourceTitles = discovery?.sources.map(source => source.title);
