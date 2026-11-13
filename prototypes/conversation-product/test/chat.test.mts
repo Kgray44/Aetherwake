@@ -1784,6 +1784,23 @@ test('History retries a failed search with the same query and keeps the open cha
  }finally{await manager?.dispose();f.restore();}
 });
 
+test('a History filter change consumes the pending text debounce',async t=>{
+ const f=fixture();let manager;
+ t.mock.timers.enable({apis:['setTimeout']});
+ try{
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  const query=f.view.root.querySelector('input[aria-label="Search conversation history"]');
+  query.value='latest history query';query.fire('input');
+  const sort=f.view.root.querySelector('[aria-label="Sort conversations"]');
+  sort.value='title';sort.fire('change');
+  await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);
+  t.mock.timers.tick(180);
+  await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);
+  assert.deepEqual(f.calls.filter(call=>call.name==='search').map(call=>[call.input.text,call.input.sort]),[['latest history query','title']]);
+ }finally{await manager?.dispose();f.restore();}
+});
+
 test('filter and clear-search changes made during an existing read drain to the latest actual query without replaying actions',async()=>{
   const f=fixture();let manager,release!:()=>void;
   try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;const priorDetails=f.calls.filter(call=>call.name==='detail').length;f.gateDetail(new Promise<void>(resolve=>{release=resolve;}));const reading=manager.refresh();await until(()=>f.calls.filter(call=>call.name==='detail').length>priorDetails);
