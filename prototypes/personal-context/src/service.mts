@@ -278,6 +278,14 @@ export class PersonalContextService {
       const previous: ReviewedFact = { ...old, version: old.version + 1, state: 'superseded', supersededBy: replacement.id, updatedAt: this.now() };
       this.put('fact', replacement, replacement.scope, replacement.state, 0);
       this.put('fact', previous, previous.scope, previous.state, old.version);
+      const owner = this.identity().userId;
+      // Keep inherited erasure dependencies even when a correction cites new evidence.
+      this.opts.db.prepare(`INSERT OR IGNORE INTO personal_context_conversation_sources
+        SELECT owner,conversation_id,message_id,? FROM personal_context_conversation_sources WHERE owner=? AND dependent=?`)
+        .run(replacement.id, owner, old.id);
+      this.opts.db.prepare(`INSERT OR IGNORE INTO personal_context_dependencies
+        SELECT owner,?,source,source_version FROM personal_context_dependencies WHERE owner=? AND dependent=?`)
+        .run(replacement.id, owner, old.id);
       return { previous, replacement };
     });
   }

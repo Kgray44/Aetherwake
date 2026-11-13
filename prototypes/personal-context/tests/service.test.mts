@@ -316,6 +316,35 @@ test('reviewed conversation memory travels within its project and stops recallin
   } finally { f.close(); }
 });
 
+test('erasing a conversation source removes corrections that inherited its memory lineage', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const source = { kind: 'conversation-message', conversationId: 'c1', messageId: 'm1', version: '1', contentDigest: 'a'.repeat(64) } as const;
+    const scope = { kind: 'project', id: 'p1' } as const;
+    const host: PersonalContextHost = { ...f.host, resolveConversationSource: () => ({ ...source,
+      role: 'user', sensitive: false, projectId: scope.id }) };
+    const memory = new PersonalContextService({ ...f.options, host });
+    const first = memory.reviewFact(fact(undefined, { scope, source }));
+    const { replacement: second } = memory.correctFact({ id: first.id, expectedVersion: first.version, replacement: fact(undefined, { scope }) });
+    const { replacement: third } = memory.correctFact({ id: second.id, expectedVersion: second.version, replacement: fact(undefined, { scope }) });
+    const independent = memory.reviewFact(fact(undefined, { scope }));
+    const anchor = { kind: source.kind, conversationId: source.conversationId, messageId: source.messageId };
+    const anchored = memory.previewContext(request({ projectId: scope.id, query: 'What was agreed?', sourceAnchors: [anchor] }));
+    assert.deepEqual(anchored.items, []);
+    const query = request({ projectId: scope.id });
+    const preview = memory.previewContext(query);
+    assert.ok(preview.items.some(item => item.factId === third.id));
+    f.denied.add('record.delete');
+    assert.throws(() => memory.eraseConversationSource(anchor), /personal_context_not_authorized/);
+    assert.doesNotThrow(() => memory.validateContext(preview, query));
+    f.denied.delete('record.delete');
+    f.lock();
+    assert.deepEqual(new Set(memory.eraseConversationSource(anchor).deleted.map(row => row.id)), new Set([first.id, second.id, third.id]));
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM personal_context_revisions WHERE id=?').get(independent.id)?.n, 1);
+  } finally { f.close(); }
+});
+
 test('deletion requires every dependent host authorization and can remove encrypted data while the key is unavailable', () => {
   const f = fixture(); try { f.enable(); const source = f.service.importOriginal(original()), value = f.service.reviewFact(fact(source, { scope: shared })), before = f.counts(); f.denied.add(JSON.stringify(shared)); assert.throws(() => f.service.hardDelete({ id: source.id, expectedVersion: 1 }), /personal_context_not_authorized/); assert.deepEqual(f.counts(), before); f.denied.clear(); f.lock(); assert.deepEqual(new Set(f.service.hardDelete({ id: source.id, expectedVersion: 1 }).deleted.map(item => item.id)), new Set([source.id, value.id])); assert.equal(f.counts().revisions, 1); } finally { f.close(); }
 });
