@@ -715,7 +715,8 @@ app.whenReady().then(async () => {
   win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
-      if (typeof command === "string" && command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture")
+      if ((typeof command === "string" && command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture") ||
+          ["personalMemoryManagementNative", "personalMemoryPolicyNative", "personalMemoryRevokeSourceNative"].includes(command))
         throw Error("unauthorized_private_command");
       if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative','aepExperimentNative'].includes(command))throw Error('unauthorized_private_command');
       if (

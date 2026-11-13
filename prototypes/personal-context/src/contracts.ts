@@ -3,7 +3,7 @@ export const PERSONAL_CONTEXT_CONTRACT = 'aerynth.personal-context/1' as const;
 export type PersonalScope = { kind: 'user.shared' | 'assistant.ordinary' | 'assistant.vela' } | { kind: 'project' | 'conversation'; id: string };
 export interface ScopeProof { scope: PersonalScope; version: string }
 export type Category = 'identity' | 'preferences' | 'projects' | 'people' | 'technical' | 'decisions' | 'temporary' | 'conversation';
-export type Certainty = 'explicit-statement' | 'user-preference' | 'imported-summary' | 'historical-observation' | 'inference' | 'conflicting' | 'unknown';
+export type Certainty = 'explicit-statement' | 'user-reviewed-summary' | 'user-preference' | 'imported-summary' | 'historical-observation' | 'inference' | 'conflicting' | 'unknown';
 export type ConversationSourceRef = { kind: 'conversation-message'; conversationId: string; messageId: string };
 export type ReviewedConversationSource = ConversationSourceRef & { version: string; contentDigest: string };
 export type ConversationSourceProof = Omit<ConversationSourceRef, 'kind'> & {
@@ -23,12 +23,16 @@ export interface ContextRequest {
   requestId: string; assistant: 'ordinary' | 'vela'; providerId: string; query: string;
   projectId: string | null; conversationId: string | null;
   sharedFactIds: string[]; includeBehavior: boolean; maxBytes: number; maxItems: number; maxScan?: number;
+  /** Exact source messages resolved by the trusted context owner. */
+  sourceAnchors?: ConversationSourceRef[];
+  /** Bounded CIE search hints. These do not grant access or act as exact source anchors. */
+  evidenceQueries?: string[];
 }
 export interface ContextItem {
   factId: string; version: number; scope: PersonalScope; purpose: ReviewedFact['purpose']; category: Category;
   text: string; certainty: Certainty; provenance: Provenance; reviewedAt: string;
 }
-export type OmissionReason = 'disabled' | 'outside-scope' | 'not-shared' | 'unavailable' | 'inactive' | 'expired' | 'sensitive-disabled' | 'source-changed' | 'irrelevant' | 'scan-limit' | 'byte-budget' | 'item-budget';
+export type OmissionReason = 'disabled' | 'outside-scope' | 'not-shared' | 'unavailable' | 'inactive' | 'expired' | 'sensitive-disabled' | 'source-changed' | 'irrelevant' | 'unmatched-evidence-query' | 'scan-limit' | 'byte-budget' | 'item-budget';
 export interface PersonalContextManifest {
   contract: typeof PERSONAL_CONTEXT_CONTRACT; id: string; createdAt: string;
   ownerId: string; hostPolicyVersion: string; policyVersion: number; requestDigest: string;
