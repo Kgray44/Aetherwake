@@ -1606,17 +1606,7 @@ function tick(now: number) {
           height: innerHeight,
         });
         sceneState = scene;
-        environment.setSpatialLayer(
-          (
-            application as
-              | (Application & {
-                  spatialLayer?: () =>
-                    | import("../../../constellation/spatial-types.ts").SpatialRenderLayer
-                    | null;
-                })
-              | null
-          )?.spatialLayer?.() ?? null,
-        );
+        environment.setSpatialLayer(application?.spatialLayer?.() ?? null);
         environment.render({
           time: motion.reduced ? 0 : visualClock,
           focus: scene.focus,
@@ -1984,6 +1974,7 @@ const renderer = mountRendererLifecycle({
     else if (change === "interrupted")
       status("Graphics interrupted. Your resources and drafts remain available.");
     else {
+      application?.spatialLayer?.()?.contextRestored?.();
       status("Graphics restored. Workspace state retained.");
       wake();
     }

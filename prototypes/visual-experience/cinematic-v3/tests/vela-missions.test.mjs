@@ -179,6 +179,27 @@ test("illustration preview discloses a billable image request and managed worksp
   } finally { f.view.setVisible(false); }
 });
 
+test("mixed mission preview discloses the image, specialist calls, and local review together", async () => {
+  const f = await fixture(() => assert.fail("preview must not dispatch"));
+  try {
+    f.view.review({
+      fingerprint: "mixed-plan",
+      plan: initial(),
+      executors: [],
+      localReview: { kind: "node-test", maxFiles: 4 },
+      externalReview: { provider: "Vela dedicated API", calls: 2, model: "gpt-6.1-sol", effort: "high" },
+      artifactReview: {
+        prompt: "Illustrate a sailboat", digest: "artifact-digest", model: "gpt-image-2.6-sunburst", quality: "medium",
+        width: 1024, height: 1024, files: ["illustration.png", "illustration-notes.txt"],
+      },
+    }, () => {});
+    const preview = f.dom.root.textContent;
+    assert.match(preview, /one billable image request/);
+    assert.match(preview, /2 separate requests to Vela dedicated API/);
+    assert.match(preview, /tracked Node tests/);
+  } finally { f.view.setVisible(false); }
+});
+
 test("completed host evidence keeps the investigation blocked and offers an attributable partial report", async () => {
   const f=await fixture(async request=>{assert.equal(request.name,'post-report');return {kind:'mission-report',missionId:'mission-a',messageId:'partial-report'};});
   try{

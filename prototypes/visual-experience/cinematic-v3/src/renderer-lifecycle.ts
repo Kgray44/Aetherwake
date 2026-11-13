@@ -1,4 +1,4 @@
-type Renderer = { dispose(): void };
+type Renderer = { dispose(): void; contextLost?(): void };
 type Change = "unavailable" | "interrupted" | "restored";
 
 /** Owns the renderer instance. The application owns the spatial layer. */
@@ -27,6 +27,7 @@ export function mountRendererLifecycle<T extends Renderer>({
   function contextLost(event: Event) {
     event.preventDefault();
     graphicsFailed = true;
+    current?.contextLost?.();
     changed("interrupted");
   }
 

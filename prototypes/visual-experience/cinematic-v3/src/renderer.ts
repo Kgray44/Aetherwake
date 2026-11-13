@@ -514,14 +514,10 @@ export class Environment {
   private readonly targetTint = new THREE.Color(0x8c7cdb);
   private lost = false;
   private disposed = false;
-  private readonly onContextLost = () => {
+  contextLost() {
     this.lost = true;
     this.spatialLayer?.contextLost?.();
-  };
-  private readonly onContextRestored = () => {
-    this.lost = false;
-    this.spatialLayer?.contextRestored?.();
-  };
+  }
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly motion?: MotionCoordinator) {
     try {
@@ -577,8 +573,6 @@ export class Environment {
     this.buildField();
     this.buildFolios();
     this.prepareSceneFades();
-    canvas.addEventListener("webglcontextlost", this.onContextLost);
-    canvas.addEventListener("webglcontextrestored", this.onContextRestored);
   }
 
   private prepareSceneFades() {
@@ -2201,11 +2195,6 @@ export class Environment {
     this.motion?.bodies.delete(this.shapeKey);
     this.spatialLayer = null; // Application owns layer lifetime across renderer recovery.
     this.presenceProjection.dispose();
-    this.canvas.removeEventListener("webglcontextlost", this.onContextLost);
-    this.canvas.removeEventListener(
-      "webglcontextrestored",
-      this.onContextRestored,
-    );
     const geometries = new Set<THREE.BufferGeometry>(),
       materials = new Set<THREE.Material>();
     for (const folio of this.folios) {

@@ -72,3 +72,30 @@ test("initial failure selects fallback and allows a later context restoration", 
   assert.equal(lifecycle.graphicsFailed, false);
   assert.deepEqual(changes, ["unavailable", "restored"]);
 });
+
+test("the lifecycle delivers every loss to the current renderer across replacements", () => {
+  const canvas = new EventTarget();
+  const events = [];
+  let nextId = 0;
+  mountRendererLifecycle({
+    canvas,
+    page: new EventTarget(),
+    create() {
+      const id = ++nextId;
+      return {
+        contextLost: () => events.push("lost " + id),
+        dispose: () => events.push("disposed " + id),
+      };
+    },
+    changed: (change) => events.push(change),
+    failed: (error) => assert.fail(error),
+  });
+  for (let cycle = 0; cycle < 2; cycle++) {
+    canvas.dispatchEvent(new Event("webglcontextlost", { cancelable: true }));
+    canvas.dispatchEvent(new Event("webglcontextrestored"));
+  }
+  assert.deepEqual(events, [
+    "lost 1", "interrupted", "disposed 1", "restored",
+    "lost 2", "interrupted", "disposed 2", "restored",
+  ]);
+});
