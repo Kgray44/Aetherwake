@@ -57,9 +57,9 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
   }
   async function load(after: string | null) {
     const intent = ++selection;
+    detail.replaceChildren();
     const page = await command({ type: 'list', after }) as Page;
     if (intent !== selection) return;
-    detail.replaceChildren();
     if (after === null) list.replaceChildren();
     if (!currentPolicy || page.policy.version >= currentPolicy.version) renderPolicy(page.policy);
     for (const record of page.records) {
@@ -116,7 +116,14 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
     const origin = fact.provenance;
     if (openSource && origin.kind === 'conversation-message') {
       detail.append(button('Open original message', async () => {
-        const latest = await command({ type: 'read', id: fact.id }) as ReviewedFact;
+        let latest: ReviewedFact;
+        try {
+          latest = await command({ type: 'read', id: fact.id }) as ReviewedFact;
+        } catch (error) {
+          if (intent !== selection) return;
+          detail.replaceChildren(manage(fact, 'delete'));
+          throw error;
+        }
         if (intent !== selection) return;
         const current = latest.provenance;
         if (latest.version !== fact.version || current.kind !== 'conversation-message' ||

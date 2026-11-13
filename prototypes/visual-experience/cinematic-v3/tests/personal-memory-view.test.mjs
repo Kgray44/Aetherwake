@@ -113,6 +113,10 @@ test('opening a saved memory source rechecks the record and opens its exact mess
     button.fire('click');
     await until(() => !button.disabled);
     assert.equal(opened.length, 1);
+    assert.doesNotMatch(view.textContent, /Synthetic decision/);
+    assert.equal(named(view, 'Open original message'), undefined);
+    assert.equal(named(view, 'Export'), undefined);
+    assert.ok(named(view, 'Delete'));
   } finally { restore(); }
 });
 
