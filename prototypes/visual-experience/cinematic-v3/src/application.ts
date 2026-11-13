@@ -2511,6 +2511,7 @@ export function installApplication(hooks: Hooks) {
       motion: experienceMotion,
       viewId: "conversation-manager",
       models: ordinaryModelControls,
+      chooseDocument: chooseChatDocument,
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
@@ -2547,6 +2548,12 @@ export function installApplication(hooks: Hooks) {
       },
     });
     await controller.ready;
+  }
+  async function chooseChatDocument() {
+    const picked = await mediaClient.chooseMediaForAdd({ kind: "file", variant: "document" });
+    if (!picked) return null;
+    const { id, version, title } = picked.resource;
+    return { id, version, title };
   }
   function openVela() {
     if (velaOpen) {
@@ -4360,6 +4367,7 @@ export function installApplication(hooks: Hooks) {
           motion: experienceMotion,
           viewId: "block:" + b.id + ":conversation",
           models: ordinaryModelControls,
+          chooseDocument: chooseChatDocument,
           viewPersistence: chatViewPersistence,
           onProviderChange: async (change) => {
             if (change.mode === "continuation") {

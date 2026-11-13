@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { fixtureFileEditHost, fixtureFileEditScratchRoot } from './fixture-file-edit-admission.mts';
 import { tmpdir } from 'node:os';
 import { join,resolve,relative,isAbsolute } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { BackendCore } from '../src/core.mts';
@@ -24,6 +24,9 @@ import { agentTemplates } from '../../agent-product/service.mts';
 import { VELA_IDENTITY_PROMPT, VELA_IDENTITY_VERSION } from '../../vela-core/src/vela-identity.mts';
 import type { AgentMutationReceipt, AgentProviderCatalog } from '../../agent-product/contracts.ts';
 import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
+import { docxFixture, pdfFixture } from '../../block-library/tests/media-fixtures.mts';
+import { extractDocumentText } from '../../visual-experience/cinematic-v3/src/document-text-worker.ts';
+import type { NativeDocumentTextServices } from '../src/document-text-host.mts';
 import type { MissionPlanningOffer, MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview } from '../src/mission-contracts.mts';
 import type { MissionTeam } from '../src/mission-teams.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
@@ -42,10 +45,57 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', h
  const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream',...(body.reasoning?['reasoning']:[]),...(body.tools?['tools','tool_choice']:[])]);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
  const provider = useCodexProtocolDouble ? { provider: 'codex' as const, codexExecutable: process.execPath,
    codexArgs: [fileURLToPath(new URL('../../codex-bridge/tests/catalog-server.mjs', import.meta.url)), codexMode] } : { provider: 'fixture' as const };
- let core:BackendCore;const create=()=>{core=new BackendCore({path,...provider,contentPolicy:'synthetic-only',...(historyContext===undefined?{}:{velaHistoryContext:historyContext})},event=>events.push(event),fileEditRoots?fixtureFileEditHost([dir,...fileEditRoots]):undefined,{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
- return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(realpathSync.native(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
+ let core: BackendCore;
+ const documents: NativeDocumentTextServices = {
+  async extract(input, signal) {
+   const { metadata } = await core.command('mediaDescribe', { resourceId: input.resourceId });
+   assert.equal(metadata.source, 'file');
+   const chunk = await core.command('mediaReadChunk', { ...input, offset: 0, length: metadata.byteLength });
+   const result = await extractDocumentText(Uint8Array.from(Buffer.from(chunk.base64, 'base64')), input.format, input.maxTextBytes, signal);
+   return { ...result, jobId: input.jobId, sourceRevision: input.sourceRevision,
+    ...(result.state === 'complete' ? { textDigest: createHash('sha256').update(result.text).digest('hex') } : {}) } as Awaited<ReturnType<NativeDocumentTextServices['extract']>>;
+  },
+ };
+ const create=()=>{core=new BackendCore({path,...provider,nativeMedia:true,contentPolicy:'synthetic-only',...(historyContext===undefined?{}:{velaHistoryContext:historyContext})},event=>events.push(event),{...(fileEditRoots?fixtureFileEditHost([dir,...fileEditRoots]):{}),documents},{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
+ return {dir,get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(realpathSync.native(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
+for (const format of ['txt', 'pdf', 'docx'] as const) test('ordinary document send reviews ' + format + ' text and refuses replacement during review', async () => {
+ const f = fixture();
+ try {
+  const path = join(f.dir, 'Synthetic brief.' + format);
+  const content = { pdf: 'Searchable second page', docx: 'Table cell', txt: 'Synthetic document evidence: the sample weighs twelve grams.' }[format];
+  writeFileSync(path, format === 'pdf' ? pdfFixture() : format === 'docx' ? docxFixture() : content);
+  const { resource } = await f.core.command('mediaImportTrusted', {
+   kind: 'file', variant: 'document', commandId: randomUUID(), selection: { kind: 'file', path },
+  });
+  const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+  const call = f.core.command.bind(f.core);
+  const input = {
+   name: 'send', input: { resourceId: chat.resourceId, expectedRevision: chat.revision,
+    content: 'What does the sample weigh?', commandId: randomUUID(),
+    documents: [{ id: resource.id, version: resource.version }] },
+  };
+  await assert.rejects(conversationCommand({ call, input, reviewSources: async () => false }), /authorization_cancelled/);
+  assert.equal(f.requests.length, 0);
+  f.responses.push(() => complete('resp-document', 'Twelve grams.'));
+  const result = await conversationCommand({ call, input, reviewSources: async ({ review }: any) => {
+   assert(review.context.included[0].content.includes(content));
+   assert.equal(review.context.included[0].id, resource.id);
+   assert.equal(review.prompt.includes(path), false);
+   return true;
+  } });
+  assert.equal(result.state, 'provider_completed');
+  assert.equal(f.requests.length, 1);
+  assert(f.requests[0].input.some((message: { content: string }) => message.content.includes(content)));
+  const revised = { ...input, input: { ...input.input, expectedRevision: chat.revision + 2, commandId: randomUUID() } };
+  await assert.rejects(conversationCommand({ call, input: revised, reviewSources: async () => {
+   writeFileSync(path, 'Changed synthetic document text');
+   return true;
+  } }), /document_text_unavailable|source_changed/);
+  assert.equal(f.requests.length, 1);
+ } finally { await f.close(); }
+});
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
 
 test('a captured chat reply retains the edited note, workspace placement and save receipt across restart', async () => {
