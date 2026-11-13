@@ -26,6 +26,8 @@ async function managePersonalMemory({ input, trustedFrame, observeGesture, allow
     const selection = { type: "previewSourceRevocation", id, version };
     const { binding, sourceText } = await send(selection);
     requireFrame();
+    if (binding?.reviewedFact?.id !== id || binding.reviewedFact.version !== version)
+      throw Error("personal_memory_review_mismatch");
     if (!await confirm({ action: "revokeSource", sourceText, binding, id, version })) return { status: "cancelled" };
     requireFrame();
     if (!await allowWrite()) throw Error("storage_reserve_admission_denied");
@@ -33,7 +35,8 @@ async function managePersonalMemory({ input, trustedFrame, observeGesture, allow
     // The memory can change during review independently of its source conversation.
     const current = await send(selection);
     requireFrame();
-    if (current.sourceText !== sourceText || current.binding.conversationId !== binding.conversationId ||
+    if (current.binding?.reviewedFact?.id !== id || current.binding.reviewedFact.version !== version ||
+        current.sourceText !== sourceText || current.binding.conversationId !== binding.conversationId ||
         current.binding.messageId !== binding.messageId || current.binding.expectedRevision !== binding.expectedRevision)
       throw Error("personal_memory_review_mismatch");
     const { erasedFacts } = await call("personalMemoryRevokeSourceNative", binding);

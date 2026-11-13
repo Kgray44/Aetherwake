@@ -56,8 +56,8 @@ test("turning off ChatGPT memory requires current gesture and forwards only a ve
 });
 
 test("source revocation only commits the native binding after confirmation and renewed admission", async () => {
-  const binding = { conversationId: "chat", messageId: "message", expectedRevision: 7 };
-  for (const outcome of ["apply", "cancel", "frame", "reserve", "gesture", "stale", "changed source"]) {
+  const binding = { conversationId: "chat", messageId: "message", expectedRevision: 7, reviewedFact: { id: "fact", version: 3 } };
+  for (const outcome of ["apply", "cancel", "frame", "reserve", "gesture", "stale", "changed source", "unbound", "changed fact binding"]) {
     const calls = [];
     let current = true;
     let storageAllowed = true;
@@ -70,11 +70,15 @@ test("source revocation only commits the native binding after confirmation and r
         calls.push([command, request]);
         if (calls.length === 2 && outcome === "stale") throw Error("stale_personal_context_version");
         if (calls.length === 2 && outcome === "changed source") return { binding: { ...binding, expectedRevision: 8 }, sourceText: "Synthetic original" };
+        if (outcome === "unbound") return { binding: { ...binding, reviewedFact: undefined }, sourceText: "Synthetic original" };
+        if (calls.length === 2 && outcome === "changed fact binding")
+          return { binding: { ...binding, reviewedFact: { id: "other", version: 3 } }, sourceText: "Synthetic original" };
         return request.type === "previewSourceRevocation"
           ? { binding, sourceText: "Synthetic original" }
           : { erasedFacts: 2 };
       },
       async confirm(review) {
+        assert.notEqual(outcome, "unbound");
         assert.deepEqual(review, { action: "revokeSource", sourceText: "Synthetic original", binding, id: "fact", version: 3 });
         current = outcome !== "frame";
         storageAllowed = outcome !== "reserve";
@@ -87,11 +91,11 @@ test("source revocation only commits the native binding after confirmation and r
     if (outcome === "reserve") await assert.rejects(operation, /storage_reserve_admission_denied/);
     if (outcome === "gesture") await assert.rejects(operation, /personal_memory_user_gesture_required/);
     if (outcome === "stale") await assert.rejects(operation, /stale_personal_context_version/);
-    if (outcome === "changed source") await assert.rejects(operation, /personal_memory_review_mismatch/);
+    if (["changed source", "unbound", "changed fact binding"].includes(outcome)) await assert.rejects(operation, /personal_memory_review_mismatch/);
     const expected = outcome === "gesture" ? [] : [
       ["personalMemoryManagementNative", { type: "previewSourceRevocation", id: "fact", version: 3 }],
     ];
-    if (["apply", "stale", "changed source"].includes(outcome)) expected.push(expected[0]);
+    if (["apply", "stale", "changed source", "changed fact binding"].includes(outcome)) expected.push(expected[0]);
     if (outcome === "apply") expected.push(["personalMemoryRevokeSourceNative", binding]);
     assert.deepEqual(calls, expected);
   }
