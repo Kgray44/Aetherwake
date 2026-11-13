@@ -682,7 +682,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
       if (typeof command === "string" && ((command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture") ||
-          ["personalMemoryPolicyNative", "personalMemoryManagementNative", "authorizeConversationSend"].includes(command)))
+          ["personalMemoryPolicyNative", "personalMemoryManagementNative", "authorizeConversationSend",
+           "velaRequestPreview", "velaNativeReview", "authorizeVelaRequest"].includes(command)))
         throw Error("unauthorized_private_command");
       if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative','aepExperimentNative'].includes(command))throw Error('unauthorized_private_command');
       if (
@@ -966,9 +967,23 @@ app.whenReady().then(async () => {
             reviewProvider,
             missionFileEditRequest:request=>missionFileEditBroker.prepare(event,request),
             observeNativeRequest: observeVelaRequest,
-            beforeMemoryPreview: async () => trustedActiveFrame(event) &&
-              await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) === true &&
-              trustedActiveFrame(event),
+            beforeMemoryPreview: async () => {
+              if (!trustedActiveFrame(event) ||
+                  await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
+                  !trustedActiveFrame(event)) return false;
+              const policy = await call("personalMemoryPolicyNative", {});
+              if (policy.velaEnabled) return trustedApplicationFrame(event);
+              if (!policy.storageEnabled) throw Error("personal_memory_no_eligible_context");
+              const choice = await reviewDialogs.showMessageBox(win, {
+                type: "question", title: "Aerynth memory", message: "Enable saved memory for the Vela API?",
+                detail: "When you request saved memory, Vela can include relevant facts after you review the exact request.",
+                buttons: ["Cancel", "Enable memory"], defaultId: 0, cancelId: 0, noLink: true,
+              });
+              if (choice.response !== 1) throw Error("authorization_cancelled");
+              if (!trustedApplicationFrame(event) || !await storage.allowWrite() || !trustedApplicationFrame(event)) return false;
+              await call("personalMemoryPolicyNative", { assistant: "vela", enable: true, expectedVersion: policy.version });
+              return trustedApplicationFrame(event);
+            },
             validateMemoryReview: () => !closing && !backendFailed && trustedApplicationFrame(event),
             offerPlanningByDefault: !verify || verifyAirLocal,
             directMessageSend: !verify || verifyAirLocal || verifyMissions && (process.argv.includes('--missions-api-live-only')||process.argv.includes('--missions-persistence-live-only')),

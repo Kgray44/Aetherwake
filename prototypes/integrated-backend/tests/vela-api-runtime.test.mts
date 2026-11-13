@@ -14,6 +14,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { BackendCore } from '../src/core.mts';
+import { NativePersonalMemory } from '../src/personal-memory.mts';
+import { createPersonalMemoryReview } from '../src/personal-memory-review.mts';
+import type { PersonalScope } from '../../personal-context/src/contracts.ts';
 import type { NativeHostServices } from '../src/native-host.mts';
 import type { VelaRequest, VelaState } from '../../vela-core/src/contracts.ts';
 import type { StreamEvent } from '../src/contracts.mts';
@@ -88,6 +91,63 @@ function fixture() {
 const weatherQuery:WeatherQuery={startDate:null,endDate:null,period:'tomorrow',metrics:['temperature','humidity'],aggregation:'range'};
 const weatherCall=(query:unknown=weatherQuery,id='resp-weather',callId='call-weather')=>response('',id,[{type:'function_call',id:'fc-'+callId,call_id:callId,name:WEATHER_TOOL_NAME,arguments:JSON.stringify(query),status:'completed'}] as any);
 const unavailableWeather=()=>readWeatherData(weatherQuery,new AbortController().signal,{authorize(){throw Error('location_os_denied');},locate:async()=>{throw Error('unexpected_location');},fetch:async()=>{throw Error('unexpected_weather_network');}});
+
+test('Vela Core binds approved memory to its canonical request and exact transport', async () => {
+  const f = fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const state = await f.core.command('vela', { name: 'open', input: {} }) as VelaState;
+    const conversationId = state.conversation!.resourceId;
+    const project = (await f.core.command('desktop', { type: 'createProject', title: 'Synthetic relay project' })).projects[0];
+    const workspace = (await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic memory workspace', projectId: project.id })).workspaces[0];
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
+    const body = 'Use the synthetic quartz relay.';
+    const source = { conversationId: 'source-chat', messageId: 'source-message', projectId: project.id,
+      role: 'user' as const, sensitive: false, version: '1', contentDigest: createHash('sha256').update(body).digest('hex') };
+    const sources = { resolveScope: (scope: PersonalScope) => ({ scope, version: '1' }), resolveConversationSource: () => source };
+    const kernel = (f.core as any).kernel;
+    const review = createPersonalMemoryReview({ ...sources, transaction: kernel.withTransaction.bind(kernel),
+      open: () => owner.open(), readSourceText: () => body,
+      resolveVelaRecallTarget: () => ({ conversationId, projectId: project.id }) });
+    let key: string;
+    const owner = new NativePersonalMemory({ kernel,
+      secrets: { available: async () => true, async seal(value) { key = value; return randomBytes(64); }, async open() { return key; } },
+      host: { ...sources, identity: () => ({ userId: 'synthetic', policyVersion: '1' }),
+        authorize: input => review.authorize(input) ? { decision: 'allow', policyVersion: '1', authorizationRef: 'synthetic-review' } : { decision: 'deny' } } });
+    Object.assign(f.core, { personalMemoryReview: review, personalMemory: owner });
+    const saved = await review.commitCapture(await review.previewCapture({ conversationId: source.conversationId, messageId: source.messageId,
+      text: body, scope: 'project', category: 'decisions', keywords: ['quartz'] }));
+    const settings = await f.core.command('personalMemoryPolicyNative', {});
+    await f.core.command('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: settings.version });
+    const intent = 'Which quartz relay should I use?';
+    const preview = await f.core.command('velaRequestPreview', { intent, resourceIds: [], adaptive: true, providerId: 'openai-api-vela', useMemory: true });
+    assert.equal(preview.sendDisposition, 'review-required');
+    const binding = { previewId: preview.id, signature: preview.signature };
+    const nativeReview = await f.core.command('velaNativeReview', binding);
+    assert.deepEqual(nativeReview.memory, preview.memory);
+    assert.match(nativeReview.prompt, /Use the synthetic quartz relay/);
+    await assert.rejects(f.core.command('authorizeVelaRequest', { ...binding, reviewDigest: nativeReview.reviewDigest, directSend: true }), /review_required/);
+    const grant = await f.core.command('authorizeVelaRequest', { ...binding, reviewDigest: nativeReview.reviewDigest });
+    f.replies.push(request => {
+      assert.deepEqual(request.input, [{ role: 'user', content: nativeReview.prompt }]);
+      assert.equal(request.tools, undefined);
+      return response('Synthetic relay answer.');
+    });
+    const result = await f.core.command('vela', { name: 'request', input: { intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId: grant.grantId } }) as VelaRequest;
+    assert.equal(result.id, preview.id);
+    assert.equal(result.state, 'responded');
+    const pending = await f.core.command('velaRequestPreview', { intent, resourceIds: [], adaptive: true, providerId: 'openai-api-vela', useMemory: true });
+    const pendingBinding = { previewId: pending.id, signature: pending.signature };
+    const pendingReview = await f.core.command('velaNativeReview', pendingBinding);
+    const pendingGrant = await f.core.command('authorizeVelaRequest', { ...pendingBinding, reviewDigest: pendingReview.reviewDigest });
+    await review.commitManagement(await review.previewManagement({ action: 'revoke', id: saved.id, version: saved.version }));
+    await assert.rejects(f.core.command('vela', { name: 'request', input: {
+      intent, resourceIds: [], authorizeProvider: true, previewId: pending.id, grantId: pendingGrant.grantId,
+    } }), /stale_personal_context/);
+    assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});
 
 test('Vela memory transport binds one reviewed user prompt and forbids tool continuations', async () => {
   const f = fixture();

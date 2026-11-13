@@ -786,7 +786,9 @@ export class VelaService {
       const { history: _history, agentInstructions: _agentInstructions, operations, ...storedContext } = providerContext;
       const conversationId=this.conversationId(),baseRevision=frozen?this.opts.host.conversationRevision?.(conversationId):undefined;
       if(frozen)check(Number.isSafeInteger(baseRevision)&&Number(baseRevision)>=1&&Number(baseRevision)<Number.MAX_SAFE_INTEGER,'canonical_history_revision_required');
-      const r: VelaRequest = { id: randomUUID(), conversationId, intent: input.intent,
+      const requestId = frozen?.requestId ?? randomUUID();
+      check(identifier(requestId) && !this.data.requests.some(item => item.id === requestId), 'invalid_canonical_request');
+      const r: VelaRequest = { id: requestId, conversationId, intent: input.intent,
         state: 'planning', createdAt: this.now(), updatedAt: this.now(), providerId: planner?.providerId ?? null,
         context: storedContext, origin: this.historyOrigin(scope), inputContentDigest: historyDigest(input.intent),
         ...(operations ? { operationContext: { contract: operations.contract, digest: operations.digest,

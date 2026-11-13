@@ -60,6 +60,7 @@ export interface HistorySelection { history?: ProviderHistory; fence: HistoryFen
 export interface AcceptedHistoryAppend { requestId: string; messageId: string; contentDigest: string; revision: number }
 /** Core-only, non-serializable bridge from its actual approved private preview/grant. Never renderer input. */
 export interface PrivateFrozenProviderContext {
+  requestId?: string;
   context: Readonly<ContextManifest & { history?: ProviderHistory }>;
   historyFence?: HistoryFence;
   validate(phase: 'before-append' | 'before-provider' | 'before-response', acceptedAppend?: AcceptedHistoryAppend): void;
