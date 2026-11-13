@@ -32,7 +32,7 @@ function response(content:string,model:string,terminal:string|null=content, frag
     usage:{input_tokens:100,output_tokens:40,total_tokens:140}}}].map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
 }
 function fixture(velaHistoryContext = false, nativeMedia = false, documents?: NativeDocumentTextServices, liveCredential?: string,
-  artifactFixture = false, alternateRootCase = false) {
+  artifactFixture = false, alternateRootCase = false, codexCwd?: string) {
   const base=resolve(tmpdir()),directory=mkdtempSync(join(base,'aerynth-mission-api-')),path=join(alternateRootCase ? directory.toUpperCase() : directory,'canonical.sqlite'),key=randomBytes(32),requests:any[]=[],replies:((body:any)=>Response|Promise<Response>)[]=[];
   let catalogModels = ['gpt-6-luna', 'gpt-6.1-sol'];
   let beforeCredentialOpen: (() => Promise<void>) | undefined;
@@ -45,7 +45,8 @@ function fixture(velaHistoryContext = false, nativeMedia = false, documents?: Na
       artifactFixture && String(url) === 'https://api.openai.com/v1/images/generations');
     assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
     const body=JSON.parse(String(init?.body));requests.push(body);const next=replies.shift();assert.ok(next,'unexpected API inference');return next(body);}) as typeof fetch};
-  const create=()=>new BackendCore({path,provider:'fixture',contentPolicy:liveCredential ? 'local-private' : 'synthetic-only',
+  const create=()=>new BackendCore({path,provider:codexCwd ? 'codex' : 'fixture',...(codexCwd ? { cwd: codexCwd } : {}),
+    contentPolicy:liveCredential ? 'local-private' : 'synthetic-only',
     ...(liveCredential || artifactFixture ? { privateRoot: alternateRootCase ? directory.toUpperCase() : directory } : {}), velaHistoryContext,nativeMedia},()=>{},native,undefined,liveCredential ? undefined : api);let core=create();
   const preview=async(text=objective)=>await core.command('missions',{name:'preview',input:{objective:text}}) as MissionPlanningOffer;
   const plan=async(offer:MissionPlanningOffer,requestId=randomUUID())=>await core.command('missionPlanReviewed',{objective:offer.objective,fingerprint:offer.fingerprint,requestId}) as MissionPreview;
@@ -405,13 +406,21 @@ test('composed artifact mission retains verified files when a native branch fail
   } finally { await f.close(); }
 });
 
-test('reviewed mixed mission sends the work clause to specialists and the prompt only to the image route', async () => {
-  const f = fixture(false, true, undefined, undefined, true);
+test('reviewed mixed mission sends the work clause to specialists and the prompt only to the image route', { timeout: 145_000 }, async t => {
+  const live = process.env.AERYNTH_VERIFY_LIVE_CODEX_ARTIFACT === '1';
+  const testPath = live ? process.env.AERYNTH_MIXED_CODEX_TEST : undefined;
+  const credential = live ? process.env.OPENAI_API_KEY : undefined;
+  if (live) {
+    assert.ok(process.platform === 'win32' && credential && testPath && isAbsolute(testPath));
+    delete process.env.OPENAI_API_KEY;
+  }
+  const f = fixture(false, true, undefined, credential, true, false, testPath ? resolve(testPath, '..') : undefined);
   try {
     f.setCatalogModels(['gpt-6.1-sol', missionImageModel]);
     await f.ready();
     await f.pin({ providerId: 'openai-api-vela', model: 'gpt-6.1-sol' });
-    const work = 'Measure CPU and RAM with two independent specialists';
+    const work = testPath ? 'Run selected Node tests and measure CPU and RAM with two independent specialists' :
+      'Measure CPU and RAM with two independent specialists';
     const imagePrompt = 'A private illustrative detail: draw a blue square';
     const objective = `Run a mission to ${work}; generate an illustration: ${imagePrompt}`;
     const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
@@ -419,20 +428,62 @@ test('reviewed mixed mission sends the work clause to specialists and the prompt
     assert.equal(preview.externalReview?.calls, 2);
     assert.equal(preview.artifactReview?.prompt, imagePrompt);
     const answer = JSON.stringify({ observations: ['Compare repeated observations', 'Record ambient load'] });
-    f.replies.push(...Array.from({ length: 3 }, () => (body: any) => body.model === missionImageModel
+    if (!live) f.replies.push(...Array.from({ length: 3 }, () => (body: any) => body.model === missionImageModel
       ? Response.json({ data: [{ b64_json: illustrationFixture().toString('base64') }] })
       : response(answer, body.model)));
-    const { id } = await f.core.command('missionStartReviewed', {
-      objective, fingerprint: preview.fingerprint, requestId: randomUUID(), approvedArtifactDigest: preview.artifactReview!.digest,
-    }) as MissionProjection;
+    const input = { objective, fingerprint: preview.fingerprint, requestId: randomUUID() };
+    const approval = { ...input, approvedArtifactDigest: preview.artifactReview!.digest };
+    const { id } = testPath ? await (async () => {
+      assert.equal(preview.localReview?.kind, 'node-test');
+      await assert.rejects(f.core.command('missionStartReviewed', approval), /mission_project_check_review_required/);
+      const { startReviewedMission } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/mission-start-broker.cjs');
+      const localURL = 'file:///synthetic-aerynth/index.html', mainFrame = { url: localURL };
+      const webContents = { mainFrame, isDestroyed: () => false, getURL: () => localURL };
+      const win = { webContents, isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => true };
+      const reviews: string[] = [];
+      const result = await startReviewedMission({ win, localURL, event: { sender: webContents, senderFrame: mainFrame },
+        input: { name: 'start', input }, storage: { allowWrite: async () => true }, call: f.core.command.bind(f.core),
+        dialog: {
+          showOpenDialog: async () => ({ canceled: false, filePaths: [testPath] }),
+          showMessageBox: async (_window: unknown, review: { title: string; detail: string }) => {
+            reviews.push(review.title);
+            if (review.title === 'Review specialist mission') {
+              assert.ok(review.detail.includes(work));
+              assert.ok(!review.detail.includes(imagePrompt));
+            }
+            return { response: 1 };
+          },
+        },
+      }) as MissionProjection;
+      assert.deepEqual(reviews, ['Review illustration mission', 'Review specialist mission', 'Review read-only project tests']);
+      return result;
+    })() : await f.core.command('missionStartReviewed', approval) as MissionProjection;
     let result: MissionProjection;
-    const deadline = performance.now() + 7000;
+    const deadline = performance.now() + (live ? 125_000 : 7000);
     do {
       result = await f.core.command('missions', { name: 'read', input: { id } }) as MissionProjection;
       if (!['queued', 'running'].includes(result.outcome)) break;
       await delay(25);
     } while (performance.now() < deadline);
     assert.equal(result.outcome, 'verified', JSON.stringify(result.tasks.map(task => [task.id, task.state, task.detail])));
+    if (live) {
+      const check = result.tasks.find(task => task.executor === 'codex.project-check')?.attempts[0];
+      assert.equal(check?.resourceLease?.kind, 'build');
+      assert.equal(check?.evidence?.source, 'codex-app-server:read-only-command');
+      assert.equal((check?.evidence?.value as { testCount?: number })?.testCount, 1);
+      const trace = await f.core.command('missions', { name: 'execution-profile', input: { id } }) as MissionExecutionProfile;
+      assert.equal(trace.economics.providerCalls, 3);
+      assert.ok(trace.work.overlapMs && trace.work.overlapMs > 0);
+      assert.ok(trace.work.criticalPath);
+      const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
+      const report = state.conversation?.messages.find(message => message.missionReport?.missionId === id);
+      assert.match(report?.content ?? '', /1 test passed/);
+      assert.match(report?.content ?? '', /illustration\.png.*illustration-notes\.txt/u);
+      assert.match(report?.content ?? '', /Specialist reported:/u);
+      t.diagnostic(JSON.stringify({ id, providerCalls: 3, codexTests: 1, overlapMs: trace.work.overlapMs,
+        criticalPathMs: trace.work.criticalPath.durationMs, reportedTokens: trace.economics.reportedTotalTokens }));
+      return;
+    }
     assert.equal(f.requests.length, 3);
     assert.deepEqual(f.requests.filter(body => body.model === missionImageModel).map(body => body.prompt), [imagePrompt]);
     for (const request of f.requests.filter(body => body.model !== missionImageModel)) {
