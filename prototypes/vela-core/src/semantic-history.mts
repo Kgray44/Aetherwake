@@ -271,6 +271,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         const bytes = Buffer.byteLength(JSON.stringify(excerpt)) + Number(excerpts.length > 0);
         const byteLimit = rounds === 1 && owner.adaptiveDiscovery ? assessmentLimit - gapReserveBytes : assessmentLimit;
         if (assessmentBytes + bytes > byteLimit) { partial(); continue; }
+        if (source.partial) partial();
         assessmentBytes += bytes;
         excerpts.push(excerpt);
         observed.add(source.sourceId);

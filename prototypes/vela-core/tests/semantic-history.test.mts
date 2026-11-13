@@ -219,6 +219,18 @@ test('reports partial owner coverage and retains usable hits after an oversized 
   assert.deepEqual(result.coverage[0].sources, [candidate]);
 });
 
+test('reports a partial excerpt without discarding a fact it directly supports', async () => {
+  const excerpt = { ...candidate, partial: true as const };
+  const result = await investigateSemanticHistory(request, {
+    search: () => ({ sources: [excerpt], scan: 'bounded' }),
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : answer,
+  });
+  assert.equal(result.searchCoverage, 'partial');
+  assert.equal(result.coverage[0].status, 'supported');
+  assert.deepEqual(result.coverage[0].sources, [excerpt]);
+});
+
 test('separates inferred intent, constraints and verification from the search proposal', async () => {
   const result = await investigateSemanticHistory('Put the handoff on paper and make sure the safety check is covered.', {
     search: () => assert.fail('the model reported no historical evidence need'),
