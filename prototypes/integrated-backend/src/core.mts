@@ -201,6 +201,8 @@ const toVelaReviewedEvidenceSource = (source: ContextManifest['included'][number
 };
 
 interface PrivateVelaPreview extends VelaRequestPreview {
+  memoryRecall?: VelaMemoryRecall;
+  memoryBasePrompt?: string;
   projectEvidenceSources?: ContextManifest['included'];
   voiceInput?: { messageId:string; context:LiveCanonicalContext };
   connectionVersion?: number;
@@ -221,6 +223,7 @@ interface PrivateVelaPreview extends VelaRequestPreview {
 }
 
 type OrdinaryMemoryRecall = NonNullable<Awaited<ReturnType<ReturnType<typeof createPersonalMemoryReview>['prepareOrdinaryRecall']>>>;
+type VelaMemoryRecall = NonNullable<Awaited<ReturnType<ReturnType<typeof createPersonalMemoryReview>['prepareVelaRecall']>>>;
 
 export class BackendCore {
   private personalMemory?: NativePersonalMemory;
@@ -3095,8 +3098,8 @@ export class BackendCore {
     // Leave room for the host to return a terminal result before the desktop command deadline.
     const turnSignal = gapFollowup ? AbortSignal.any([controller.signal, AbortSignal.timeout(VELA_REVIEWED_GAP_TURN_MS)]) : controller.signal;
     const planning = preview.route.kind === 'app-planning';
-    const tools=preview.semanticContext ? undefined : this.toolPort(input,preview);
-    const weatherTool=preview.semanticContext ? undefined : this.apiWeatherTool(input.requestId);
+    const tools=preview.semanticContext || preview.memoryRecall ? undefined : this.toolPort(input,preview);
+    const weatherTool=preview.semanticContext || preview.memoryRecall ? undefined : this.apiWeatherTool(input.requestId);
     const validate = () => {
       ensure(this.velaGrants.get(pair[0]) === grant && (grant.consumed || Date.parse(grant.expiresAt) > Date.now()), 'native_vela_grant_expired');
       if (preview.semanticContext) ensure(!this.closed && !turnSignal.aborted && this.missionStorageAdmitted,
@@ -3114,10 +3117,11 @@ export class BackendCore {
     const request: VelaApiRun = { requestId: input.requestId, version: preview.connectionVersion, model: preview.route.model,
       ...(preview.route.effort ? { reasoningEffort: preview.route.effort } : {}),
       prompt: preview.prompt, contextDigest: preview.signature, validate,
+      ...(preview.memoryRecall ? { memory: preview.memoryRecall } : {}),
       ...(tools ? {tools,...(resume?{resume:resume.ref,resumeReceipt:resume.receipt}:{}),...(transition?{resumeContext:transition}:{}),advanceContext:receipts=>this.advanceToolContext(input.requestId,receipts),validateResumeContext:(certificate,binding)=>this.validateToolContextAdvance(input.requestId,certificate,binding)} : {oneUse:true}),
       ...(weatherTool?{weatherTool}:{}),
-      instruction:[...(weatherTool?['Interpret current-location weather questions using get_weather_forecast, including informal phrasing, humidity, weekdays and averages. Answer concisely from its returned forecast and coverage; never invent missing data or a complete mean for a partial period. Do not propose a readWeather plan. General weather explanations need no location lookup.']:[]),
-        ...(planning?['Contribute a typed Aerynth action plan to Vela. The reviewed tools retrieve data or schemas; no app mutation has run. Fetch each action schema before proposing it. Return exactly the JSON envelope specified in the user payload. Do not invent IDs or capabilities.']:[])].join(' '),
+      ...(preview.memoryRecall ? {} : { instruction:[...(weatherTool?['Interpret current-location weather questions using get_weather_forecast, including informal phrasing, humidity, weekdays and averages. Answer concisely from its returned forecast and coverage; never invent missing data or a complete mean for a partial period. Do not propose a readWeather plan. General weather explanations need no location lookup.']:[]),
+        ...(planning?['Contribute a typed Aerynth action plan to Vela. The reviewed tools retrieve data or schemas; no app mutation has run. Fetch each action schema before proposing it. Return exactly the JSON envelope specified in the user payload. Do not invent IDs or capabilities.']:[])].join(' ') }),
       ...(planning?{catalog:preview.catalog}:{}),
       ...(this.missions.fullProfilingClock() ? { observeTransport: (executionId, timing) => {
         if (trace?.executionId === executionId) trace.timing.observeTransport(timing);
@@ -3430,6 +3434,7 @@ export class BackendCore {
   }
   private velaState():VelaBackendState {
     const state=this.vela.state(),nativeCapabilities:VelaBackendState['nativeCapabilities']={};
+    if (this.personalMemoryReview && this.missionStorageAdmitted) state.reviewedMemoryAvailable = true;
     if (this.velaPlanner.providerId === 'codex-app-server') {
       state.planningProviders = [
         { providerId: this.velaPlanner.providerId, available: this.velaPlanner.availability().available },
@@ -3990,7 +3995,7 @@ export class BackendCore {
     if(preview.frozenContext.operations)this.vela.validateOperationContext(preview.frozenContext.operations,this.inspectVelaOperationWorkspace);
     if((preview.nativeReviewed||options.nativeReview)&&!preview.historyFence)this.validateVelaInputAnchor(preview,options.metadataOnly===true);
     // The schema tool validates immutable proof metadata only; it never serializes cached source/history bodies.
-    if(!options.metadataOnly)ensure(this.velaEgress(preview.intent,preview.frozenContext,preview.discovery,preview)===preview.signature&&this.velaSemanticPrompt(preview.intent,preview.frozenContext,preview.catalog,preview.discovery,preview.providerId,preview.route,preview.nativeStage,preview.fileEdit,preview.voiceInput?.context)===preview.prompt,'stale_vela_preview');
+    if(!options.metadataOnly)ensure(this.velaEgress(preview.intent,preview.frozenContext,preview.discovery,preview)===preview.signature&&this.velaSemanticPrompt(preview.intent,preview.frozenContext,preview.catalog,preview.discovery,preview.providerId,preview.route,preview.nativeStage,preview.fileEdit,preview.voiceInput?.context)===(preview.memoryBasePrompt ?? preview.prompt),'stale_vela_preview');
   }
   private releaseVelaCatalog(requestId: string) {
     const entry = this.velaCatalogLeases.get(requestId);
@@ -4701,6 +4706,9 @@ export class BackendCore {
   private async previewVelaRequest(input:CommandMap['velaRequestPreview']['input']):Promise<VelaRequestPreview> {
     const previewStarted = performance.now();
     this.pruneVelaGrants();ensure(typeof input.intent==='string'&&input.intent.trim()&&input.intent.length<=16000,'invalid_vela_intent');ensure(this.velaPreviews.size<64,'approval_backpressure');
+    ensure(input.useMemory === undefined || input.useMemory === true && this.personalMemoryReview && input.adaptive &&
+      input.providerId === VELA_API_PROVIDER && !input.resourceIds?.length && !input.activeCard && !input.semanticContext &&
+      !input.handoffSourceRequestId && !input.routingAgentId && !input.allowEscalation, 'vela_memory_requires_conversation');
     ensure(Array.isArray(input.resourceIds)&&input.resourceIds.length<=100&&input.resourceIds.every(identifier),'invalid_vela_context');await this.selectedDocumentContext.prepare(input.resourceIds);
     ensure(input.includeRecentHistory===undefined||typeof input.includeRecentHistory==='boolean','invalid_vela_history_mode');
     const handoffRequestId = input.handoffSourceRequestId;
@@ -4861,6 +4869,19 @@ export class BackendCore {
     if (workflowScope && !context.activeResourceId) publicPreview.workflowScope = workflowScope;
     const preview:PrivateVelaPreview={...publicPreview,...(usingApi?{connectionVersion:this.velaApiRuntime.configurationVersion()!}:usingChatGPT?{connectionVersion:this.ordinaryStatus.registrationVersion!}:{}),...(nativeStage?{nativeStage}:{}),...(fileEdit?{fileEdit}:{}),...(routingSettingsStamp?{routingSettingsStamp,routingTurn}:{}),frozenContext:structuredClone(selected.context),origin:selected.origin,...(selected.historyFence?{historyFence:selected.historyFence}:{}),historyOmissions:selected.historyOmissions,catalog,prompt:this.velaSemanticPrompt(input.intent,selected.context,catalog,discovery,providerId,route,nativeStage,fileEdit),nativeReviewed:false,inputAnchor,inputDigest:historyDigest(input.intent)};
     if (projectEvidence) preview.projectEvidenceSources = projectEvidence.sources;
+    if (input.useMemory) {
+      ensure(usingApi && route?.kind === 'conversational' && !route.nativeMetric && !route.nativeLog && !nativeStage &&
+        !workflowScope && !context.included.length && !context.activeResourceId && conversationId, 'vela_memory_requires_conversation');
+      const projectId = this.velaContext().currentProjectId;
+      const sourceAnchors = this.personalMemorySourceAnchors(input.intent);
+      const memoryRecall = await this.personalMemoryReview!.prepareVelaRecall({ conversationId,
+        projectId, requestId: preview.id, intent: input.intent, prompt: preview.prompt, sourceAnchors });
+      ensure(memoryRecall, 'personal_memory_no_eligible_context');
+      preview.memoryRecall = memoryRecall;
+      preview.memoryBasePrompt = preview.prompt;
+      preview.prompt = memoryRecall.prompt;
+      preview.memory = publicPreview.memory = { manifestDigest: memoryRecall.manifestDigest, promptDigest: memoryRecall.promptDigest };
+    }
     if (agent) {
       preview.agentRoutingDigest = agentRoutingDigest;
       preview.routingAgent = publicPreview.routingAgent = agent.agent;
@@ -4992,6 +5013,7 @@ export class BackendCore {
     const checkpoint = preview.missionCheckpoint && this.readVelaMissionCheckpoint(preview.missionCheckpoint.selection);
     const {history}=preview.frozenContext,review={previewId:preview.id,signature:preview.signature,providerId:preview.providerId,prompt:preview.prompt,promptDigest:planningDigest(preview.prompt),context:preview.context,...(preview.semanticContext?{semanticContext:true as const}:{}),...(preview.route?{route:preview.route}:{}),...(history?{history}:{}),historyOmissions:preview.historyOmissions.map(item=>({reason:item.reason,...(item.count!==undefined?{count:item.count}:item.messageIds?{count:item.messageIds.length}:{})})),
       ...(preview.handoff ? { handoff: preview.handoff } : {}),
+      ...(preview.memory ? { memory: preview.memory } : {}),
       ...(checkpoint ? { missionCheckpoint: { selection: checkpoint.selection, digest: checkpoint.digest, text: checkpoint.text } } : {}),
       ...(preview.workspaceState ? { workspaceState: this.readVelaWorkspaceState() } : {}),
       ...(preview.projectEvidence ? { projectEvidence: { ...preview.projectEvidence, sources: preview.projectEvidenceSources! } } : {}),
@@ -5003,6 +5025,7 @@ export class BackendCore {
     const reviewDigest=planningDigest(review),result={...review,reviewDigest};ensure(Buffer.byteLength(JSON.stringify(result))<=65536,'vela_native_review_too_large');preview.nativeReviewed=true;preview.reviewDigest=reviewDigest;return structuredClone(result);
   }
   private velaSendDisposition(preview:PrivateVelaPreview):NonNullable<VelaRequestPreview['sendDisposition']> {
+    if (preview.memoryRecall) return 'review-required';
     // Ordinary foreground Send is already consent for this exact ready ChatGPT-plan request. History is
     // canonical source data, not new action authority. New sources, execution and sharing still need review.
     const route=preview.route;
@@ -5055,6 +5078,10 @@ export class BackendCore {
     if (input.directSend) ensure(preview.nativeReviewed && preview.sendDisposition==='routine' &&
       this.velaSendDisposition(preview)==='routine', 'vela_attached_context_review_required');
     if(preview.nativeReviewRequired||preview.nativeReviewed||input.reviewDigest!==undefined)ensure(preview.nativeReviewed&&typeof input.reviewDigest==='string'&&input.reviewDigest===preview.reviewDigest,'vela_native_review_required');
+    if (preview.memoryRecall) {
+      preview.memoryRecall.approve(preview.memoryRecall.promptDigest);
+      preview.memoryRecall.validate(preview.prompt);
+    }
     // The read-only gap investigation can spend its turn budget before composition consumes the grant.
     const grantLifetime = preview.missionCheckpoint?.selection.gapIndex === undefined ? 60_000 : VELA_REVIEWED_GAP_TURN_MS + 5_000;
     const grantId = randomUUID(), expiresAt = new Date(Math.min(Date.now() + grantLifetime, Date.parse(preview.expiresAt))).toISOString();
@@ -5067,7 +5094,9 @@ export class BackendCore {
     const grant=this.validateVelaGrant(grantId),preview=this.velaPreviews.get(grant.previewId)!;
     ensure(preview.nativeReviewed&&typeof preview.reviewDigest==='string'&&preview.reviewDigest.length>0&&grant.reviewDigest===preview.reviewDigest,'vela_native_review_required');
     return {context:preview.frozenContext,...(preview.historyFence?{historyFence:preview.historyFence}:{}),
+      ...(preview.memoryRecall ? { requestId: preview.memoryRecall.requestId } : {}),
       validate:(phase,append)=>{
+        preview.memoryRecall?.validate(preview.prompt);
         // Sending requires a live grant. A response to that exact, already dispatched request
         // is still subject to the reviewed context and accepted input fences below.
         if(phase!=='before-response'||!grant.consumed)
