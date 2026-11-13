@@ -133,10 +133,18 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   const canOpen=()=>!disposed&&!closing&&(intent===undefined||intent===openIntent)&&(stillRequested?.()??true);
   await flush();
   if(!canOpen())return;
+  const previousResourceId=state.selectedResourceId,previousMessageId=selectedMessageId;
   state.selectedResourceId=resourceId;selectedMessageId=messageId;
-  root.classList.remove('cp-history-open');historyToggle.setAttribute('aria-expanded','false');
-  await bindChat(resourceId,messageId);
+  try{await bindChat(resourceId,messageId);}catch(error){
+   if(!disposed&&!closing&&(intent===undefined||intent===openIntent)&&previousResourceId!==resourceId){
+    state.selectedResourceId=previousResourceId;selectedMessageId=previousMessageId;
+    if(previousResourceId)await bindChat(previousResourceId,previousMessageId).catch(()=>{});
+    else await detachChat();
+   }
+   throw error;
+  }
   if(!canOpen())return;
+  root.classList.remove('cp-history-open');historyToggle.setAttribute('aria-expanded','false');
   if(current?.conversation.resourceId===resourceId&&current.conversation.state==='active')await saveSelection(resourceId);
   if(canOpen())options.onResource?.(resourceId,messageId);
  };
