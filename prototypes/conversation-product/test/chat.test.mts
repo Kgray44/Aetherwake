@@ -1792,6 +1792,8 @@ test('History waits for composed text before searching',async t=>{
   await manager.ready;
   const query=f.view.root.querySelector('input[aria-label="Search conversation history"]');
   query.fire('compositionstart');query.value='intermediate';query.fire('input',{isComposing:true});
+  assert.equal(query.fire('keydown',{key:'Escape',isComposing:true}).defaultPrevented,false);
+  assert.equal(query.fire('keydown',{key:'Escape'}).defaultPrevented,false);
   t.mock.timers.tick(180);
   await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);
   assert.equal(f.calls.filter(call=>call.name==='search').length,0);
