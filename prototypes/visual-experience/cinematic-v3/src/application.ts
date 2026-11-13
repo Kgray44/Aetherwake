@@ -12,8 +12,6 @@ import type { MotionCoordinator } from "./motion";
 import { footprint } from "../../../workspace-engine/collisions.mts";
 import { previewLayout } from "../../../workspace-engine/organization.mts";
 import type {
-  LayoutState,
-  LayoutPreview,
   LayoutPreviewRequest,
 } from "../../../workspace-engine/contracts.mts";
 import { LAYOUT_OPTIMIZATION_LIMITS } from "../../../workspace-engine/contracts.mts";
@@ -24,6 +22,7 @@ import {
 import "./application.css";
 import { mountApplicationShell } from "./application-shell.ts";
 import "./workspace-grid.css";
+import { mountWorkspacePreview } from "./workspace-preview.ts";
 import { createWorkspaceGrid } from "./workspace-grid.ts";
 import {
   mountDirectManipulation,
@@ -702,9 +701,6 @@ export function installApplication(hooks: Hooks) {
   let workspaceActionsSurface: (ContextualSurfaceRequest & { id: "workspace-actions" }) | null = null;
   let offset = { x: 0, y: 0 };
   let zoom = 1;
-  let previewBase: LayoutState | undefined;
-  let preview: LayoutPreview | undefined;
-  let previewRequest: LayoutPreviewRequest | undefined;
   let previewCommitting = false;
   let optimizationReview: { review: WorkspaceOptimizationReview; viewStamp: string } | null = null;
   let cancelResize: (() => void) | undefined;
@@ -714,22 +710,16 @@ export function installApplication(hooks: Hooks) {
     ReturnType<typeof mountDirectManipulation>
   >();
   const directGestures = new Map<string, DirectGesturePresentation>();
-  const previewGuides = document.createElement("div");
-  previewGuides.className = "layout-preview-guides";
-  previewGuides.setAttribute("aria-hidden", "true");
-  el("#stage").append(previewGuides);
-  const previewGuideId = "application:preview-guides";
-  const previewGuidePose = {
-    x: 0,
-    y: 0,
-    w: 0,
-    h: 0,
-    lift: 0,
-    yaw: 0,
-    opacity: 0,
-  };
-  hooks.motion.add(previewGuideId, previewGuidePose);
-  previewGuides.style.opacity = "0";
+  const workspacePreview = mountWorkspacePreview({
+    stage: el("#stage"),
+    motion: hooks.motion,
+    camera,
+    layout: hooks.layout,
+    wake: hooks.wake,
+    failed: (error) => hooks.status(
+      `Placement preview unavailable: ${(error as Error).message}. Saved layout retained.`,
+    ),
+  });
   const gridRoot = document.createElement("div");
   gridRoot.className = "workspace-grid-host";
   el("#stage").prepend(gridRoot);
@@ -987,7 +977,7 @@ export function installApplication(hooks: Hooks) {
   let suppressPresenceClick = false;
   let overviewBarBottom = 201;
   function camera() {
-    const viewport = optimizationReview ? undefined : preview?.viewport;
+    const viewport = optimizationReview ? undefined : workspacePreview.current?.viewport;
     return viewport
       ? {
           zoom: viewport.zoom,
@@ -1006,7 +996,7 @@ export function installApplication(hooks: Hooks) {
         yaw: 0,
         opacity: 1,
       };
-    const p = preview?.presence ?? state?.presence;
+    const p = workspacePreview.current?.presence ?? state?.presence;
     if (!p) return;
     const { zoom, offset } = camera();
     return {
@@ -1169,7 +1159,7 @@ export function installApplication(hooks: Hooks) {
     if (
       changed ||
       navigated ||
-      (previewBase && previewBase.revision !== next.layoutVersion)
+      (workspacePreview.revision !== undefined && workspacePreview.revision !== next.layoutVersion)
     )
       cancelPreview();
     state = next;
@@ -1612,67 +1602,19 @@ export function installApplication(hooks: Hooks) {
   function queuePreview(request: LayoutPreviewRequest) {
     if (!state || previewCommitting) return;
     if (optimizationReview) cancelPreview();
-    previewBase ??= layoutState(state);
-    if (!previewBase) return;
-    previewRequest = {
-      ...request,
-      expectedRevision: previewBase.revision,
-      bounds: request.bounds ?? viewBounds(),
-    };
-    hooks.wake();
-  }
-  function paintPreview() {
-    if (!previewRequest || !previewBase) return;
-    const request = previewRequest;
-    previewRequest = undefined;
-    try {
-      presentPreview(previewLayout(previewBase, request), request.intent);
-    } catch (error) {
-      hooks.status(
-        `Placement preview unavailable: ${(error as Error).message}. Saved layout retained.`,
-      );
-    }
-  }
-  function presentPreview(result: LayoutPreview, intent?: LayoutPreviewRequest["intent"]) {
-    preview = result;
-    const { zoom, offset } = camera();
-    const gridOnly = result.organization.mode === "structured" && ["mode", "move", "resize"].includes(intent ?? "");
-    const guides = (gridOnly ? [] : result.guides).map(
-      (g) =>
-        `<i class="alignment-guide" style="left:${(g.axis === "x" ? g.position : g.from) * zoom + offset.x}px;top:${(g.axis === "y" ? g.position : g.from) * zoom + offset.y}px;width:${g.axis === "x" ? 1 : (g.to - g.from) * zoom}px;height:${g.axis === "y" ? 1 : (g.to - g.from) * zoom}px"></i>`,
-    );
-    const areas = result.placementAreas.map(
-      (a) =>
-        `<i class="placement-area" style="left:${a.x * zoom + offset.x}px;top:${a.y * zoom + offset.y}px;width:${a.width * zoom}px;height:${a.height * zoom}px"></i>`,
-    );
-    previewGuides.innerHTML = [...guides, ...areas].join("");
-    hooks.motion.target(
-      previewGuideId,
-      { ...previewGuidePose, opacity: guides.length || areas.length ? 1 : 0 },
-      "placement guide reveal",
-    );
-    document.body.dataset.layoutPreview = result.organization.mode;
-    hooks.layout();
+    workspacePreview.queue(() => layoutState(state!), request, viewBounds);
   }
   function cancelPreview(invalidateOptimization = true) {
     const hadOptimization = !!optimizationReview;
     optimizationReview = null;
-    previewRequest = undefined;
-    preview = undefined;
-    previewBase = undefined;
-    hooks.motion.target(
-      previewGuideId,
-      previewGuidePose,
-      "placement guide dismissal",
-    );
-    delete document.body.dataset.layoutPreview;
+    workspacePreview.cancel();
     if (hadOptimization && invalidateOptimization) workspaceActions?.invalidateOptimization();
     hooks.layout();
     hooks.wake();
   }
   function commitLayout(a: DesktopCommand, requireAcknowledgement = false) {
-    paintPreview();
-    const revision = previewBase?.revision;
+    workspacePreview.paint();
+    const revision = workspacePreview.revision;
     previewCommitting = true;
     const action = {
       ...a,
@@ -1705,10 +1647,9 @@ export function installApplication(hooks: Hooks) {
       }),
       unresolvedPlacementIds: result.unresolvedPlacementIds ?? [],
     };
-    if (previewBase) cancelPreview(false);
+    if (workspacePreview.revision !== undefined) cancelPreview(false);
     optimizationReview = { review, viewStamp: optimizationViewStamp() };
-    previewBase = base;
-    presentPreview(result, "optimize");
+    workspacePreview.showReview(base, result);
     return review;
   }
   function applyOptimization(review: WorkspaceOptimizationReview) {
@@ -3213,7 +3154,7 @@ export function installApplication(hooks: Hooks) {
         return Promise.reject(Error("workspace_unavailable"));
       const workspaceId = state.activeWorkspaceId;
       queuePreview({ organization, intent: "mode" });
-      paintPreview();
+      workspacePreview.paint();
       previewCommitting = true;
       return mutate({
         type: "setOrganization",
@@ -3280,7 +3221,7 @@ export function installApplication(hooks: Hooks) {
           return Promise.reject(Error("workspace_unavailable"));
         const workspaceId = state.activeWorkspaceId;
         queuePreview({ structuredPreset: preset, intent: "mode" });
-        paintPreview();
+        workspacePreview.paint();
         previewCommitting = true;
         return mutate({
           type: "applyStructuredPreset",
@@ -3418,7 +3359,7 @@ export function installApplication(hooks: Hooks) {
         state.navigation.kind !== "workspace" ||
         !block ||
         !body ||
-        preview ||
+        workspacePreview.current ||
         unavailableBlocks.has(id) ||
         !blockPresentations.get(id)?.visible
       )
@@ -4966,7 +4907,7 @@ export function installApplication(hooks: Hooks) {
           target as HTMLElement,
         ),
         blocked:
-          !!preview ||
+          !!workspacePreview.current ||
           previewCommitting ||
           !!presenceDrag ||
           !!cancelResize ||
@@ -5267,39 +5208,22 @@ export function installApplication(hooks: Hooks) {
       controlMotion.frame();
       velaExperience.frame(policy);
       velaManifestation.frame(policy);
-      paintPreview();
+      workspacePreview.paint();
       const gridCamera = camera();
       workspaceGrid.update({
         visible:
           state?.navigation.kind === "workspace" &&
-          (preview?.organization ?? state?.organization)?.mode === "structured",
+          (workspacePreview.current?.organization ?? state?.organization)?.mode === "structured",
         zoom: gridCamera.zoom,
         offset: gridCamera.offset,
       });
       workspaceGrid.frame(policy);
-      if (
-        policy.reduced ||
-        policy.quiet ||
-        policy.hidden ||
-        !policy.graphicsAvailable
-      )
-        hooks.motion.snap(previewGuideId);
-      const guideReveal = Math.max(
-        0,
-        Math.min(1, hooks.motion.pose(previewGuideId).opacity),
+      workspacePreview.frame(
+        policy.reduced || policy.quiet || policy.hidden || !policy.graphicsAvailable,
       );
-      if (previewGuides.style.opacity !== String(guideReveal))
-        previewGuides.style.opacity = String(guideReveal);
-      if (
-        !preview &&
-        !previewRequest &&
-        guideReveal === 0 &&
-        previewGuides.childElementCount
-      )
-        previewGuides.replaceChildren();
       const target = presenceTarget();
       if (target) {
-        const dragging = presenceDrag?.moved === true && !!preview;
+        const dragging = presenceDrag?.moved === true && !!workspacePreview.current;
         hooks.motion.target(
           presenceId,
           dragging ? { ...target, lift: 8 } : target,
@@ -5380,7 +5304,7 @@ export function installApplication(hooks: Hooks) {
     offset: () => camera().offset,
     zoom: () => camera().zoom,
     previewBlock: (id: string) => {
-      const b = preview?.blocks.find((b) => b.blockId === id);
+      const b = workspacePreview.current?.blocks.find((b) => b.blockId === id);
       return b ? desktopPreviewBlock(b) : undefined;
     },
     previewMove(id: string, dx: number, dy: number) {
@@ -5419,16 +5343,7 @@ export function installApplication(hooks: Hooks) {
     block: (id: string) => state?.blocks.find((b) => b.id === id),
     directGesture: (id: string) => directGestures.get(id) ?? null,
     directOutline: (id: string) => {
-      if (!directGestures.has(id) || preview?.placementAreas.length !== 1)
-        return null;
-      const area = previewGuides.querySelector<HTMLElement>(".placement-area");
-      const opacity =
-        area && area.getClientRects().length
-          ? Number(getComputedStyle(previewGuides).opacity) *
-            Number(getComputedStyle(area).opacity) *
-            Number(getComputedStyle(el("#stage")).opacity)
-          : 0;
-      return { ...preview.placementAreas[0], opacity };
+      return directGestures.has(id) ? workspacePreview.outline() : null;
     },
     workspaceGrid: () => workspaceGrid.diagnostics(),
     directDragging: () =>
