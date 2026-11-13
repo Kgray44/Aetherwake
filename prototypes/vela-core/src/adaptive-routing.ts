@@ -19,6 +19,8 @@ export interface VelaTurnRouting {
   allowEscalation?: true;
   /** Omitted uses the runtime default; false starts this send without the recent canonical tail. */
   includeRecentHistory?: boolean;
+  /** One send through the separately reviewed native Vela memory path. */
+  useMemory?: true;
   /** This send explicitly reviews selected evidence for semantic analysis. */
   semanticContext?: true;
   missionCheckpoint?: VelaMissionCheckpointRef;
