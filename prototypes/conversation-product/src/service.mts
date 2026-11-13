@@ -182,9 +182,9 @@ export class ConversationProduct implements ConversationProductPort {
  }
  private draftDocument(conversationId: string, sourceId: string) {
   const file = this.db.prepare(`SELECT r.title,r.version
-   FROM resources r JOIN desktop_resources d ON d.resource_id=r.id
+   FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id
    JOIN resources chat ON chat.id=?
-   WHERE r.id=? AND d.kind='file' AND r.state='active'
+   WHERE r.id=? AND (d.kind='file' OR r.kind='note') AND r.state='active'
      AND (r.project_id IS NULL OR r.project_id=chat.project_id)`).get(conversationId,sourceId);
   return file && this.host.access?.(sourceId) === true ? file : undefined;
  }

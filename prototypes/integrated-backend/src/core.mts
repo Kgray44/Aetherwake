@@ -5647,10 +5647,10 @@ export class BackendCore {
     const row=this.db.prepare("SELECT w.id,w.project_id,w.title,w.version,l.version AS layout_version FROM workspaces w JOIN workspace_layouts l ON l.workspace_id=w.id WHERE w.id=? AND w.state='active'").get(id);
     return row&&row.project_id===scope.currentProjectId?{workspaceId:id,projectId:scope.currentProjectId,workspaceVersion:Number(row.version),layoutVersion:Number(row.layout_version),workspaceTitle:String(row.title)}:null;
   }
-  private attachmentReferences(ids:string[],selected?:ResourceRef[]):ResourceRef[]{
+  private attachmentReferences(ids:string[],selected?:ResourceRef[], kinds:readonly string[]=['file','folder']):ResourceRef[]{
     ensure(selected===undefined||Array.isArray(selected)&&selected.length===ids.length&&selected.every(ref=>ref&&ref.kind==='resource'&&identifier(ref.id)&&ids.includes(ref.id)&&Number.isSafeInteger(ref.version)&&ref.version>=1)&&new Set(selected.map(ref=>ref.id)).size===ids.length,'invalid_source_selection');
     const scope=this.velaHost.scope();return ids.map(id=>{const current=this.velaHost.resolve({id,kind:'resource'},scope),expected=selected?.find(ref=>ref.id===id);
-      ensure(current&&this.productResourceAccess(id)&&['file','folder'].includes(current.resourceKind??''),'source_selection_unavailable');
+      ensure(current&&this.productResourceAccess(id)&&kinds.includes(current.resourceKind??''),'source_selection_unavailable');
       ensure(!expected||current.version===expected.version&&(expected.resourceKind===undefined||current.resourceKind===expected.resourceKind)&&(expected.projectId===undefined||current.projectId===expected.projectId),'source_selection_changed');return current;});
   }
   private attachCanonicalSources(intent:string,refs:ResourceRef[],searchReceiptId?:string):import('../../vela-core/src/contracts.ts').VelaRequest{
@@ -5953,7 +5953,7 @@ export class BackendCore {
       selection.every(ref => ref && identifier(ref.id) && Number.isSafeInteger(ref.version) && ref.version > 0),
     'invalid_source_selection');
     const refs = this.attachmentReferences(selection.map(ref => ref.id),
-      selection.map(ref => ({ ...ref, kind: 'resource', resourceKind: 'file', title: '' })));
+      selection.map(ref => ({ ...ref, kind: 'resource', title: '' })), ['file','note']);
     const chat = this.db.prepare('SELECT project_id FROM resources WHERE id=?').get(input.resourceId);
     ensure(chat && refs.every(ref => ref.projectId == null || ref.projectId === chat.project_id), 'source_selection_unavailable');
     return refs;
@@ -5961,6 +5961,12 @@ export class BackendCore {
   private ordinaryDocuments(input: ConversationSendInput): NonNullable<ConversationSendPreview['documents']> {
     const scope = this.velaHost.scope();
     return this.ordinaryDocumentRefs(input).map(ref => {
+      if(ref.resourceKind==='note'){
+        const selected=this.velaHistoryContent(ref,16384,this.velaHost,scope);
+        ensure(selected&&'content' in selected&&selected.content.trim(),'document_text_unavailable');
+        return {id:ref.id,version:ref.version,kind:'note' as const,source:selected.source,
+          sourceRevision:String(ref.version),content:selected.content,digest:hash(selected.content)};
+      }
       const media = this.scopedMedia(ref.id, ref.version).metadata;
       ensure(media.source === 'file' && ['pdf', 'docx', 'text'].includes(media.format), 'unsupported_document_attachment');
       const selected = this.velaHost.readContent(ref.id, scope);
@@ -6052,7 +6058,7 @@ export class BackendCore {
     ensure(input.webSearch === undefined || input.webSearch === true && c.providerId === CHATGPT_PLAN_PROVIDER, 'invalid_web_search_scope');
     if (input.documents !== undefined) {
       ensure(c.providerId === CHATGPT_PLAN_PROVIDER && !input.webSearch && !ordinaryBinding?.purpose, 'invalid_document_attachment_scope');
-      if (!ordinaryBinding) await this.selectedDocumentContext.prepare(this.ordinaryDocumentRefs(input).map(ref => ref.id));
+      if (!ordinaryBinding) await this.selectedDocumentContext.prepare(this.ordinaryDocumentRefs(input).filter(ref=>ref.resourceKind==='file').map(ref => ref.id));
     }
     if(c.providerId===CHATGPT_PLAN_PROVIDER&&!ordinaryBinding)
       await this.maintainOrdinarySession();
@@ -6359,6 +6365,11 @@ export class BackendCore {
     if (preview.documents) {
       this.ordinaryDocumentRefs(input);
       for (const document of preview.documents) {
+        if(document.kind==='note'){
+          const note=this.db.prepare("SELECT content FROM notes WHERE resource_id=? AND length(CAST(content AS BLOB))<=16384").get(document.id);
+          ensure(note&&this.conversationReadAccess(document.id)&&hash(String(note.content))===document.digest,'source_changed');
+          continue;
+        }
         const source = this.scopedMedia(document.id, document.version, document.sourceRevision);
         ensure(source.path && realpathSync(source.path) === source.path, 'source_changed');
         const stat = lstatSync(source.path, { bigint: true });

@@ -2560,10 +2560,11 @@ export function installApplication(hooks: Hooks) {
     const chat = state?.resources.find(resource => resource.id === conversationId);
     if (!chat || chat.visible === false || chat.available === false || chat.state === "archived") return [];
     return (state?.resources ?? [])
-      .filter(resource => resource.kind === "file" && resource.visible !== false &&
+      .filter(resource => resource.visible !== false &&
         resource.available !== false && resource.state !== "archived" &&
         (resource.project_id == null || resource.project_id === chat.project_id) &&
-        resource.media?.source === "file" && ["pdf", "docx", "text"].includes(resource.media.format))
+        (resource.kind === "note" || resource.kind === "file" && resource.media?.source === "file" &&
+          ["pdf", "docx", "text"].includes(resource.media.format)))
       .map(({ id, version, title }) => ({ id, version, title }))
       .sort((left, right) => left.title.localeCompare(right.title));
   }

@@ -65,7 +65,7 @@ export interface ConversationSendPreview {
   draftVersion?: number;
  id: string; commandId: string; resourceId: string; providerId: string; expectedRevision: number;
  prompt: string; model?: string; context: AttachedContext[];
- documents?: { id: string; version: number; source: string; sourceRevision: string; content: string; digest: string }[];
+ documents?: { id: string; version: number; source: string; sourceRevision: string; content: string; digest: string; kind?: 'note' }[];
  handoff?: { id:string; fingerprint:string; sourceResourceId:string; items:ContextPackage['items'];continued?:true };
  executionText: string; fingerprint: string; expiresAt: string;
  /** Exact stateless Responses egress, without credentials or account identifiers. */
