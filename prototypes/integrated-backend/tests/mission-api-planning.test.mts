@@ -1996,7 +1996,7 @@ test('reviewed CIE cites a selected local file and fences physical replacement b
   }
 });
 
-test('reviewed CIE treats extracted document coverage as partial and keeps extraction notices out of citations', async () => {
+test('standing selected DOCX analysis runs through the broker and preserves partial extraction coverage', async () => {
   const bytes = docxFixture();
   let bodyText: string;
   const f = fixture(true, true, { extract: async (input, signal) => {
@@ -2014,11 +2014,22 @@ test('reviewed CIE treats extracted document coverage as partial and keeps extra
     const { resource } = await f.core.command('mediaImportTrusted', { commandId: randomUUID(), kind: 'file', selection: { kind: 'file', path } });
     const intent = 'Which text was extracted from the table?';
     const resourceIds = [resource.id];
+    const resourceRefs = [{ id: resource.id, kind: 'resource' as const, resourceKind: 'file',
+      title: resource.title, version: resource.version }];
     const preview = await f.core.command('velaRequestPreview', { intent, resourceIds, adaptive: true, providerId: 'openai-api-vela',
-      model: 'gpt-6-luna', semanticContext: true });
+      model: 'gpt-6-luna', semanticContext: true, resourceRefs });
+    assert.equal(preview.sendDisposition, 'standing-selected-evidence');
     const review = await f.core.command('velaNativeReview', { previewId: preview.id, signature: preview.signature });
     assert.match(review.context.included[0].content, /Extracted DOCX body text/);
-    const { grantId } = await f.core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature, reviewDigest: review.reviewDigest });
+    const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    const send = () => velaCommand({
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      directMessageSend: true, routeNative: true, dialog: {},
+      call: f.core.command.bind(f.core),
+      reviewProvider: async () => assert.fail('standing file analysis opened the sharing modal'),
+      input: { name: 'request', input: { intent, resourceIds, resourceRefs, authorizeProvider: true,
+        providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
+    }) as Promise<VelaRequest>;
     const proposal = (key: string) => ({ version: 2, objective: intent, clarification: '',
       perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
       needs: [{ key, question: intent, query: 'table text' }] });
@@ -2037,8 +2048,12 @@ test('reviewed CIE treats extracted document coverage as partial and keeps extra
         assert.doesNotMatch(JSON.stringify(body.input), /Extracted DOCX body text/);
         return response('The extracted body contains “Table cell.”', body.model);
       });
-    const result = await f.core.command('vela', { name: 'request', input: { intent, resourceIds, authorizeProvider: true, previewId: preview.id, grantId } }) as VelaRequest;
+    const result = await send();
     assert.equal(result.state, 'responded');
+    assert.equal(f.requests.length, 5);
+    assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 5);
+    writeFileSync(path, 'Replaced synthetic source');
+    await assert.rejects(send(), /source_changed|stale_vela_preview/);
     assert.equal(f.requests.length, 5);
   } finally {
     await f.close();
