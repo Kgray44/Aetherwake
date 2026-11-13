@@ -1478,6 +1478,38 @@ test('local chat can stage an offline attachment without sending or changing pro
  } finally { await chat?.dispose(); f.restore(); }
 });
 
+for (const empty of [true,false]) test('attachment continuation uses the existing provider action (empty: '+empty+')', async () => {
+ const f=fixture('local');
+ let chat,release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const requested:unknown[]=[];
+ try {
+  if(empty){f.detail.messages.items=[];f.detail.messages.total=f.detail.conversation.messageCount=0;}
+  const target={...f.detail.providers[0],id:'chatgpt-plan-responses',label:'ChatGPT',available:false};
+  f.detail.providers.push(target);
+  const documents=[{id:'file:offline',version:2,title:'Offline brief.txt'}];
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,
+   content:f.draft.content,documents});
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   onProviderChange:async change=>{requested.push(change);await gate;}});
+  await chat.ready;
+  const button=named(f.view.root,'Continue with ChatGPT');
+  assert.equal(button.hidden,true);
+  target.available=true;
+  await chat.refresh();
+  assert.equal(button.hidden,false);
+  const draft=f.draft;
+  button.fire('click');button.fire('click');
+  assert.equal(button.disabled,true);
+  assert.deepEqual(requested,[{resourceId:draft.resourceId,targetProviderId:target.id,
+   expectedRevision:f.detail.conversation.revision,mode:empty?'empty':'continuation'}]);
+  assert.deepEqual(f.draft,draft);
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+  release();
+  await until(()=>!button.disabled);
+ } finally {release();await chat?.dispose();f.restore();}
+});
+
 test('a recovered unavailable document can be removed without losing the draft or sending', async () => {
  const f = fixture('chatgpt-plan-responses');
  let chat;
