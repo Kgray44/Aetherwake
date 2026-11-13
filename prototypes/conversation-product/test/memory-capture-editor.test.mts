@@ -62,8 +62,9 @@ test('only a non-project preference can be submitted for all ordinary chats', as
     const editor = createMemoryCaptureEditor(options);
     const [scope, category] = editor.querySelectorAll('select');
     assert.ok(Array.from(scope.options).some(option => option.value === 'assistant.ordinary'));
+    assert.ok(Array.from(scope.options).some(option => option.value === 'assistant.vela'));
     const projectEditor = createMemoryCaptureEditor({ ...options, projectAvailable: true });
-    assert.ok(!Array.from(projectEditor.querySelector('select')!.options).some(option => option.value === 'assistant.ordinary'));
+    assert.ok(!Array.from(projectEditor.querySelector('select')!.options).some(option => option.value.startsWith('assistant.')));
     assert.equal(category.value, 'preferences');
     assert.equal(scope.value, 'conversation');
     scope.value = 'assistant.ordinary';

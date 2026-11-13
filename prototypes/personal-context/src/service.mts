@@ -268,7 +268,7 @@ export class PersonalContextService {
   private sourceScopeMatches(scopeValue: PersonalScope, source: ConversationSourceProof, category: Category): boolean {
     return (scopeValue.kind === 'conversation' && scopeValue.id === source.conversationId) ||
       (scopeValue.kind === 'project' && scopeValue.id === source.projectId) ||
-      (scopeValue.kind === 'assistant.ordinary' && source.projectId === null && category === 'preferences');
+      ((scopeValue.kind === 'assistant.ordinary' || scopeValue.kind === 'assistant.vela') && source.projectId === null && category === 'preferences');
   }
   private currentConversationSource(value: ReviewedFact): ConversationSourceProof | null {
     const provenance = value.provenance;
