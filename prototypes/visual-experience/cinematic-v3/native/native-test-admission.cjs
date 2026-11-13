@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { userInfo } = require("node:os");
 const { randomUUID } = require("node:crypto");
 
 const permitName = "permit.json";
@@ -14,9 +15,15 @@ function refuse(code) {
 
 function desktopDirectory() {
   if (process.platform !== "win32") return null;
-  const local = process.env.LOCALAPPDATA;
-  if (!local || !path.isAbsolute(local)) refuse("native_test_desktop_directory_unavailable");
-  return path.join(local, "Aerynth", "native-test-admission-v1");
+  let profile;
+  try {
+    profile = userInfo().homedir;
+  } catch {
+    refuse("native_test_desktop_directory_unavailable");
+  }
+  if (!profile || !path.isAbsolute(profile)) refuse("native_test_desktop_directory_unavailable");
+  // Windows can redirect new AppData files into package-private storage.
+  return path.join(profile, ".aerynth-native-test-admission-v2");
 }
 
 function createAdmission(directory, now = Date.now) {

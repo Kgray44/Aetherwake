@@ -104,16 +104,33 @@ test("independent processes contending for the same Windows slot produce one win
   ]);
 });
 
+test("Windows admission resolves from the account profile across Local AppData views", {
+  skip: process.platform !== "win32",
+}, async t => {
+  const { root } = fixture(t);
+  const code = `
+    require("node:os").userInfo = () => ({ homedir: process.argv[2] });
+    console.log(require(process.argv[1]).desktopDirectory());
+  `;
+  for (const local of [path.join(root, "local"), path.join(root, "redirected")]) {
+    const result = await promisify(execFile)(process.execPath, ["-e", code, admissionPath, root], {
+      windowsHide: true, env: { ...process.env, LOCALAPPDATA: local },
+    });
+    assert.equal(result.stdout.trim(), path.join(root, ".aerynth-native-test-admission-v2"));
+  }
+});
+
 test("Windows denial exits without reaching window code and revocation fences visible and input methods", {
   skip: process.platform !== "win32",
   timeout: 5000,
 }, async t => {
   const { root } = fixture(t);
-  const localDirectory = path.join(root, "Aerynth", "native-test-admission-v1");
+  const localDirectory = path.join(root, ".aerynth-native-test-admission-v2");
   const admission = createAdmission(localDirectory);
   const code = `
     const assert = require("node:assert/strict");
     const { EventEmitter } = require("node:events");
+    require("node:os").userInfo = () => ({ homedir: process.argv[2] });
     const { installDesktopTestAdmission } = require(process.argv[1]);
     const app = new EventEmitter();
     let shown = 0, inputs = 0, hidden = 0, terminated = 0;
@@ -146,13 +163,13 @@ test("Windows denial exits without reaching window code and revocation fences vi
       app.emit("quit");
     });
   `;
-  const env = { ...process.env, LOCALAPPDATA: root, AERYNTH_NATIVE_TEST_SLOT: "" };
-  await assert.rejects(promisify(execFile)(process.execPath, ["-e", code, admissionPath], {
+  const env = { ...process.env, AERYNTH_NATIVE_TEST_SLOT: "" };
+  await assert.rejects(promisify(execFile)(process.execPath, ["-e", code, admissionPath, root], {
     windowsHide: true, env,
   }), error => error.code === 2 && error.stdout === "" && /availability_unconfirmed/.test(error.stderr));
   admission.resume(Date.now());
   const { token } = admission.open("mission-9", 1);
-  const child = spawn(process.execPath, ["-e", code, admissionPath], {
+  const child = spawn(process.execPath, ["-e", code, admissionPath, root], {
     windowsHide: true, env: { ...env, AERYNTH_NATIVE_TEST_SLOT: token },
   });
   t.after(() => { if (child.exitCode === null) child.kill(); });
