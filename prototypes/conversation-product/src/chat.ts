@@ -140,6 +140,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
   let sendTask: Promise<void>|null = null, cancelPending = false, streamLimited = false, accessRevoked = false;
   let pendingFollow:{messageId?:string}|null=null;
+  let followingLatest=false;
   let pendingAnchor:NonNullable<ConversationViewPosition['anchor']>|null=null,viewIntent=0,viewWanted=false,userScroll=false,preferredViewAnchor:string|undefined,persistenceIntent:number|undefined;
   let presentationAnchor: NonNullable<ConversationViewPosition['anchor']> | null = null;
   const tracksView=!!(options.viewPersistence||options.initialView);
@@ -259,7 +260,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       resizeFrame=undefined;resizeTimer=undefined;
       if(options.deferHostResize?.()===true){layoutDeferred=true;return;}
       resize();
-      if(!layoutDeferred){drainPendingFollow();drainAnchor();}
+      if(!layoutDeferred){
+        if(followingLatest&&!pendingFollow&&!pendingAnchor&&!presentationAnchor)
+          followLatestContent(current?.messages.items.at(-1)?.id);
+        drainPendingFollow();drainAnchor();
+      }
     };
     if(typeof requestAnimationFrame==='function')resizeFrame=requestAnimationFrame(reconcile);else resizeTimer=setTimeout(reconcile,0);
   };
@@ -271,6 +276,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   });
   if(layoutHost)resizeObserver?.observe(layoutHost);
   function revokeView() {
+    followingLatest=false;
     const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=pendingAnchor=presentationAnchor=null;viewWanted=userScroll=false;inspectionFollow=liveFollow=false;inspectionReturn=null;root.dataset.resourceAvailable='false';current=null;thinking=undefined;cache.clear();days.clear();messages.replaceChildren(stream,feedbackBody);
     streamText.textContent='';stream.hidden=true;paging.hidden=true;capabilityNote.textContent=contextNote.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;
     renderDraft();if(notify)options.onUnavailable?.();report('This conversation is no longer available. Its draft is retained.');
@@ -361,6 +367,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   textarea.addEventListener('keydown', event => { if (!composing && composerShouldSubmit(event)) { event.preventDefault(); if (!send.disabled) composer.requestSubmit(); } });
   messages.addEventListener('scroll',()=>{if(userScroll)markViewIntent();viewState();},{passive:true});
   const beginTranscriptScroll = () => {
+    followingLatest = false;
     presentationAnchor = null;
     userScroll = true;
     if (tracksView) viewIntent++;
@@ -418,7 +425,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   }
   function followLatestContent(messageId?:string):boolean {
     const viewport=messages.getBoundingClientRect();if(messages.clientHeight<=0||viewport.height<=0)return false;
-    if(presentation!=='workspace'&&!messageId){setScroll(messages.scrollHeight);return true;}
+    if(presentation!=='workspace'&&!messageId){followingLatest=true;setScroll(messages.scrollHeight);return true;}
     const content=messageId?messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`)?.querySelector<HTMLElement>('.cp-message-content'):[...messages.querySelectorAll<HTMLElement>('.cp-message-content')].at(-1);if(!content)return !messageId&&current?.messages.items.length===0;
     const box=content.getBoundingClientRect(),scale=viewport.height/(messages.offsetHeight||messages.clientHeight);
     if(!Number.isFinite(scale)||scale<=0||box.height<=0)return false;
@@ -426,6 +433,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     // that footer in a short card. Move this scroller alone to the canonical content's end.
     const bottom=viewport.top+((messages.clientTop||0)+messages.clientHeight)*scale;
     setScroll(Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(box.bottom-bottom)/scale)));
+    followingLatest=true;
     return true;
   }
   function drainPendingFollow(){if(pendingFollow&&followLatestContent(pendingFollow.messageId))pendingFollow=null;}
@@ -476,9 +484,9 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     paging.replaceChildren(before,el('span',`${detail.messages.total?detail.messages.offset+1:0}–${detail.messages.offset+detail.messages.items.length} of ${detail.messages.total}`),after);paging.hidden=detail.messages.total<=detail.messages.limit;
     disclosures?.sync();renderDraft();options.onDetail?.(detail);
     if (restoreAnchor || followMessageId || around) presentationAnchor = null;
-    if(restoreAnchor){pendingFollow=null;pendingAnchor=restoreAnchor;drainAnchor();}
+    if(restoreAnchor){followingLatest=false;pendingFollow=null;pendingAnchor=restoreAnchor;drainAnchor();}
     else if(followMessageId){pendingAnchor=null;pendingFollow={messageId:followMessageId};drainPendingFollow();}
-    else if(around){pendingFollow=pendingAnchor=null;messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(around)}"]`)?.scrollIntoView({block:'center'});markViewIntent(around);viewState();}
+    else if(around){followingLatest=false;pendingFollow=pendingAnchor=null;messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(around)}"]`)?.scrollIntoView({block:'center'});markViewIntent(around);viewState();}
     else if(pendingAnchor&&detail.messages.items.some(item=>item.id===pendingAnchor?.messageId))drainAnchor();
     else {
       pendingAnchor = null;
@@ -486,7 +494,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       else if (!presentationAnchor || !alignReadingAnchor(presentationAnchor)) {
         presentationAnchor = null;
         if (nearBottom) followLatestContent();
-        else setScroll(scroll);
+        else {followingLatest=false;setScroll(scroll);}
       }
     }
   }
@@ -602,7 +610,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     else await refresh(options.initialAroundMessageId?{aroundMessageId:options.initialAroundMessageId}:{});
     if(disposed)return;resize();
     if(intent===viewIntent){const snapshot=session.snapshot(),selection=view?.selection;if(selection&&snapshot.phase==='clean'&&snapshot.version===selection.draftVersion&&snapshot.content===textarea.value&&selection.end<=textarea.value.length)textarea.setSelectionRange(selection.start,selection.end,selection.direction);
-      if(options.initialScroll!==undefined&&!options.initialAroundMessageId){pendingFollow=pendingAnchor=null;setScroll(options.initialScroll);}else if(anchor)drainAnchor();else if(!options.initialAroundMessageId){pendingFollow={};drainPendingFollow();}}
+      if(options.initialScroll!==undefined&&!options.initialAroundMessageId){followingLatest=false;pendingFollow=pendingAnchor=null;setScroll(options.initialScroll);}else if(anchor)drainAnchor();else if(!options.initialAroundMessageId){pendingFollow={};drainPendingFollow();}}
   })().catch(error=>{report(errorText(error));throw error;});
   root.addEventListener('keydown',event=>{if(event.key!=='Escape')return;const details=(event.target as HTMLElement).closest<HTMLDetailsElement>('details[open]');if(details&&root.contains(details)){event.preventDefault();event.stopPropagation();details.open=false;details.querySelector('summary')?.focus();}});
   // The send RPC can remain pending through the entire native provider turn. Draft durability
