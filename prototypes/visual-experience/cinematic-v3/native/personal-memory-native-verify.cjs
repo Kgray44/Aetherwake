@@ -65,6 +65,31 @@ async function run() {
     safeStorage, isReady: () => app.isReady(), send: wire => client.handle(wire),
   });
   const startBackend = () => new Backend({ path, privateRoot: root, contentPolicy: 'local-private', provider: 'fixture' }, client.services);
+  async function withLocalRecall(expected, check) {
+    assert(allowWrite(), 'storage_reserve_admission_denied');
+    const local = new BackendCore({ path, privateRoot: root, contentPolicy: 'local-private', provider: 'fixture' }, undefined, client.services);
+    try {
+      const vela = await local.command('vela', { name: 'open', input: {} });
+      const conversationId = vela.conversation.resourceId;
+      assert.notEqual(conversationId, expected.input.conversationId);
+      await local.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: expected.workspaceId } });
+      const policy = await local.command('personalMemoryPolicyNative', {});
+      assert.equal(policy.velaEnabled, false);
+      await local.command('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: policy.version });
+      try {
+        const query = { conversationId, projectId: expected.projectId, requestId: 'synthetic-memory-restore',
+          intent: 'Which quartz relay?', prompt: 'Synthetic local recall only.' };
+        const recall = await local.personalMemoryReview.prepareVelaRecall(query);
+        try { check(recall); } finally { recall?.revoke(); }
+        const activity = await local.command('providerActivity', {});
+        assert.equal(activity.providerRequests, 0);
+        assert.equal(activity.codexConnections, 0);
+      } finally {
+        const current = await local.command('personalMemoryPolicyNative', {});
+        await local.command('personalMemoryPolicyNative', { assistant: 'vela', enable: false, expectedVersion: current.version });
+      }
+    } finally { await local.command('close', {}); }
+  }
   let backend = startBackend();
   let parent;
   let stopObservingFocus;
@@ -88,28 +113,12 @@ async function run() {
       stage = 'recall in a second chat through the local owner';
       await backend.close();
       backend = undefined;
-      const local = new BackendCore({ path, privateRoot: root, contentPolicy: 'local-private', provider: 'fixture' }, undefined, client.services);
-      try {
-        const vela = await local.command('vela', { name: 'open', input: {} });
-        const conversationId = vela.conversation.resourceId;
-        assert.notEqual(conversationId, expected.input.conversationId);
-        await local.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: expected.workspaceId } });
-        await local.command('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: preview.policy.version });
-        const query = { conversationId, projectId: expected.projectId, requestId: 'synthetic-memory-restore',
-          intent: 'Which quartz relay?', prompt: 'Synthetic local recall only.' };
-        const owner = local.personalMemoryReview;
-        const recall = await owner.prepareVelaRecall(query);
+      await withLocalRecall(expected, recall => {
         assert.ok(recall);
         const data = JSON.parse(recall.prompt.slice(recall.prompt.lastIndexOf('\n') + 1));
         assert.deepEqual(data.items.map(item => [item.factId, item.provenance.messageId]), [[fact.id, expected.input.messageId]]);
         assert.throws(() => recall.validate(recall.prompt), /personal_memory_disclosure_review_required/);
-        recall.revoke();
-        const policy = await local.command('personalMemoryPolicyNative', {});
-        await local.command('personalMemoryPolicyNative', { assistant: 'vela', enable: false, expectedVersion: policy.version });
-        const activity = await local.command('providerActivity', {});
-        assert.equal(activity.providerRequests, 0);
-        assert.equal(activity.codexConnections, 0);
-      } finally { await local.command('close', {}); }
+      });
       backend = startBackend();
       stage = 'revoke the exact restored source';
       const revoke = await backend.call('personalMemoryManagementNative', {
@@ -128,8 +137,11 @@ async function run() {
       await assert.rejects(backend.call('personalMemoryManagementNative', read), /personal_record_unavailable/);
       const opened = await backend.call('openResource', { resourceId: conversationId, selection: { messageId } });
       assert.equal(opened.status, 'unavailable');
+      await backend.close();
+      backend = undefined;
+      await withLocalRecall(expected, recall => assert.equal(recall, null));
       console.log(JSON.stringify({ result: 'pass', mode, electron: process.versions.electron,
-        restoredFact: true, localCrossChatRecall: true, providerUseOff: true, revokedSourceSurvivedWorkerRestart: true }));
+        restoredFact: true, localCrossChatRecall: true, revokedLocalRecallDenied: true, providerUseOff: true, revokedSourceSurvivedWorkerRestart: true }));
       return;
     }
     stage = 'seed canonical conversation';
