@@ -1565,20 +1565,29 @@ test('replace at the attachment limit preserves the old selection on cancellatio
  } finally { f.pending?.reject(Error('synthetic cleanup')); await chat?.dispose(); f.restore(); }
 });
 
-test('saved document picker reuses an exact current resource without importing or sending it', async () => {
+for (const closeDuringHandoff of [false, true]) test('saved document picker reuses an exact current resource (close during handoff: '+closeDuringHandoff+')', async () => {
  const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
  let chat;
+ let releaseHandoff!: () => void;
+ const handoffGate = new Promise<void>(resolve => { releaseHandoff = resolve; });
  try {
   const saved = { id: 'file:saved', version: 1, title: 'Saved brief.pdf' };
   let available = [saved];
   const opened: typeof available = [];
   const staged: typeof available = [];
+  let verifyHandoff: (() => boolean) | undefined;
   let opening: 'opened' | 'unavailable' = 'opened';
   chat = mountConversationChat(f.view.root, {
    port: f.port, resourceId: f.draft.resourceId, motion: motion.motion, viewId: 'chat:saved-document',
    listDocuments: id => { assert.equal(id, f.draft.resourceId); return available; },
    openDocument: async document => { opened.push(document); return opening; },
-   askVelaAboutDocument: async document => { staged.push(document); },
+   askVelaAboutDocument: async (document, isCurrent) => {
+    if (staged.length) {
+      verifyHandoff = isCurrent;
+      await handoffGate;
+    }
+    if (isCurrent()) staged.push(document);
+   },
    chooseDocument: async () => { throw Error('Saved selection must not use the file picker'); },
   });
   await chat.ready;
@@ -1607,12 +1616,24 @@ test('saved document picker reuses an exact current resource without importing o
   picker.fire('click');
   assert.equal(f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').disabled, true);
   picker.fire('click');
-  opening = 'unavailable';
-  const changed = [{ ...available[0], unavailable: 'changed' as const }];
-  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:changed});
-  openAttachment.fire('click');
-  await until(() => !!named(f.view.root,'Replace'));
-  assert.equal(f.draft.content,draft.content);
-  assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,true);
- } finally { await chat?.dispose(); assert.equal(motion.poses.size, 0); f.restore(); }
+  if (!closeDuringHandoff) {
+   opening = 'unavailable';
+   const changed = [{ ...available[0], unavailable: 'changed' as const }];
+   await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:changed});
+   openAttachment.fire('click');
+   await until(() => !!named(f.view.root,'Replace'));
+   assert.equal(f.draft.content,draft.content);
+   assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,true);
+   return;
+  }
+  named(f.view.root,'Ask Vela').fire('click');
+  await until(()=>!!verifyHandoff);
+  assert.equal(verifyHandoff?.(),true);
+  const closing = chat.dispose();
+  assert.equal(verifyHandoff?.(),false,'closing retires the handoff before draft flushing finishes');
+  releaseHandoff();
+  await closing;
+  assert.equal(staged.length,1);
+  assert.deepEqual(f.draft,draft);
+ } finally { releaseHandoff(); await chat?.dispose(); assert.equal(motion.poses.size, 0); f.restore(); }
 });

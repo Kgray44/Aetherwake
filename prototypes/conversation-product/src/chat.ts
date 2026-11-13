@@ -159,6 +159,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const attachDocument = el('button', 'Attach document');
   let choosingDocument = false;
   let stagingForVela = false;
+  let retiring = false;
   let renderedDocuments: readonly DraftDocument[] | undefined;
   function renderDocuments(documents: readonly DraftDocument[]) {
     if (documents === renderedDocuments) return;
@@ -195,16 +196,16 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         decorateConversationControl(askVela,{identity:'source',emphasis:'secondary'});
         askVela.setAttribute('aria-label','Ask Vela about ' + label);
         askVela.addEventListener('click', async () => {
-          if (askVela.disabled || stagingForVela || disposed || accessRevoked) return;
+          const isCurrent = () => !retiring && !disposed && !accessRevoked && root.contains(askVela) &&
+            session.snapshot().documents.some(item => item.id === document.id && item.version === document.version && !item.unavailable);
+          if (askVela.disabled || stagingForVela || !isCurrent()) return;
           stagingForVela = true;
           renderDraft();
           try {
             await session.flush();
-            const isCurrent = () => !disposed && !accessRevoked && root.contains(askVela) &&
-              session.snapshot().documents.some(item => item.id === document.id && item.version === document.version && !item.unavailable);
             if (isCurrent()) await options.askVelaAboutDocument!(document,isCurrent);
-          } catch (error) { report(errorText(error)); }
-          finally { stagingForVela = false; renderDraft(); }
+          } catch (error) { if (isCurrent()) report(errorText(error)); }
+          finally { stagingForVela = false; if (!disposed) renderDraft(); }
         });
         return [open, askVela, remove];
       }
@@ -1024,7 +1025,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const scroll=messages.scrollTop;
     resize();if(!presentationAnchor)setScroll(scroll);drainPendingFollow();drainAnchor();
   },flush,async whenSubmissionSettled(){while(sendTask)await sendTask;},async dispose(){
-    if(disposed)return;await flush();disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();modelPicker?.dispose();thinkingPicker?.dispose();documentPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
+    if(disposed)return;
+    retiring=true;
+    try { await flush(); } catch (error) { retiring=false; throw error; }
+    disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();modelPicker?.dispose();thinkingPicker?.dispose();documentPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){
       if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}
       else await session.dispose();
