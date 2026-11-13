@@ -1,3 +1,4 @@
+import type { ExperienceEvidencePort } from './experience-evidence-view.ts';
 import type { MissionProjection, MissionSummary } from '../../../integrated-backend/src/mission-contracts.mts';
 import type { MissionExecutionProfile } from '../../../integrated-backend/src/execution-profiler.mts';
 import { mountIntelligenceInspection } from './adaptive-workspace-view.ts';
@@ -11,6 +12,7 @@ type Options = {
   readMission(id: string): Promise<MissionProjection | null>;
   readProfile?(id: string): Promise<MissionExecutionProfile | null>;
   resourcePolicy?: ResourcePolicyPort;
+  experience?: ExperienceEvidencePort;
 };
 
 export function mountAdaptiveWorkspace(root: HTMLElement, options: Options) {
@@ -25,7 +27,7 @@ export function mountAdaptiveWorkspace(root: HTMLElement, options: Options) {
   status.tabIndex = -1;
   root.classList.add('aw-adaptive-workspace');
   root.append(label, status);
-  const inspection = mountIntelligenceInspection(root, options.viewId, options.readProfile, options.resourcePolicy, true);
+  const inspection = mountIntelligenceInspection(root, options.viewId, options.readProfile, options.resourcePolicy, true, options.experience);
   let selected = options.initialMissionId ?? '';
   let available = new Map<string, MissionSummary>();
   let epoch = 0, disposed = false, pending: Promise<void> | undefined, queued = false;
@@ -56,6 +58,7 @@ export function mountAdaptiveWorkspace(root: HTMLElement, options: Options) {
   picker.onchange = () => { selected = picker.value; void select(); };
   function refresh(accessChanged = false) {
     if (disposed) return;
+    if (!accessChanged) inspection.refreshExperience();
     if (accessChanged) {
       epoch++;
       resetChoices();

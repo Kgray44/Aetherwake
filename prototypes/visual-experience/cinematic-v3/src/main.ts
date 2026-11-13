@@ -1302,6 +1302,7 @@ declare global {
       copyText?: (text: string) => Promise<unknown>;
       onActive: (listener: (active: boolean) => void) => void;
       resourcePolicyInspection?: import('./resource-policy-view.ts').ResourcePolicyPort;
+      experiencePolicyRollback?: import('./experience-evidence-view.ts').ExperiencePolicyRollback;
       command?: (name: string, input: unknown) => Promise<unknown>;
       onEvent?: (listener: (event: unknown) => void) => () => void;
       observeResourceTiming?: (sample: { frameP95Ms: number; budgetRatioP95: number; samples: number; windowMs: number }) => void;

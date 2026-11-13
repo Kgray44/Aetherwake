@@ -168,11 +168,13 @@ if (verifyMissions) {
   if(process.argv.includes('--missions-persistence-reopen-only'))require('./mission-persistence.cjs').assertMissionPersistenceReopen({profile:privateRoot,argv:process.argv,source});
   else if(!/^review-vela-missions-\d+$/u.test(path.basename(privateRoot))||existsSync(privateRoot))throw Error('fresh_offline_mission_profile_required');
 }
+if (process.argv.includes("--missions-aiw-experience") && !process.argv.includes("--missions-aiw-inspection"))
+  throw Error("owned_offline_aiw_verification_required");
 if (process.argv.includes("--missions-aiw-inspection") &&
   (!verifyMissions || !process.argv.includes("--missions-aep-presentation-only") ||
     process.argv.includes("--bootstrap-vela-api") ||
     process.argv.some(arg => arg.startsWith("--integration-") && arg !== "--integration-vela-missions" ||
-      arg.startsWith("--missions-") && !["--missions-aep-presentation-only", "--missions-aiw-inspection"].includes(arg))))
+      arg.startsWith("--missions-") && !["--missions-aep-presentation-only", "--missions-aiw-inspection", "--missions-aiw-experience"].includes(arg))))
   throw Error("owned_offline_aiw_verification_required");
 if (missionProfilerFlags.length && (missionProfilerFlags.length !== 1 || !verifyMissions ||
   !["off", "minimal", "full"].includes(missionProfilerMode) ||
@@ -634,6 +636,14 @@ app.whenReady().then(async () => {
     inspect: () => call("resourcePolicyNative", { name: "inspect" }),
     reviewMode, reviewRollback,
   }));
+  ipcMain.handle("application-experience-policy-rollback", require("./experience-policy-review.cjs").experiencePolicyReview({
+    trusted: event => policyReady() && trustedActiveFrame(event),
+    hasGesture: event => !verify && event.senderFrame.executeJavaScript(
+      "navigator.userActivation.isActive && document.hasFocus()", false,
+    ).catch(() => false),
+    call, show: options => reviewDialogs.showMessageBox(win, options),
+    canWrite: () => storage.allowWrite(),
+  }));
   const validateHostOperation=async(binding,{phase='before-dispatch'}={})=>{
       const frame=maintenanceReviewFrames.get(binding.operationId);
       const trusted=()=>!closing&&!backendFailed&&!!frame&&maintenanceReviewFrames.get(binding.operationId)===frame&&(phase==='after-dispatch'?trustedApplicationFrame:trustedActiveFrame)({sender:win.webContents,senderFrame:frame});
@@ -679,7 +689,7 @@ app.whenReady().then(async () => {
   win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
-      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative'].includes(command))throw Error('unauthorized_private_command');
+      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative','aepExperimentNative'].includes(command))throw Error('unauthorized_private_command');
       if (
         event.sender !== win.webContents ||
         event.senderFrame !== win.webContents.mainFrame ||
@@ -764,7 +774,7 @@ app.whenReady().then(async () => {
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && (isVelaRead(input) || input?.name === "submissionStatus")) &&
-        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experiment-hypothesis", "compare-native-samples", "resource-experiment-preview", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
+        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experience-list", "experience-evidence", "experience-finding", "experiment-hypothesis", "compare-native-samples", "resource-experiment-preview", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
         !(command === "workspaceRecovery" && ["state", "preview"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
