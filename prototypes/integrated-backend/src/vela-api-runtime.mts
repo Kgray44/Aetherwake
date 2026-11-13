@@ -28,6 +28,12 @@ const digest = (value: string) => createHash('sha256').update(value).digest('hex
 const check: (value: unknown, code: string) => asserts value = (value, code) => { if (!value) throw new VelaError(code); };
 export interface VelaApiUsageStatus { enabled: boolean; configurationVersion: number | null; maxOutputTokens: number; requestsPerDay: number; usedToday: number }
 export interface VelaApiRunReceipt extends ApiRunDiagnostics {executionId:string;bodyDigest:string;contextDigest:string;state:TurnResult['outcome']|'dispatching';responseId:string|null;elapsedMs:number|null}
+export type VelaApiLedgerProfile = {profileId:string;configurationVersion:number|null;usage:VelaApiUsageStatus};
+type LedgerReceipt = {
+  requestId:string;executionId:string;outcome:'completed'|'incomplete'|'failed'|'cancelled-before-dispatch';
+  elapsedMs:number|null;totalTokens:number|null;
+};
+export type VelaApiLedgerRead = {state:'unresolved'} | {state:'terminal-receipts';receipts:LedgerReceipt[]};
 export type VelaMissionCognitionAttribution =
   | { owner: { kind: 'planning'; requestId: string };
       stage: 'qualify-perception' | 'qualify-assessment' | 'perception' | 'evidence-assessment' | 'planning'; round?: number }
@@ -134,9 +140,13 @@ export class VelaApiRuntime {
   static migrate(db: DatabaseSync) {
     check(db.isTransaction, 'api_storage_unavailable');
     db.exec(`CREATE TABLE IF NOT EXISTS vela_api_usage(id INTEGER PRIMARY KEY CHECK(id=1),configuration_version INTEGER NOT NULL,enabled INTEGER NOT NULL CHECK(enabled IN(0,1)),observed_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS vela_api_ledger_identity(id INTEGER PRIMARY KEY CHECK(id=1),profile_id TEXT NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS vela_api_runs(execution_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,configuration_version INTEGER NOT NULL,utc_day TEXT NOT NULL,body_digest TEXT NOT NULL,context_digest TEXT NOT NULL,state TEXT NOT NULL,result_digest TEXT,response_id TEXT,usage_json TEXT,elapsed_ms INTEGER,error_code TEXT,http_diagnostic_json TEXT);
       CREATE INDEX IF NOT EXISTS vela_api_runs_day ON vela_api_runs(utc_day);
+      CREATE INDEX IF NOT EXISTS vela_api_runs_request ON vela_api_runs(request_id);
       CREATE TABLE IF NOT EXISTS vela_api_tool_receipts(receipt_id TEXT PRIMARY KEY,execution_id TEXT NOT NULL,call_id TEXT NOT NULL,arguments_digest TEXT NOT NULL,output_digest TEXT NOT NULL,UNIQUE(execution_id,call_id));`);
+    if (!db.prepare('SELECT 1 FROM vela_api_ledger_identity WHERE id=1').get())
+      db.prepare('INSERT INTO vela_api_ledger_identity VALUES(1,?)').run(randomUUID());
     const columns=new Set(db.prepare('PRAGMA table_info(vela_api_runs)').all().map(row=>row.name));
     if(!columns.has('error_code'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN error_code TEXT');
     if(!columns.has('http_diagnostic_json'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN http_diagnostic_json TEXT');
@@ -158,6 +168,50 @@ export class VelaApiRuntime {
       configurationVersion: version, maxOutputTokens: VELA_API_RUNTIME_LIMITS.maxOutputTokens,
       requestsPerDay: VELA_API_RUNTIME_LIMITS.requestsPerDay,
       usedToday: Number(this.options.db.prepare('SELECT count(*) AS n FROM vela_api_runs WHERE utc_day=?').get(new Date().toISOString().slice(0,10))!.n) };
+  }
+  /** Private to the owning host. This read does not authorize usage. */
+  readLedgerProfile(): VelaApiLedgerProfile | null {
+    return this.options.transaction(() => {
+      const row = this.options.db.prepare('SELECT profile_id FROM vela_api_ledger_identity WHERE id=1').get();
+      if (typeof row?.profile_id !== 'string' || !/^[0-9a-f-]{36}$/.test(row.profile_id)) return null;
+      const usage = this.usageStatus();
+      return {profileId:row.profile_id,configurationVersion:usage.configurationVersion,usage};
+    });
+  }
+  /** The host must supply complete, canonically bound request IDs. Terminal
+   * transport receipts alone do not settle a Vela request or a blind claim. */
+  readLedgerReceipts(input:{profileId:string;configurationVersion:number;requestIds:readonly string[]}): VelaApiLedgerRead {
+    const unresolved = {state:'unresolved'} as const;
+    const {profileId,configurationVersion,requestIds} = input;
+    if (!Number.isSafeInteger(configurationVersion) || configurationVersion < 1 ||
+        !Array.isArray(requestIds) || !requestIds.length || requestIds.length > 12 ||
+        !requestIds.every(id=>typeof id==='string' && /^[a-zA-Z0-9_.:-]{1,200}$/.test(id)) ||
+        new Set(requestIds).size !== requestIds.length) return unresolved;
+    return this.options.transaction(() => {
+      const identity = this.options.db.prepare('SELECT profile_id FROM vela_api_ledger_identity WHERE id=1').get();
+      if (!identity || identity.profile_id !== profileId) return unresolved;
+      const db = this.options.db;
+      const rows = db.prepare(`SELECT request_id,execution_id,configuration_version,state,elapsed_ms,usage_json
+        FROM vela_api_runs WHERE request_id IN (${requestIds.map(()=>'?').join(',')}) ORDER BY rowid LIMIT 13`).all(...requestIds);
+      if (rows.length > 12 || new Set(rows.map(row=>row.request_id)).size !== requestIds.length) return unresolved;
+      const receipts:LedgerReceipt[] = [];
+      for (const row of rows) {
+        const outcome = row.state;
+        if (row.configuration_version !== configurationVersion ||
+            (outcome !== 'completed' && outcome !== 'incomplete' && outcome !== 'failed' && outcome !== 'cancelled-before-dispatch')) return unresolved;
+        let totalTokens:unknown;
+        try {
+          if (typeof row.usage_json === 'string' && row.usage_json.length <= 2048) {
+            const usage = JSON.parse(row.usage_json);
+            if (usage?.source === 'provider-reported') totalTokens = usage.totalTokens;
+          }
+        } catch { /* Absent or unreadable usage remains unknown. */ }
+        receipts.push({requestId:String(row.request_id),executionId:String(row.execution_id),outcome,
+          elapsedMs:typeof row.elapsed_ms==='number' && row.elapsed_ms>=0 ? row.elapsed_ms : null,
+          totalTokens:typeof totalTokens==='number' && Number.isSafeInteger(totalTokens) && totalTokens>=0 ? totalTokens : null});
+      }
+      return {state:'terminal-receipts',receipts};
+    });
   }
   authorizeUsage(expectedVersion: number, enabled: boolean): VelaApiUsageStatus {
     check(Number.isSafeInteger(expectedVersion) && expectedVersion >= 1 && typeof enabled === 'boolean', 'api_configuration_invalid');

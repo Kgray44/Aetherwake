@@ -87,6 +87,45 @@ function fixture() {
   };
 }
 
+test('private ledger reads preserve profile identity and refuse incomplete or unknown receipt sets after restart', async () => {
+  const f = fixture(), other = fixture();
+  try {
+    await f.configure();
+    await f.authorize();
+    const runtime = () => (f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
+    const profile = runtime().readLedgerProfile()!;
+    assert.match(profile.profileId,/^[0-9a-f-]{36}$/);
+    assert.notEqual((other.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime.readLedgerProfile()?.profileId,profile.profileId);
+    f.replies.push(()=>response('Synthetic completed answer.'));
+    const request = await f.send('Explain ocean currents.');
+    assert.equal(request.state,'responded');
+    const scope = {profileId:profile.profileId,configurationVersion:1,requestIds:[request.id]};
+    const result = runtime().readLedgerReceipts(scope);
+    assert.equal(result.state,'terminal-receipts');
+    if(result.state==='terminal-receipts'){
+      assert.equal(result.receipts.length,1);
+      assert.equal(result.receipts[0].requestId,request.id);
+      assert.equal(result.receipts[0].totalTokens,28);
+      assert.equal(result.receipts[0].outcome,'completed');
+    }
+    const db=(f.core as unknown as {db:DatabaseSync}).db;
+    db.prepare(`INSERT INTO vela_api_runs(execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state)
+      VALUES('synthetic-interrupted','synthetic-interrupted',1,?,'body','context','dispatching')`).run(new Date().toISOString().slice(0,10));
+    await f.reopen();
+    const reopenedDb=(f.core as unknown as {db:DatabaseSync}).db;
+    const changes=()=>reopenedDb.prepare('SELECT total_changes() AS n').get()?.n;
+    const before=changes();
+    assert.equal(runtime().readLedgerProfile()?.profileId,profile.profileId);
+    assert.deepEqual(runtime().readLedgerReceipts(scope),result);
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,requestIds:[request.id,'synthetic-interrupted']}),{state:'unresolved'});
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,requestIds:[request.id,'missing']}),{state:'unresolved'});
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,configurationVersion:2}),{state:'unresolved'});
+    assert.deepEqual(runtime().readLedgerReceipts({...scope,profileId:'other'}),{state:'unresolved'});
+    assert.equal(changes(),before);
+    assert.equal(f.requests.length,1);
+  } finally { await f.close(); await other.close(); }
+});
+
 const weatherQuery:WeatherQuery={startDate:null,endDate:null,period:'tomorrow',metrics:['temperature','humidity'],aggregation:'range'};
 const weatherCall=(query:unknown=weatherQuery,id='resp-weather',callId='call-weather')=>response('',id,[{type:'function_call',id:'fc-'+callId,call_id:callId,name:WEATHER_TOOL_NAME,arguments:JSON.stringify(query),status:'completed'}] as any);
 const unavailableWeather=()=>readWeatherData(weatherQuery,new AbortController().signal,{authorize(){throw Error('location_os_denied');},locate:async()=>{throw Error('unexpected_location');},fetch:async()=>{throw Error('unexpected_weather_network');}});
