@@ -84,8 +84,10 @@ for (const [question, directory, ...files] of selected) {
   console.log(`\n${question} (${directory})`);
   const start = performance.now();
   const lanes = directory === 'integrated-backend' ? backendLanes : null;
-  const runs = await Promise.all((lanes ?? [files]).map((laneFiles, lane) =>
+  const serial = lanes?.[2] ? await runTests(directory, lanes[2], 1, 2) : null;
+  const runs = await Promise.all((lanes?.slice(0, 2) ?? [files]).map((laneFiles, lane) =>
     runTests(directory, laneFiles, lanes ? 1 : 2, lane)));
+  if (serial) runs.push(serial);
   const result = runs.find(run => run.status !== 0) ?? runs[0];
   const tests = runs.flatMap(run => run.tests);
   const counts = runs.every(run => run.counts) ? Object.fromEntries(Object.keys(runs[0].counts!).map(key =>
