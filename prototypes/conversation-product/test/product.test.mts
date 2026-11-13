@@ -306,3 +306,33 @@ test('canonical chat search reads an inherited message once per query and rechec
   assert.equal(inheritedReads,0,'revoked content is excluded before reading its body');
  } finally {await f.close();removeFixture(dir);}
 });
+
+test('canonical exact-hit detail reads only the requested page and preserves authorized lineage', async () => {
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-detail-read-work-')),f=fixture(join(dir,'canonical.sqlite'));
+ try {
+  const parent=await create(f,'Synthetic detail parent');
+  const earlier=await record(f,parent.resourceId,'Synthetic earlier message outside page');
+  const source=await record(f,parent.resourceId,'Synthetic exact inherited hit');
+  const child=await branch(f,parent.resourceId,source.id);
+  const later=await record(f,parent.resourceId,'Synthetic parent-only later message');
+  const query={resourceId:child.resourceId,aroundMessageId:source.id,limit:1};
+  const expected=await f.product.command('detail',query);
+  const graph=(f.core as unknown as {graph:ConversationGraph}).graph;
+  const records=(graph as unknown as {data:GraphData}).data;
+  let offPageReads=0;
+  for (const message of records.messages.filter(message=>message.id===earlier.id || message.id===later.id)) {
+   const body=message.content;
+   Object.defineProperty(message,'content',{configurable:true,enumerable:true,get:()=>{
+    offPageReads++;
+    return body;
+   }});
+  }
+  const detail=await f.core.command('conversation',{name:'detail',input:query}) as typeof expected;
+  assert.deepEqual(detail.messages,expected.messages);
+  assert.deepEqual(detail.lineage,expected.lineage);
+  assert.equal(detail.messages.items[0].id,source.id);
+  assert.equal(offPageReads,0);
+  graph.markUnavailable(source.id);
+  await assert.rejects(f.core.command('conversation',{name:'detail',input:query}),/message_unavailable/);
+ } finally {await f.close();removeFixture(dir);}
+});

@@ -217,6 +217,23 @@ export class ConversationGraph {
     return [...inherited, ...c.ownMessageIds.map(id => this.message(id))];
   }
   visibleMessages(conversationId: string): Message[] {return this.visibleMessageRecords(conversationId).map(copy);}
+  pageVisibleMessages(
+    conversationId: string,
+    select: (ids: readonly string[]) => { offset: number; limit: number },
+    allow: (conversationId: string, messageId: string) => boolean,
+  ): { items: Message[]; total: number; offset: number; limit: number; hasMore: boolean } {
+    const records = this.visibleMessageRecords(conversationId)
+      .filter(message => !this.unavailableMessages.has(message.id) && allow(message.conversationId, message.id));
+    const { offset, limit } = select(records.map(message => message.id));
+    assert(Number.isInteger(offset) && offset >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 200, 'invalid_page');
+    return {
+      items: records.slice(offset, offset + limit).map(copy),
+      total: records.length,
+      offset,
+      limit,
+      hasMore: offset + limit < records.length,
+    };
+  }
   searchVisibleMessages(
     conversationIds: readonly string[],
     needle: string,

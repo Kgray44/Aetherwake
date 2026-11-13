@@ -63,6 +63,7 @@ export interface ConversationReadView {
  readonly conversations: readonly Snapshot['conversations'][number][]; readonly resourceMap: Readonly<Snapshot['resourceMap']>;
  readonly graph: Pick<ConversationGraph,'visibleMessages'|'visibleMessageMetadata'>;
  readonly searchVisibleMessages?: ConversationGraph['searchVisibleMessages'];
+ readonly pageVisibleMessages?: ConversationGraph['pageVisibleMessages'];
  readonly graphMetadata: Readonly<Pick<GraphData,'providers'|'conversations'|'edges'|'unavailableMessageIds'>>;
  readonly executions: Readonly<Record<string,PublicConversationExecution>>;
  readonly messageEvidence?:Readonly<Record<string,{executionId:string;outputState?:'complete'|'partial';webSearch?:MessageView['webSearch']}>>;
@@ -414,8 +415,46 @@ export class ConversationProduct implements ConversationProductPort {
   const s = this.allowedShare(v,row,resourceId); check(this.host.contextReceipt?.(executionId,resourceId,shareId,s.digest) === true,'execution_context_receipt_required');
   const result = this.db.prepare('UPDATE cp_adoptions SET sent_at=?,execution_id=? WHERE share_id=? AND target_id=? AND attached_at IS NOT NULL').run(stamp(),executionId,shareId,resourceId); check(Number(result.changes) === 1,'share_not_attached');
  }
+ private readDetail(v: View, a: ProductCommandMap['detail']['input']): Omit<Detail, 'providers'> {
+  this.resource(v, a.resourceId, undefined, true);
+  const c = this.summary(v, a.resourceId, true);
+  const allow = (gid: string, messageId: string) => this.readable(v, v.publicIds.get(gid)!, messageId, true);
+  const select = (ids: readonly string[]) => {
+   const limit = a.limit ?? 50;
+   if (!a.aroundMessageId) return { offset: a.offset ?? 0, limit };
+   const index = ids.indexOf(a.aroundMessageId);
+   check(index >= 0, 'message_unavailable');
+   return { offset: Math.max(0, index - Math.min(10, Math.floor(limit / 2))), limit };
+  };
+  const messages = v.pageVisibleMessages
+   ? v.pageVisibleMessages(c.conversationId, select, allow)
+   : (() => {
+     const records = v.graph.visibleMessages(c.conversationId).filter(m => allow(m.conversationId, m.id));
+     return page(records, select(records.map(m => m.id)));
+    })();
+  const items = messages.items.map(m => ({
+   id:m.id,resourceId:v.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,
+   provenance:m.provenance,inherited:m.conversationId!==c.conversationId,sensitivity:m.sensitivity,...v.messageEvidence?.[m.id],
+  }));
+  const family=this.family(v,a.resourceId);
+  const lineage=v.graphMetadata.edges.filter(e=>family.has(v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.childId)!)).filter(e=>{if(v.graphMetadata.unavailableMessageIds.includes(e.sourceMessageId))return false;const source=v.messageMetadata(e.sourceMessageId);return !!source&&this.readable(v,v.publicIds.get(source.conversationId)!,e.sourceMessageId);}).map(e=>({id:e.id,parentResourceId:v.publicIds.get(e.parentId)!,childResourceId:v.publicIds.get(e.childId)!,sourceMessageId:e.sourceMessageId,mode:e.mode,createdAt:e.createdAt}));
+  return {
+   conversation:{...c,messageCount:messages.total},
+   messages:{...messages,items},
+   lineage,
+   policy:this.policy(a.resourceId),
+   shares:this.db.prepare('SELECT * FROM cp_shares WHERE source_resource_id=? OR id IN(SELECT share_id FROM cp_adoptions WHERE target_id=?)').all(a.resourceId,a.resourceId).map(row=>this.share(v,row,a.resourceId)),
+  };
+ }
  async command<K extends keyof ProductCommandMap>(name: K, input: ProductCommandMap[K]['input']): Promise<ProductCommandMap[K]['output']> {
   const a = input as any;
+  if (name === 'detail' && this.host.canonicalReadBatch && this.host.capabilitySnapshot) {
+   const snapshot = this.host.canonicalReadBatch(view => ({
+    detail: this.readDetail(this.indexed(view, true), a),
+    providers: this.providers(view),
+   }));
+   return {...snapshot.detail, providers: await snapshot.providers} as ProductCommandMap[K]['output'];
+  }
   if(this.host.canonicalReadBatch&&(name==='list'||name==='search'||name==='collections'||name==='readViewState')){
    const result=this.host.canonicalReadBatch(view=>name==='readViewState'?this.readViewState(this.indexed(view,true),a):this.readProjection(this.indexed(view,true),name,a));
    check(!result||typeof (result as {then?:unknown}).then!=='function','synchronous_canonical_callback_required');
@@ -425,10 +464,7 @@ export class ConversationProduct implements ConversationProductPort {
   switch(name) {
    case 'list': case 'search': case 'collections': result=this.readProjection(v,name,a);break;
    case 'detail': {
-    this.resource(v,a.resourceId,undefined,true); const c = this.summary(v,a.resourceId,true), all = v.graph.visibleMessages(c.conversationId).filter(m => this.readable(v,v.publicIds.get(m.conversationId)!,m.id,true)).map(m => ({id:m.id,resourceId:v.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==c.conversationId,sensitivity:m.sensitivity,...v.messageEvidence?.[m.id]}));
-    const around = a.aroundMessageId ? all.findIndex(m => m.id === a.aroundMessageId) : -1; if (a.aroundMessageId) check(around>=0,'message_unavailable');
-    const family=this.family(v,a.resourceId); const lineage=v.graphMetadata.edges.filter(e=>family.has(v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.childId)!)).filter(e=>{if(v.graphMetadata.unavailableMessageIds.includes(e.sourceMessageId))return false;const source=v.messageMetadata(e.sourceMessageId);return !!source&&this.readable(v,v.publicIds.get(source.conversationId)!,e.sourceMessageId);}).map(e=>({id:e.id,parentResourceId:v.publicIds.get(e.parentId)!,childResourceId:v.publicIds.get(e.childId)!,sourceMessageId:e.sourceMessageId,mode:e.mode,createdAt:e.createdAt}));
-    result={conversation:{...c,messageCount:all.length},messages:page<MessageView>(all,{...a,...(around>=0?{offset:Math.max(0,around-Math.min(10,Math.floor((a.limit??50)/2)))}:{})}),lineage,policy:this.policy(a.resourceId),shares:this.db.prepare('SELECT * FROM cp_shares WHERE source_resource_id=? OR id IN(SELECT share_id FROM cp_adoptions WHERE target_id=?)').all(a.resourceId,a.resourceId).map(row=>this.share(v,row,a.resourceId)),providers:await this.providers(v)} satisfies Detail; break;
+    result={...this.readDetail(v, a),providers:await this.providers(v)} satisfies Detail; break;
    }
    case 'readDraft': this.draftResource(v,a.resourceId);result=this.draft(a.resourceId);break;
    case 'saveDraft': result=this.saveDraft(v,a);break;

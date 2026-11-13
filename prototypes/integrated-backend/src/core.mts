@@ -5344,7 +5344,12 @@ export class BackendCore {
           visibleMessages:gid=>{ensure(currentSource(gid),'source_unavailable');return this.graph.visibleMessages(gid).filter(m=>currentSource(m.conversationId,m.id));},
           visibleMessageMetadata:(gid,options)=>{ensure(currentSource(gid),'source_unavailable');return this.graph.visibleMessageMetadata(gid,{...options,allow:m=>currentSource(m.conversationId,m.id)&&options.allow(m)});},
         },
-        ...(assertOpen ? {searchVisibleMessages: (ids: readonly string[], needle: string, allow: (gid: string, messageId: string) => boolean) => {
+        ...(assertOpen ? {pageVisibleMessages: (...[gid, select, allow]: Parameters<NonNullable<ConversationReadView['pageVisibleMessages']>>) => {
+          assertOpen();
+          ensure(currentSource(gid), 'source_unavailable');
+          return this.graph.pageVisibleMessages(gid, select, (source, messageId) =>
+            currentSource(source, messageId) && allow(source, messageId));
+        }, searchVisibleMessages: (ids: readonly string[], needle: string, allow: (gid: string, messageId: string) => boolean) => {
           assertOpen();
           for (const gid of ids) ensure(currentSource(gid), 'source_unavailable');
           return this.graph.searchVisibleMessages(ids, needle, (gid, messageId) =>
