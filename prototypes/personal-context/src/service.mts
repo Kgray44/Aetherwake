@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { PERSONAL_CONTEXT_CONTRACT } from './contracts.ts';
+import type { ConversationSourceRef, ConversationSourceProof } from './contracts.ts';
 import type { Category, Certainty, ContextItem, ContextRequest, FactDraft, OmissionReason, Operation, OriginalImport, OriginalInput, PersonalAuthorization, PersonalContextHost, PersonalContextManifest, PersonalCrypto, PersonalExport, PersonalPolicy, PersonalScope, PolicyPatch, Provenance, RecordRef, ReviewedFact, ScopeProof } from './contracts.ts';
 
 export class PersonalContextError extends Error { readonly code: string; constructor(code: string) { super(code); this.name = 'PersonalContextError'; this.code = code; } }
@@ -12,6 +13,7 @@ const encode = (v: unknown) => JSON.stringify(canonical(v));
 const hash = (v: unknown) => createHash('sha256').update(encode(v)).digest('hex');
 const bytes = (v: unknown) => Buffer.byteLength(encode(v), 'utf8');
 const same = (a: unknown, b: unknown) => encode(a) === encode(b);
+const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const exact = (v: Record<string, unknown>, keys: string[]) => Object.keys(v).sort().join(',') === keys.sort().join(',');
 const categories: Category[] = ['identity', 'preferences', 'projects', 'people', 'technical', 'decisions', 'temporary', 'conversation'];
 const certainties: Certainty[] = ['explicit-statement', 'user-preference', 'imported-summary', 'historical-observation', 'inference', 'conflicting', 'unknown'];
@@ -47,6 +49,11 @@ function draft(input: unknown): asserts input is FactDraft {
   check(Array.isArray(input.keywords) && input.keywords.length > 0 && input.keywords.length <= 16 && input.keywords.every(v => typeof v === 'string' && v.trim().length > 0 && v.length <= 64) && new Set(input.keywords).size === input.keywords.length, 'invalid_keywords');
   check(input.purpose !== 'behavior' || input.scope.kind !== 'user.shared', 'shared_behavior_forbidden');
   const source = input.source; check(record(source), 'invalid_provenance');
+  if (source.kind === 'conversation-message') {
+    check(exact(source, ['kind', 'conversationId', 'messageId', 'version', 'contentDigest']) &&
+      id(source.conversationId) && id(source.messageId) && id(source.version) && digest(source.contentDigest), 'invalid_provenance');
+    return;
+  }
   check(source.kind === 'user-statement' ? exact(source, ['kind']) : source.kind === 'import' && exact(source, ['kind', 'id', 'version', 'start', 'end']) && id(source.id) && Number.isSafeInteger(source.version) && Number(source.version) >= 1 && Number.isSafeInteger(source.start) && Number(source.start) >= 0 && Number.isSafeInteger(source.end) && Number(source.end) > Number(source.start), 'invalid_provenance');
 }
 function request(value: ContextRequest) {
@@ -102,8 +109,14 @@ export class PersonalContextService {
       if (head.kind === 'import') { const { id: _id, version: _version, state: _state, createdAt: _created, updatedAt: _updated, contentDigest: _digest, ...fields } = value; original(fields); check(value.state === 'active' || value.state === 'revoked', 'corrupt_personal_context'); check(value.contentDigest === hash(value.text), 'corrupt_personal_context'); }
       else {
         const { id: _id, version: _version, state: _state, createdAt: _created, updatedAt: _updated, reviewedAt: _reviewed, reviewedBy: _by, provenance, supersededBy: _next, ...fields } = value;
-        check(record(provenance) && (provenance.kind === 'user-statement' ? exact(provenance, ['kind']) : provenance.kind === 'import' && exact(provenance, ['kind', 'id', 'version', 'contentDigest', 'start', 'end']) && typeof provenance.contentDigest === 'string' && /^[a-f0-9]{64}$/.test(provenance.contentDigest)), 'corrupt_personal_context');
-        const { contentDigest: _sourceDigest, ...source } = provenance; draft({ ...fields, source });
+        check(record(provenance), 'corrupt_personal_context');
+        if (provenance.kind === 'conversation-message') draft({ ...fields, source: provenance });
+        else {
+          check(provenance.kind === 'user-statement' ? exact(provenance, ['kind']) :
+            provenance.kind === 'import' && exact(provenance, ['kind', 'id', 'version', 'contentDigest', 'start', 'end']) && digest(provenance.contentDigest), 'corrupt_personal_context');
+          const { contentDigest: _sourceDigest, ...source } = provenance;
+          draft({ ...fields, source });
+        }
         check(['active', 'revoked', 'superseded'].includes(value.state) && id(value.reviewedBy) && typeof value.reviewedAt === 'string' && Number.isFinite(Date.parse(value.reviewedAt)) && (value.supersededBy === null || id(value.supersededBy)), 'corrupt_personal_context');
       }
     }
@@ -152,8 +165,32 @@ export class PersonalContextService {
       for (const row of rows.slice(0, input.limit)) { const head = this.required(String(row.id), input.kind); try { this.authorize('record.list', head.scope, this.ref(head)); records.push({ ...this.ref(head), state: head.state }); } catch (error) { if (!(error instanceof PersonalContextError && error.code === 'personal_context_not_authorized')) throw error; } }
       return { records, next: rows.length > input.limit ? String(rows[input.limit - 1].id) : null }; });
   }
+  private conversationSource(reference: ConversationSourceRef): ConversationSourceProof | null {
+    const { conversationId, messageId } = reference;
+    let source;
+    try {
+      source = this.opts.host.resolveConversationSource?.({ kind: 'conversation-message', conversationId, messageId });
+    } catch {
+      return null;
+    }
+    return source?.conversationId === conversationId && source.messageId === messageId &&
+      source.role === 'user' && id(source.version) && digest(source.contentDigest) &&
+      (source.projectId === null || id(source.projectId)) && typeof source.sensitive === 'boolean' ? source : null;
+  }
+  private sourceScopeMatches(scopeValue: PersonalScope, source: ConversationSourceProof): boolean {
+    return (scopeValue.kind === 'conversation' && scopeValue.id === source.conversationId) ||
+      (scopeValue.kind === 'project' && scopeValue.id === source.projectId);
+  }
   private provenance(input: FactDraft): Provenance {
     if (input.source.kind === 'user-statement') return { kind: 'user-statement' };
+    if (input.source.kind === 'conversation-message') {
+      const source = this.conversationSource(input.source);
+      check(source, 'conversation_source_unavailable');
+      check(source.version === input.source.version && source.contentDigest === input.source.contentDigest, 'stale_conversation_source');
+      check(input.purpose === 'knowledge' && this.sourceScopeMatches(input.scope, source), 'conversation_source_scope_mismatch');
+      check(!source.sensitive || input.sensitive, 'sensitive_source_requires_sensitive_fact');
+      return structuredClone(input.source);
+    }
     const head = this.required(input.source.id, 'import', input.source.version), source = this.readable<OriginalImport>(head);
     check(source.state === 'active' && (!source.expiresAt || Date.parse(source.expiresAt) > Date.parse(this.now())) && input.source.end <= source.text.length, 'import_source_unavailable');
     check(!source.sensitive || input.sensitive, 'sensitive_source_requires_sensitive_fact');
@@ -200,6 +237,11 @@ export class PersonalContextService {
     if (!this.inScope(value.scope, input)) return 'outside-scope';
     if (value.scope.kind === 'user.shared' && (!policy.sharingEnabled || !input.sharedFactIds.includes(value.id))) return 'not-shared';
     if (value.purpose === 'behavior' && (!input.includeBehavior || value.scope.kind === 'user.shared')) return 'irrelevant';
+    if (value.provenance.kind === 'conversation-message') {
+      const source = this.conversationSource(value.provenance);
+      if (!source || source.version !== value.provenance.version || source.contentDigest !== value.provenance.contentDigest ||
+        !this.sourceScopeMatches(value.scope, source) || (source.sensitive && (!value.sensitive || !policy.sensitiveEnabled))) return 'source-changed';
+    }
     if (value.provenance.kind === 'import') {
       const source = this.head(value.provenance.id); if (!source || source.kind !== 'import' || source.state !== 'active' || source.version !== value.provenance.version) return 'source-changed';
       this.proof(source.scope!); this.authorize('record.read', source.scope, this.ref(source));
