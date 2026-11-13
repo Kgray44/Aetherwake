@@ -2,7 +2,7 @@
  * --integration-chat-motion --profile=<C:absolute review-chat-motion-DIGITS>.
  * --verify-restore binds the original passing source/assets and canonical IDs.
  * --verify-quote exercises keyboard Quote and restores the resulting draft.
- * 45s /12s including cleanup, or 55s /12s with --verify-quote; <=3 PNG /16MiB combined. Optional initial-only
+ * 45s /12s including cleanup,; <=3 PNG /16MiB combined. Optional initial-only
  * --record-chat-motion uses one existing exact-window video <=32MiB. Software input is
  * not physical OS input. No refocus, global hooks, auth, provider or fixture RPC.
  */
@@ -154,7 +154,7 @@ function optionalRecording({ requested, restore, slot, win, session, localURL, o
 Object.assign(exports, { assertOwnedProfile, assertRead, assertNoProvider, canonicalChat, assertMotionSample, assertGeometry, passingCheckpoint, motionScript, viewScript, geometryScript, validateMotionBudget, admitVideo, optionalRecording, FIXTURE });
 
 exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, observeProviderActivity, session, localURL }) {
-  const restore = process.argv.includes('--verify-restore'), record = process.argv.includes('--record-chat-motion'), limitMs = restore ? 12000 : (VERIFY_QUOTE ? 55000 : 45000), root = path.resolve(privateRoot), out = path.join(root, 'chat-motion-evidence', `${restore ? 'restore' : 'initial'}-${Date.now()}`), expectedFile = path.join(root, 'chat-motion-expected.json'), budgetFile = path.join(root, 'chat-motion-capture-budget.json');
+  const restore = process.argv.includes('--verify-restore'), record = process.argv.includes('--record-chat-motion'), limitMs = restore ? 12000 : 45000, root = path.resolve(privateRoot), out = path.join(root, 'chat-motion-evidence', `${restore ? 'restore' : 'initial'}-${Date.now()}`), expectedFile = path.join(root, 'chat-motion-expected.json'), budgetFile = path.join(root, 'chat-motion-capture-budget.json');
   const scope = process.argv.includes('--chat-reading-only') ? 'resize-search-and-reading' : 'full-chat-motion';
   const receipt = { contract: 'aerynth.chat-motion-integration@1', source, restore, passed: false, syntheticOnly: true, inputMethod: 'App-only software native-window mouse/key/wheel/insertText; all journey evaluations FALSE. Optional recorder alone uses the existing exact-window media authority. Renderer writes only temporary observation references, never product state or activation.', limits: { milliseconds: limitMs, combinedPNGs: 3, combinedPNGBytes: 16 * MiB, videos: record && !restore ? 1 : 0, combinedVideoBytes: 32 * MiB }, actions: [], samples: [], captures: [], checks: [], errors: [], limitations: ['No provider/handoff/account/native-thread or generated-title proof.', 'Shared-MC CSS samples and native-window capture are not physical input, monitor-presentation, artistic or performance acceptance.', 'Reading position compares the canonical message anchor at matching viewport geometry; this does not qualify arbitrary viewport changes or IME recovery.', 'Optional initial-only exact-window/no-audio recording needs successful bounded stop acknowledgement; capture overhead is included and requested30fps is not monitor performance.', 'Root must inspect PNGs/optional WebM and independently confirm all test processes exited.'] };
   receipt.scope = scope;
