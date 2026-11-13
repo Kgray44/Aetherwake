@@ -95,12 +95,22 @@ for (const outcome of ['matching','wrong anchor','disconnected read','still disc
  } finally { await chat?.dispose(); f.restore(); }
 });
 
-for (const editWhileWaiting of [false, true]) test('late completion reconciles the exact lost send (later edits: '+editWhileWaiting+')', async () => {
+for (const scenario of ['no edits', 'later edits', 'reconnect']) test('late completion reconciles the exact lost send ('+scenario+')', async () => {
  const f = fixture('chatgpt-plan-responses');
+ const editWhileWaiting = scenario === 'later edits';
+ let connected = true;
+ let evidenceReads = 0;
+ const port = { async command(name:string,input:any) {
+  if (name === 'detail' && input.aroundMessageId === 'message:confirmed') {
+   evidenceReads++;
+   if (!connected) throw Error('backend_disconnected');
+  }
+  return (f.port.command as any)(name,input);
+ } } as ConversationProductPort;
  let chat, observe!: (observation: ConversationExecutionObservation) => void;
  try {
   const resourceId = f.draft.resourceId;
-  chat = mountConversationChat(f.view.root, { port: f.port, resourceId, execution: {
+  chat = mountConversationChat(f.view.root, { port, resourceId, execution: {
    observe(_id, listener) { observe = listener; return () => {}; },
    async cancel() {},
    async refresh() {},
@@ -109,6 +119,16 @@ for (const editWhileWaiting of [false, true]) test('late completion reconciles t
   f.view.root.querySelector('form').fire('submit');
   await until(() => !!f.pending);
   const commandId = f.pending!.input.commandId;
+  const completion: ConversationExecutionObservation = { execution: {
+   id: 'execution:confirmed', resourceId, commandId, providerId: 'chatgpt-plan-responses',
+   state: 'provider_completed', startedAt: '2026-11-02T00:00:00Z', endedAt: '2026-11-02T00:00:01Z',
+   inputMessageId: 'message:confirmed', taskVerified: false,
+  } };
+  if (scenario === 'reconnect') {
+   observe(completion);
+   connected = false;
+   observe({ connection: 'unavailable' });
+  }
   f.pending!.reject(Error('synthetic response lost'));
   await chat.whenSubmissionSettled();
   assert.equal(f.draft.content, 'Saved unsent text');
@@ -120,14 +140,49 @@ for (const editWhileWaiting of [false, true]) test('late completion reconciles t
   }
   f.detail.messages.items.push({ ...f.detail.messages.items[0], id: 'message:confirmed', content: 'Saved unsent text' });
   f.detail.conversation.revision++;
-  observe({ execution: {
-   id: 'execution:confirmed', resourceId, commandId, providerId: 'chatgpt-plan-responses',
-   state: 'provider_completed', startedAt: '2026-11-02T00:00:00Z', endedAt: '2026-11-02T00:00:01Z',
-   inputMessageId: 'message:confirmed', taskVerified: false,
-  } });
+  if (scenario === 'reconnect') {
+   assert.equal(evidenceReads, 0);
+   connected = true;
+   observe({ connection: 'available' });
+  } else observe(completion);
   await chat.whenSubmissionSettled();
   assert.equal(f.draft.content, editWhileWaiting ? 'My next question' : '');
   assert.match(f.view.root.querySelector('.cp-chat-status').textContent, /Message accepted/);
+  assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+for (const arrivesBeforeRejection of [false, true]) test('a confirmed provider failure releases a lost send for explicit retry (early: '+arrivesBeforeRejection+')', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ let chat, observe!: (observation: ConversationExecutionObservation) => void;
+ try {
+  const resourceId = f.draft.resourceId;
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId, execution: {
+   observe(_id, listener) { observe = listener; return () => {}; },
+   async cancel() {},
+  } });
+  await chat.ready;
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  const execution = {
+   id: 'execution:rejected', resourceId, commandId: f.pending!.input.commandId,
+   providerId: 'chatgpt-plan-responses', state: 'failed' as const,
+   startedAt: '2026-11-02T00:00:00Z', endedAt: '2026-11-02T00:00:01Z', taskVerified: false as const,
+  };
+  const send = f.view.root.querySelector('[data-cp-control="send"]');
+  if (arrivesBeforeRejection) observe({ execution });
+  f.pending!.reject(Error('synthetic response lost'));
+  await chat.whenSubmissionSettled();
+  if (!arrivesBeforeRejection) {
+   observe({ execution: { ...execution, commandId: 'unrelated-command' } });
+   assert.equal(send.disabled, true);
+   observe({ execution: { ...execution, state: 'unknown' } });
+   assert.equal(send.disabled, true);
+   observe({ execution });
+  }
+  assert.equal(f.draft.content, 'Saved unsent text');
+  assert.equal(send.disabled, false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, /provider ended the reply with an error.*draft is still here/i);
   assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
  } finally { await chat?.dispose(); f.restore(); }
 });
