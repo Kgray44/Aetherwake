@@ -360,10 +360,23 @@ test('Vela memory-derived replies remain readable locally and stay out of voice 
       voiceContext(id: string, purpose: 'conversation'): Promise<{ contextRef: string; contextDigest: string; history: unknown[] }>;
       validateVoiceContext(ref: string, digest: string): void;
     };
+    const branchInput = { resourceId: conversationId, messageId: reply.id, includeMessageIds: [reply.id],
+      providerId: 'local', title: 'Synthetic branch', commandId: 'branch', tokenBudget: 8192, expectedRevision: reply.revision };
+    const branch = await core.command('branch', branchInput);
+    const publish = { name: 'publish' as const, input: { sourceResourceId: conversationId, sourceMessageId: reply.id, evidence: 'excerpt' as const } };
+    const share = await core.command('conversation', publish) as { id: string };
+    await core.command('conversation', { name: 'inspectShare', input: { shareId: share.id, resourceId: branch.conversation.resourceId } });
     const before = await owner.voiceContext(conversationId, 'conversation');
     assert.match(JSON.stringify(before.history), /containing a private memory/);
     owner.state.executions['memory-execution'] = { reviewedMemory: true } as Execution;
     owner.state.messageEvidence[reply.id] = { executionId: 'memory-execution' };
+    await assert.rejects(core.command('branch', branchInput), /source_unavailable/);
+    await assert.rejects(core.command('branch', { ...branchInput, commandId: 'second-branch' }), /source_unavailable/);
+    await assert.rejects(core.command('review', { handoffId: branch.handoff.id, fingerprint: branch.handoff.fingerprint,
+      approve: true }), /source_unavailable/);
+    await assert.rejects(core.command('conversation', publish), /source_unavailable/);
+    await assert.rejects(core.command('conversation', { name: 'inspectShare',
+      input: { shareId: share.id, resourceId: branch.conversation.resourceId } }), /source_unavailable/);
     assert.throws(() => owner.validateVoiceContext(before.contextRef, before.contextDigest), /live_context_changed/);
     const after = await owner.voiceContext(conversationId, 'conversation');
     assert.doesNotMatch(JSON.stringify(after.history), /containing a private memory/);
