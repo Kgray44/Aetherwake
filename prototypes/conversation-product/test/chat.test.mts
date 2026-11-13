@@ -1420,11 +1420,17 @@ test('an inherited citation opens through its source chat and suppresses repeat 
   await chat.ready;
   const citation=f.view.root.querySelector('.cp-web-citation');
   citation.fire('click');citation.fire('click');
+    message.outputState='complete';
+    await chat.refresh();
+    const updated=f.view.root.querySelector('.cp-web-citation');
+    assert.ok(updated!==citation);
+    updated.fire('click');
   assert.deepEqual(f.calls.filter(c=>c.name==='openCitation').map(c=>c.input),
    [{resourceId:'chat:source',messageId:message.id,index:0}]);
-  assert.equal(citation.disabled,true);
+    assert.equal(updated.disabled,false);
+    assert.equal(updated.getAttribute('aria-disabled'),'true');
   finish({requested:true});
-  await until(()=>!citation.disabled);
+    await until(()=>updated.getAttribute('aria-disabled')===null);
   assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/browser/i);
  }finally{await chat?.dispose();f.restore();}
 });

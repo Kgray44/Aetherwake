@@ -614,6 +614,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   messages.addEventListener('keydown',event=>{if(event.target===messages&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)){pendingFollow=pendingAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;beginTranscriptScroll();}});
   const doAction = (event: ConversationMessageAction) => { Promise.resolve(options.onMessageAction?.(event)).catch(error=>report(errorText(error))); };
   const replyNotes = new Map<string, { pending: boolean; noteId?: string }>();
+  const openingCitations = new Set<string>();
   const updateReplyNoteControl = (messageId: string, button: HTMLButtonElement) => {
     const capture = replyNotes.get(messageId);
     const opening = !!capture?.noteId && capture.pending;
@@ -637,18 +638,24 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       offsets: sources.map(source => source.end),
       element: (index: number) => {
         const source = sources[index], button = el('button', String(index + 1), 'cp-web-citation');
+        const key = JSON.stringify([message.resourceId, message.id, index]);
         button.type = 'button'; button.title = source.title; button.setAttribute('aria-label', 'Open source ' + (index + 1) + ', ' + source.title);
         button.dataset.aerynthMotionControl = 'true';
+        button.dataset.citationIndex = String(index);
+        if (openingCitations.has(key)) button.setAttribute('aria-disabled', 'true');
         button.addEventListener('click', async () => {
-          if (button.disabled || disposed || accessRevoked || !root.contains(button)) return;
-          button.disabled = true;
+          if (openingCitations.has(key) || disposed || accessRevoked || !root.contains(button)) return;
+          openingCitations.add(key);
+          button.setAttribute('aria-disabled', 'true');
           try {
             await port.command('openCitation', { resourceId: message.resourceId, messageId: message.id, index });
             if (!accessRevoked) report('Browser open requested for this source.');
           } catch {
             if (!accessRevoked) report('This source could not be opened.');
           } finally {
-            button.disabled = false;
+            openingCitations.delete(key);
+            button.removeAttribute('aria-disabled');
+            cache.get(message.id)?.node.querySelector(`[data-citation-index="${index}"]`)?.removeAttribute('aria-disabled');
           }
         });
         return button;
