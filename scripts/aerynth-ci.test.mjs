@@ -10,6 +10,25 @@ import { acceptanceSchema, planBackendShards, windowsAddonCase, workerLossCase }
 const gate = new URL('./aerynth-ci-gate.mjs', import.meta.url);
 const reporter = new URL('./aerynth-test-reporter.mjs', import.meta.url);
 
+test('acceptance producer and required aggregate pin the same Node runtime before running their scripts', () => {
+  function runtimeBefore(file, job, script) {
+    const workflow = readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+    const jobBody = workflow.split(/^  (?=[\w-]+:\s*$)/m).find(section => section.startsWith(`${job}:\n`));
+    assert.ok(jobBody, `Missing ${job} job in ${file}`);
+    const scriptIndex = jobBody.indexOf(`run: node scripts/${script}`);
+    assert.ok(scriptIndex >= 0, `Missing ${script} in ${job}`);
+    const setup = [...jobBody.slice(0, scriptIndex).matchAll(
+      /^      - uses: actions\/setup-node@([a-f0-9]{40})[^\n]*\n        with:\n          node-version: '([\d.]+)'\s*$/gm,
+    )];
+    assert.equal(setup.length, 1, `${job} must pin one setup-node action and version before ${script}`);
+    return setup[0].slice(1);
+  }
+  const producer = runtimeBefore('aerynth-integration.yml', 'verify', 'run-aerynth-acceptance.mts');
+  const validator = runtimeBefore('integrated-backend.yml', 'required', 'aerynth-ci-gate.mjs');
+  assert.deepEqual(validator, producer);
+  assert.equal(validator[1], '24.18.0');
+});
+
 test('required gate rejects a failed, cancelled, skipped or missing job and accepts recovery', t => {
   const directory = mkdtempSync(join(tmpdir(), 'aerynth-ci-gate-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));

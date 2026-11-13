@@ -97,6 +97,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.18.0'
+        id: node-runtime
       - name: Record job and step timings
         continue-on-error: true
         env:
@@ -117,7 +121,7 @@ jobs:
           name: aerynth-acceptance-windows-latest-shard-1-${{ github.run_attempt }}
           path: ${{ runner.temp }}/aerynth-windows-reports/1
       - name: Require all verification jobs to succeed
-        if: always()
+        if: always() && steps.node-runtime.outcome == 'success'
         env:
           AERYNTH_LINUX: ${{ needs.linux.result }}
           AERYNTH_WINDOWS: ${{ needs.windows.result }}
