@@ -26,8 +26,8 @@ export interface CaptureReview {
   expiresAt: string;
 }
 
-type ManagementRequest = { action: 'correct' | 'revoke' | 'delete' | 'export'; id: string; version: number; text?: string };
-type ManagementReview = ManagementRequest & { ticket: string; fact: ReviewedFact | null; target: RecordRef; expiresAt: string };
+export type ManagementRequest = { action: 'correct' | 'revoke' | 'delete' | 'export'; id: string; version: number; text?: string };
+export type ManagementReview = ManagementRequest & { ticket: string; fact: ReviewedFact | null; target: RecordRef; expiresAt: string };
 
 const identifier = (value: unknown): value is string =>
   typeof value === 'string' && value.length <= 200 && value.trim().length > 0 && !/[\x00-\x1f]/.test(value);
