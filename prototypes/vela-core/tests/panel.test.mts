@@ -630,6 +630,34 @@ for (const outcome of ['responded', 'provider-unavailable', 'cancelled', 'unknow
   } finally { panel.dispose(); }
 });
 
+test('an unconfirmed disconnect warns before another send and preserves newer text', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  let rejectSend!: (error: Error) => void;
+  let submissions = 0;
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: () => {
+      submissions++;
+      return new Promise((_, reject) => { rejectSend = reject; });
+    },
+  }));
+  try {
+    await panel.open();
+    const composer = root.querySelector('textarea')!;
+    composer.value = 'Summarize the report.';
+    composer.fire('input');
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => submissions === 1);
+    composer.value = 'What changed since last week?';
+    composer.fire('input');
+    rejectSend(Error('Error invoking remote method: Error: backend_disconnected'));
+    const notice = root.find(node => node.className === 'vela-core-error')!;
+    await settles(() => !notice.hidden);
+    assert.match(notice.textContent, /couldn’t confirm.*Check Vela history before sending again/i);
+    assert.equal(composer.value, 'What changed since last week?');
+    assert.equal(submissions, 1);
+  } finally { panel.dispose(); }
+});
+
 test('workspace evidence is an explicit dedicated API composer choice', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];

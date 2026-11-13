@@ -643,6 +643,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         }
         busy = false;
         try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; }
+        if (error instanceof Error && /(?:^|: )backend_disconnected$/.test(error.message)) {
+          throw Error('vela_submission_unconfirmed', { cause: error });
+        }
         throw error;
       }
       finally { busy = false; send.disabled = !intent.value.trim(); form.setAttribute('aria-busy', 'false'); stop.hidden = !current?.requests.some(request => request.state === 'planning'); if (!disposed) renderReading(); present(); }
@@ -1009,6 +1012,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       const messages: Record<string, string> = {
         vela_response_refresh_failed: 'Vela responded, but the view could not refresh. Check the conversation before sending again.',
         vela_request_refresh_failed: 'Vela recorded the request, but the view could not refresh. Check its outcome before sending again.',
+        vela_submission_unconfirmed: 'Vela couldn’t confirm whether your last request went through. Your draft is still here. Check Vela history before sending again.',
         vela_project_evidence_unavailable: 'Open a project with readable notes or short text files to search for evidence.',
         vela_project_evidence_changed: 'Project evidence changed. Review the current sources and send again.',
         vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',
