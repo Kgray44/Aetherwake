@@ -6,6 +6,7 @@ import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, t
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { NativePersonalMemory } from './personal-memory.mts';
+import { defaultPersonalMemoryPolicy } from '../../personal-context/src/service.mts';
 import { createPersonalMemoryReview } from './personal-memory-review.mts';
 import { createPersonalMemorySourceReader } from './personal-memory-sources.mts';
 import { createIntelligenceJournalProjection, missionStreamFields, streamScopeMatches } from './intelligence-journal-projection.mts';
@@ -700,7 +701,13 @@ export class BackendCore {
       if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='timer_documents'").get() &&
           this.db.prepare('SELECT 1 FROM timer_documents LIMIT 1').get())
         void this.ensureTimerDomain().ready.catch(() => {});
-    } catch (error) { this.personalMemory?.close(); this.kernel.close(); throw error; }
+    } catch (error) {
+      // Attempt each cleanup while preserving the original startup error.
+      try { this.personalMemoryReview?.close(); } catch {}
+      try { this.personalMemory?.close(); } catch {}
+      try { this.kernel.close(); } catch {}
+      throw error;
+    }
   }
   private missionScopeAllowed(scope: MissionScope): boolean {
     if (this.closed || !this.libraryAuthorized({ kind: 'workspace', id: scope.workspaceId })) return false;
@@ -6252,10 +6259,14 @@ export class BackendCore {
   }
   private gid(resourceId: string) { ensure(typeof resourceId === 'string' && Object.hasOwn(this.state.resources, resourceId), 'resource_not_found'); return this.state.resources[resourceId]; }
   private publicId(graphId: string) { const id = Object.keys(this.state.resources).find(id => this.state.resources[id] === graphId); ensure(id, 'resource_not_found'); return id; }
-  private once<T>(commandId: string, input: unknown, fn: () => T): T {
+  private once<T>(commandId: string, input: unknown, fn: () => T, authorizeReplay?: (result: T) => void): T {
     ensure(typeof commandId === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,198}$/.test(commandId), 'invalid_command_id');
     const fingerprint = hash(input), previous = Object.hasOwn(this.state.receipts, commandId) ? this.state.receipts[commandId] : undefined;
-    if (previous) { ensure(previous.fingerprint === fingerprint, 'idempotency_conflict'); return structuredClone(previous.result); }
+    if (previous) {
+      ensure(previous.fingerprint === fingerprint, 'idempotency_conflict');
+      authorizeReplay?.(previous.result);
+      return structuredClone(previous.result);
+    }
     const result = fn(); this.state.receipts[commandId] = { fingerprint, result }; return result;
   }
   private conv(resourceId: string) {
@@ -6700,6 +6711,97 @@ export class BackendCore {
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
+    if (name === 'personalMemoryRevokeSourceNative') {
+      const memory = this.personalMemory, review = this.personalMemoryReview;
+      ensure(memory && review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+      const request = input as CommandMap['personalMemoryRevokeSourceNative']['input'];
+      ensure(request && identifier(request.conversationId) && identifier(request.messageId) &&
+        Number.isSafeInteger(request.expectedRevision) && request.expectedRevision >= 1 &&
+        (request.reviewedFact === undefined || request.reviewedFact && identifier(request.reviewedFact.id) &&
+          Number.isSafeInteger(request.reviewedFact.version) && request.reviewedFact.version >= 1), 'invalid_personal_memory_source');
+      const { conversationId, messageId, expectedRevision, reviewedFact } = structuredClone(request);
+      const service = reviewedFact ? await memory.open() : undefined;
+      ensure(!this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+      const revoke = () => this.atomic(() => {
+        ensure(this.state.revisions[conversationId] === expectedRevision, 'stale_source_revision');
+        const graphId = this.gid(conversationId);
+        const message = this.graph.readOwnMessage(graphId, messageId);
+        ensure(message?.role === 'user' && message.provenance === 'user' &&
+          this.productResourceAccess(conversationId, messageId), 'conversation_source_unavailable');
+        if (reviewedFact && service) {
+          const fact = review.activeFactForSourceRevocation(service, reviewedFact.id, reviewedFact.version);
+          const provenance = fact.provenance;
+          ensure(provenance.kind === 'conversation-message' && provenance.conversationId === conversationId &&
+            provenance.messageId === messageId && provenance.version === String(message.sequence) &&
+            provenance.contentDigest === createHash('sha256').update(message.content).digest('hex'),
+          'conversation_source_unavailable');
+        }
+        const source = { kind: 'conversation-message' as const, conversationId, messageId };
+        const { deleted } = review.withSourceErasure(source, () => memory.eraseConversationSource(source));
+        this.graph.markUnavailable(messageId);
+        return { revision: ++this.state.revisions[conversationId], erasedFacts: deleted.length };
+      });
+      try { return revoke() as CommandMap[K]['output']; }
+      catch (error) {
+        if (!(error instanceof Error) || error.message !== 'personal_context_lineage_repair_required') throw error;
+        // Upgrade legacy erasure dependencies under protected custody, then retry the same source revision.
+        await memory.open();
+        ensure(!this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+        return revoke() as CommandMap[K]['output'];
+      }
+    }
+    if (name === 'personalMemoryManagementNative') {
+      const review = this.personalMemoryReview;
+      ensure(review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+      const request = input as CommandMap['personalMemoryManagementNative']['input'];
+      switch (request?.type) {
+        case 'list': return await review.inspect({ after: request.after, limit: 20 }) as CommandMap[K]['output'];
+        case 'read': return await review.read(request.id) as CommandMap[K]['output'];
+        case 'previewSourceRevocation': {
+          const memory = this.personalMemory;
+          ensure(memory && identifier(request.id) && Number.isSafeInteger(request.version) && request.version >= 1,
+            'invalid_personal_memory_source');
+          const { id, version } = request;
+          const service = await memory.open();
+          ensure(!this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+          const fact = this.kernel.withTransaction(() => review.activeFactForSourceRevocation(service, id, version));
+          const source = fact.provenance;
+          ensure(source.kind === 'conversation-message', 'conversation_source_unavailable');
+          const { conversationId, messageId } = source;
+          const message = this.graph.readOwnMessage(this.gid(conversationId), messageId);
+          ensure(message?.role === 'user' && message.provenance === 'user' &&
+            this.productResourceAccess(conversationId, messageId) && String(message.sequence) === source.version &&
+            createHash('sha256').update(message.content).digest('hex') === source.contentDigest, 'conversation_source_unavailable');
+          return {
+            binding: { conversationId, messageId, expectedRevision: this.state.revisions[conversationId],
+              reviewedFact: { id, version } },
+            sourceText: message.content,
+          } as CommandMap[K]['output'];
+        }
+        case 'preview': return await review.previewManagement(request.request) as CommandMap[K]['output'];
+        case 'commit': return await review.commitManagement(request.review) as CommandMap[K]['output'];
+        case 'cancel': review.cancelManagement(request.ticket); return null as CommandMap[K]['output'];
+        default: throw new ServiceError('invalid_personal_memory_management');
+      }
+    }
+    if (name === 'personalMemoryPolicyNative') {
+      const review = this.personalMemoryReview;
+      ensure(review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+      const policy = input as CommandMap['personalMemoryPolicyNative']['input'];
+      if (policy.pauseStorage !== undefined) {
+        ensure(policy.pauseStorage === true && policy.enable === undefined && policy.assistant === undefined &&
+          Number.isSafeInteger(policy.expectedVersion) && policy.expectedVersion! > 0 && this.personalMemory?.hasStorage(),
+          'invalid_privacy_policy');
+        return await review.pauseStorage(policy.expectedVersion!) as CommandMap[K]['output'];
+      }
+      if (policy.enable !== undefined) {
+        ensure(typeof policy.enable === 'boolean' && Number.isSafeInteger(policy.expectedVersion), 'invalid_privacy_policy');
+        if (policy.enable) ensure(this.personalMemory?.hasStorage(), 'personal_storage_disabled');
+        return await review.setProviderUse(policy.assistant ?? 'ordinary', policy.enable, policy.expectedVersion!) as CommandMap[K]['output'];
+      }
+      if (!this.personalMemory?.hasStorage()) return defaultPersonalMemoryPolicy() as CommandMap[K]['output'];
+      return (await review.inspect({ after: null, limit: 1 })).policy as CommandMap[K]['output'];
+    }
     if (name === 'personalMemoryCapturePreviewNative' || name === 'personalMemoryCaptureCommitNative' || name === 'personalMemoryCaptureCancelNative') {
       const review = this.personalMemoryReview;
       ensure(review && !this.closed, 'personal_memory_native_required');
@@ -7130,7 +7232,9 @@ export class BackendCore {
         const m = this.graph.addMessage(this.gid(a.resourceId), a.role, a.content, { sensitivity: a.sensitivity });
         this.state.revisions[a.resourceId]++; return { ...m, resourceId: a.resourceId, revision: this.state.revisions[a.resourceId] };
         };
-        return this.atomic(() => a.commandId ? this.once(a.commandId, {name, ...a}, append) : append()) as any;
+        return this.atomic(() => a.commandId ? this.once(a.commandId, {name, ...a}, append, message => {
+          ensure(this.conversationAccess.access(a.resourceId, message.id), 'source_unavailable');
+        }) : append()) as any;
       }
       case 'workspace': return this.atomic(() => { const p = a.projectTitle ? this.kernel.createProject(a.projectTitle) : null; return this.kernel.createWorkspace(a.title, p?.id ?? null); }) as any;
       case 'openWorkspace': return this.kernel.openWorkspace(a.workspaceId) as any;
@@ -7156,6 +7260,9 @@ export class BackendCore {
         const review: HandoffReview = { id: result.handoff.id, resourceId: resource.id, sourceResourceId: a.resourceId, targetProviderId: a.providerId, sourceRevision, fingerprint, estimatedTokens, estimator: 'utf8-bytes-upper-bound', tokenBudget: a.tokenBudget, state: 'prepared', expiresAt: new Date(Date.now() + 3600000).toISOString() };
         this.state.reviews[review.id] = review;
         return { conversation: this.conv(resource.id), handoff: review, context: result.handoff, mode: 'application_continuation' };
+      }, () => {
+        ensure(this.conversationAccess.resource(a.resourceId, 'read') &&
+          [a.messageId, ...a.includeMessageIds].every(id => this.conversationAccess.access(a.resourceId, id)), 'source_unavailable');
       })) as any;
       case 'review': return this.atomic(() => { const r = this.package(a.handoffId); ensure(r.state === 'prepared' || r.state === 'approved', 'handoff_not_reviewable'); ensure(r.fingerprint === a.fingerprint, 'approval_scope_mismatch'); if(a.approve === true)this.validateReview(r); r.state = a.approve === true ? 'approved' : 'rejected'; r.approvedAt = now(); return structuredClone(r); }) as any;
       case 'selectProvider': return this.atomic(() => {
