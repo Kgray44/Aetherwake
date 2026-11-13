@@ -359,6 +359,9 @@ test('a later assessment cannot erase an earlier sourced conflict by dropping a 
       disclose: async call => {
         if (call.stage === 'interpret') return proposal;
         const first = call.round === 1;
+        assert.deepEqual(call.priorDisputes, first ? undefined : [{ key: 's1', sources: ['e1', 'e2'],
+          passages: [{ source: 'e1', start: 0, end: monday.text.length },
+            { source: 'e2', start: 0, end: tuesday.text.length }] }]);
         return { version: 3, clarification: '', assessment: [{
           key: 's1', status: first ? 'contradicted' : 'supported', query: first ? 'inspection correction' : '',
           passages: first ? [{ source: 'e1', quote: monday.text }, { source: 'e2', quote: tuesday.text }]

@@ -70,7 +70,9 @@ export interface ReviewedProjectCheckContext {
 export type SemanticHistoryCall = (
   | { stage: 'interpret'; request: string; reviewedSourceTitles?: readonly string[]; reviewedMissionGap?: string }
   | { stage: 'assess'; request: string; proposedClarification?: string; needs: readonly Need[];
-    excerpts: readonly { handle: string; text: string; title?: string; partial?: true; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number }
+    excerpts: readonly { handle: string; text: string; title?: string; partial?: true; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number;
+    priorDisputes?: readonly { key: string; sources: readonly string[];
+      passages: readonly { source: string; start: number; end: number }[] }[] }
 ) & { missionPlanning?: true; reviewedProjectCheck?: ReviewedProjectCheckContext; reviewedMissionCapabilities?: readonly string[] };
 
 interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan; moreMatches?: boolean }
@@ -275,6 +277,15 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     while (rounds < maxRounds) {
       rounds++;
       const priorCount = evidence.size;
+      const priorDisputes = priorAssessment?.rows.filter(row => row.status === 'contradicted').map(row => ({
+        key: row.key, sources: row.sources,
+        passages: (row.passages ?? []).map(({ source, quote }) => {
+          const start = evidence.get(source)!.text.indexOf(quote);
+          return { source, start, end: start + quote.length };
+        }),
+      }));
+      const followup = priorDisputes?.length ? { priorDisputes } : {};
+      if (priorDisputes?.length) assessmentBytes += Buffer.byteLength(JSON.stringify(followup)) - 1;
       // Preserve selected evidence and leave discovery slots for refined queries.
       const limit = rounds < maxRounds ? Math.max(priorCount, candidateLimit - 2) : candidateLimit;
       const matches: T[][] = [];
@@ -324,7 +335,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       if (pendingClarification && !evidence.size) return { ...empty('assessed'), proposal, clarification: pendingClarification };
       const sources = [...evidence.values()];
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
-      const reviewed = await disclose(structuredClone({ ...assessmentInput, round: rounds, excerpts }), sources);
+      const reviewed = await disclose(structuredClone({ ...assessmentInput, round: rounds, excerpts, ...followup }), sources);
       if (!sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
       if (reviewed == null) return empty('unavailable', 'no-provider-result');
       let rejection: AssessmentRejection = 'assessment-shape';
