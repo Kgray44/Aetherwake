@@ -150,6 +150,15 @@ test("explicit fixture activity reuses the current Core output buffer, marks sim
       )!.project_id,
       project.id,
     );
+    const idle = await core.command("createConversation", {
+      title: "Idle synthetic chat",
+      providerId: "fixture-codex",
+      commandId: randomUUID(),
+    });
+    const listRunning = () => core.command("conversation", {
+      name: "list",
+      input: { runningOnly: true, sort: "active", limit: 1 },
+    });
     running = core.command("execute", {
       resourceId: conversation.resourceId,
       prompt: "Explicit synthetic fixture, no actual provider",
@@ -168,6 +177,13 @@ test("explicit fixture activity reuses the current Core output buffer, marks sim
     assert.equal(activity.executions.length, 1);
     const execution = activity.executions[0];
     assert.equal(execution.state, "running");
+    const runningPage = await listRunning();
+    assert.equal(runningPage.total, 1);
+    assert.equal(runningPage.hasMore, false);
+    assert.deepEqual(runningPage.items.map(item => item.resourceId), [conversation.resourceId]);
+    assert.equal(runningPage.items[0].execution?.id, execution.id);
+    const history = await core.command("conversation", { name: "list", input: { sort: "active" } });
+    assert.ok(history.items.some(item => item.resourceId === idle.resourceId));
     assert.equal(execution.taskVerified, false);
     assert.deepEqual(
       Object.keys(execution).sort(),
@@ -226,6 +242,7 @@ test("explicit fixture activity reuses the current Core output buffer, marks sim
     ]);
     assert.deepEqual(denied.executions, []);
     assert.equal(denied.preview, null);
+    assert.equal((await listRunning()).total, 0);
     await core.command("interrupt", { executionId: execution.id });
     await running;
     running = undefined;
@@ -235,6 +252,7 @@ test("explicit fixture activity reuses the current Core output buffer, marks sim
     });
     assert.equal(terminal.executions[0].state, "interrupted");
     assert.equal(terminal.preview, null);
+    assert.equal((await listRunning()).total, 0);
     running = core.command("execute", {
       resourceId: conversation.resourceId,
       prompt: "Second explicit synthetic fixture",
