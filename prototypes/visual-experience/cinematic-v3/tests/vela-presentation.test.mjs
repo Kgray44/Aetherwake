@@ -48,6 +48,26 @@ test("a completed Vela submission survives a lost reply without sending again", 
   assert.deepEqual(changed, [{ name: "request", result: recorded }]);
 });
 
+test("a confirmed Vela response survives a failed workspace refresh", async () => {
+  const recorded = { id: "canonical-request", state: "responded" };
+  const operations = [];
+  let refreshFailures = 0;
+  const client = createVelaClient({
+    command: async (name, input) => {
+      operations.push(input.name);
+      assert.equal(name, "vela");
+      assert.equal(input.name, "request");
+      return recorded;
+    },
+    changed: async () => { throw Error("workspace snapshot unavailable"); },
+    requestRefreshFailed: () => { refreshFailures++; },
+    observed() {},
+  });
+  assert.deepEqual(await client.request({ intent: "Check status", resourceIds: [], authorizeProvider: false }), recorded);
+  assert.deepEqual(operations, ["request"]);
+  assert.equal(refreshFailures, 1);
+});
+
 test("durable response presentation uses its exact service CAS payload and is never a storage-exempt read", async () => {
   const { isVelaRead } = createRequire(import.meta.url)(
     "../native/vela-broker.cjs",

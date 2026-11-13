@@ -10,6 +10,7 @@ import type { WorkspacePresentationContext } from "../../../application-contract
 export function createVelaClient(options: {
   command(name: string, input: unknown): Promise<unknown>;
   changed(name: string, result: unknown, mayPresent?: () => boolean): Promise<void>;
+  requestRefreshFailed?(): void;
   presentationFence?(): () => boolean;
   observationFence?(): () => boolean;
   observed(state: VelaState): void;
@@ -78,8 +79,15 @@ export function createVelaClient(options: {
         "reviewPreference",
         "resetPreferences",
       ].includes(name)
-    )
-      await options.changed(name, result, mayPresent);
+    ) {
+      try {
+        await options.changed(name, result, mayPresent);
+      } catch (error) {
+        if (name !== "request") throw error;
+        // The native request receipt remains authoritative if presentation fails.
+        try { options.requestRefreshFailed?.(); } catch { /* Feedback cannot invalidate the receipt. */ }
+      }
+    }
     return result as T;
   };
   return {
