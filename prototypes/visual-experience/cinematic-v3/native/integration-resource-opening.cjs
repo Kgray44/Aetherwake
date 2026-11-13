@@ -144,7 +144,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const note = async resourceId => (await rpc('notes', { name: 'readNote', input: resourceId })).result;
     const directSelector = id => `.application-direct-resource[data-resource-id="${id}"]`;
     const waitNote = id => expression('Actual direct Note session', `(()=>{const r=document.querySelector(${JSON.stringify(directSelector(id))});return r?.querySelector('.aw-direct-editor')&&!r.querySelector('.aw-direct-editor').disabled&&['ready','saved','recovered'].includes(r.querySelector('[data-note-state]')?.dataset.noteState)})()`);
-    const close = async id => { const selector = `[data-surface-id="${id}"]`; await action(selector + ' .aw-contextual-dismiss'); await expression('Surface closes after actual flush', `!document.querySelector(${JSON.stringify(selector)})`); };
+    const close = async id => { const selector = `[data-surface-id="${id}"]`; const control = id === 'conversations' ? ' .cp-header-actions [data-cp-control="close"]' : ' .aw-contextual-dismiss'; await action(selector + control); await expression('Surface closes after actual flush', `!document.querySelector(${JSON.stringify(selector)})`); };
     const canonical = async () => {
       const d = await desktop(), core = await rpc('snapshot', {}), layouts = {};
       assert.equal(Object.keys(core.executions).length, 0, 'No provider execution authorized'); assert.equal(Object.keys(core.handoffs).length, 0, 'No delegated handoff authorized');
