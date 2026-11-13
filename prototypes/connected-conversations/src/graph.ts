@@ -221,6 +221,10 @@ export class ConversationGraph {
     const message = this.messagesById.get(messageId);
     return !!message && message.conversationId === conversationId && this.conversationsById.get(conversationId)?.ownMessageIds[message.sequence - 1] === messageId;
   }
+  readOwnMessage(conversationId: string, messageId: string): Message | null {
+    if (this.unavailableMessages.has(messageId) || !this.ownsMessage(conversationId, messageId)) return null;
+    return copy(this.message(messageId));
+  }
   private visibleMessageRecords(conversationId:string,budget?:{remaining:number}):Message[] {
     const lineage: Conversation[] = [];
     for (let c = this.conversation(conversationId); ; ) {
