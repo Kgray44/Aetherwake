@@ -4764,7 +4764,30 @@ export class BackendCore {
       const scope = this.velaHost.scope();
       if (request.sourceDependencies.some(({ref,content})=>{
         const current = this.velaHost.resolve(ref,scope);
-        return !current || current.version !== ref.version || (content && this.velaHost.canReadContent?.(current,scope) !== true);
+        if (!current || current.version !== ref.version) return true;
+        if (!content) return false;
+        if (this.velaHost.canReadContent?.(current,scope) !== true) return true;
+        if (ref.resourceKind === 'note') {
+          const observed = this.velaHistoryContent(ref,16384,this.velaHost,scope);
+          return !observed || 'overBudget' in observed || observed.source !== content.source ||
+            historyDigest(observed.content) !== content.digest;
+        }
+        if (ref.resourceKind !== 'file') return true;
+        // Extracted text is volatile. Recheck the original file revision without re-extracting.
+        try {
+          const source = readMediaSource(this.db,ref.id);
+          if (!source?.path || source.metadata.source !== 'file') return true;
+          const revision = source.metadata.sourceRevision;
+          const sourceUrl = 'aerynth://resource/'+encodeURIComponent(ref.id)+'?sourceRevision='+revision;
+          const suffix = {docx:'&extraction=body-text',pdf:'&extraction=extractable-text-all-pages',text:''}
+            [source.metadata.format as 'docx'|'pdf'|'text'];
+          if (suffix === undefined || content.source !== sourceUrl+suffix) return true;
+          const stat = lstatSync(source.path,{bigint:true});
+          return !stat.isFile() || stat.isSymbolicLink() || realpathSync(source.path)!==source.path ||
+            mediaSourceRevision(stat)!==revision;
+        } catch {
+          return true;
+        }
       })) return unresolved;
       const {conversationId,response:{messageId,contentDigest}} = request;
       const metadata = this.velaHistoryMessageMetadata(conversationId,messageId);
