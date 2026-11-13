@@ -387,6 +387,7 @@ export function installApplication(hooks: Hooks) {
       const opening = velaOpening;
       return () => velaOpen && velaOpening === opening && current();
     },
+    requestRefreshFailed: () => hooks.status("Vela recorded the request. The workspace could not refresh."),
     changed: async (name, result, mayPresent) => {
       await enqueue(async () => {
         const previousWorkspaceId = state?.activeWorkspaceId;

@@ -1,6 +1,6 @@
 import { LOCAL_FACT_LABELS } from './capabilities.ts';
 import { VELA_PROJECT_CHECK_LABELS } from './contracts.ts';
-import type { ResourceRef, VelaClient, VelaMessage, VelaNativeAction, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch, VelaLocalFacts } from './contracts.ts';
+import type { ResourceRef, VelaClient, VelaMessage, VelaNativeAction, VelaRequest, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch, VelaLocalFacts } from './contracts.ts';
 import { velaPanelStatus } from './panel-status.ts';
 import { confirmedVelaPlan, projectVelaManifestation, type VelaManifestationState } from './manifestation-state.ts';
 import { summarizeSystemMemory } from './system-information.ts';
@@ -152,14 +152,18 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const sourcePanel = disclosure('Find and add sources', 'vela-core-source-panel');
   const localFilesPanel=disclosure('Add files or folders','vela-core-local-files');
   let pickingSources=false;
+  let sourcePickerGeneration=0;
   const pickLocalSources=async(kind:'files'|'folder')=>{
     if(disposed||busy||pickingSources)return;
     if(!client.pickSources)throw Error('source_picker_unavailable');
     pickingSources=true;
+    const generation=++sourcePickerGeneration;
     pickFilesButton.disabled=pickFolderButton.disabled=send.disabled=true;
+    pickerStatus.textContent=kind==='files'?'Waiting for file selection…':'Waiting for folder selection…';
+    pickerStatus.hidden=false;
     try{
       const picked=await client.pickSources({kind,destination:'context'});
-      if(disposed)return;
+      if(disposed||generation!==sourcePickerGeneration)return;
       const refs=picked.resources.map((source):ResourceRef=>{
         const version=source.version;
         if(!Number.isSafeInteger(version)||!version||version<1)throw Error('source_version_unavailable');
@@ -167,8 +171,12 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       });
       for(const ref of refs)selected.set(ref.id,ref);
       renderSelection();
+    }catch(error){
+      if(!disposed&&generation===sourcePickerGeneration)throw error;
     }finally{
       pickingSources=false;
+      pickerStatus.textContent='';
+      pickerStatus.hidden=true;
       pickFilesButton.disabled=pickFolderButton.disabled=false;
       send.disabled=busy||!intent.value.trim();
     }
@@ -530,7 +538,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   if (options.voice) composeActions.append(voiceControl);
   composeActions.append(stop, send);
   connection.body.append(providerChoice);
-  form.append(intent, selection, selectedEvidenceOption, composeActions);
+  const pickerStatus=el('span','vela-core-secondary');
+  pickerStatus.setAttribute('role','status');
+  pickerStatus.hidden=true;
+  form.append(intent, selection, selectedEvidenceOption, pickerStatus, composeActions);
   intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || pickingSources || !intent.value.trim(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
   form.addEventListener('submit', event => { event.preventDefault(); if (busy || pickingSources || !intent.value.trim() || composing) return;
@@ -605,8 +616,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const selectedInvestigation = semanticContext.checked;
     transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; projectEvidence.checked = workspaceState.checked = routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
+      let recorded: VelaRequest | undefined;
       try {
-        const recorded = await client.request(submitted);
+        recorded = await client.request(submitted);
         if (disposed) return;
         const keepDraft = ['provider-unavailable', 'failed', 'invalid-plan', 'unknown', 'cancelled'].includes(recorded.state);
         if (!keepDraft && recorded.handoff && recorded.handoff.sourceRequestId === handoffSelection?.requestId) {
@@ -624,7 +636,15 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         observeLiveAnswer(undefined);
         await settleSubmittedView(submittedView);
       }
-      catch (error) { observeLiveAnswer(undefined); busy = false; try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; } throw error; }
+      catch (error) {
+        observeLiveAnswer(undefined);
+        if (recorded) {
+          throw Error(recorded.state === 'responded' ? 'vela_response_refresh_failed' : 'vela_request_refresh_failed');
+        }
+        busy = false;
+        try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; }
+        throw error;
+      }
       finally { busy = false; send.disabled = !intent.value.trim(); form.setAttribute('aria-busy', 'false'); stop.hidden = !current?.requests.some(request => request.state === 'planning'); if (!disposed) renderReading(); present(); }
     });
   });
@@ -634,6 +654,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   shell.addEventListener('keydown', event => { if (event.key !== 'Escape') return; const target = event.target as HTMLElement, opened = target.closest<HTMLDetailsElement>('details[open]') ?? (lastDisclosure?.open && shell.contains(lastDisclosure) && !lastDisclosure.closest('[hidden]') ? lastDisclosure : null); if (!more.hidden && (!opened || opened === contextPanels.get(activeContext!)?.panel.node)) { event.preventDefault(); event.stopPropagation(); closeContext(); } else if (opened) { event.preventDefault(); event.stopPropagation(); opened.open = false; opened.querySelector('summary')?.focus(); } });
   function renderSelection() {
     updateSemanticContext();
+    for(const [id,control] of sourceControls)control.checked=selected.has(id);
     selection.replaceChildren(); selection.hidden = !selected.size && !handoffSelection && !routingAgentSelection;
     routeHistory.disabled = !!handoffSelection;
     if (handoffSelection) {
@@ -986,6 +1007,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       status.dataset.actionState = 'failed'; errorBox.hidden = false;
       const code = error instanceof Error ? error.message : String(error);
       const messages: Record<string, string> = {
+        vela_response_refresh_failed: 'Vela responded, but the view could not refresh. Check the conversation before sending again.',
+        vela_request_refresh_failed: 'Vela recorded the request, but the view could not refresh. Check its outcome before sending again.',
         vela_project_evidence_unavailable: 'Open a project with readable notes or short text files to search for evidence.',
         vela_project_evidence_changed: 'Project evidence changed. Review the current sources and send again.',
         vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',
@@ -1379,7 +1402,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     refresh,
     observeLiveAnswer,
     /** Host visibility notification only; no canonical mutation or inference. */
-    close() { observing = false; options.missions?.setVisible(false); options.voice?.setVisible(false); options.permissions?.setVisible(false); observeLiveAnswer(undefined); manifestationSignature = ''; manifestationBaseline = true; try { options.onManifestation?.(null); } catch {} },
+    close() { observing = false; sourcePickerGeneration++; options.missions?.setVisible(false); options.voice?.setVisible(false); options.permissions?.setVisible(false); observeLiveAnswer(undefined); manifestationSignature = ''; manifestationBaseline = true; try { options.onManifestation?.(null); } catch {} },
     dispose() { disposed = true; observing = false; fileProposalView.dispose(); planProposalView.dispose(); planReviewActions.clear(); releaseVoice?.(); options.missions?.setVisible(false); options.voice?.setVisible(false); options.permissions?.setVisible(false); readSequence++; shell.remove(); try { options.onManifestation?.(null); } catch {} },
   };
 }

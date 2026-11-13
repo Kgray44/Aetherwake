@@ -48,6 +48,75 @@ test("a completed Vela submission survives a lost reply without sending again", 
   assert.deepEqual(changed, [{ name: "request", result: recorded }]);
 });
 
+for (const reason of ["backend_disconnected", "missing receipt", "authorization_cancelled"]) test("Vela handles a rejected submission with " + reason, async () => {
+  const recorded = { id: "canonical-request", state: "responded" };
+  const calls = [];
+  const client = createVelaClient({
+    command: async (_name, input) => {
+      calls.push(input);
+      if (input.name === "request") throw Error(reason === "missing receipt" ? "backend_disconnected" : reason);
+      assert.equal(input.name, "submissionStatus");
+      assert.equal(input.input.submissionId, calls[0].submissionId);
+      return reason === "missing receipt" ? null : recorded;
+    },
+    changed: async () => {},
+    observed() {},
+  });
+  const pending = client.request({ intent: "Check status", resourceIds: [], authorizeProvider: false });
+  if (reason === "backend_disconnected") {
+    assert.deepEqual(await pending, recorded);
+    assert.deepEqual(calls.map(call => call.name), ["request", "submissionStatus"]);
+  } else if (reason === "missing receipt") {
+    await assert.rejects(pending, /backend_disconnected/);
+    assert.deepEqual(calls.map(call => call.name), ["request", "submissionStatus"]);
+  } else {
+    await assert.rejects(pending, /authorization_cancelled/);
+    assert.deepEqual(calls.map(call => call.name), ["request"]);
+  }
+});
+
+test("a confirmed Vela response reaches the composer while workspace refresh is pending", async () => {
+  const recorded = { id: "canonical-request", state: "responded" };
+  let finishRefresh;
+  const refresh = new Promise(resolve => { finishRefresh = resolve; });
+  const client = createVelaClient({
+    command: async () => recorded,
+    changed: () => refresh,
+    observed() {},
+  });
+  try {
+    const pending = client.request({ intent: "Check status", resourceIds: [], authorizeProvider: false });
+    const waiting = Symbol("workspace refresh is still pending");
+    assert.deepEqual(await Promise.race([
+      pending,
+      new Promise(resolve => setImmediate(() => resolve(waiting))),
+    ]), recorded);
+  } finally {
+    finishRefresh();
+  }
+});
+
+test("a confirmed Vela response survives a failed workspace refresh", async () => {
+  const recorded = { id: "canonical-request", state: "responded" };
+  const operations = [];
+  let refreshFailures = 0;
+  const client = createVelaClient({
+    command: async (name, input) => {
+      operations.push(input.name);
+      assert.equal(name, "vela");
+      assert.equal(input.name, "request");
+      return recorded;
+    },
+    changed: async () => { throw Error("workspace snapshot unavailable"); },
+    requestRefreshFailed: () => { refreshFailures++; },
+    observed() {},
+  });
+  assert.deepEqual(await client.request({ intent: "Check status", resourceIds: [], authorizeProvider: false }), recorded);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(operations, ["request"]);
+  assert.equal(refreshFailures, 1);
+});
+
 test("durable response presentation uses its exact service CAS payload and is never a storage-exempt read", async () => {
   const { isVelaRead } = createRequire(import.meta.url)(
     "../native/vela-broker.cjs",

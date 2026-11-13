@@ -469,6 +469,33 @@ test('terminal status survives request completion and refresh; connection probe 
   panel.dispose(); assert.equal(root.children.length, 0);
 });
 
+test('Vela preserves confirmed delivery when refreshing the response fails', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  let delivered = false, sends = 0;
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => {
+    if (delivered) throw Error('synthetic_read_unavailable');
+    return canonical;
+  }, {
+    request: async () => {
+      sends++;
+      delivered = true;
+      return request({ state: 'responded' });
+    },
+  }));
+  try {
+    await panel.open();
+    const editor = root.querySelector('textarea')!;
+    editor.value = 'A question for Vela';
+    editor.fire('input');
+    editor.fire('keydown', { key: 'Enter' });
+    const feedback = root.find(node => node.className === 'vela-core-error')!;
+    await settles(() => !feedback.hidden);
+    assert.match(feedback.textContent, /Vela responded.*could not refresh/i);
+    assert.equal(editor.value, '');
+    assert.equal(sends, 1);
+  } finally { panel.dispose(); }
+});
+
 test('Vela source search keeps the latest query when an older lookup finishes last', async () => {
   const doc = new Document(), root = doc.createElement('main');
   const canonical = state(), opened: unknown[] = [];
@@ -506,7 +533,7 @@ test('Vela source search keeps the latest query when an older lookup finishes la
   } finally { panel.dispose(); }
 });
 
-test('Vela waits for the file selection before sending the versioned sources', async () => {
+for (const closeDuringPick of [false,true]) test('Vela waits for the file selection before sending (close: '+closeDuringPick+')', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
   const file = { id: 'file:pending', kind: 'file' as const, title: 'Pending.docx', version: 2, projectId: null };
@@ -516,10 +543,18 @@ test('Vela waits for the file selection before sending the versioned sources', a
   let picks = 0;
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
     pickSources: async () => { picks++; return pending; },
+    search: async () => [{ ...file, kind: 'resource', resourceKind: 'file' }],
     request: async input => { turns.push(input); return request({ state: 'responded' }); },
   }));
   try {
     await panel.open();
+    const sourceSearch = root.find(node => node.getAttribute('aria-label') === 'Search your work')!;
+    sourceSearch.value = 'Pending';
+    sourceSearch.closest('form')!.fire('submit');
+    const searchResults = root.find(node => node.className === 'vela-core-results')!;
+    await settles(() => !!searchResults.querySelector('input'));
+    const include = searchResults.querySelector('input')!;
+    assert.equal(include.checked,false);
     const editor = root.querySelector('textarea')!;
     editor.value = 'Summarize the selected file.';
     editor.fire('input');
@@ -529,8 +564,24 @@ test('Vela waits for the file selection before sending the versioned sources', a
     assert.equal(turns.length, 0);
     assert.equal(picks, 1);
     assert.equal(named(root, 'Send to Vela').disabled, true);
+    const notice = root.find(node => node.getAttribute('role') === 'status' &&
+      node.textContent === 'Waiting for file selection…');
+    assert.ok(notice && !notice.hidden, 'the pending selection explains why Send is disabled');
+    if(closeDuringPick){
+      panel.close();
+      await panel.open();
+    }
     finish({ resources: [file] });
+    if(closeDuringPick){
+      await settles(() => !named(root, 'Send to Vela').disabled);
+      assert.equal(!!named(root,'Remove source Pending.docx'),false);
+      assert.equal(editor.value,'Summarize the selected file.');
+      assert.equal(turns.length,0);
+      return;
+    }
     await settles(() => !!named(root, 'Remove source Pending.docx'));
+    assert.equal(include.checked,true);
+    assert.equal(notice.textContent, '');
     assert.equal(turns.length, 0);
     editor.fire('keydown', { key: 'Enter' });
     await settles(() => turns.length === 1);

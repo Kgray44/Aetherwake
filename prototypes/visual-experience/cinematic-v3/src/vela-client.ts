@@ -10,6 +10,7 @@ import type { WorkspacePresentationContext } from "../../../application-contract
 export function createVelaClient(options: {
   command(name: string, input: unknown): Promise<unknown>;
   changed(name: string, result: unknown, mayPresent?: () => boolean): Promise<void>;
+  requestRefreshFailed?(): void;
   presentationFence?(): () => boolean;
   observationFence?(): () => boolean;
   observed(state: VelaState): void;
@@ -21,12 +22,13 @@ export function createVelaClient(options: {
     const response = options.command("vela", { name: "request", input, submissionId }) as Promise<VelaRequest>;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const readReceipt = () => options.command("vela", {
+      name: "submissionStatus",
+      input: { submissionId },
+    }).catch(() => null) as Promise<VelaRequest | null>;
     const recovered = new Promise<VelaRequest>((resolve) => {
       async function check() {
-        const recorded = await options.command("vela", {
-          name: "submissionStatus",
-          input: { submissionId },
-        }).catch(() => null) as VelaRequest | null;
+        const recorded = await readReceipt();
         if (settled) return;
         if (recorded?.id) resolve(recorded);
         else timer = setTimeout(check, 750);
@@ -35,6 +37,14 @@ export function createVelaClient(options: {
     });
     try {
       return await Promise.race([response, recovered]);
+    } catch (error) {
+      if (error instanceof Error && /(?:^|: )backend_disconnected$/.test(error.message)) {
+        settled = true;
+        clearTimeout(timer);
+        const recorded = await readReceipt();
+        if (recorded?.id) return recorded;
+      }
+      throw error;
     } finally {
       settled = true;
       clearTimeout(timer);
@@ -57,6 +67,11 @@ export function createVelaClient(options: {
       if (current && !current()) throw Error("vela_observation_superseded");
       options.observed(result as VelaState);
     }
+    if (name === "request" && (result as VelaRequest).state === "responded") {
+      // A conversational reply can render independently of workspace hydration.
+      void Promise.resolve().then(() => options.changed(name, result, mayPresent)).catch(reportRequestRefreshFailure);
+      return result as T;
+    }
     if (
       [
         "native",
@@ -78,10 +93,20 @@ export function createVelaClient(options: {
         "reviewPreference",
         "resetPreferences",
       ].includes(name)
-    )
-      await options.changed(name, result, mayPresent);
+    ) {
+      try {
+        await options.changed(name, result, mayPresent);
+      } catch (error) {
+        if (name !== "request") throw error;
+        // The native request receipt remains authoritative if presentation fails.
+        reportRequestRefreshFailure();
+      }
+    }
     return result as T;
   };
+  function reportRequestRefreshFailure() {
+    try { options.requestRefreshFailed?.(); } catch { /* Feedback cannot invalidate the receipt. */ }
+  }
   return {
     hostOperation:input=>invoke('hostOperation',input),
     missionFileEdit:input=>invoke('missionFileEdit',input),
