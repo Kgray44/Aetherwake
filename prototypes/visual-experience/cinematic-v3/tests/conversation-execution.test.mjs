@@ -214,6 +214,57 @@ test("known backend disconnection fences a pending old read without inventing an
   f.port.dispose();
 });
 
+test("an unchanged active preview is delivered again after an activity read fails", async () => {
+  const preview = {
+    resourceId: "r",
+    executionId: "e",
+    providerId: "codex-app-server",
+    cursor: 4,
+    text: "Observed reply before a temporary disconnect",
+    classification: "reported",
+  };
+  let fail = false;
+  const f = setup((_name, { resourceIds }) => {
+    if (fail) throw Error("temporary activity read failure");
+    return activity(resourceIds, [execution()], preview);
+  });
+  const received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  try {
+    await f.port.refresh();
+    assert.equal(received.at(-1).preview.text, preview.text);
+    fail = true;
+    await f.port.refresh();
+    assert.deepEqual(received.at(-1), { connection: "unavailable" });
+    fail = false;
+    await f.port.refresh();
+    assert.equal(received.at(-1).connection, "available");
+    assert.equal(received.at(-1).preview?.text, preview.text);
+    assert.equal(received.at(-1).execution.state, "running");
+    assert.ok(f.calls.every(call => call.name === "conversationActivity"));
+  } finally {
+    off();
+    f.port.dispose();
+  }
+});
+
+test("a successful activity read explicitly retires an execution absent from the snapshot", async () => {
+  let rows = [execution()];
+  const f = setup((_name, { resourceIds }) => activity(resourceIds, rows));
+  const received = [];
+  const off = f.port.observe("r", value => received.push(value));
+  try {
+    await f.port.refresh();
+    assert.equal(received.at(-1).execution.id, "e");
+    rows = [];
+    await f.port.refresh();
+    assert.deepEqual(received.at(-1), { resourceAvailable: true, connection: "available", execution: null, preview: null });
+  } finally {
+    off();
+    f.port.dispose();
+  }
+});
+
 test("reopening and returning from a hidden view read the full existing backend preview without replaying a provider request", async () => {
   let preview = {
     resourceId: "r",

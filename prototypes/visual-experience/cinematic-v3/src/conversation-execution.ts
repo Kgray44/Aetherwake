@@ -264,7 +264,7 @@ export function createConversationExecutionPort(
               notify(id, {
                 resourceAvailable: resource.available,
                 connection: "available",
-                ...(next ? { execution: next } : {}),
+                execution: next ?? null,
                 preview: preview ? {
                   executionId: preview.executionId,
                   cursor: preview.cursor,
@@ -279,8 +279,10 @@ export function createConversationExecutionPort(
         pendingBytes = 0;
       } catch (error) {
         if (!stopped && watchers.size && epoch === connectionEpoch) {
-          connection(false);
           availability.clear();
+          // The chat clears its live preview when the connection is lost.
+          signatures.clear();
+          connection(false);
           host.onError?.(error);
         }
       }
