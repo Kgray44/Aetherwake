@@ -699,7 +699,13 @@ export class BackendCore {
       if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='timer_documents'").get() &&
           this.db.prepare('SELECT 1 FROM timer_documents LIMIT 1').get())
         void this.ensureTimerDomain().ready.catch(() => {});
-    } catch (error) { this.personalMemory?.close(); this.kernel.close(); throw error; }
+    } catch (error) {
+      // Attempt each cleanup while preserving the original startup error.
+      try { this.personalMemoryReview?.close(); } catch {}
+      try { this.personalMemory?.close(); } catch {}
+      try { this.kernel.close(); } catch {}
+      throw error;
+    }
   }
   private missionScopeAllowed(scope: MissionScope): boolean {
     if (this.closed || !this.libraryAuthorized({ kind: 'workspace', id: scope.workspaceId })) return false;
