@@ -813,8 +813,10 @@ app.whenReady().then(async () => {
             event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false),
           allowWrite: () => storage.allowWrite(), call,
           confirm: async review => {
-            const labels = { correct: "Correct memory", revoke: "Revoke memory", delete: "Delete memory", export: "Export memory" };
-            const detail = review.action === "correct" ? "Current memory\n" + review.fact.text + "\n\nReplacement\n" + review.text
+            const labels = { correct: "Correct memory", revoke: "Revoke memory", delete: "Delete memory", export: "Export memory", revokeSource: "Revoke original message" };
+            const detail = review.action === "revokeSource"
+              ? "Hide this message from the app and remove all saved memories that depend on it. The original remains in local history storage. Previous exports, backups, and provider copies may still contain it.\n\nOriginal message\n" + review.sourceText
+              : review.action === "correct" ? "Current memory\n" + review.fact.text + "\n\nReplacement\n" + review.text
               : review.action === "export" ? "Export this fact and its retained revisions to a JSON file you choose. The file contains readable memory text.\n\n" + review.fact.text
               : (review.action === "delete" ? "Remove this memory and its retained revisions from the profile."
                 : "Keep the record for inspection and exclude it from future recall.")

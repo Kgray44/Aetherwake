@@ -98,6 +98,15 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
         await openSource({ conversationId: origin.conversationId, messageId: origin.messageId });
       }));
     }
+    if (origin.kind === 'conversation-message') {
+      detail.append(button('Revoke original message', async () => {
+        const result = await command({ type: 'revokeSource', id: fact.id, version: fact.version }) as { status: string };
+        if (result.status === 'applied') {
+          await load(null);
+          status.textContent = 'Original message revoked and dependent memories removed.';
+        }
+      }));
+    }
     if (record.state === 'active') {
       const editor = document.createElement('textarea');
       editor.setAttribute('aria-label', 'Corrected memory');

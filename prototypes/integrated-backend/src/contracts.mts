@@ -272,6 +272,7 @@ export interface CommandMap {
   personalMemoryPolicyNative: { input: { assistant?: 'ordinary' | 'vela'; enable?: boolean; expectedVersion?: number }; output: import('../../personal-context/src/contracts.ts').PersonalPolicy };
   personalMemoryManagementNative: {
     input: { type: 'list'; after: string | null } | { type: 'read'; id: string }
+      | { type: 'previewSourceRevocation'; id: string; version: number }
       | { type: 'preview'; request: import('./personal-memory-review.mts').ManagementRequest }
       | { type: 'commit'; review: import('./personal-memory-review.mts').ManagementReview }
       | { type: 'cancel'; ticket: string };

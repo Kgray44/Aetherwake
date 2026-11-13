@@ -82,7 +82,17 @@ test('Core native capture persists a canonical user message across a private pro
     assert.equal(fact.text, content);
     assert.equal(fact.provenance.kind, 'conversation-message');
     assert.equal((await inspection.inspect({ after: null, limit: 8 })).policy.ordinaryEnabled, false);
-    const revoke = { conversationId: chat.resourceId, messageId: message.id, expectedRevision: message.revision };
+    const request = { type: 'previewSourceRevocation' as const, id: saved.id, version: fact.version };
+    await assert.rejects(core.command('personalMemoryManagementNative', { ...request, version: fact.version + 1 }),
+      /stale_personal_context_version/);
+    const reviewed = await core.command('personalMemoryManagementNative', request) as {
+      binding: { conversationId: string; messageId: string; expectedRevision: number }; sourceText: string;
+    };
+    assert.deepEqual(reviewed, {
+      binding: { conversationId: chat.resourceId, messageId: message.id, expectedRevision: message.revision },
+      sourceText: content,
+    });
+    const revoke = reviewed.binding;
     await assert.rejects(core.command('personalMemoryRevokeSourceNative', { ...revoke, expectedRevision: chat.revision }), /stale_source_revision/);
     assert.equal((await inspection.read(saved.id)).text, content);
     const graph = (core as unknown as { graph: import('../../connected-conversations/src/graph.ts').ConversationGraph }).graph;
