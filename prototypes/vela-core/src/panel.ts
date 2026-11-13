@@ -953,6 +953,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       status.dataset.actionState = 'failed'; errorBox.hidden = false;
       const code = error instanceof Error ? error.message : String(error);
       const messages: Record<string, string> = {
+        personal_memory_search_incomplete: 'Memory search reached its limit. Try a more specific query or include the original message reference.',
         vela_project_evidence_unavailable: 'Open a project with readable notes or short text files to search for evidence.',
         vela_project_evidence_changed: 'Project evidence changed. Review the current sources and send again.',
         vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',

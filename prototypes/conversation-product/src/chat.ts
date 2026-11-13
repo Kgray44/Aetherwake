@@ -598,6 +598,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     })().catch(error=>{
       const code = errorText(error);
       if (code === 'authorization_cancelled') report('Send cancelled. Your saved draft was retained.');
+      else if (code === 'personal_memory_search_incomplete') report('Memory search reached its limit. Try a more specific query or include the original message reference. Your draft is still here.');
       else if (code === 'unsupported_model') report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');
       else if (code === 'unsupported_reasoning_effort') report('This model cannot use the requested thinking level. Your draft is still here.');
       else if (code === 'unsupported_web_search_model') report('This model cannot use web search. Your draft is still here.');

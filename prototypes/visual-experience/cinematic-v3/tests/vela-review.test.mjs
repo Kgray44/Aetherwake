@@ -166,12 +166,14 @@ test('native send review identifies the same escaped memories in the exact provi
     ] }) : 'Trusted prefix\n' + text;
     const review = { ...disclosure(), prompt, memory: { manifestDigest } };
     const html = reviewPage(review, 'Synthetic question', experience);
-    assert.match(html, /Saved memories shared in this request \(1\)/);
+    assert.doesNotMatch(html, /Memory search was limited/);
+    assert.match(reviewPage({ ...review, memory: { manifestDigest, partialCoverage: true } }, '', experience), /Memory search was limited/);
+    assert.match(html, /Saved memories included in this request \(1\)/);
     assert.match(html, /Original message msg-1/);
     assert.match(html, /&lt;script&gt;synthetic&lt;\/script&gt;/);
     assert.doesNotMatch(html, /<script>synthetic<\/script>/);
     assert.doesNotMatch(reviewPage({ ...review, memory: { manifestDigest: 'c'.repeat(64) } }, '', experience),
-      /Saved memories shared in this request/);
+      /Saved memories included in this request/);
   }
 });
 

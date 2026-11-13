@@ -329,14 +329,14 @@ exports.velaCommand = async ({
         ...(request.routingAgentId ? { routingAgentId: request.routingAgentId } : {}),
         ...(value.activeCard === undefined ? {} : { activeCard: value.activeCard }),
     };
-    let memoryMiss = false;
+    let memoryMiss;
     let preview = await stage("preview", async () => {
       try { return await call("velaRequestPreview", previewInput); }
       catch (error) {
         const code = error?.code ?? error?.message;
         if (value.useMemory) {
-          if (code !== "personal_memory_no_eligible_context" || !reviewMemorySearch) throw error;
-          memoryMiss = true;
+          if (!["personal_memory_no_eligible_context", "personal_memory_search_incomplete"].includes(code) || !reviewMemorySearch) throw error;
+          memoryMiss = code;
           const { useMemory: _memory, ...baseInput } = previewInput;
           return call("velaRequestPreview", baseInput);
         }
@@ -368,7 +368,7 @@ exports.velaCommand = async ({
         preview = await stage("preview", () => call("velaRequestPreview", { ...previewInput, useMemory: true, providerId: preview.providerId }));
         reviewedMemory = true;
       } catch (error) {
-        if ((error?.code ?? error?.message) !== "personal_memory_no_eligible_context") throw error;
+        if (!["personal_memory_no_eligible_context", "personal_memory_search_incomplete"].includes(error?.code ?? error?.message)) throw error;
       }
     }
     if (memoryMiss && reviewMemorySearch && validateMemoryReview?.() === true) {
@@ -389,7 +389,7 @@ exports.velaCommand = async ({
         }
       }
     }
-    if (value.useMemory && !reviewedMemory) throw Error("personal_memory_no_eligible_context");
+    if (value.useMemory && !reviewedMemory) throw Error(memoryMiss ?? "personal_memory_no_eligible_context");
     if (!!preview.memory !== reviewedMemory || (reviewedMemory &&
         (preview.sendDisposition !== "review-required" || preview.providerId !== "openai-api-vela" ||
          preview.route?.kind !== "conversational" || preview.route.nativeMetric || preview.route.nativeLog || preview.workflowScope)))

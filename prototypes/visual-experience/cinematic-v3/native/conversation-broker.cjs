@@ -113,7 +113,7 @@ exports.conversationCommand = async ({
         preview = await call("conversationSendPreview", { ...request, useMemory: true });
         reviewedMemory = true;
       } catch (error) {
-        if (error?.message !== "personal_memory_no_eligible_context") throw error;
+        if (!["personal_memory_no_eligible_context", "personal_memory_search_incomplete"].includes(error?.code ?? error?.message)) throw error;
       }
     }
     preview ??= await call("conversationSendPreview", request);
@@ -177,7 +177,7 @@ exports.conversationCommand = async ({
           providerId: PLAN,
           prompt: body,
           promptDigest: digest,
-          ...(reviewedMemory ? { memory: { manifestDigest: r.memoryDigest } } : {}),
+          ...(reviewedMemory ? { memory: { manifestDigest: r.memoryDigest, ...(r.memoryPartialCoverage === true ? { partialCoverage: true } : {}) } } : {}),
           context: { included: reviewedResources(preview, state.resources, "invalid_native_responses_preview") },
           history: {
             messages: r.messages

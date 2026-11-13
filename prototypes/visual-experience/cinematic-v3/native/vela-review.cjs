@@ -91,6 +91,7 @@ function validateReview(preview, review) {
     (!!review.memory !== !!preview.memory) ||
     (preview.memory && (!hash(preview.memory.manifestDigest) || !hash(preview.memory.promptDigest) ||
       review.memory.manifestDigest !== preview.memory.manifestDigest || review.memory.promptDigest !== preview.memory.promptDigest ||
+      review.memory.partialCoverage !== preview.memory.partialCoverage ||
       typeof review.prompt !== "string" || createHash("sha256").update(review.prompt).digest("hex") !== review.memory.promptDigest)) ||
     review.semanticContext !== preview.semanticContext ||
     !reviewedStateMatches(preview.missionCheckpoint, review.missionCheckpoint) ||
@@ -197,7 +198,7 @@ function reviewedMemoryDetails(review, experience) {
       !Array.isArray(payload.items) || !payload.items.length || payload.items.length > 4) return "";
   const rows = payload.items.map(item => {
     const scope = { project: "Project", conversation: "Conversation", "assistant.ordinary": "All ordinary chats",
-      global: "Global", user: "Personal" }[item?.scope?.kind];
+      "assistant.vela": "All Vela chats", "user.shared": "Shared by selection" }[item?.scope?.kind];
     const source = item?.provenance;
     if (typeof item?.text !== "string" || !source) return "";
     const origin = source.kind === "conversation-message" ? "Original message " + source.messageId
@@ -205,7 +206,9 @@ function reviewedMemoryDetails(review, experience) {
     return `<article><h2>${escape(scope || "Saved memory")}</h2><small>${escape(origin)}</small><pre>${escape(item.text)}</pre></article>`;
   });
   if (rows.some(row => !row)) return "";
-  return `<details open><summary>Saved memories shared in this request (${rows.length})</summary><section>${rows.join("")}</section></details>`;
+  const coverage = review.memory.partialCoverage === true
+    ? "<p>Memory search was limited. Other relevant saved memories may be missing from this request.</p>" : "";
+  return `<details open><summary>Saved memories included in this request (${rows.length})</summary><section>${coverage}${rows.join("")}</section></details>`;
 }
 
 function reviewPage(review, intent = "", experience = "vela", workflow, decisionMode) {
