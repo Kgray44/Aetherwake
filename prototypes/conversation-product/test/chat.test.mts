@@ -1376,6 +1376,7 @@ test('saved document picker reuses an exact current resource without importing o
   available = [{ ...saved, version: 2 }];
   f.view.root.querySelector('[data-cp-option-value="file:saved:1"]').fire('click');
   assert.equal(f.draft.documents, undefined);
+  assert.equal(f.view.root.querySelector('[data-cp-option-value="file:saved:1"]'), null);
   picker.fire('click');
   f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').fire('click');
   await chat.flush();
