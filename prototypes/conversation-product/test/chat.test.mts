@@ -190,7 +190,7 @@ test('quick search Enter submits pending text immediately and opens the first ex
  } finally {await manager?.dispose();f.restore();}
 });
 
-test('Switch chat retries a failed query with Enter and keeps the exact text', async () => {
+for(const retryWithButton of [false,true])test('Switch chat retries a failed query and keeps the exact text (button: '+retryWithButton+')', async () => {
  const f=fixture(), resourceId=f.draft.resourceId, messageId=f.detail.messages.items[0].id;
  const searches:string[]=[], opened:string[][]=[];
  let manager;
@@ -211,7 +211,15 @@ test('Switch chat retries a failed query with Enter and keeps the exact text', a
   await until(()=>switcher.querySelector('.cp-switcher-status').textContent.includes('Press Enter to retry'));
   assert.deepEqual(opened,[]);
   assert.equal(input.value,'exact phrase');
-  input.fire('keydown',{key:'Enter'});
+  if(retryWithButton){
+   const retry=named(switcher,'Retry search');
+   assert.ok(retry);
+   retry.fire('click');
+   const results=switcher.querySelector('.cp-switcher-results');
+   await until(()=>results.querySelector('[data-message-id]')!==null);
+   assert.deepEqual(opened,[]);
+   results.querySelector('[data-message-id]').fire('click');
+  }else input.fire('keydown',{key:'Enter'});
   await until(()=>opened.length===1);
   assert.deepEqual(searches,['exact phrase','exact phrase']);
   assert.deepEqual(opened,[[resourceId,messageId]]);

@@ -210,6 +210,11 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    if(stillCurrent()){
     switchFailedGeneration=generation;
     switchStatus.textContent='Couldn’t load conversations. Press Enter to retry.';
+    switchResults.append(button('Retry search',()=>{
+     if(!stillCurrent()||switchFailedGeneration!==generation)return;
+     switchQuery.focus();
+     return loadSwitcher();
+    }));
    }
   }
   finally{if(generation===switchGeneration)switchLoading=false;}
@@ -245,10 +250,10 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   if(event.key==='ArrowDown'){event.preventDefault();first?.focus();}
   if(event.key!=='Enter'||!switcher.node.open)return;
   event.preventDefault();
-  if(first)first.click();
+  if(switchFailedGeneration===switchGeneration)void loadSwitcher(true);
+  else if(first)first.click();
   else if(switchTimer!==undefined)void loadSwitcher(true);
   else if(switchLoading)switchOpenGeneration=switchGeneration;
-  else if(switchFailedGeneration===switchGeneration)void loadSwitcher(true);
  });
  const renderBranchNavigator=(d:Detail)=>{
   const view=disclosure('Branch lineage','cp-branch-navigator');view.node.dataset.resourceId=d.conversation.resourceId;let generation=0;
