@@ -41,6 +41,33 @@ function distribution(values: number[]) {
   values.sort((a, b) => a - b);
   return { samples: values.length, p50: values[Math.ceil(values.length * .5) - 1], p95: values[Math.ceil(values.length * .95) - 1] };
 }
+
+function summarizeReportedCalls(calls: readonly Run[]) {
+  const byModel = new Map<string | null, Run[]>();
+  for (const call of calls) {
+    if (call.providerEvidence !== 'reported') continue;
+    const model = call.reportedModel ?? null;
+    const group = byModel.get(model);
+    if (group) group.push(call);
+    else byModel.set(model, [call]);
+  }
+  return [...byModel].map(([model, group]) => {
+    const dispatched = group.filter(call => call.dispatched === true);
+    const usage = { samples: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    for (const call of dispatched) {
+      const input = call.usage?.inputTokens;
+      const output = call.usage?.outputTokens;
+      const total = call.usage?.totalTokens;
+      if (!tokens(input) || !tokens(output) || !tokens(total) || input + output !== total) continue;
+      usage.samples++;
+      usage.inputTokens += input;
+      usage.outputTokens += output;
+      usage.totalTokens += total;
+    }
+    return { model, reportedDispatched: dispatched.length, dispatchUnknown: group.filter(call => call.dispatched === null).length,
+      providerLatencyMs: distribution(dispatched.flatMap(call => nonnegative(call.elapsedMs) ? [call.elapsedMs] : [])), usage };
+  });
+}
 /** Offline derived view of canonical AEP receipts, never a second ledger or promotion authority. */
 export function reportCognitiveRepetitions(repetitions: readonly Repetition[], rates: readonly Rate[] = []) {
   if (new Set(repetitions.map(row => row.id)).size !== repetitions.length) throw new Error('duplicate_repetition');
@@ -73,6 +100,7 @@ export function reportCognitiveRepetitions(repetitions: readonly Repetition[], r
     const selected = rows.filter(row => row.arm === arm);
     return { arm, repetitions: selected.length,
       endToEndMs: distribution(selected.flatMap(row => row.endToEndMs === null ? [] : [row.endToEndMs])),
+      providers: summarizeReportedCalls(selected.flatMap(row => row.calls)),
       independentQualityKnown: selected.filter(row => row.quality !== null).length,
       independentQualityPassed: selected.filter(row => row.quality?.passed).length,
       incomplete: selected.filter(row => row.issues.length > 0).length };
