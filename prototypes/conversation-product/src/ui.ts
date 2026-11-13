@@ -156,9 +156,65 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   resultCount.textContent=query.value?`${list.total} matching locations · ${groups.size} conversations on this page`:`${groups.size}${list.hasMore?' shown':''} conversations${resources.length?' · resources available':''}`;
  };
  const readMatches=async(scope:SearchQuery):Promise<ProductCommandMap['search']['output']>=>{const request={...scope,offset:scope.offset??0,limit:50};if(!scope.text?.trim()&&!scope.collectionId&&(!scope.searchMode||['all','conversations'].includes(scope.searchMode))){const page=await call('list',request);return {...page,items:page.items.map(summary=>({kind:'conversation' as const,resourceId:summary.resourceId,title:summary.title,excerpt:'',providerId:summary.providerId,summary,sourceTime:summary.lastActivityAt??undefined}))};}return call('search',{...request,searchMode:scope.searchMode??'all'});};
- const loadSwitcher=async()=>{const generation=++switchGeneration;switchLoading=true;switchStatus.textContent='Finding conversations…';try{const page=await call('list',{...(state.query.projectId!==undefined?{projectId:state.query.projectId}:{}),...(switchMode.value==='favorite'?{favorite:true}:{}),...(switchQuery.value?{text:switchQuery.value}:{}),sort:switchMode.value==='running'?'active':'activity',limit:12});if(disposed||generation!==switchGeneration||!switcher.node.open)return;const items=page.items.filter(item=>switchMode.value!=='running'||item.execution&&['dispatching','running'].includes(item.execution.state)),rows=items.map(item=>{const row=button(item.title,()=>{switcher.node.open=false;return requestOpen(item.resourceId);},{identity:'history-result'});row.dataset.resourceId=item.resourceId;row.setAttribute('aria-current',String(item.resourceId===state.selectedResourceId));row.title=[item.favorite?'Favorite':'',providerLabels.get(item.providerId)??item.providerId,item.execution?.state??''].filter(Boolean).join(' · ');row.setAttribute('aria-description',row.title);return row;});for(const [index,row]of rows.entries())row.addEventListener('keydown',event=>{if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();rows[Math.max(0,Math.min(rows.length-1,index+(event.key==='ArrowDown'?1:-1)))].focus();}});switchResults.replaceChildren(...rows);switchStatus.textContent=items.length?`${items.length} conversations${page.hasMore?' · more in library':''}`:'No conversations in this group.';}catch(error){if(!disposed&&generation===switchGeneration){switchResults.replaceChildren();switchStatus.textContent=error instanceof Error?error.message:String(error);}}finally{if(generation===switchGeneration)switchLoading=false;}};
+ const invalidateSwitcher=()=>{
+  clearTimeout(switchTimer);
+  switchResults.replaceChildren();
+  switchStatus.textContent='Finding conversations…';
+  return ++switchGeneration;
+ };
+ const loadSwitcher=async()=>{
+  const generation=invalidateSwitcher(),text=switchQuery.value.trim(),mode=switchMode.value;
+  const stillCurrent=()=>!disposed&&!closing&&generation===switchGeneration&&switcher.node.open;
+  const scope:SearchQuery={projectId:state.query.projectId,...(mode==='favorite'?{favorite:true}:{}),sort:mode==='running'?'active':'activity',limit:12};
+  switchLoading=true;
+  try{
+   // The Running group uses the canonical execution summary from the list projection.
+   const exact=!!text&&mode!=='running';
+   const page=exact?await call('search',{...scope,text,searchMode:'all'}):await call('list',{...scope,...(text?{text}:{})});
+   if(!stillCurrent())return;
+   const hits:SearchHit[]=(page.items as (SearchHit|ConversationSummary)[]).flatMap(item=>{
+    if('kind' in item)return item.kind==='resource'?[]:[item];
+    if(mode==='running'&&item.execution?.state!=='dispatching'&&item.execution?.state!=='running')return [];
+    return [{kind:'conversation',resourceId:item.resourceId,title:item.title,excerpt:'',summary:item,providerId:item.providerId}];
+   });
+   const rows=hits.map(hit=>{
+    const row=button(hit.title,()=>{
+     if(!stillCurrent())return;
+     switcher.node.open=false;
+     return requestOpen(hit.resourceId,hit.messageId);
+    },{identity:'history-result'});
+    row.dataset.resourceId=hit.resourceId;
+    if(hit.messageId){
+     row.dataset.messageId=hit.messageId;
+     row.append(el('span',hit.excerpt,'cp-switcher-excerpt'));
+    }
+    row.setAttribute('aria-current',String(hit.resourceId===state.selectedResourceId&&(!hit.messageId||hit.messageId===selectedMessageId)));
+    const providerId=hit.summary?.providerId??hit.providerId;
+    row.title=[hit.summary?.favorite?'Favorite':'',providerId?(providerLabels.get(providerId)??providerId):'',hit.summary?.execution?.state??''].filter(Boolean).join(' · ');
+    row.setAttribute('aria-description',row.title);
+    return row;
+   });
+   for(const [index,row]of rows.entries())row.addEventListener('keydown',event=>{
+    if(event.key!=='ArrowDown'&&event.key!=='ArrowUp')return;
+    event.preventDefault();
+    if(index===0&&event.key==='ArrowUp')switchQuery.focus();
+    else rows[Math.min(rows.length-1,index+(event.key==='ArrowDown'?1:-1))].focus();
+   });
+   switchResults.replaceChildren(...rows);
+   switchStatus.textContent=rows.length?`${rows.length} ${exact?'matches':'conversations'}${page.hasMore?' · more in history':''}`:text?'No matches in this group.':'No conversations in this group.';
+  }catch(error){if(stillCurrent())switchStatus.textContent=error instanceof Error?error.message:String(error);}
+  finally{if(generation===switchGeneration)switchLoading=false;}
+ };
  const openSwitcher=()=>{if(disposed)return Promise.reject(new Error('conversation_manager_closed'));switcher.node.open=true;switchQuery.focus();return loadSwitcher();};
- switcher.node.addEventListener('toggle',()=>{if(switcher.node.open){switchQuery.focus();if(!switchLoading)void loadSwitcher();}else{switchGeneration++;switchLoading=false;clearTimeout(switchTimer);}});switchQuery.addEventListener('input',()=>{switchGeneration++;clearTimeout(switchTimer);switchTimer=setTimeout(()=>void loadSwitcher(),120);});switchMode.addEventListener('change',()=>void loadSwitcher());switchQuery.addEventListener('keydown',event=>{if(event.key==='ArrowDown'){event.preventDefault();switchResults.querySelector('button')?.focus();}});
+ switcher.node.addEventListener('toggle',()=>{if(switcher.node.open){switchQuery.focus();if(!switchLoading)void loadSwitcher();}else{switchGeneration++;switchLoading=false;clearTimeout(switchTimer);}});
+ switchQuery.addEventListener('input',()=>{invalidateSwitcher();switchTimer=setTimeout(()=>void loadSwitcher(),120);});
+ switchMode.addEventListener('change',()=>void loadSwitcher());
+ switchQuery.addEventListener('keydown',event=>{
+  if(event.isComposing||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
+  const first=switchResults.querySelector('button');
+  if(event.key==='ArrowDown'){event.preventDefault();first?.focus();}
+  if(event.key==='Enter'&&first){event.preventDefault();first.click();}
+ });
  const renderBranchNavigator=(d:Detail)=>{
   const view=disclosure('Branch lineage','cp-branch-navigator');view.node.dataset.resourceId=d.conversation.resourceId;let generation=0;
   view.node.addEventListener('toggle',()=>{if(!view.node.open){generation++;return;}const token=++generation;view.panel.replaceChildren(el('p',d.lineage.length?'Loading branch family…':'No linked branches.'));

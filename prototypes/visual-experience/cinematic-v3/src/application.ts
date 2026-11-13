@@ -72,6 +72,7 @@ import { mountMissionWorkroomView, type MissionWorkroomView } from "./mission-wo
 import type { MissionResponse, MissionProjection } from "../../../integrated-backend/src/mission-contracts.mts";
 import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
+import { createWorkspaceStage } from "./workspace-stage.ts";
 import { returnFocusAfterDialogClose } from "./focus-return";
 import {
   createContextualSurfaces,
@@ -104,6 +105,7 @@ import type {FolderBrowseResponse} from '../../../application-contract/folder.ts
 import "../../../block-library/resource-links-view.css";
 import { createRelatedResourcesPort } from "./related-resources";
 import { createResourceOpener } from "./resource-opening.ts";
+import { createResourcePresenter } from "./resource-presentation.ts";
 import { createResourceSurface } from "./resource-surface.ts";
 import { mountProviderConnections } from "./provider-connections.ts";
 import { mountEnvironmentNavigator } from "./environment-navigator.ts";
@@ -590,6 +592,10 @@ export function installApplication(hooks: Hooks) {
     }, (id) => { openCanonicalResource(id); }, {
       motion: experienceMotion,
       viewId: `mission-workroom:${resourceId}:${++missionWorkroomSerial}`,
+      readProfile: async (id) => {
+        const result = await host.command!("missions", { name: "execution-profile", input: { id } }) as MissionResponse;
+        return result && "kind" in result && result.kind === "execution-profile" ? result : null;
+      },
       readMission: async (id) => {
         const result = await host.command!("missions", { name: "read", input: { id } }) as MissionResponse;
         if (result === null) return null;
@@ -879,66 +885,31 @@ export function installApplication(hooks: Hooks) {
         input,
       )) as ResourceOpeningResult;
     },
-    present: async (result, input, current) => {
-      if (!current()) return;
-      const resource = result.resource;
-      const projection = input.origin?.nodeKey
-        ? constellation?.layer.screenBodyProjection?.(input.origin.nodeKey)
-        : null;
-      const body =
-        projection?.resourceId === resource.id
-          ? projection.clippedBounds
-          : null;
-      const anchor =
-        body && body.right > body.left && body.bottom > body.top
-          ? {
-              x: body.left,
-              y: body.top,
-              width: body.right - body.left,
-              height: body.bottom - body.top,
-            }
-          : undefined;
-      if (state)
-        state = {
-          ...state,
-          resources: state.resources.some((item) => item.id === resource.id)
-            ? state.resources.map((item) =>
-                item.id === resource.id ? resource : item,
-              )
-            : [...state.resources, resource],
-        };
-      if (
-        result.presentation.mode === "existing-placement" &&
-        result.placement
-      ) {
-        const placement = result.placement;
-        await enqueueResult(async () => {
-          if (!current()) return;
-          await command({
-            type: "navigate",
-            target: { kind: "workspace", workspaceId: placement.workspaceId },
-          });
-          if (!current()) return;
-          surfaces.close("canonical-resource");
-          surfaces.close("conversations");
-          reveal(placement.blockId);
-          hooks.focus(placement.blockId);
-        });
-      } else if (result.presentation.kind === "agent") {
-        await showAgents(resource.id);
-      } else if (result.presentation.kind === "conversation") {
-        surfaces.close("canonical-resource");
-        await showConversations(
-          resource.id,
-          result.selection?.messageId,
-          current,
-          anchor,
-        );
-      } else {
-        surfaces.close("conversations");
-        directResources.show(resource, anchor);
-      }
-    },
+    present: createResourcePresenter({
+      remember: (resource) => {
+        if (state)
+          state = {
+            ...state,
+            resources: state.resources.some((item) => item.id === resource.id)
+              ? state.resources.map((item) => item.id === resource.id ? resource : item)
+              : [...state.resources, resource],
+          };
+      },
+      project: (nodeKey) => constellation?.layer.screenBodyProjection?.(nodeKey),
+      enqueue: enqueueResult,
+      navigate: (workspaceId) => command({
+        type: "navigate",
+        target: { kind: "workspace", workspaceId },
+      }),
+      close: (id) => surfaces.close(id),
+      focusPlacement: (blockId) => {
+        reveal(blockId);
+        hooks.focus(blockId);
+      },
+      showAgent: showAgents,
+      showConversation: showConversations,
+      showResource: directResources.show,
+    }),
     unavailable: (result) => {
       directResources.unavailable(result.resourceId);
       hooks.status(
@@ -993,12 +964,10 @@ export function installApplication(hooks: Hooks) {
     { once: true },
   );
   let policyKey = "";
-  const arrivalId = "application:arrival";
-  let departingWorkspace = false;
-  let waitingForVela = false;
-  let arrivalOrigin = { x: innerWidth / 2, y: innerHeight / 2 };
-  const arrivalPose = { x: 1, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 1 };
-  hooks.motion.add(arrivalId, arrivalPose);
+  const workspaceStage = createWorkspaceStage(el("#stage"), hooks.motion, hooks.wake, {
+    x: innerWidth / 2,
+    y: innerHeight / 2,
+  });
   const presenceId = "application:vela-presence";
   let presenceDrag: {
     pointerId: number;
@@ -1047,11 +1016,7 @@ export function installApplication(hooks: Hooks) {
   function velaCrossesWorkspace(target: NonNullable<ReturnType<typeof presenceTarget>>) {
     const current = hooks.motion.pose(presenceId);
     const { zoom, offset } = camera();
-    const stage = {
-      scale: hooks.motion.pose(arrivalId).x,
-      originX: arrivalOrigin.x,
-      originY: arrivalOrigin.y,
-    };
+    const stage = workspaceStage.view();
     return state?.blocks.some((block) => {
       const box = footprint({ ...block, locked: !!block.locked });
       return presenceTravelOccludes(current, target, {
@@ -1061,12 +1026,6 @@ export function installApplication(hooks: Hooks) {
         height: box.height * zoom,
       }, stage);
     });
-  }
-  function revealWorkspace() {
-    waitingForVela = false;
-    el("#stage").inert = false;
-    hooks.motion.target(arrivalId, arrivalPose, "Vela cleared the workspace arrival");
-    hooks.wake();
   }
   function presenceCard() {
     if (
@@ -1454,42 +1413,15 @@ export function installApplication(hooks: Hooks) {
     const overview = next.navigation.kind === "constellation";
     document.body.classList.toggle("constellation-overview", overview);
     universe.classList.toggle("overview", overview);
-    if (navigated) {
-      waitingForVela = arrivingWorkspace &&
-        hooks.motion.pose(arrivalId).opacity <= 0.003 &&
-        !hooks.motion.reduced &&
-        !constellation?.controller.policy.quiet &&
-        !!presence && !!velaCrossesWorkspace(presence);
-    }
-    el("#stage").inert = overview || waitingForVela;
-    if (leavingWorkspace) {
-      departingWorkspace = true;
-      arrivalOrigin = { x: innerWidth / 2, y: innerHeight / 2 };
-      el("#stage").style.transformOrigin =
-        `${arrivalOrigin.x}px ${arrivalOrigin.y}px`;
-      hooks.motion.target(
-        arrivalId,
-        { ...arrivalPose, x: 0.78, opacity: 0 },
-        "workspace departure to celestial overview",
-      );
-      if (hooks.motion.reduced || constellation?.controller.policy.quiet)
-        hooks.motion.snap(arrivalId);
-    } else if (!overview) {
-      departingWorkspace = false;
-      // Direct navigation and interrupted graph travel still apply a canonical
-      // workspace. The graph callback can refine the origin when it has one.
-      if (arrivingWorkspace) {
-        hooks.motion.target(
-          arrivalId,
-          waitingForVela ? { ...arrivalPose, opacity: 0 } : arrivalPose,
-          "canonical workspace arrival",
-          true,
-        );
-        hooks.wake();
-      }
-    }
-    el("#stage").style.visibility =
-      !overview || departingWorkspace ? "" : "hidden";
+    workspaceStage.reconcile({
+      overview,
+      leaving: leavingWorkspace,
+      arriving: arrivingWorkspace,
+      navigated,
+      quiet: constellation?.controller.policy.quiet ?? false,
+      center: { x: innerWidth / 2, y: innerHeight / 2 },
+      velaOccludes: presence && (() => !!velaCrossesWorkspace(presence)),
+    });
     const navigationSnapshot = {
       ...next,
       blocks: next.navigationBlocks ?? next.blocks,
@@ -1564,7 +1496,7 @@ export function installApplication(hooks: Hooks) {
               universe.querySelector(".aw-spatial-field") ?? universe
             ).getBoundingClientRect(),
             c = transition.camera;
-          arrivalOrigin = transition.screenOrigin ?? {
+          const origin = transition.screenOrigin ?? {
             x:
               bounds.left +
               bounds.width / 2 +
@@ -1574,25 +1506,7 @@ export function installApplication(hooks: Hooks) {
               bounds.height / 2 +
               (transition.origin.y - c.y) * c.zoom,
           };
-          el("#stage").style.transformOrigin =
-            `${arrivalOrigin.x}px ${arrivalOrigin.y}px`;
-          if (waitingForVela) return;
-          const body = hooks.motion.bodies.get(arrivalId)!;
-          if (
-            !body.transitioning &&
-            !hooks.motion.reduced &&
-            !constellation?.controller.policy.quiet
-          ) {
-            body.channels.x.value = 0.92;
-            body.channels.opacity.value = 0.45;
-          }
-          hooks.motion.target(
-            arrivalId,
-            arrivalPose,
-            "workspace arrival from canonical anchor",
-            true,
-          );
-          hooks.wake();
+          workspaceStage.approach(origin, constellation?.controller.policy.quiet ?? false);
         },
       };
       constellation = mountConstellation(universe, options);
@@ -5463,8 +5377,8 @@ export function installApplication(hooks: Hooks) {
         (policy.reduced || policy.quiet || policy.hidden)
       )
         hooks.motion.snap(presenceId);
-      if (waitingForVela && (policy.reduced || policy.quiet || policy.hidden || !target))
-        revealWorkspace();
+      if (workspaceStage.waiting && (policy.reduced || policy.quiet || policy.hidden || !target))
+        workspaceStage.reveal();
       velaCard.classList.toggle("vela-card", !!presenceCard());
       const card = presenceCard();
       if (card) {
@@ -5477,37 +5391,24 @@ export function installApplication(hooks: Hooks) {
         policyKey = key;
         constellation?.setPolicy(policy);
       }
-      if (policy.reduced || policy.quiet || policy.hidden)
-        hooks.motion.snap(arrivalId);
-      const pose = hooks.motion.pose(arrivalId);
-      el("#stage").style.visibility =
-        state?.navigation.kind !== "constellation" ||
-        (departingWorkspace && pose.opacity > 0.003)
-          ? ""
-          : "hidden";
-      el("#stage").style.transform = `scale(${pose.x})`;
-      el("#stage").style.opacity = String(pose.opacity);
+      workspaceStage.frame(
+        state?.navigation.kind === "constellation",
+        policy.reduced || policy.quiet || policy.hidden,
+      );
       constellation?.frame(now);
     },
     ready,
     completeWorkspaceArrival: (unclipped: (pose: ReturnType<MotionCoordinator["pose"]>) => boolean) => {
-      if (!waitingForVela) return;
+      if (!workspaceStage.waiting) return;
       const target = presenceTarget();
       // A previously saved overlap must still be reachable after travel settles.
       if (!target || !hooks.motion.bodies.get(presenceId)?.transitioning ||
           (!velaCrossesWorkspace(target) && unclipped(hooks.motion.pose(presenceId))))
-        revealWorkspace();
+        workspaceStage.reveal();
     },
     workspaceSurfacesVisible: () =>
-      !waitingForVela &&
-      (state?.navigation.kind !== "constellation" ||
-        (departingWorkspace && hooks.motion.pose(arrivalId).opacity > 0.003)),
-    surfaceView: () => ({
-      scale: hooks.motion.pose(arrivalId).x,
-      opacity: hooks.motion.pose(arrivalId).opacity,
-      originX: arrivalOrigin.x,
-      originY: arrivalOrigin.y,
-    }),
+      workspaceStage.surfacesVisible(state?.navigation.kind === "constellation"),
+    surfaceView: workspaceStage.view,
     spatialLayer: () =>
       (
         constellation as
