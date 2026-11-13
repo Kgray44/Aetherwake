@@ -303,7 +303,7 @@ export interface MissionPreview {
   fingerprint: string;
   plan: MissionPlan;
   executors: { id: string; available: boolean }[];
-  externalReview?: { provider: string; model: string; effort?: ReasoningEffort; calls: number };
+  externalReview?: { provider: string; model: string; effort?: ReasoningEffort; calls: number; objective?: string };
   localReview?: { kind: 'node-test'; maxFiles: number; preselected?: true };
   objectiveReview?: MissionObjectiveReviewPreview;
   artifactReview?: { prompt: string; digest: string; model: string; quality: string; width: number; height: number;
