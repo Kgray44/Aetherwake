@@ -4709,7 +4709,12 @@ export class BackendCore {
         if (!current || current.version !== ref.version) return true;
         if (!content) return false;
         if (this.velaHost.canReadContent?.(current,scope) !== true) return true;
-        if (ref.resourceKind !== 'file') return false;
+        if (ref.resourceKind === 'note') {
+          const observed = this.velaHistoryContent(ref,16384,this.velaHost,scope);
+          return !observed || 'overBudget' in observed || observed.source !== content.source ||
+            historyDigest(observed.content) !== content.digest;
+        }
+        if (ref.resourceKind !== 'file') return true;
         // Extracted text is volatile. Recheck the original file revision without re-extracting.
         try {
           const source = readMediaSource(this.db,ref.id);
