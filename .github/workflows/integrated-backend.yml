@@ -22,11 +22,19 @@ jobs:
       runner: ubuntu-latest
       timeout: 20
   windows:
-    name: Aerynth Windows integration
+    name: Aerynth Windows integration (backend shard 0)
     uses: ./.github/workflows/aerynth-integration.yml
     with:
       runner: windows-latest
       timeout: 45
+      windows-shard: '0'
+  windows-backend:
+    name: Aerynth Windows backend (shard 1)
+    uses: ./.github/workflows/aerynth-integration.yml
+    with:
+      runner: windows-latest
+      timeout: 45
+      windows-shard: '1'
   security:
     name: Aerynth security and workflow checks
     runs-on: ubuntu-latest
@@ -78,7 +86,7 @@ jobs:
           retention-days: 14
   required:
     name: Aerynth required checks
-    needs: [linux, windows, security]
+    needs: [linux, windows, windows-backend, security]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -96,12 +104,26 @@ jobs:
         run: |
           gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" --slurp > "$RUNNER_TEMP/aerynth-jobs.json"
           node scripts/aerynth-ci-timings.mjs "$RUNNER_TEMP/aerynth-jobs.json" "$RUNNER_TEMP/aerynth-timings.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Download current Windows shard 0 report
+        if: ${{ !cancelled() && needs.windows.result == 'success' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: aerynth-acceptance-windows-latest-shard-0-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aerynth-windows-reports/0
+      - name: Download current Windows shard 1 report
+        if: ${{ !cancelled() && needs.windows-backend.result == 'success' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: aerynth-acceptance-windows-latest-shard-1-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aerynth-windows-reports/1
       - name: Require all verification jobs to succeed
+        if: always()
         env:
           AERYNTH_LINUX: ${{ needs.linux.result }}
           AERYNTH_WINDOWS: ${{ needs.windows.result }}
+          AERYNTH_WINDOWS_BACKEND: ${{ needs.windows-backend.result }}
           AERYNTH_SECURITY: ${{ needs.security.result }}
-        run: node scripts/aerynth-ci-gate.mjs "$RUNNER_TEMP/aerynth-gate.json"
+        run: node scripts/aerynth-ci-gate.mjs "$RUNNER_TEMP/aerynth-gate.json" "$RUNNER_TEMP/aerynth-windows-reports"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

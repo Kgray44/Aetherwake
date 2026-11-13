@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { acceptanceSchema, planBackendShards, windowsAddonCase, workerLossCase } from './aerynth-backend-shards.mjs';
 
 const gate = new URL('./aerynth-ci-gate.mjs', import.meta.url);
 const reporter = new URL('./aerynth-test-reporter.mjs', import.meta.url);
@@ -13,10 +14,23 @@ test('required gate rejects a failed, cancelled, skipped or missing job and acce
   const directory = mkdtempSync(join(tmpdir(), 'aerynth-ci-gate-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const report = join(directory, 'gate.json');
-  const run = (windows, linux = 'success', security = 'success') => {
-    const result = spawnSync(process.execPath, [fileURLToPath(gate), report], {
-      env: { ...process.env, AERYNTH_LINUX: linux, AERYNTH_WINDOWS: windows, AERYNTH_SECURITY: security },
+  const identity = {
+    revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: new URL('../', import.meta.url), encoding: 'utf8' }).trim(),
+    runId: '1234', event: 'pull_request', runAttempt: 2,
+  };
+  const plan = planBackendShards(fileURLToPath(new URL('../prototypes/integrated-backend/', import.meta.url)));
+  const group = (directory, cases, backendLanes) => ({
+    directory, status: 'passed', exitCode: 0, signal: null, missingRequiredCases: [],
+    counts: { tests: cases.length, passed: cases.length, failed: 0, cancelled: 0 },
+    tests: cases.map(entry => ({ ...entry, status: 'passed' })), backendLanes,
+  });
+  const run = (windows, linux = 'success', security = 'success', windowsBackend = 'success') => {
+    const result = spawnSync(process.execPath, [fileURLToPath(gate), report, directory], {
+      env: { ...process.env, AERYNTH_LINUX: linux, AERYNTH_WINDOWS: windows, AERYNTH_WINDOWS_BACKEND: windowsBackend,
+        AERYNTH_SECURITY: security, GITHUB_SHA: identity.revision, GITHUB_RUN_ID: identity.runId,
+        GITHUB_EVENT_NAME: identity.event, GITHUB_RUN_ATTEMPT: String(identity.runAttempt) },
       encoding: 'utf8',
+      windowsHide: true,
     });
     return { result, report: JSON.parse(readFileSync(report, 'utf8')) };
   };
@@ -27,9 +41,21 @@ test('required gate rejects a failed, cancelled, skipped or missing job and acce
   }
   assert.equal(run('success', 'failure').result.status, 1);
   assert.equal(run('success', 'success', 'failure').result.status, 1);
+  assert.equal(run('success', 'success', 'success', '').result.status, 1);
+  assert.equal(run('success').report.windowsReports, 'failed');
+  for (const [windowsShard, backendLanes] of plan.entries()) {
+    mkdirSync(join(directory, String(windowsShard)));
+    const groups = [group('integrated-backend', backendLanes.flat().map(file => file === workerLossCase.file ? workerLossCase : { file }),
+      backendLanes)];
+    if (windowsShard === 0) groups.push(group('visual-experience/cinematic-v3', [windowsAddonCase]));
+    writeFileSync(join(directory, String(windowsShard), 'acceptance.json'), JSON.stringify({
+      ...identity, windowsShard, schema: acceptanceSchema, environment: { platform: 'win32' }, failures: [], groups,
+    }));
+  }
   const repaired = run('success');
   assert.equal(repaired.result.status, 0);
   assert.equal(repaired.report.status, 'passed');
+  assert.equal(repaired.report.windowsReports, 'passed');
 });
 
 test('Node reporter identifies failing and skipped tests without serializing error messages', t => {
