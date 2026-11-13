@@ -41,6 +41,7 @@ export type ConversationExecutionObservation = {
 };
 export interface ConversationExecutionPort {
   observe(resourceId: string, listener: (observation: ConversationExecutionObservation) => void): () => void;
+  refresh?(): Promise<void>;
   cancel(executionId: string): Promise<unknown>;
   recoverTurn?(resourceId: string, executionId: string): Promise<{ state: 'unchanged' | 'provider_completed' | 'failed' | 'interrupted' }>;
 }
@@ -110,7 +111,7 @@ export function acceptedConversationSubmission(input: { resourceId:string;provid
   if (!result || typeof result !== 'object') return false; const value = result as Record<string, unknown>;
   if (value.resourceId !== input.resourceId || typeof value.id !== 'string') return false;
   if (value.role === 'user' && value.content === input.content && typeof value.revision === 'number' && value.revision > input.revision) return true;
-  return value.commandId === input.commandId && value.providerId === input.providerId && ['running','provider_completed'].includes(String(value.state)) && after?.conversation.resourceId === input.resourceId && after.conversation.revision > input.revision && after.messages.items.some(m => m.resourceId === input.resourceId && !m.inherited && m.role === 'user' && m.content === input.content && !input.priorMessageIds.includes(m.id)) === true;
+  return value.commandId === input.commandId && value.providerId === input.providerId && ['running','provider_completed'].includes(String(value.state)) && after?.conversation.resourceId === input.resourceId && after.conversation.revision > input.revision && after.messages.items.some(m => m.resourceId === input.resourceId && !m.inherited && m.role === 'user' && m.content === input.content && !input.priorMessageIds.includes(m.id) && (value.inputMessageId === undefined || m.id === value.inputMessageId)) === true;
 }
 
 /** One canonical chat, independent of its block/panel placement. No store, provider connection or authorization issuance. */
@@ -744,18 +745,32 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       if (checkpoint.record.documents?.length) attachments = checkpoint.record.documents.map(({ id, version }) => ({ id, version }));
       if (reasoningEffort !== undefined) thinking = undefined;
       sendStarted = true;
-      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{}),...(attachments?{documents:attachments}:{})});
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
+      let result: unknown;
+      try {
+        result=await port.command('send',{resourceId,content,expectedRevision:input.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{}),...(attachments?{documents:attachments}:{})});
+      } catch (error) {
+        if (input.providerId !== 'chatgpt-plan-responses' || observedSubmittedStop()) throw error;
+        if (!disposed && (execution?.commandId !== commandId || execution.state !== 'provider_completed'))
+          await options.execution?.refresh?.().catch(() => {});
+        const observed = execution;
+        if (!observed || observed.providerId !== 'chatgpt-plan-responses' || observed.state !== 'provider_completed' ||
+            observed.commandId !== commandId || observed.resourceId !== resourceId || !observed.inputMessageId) throw error;
+        evidence = await port.command('detail',{resourceId,limit:50,aroundMessageId:observed.inputMessageId});
+        if (!acceptedConversationSubmission(input,observed,evidence)) throw error;
+        result = observed;
+      }
       const receipt = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
       const matchingReceipt = receipt && typeof receipt.id === 'string' && receipt.commandId === commandId && receipt.resourceId === resourceId && receipt.providerId === input.providerId;
       const failed = matchingReceipt && receipt.state === 'failed';
       const interrupted = (matchingReceipt && receipt.state === 'interrupted') || observedSubmittedStop();
-      if(!failed&&!interrupted&&!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
+      if(!evidence&&!failed&&!interrupted&&!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
       let followMessageId:string|undefined;
       if (receipt && !failed && !interrupted && acceptedConversationSubmission(input, result, evidence)) {
         const clockMessageId = typeof receipt.deviceClockMessageId === 'string' ? receipt.deviceClockMessageId : undefined;
-        followMessageId = clockMessageId ?? (receipt.role === 'user' ? String(receipt.id) :
+        const inputMessageId = typeof receipt.inputMessageId === 'string' ? receipt.inputMessageId : undefined;
+        followMessageId = clockMessageId ?? inputMessageId ?? (receipt.role === 'user' ? String(receipt.id) :
           evidence?.messages.items.find(m => m.resourceId === resourceId && !m.inherited &&
             m.role === 'user' && m.content === content && !input.priorMessageIds.includes(m.id))?.id);
         const accepted = clockMessageId ? 'Answered from this device’s clock.' : 'Message accepted.';

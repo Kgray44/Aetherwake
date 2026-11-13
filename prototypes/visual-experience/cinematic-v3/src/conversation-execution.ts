@@ -42,7 +42,9 @@ function publicExecution(value: unknown): ConversationExecution | null {
     !timestamp(item.startedAt) ||
     !(item.endedAt === null || timestamp(item.endedAt)) ||
     item.taskVerified !== false ||
-    !(item.errorCode === undefined || text(item.errorCode, 512))
+    !(item.errorCode === undefined || text(item.errorCode, 512)) ||
+    !(item.inputMessageId === undefined ||
+      item.providerId === "chatgpt-plan-responses" && text(item.inputMessageId))
   )
     return null;
   return {
@@ -55,6 +57,7 @@ function publicExecution(value: unknown): ConversationExecution | null {
     endedAt: item.endedAt,
     taskVerified: false,
     ...(item.recoveryAvailable === true ? { recoveryAvailable: true as const } : {}),
+    ...(typeof item.inputMessageId === "string" ? { inputMessageId: item.inputMessageId } : {}),
     ...(item.errorCode ? { errorCode: item.errorCode as string } : {}),
   };
 }

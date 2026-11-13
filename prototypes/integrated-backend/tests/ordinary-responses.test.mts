@@ -128,6 +128,14 @@ for (const format of ['txt', 'pdf', 'docx'] as const) test('ordinary document se
   } });
   assert.equal(result.state, 'provider_completed');
   assert.equal(f.requests.length, 1);
+  const activity = await f.core.command('conversationActivity', { resourceIds: [chat.resourceId] });
+  const execution = activity.executions.find(item => item.commandId === input.input.commandId);
+  assert.ok(execution?.inputMessageId);
+  const detail = await f.core.command('conversation', {
+   name: 'detail', input: { resourceId: chat.resourceId, aroundMessageId: execution.inputMessageId },
+  }) as import('../../conversation-product/src/contracts.ts').Detail;
+  assert.ok(detail.messages.items.some(message => message.id === execution.inputMessageId &&
+   !message.inherited && message.role === 'user' && message.content === input.input.content));
   assert(f.requests[0].input.some((message: { content: string }) => message.content.includes(content)));
   const revised = { ...input, input: { ...input.input, expectedRevision: chat.revision + 2, commandId: randomUUID() } };
   await assert.rejects(conversationCommand({ call, input: revised, reviewSources: async () => {

@@ -5891,6 +5891,9 @@ export class BackendCore {
     const resources=input.resourceIds.map(resourceId=>({resourceId,available:!!this.state.resources[resourceId]&&this.conversationAccess.access(resourceId)}));
     const allowed=new Set(resources.filter(item=>item.available).map(item=>item.resourceId));
     const publicExecution=(execution:Execution):PublicConversationExecution=>({id:execution.id,resourceId:execution.resourceId,providerId:execution.providerId,commandId:execution.commandId,state:execution.state,startedAt:execution.startedAt,endedAt:execution.endedAt,taskVerified:false,...(this.recoverableCodexTurn(execution)?{recoveryAvailable:true as const}:{}),...(execution.errorCode?{errorCode:execution.errorCode}:{}),...(execution.httpDiagnostic?{httpDiagnostic:projectTurnHttpDiagnostic(execution.httpDiagnostic)}:{}),
+      ...(execution.providerId===CHATGPT_PLAN_PROVIDER && execution.inputMessageId &&
+        this.conversationReadAccess(execution.resourceId, execution.inputMessageId) ?
+        { inputMessageId: execution.inputMessageId } : {}),
       ...(execution.outputTiming && this.conversationReadAccess(execution.resourceId, execution.outputTiming.messageId) ?
         { outputTiming: structuredClone(execution.outputTiming) } : {})});
     const current=this.active?this.state.executions[this.active.id]:null;
