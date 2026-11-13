@@ -14,6 +14,11 @@ export const backendTestGlob = 'tests/*.test.mts';
 
 // Summed case times in milliseconds from Windows artifact 14016804955.
 const windowsWeights = JSON.parse(readFileSync(new URL('./aerynth-windows-backend-weights.json', import.meta.url), 'utf8'));
+// These two fixture files exceeded their settle windows when they shared a runner.
+const separateRunner = new Map([
+  ['tests/mission-api-planning.test.mts', 'tests/ordinary-responses.test.mts'],
+  ['tests/ordinary-responses.test.mts', 'tests/mission-api-planning.test.mts'],
+]);
 
 export function planBackendShards(backendRoot, weights = windowsWeights) {
   // Match the existing backend glob, including new files with no timing history.
@@ -22,12 +27,16 @@ export function planBackendShards(backendRoot, weights = windowsWeights) {
     .map(entry => `tests/${entry.name}`).sort();
   const defaultWeight = 10_000;
   const weight = file => Math.max(1, weights[file] ?? defaultWeight);
-  const lanes = Array.from({ length: 4 }, () => ({ files: [], duration: 0 }));
+  const lanes = Array.from({ length: 4 }, (_, index) => ({ shard: Math.floor(index / 2), files: [], duration: 0 }));
+  const assignedShard = new Map();
   if (files.length < lanes.length) throw new Error('Expected at least four backend test files');
   for (const file of files.sort((a, b) => weight(b) - weight(a))) {
-    const lane = lanes.reduce((lightest, next) => next.duration < lightest.duration ? next : lightest);
+    const otherShard = assignedShard.get(separateRunner.get(file));
+    const eligible = lanes.filter(lane => lane.shard !== otherShard);
+    const lane = eligible.reduce((lightest, next) => next.duration < lightest.duration ? next : lightest);
     lane.files.push(file);
     lane.duration += weight(file);
+    assignedShard.set(file, lane.shard);
   }
   return [[lanes[0].files, lanes[1].files], [lanes[2].files, lanes[3].files]];
 }

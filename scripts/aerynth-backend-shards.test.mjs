@@ -21,6 +21,24 @@ test('discovers new backend files and assigns each top-level test to exactly one
   assert.deepEqual(planBackendShards(root, weights), after);
 });
 
+test('schedules planning and ordinary Responses on opposite Windows runners', t => {
+  const root = mkdtempSync(join(tmpdir(), 'aerynth-shard-placement-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'tests'));
+  const planning = 'tests/mission-api-planning.test.mts';
+  const responses = 'tests/ordinary-responses.test.mts';
+  const files = ['tests/heavy-a.test.mts', 'tests/heavy-b.test.mts', planning, responses, 'tests/new.test.mts'];
+  for (const file of files) writeFileSync(join(root, file), '');
+  for (const order of [files, [files[0], files[1], responses, planning, files[4]]]) {
+    const weights = Object.fromEntries(order.map((file, index) => [file, 50_000 - index * 10_000]));
+    const plan = planBackendShards(root, weights);
+    assert.deepEqual(plan.flat(2).sort(), [...files].sort());
+    const shardFor = file => plan.findIndex(lanes => lanes.flat().includes(file));
+    assert.notEqual(shardFor(planning), shardFor(responses));
+    assert.deepEqual(planBackendShards(root, weights), plan);
+  }
+});
+
 test('acceptance runner executes both assigned lanes and retains their case reports', { skip: process.platform !== 'win32' }, t => {
   const root = mkdtempSync(join(tmpdir(), 'aerynth-shard-runner-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
