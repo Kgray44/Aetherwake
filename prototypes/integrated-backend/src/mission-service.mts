@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { backendInspectionBinding, backendInspectionCurrent } from './mission-source-receipt.mts';
+import { isExitedBackendInspection } from './mission-cpu-pool.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import { compileMissionContext, createMissionContextCache, validateMissionContext, validateMissionContextSources,
   type MissionContextSource } from '../../vela-core/src/mission-context.mts';
@@ -159,6 +161,20 @@ export function validateMissionPlan(plan: MissionPlan, executors: MissionService
   tasks.forEach(task => visit(task.id));
 }
 
+/** A reservation is proof only when bound to its original canonical admission event. */
+function reservedDispatch(mission: Mission, task: MissionTask, attempt: MissionAttempt): boolean {
+  const gate = attempt.dispatch;
+  return !!gate && Object.keys(gate).length === 4 && gate.contract === 'aerynth.mission-dispatch@1' &&
+    gate.state === 'reserved' && gate.attemptId === attempt.id && Number.isSafeInteger(gate.reservedRevision) &&
+    gate.reservedRevision > 0 && mission.events.some(event => event.kind === 'started' &&
+      event.seq === gate.reservedRevision && event.taskId === task.id && event.attemptId === attempt.id);
+}
+function noDispatchReceipt(mission: Mission, attempt: MissionAttempt): NonNullable<MissionAttempt['reconciliation']> {
+  return { contract: 'aerynth.mission-no-dispatch@1', attemptId: attempt.id,
+    reservedRevision: attempt.dispatch!.reservedRevision, observedRevision: mission.revision,
+    observedAt: stamp(), authority: 'mission-service:dispatch-gate', outcome: 'not-dispatched' };
+}
+
 interface Running {
   missionId: string;
   task: MissionTaskPlan;
@@ -199,9 +215,12 @@ export class MissionService {
         const before = m.events.length;
         for (const task of m.tasks) if (task.state === 'running' || task.state === 'cancelling') {
           const executor = own(host.executors, task.executor) ? host.executors[task.executor] : undefined;
-          task.state = executor?.replaySafe ? 'failed' : 'uncertain';
-          task.detail = 'interrupted_by_restart';
           const attempt = task.attempts.at(-1)!;
+          const notDispatched = reservedDispatch(m, task, attempt);
+          task.state = notDispatched && (task.state === 'cancelling' || m.disposition === 'cancelled') ? 'cancelled' :
+            notDispatched || executor?.replaySafe ? 'failed' : 'uncertain';
+          task.detail = notDispatched ? 'interrupted_before_dispatch' : 'interrupted_by_restart';
+          if (notDispatched) attempt.reconciliation = noDispatchReceipt(m, attempt);
           attempt.finishedAt = stamp(); attempt.outcome = task.state;
           this.event(m, { kind: 'recovered', taskId: task.id, attemptId: attempt.id, detail: task.state });
         }
@@ -498,6 +517,15 @@ export class MissionService {
 
   control(id: string, scope: MissionScope, revision: number, control: MissionControl): MissionProjection {
     this.requireOpen();
+    // Retry of this qualified original result means readback, never another worker dispatch.
+    if (control?.type === 'retry') {
+      const current = this.lookup(id);
+      this.requireAccess(current, scope);
+      const task = taskOf(current, control.taskId), attempt = task?.attempts.at(-1);
+      if (task?.executor === 'inspect.backend-source' && attempt?.backendInspection &&
+        (task.state === 'failed' || task.state === 'uncertain'))
+        return this.reconcileBackendInspection(id, scope, revision, task.id, attempt.id);
+    }
     const aborts: string[] = [];
     const m = this.update(id, value => {
       this.requireAccess(value, scope);
@@ -664,9 +692,62 @@ export class MissionService {
     }
   }
 
+  /** Host-only, fixed read-only inspection class. Never dispatches an executor. */
+  reconcileBackendInspection(id: string, scope: MissionScope, revision: number, taskId: string, attemptId: string): MissionProjection {
+    this.requireOpen();
+    const mission = this.update(id, current => {
+      this.requireAccess(current, scope);
+      check(current.revision === revision, 'mission_revision_changed');
+      check(current.disposition !== 'cancelled', 'mission_reconciliation_denied');
+      const task = taskOf(current, taskId), attempt = task?.attempts.at(-1), receipt = attempt?.backendInspection;
+      check(task && attempt?.id === attemptId && task.executor === 'inspect.backend-source' &&
+        receipt?.contract === 'aerynth.backend-inspection-terminal@1' && receipt.missionId === id &&
+        receipt.taskId === taskId && receipt.attemptId === attemptId && receipt.scopeDigest === digest({ workspaceId: current.scope.workspaceId, projectId: current.scope.projectId }) &&
+        receipt.claimsDigest === digest(task.claims) && receipt.contextDigest === digest(attempt.context) && receipt.terminal && typeof receipt.terminal === 'object' &&
+        receipt.terminalDigest === digest(receipt.terminal) &&
+        receipt.effectId === receipt.terminal.exit?.effectId &&
+        typeof receipt.observedAt === 'string' && Number.isFinite(Date.parse(receipt.observedAt)) &&
+        attempt.dispatch?.contract === 'aerynth.mission-dispatch@1' && attempt.dispatch?.state === 'entered' && attempt.dispatch.attemptId === attemptId &&
+        receipt.reservedRevision === attempt.dispatch.reservedRevision && current.events.some(event =>
+          event.kind === 'started' && event.seq === receipt.reservedRevision && event.taskId === taskId && event.attemptId === attemptId) &&
+        receipt.terminal.bindingDigest === backendInspectionBinding({ missionId: id, task, attemptId, scope: current.scope }) &&
+        backendInspectionCurrent(receipt.terminal) && this.contextIsCurrent(current, task, attempt, new Map()),
+        'mission_reconciliation_denied');
+      if (task.state === 'verified') {
+        check(attempt.outcome === 'verified' && attempt.evidence?.id === receipt.evidenceId &&
+          attempt.verification?.passed && attempt.verification.evidenceIds.includes(receipt.evidenceId) &&
+          current.events.some(event => event.kind === 'recovered' && event.seq === receipt.reconciledRevision &&
+            event.taskId === taskId && event.attemptId === attemptId && event.detail === 'original_source_inspection_reconciled'),
+          'mission_reconciliation_denied');
+        return;
+      }
+      check(task.state === 'uncertain' || task.state === 'failed', 'mission_reconciliation_denied');
+      const evidence = { ...structuredClone(receipt.terminal.evidence), id: receipt.evidenceId, attemptId,
+        observedAt: receipt.observedAt };
+      attempt.evidence = evidence;
+      attempt.verification = { criterion: task.criterion, passed: true, detail: 'Verified original retired source-inspection worker and current source', evidenceIds: [evidence.id] };
+      task.state = 'verified'; task.detail = 'original_source_inspection_reconciled'; attempt.outcome = 'verified';
+      this.event(current, { kind: 'recovered', taskId, attemptId, detail: 'original_source_inspection_reconciled' });
+      receipt.reconciledRevision = current.revision;
+    });
+    this.wake();
+    return this.project(mission);
+  }
+
   private conflict(task: MissionTaskPlan) {
-    return [...this.running.values()].some(other => task.claims.some(claim => other.task.claims.some(activeClaim =>
-      activeClaim.resource === claim.resource && (claim.mode === 'exclusive' || activeClaim.mode === 'exclusive'))));
+    if (!task.claims.length) return false;
+    const conflicts = (other: MissionTaskPlan) => task.claims.some(claim => other.claims.some(activeClaim =>
+      activeClaim.resource === claim.resource && (claim.mode === 'exclusive' || activeClaim.mode === 'exclusive')));
+    if ([...this.running.values()].some(other => conflicts(other.task))) return true;
+    // Restored from the earlier FI-4 increment: worker/lease release is not effect quiescence.
+    const unresolved = this.host.db.prepare(`
+      SELECT task.value AS json FROM vela_missions, json_each(vela_missions.json, '$.tasks') AS task
+        WHERE json_extract(task.value, '$.state') = 'uncertain'
+      UNION ALL
+      SELECT task.value AS json FROM vela_missions, json_each(vela_missions.json, '$.retiredTasks') AS task
+        WHERE json_extract(task.value, '$.state') = 'uncertain'
+    `).all();
+    return unresolved.some(row => conflicts(JSON.parse(row.json as string) as MissionTaskPlan));
   }
   private capacityFor(m: Mission, lane: string) {
     const running = [...this.running.values()];
@@ -755,10 +836,16 @@ export class MissionService {
       expectedRemote.reduce((total, attempt) => total + attempt.telemetry!.providerCalls,
         (m.planning ? 1 : 0) + (m.planning?.context?.providerCalls ?? 0)) : null;
     const { usageReports, reportedTotalTokens, completeReportedUsage } = summarizeMissionUsage(attempts, m.planning, providerCalls);
-    let peakWorkers = 0, admitted = 0;
+    let peakWorkers = 0;
+    const activeAttempts = new Set<string>(), startedAttempts = new Set<string>();
     for (const event of m.events) {
-      if (event.kind === 'started') peakWorkers = Math.max(peakWorkers, ++admitted);
-      if (event.attemptId && (event.kind === 'settled' || event.kind === 'recovered')) admitted--;
+      if (event.kind === 'started' && event.attemptId && !startedAttempts.has(event.attemptId)) {
+        startedAttempts.add(event.attemptId); activeAttempts.add(event.attemptId);
+        peakWorkers = Math.max(peakWorkers, activeAttempts.size);
+      }
+      // Verification of a retained result is not another worker termination.
+      if (event.attemptId && (event.kind === 'settled' || event.kind === 'recovered') &&
+        event.detail !== 'original_source_inspection_reconciled') activeAttempts.delete(event.attemptId);
     }
     const ended = ['queued', 'running', 'cancelling'].includes(outcome) ? Date.now() :
       Date.parse(m.events.findLast(event => event.kind !== 'workroom')!.time);
@@ -931,6 +1018,19 @@ export class MissionService {
       queueMs: Math.max(0, Date.now() - Date.parse(task.queuedAt)),
       contextPreparationMs: assembledAt - compilingAt,
     };
+    if (task.executor === 'inspect.backend-source') context.recordBackendInspection = terminal => {
+      check(isExitedBackendInspection(terminal) && terminal.bindingDigest === backendInspectionBinding(context) && backendInspectionCurrent(terminal), 'mission_inspection_receipt_invalid');
+      this.update(m.id, current => {
+        this.requireAccess(current, m.scope);
+        const value = taskOf(current, task.id), attempt = value?.attempts.at(-1);
+        check(value?.state === 'running' && attempt?.id === id && attempt.dispatch?.state === 'entered' &&
+          !attempt.backendInspection && !abort.signal.aborted &&
+          this.contextIsCurrent(current, value, attempt, new Map()), 'mission_inspection_receipt_denied');
+        attempt.backendInspection = { contract: 'aerynth.backend-inspection-terminal@1', missionId: m.id, taskId: task.id,
+          attemptId: id, scopeDigest: digest({ workspaceId: m.scope.workspaceId, projectId: m.scope.projectId }), claimsDigest: digest(task.claims), contextDigest: digest(attempt.context),
+          reservedRevision: attempt.dispatch.reservedRevision, evidenceId: randomUUID(), terminalDigest: digest(terminal), observedAt: stamp(), effectId: terminal.exit!.effectId, terminal: structuredClone(terminal) };
+      });
+    };
     const resources = this.host.resources;
     const lease = resources?.acquire(executor.lane,
       { missionId: m.id, taskId: task.id, attemptId: id, timeoutMs: task.timeoutMs }, task.executor);
@@ -944,6 +1044,7 @@ export class MissionService {
         const attempt: MissionAttempt = { id, executor: task.executor, admittedAt: stamp(), context: context.context.manifest, timing };
         value.state = 'running'; value.attempts.push(attempt);
         this.event(current, { kind: 'started', taskId: task.id, attemptId: id });
+        attempt.dispatch = { contract: 'aerynth.mission-dispatch@1', attemptId: id, state: 'reserved', reservedRevision: current.revision };
         if (lease) {
           attempt.resourceLease = lease.receipt;
           if (Buffer.byteLength(JSON.stringify(current)) > recordLimitBytes) delete attempt.resourceLease;
@@ -965,6 +1066,9 @@ export class MissionService {
       let verification: MissionTask['attempts'][number]['verification'];
       let telemetry: MissionTask['attempts'][number]['telemetry'];
       let reportedOutcome: 'blocked' | 'failed' | 'uncertain' | undefined;
+      // Only this host continuation knows whether the effectful executor was entered.
+      // After entry, an abort or lost authority cannot prove that its effects stopped.
+      let executorEntered = false;
       let detail: string | undefined;
       try {
         abort.signal.throwIfAborted();
@@ -989,7 +1093,17 @@ export class MissionService {
         }
         const executingAt = performance.now();
         let result: Awaited<ReturnType<MissionExecutor['run']>>;
-        try { result = await executor.run(context); }
+        try {
+          this.update(m.id, current => {
+            const value = taskOf(current, task.id), attempt = value?.attempts.at(-1);
+            check(value?.state === 'running' && attempt?.id === id && reservedDispatch(current, value, attempt), 'mission_dispatch_denied');
+            check(this.host.authorized(current.scope), 'mission_scope_revoked');
+            attempt.dispatch!.state = 'entered';
+          });
+          // No asynchronous boundary between committing entry and invoking the executor.
+          executorEntered = true;
+          result = await executor.run(context);
+        }
         finally {
           const executedAt = performance.now();
           timing.executionMs = executedAt - executingAt;
@@ -1019,13 +1133,15 @@ export class MissionService {
       } catch { detail ??= 'executor_failed_or_evidence_invalid'; }
       const cancellation = this.running.get(id)?.cancellation;
       const authorized = this.host.authorized(m.scope);
-      const outcome = cancellation || !authorized ? (!executor.replaySafe ? 'uncertain' :
+      const outcome = cancellation || !authorized ? (executorEntered && !executor.replaySafe ? 'uncertain' :
         !authorized ? 'blocked' : cancellation === 'user' ? 'cancelled' : 'failed') :
-        reportedOutcome ?? (verification?.passed ? 'verified' : executor.replaySafe || evidence ? 'failed' : 'uncertain');
+        reportedOutcome ?? (verification?.passed ? 'verified' : !executorEntered || executor.replaySafe || evidence ? 'failed' : 'uncertain');
       this.update(m.id, current => {
         const value = taskOf(current, task.id)!;
         const attempt = value.attempts.at(-1)!;
-        check(attempt.id === id, 'mission_attempt_changed');
+        check(attempt.id === id && (value.state === 'running' || value.state === 'cancelling'), 'mission_attempt_changed');
+        if (!executorEntered && reservedDispatch(current, value, attempt))
+          attempt.reconciliation = noDispatchReceipt(current, attempt);
         value.state = outcome; value.detail = cancellation ?? (!authorized ? 'mission_scope_revoked' : detail);
         attempt.outcome = outcome; attempt.finishedAt = stamp();
         attempt.timing = timing;
