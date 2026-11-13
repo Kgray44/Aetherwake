@@ -58,6 +58,7 @@ test('admitted desktop fixture captures and revokes a canonical source through t
   const policyToken = randomBytes(32).toString('base64url');
   const env = {
     AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN: policyToken,
+    AERYNTH_MEMORY_FIXTURE_SEED: 'inspector-v1',
     SystemRoot: process.env.SystemRoot, TEMP: root, TMP: root,
     APPDATA: unrelatedProfile, LOCALAPPDATA: unrelatedProfile, USERPROFILE: unrelatedProfile,
     HOME: unrelatedProfile, CODEX_HOME: unrelatedProfile,
@@ -77,6 +78,13 @@ test('admitted desktop fixture captures and revokes a canonical source through t
     entered.check();
     assert.deepEqual(readdirSync(profileRoot).sort(), ['synthetic-packaged.consumed', 'synthetic-packaged.started']);
     assert.equal(existsSync(databasePath), false);
+    const unsupportedSeed = spawnSync(process.execPath, hostArgs(entered.backendDescriptor), {
+      ...launchOptions, env: { ...env, AERYNTH_MEMORY_FIXTURE_SEED: 'unknown' },
+      timeout: 5000, encoding: 'utf8',
+    });
+    assert.equal(unsupportedSeed.status, 1);
+    assert.match(unsupportedSeed.stderr, /memory_fixture_seed_invalid/u);
+    assert.deepEqual(readdirSync(profileRoot).sort(), ['synthetic-packaged.consumed', 'synthetic-packaged.started']);
     const key = randomBytes(32);
     let protector: ReturnType<typeof createSyntheticMemoryProtector>;
     try {
@@ -120,6 +128,7 @@ test('admitted desktop fixture captures and revokes a canonical source through t
     const lines = createInterface({ input: child.stdout });
     const replies = lines[Symbol.asyncIterator]();
     let id = 0;
+    const seeds: { contract: string; conversationId: string; messageId: string; factId: string }[] = [];
     async function call<K extends keyof CommandMap>(command: K, input: CommandMap[K]['input'], fixturePolicyToken?: string): Promise<CommandMap[K]['output']> {
       entered.check();
       const wanted = ++id;
@@ -132,6 +141,7 @@ test('admitted desktop fixture captures and revokes a canonical source through t
           custodyOperations.push(response.nativeHost.operation);
           continue;
         }
+        if (response.fixtureSeed) { seeds.push(response.fixtureSeed); continue; }
         if (response.event) continue;
         assert.equal(response.id, wanted);
         if (response.error) throw Error(response.error);
@@ -143,15 +153,29 @@ test('admitted desktop fixture captures and revokes a canonical source through t
       assert.equal((await call('capabilities', {})).providerId, 'fixture-codex');
       for (const command of ['providerAuth', 'velaApiConfigure', 'velaVoiceNative', 'velaWakeNative', 'githubTimeline'] as const)
         await assert.rejects(call(command, {} as never), /memory_fixture_command_denied|native_api_configuration_required|unsupported_command/u);
-      const chat = await call('createConversation', { title: 'Synthetic preferences', commandId: 'joint-chat' });
-      const text = 'I prefer numbered lists.';
-      const source = await call('addMessage', { resourceId: chat.resourceId, expectedRevision: chat.revision,
-        commandId: 'joint-source', content: text, role: 'user' });
-      const review = await call('personalMemoryCapturePreviewNative', { conversationId: chat.resourceId,
-        messageId: source.id, scope: 'conversation', category: 'preferences', text, keywords: ['lists'] });
-      const receipt = await call('personalMemoryCaptureCommitNative', review);
-      assert.ok(receipt.id);
-      await assert.rejects(call('personalMemoryCaptureCommitNative', review), /personal_memory_review_mismatch/u);
+      await assert.rejects(call('fixtureSeed' as never, {} as never), /unsupported_command/u);
+      assert.equal(seeds.length, 1);
+      const [seed] = seeds;
+      assert.equal(seed.contract, 'aerynth.memory-fixture-seed@1');
+      const snapshot = await call('snapshot', {});
+      const chat = snapshot.conversations.find(item => item.resourceId === seed.conversationId)!;
+      const source = snapshot.graph.messages.find(item => item.id === seed.messageId)!;
+      assert.equal(snapshot.conversations.length, 1);
+      assert.equal(snapshot.graph.messages.length, 1);
+      assert.equal(source.role, 'user');
+      const receipt = { id: seed.factId };
+      const listing = await call('personalMemoryManagementNative', { type: 'list', after: null });
+      const page = listing as { records: { id: string }[] };
+      assert.deepEqual(page.records.map(item => item.id), [receipt.id]);
+      const fact = await call('personalMemoryManagementNative', { type: 'read', id: receipt.id });
+      const saved = fact as import('../../personal-context/src/contracts.ts').ReviewedFact;
+      assert.equal(saved.id, receipt.id);
+      assert.equal(saved.text, source.content);
+      assert.equal(saved.provenance.kind, 'conversation-message');
+      if (saved.provenance.kind === 'conversation-message') {
+        assert.equal(saved.provenance.conversationId, seed.conversationId);
+        assert.equal(saved.provenance.messageId, seed.messageId);
+      }
       const policy = await call('personalMemoryPolicyNative', {});
       assert.equal(policy.storageEnabled, true);
       assert.equal(policy.ordinaryEnabled, false);
@@ -183,7 +207,7 @@ test('admitted desktop fixture captures and revokes a canonical source through t
       }) as { binding: CommandMap['personalMemoryRevokeSourceNative']['input'] };
       assert.equal(revocation.binding.messageId, source.id);
       assert.deepEqual(await call('personalMemoryRevokeSourceNative', revocation.binding), {
-        revision: source.revision + 1, erasedFacts: 1,
+        revision: chat.revision + 1, erasedFacts: 1,
       });
       await assert.rejects(call('personalMemoryManagementNative', { type: 'read', id: receipt.id }), /personal_record_unavailable/u);
       assert.equal((await call('openResource', target)).status, 'unavailable');

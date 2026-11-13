@@ -26,6 +26,11 @@ if (fixtureLaunch) {
 } else if (argv.some(arg => arg.startsWith('--memory-fixture'))) {
   throw Error('memory_fixture_bootstrap_invalid');
 }
+const fixtureSeedMode = process.env.AERYNTH_MEMORY_FIXTURE_SEED;
+delete process.env.AERYNTH_MEMORY_FIXTURE_SEED;
+if (fixtureSeedMode !== undefined && (!fixtureStartup || fixtureSeedMode !== 'inspector-v1'))
+  throw Error('memory_fixture_seed_invalid');
+
 // The native acceptance parent holds this separate startup capability.
 const fixturePolicyToken = fixtureStartup ? process.env.AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN : undefined;
 if (fixtureStartup) delete process.env.AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN;
@@ -74,6 +79,35 @@ const closeBackend=()=>{
 };
 backend.subscribe((event) => write({ event }));
 const lines = createInterface({ input: process.stdin });
+
+// Bootstrap-owned synthetic data. Keep the seed outside the RPC command map
+// and route each mutation through its existing canonical owner.
+async function seedFixtureInspector() {
+  const conversation = await backend.call('createConversation', {
+    title: 'Synthetic memory source', providerId: 'local', commandId: 'fixture-inspector-conversation',
+  });
+  const text = 'I prefer numbered lists.';
+  const message = await backend.call('addMessage', {
+    resourceId: conversation.resourceId, expectedRevision: conversation.revision,
+    commandId: 'fixture-inspector-message', role: 'user', content: text,
+  });
+  const review = await backend.call('personalMemoryCapturePreviewNative', {
+    conversationId: conversation.resourceId, messageId: message.id,
+    scope: 'conversation', category: 'preferences', text, keywords: ['lists'],
+  });
+  const fact = await backend.call('personalMemoryCaptureCommitNative', review);
+  write({ fixtureSeed: { contract: 'aerynth.memory-fixture-seed@1',
+    conversationId: conversation.resourceId, messageId: message.id, factId: fact.id } });
+}
+
+const seedReady = fixtureSeedMode === 'inspector-v1'
+  ? seedFixtureInspector().then(() => true, () => {
+      write({ startupError: 'memory_fixture_seed_failed' });
+      process.exitCode = 1;
+      lines.close();
+      return false;
+    })
+  : undefined;
 lines.on("line", async (line) => {
   let id: unknown;
   try {
@@ -93,6 +127,8 @@ lines.on("line", async (line) => {
       return;
     }
     id = request.id;
+    // Custody replies above must be serviced while startup awaits the protector.
+    if (seedReady && !await seedReady) throw Error('memory_fixture_seed_failed');
     if (fixtureStartup && request.command === 'personalMemoryPolicyNative' &&
         Object.hasOwn(request, 'fixturePolicyToken')) {
       if (Object.keys(request).length !== 4 ||
@@ -239,6 +275,6 @@ lines.on(
   "close",
   () =>
     {void closeBackend()
-      .then(()=>process.exit())
+      .then(()=>process.exit(process.exitCode ?? 0))
       .catch(async()=>{computerClient?.close();maintenanceClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();fixtureCustody?.close();await backend.terminate().catch(()=>{});process.exit(1);});},
 );
