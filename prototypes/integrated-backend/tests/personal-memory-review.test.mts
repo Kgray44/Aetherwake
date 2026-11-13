@@ -28,6 +28,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     resolveScope,
   });
   let wrappedValue: string;
+  let custodyChecks = 0;
   const owner = new NativePersonalMemory({
     kernel, host: {
       identity: () => ({ userId: 'local-owner', policyVersion: '1' }),
@@ -35,7 +36,7 @@ test('native capture reviews exact source, saves once, and leaves provider use o
       resolveScope,
       authorize: input => review.authorize(input) ? { decision: 'allow', policyVersion: '1', authorizationRef: 'synthetic-review' } : { decision: 'deny' },
     },
-    secrets: { available: async () => true, async seal(value) { wrappedValue = value; return randomBytes(64); }, async open() { return wrappedValue; } },
+    secrets: { available: async () => { custodyChecks++; return true; }, async seal(value) { wrappedValue = value; return randomBytes(64); }, async open() { return wrappedValue; } },
   });
   nativeOpen = () => owner.open();
   try {
@@ -45,10 +46,11 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     await assert.rejects(review.previewCapture(unscoped), /stale_personal_memory_source/);
     currentProjectId = null;
     await assert.rejects(review.previewCapture(input), /stale_personal_memory_source/);
+    assert.equal(custodyChecks, 0);
     const unscopedPreview = await review.previewCapture(unscoped);
     assert.deepEqual(unscopedPreview.draft.scope, { kind: 'conversation', id: 'chat' });
-    review.cancelCapture(unscopedPreview.id);
     currentProjectId = 'project';
+    await assert.rejects(review.commitCapture(unscopedPreview), /stale_personal_memory_source/);
     currentSourceText = 'The synthetic relay was replaced.';
     await assert.rejects(review.previewCapture(input), /stale_personal_memory_source/);
     currentSourceText = sourceText;

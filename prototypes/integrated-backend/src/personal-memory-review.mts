@@ -326,6 +326,7 @@ export function createPersonalMemoryReview(options: Options) {
       if (!input || !identifier(input.conversationId) || !identifier(input.messageId) ||
         !['conversation', 'project', 'assistant.ordinary', 'assistant.vela'].includes(input.scope) || !['preferences', 'projects', 'technical', 'decisions'].includes(input.category) ||
         typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4096 ||
+        (input.expectedProjectId !== undefined && input.expectedProjectId !== null && !identifier(input.expectedProjectId)) ||
         (input.expectedSourceText !== undefined && (typeof input.expectedSourceText !== 'string' || Buffer.byteLength(input.expectedSourceText) > 16384)) ||
         !validKeywords(input.keywords)) throw new PersonalContextError('invalid_personal_memory_capture');
       const { conversationId, messageId, scope, category, text, keywords, expectedProjectId, expectedSourceText } = structuredClone(input);
@@ -354,7 +355,7 @@ export function createPersonalMemoryReview(options: Options) {
           throw new PersonalContextError('conversation_source_unavailable');
         if (containsRecognizableMemoryCredential(sourceText))
           throw new PersonalContextError('personal_memory_credential_detected');
-        return { original, sourceText };
+        return { original: { ...original }, sourceText };
       });
       const service = await options.open();
       requireOpen();
