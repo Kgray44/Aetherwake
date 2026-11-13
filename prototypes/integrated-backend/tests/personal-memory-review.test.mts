@@ -92,6 +92,26 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     await assert.rejects(review.commitCapture(stale), /conversation_source_unavailable/);
     await assert.rejects(review.read(saved.id), /conversation_source_unavailable/);
     assert.throws(() => recall.validate(recall.turn), /stale_personal_context/);
+    enabled = true;
+    const correction = await review.previewManagement({ action: 'correct', id: saved.id, version: saved.version, text: 'Use the revised synthetic relay' });
+    await assert.rejects(review.commitManagement({ ...correction, text: 'Tampered' }), /personal_memory_review_mismatch/);
+    const corrected = await review.commitManagement(correction);
+    assert.equal(corrected.action, 'correct');
+    assert.equal((await review.read(corrected.id)).text, 'Use the revised synthetic relay');
+    const exported = await review.commitManagement(await review.previewManagement({ action: 'export', id: corrected.id, version: 1 }));
+    assert.equal(exported.action, 'export');
+    if (exported.action === 'export') assert.match(JSON.stringify(exported.bundle), /revised synthetic relay/);
+    const revoke = await review.previewManagement({ action: 'revoke', id: corrected.id, version: 1 });
+    const staleDeletion = await review.previewManagement({ action: 'delete', id: corrected.id, version: 1 });
+    await review.commitManagement(revoke);
+    await assert.rejects(review.commitManagement(revoke), /personal_memory_review_mismatch/);
+    await assert.rejects(review.commitManagement(staleDeletion), /stale_personal_context_version/);
+    assert.equal(await review.prepareOrdinaryRecall('other-chat', turn), null);
+    enabled = false;
+    const deletion = await review.previewManagement({ action: 'delete', id: corrected.id, version: 2 });
+    assert.equal(deletion.fact, null);
+    await review.commitManagement(deletion);
+    await assert.rejects(review.read(corrected.id), /personal_record_unavailable/);
   } finally {
     owner.close();
     kernel.close();
