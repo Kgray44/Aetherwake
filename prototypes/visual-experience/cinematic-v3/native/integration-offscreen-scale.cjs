@@ -106,6 +106,7 @@ exports.verify = async ({
       return { metrics:s.metrics, active:s.active, graphicsFailed:s.graphicsFailed, contextLost:s.gpu?.contextLost,
         surfacesRendered:s.gpu?.surfacesRendered,detailedSurfacesRendered:s.gpu?.detailedSurfacesRendered,
         distinctSlabGeometries:s.gpu?.distinctSlabGeometries,
+        gpuResources: s.gpu && { geometries: s.gpu.geometries, textures: s.gpu.textures },
         unhiddenCardNodes:cards.filter(card=>!card.hidden).length, mountedCards:cards.length,
         interactiveCardNodes:cards.filter(card=>!card.closest('[inert],[hidden]')).length,
         usableCardNodes:cards.filter(card=>card.dataset.workspacePresentation==='usable').length,
@@ -114,6 +115,7 @@ exports.verify = async ({
     assert.equal(result.active, true);
     assert.equal(result.graphicsFailed, false);
     assert.equal(result.contextLost, false);
+    assertGpuResources(result.gpuResources);
     assert.deepEqual(result.metrics.errors, []);
     assert(result.metrics.draws > 0 && paintCount > 0, "no_offscreen_frames_observed");
     const { metrics, ...observations } = result;
@@ -266,6 +268,14 @@ exports.verify = async ({
       await wait("window.__aerynth.snapshot().metrics.draws > " + drawsBeforeRestore);
       await visibleWorkspace();
       sameState(projection(canonical), await snapshot());
+      if (memoryCycles) {
+        const recovered = await js(`(() => {
+          const { geometries, textures } = window.__aerynth.snapshot().gpu;
+          return { geometries, textures };
+        })()`);
+        assertGpuResources(recovered);
+        receipt.recoveredGpuResources = recovered;
+      }
       await js("window.__aerynth.flush()");
       await writeFile(expectedPath, JSON.stringify(projection(canonical)), { flag: "wx" });
       receipt.reducedMotion = true;
@@ -289,3 +299,10 @@ exports.verify = async ({
   console.log(JSON.stringify({ passed: receipt.passed, count: receipt.count, evidence, error: receipt.error }));
   app.exit(receipt.passed ? 0 : 1);
 };
+
+function assertGpuResources(resources) {
+  for (const name of ["geometries", "textures"]) {
+    assert(Number.isSafeInteger(resources?.[name]) && resources[name] >= 0,
+      "missing_or_invalid_gpu_resource_count:" + name);
+  }
+}
