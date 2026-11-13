@@ -73,6 +73,8 @@ Before claiming each case, the runner can call the host's `canStartCase` gate. T
 
 The AEP report groups reported model executions by exact reported model. Dispatch totals and unknown states are distinct. Token sums cover only dispatched executions with consistent usage receipts, with sample coverage shown. These totals describe observed dispatch and usage and do not establish what was billed.
 
+The independent blind quality report includes end-to-end p50, p95 and sample count from all completed predictions. Unscored predictions still contribute timing. Recall, precision, disclosure, contradiction and answer metrics each retain their independently graded denominator.
+
 The Windows native harness has an opt-in, single-case live smoke for the frozen public synthetic inputs. Set `AERYNTH_VERIFY_LIVE_CIE=1`, supply an authorized `OPENAI_API_KEY` and `AERYNTH_CIE_LIVE_MODEL`, and point `AERYNTH_CIE_LIVE_JOURNAL` to a new absolute path in the evaluation evidence directory. Run `node --test --test-name-pattern 'authorized live CIE smoke' prototypes/integrated-backend/tests/mission-api-planning.test.mts` from a clean checkout. It submits one reviewed request with at most six Responses calls. The temporary profile uses the existing credential and dispatch paths. The external journal retains the claim and sealed prediction. This smoke uses an isolated profile and is unsuitable for coordinating daily limits across evaluation batches. The returned prediction requires independent scoring.
 
 ### Independent lexical holdout baseline

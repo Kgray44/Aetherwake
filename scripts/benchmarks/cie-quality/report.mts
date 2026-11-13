@@ -42,7 +42,7 @@ function cost(run: Run, rates: readonly Rate[]) {
       usage.outputTokens! * rate.outputPerMillion) / 1e6,
     rate: { ...rate }, scope: 'reported cognitive token usage only; not an invoice or subscription quota' };
 }
-function distribution(values: number[]) {
+export function distribution(values: number[]) {
   if (!values.length) return { samples: 0, p50: null, p95: null };
   values.sort((a, b) => a - b);
   return { samples: values.length, p50: values[Math.ceil(values.length * .5) - 1], p95: values[Math.ceil(values.length * .95) - 1] };

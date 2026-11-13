@@ -18,6 +18,8 @@ test('candidate quality cannot stand in for disclosure, contradiction, or answer
   assert.equal(report.expectedCases, 48);
   assert.equal(report.predictedCases, 2);
   assert.equal(report.casesWithGrades, 2);
+  const times = prediction.results.map(row => row.endToEndMs).sort((a, b) => a - b);
+  assert.deepEqual(report.endToEndMs, { samples: 2, p50: times[0], p95: times[1] });
   assert.equal(report.candidates.recall, .5);
   assert.equal(report.candidates.precision, .25);
   assert.deepEqual(report.disclosure, { cases: 1, invalid: 0, casesWithInvalid: 0 });
@@ -32,4 +34,10 @@ test('rejects mismatched predictions, duplicate cases and impossible candidate h
     grades: [{ id: 'blind-001' }, { id: 'blind-001' }] }), /cases/);
   assert.throws(() => reportBlindQuality(input, prediction, { ...evaluation,
     grades: [{ id: 'blind-001', candidates: { relevant: 1, returned: 2, hits: 2 } }] }), /counts/);
+});
+
+test('request latency includes completed cases awaiting independent grades', () => {
+  const report = reportBlindQuality(input, prediction, { ...evaluation, grades: [] });
+  assert.equal(report.casesWithGrades, 0);
+  assert.equal(report.endToEndMs.samples, 2);
 });

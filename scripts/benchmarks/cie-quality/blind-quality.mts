@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { BLIND_INPUT_SHA256, readBlindInputs, type BlindCheckpoint } from './blind-runner.mts';
+import { distribution } from './report.mts';
 
 /** Scores are supplied by the independent evaluator after predictions are frozen. */
 export interface BlindCaseGrade {
@@ -24,7 +25,8 @@ export function reportBlindQuality(input: Buffer, prediction: BlindCheckpoint, e
     createHash('sha256').update(JSON.stringify(payload)).digest('hex') !== predictionSha256) throw new Error('blind_grade_binding');
   const expected = readBlindInputs(input);
   if (!Array.isArray(payload.results) || payload.results.length > expected.length ||
-    payload.results.some((result, index) => result?.id !== expected[index].id) ||
+    payload.results.some((result, index) => result?.id !== expected[index].id ||
+      !Number.isFinite(result.endToEndMs) || result.endToEndMs < 0) ||
     payload.complete !== (payload.results.length === expected.length && payload.stopped === null)) {
     throw new Error('blind_grade_cases');
   }
@@ -68,6 +70,7 @@ export function reportBlindQuality(input: Buffer, prediction: BlindCheckpoint, e
     evaluator: evaluation.evaluator, predictionSha256, rubricSha256: evaluation.rubricSha256,
     expectedCases: expected.length, predictedCases: predicted.size, casesWithGrades: scored.size,
     stopped: payload.stopped,
+    endToEndMs: distribution(payload.results.map(result => result.endToEndMs)),
     candidates: { ...candidates, recall: candidates.relevant ? candidates.hits / candidates.relevant : null,
       precision: candidates.returned ? candidates.hits / candidates.returned : null },
     disclosure, contradiction, answer,
