@@ -56,10 +56,13 @@ assert.equal(admission.status, 0, 'Storage reserve check failed');
 assert.equal(JSON.parse(admission.stdout).allowed, true);
 await mkdir(profile);
 const catalogFixture = join(profile, 'catalog-fixture.mjs');
-await writeFile(catalogFixture, `globalThis.fetch = async input => {
+const unexpectedFetch = join(profile, 'unexpected-provider-fetch');
+await writeFile(catalogFixture, `import { writeFileSync } from 'node:fs';
+globalThis.fetch = async input => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   if (url === 'https://api.openai.com/v1/models')
     return Response.json({ data: [{ id: 'gpt-6-luna' }] });
+  writeFileSync(${JSON.stringify(unexpectedFetch)}, 'unexpected fetch\\n');
   throw Error('unexpected_provider_dispatch');
 };\n`, { flag: 'wx' });
 
@@ -175,7 +178,8 @@ const saved = await withWorker(false, async call => {
 });
 const read = { type: 'read', id: saved.factId };
 const navigate = (call, workspaceId) => call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
-const previewRecall = call => call('velaRequestPreview', { intent: 'Which quartz relay?', resourceIds: [],
+const intent = 'Which quartz relay?';
+const previewRecall = call => call('velaRequestPreview', { intent, resourceIds: [],
   adaptive: true, providerId: 'openai-api-vela', useMemory: true, includeRecentHistory: false });
 await withWorker(true, call => assert.rejects(call('personalMemoryManagementNative', read), /private_key_unavailable/u));
 await withWorker(false, async call => {
@@ -205,8 +209,16 @@ await withWorker(false, async call => {
   await navigate(call, otherWorkspace.id);
   await assert.rejects(previewRecall(call), /personal_memory_no_eligible_context/u);
   await navigate(call, saved.workspaceId);
+  const beforeRevocation = await previewRecall(call);
+  const binding = { previewId: beforeRevocation.id, signature: beforeRevocation.signature };
+  const nativeReview = await call('velaNativeReview', binding);
+  const { grantId } = await call('authorizeVelaRequest', { ...binding, reviewDigest: nativeReview.reviewDigest });
+  assert.equal(typeof grantId, 'string');
   const { factId: _id, workspaceId: _workspace, projectId: _project, ...source } = saved;
   assert.equal((await call('personalMemoryRevokeSourceNative', source)).erasedFacts, 1);
+  await assert.rejects(call('vela', { name: 'request', input: {
+    ...binding, intent, resourceIds: [], authorizeProvider: true, grantId,
+  } }), /stale_personal_context|personal_record_unavailable/u);
 });
 await withWorker(false, async call => {
   await assert.rejects(call('personalMemoryManagementNative', read), /personal_record_unavailable/u);
@@ -215,8 +227,9 @@ await withWorker(false, async call => {
   await navigate(call, saved.workspaceId);
   await assert.rejects(previewRecall(call), /personal_memory_no_eligible_context/u);
 });
+await assert.rejects(readFile(unexpectedFetch), { code: 'ENOENT' });
 const receipt = { result: 'pass', candidate: inventory.candidate, manifestSha256: manifestHash, verifiedFiles: files.size,
-  workerStarts: 4, crossConversationRecall: true, foreignProjectDenied: true, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true,
+  workerStarts: 4, crossConversationRecall: true, foreignProjectDenied: true, sourceAttributed: true, lockedDenied: true, recovered: true, revokedAfterRestart: true, revokedApprovedRequestDenied: true,
   custody: 'Windows DPAPI CurrentUser through test adapter', approval: 'simulated', providerDispatch: false };
 await writeFile(join(profile, 'worker-receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx' });
 console.log(JSON.stringify(receipt));
