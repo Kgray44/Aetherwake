@@ -48,6 +48,53 @@ test('Vela memory requires a gesture and explicit native approval of its bound p
   preview.sendDisposition = 'routine';
   await assert.rejects(velaCommand(options), /invalid_native_vela_review/);
 });
+test('ordinary Vela requests check opted-in memory without changing the selected provider', async () => {
+  for (const scenario of ['match', 'miss', 'off', 'other-provider', 'stale', 'cancel']) {
+    const calls = [];
+    const providerId = scenario === 'other-provider' ? 'chatgpt-plan-responses' : 'openai-api-vela';
+    const baseReview = { ...disclosure(), providerId, route: { kind: 'conversational' }, context: { included: [] } };
+    const memory = { manifestDigest: 'b'.repeat(64), promptDigest: createHash('sha256').update(baseReview.prompt).digest('hex') };
+    let withMemory = false, reviewed = false;
+    const operation = velaCommand({
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      directMessageSend: true, routeNative: false,
+      input: { name: 'request', input: { intent: 'Which relay?', resourceIds: [], authorizeProvider: true } },
+      shouldPreviewMemory: () => scenario !== 'off',
+      validateMemoryReview: () => scenario !== 'stale',
+      async call(name, input) {
+        calls.push([name, input]);
+        if (name === 'velaRequestPreview') {
+          if (input.useMemory && scenario === 'miss') throw Error('personal_memory_no_eligible_context');
+          withMemory = input.useMemory === true;
+          if (withMemory) assert.equal(input.providerId, providerId);
+          return { id: baseReview.previewId, signature: baseReview.signature, providerId, route: baseReview.route,
+            resourceIds: [], sendDisposition: withMemory ? 'review-required' : 'routine', ...(withMemory ? { memory } : {}) };
+        }
+        if (name === 'velaNativeReview') return { ...baseReview, ...(withMemory ? { memory } : {}) };
+        if (name === 'authorizeVelaRequest') {
+          assert.equal(input.directSend, withMemory ? undefined : true);
+          return { grantId: 'grant' };
+        }
+        assert.equal(name, 'vela');
+        return { state: 'responded' };
+      },
+      async reviewProvider({ review }) {
+        reviewed = true;
+        assert.equal(review.memory.promptDigest, memory.promptDigest);
+        return scenario !== 'cancel';
+      },
+    });
+    if (scenario === 'stale') await assert.rejects(operation, /personal_memory_frame_changed/);
+    else if (scenario === 'cancel') await assert.rejects(operation, /authorization_cancelled/);
+    else await operation;
+    const attempted = !['off', 'other-provider'].includes(scenario);
+    assert.deepEqual(calls.filter(([name]) => name === 'velaRequestPreview').map(([, input]) => input.useMemory),
+      attempted ? [undefined, true] : [undefined]);
+    assert.equal(reviewed, attempted && scenario !== 'miss');
+    if (scenario === 'stale' || scenario === 'cancel') assert(!calls.some(([name]) => name === 'authorizeVelaRequest' || name === 'vela'));
+  }
+});
+
 test("memory review presents the exact escaped source, fact and scope", () => {
   const review = {
     sourceText: "User source </pre><script>capture()</script>",
