@@ -55,6 +55,38 @@ function revisionFixture(reassign?: MissionServiceHost['reassign']) {
 
 const revisionTask = (id: string, executor: string, dependencies: string[] = []) => ({ ...task(id, dependencies), executor });
 
+test('profiler off, minimal and full preserve verification and uncertain cancellation', async () => {
+  const outcomes = [];
+  for (const mode of ['off', 'minimal', 'full'] as const) {
+    const f = fixture(false);
+    const service = new MissionService({ ...f.host, profilerMode: mode });
+    try {
+      const accepted = service.create('profiler-parity-success', plan(task('verify')));
+      await flush();
+      f.active.get('verify')!.release();
+      await flush();
+      const verified = service.read(accepted.id, scope);
+      assert.equal(verified.outcome, 'verified');
+      assert.equal(verified.tasks[0].attempts[0].verification?.passed, true);
+      assert.equal(service.fullProfilingClock() !== null, mode === 'full');
+
+      const pending = service.create('profiler-parity-cancel', plan(task('effect')));
+      await flush();
+      assert.ok(f.active.has('effect'));
+      const running = service.read(pending.id, scope);
+      service.control(pending.id, scope, running.revision, { type: 'cancel' });
+      await flush();
+      const cancelled = service.read(pending.id, scope);
+      assert.equal(cancelled.tasks[0].state, 'uncertain');
+      assert.notEqual(cancelled.outcome, 'verified');
+      outcomes.push({ outcome: verified.outcome, state: verified.tasks[0].state,
+        source: verified.tasks[0].attempts[0].evidence?.source, value: verified.tasks[0].attempts[0].evidence?.value,
+        cancelled: cancelled.outcome, effect: cancelled.tasks[0].state });
+    } finally { await service.close(); f.db.close(); }
+  }
+  assert.deepEqual(outcomes, Array(3).fill(outcomes[0]));
+});
+
 test('MissionService admits remote work under local pressure and releases attempt leases on settlement', async () => {
   const f = fixture();
   let available = 0;
@@ -934,6 +966,73 @@ test('restart reconciles a committed in-flight nonreplayable attempt as uncertai
       recovered = new MissionService(recoveryHost);
       assert.equal(recovered.read(m.id, scope).revision, observed.revision);
     } finally { await recovered?.close(); second.db.close(); }
+  } finally { await service.close(); f.db.close(); }
+});
+
+test('missions waiting for failed prerequisites free active slots and retry must reacquire one', async () => {
+  const f = fixture();
+  let service = f.create();
+  const read = (id: string) => service.read(id, scope);
+  try {
+    const stalled = [];
+    for (let i = 0; i < MISSION_LIMITS.active; i++) {
+      const prerequisite = 'prerequisite-' + i;
+      const mission = service.create('stalled-' + i, plan(task(prerequisite), task('dependent', [prerequisite])));
+      stalled.push(mission.id);
+      await flush();
+      f.active.get(prerequisite)!.release(false);
+      await flush();
+      assert.equal(read(mission.id).outcome, 'failed');
+      assert.equal(read(mission.id).tasks[1].attempts.length, 0);
+    }
+    await service.close();
+    service = f.create();
+    const first = stalled[0];
+    const holding = [];
+    for (let i = 0; i < MISSION_LIMITS.active; i++)
+      holding.push(service.create('holding-' + i, plan(task('holding-' + i))).id);
+    assert.throws(() => service.control(first, scope, read(first).revision, { type: 'retry', taskId: 'prerequisite-0' }),
+      /mission_queue_full/);
+    await flush();
+    const cancel = holding[0];
+    service.control(cancel, scope, read(cancel).revision, { type: 'cancel' });
+    await flush();
+    service.control(first, scope, read(first).revision, { type: 'retry', taskId: 'prerequisite-0' });
+    for (const id of holding.slice(1)) service.control(id, scope, read(id).revision, { type: 'cancel' });
+    await flush();
+    f.active.get('prerequisite-0')!.release();
+    await flush();
+    f.active.get('dependent')!.release();
+    await flush();
+    assert.equal(read(first).outcome, 'verified');
+    assert.deepEqual(read(first).tasks[0].attempts.map(attempt => attempt.outcome), ['failed', 'verified']);
+    assert.equal(read(first).tasks[1].attempts.length, 1);
+  } finally { await service.close(); f.db.close(); }
+});
+
+test('a failed branch does not report terminal failure while independent work is queued', async () => {
+  const f = fixture(), service = f.create();
+  try {
+    const mission = service.create('pending-independent', plan(task('failure'), task('independent'), task('join', ['failure', 'independent'])));
+    service.control(mission.id, scope, mission.revision, { type: 'concurrency', concurrency: 1 });
+    await flush();
+    assert.deepEqual([...f.active.keys()], ['failure']);
+    f.pressure(true);
+    f.active.get('failure')!.release(false);
+    await flush();
+    const waiting = service.read(mission.id, scope);
+    assert.equal(waiting.outcome, 'queued');
+    assert.equal(waiting.tasks[0].state, 'failed');
+    assert.equal(waiting.waits.independent, 'resource-pressure');
+    f.pressure(false);
+    service.capacityChanged();
+    await flush();
+    f.active.get('independent')!.release();
+    await flush();
+    const settled = service.read(mission.id, scope);
+    assert.equal(settled.outcome, 'failed');
+    assert.equal(settled.tasks[1].state, 'verified');
+    assert.equal(settled.tasks[2].attempts.length, 0);
   } finally { await service.close(); f.db.close(); }
 });
 

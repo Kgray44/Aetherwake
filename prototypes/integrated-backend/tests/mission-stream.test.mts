@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { BackendCore } from '../src/core.mts';
 import { Backend } from '../src/service.mts';
+import { nativeMissionDiagnostics } from './fixtures/native-mission-diagnostics.mts';
 import type { StreamEvent } from '../src/contracts.mts';
 import type { MissionExecutor, MissionPreview, MissionProjection } from '../src/mission-contracts.mts';
 import type { VelaState } from '../../vela-core/src/contracts.ts';
@@ -82,8 +83,12 @@ test('native mission lifecycle events replay in the originating workspace and hi
     core = new BackendCore(options);
     closed = false;
     assert.deepEqual(await replay(), retained, 'Legacy replay uses the exact durable lifecycle record and drops an unproven row');
+    const rendererReplay = async () => (await core.command('rendererEventPage', { recent: true, limit: 250 }))
+      .events.filter(event => event.type.startsWith('vela.mission/'));
+    assert.deepEqual(await rendererReplay(), retained, 'Renderer replay applies the same legacy proof and scope');
     await navigate(sibling);
     assert.deepEqual(await replay(), []);
+    assert.deepEqual(await rendererReplay(), []);
   } finally {
     releaseCpu();
     if (!closed) await core.command('close', {});
@@ -146,7 +151,10 @@ test('trusted native reserve observations defer mission dispatch and persist the
 });
 
 for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
-  test(`mission ${fault} publication recovers after worker termination without duplicate receipts`, { timeout: 15_000 }, async () => {
+  test(`mission ${fault} publication recovers after worker termination without duplicate receipts`, { timeout: 15_000 }, async t => {
+    let stage = 'worker and SQLite setup';
+    const reportStage = () => t.diagnostic(`Publication fixture stage at abort: ${stage}`);
+    t.signal.addEventListener('abort', reportStage, { once: true });
     const directory = mkdtempSync(join(tmpdir(), 'aerynth-mission-publication-'));
     const options = { path: join(directory, 'state.sqlite'), contentPolicy: 'synthetic-only' as const };
     let backend = new Backend(options);
@@ -174,7 +182,7 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
         await delay(20);
         mission = await read();
       }
-      assert.equal(mission.outcome, 'verified');
+      assert.equal(mission.outcome, 'verified', nativeMissionDiagnostics(mission));
       return mission;
     };
     const pending = (id: string) => {
@@ -214,7 +222,9 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
           BEGIN SELECT RAISE(ABORT,'test mission publication failure'); END;`);
       } finally { db.close(); }
 
+      stage = 'first native mission verification';
       const first = await verified((await start(firstRequestId)).id);
+      stage = 'outbox fault assertions';
       const retained = await stream(first.id);
       assert.ok(retained.some(event => event.mission?.kind === 'created'));
       const beforeLoss = pending(first.id);
@@ -232,12 +242,14 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
       } else {
         assert.equal(beforeLoss.lifecycle, 0);
         assert.deepEqual(retained.map(event => event.mission?.seq), first.events.map(event => event.seq));
+        stage = 'independent native mission verification';
         independent = await verified((await start('publication-independent')).id);
         assert.equal((await reports(independent.id)).length, 1, 'A failed report must not block another mission');
         assert.deepEqual(pending(independent.id), { lifecycle: 0, report: 0 });
         assert.deepEqual(pending(first.id), beforeLoss);
       }
 
+      stage = 'worker termination and restart';
       await backend.terminate();
       const maintenance = new DatabaseSync(options.path);
       try { maintenance.exec('DROP TRIGGER test_mission_publication_fault'); }
@@ -246,6 +258,7 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
       // The first ordinary request only waits for worker startup. Inspect SQLite
       // before asking either projection to prove recovery happened at startup.
       await backend.call('providerActivity', {});
+      stage = 'restored outbox and receipt assertions';
       assert.deepEqual(pending(first.id), { lifecycle: 0, report: 0 });
       const repaired = await stream(first.id);
       const lifecycle = repaired.filter(event => event.mission?.kind !== 'report-posted');
@@ -271,24 +284,29 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
           connection.exec(`CREATE TRIGGER test_mission_publication_retry BEFORE INSERT ON vela_mission_report_links
             WHEN NEW.mission_id=(SELECT id FROM vela_missions WHERE request_id='${retryRequest}')
             BEGIN SELECT RAISE(ABORT,'test temporary report publication failure'); END;`);
+          stage = 'live retry native mission verification';
           const delayed = await verified((await start(retryRequest)).id);
           assert.equal(delayed.reportPending, true);
           connection.exec('DROP TRIGGER test_mission_publication_retry');
+          stage = 'live report retry after fault removal';
           const retryDeadline = performance.now() + 5500;
           while (pending(delayed.id).report && performance.now() < retryDeadline) await delay(25);
           assert.deepEqual(pending(delayed.id), { lifecycle: 0, report: 0 });
           assert.equal((await reports(delayed.id)).length, 1);
         } finally { connection.close(); }
       }
+      stage = 'sibling isolation assertions';
       await navigate(sibling);
       assert.deepEqual(await stream(first.id), []);
       assert.deepEqual(await reports(first.id), []);
       assert.equal((await backend.call('providerActivity', {})).providerRequests, 0);
     } finally {
+      stage = 'worker and fixture cleanup';
       await backend.close();
       const target = resolve(directory);
       assert.ok(relative(resolve(tmpdir()), target).startsWith('aerynth-mission-publication-'));
       rmSync(target, { recursive: true, force: true });
+      t.signal.removeEventListener('abort', reportStage);
     }
   });
 }
