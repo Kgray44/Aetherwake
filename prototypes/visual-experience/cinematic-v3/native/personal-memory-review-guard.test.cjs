@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createMemoryReviewGuard } = require('./personal-memory-review-guard.cjs');
+const { createMemoryReviewGuard, memoryWitnessDeadline } = require('./personal-memory-review-guard.cjs');
 
 test('memory approval accepts only the current authenticated review child', () => {
   const parent = {}, review = {}, foreign = {};
@@ -26,4 +26,13 @@ test('closed reviews and expired deadlines fail before more input', () => {
   const expired = guard();
   now = 20;
   assert.throws(() => expired.checkReview(review), /native_memory_work_deadline/);
+});
+
+test('the source witness requires a current, bounded allocation for its phase', () => {
+  const allocation = { purpose: 'synthetic-memory-review', mode: 'save', expiresAt: 2000 };
+  assert.equal(memoryWitnessDeadline(allocation, 'save', 1000, 25), 1025);
+  for (const invalid of [null, { ...allocation, mode: 'restore' }, { ...allocation, expiresAt: 1000 },
+    { ...allocation, expiresAt: 46001 }]) {
+    assert.throws(() => memoryWitnessDeadline(invalid, 'save', 1000, 25), /native_memory_admission_required/);
+  }
 });

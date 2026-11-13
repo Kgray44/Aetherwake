@@ -16,4 +16,11 @@ function createMemoryReviewGuard({ parent, focusedWindow, isOwned, deadline, now
   };
 }
 
-module.exports = { createMemoryReviewGuard };
+function memoryWitnessDeadline(admission, mode, wallNow = Date.now(), monotonicNow = performance.now()) {
+  assert(admission?.purpose === 'synthetic-memory-review' && admission.mode === mode &&
+    Number.isSafeInteger(admission.expiresAt) && admission.expiresAt > wallNow &&
+    admission.expiresAt - wallNow <= 45000, 'native_memory_admission_required');
+  return monotonicNow + admission.expiresAt - wallNow;
+}
+
+module.exports = { createMemoryReviewGuard, memoryWitnessDeadline };

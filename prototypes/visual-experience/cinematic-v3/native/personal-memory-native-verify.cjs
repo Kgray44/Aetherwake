@@ -1,16 +1,39 @@
 const assert = require('node:assert/strict');
 const { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } = require('node:fs');
+const { spawnSync } = require('node:child_process');
 const { join } = require('node:path');
 const { setTimeout: pause } = require('node:timers/promises');
 const { app, BrowserWindow, safeStorage } = require('electron');
 const { createProtectedStorageBroker } = require('./protected-storage.cjs');
 const { capturePersonalMemory } = require('./personal-memory-capture.cjs');
 const { showVelaReview, isOwnedVelaReviewWindow } = require('./vela-review.cjs');
-const { createMemoryReviewGuard } = require('./personal-memory-review-guard.cjs');
+const { createMemoryReviewGuard, memoryWitnessDeadline } = require('./personal-memory-review-guard.cjs');
 
-const root = realpathSync(process.argv[2]);
 const mode = process.argv[3];
 assert(['save', 'restore'].includes(mode));
+let deadline;
+try {
+  // The supervising process supplies the allocation, after central handoff.
+  deadline = memoryWitnessDeadline(JSON.parse(process.env.AERYNTH_MEMORY_WITNESS_ADMISSION ?? 'null'), mode);
+} catch {
+  console.error(JSON.stringify({ result: 'fail', mode, error: 'native_memory_admission_required' }));
+  app.exit(1);
+  return;
+}
+const root = realpathSync(process.argv[2]);
+const drive = root[0].toUpperCase();
+assert(['C', 'D'].includes(drive));
+function allowWrite() {
+  if (performance.now() >= deadline - 3000) return false;
+  const result = spawnSync(join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+    ['-NoProfile', '-NonInteractive', '-File', join(process.env.LOCALAPPDATA, 'AeroStorageWatch/ReserveGuard.ps1'),
+      '-EstimatedCBytes', drive === 'C' ? '268435456' : '0', '-EstimatedDBytes', drive === 'D' ? '268435456' : '0'],
+    { windowsHide: true, timeout: Math.max(1, Math.min(3000, Math.floor(deadline - 3000 - performance.now()))),
+      encoding: 'utf8', maxBuffer: 8192 });
+  try { return result.status === 0 && JSON.parse(result.stdout).allowed === true && performance.now() < deadline - 3000; }
+  catch { return false; }
+}
+assert(allowWrite(), 'storage_reserve_admission_denied');
 const profile = join(root, 'electron-profile');
 if (mode === 'save') {
   assert.equal(readdirSync(root).length, 0);
@@ -24,8 +47,8 @@ const text = 'Use the synthetic quartz relay for the next prototype.';
 const factText = 'The next prototype uses the synthetic quartz relay.';
 
 async function waitFor(read) {
-  const end = Date.now() + 10000;
-  while (Date.now() < end) {
+  const end = Math.min(deadline - 3000, performance.now() + 10000);
+  while (performance.now() < end) {
     const value = await read();
     if (value) return value;
     await pause(50);
@@ -93,13 +116,13 @@ async function run() {
     parent.show();
     await waitFor(() => parent.isFocused());
     const guard = createMemoryReviewGuard({ parent, focusedWindow: () => BrowserWindow.getFocusedWindow(),
-      isOwned: isOwnedVelaReviewWindow, deadline: performance.now() + 10000 });
+      isOwned: isOwnedVelaReviewWindow, deadline: deadline - 3000 });
     guard.checkParent();
     stage = 'review and save';
     let reviewed;
     const saved = await capturePersonalMemory({
       input, trustedFrame: () => !parent.isDestroyed() && parent.isVisible(),
-      observeGesture: () => parent.isFocused(), allowWrite: async () => true,
+      observeGesture: () => parent.isFocused(), allowWrite,
       preview: value => backend.call('personalMemoryCapturePreviewNative', value),
       cancel: id => backend.call('personalMemoryCaptureCancelNative', { id }),
       commit: review => backend.call('personalMemoryCaptureCommitNative', review),
@@ -141,4 +164,11 @@ async function run() {
   }
 }
 
-app.whenReady().then(run).then(() => app.exit(0), () => app.exit(1));
+const watchdog = setTimeout(() => {
+  console.error(JSON.stringify({ result: 'fail', mode, error: 'native_memory_hard_deadline' }));
+  app.exit(1);
+}, Math.max(1, deadline - performance.now()));
+app.whenReady().then(run).then(
+  () => { clearTimeout(watchdog); app.exit(0); },
+  () => { clearTimeout(watchdog); app.exit(1); },
+);
