@@ -2391,7 +2391,9 @@ for (const scenario of ['standing', 'evaluation', 'provider failure', 'interrupt
     const resourceRefs = [{ id: resource.id, kind: 'resource' as const, resourceKind: 'file',
       title: resource.title, version: resource.version }];
     const runtime=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
-    const claim={profileId:runtime.readLedgerProfile()!.profileId,configurationVersion:1,
+    const evaluationProfile=f.core.readVelaEvaluationProfile()!;
+    assert.equal(evaluationProfile.configurationVersion,1);
+    const claim={profileId:evaluationProfile.profileId,configurationVersion:1,
       claimToken:'a'.repeat(64),bindingDigest:'b'.repeat(64)};
     const preview = await f.core.command('velaRequestPreview', { intent, resourceIds, adaptive: true, providerId: 'openai-api-vela',
       model: 'gpt-6-luna', semanticContext: true, resourceRefs });
@@ -2473,13 +2475,15 @@ for (const scenario of ['standing', 'evaluation', 'provider failure', 'interrupt
     assert.equal(f.requests.length, 5);
     assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 5);
     if(evaluation){
-      const expected=runtime.readEvaluationAdmissions(claim)!;
+      const expected=f.core.readVelaEvaluationAdmissions(claim)!;
       assert.equal(expected.length,5);
       assert.ok(expected.some(stage=>stage.requestId===result.id));
       assert.equal(runtime.readLedgerReceipts({...claim,expected}).state,'terminal-receipts');
       await f.reopen();
       const reopened=(f.core as unknown as {velaApiRuntime:VelaApiRuntime}).velaApiRuntime;
-      assert.deepEqual(reopened.readEvaluationAdmissions(claim),expected);
+      assert.equal(f.core.readVelaEvaluationProfile()?.profileId,claim.profileId);
+      assert.deepEqual(f.core.readVelaEvaluationAdmissions(claim),expected);
+      assert.equal(f.core.readVelaEvaluationAdmissions({...claim,configurationVersion:2}),null);
       assert.equal(reopened.readLedgerReceipts({...claim,expected}).state,'terminal-receipts');
       const recovered=f.core.readVelaEvaluationResult(claim,expected);
       assert.equal(recovered.state,'verified-answer');

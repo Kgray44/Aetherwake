@@ -4666,6 +4666,16 @@ export class BackendCore {
         ...(workflow?.metric ? { nativeMetric: workflow.metric } : {}), ...(workflow?.nativeLog ? { nativeLog: true as const } : {}),
         ...(calibration ? { calibration } : {}), ...(escalation ? { escalation } : {}) } };
   }
+  /** Read-only in-process identity and usage for the owning synthetic host. */
+  readVelaEvaluationProfile() {
+    return this.velaApiTest && !this.privateMode ? this.velaApiRuntime.readLedgerProfile() : null;
+  }
+
+  /** Admitted stage IDs are partial evidence until the canonical result is verified. */
+  readVelaEvaluationAdmissions(claim: NonNullable<VelaApiRun['evaluationClaim']>) {
+    return this.velaApiTest && !this.privateMode ? this.velaApiRuntime.readEvaluationAdmissions(claim) : null;
+  }
+
   /** In-process host seam. Standard RPC preview never accepts an evaluation claim. */
   async previewVelaEvaluation(input:CommandMap['velaRequestPreview']['input'],
     claim: NonNullable<VelaApiRun['evaluationClaim']>):Promise<VelaRequestPreview> {
