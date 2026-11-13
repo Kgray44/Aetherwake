@@ -203,6 +203,10 @@ export class ConversationGraph {
     const message = this.messagesById.get(messageId);
     return !!message && message.conversationId === conversationId && this.conversationsById.get(conversationId)?.ownMessageIds[message.sequence - 1] === messageId;
   }
+  readOwnMessage(conversationId: string, messageId: string): Message | null {
+    if (this.unavailableMessages.has(messageId) || !this.ownsMessage(conversationId, messageId)) return null;
+    return copy(this.message(messageId));
+  }
   private visibleMessageRecords(conversationId:string,budget?:{remaining:number}):Message[] {
     const lineage: Conversation[] = [];
     for (let c = this.conversation(conversationId); ; ) {
@@ -230,7 +234,9 @@ export class ConversationGraph {
     }
     return records;
   }
-  visibleMessages(conversationId: string): Message[] {return this.visibleMessageRecords(conversationId).map(copy);}
+  visibleMessages(conversationId: string): Message[] {
+    return this.visibleMessageRecords(conversationId).filter(message => !this.unavailableMessages.has(message.id)).map(copy);
+  }
   pageVisibleMessages(
     conversationId: string,
     select: (ids: readonly string[]) => { offset: number; limit: number },
@@ -304,11 +310,14 @@ export class ConversationGraph {
     const previous = this.once(input.key);
     if (previous) {
       const c = this.conversation(previous);
-      return { conversation: copy(c), edge: copy(this.data.edges.find(e => e.childId === c.id)!),
-        handoff: copy(this.data.handoffs.find(h => h.targetConversationId === c.id)!) };
+      const edge = this.data.edges.find(e => e.childId === c.id)!;
+      const handoff = this.inspectHandoff(edge.handoffId);
+      assert(!handoff.staleMessageIds.length, 'fork source unavailable');
+      const { staleMessageIds: _stale, ...context } = handoff;
+      return { conversation: copy(c), edge: copy(edge), handoff: context };
     }
     const source = this.conversation(input.sourceConversationId);
-    const visible = this.visibleMessages(source.id);
+    const visible = this.visibleMessageRecords(source.id);
     const end = visible.findIndex(m => m.id === input.sourceMessageId);
     assert(end >= 0, 'fork source message is not visible');
     assert(!this.data.unavailableMessageIds.includes(input.sourceMessageId), 'fork source unavailable');
@@ -348,6 +357,7 @@ export class ConversationGraph {
     for (const artifactId of handoff.artifactIds) {
       const a = this.data.artifacts.find(item => item.id === artifactId);
       assert(a && eligible.some(m => m.id === a.sourceMessageId), 'artifact outside fork boundary');
+      assert(!this.unavailableMessages.has(a.sourceMessageId), 'artifact source unavailable');
     }
     let providerSessionId: string | null = null;
     try {
@@ -409,7 +419,16 @@ export class ConversationGraph {
       return !source || this.data.unavailableMessageIds.includes(item.sourceMessageId) ||
         digest(source.content) !== item.digest;
     }).map(item => item.sourceMessageId);
-    return { ...copy(h), staleMessageIds };
+    if (this.unavailableMessages.has(h.forkMessageId) && !staleMessageIds.includes(h.forkMessageId))
+      staleMessageIds.push(h.forkMessageId);
+    const stale = new Set(staleMessageIds);
+    const artifactIds = h.artifactIds.filter(id => {
+      const artifact = this.data.artifacts.find(item => item.id === id);
+      if (!artifact || !this.unavailableMessages.has(artifact.sourceMessageId)) return true;
+      stale.add(artifact.sourceMessageId);
+      return false;
+    });
+    return { ...copy({ ...h, artifactIds, items: h.items.filter(item => !stale.has(item.sourceMessageId)) }), staleMessageIds: [...stale] };
   }
   snapshot(): GraphData { return copy(this.data); }
   exportJson(): string { this.validate(); return JSON.stringify(this.data, null, 2); }
