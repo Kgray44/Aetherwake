@@ -1150,3 +1150,29 @@ body.application-ready
   font-variant-numeric: tabular-nums;
 }
 .aw-intelligence-inspection dd > small { display: block; }
+
+.aw-execution-trace { margin-block: .75rem; }
+.aw-execution-trace h5 { margin-block: .4rem; color: #f2ecfa; }
+.aw-execution-trace section > p { margin-block: .35rem; font-size: .73rem; color: #cdc2df; }
+.aw-execution-trace button {
+  display: grid;
+  gap: .35rem;
+  width: 100%;
+  padding: .4rem .5rem;
+  margin-block: .2rem;
+  border: 1px solid #9481b655;
+  border-radius: .35rem;
+  background: #100c1e80;
+  color: inherit;
+  text-align: start;
+}
+.aw-execution-trace button[aria-pressed="true"] { border-color: #e1ccfa; background: #544367; }
+.aw-execution-trace-track { position: relative; display: block; min-height: .4rem; border-radius: .2rem; background: #cdc2df22; }
+.aw-execution-trace-track > span {
+  position: absolute;
+  inset-block: 0;
+  min-width: 2px;
+  border-radius: inherit;
+  background: #8de0cf;
+}
+.aw-execution-trace [data-critical-path="true"] .aw-execution-trace-track > span { background: #edc598; }
