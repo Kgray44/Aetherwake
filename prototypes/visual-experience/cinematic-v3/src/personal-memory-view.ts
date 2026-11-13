@@ -1,7 +1,17 @@
 import type { PersonalPolicy, RecordRef, ReviewedFact } from '../../../personal-context/src/contracts.ts';
 
-type Page = { records: (RecordRef & { state: string })[]; next: string | null; policy: PersonalPolicy };
+type Page = { records: (RecordRef & { state: ReviewedFact['state'] })[]; next: string | null; policy: PersonalPolicy };
 type Command = (input: unknown) => Promise<unknown>;
+const scopeLabels = {
+  'assistant.ordinary': 'Ordinary chats', 'assistant.vela': 'Vela', 'user.shared': 'Shared by selection',
+  project: 'This project', conversation: 'This conversation',
+} as const;
+const stateLabels = { active: 'Saved', revoked: 'Revoked', superseded: 'Superseded' } as const;
+const certaintyLabels: Record<ReviewedFact['certainty'], string> = {
+  'explicit-statement': 'Explicit statement', 'user-preference': 'User preference', 'imported-summary': 'Imported summary',
+  'historical-observation': 'Historical observation', inference: 'Inference', conflicting: 'Conflicting', unknown: 'Unknown',
+};
+
 type OpenSource = (source: { conversationId: string; messageId: string }) => Promise<void>;
 
 export function createPersonalMemoryView(command: Command, openSource?: OpenSource): HTMLElement {
@@ -41,7 +51,7 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
   function renderPolicy(value: PersonalPolicy) {
     currentPolicy = value;
     policy.textContent = 'ChatGPT memory: ' + (value.ordinaryEnabled ? 'Enabled for reviewed sends' : 'Off')
-      + ' · Vela memory: ' + (value.velaEnabled ? 'Enabled' : 'Off');
+      + ' · Vela memory: ' + (value.velaEnabled ? 'Enabled for reviewed sends' : 'Off');
     disableChatGPT.hidden = !value.ordinaryEnabled;
     disableVela.hidden = !value.velaEnabled;
   }
@@ -62,29 +72,47 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
     more.hidden = next === null;
     if (!list.children.length) status.textContent = next ? 'No accessible memories on this page.' : 'No saved memories.';
   }
-  async function inspect(record: Page['records'][number]) {
+  async function inspect(record: Pick<RecordRef, 'id'> & Partial<Pick<RecordRef, 'version'>>) {
     const intent = ++selection;
     detail.replaceChildren();
     const controls = document.createElement('div');
-    const manage = (action: 'revoke' | 'delete' | 'export') => button({
+    const manage = (target: Pick<RecordRef, 'id' | 'version'>, action: 'revoke' | 'delete' | 'export') => button({
       revoke: 'Revoke', delete: 'Delete', export: 'Export',
     }[action], async () => {
-      const result = await command({ type: 'manage', action, id: record.id, version: record.version }) as { status: string };
+      const result = await command({ type: 'manage', action, id: target.id, version: target.version }) as { status: string };
       if (result.status === 'applied') { await load(null); status.textContent = 'Memory updated'; }
       if (result.status === 'exported') status.textContent = 'Memory exported';
     });
-    detail.append(controls);
-    if (record.state === 'active') controls.append(manage('revoke'));
-    controls.append(manage('delete'));
-    const fact = await command({ type: 'read', id: record.id }) as ReviewedFact;
+    let fact: ReviewedFact;
+    try {
+      fact = await command({ type: 'read', id: record.id }) as ReviewedFact;
+    } catch (error) {
+      if (intent !== selection) return;
+      if (record.version !== undefined) detail.append(manage({ id: record.id, version: record.version }, 'delete'));
+      throw error;
+    }
     if (intent !== selection) return;
+    detail.append(controls);
+    if (fact.state === 'active') controls.append(manage(fact, 'revoke'));
+    controls.append(manage(fact, 'delete'));
     const body = document.createElement('p');
     body.textContent = fact.text;
     const source = document.createElement('p');
     source.textContent = fact.provenance.kind === 'conversation-message'
       ? `Source message ${fact.provenance.messageId} · conversation ${fact.provenance.conversationId}`
       : fact.provenance.kind === 'import' ? `Imported source ${fact.provenance.id}` : 'User statement';
-    detail.append(body, source, manage('export'));
+    const description = document.createElement('p');
+    description.textContent = [stateLabels[fact.state], scopeLabels[fact.scope.kind], certaintyLabels[fact.certainty]]
+      .filter(Boolean).join(' · ');
+    const use = document.createElement('p');
+    use.textContent = fact.state === 'active'
+      ? 'Eligible for recall when the scope, request, and memory settings allow.'
+      : 'Excluded from future recall.';
+    detail.append(description, body, source, use, manage(fact, 'export'));
+    const replacementId = fact.supersededBy;
+    if (fact.state === 'superseded' && replacementId && replacementId !== fact.id) {
+      detail.append(button('Open replacement memory', () => inspect({ id: replacementId })));
+    }
     const origin = fact.provenance;
     if (openSource && origin.kind === 'conversation-message') {
       detail.append(button('Open original message', async () => {
@@ -107,13 +135,15 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
         }
       }));
     }
-    if (record.state === 'active') {
+    if (fact.state === 'active') {
       const editor = document.createElement('textarea');
       editor.setAttribute('aria-label', 'Corrected memory');
       editor.maxLength = 4096;
       editor.value = fact.text;
       const searchTerms = document.createElement('input');
-      searchTerms.setAttribute('aria-label', 'Memory search terms');
+      const termsLabel = document.createElement('label');
+      termsLabel.textContent = 'Search terms (comma separated)';
+      termsLabel.append(searchTerms);
       searchTerms.maxLength = 1040;
       searchTerms.value = fact.keywords.join(', ');
       const correction = button('Review correction', async () => {
@@ -122,11 +152,11 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
           : [...new Set(searchTerms.value.split(',').map(term => term.trim()).filter(Boolean))];
         if (keywords && (!keywords.length || keywords.length > 16 || keywords.some(term => term.length > 64)))
           throw Error('Enter 1–16 search terms of up to 64 characters each.');
-        const result = await command({ type: 'manage', action: 'correct', id: record.id, version: record.version,
+        const result = await command({ type: 'manage', action: 'correct', id: fact.id, version: fact.version,
           text: editor.value, ...(keywords ? { keywords } : {}) }) as { status: string };
         if (result.status === 'applied') { await load(null); status.textContent = 'Memory corrected'; }
       });
-      detail.append(editor, searchTerms, correction);
+      detail.append(editor, termsLabel, correction);
     }
   }
   const more = button('More memories', async () => { if (next !== null) await load(next); });
