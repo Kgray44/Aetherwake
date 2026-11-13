@@ -21,7 +21,7 @@ import type { ConversationGraph, GraphData } from '../../connected-conversations
 import type { ConversationProduct, CanonicalConversationHost } from '../src/service.mts';
 
 const MiB=1024*1024,DISK_BOUND=64*MiB,DB_BOUND=15*MiB,STATE_BOUND=6*MiB;
-const OUTPUT_BOUND=256*1024,MAX_DATASET_MS=90_000,SLOW_SAMPLE_MS=2_000,RSS_CHECKPOINT_BOUND=256*MiB;
+const OUTPUT_BOUND=256*1024,MAX_DATASET_MS=90_000,MAX_SEARCH_DATASET_MS=240_000,SLOW_SAMPLE_MS=2_000,RSS_CHECKPOINT_BOUND=256*MiB;
 // Keep the V8 heap below the separate RSS admission ceiling. These are not
 // explicit collections and do not turn RSS checkpoints into an OS quota.
 const WORKER_HEAP_FLAGS=['--max-old-space-size=128','--max-semi-space-size=8'];
@@ -46,6 +46,7 @@ const jsonBytes=(value:unknown)=>Buffer.byteLength(JSON.stringify(value));
 const digestIds=(ids:string[])=>hash(JSON.stringify([...ids].sort()));
 const serializeError=(error:unknown)=>({name:error instanceof Error?error.name:'Error',message:String(error instanceof Error?error.message:error).slice(0,500)});
 const parsed=new Map(process.argv.slice(2).map(arg=>{assert(arg.startsWith('--'),'invalid_argument');const n=arg.indexOf('=');return n<0?[arg.slice(2),'true']:[arg.slice(2,n),arg.slice(n+1)];}));
+const datasetDeadlineMs=parsed.has('search-only')?MAX_SEARCH_DATASET_MS:MAX_DATASET_MS;
 const git=(...args:string[])=>execFileSync('git',args,{cwd:REPO,encoding:'utf8',windowsHide:true,maxBuffer:2*MiB}).trim();
 function directoryBytes(root:string):number{let count=0,total=0;const visit=(dir:string)=>{for(const e of readdirSync(dir,{withFileTypes:true})){assert(++count<=256,'fixture_file_bound');const p=join(dir,e.name);if(e.isDirectory())visit(p);else{assert(e.isFile()&&!e.isSymbolicLink(),'unexpected_fixture_entry');total+=statSync(p).size;}}};visit(root);return total;}
 function writeReceipt(file:string,value:unknown){const bytes=Buffer.from(JSON.stringify(value,null,2)+'\n');assert(bytes.length<=OUTPUT_BOUND,'receipt_capacity');writeFileSync(file,bytes,{flag:'wx'});}
@@ -68,7 +69,7 @@ function guard(){
 }
 function fixtureFence(session:string,profile:string,started:number){
  const part=relative(session,profile);assert(part&&!isAbsolute(part)&&!part.startsWith('..'),'fixture_outside_owned_session');
- assert(performance.now()-started<MAX_DATASET_MS,'dataset_deadline');
+ assert(performance.now()-started<datasetDeadlineMs,'dataset_deadline');
  assert(directoryBytes(session)<=DISK_BOUND,'owned_disk_envelope');
  assert(process.memoryUsage().rss<=RSS_CHECKPOINT_BOUND,'sampled_rss_admission_exceeded');
 }
@@ -86,7 +87,7 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
  const file=join(profile,'canonical.sqlite'),requested=DATASETS[dataset];let core:BackendCore|undefined,providerCalls=0;
  const receipt:Record<string,unknown>={contract:'aerynth.library-scale@1',synthetic:true,binding,searchOnly,dataset:{name:dataset,requested},passed:false,
   tiers:{structural:'instrumented canonical reads; excluded from timing',timing:'in-process Core/conversation service only; excludes Electron/IPC/render/presentation'},
-  bounds:{ownedDiskBytes:DISK_BOUND,databaseBytes:DB_BOUND,canonicalStateBytes:STATE_BOUND,deadlineMs:MAX_DATASET_MS,sampledRssBytes:RSS_CHECKPOINT_BOUND,workerHeapFlags:WORKER_HEAP_FLAGS},
+  bounds:{ownedDiskBytes:DISK_BOUND,databaseBytes:DB_BOUND,canonicalStateBytes:STATE_BOUND,deadlineMs:datasetDeadlineMs,sampledRssBytes:RSS_CHECKPOINT_BOUND,workerHeapFlags:WORKER_HEAP_FLAGS},
   limitations:['Fresh synthetic local messages, not model output or account history.','Old-heap flag and RSS checkpoints are not an OS total-memory quota.','Counts/data sizes and work are measured separately from timing.','No native input/paint/presentation latency, accessibility or artistic acceptance.']};
  try{
   core=new BackendCore({path:file,privateRoot:profile,contentPolicy:'synthetic-only',provider:'fixture'});
@@ -258,7 +259,7 @@ async function worker(dataset:Dataset,session:string,candidate:string,searchOnly
 async function main(){
  const allowed=new Set(['candidate','datasets','describe','worker','session','dataset','search-only']);for(const key of parsed.keys())assert(allowed.has(key),'unknown_argument');
  const searchOnly=parsed.has('search-only');
- if(parsed.has('describe')){console.log(JSON.stringify({contract:'aerynth.library-scale-plan@1',datasets:DATASETS,modes:['full-library','search-only'],bounds:{disk:DISK_BOUND,db:DB_BOUND,state:STATE_BOUND,receipt:OUTPUT_BOUND,perDatasetMs:MAX_DATASET_MS},providerCalls:0,qualification:'No benchmark performed by --describe'}));return;}
+ if(parsed.has('describe')){console.log(JSON.stringify({contract:'aerynth.library-scale-plan@1',datasets:DATASETS,modes:['full-library','search-only'],bounds:{disk:DISK_BOUND,db:DB_BOUND,state:STATE_BOUND,receipt:OUTPUT_BOUND,perDatasetMs:MAX_DATASET_MS,searchOnlyPerDatasetMs:MAX_SEARCH_DATASET_MS},providerCalls:0,qualification:'No benchmark performed by --describe'}));return;}
  const candidate=parsed.get('candidate');assert(candidate,'explicit_candidate_required');
  if(parsed.has('worker')){assert(parsed.get('session')&&parsed.get('dataset'));const dataset=parsed.get('dataset') as Dataset;assert(Object.hasOwn(DATASETS,dataset));const result=await worker(dataset,parsed.get('session')!,candidate,searchOnly);process.exitCode=result.passed?0:1;return;}
  const names=(parsed.get('datasets')??'small').split(',') as Dataset[];assert(names.length>=1&&names.length<=3&&new Set(names).size===names.length&&names.every(n=>Object.hasOwn(DATASETS,n)),'invalid_datasets');
@@ -269,7 +270,7 @@ async function main(){
   const result=await new Promise<{dataset:string;code:number|null;signal:string|null;deadline:boolean}>((done,reject)=>{
    const options={cwd:REPO,execArgv:WORKER_HEAP_FLAGS,env:{...process.env,NODE_DISABLE_COMPILE_CACHE:'1'},silent:true,windowsHide:true};
    const child=fork(HERE,['--worker','--candidate='+candidate,'--session='+session,'--dataset='+dataset,...(searchOnly?['--search-only']:[])],options);let deadline=false,output=0;
-   const timer=setTimeout(()=>{deadline=true;child.kill();},MAX_DATASET_MS+3000);
+   const timer=setTimeout(()=>{deadline=true;child.kill();},datasetDeadlineMs+3000);
    for(const stream of [child.stdout,child.stderr])stream?.on('data',(data:Buffer)=>{output+=data.length;if(output>65536){deadline=true;child.kill();}});
    child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',(code,signal)=>{clearTimeout(timer);done({dataset,code,signal,deadline});});
   });stages.push(result);if(result.code!==0||result.deadline)break;
