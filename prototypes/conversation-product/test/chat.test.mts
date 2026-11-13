@@ -106,6 +106,60 @@ test('history and quick-switch chat rows show only canonical title while actual 
  const f=fixture();let manager;try{const summary={...f.detail.conversation,favorite:true,lastActivityAt:'2026-11-01T12:30:00Z'};f.history.items=[{kind:'conversation',resourceId:summary.resourceId,title:summary.title,excerpt:'',summary}];f.history.total=1;manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;const row=f.view.root.querySelector('.cp-results').querySelector('button');assert.equal(row.textContent,summary.title);assert.ok(row.title.includes('Favorite'));assert.ok(row.getAttribute('aria-description').includes('Local recording'));assert.equal(f.view.root.querySelector('.cp-results').querySelectorAll('.cp-result-meta').length,0);await manager.openSwitcher();const quick=f.view.root.querySelector('.cp-switcher-results').querySelector('button');assert.equal(quick.textContent,summary.title);assert.ok(quick.title.includes('Favorite'));assert.ok(quick.getAttribute('aria-description').includes('Local recording'));assert.equal(f.calls.some(c=>['send','selectProvider','organize','branch'].includes(c.name)),false);}finally{await manager?.dispose();f.restore();}
 });
 
+test('quick search opens the exact message from the keyboard and never activates a superseded result',async()=>{
+  const f=fixture();
+  const resourceId=f.draft.resourceId,messageId=f.detail.messages.items[1].id;
+  const summary=f.detail.conversation;
+  f.history.items=[{kind:'conversation',resourceId,title:summary.title,excerpt:'',summary}];
+  f.history.total=1;
+  let manager,release!:()=>void,started!:()=>void;
+  const slow=new Promise<void>(resolve=>{release=resolve;});
+  const searchStarted=new Promise<void>(resolve=>{started=resolve;});
+  const opened:string[][]=[];
+  const port={async command(name:string,input:any){
+    if(name==='search'&&input.text==='slow query'){
+      started();
+      await slow;
+      return {items:[],total:0,offset:0,limit:12,hasMore:false};
+    }
+    if(name==='search'&&input.text==='readable'){
+      assert.equal(input.limit,12);
+      return {items:[{kind:'message',resourceId,messageId,title:summary.title,excerpt:'A readable response.'}],total:1,offset:0,limit:12,hasMore:false};
+    }
+    return (f.port.command as any)(name,input);
+  }} as ConversationProductPort;
+  try{
+    manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(id,message)=>opened.push([id,message??''])});
+    await manager.ready;
+    const editor=f.view.root.querySelector('textarea');
+    editor.value='Unsent follow-up';editor.fire('input');
+    await manager.openSwitcher();
+    const switcher=f.view.root.querySelector('.cp-switcher'),input=switcher.querySelector('input');
+    const results=switcher.querySelector('.cp-switcher-results'),oldRow=results.querySelector('button');
+    input.value='slow query';input.fire('input');
+    assert.equal(!!results.querySelector('button'),false);
+    oldRow.fire('click');
+    await searchStarted;
+    input.value='readable';input.fire('input');
+    input.fire('keydown',{key:'Enter'});
+    assert.deepEqual(opened,[]);
+    await new Promise(resolve=>setTimeout(resolve,160));
+    assert.equal(results.querySelector('button').dataset.messageId,messageId);
+    assert.match(results.textContent,/A readable response/);
+    release();
+    await new Promise<void>(resolve=>setImmediate(resolve));
+    input.fire('keydown',{key:'Enter',isComposing:true});
+    assert.deepEqual(opened,[]);
+    input.fire('keydown',{key:'Enter'});
+    await until(()=>opened.length===1);
+    assert.deepEqual(opened,[[resourceId,messageId]]);
+    assert.equal(f.calls.filter(c=>c.name==='detail').at(-1)?.input.aroundMessageId,messageId);
+    assert.equal(f.view.root.querySelector('textarea'),editor);
+    assert.equal(f.draft.content,'Unsent follow-up');
+    assert.equal(switcher.open,false);
+  }finally{release();await manager?.dispose();f.restore();}
+});
+
 test('mounted manager menus, branch/context and canonical nested folders borrow the same frame lifecycle without replacing the live composer',async()=>{
  const f=fixture(),m=pickerMotion();let manager;try{f.projects.push({id:'project:canonical',title:'Canonical project',version:1});f.collections.push({id:'folder:canonical',title:'Canonical folder',projectId:'project:canonical',version:1,ruleRevision:0,state:'active',parentId:null,rule:null,memberIds:[f.draft.resourceId],pinnedIds:[f.draft.resourceId]});manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId,motion:m.motion,viewId:'manager:disclosures'});await manager.ready;manager.frame();const editor=f.view.root.querySelector('textarea');editor.value='Same canonical draft through menu motion 🧭';editor.fire('input');editor.setSelectionRange(2,8);await manager.flush();const draft=f.draft;
   for(const selector of ['.cp-new-chat','.cp-switcher','.cp-filters','.cp-history-tools','.cp-chat-options','.cp-chat-extras','[data-collection-id="folder:canonical"]']){const node=f.view.root.querySelector(selector);assert.ok(node,selector);assert.equal(node.dataset.cpMotionDisclosure,'true',selector);const body=node.querySelector('.cp-motion-disclosure-body');node.open=true;node.fire('toggle');manager.frame();assert.equal(body.inert,false,selector);assert.equal(body.hidden,false,selector);m.step(.5);manager.frame();assert.ok(Number.parseFloat(body.style.height)>0,selector);node.open=false;node.fire('toggle');manager.frame();assert.equal(body.inert,true,selector);assert.equal(body.hidden,false,selector+' retains closing paint');m.step();manager.frame();assert.equal(body.hidden,true,selector);assert.equal(f.view.root.querySelector('textarea')===editor,true);assert.deepEqual([editor.selectionStart,editor.selectionEnd],[2,8]);}
