@@ -201,6 +201,7 @@ const toVelaReviewedEvidenceSource = (source: ContextManifest['included'][number
 };
 
 interface PrivateVelaPreview extends VelaRequestPreview {
+  explicitSourceSelection?: true;
   projectEvidenceSources?: ContextManifest['included'];
   voiceInput?: { messageId:string; context:LiveCanonicalContext };
   connectionVersion?: number;
@@ -3241,8 +3242,10 @@ export class BackendCore {
         this.vela.checkpointToolRequest(input.requestId,tools.workflowId,workflow.phase,workflow.reason);
         if(['awaiting-review','waiting-job','budget-exhausted','blocked','clarification','unknown'].includes(workflow.phase))return undefined;
       }
+      // Retain an uncertain dispatch outcome even when interruption also invalidated the preview.
+      if (result.outcome === 'unknown') throw new VelaError(result.errorCode ?? 'vela_api_unknown','unknown');
       validate();
-      if (result.outcome !== 'completed') throw new VelaError(result.errorCode ?? 'vela_api_' + result.outcome, result.outcome === 'unknown' ? 'unknown' : undefined);
+      if (result.outcome !== 'completed') throw new VelaError(result.errorCode ?? 'vela_api_' + result.outcome);
       ensure(result.responseId && this.state.executions[executionId]?.state === 'provider_completed', 'planning_output_provenance_mismatch');
       if (preview.semanticContext) {
         const [message, ...extra] = result.api?.outputItems.filter(item => item.type !== 'reasoning') ?? [];
@@ -4718,7 +4721,14 @@ export class BackendCore {
   private async previewVelaRequest(input:CommandMap['velaRequestPreview']['input']):Promise<VelaRequestPreview> {
     const previewStarted = performance.now();
     this.pruneVelaGrants();ensure(typeof input.intent==='string'&&input.intent.trim()&&input.intent.length<=16000,'invalid_vela_intent');ensure(this.velaPreviews.size<64,'approval_backpressure');
-    ensure(Array.isArray(input.resourceIds)&&input.resourceIds.length<=100&&input.resourceIds.every(identifier),'invalid_vela_context');await this.selectedDocumentContext.prepare(input.resourceIds);
+    ensure(Array.isArray(input.resourceIds)&&input.resourceIds.length<=100&&input.resourceIds.every(identifier),'invalid_vela_context');
+    if (input.resourceRefs !== undefined) {
+      ensure(Array.isArray(input.resourceRefs) && input.resourceRefs.length === input.resourceIds.length &&
+        new Set(input.resourceIds).size === input.resourceIds.length &&
+        input.resourceRefs.every((ref, index) => ref?.kind === 'resource' && ref.id === input.resourceIds[index] &&
+          Number.isSafeInteger(ref.version) && ref.version > 0), 'invalid_source_selection');
+    }
+    await this.selectedDocumentContext.prepare(input.resourceIds);
     ensure(input.includeRecentHistory===undefined||typeof input.includeRecentHistory==='boolean','invalid_vela_history_mode');
     const handoffRequestId = input.handoffSourceRequestId;
     if (handoffRequestId !== undefined) {
@@ -4889,6 +4899,16 @@ export class BackendCore {
     }
     if (profiles && route?.kind === 'conversational' && !route.nativeMetric && !route.nativeLog && route.effort && this.velaCalibrationInput(input) && resolveVelaCalibration(profiles) !== 'off')
       preview.calibrationProjectId = this.velaContext().currentProjectId;
+    if (input.resourceRefs) {
+      const scope = this.velaHost.scope();
+      for (const ref of input.resourceRefs) {
+        const current = this.velaHost.resolve({ id: ref.id, kind: 'resource' }, scope);
+        ensure(current && current.version === ref.version &&
+          (ref.resourceKind === undefined || ref.resourceKind === current.resourceKind) &&
+          (ref.projectId === undefined || ref.projectId === current.projectId), 'source_selection_changed');
+      }
+      preview.explicitSourceSelection = true;
+    }
     preview.sendDisposition=publicPreview.sendDisposition=this.velaSendDisposition(preview);
     preview.signature=this.velaEgress(input.intent,preview.frozenContext,discovery,preview);
     if (route) {
@@ -5023,6 +5043,17 @@ export class BackendCore {
     // Ordinary foreground Send is already consent for this exact ready ChatGPT-plan request. History is
     // canonical source data, not new action authority. New sources, execution and sharing still need review.
     const route=preview.route;
+    if (preview.providerId === VELA_API_PROVIDER && this.velaApiRuntime.authorized(preview.connectionVersion) &&
+        preview.semanticContext && preview.explicitSourceSelection && route?.kind === 'conversational' &&
+        !route.nativeMetric && !route.nativeLog && !route.escalation && !preview.nativeStage && !preview.workflowScope &&
+        !preview.missionCheckpoint && !preview.workspaceState && !preview.projectEvidence &&
+        !preview.handoff && !preview.routingAgent && !preview.voiceInput && !preview.context.activeResourceId &&
+        !preview.frozenContext.history && !preview.frozenContext.operations && !preview.frozenContext.agentInstructions &&
+        preview.resourceIds.length > 0 && preview.context.included.length === preview.resourceIds.length &&
+        preview.context.included.every(ref => preview.resourceIds.includes(ref.id) &&
+          (ref.resourceKind === 'note' || ref.resourceKind === 'file') &&
+          (ref.projectId == null || ref.projectId === this.velaContext().currentProjectId)))
+      return 'standing-selected-evidence';
     if (preview.providerId === VELA_API_PROVIDER) return this.velaApiRuntime.authorized(preview.connectionVersion) &&
       (!route || route.kind === 'conversational' && !route.nativeMetric && !route.nativeLog || route.kind === 'app-planning') &&
       !preview.nativeStage && !preview.semanticContext && !preview.resourceIds.length && !preview.context.included.length && !preview.handoff &&
@@ -5069,8 +5100,8 @@ export class BackendCore {
   private authorizeVelaRequest(input:CommandMap['authorizeVelaRequest']['input']) {
     this.pruneVelaGrants();const preview=this.velaPreviews.get(input.previewId);ensure(preview,'vela_preview_expired');ensure(preview.signature===input.signature,'approval_scope_mismatch');
     this.validateFrozenVelaPreview(preview);ensure(this.velaGrants.size<64,'approval_backpressure');
-    if (input.directSend) ensure(preview.nativeReviewed && preview.sendDisposition==='routine' &&
-      this.velaSendDisposition(preview)==='routine', 'vela_attached_context_review_required');
+    if (input.directSend) ensure(preview.nativeReviewed && preview.sendDisposition !== 'review-required' &&
+      preview.sendDisposition === this.velaSendDisposition(preview), 'vela_attached_context_review_required');
     if(preview.nativeReviewRequired||preview.nativeReviewed||input.reviewDigest!==undefined)ensure(preview.nativeReviewed&&typeof input.reviewDigest==='string'&&input.reviewDigest===preview.reviewDigest,'vela_native_review_required');
     // The read-only gap investigation can spend its turn budget before composition consumes the grant.
     const grantLifetime = preview.missionCheckpoint?.selection.gapIndex === undefined ? 60_000 : VELA_REVIEWED_GAP_TURN_MS + 5_000;
@@ -6749,6 +6780,11 @@ export class BackendCore {
         Reflect.ownKeys(request).length === 2 && Object.hasOwn(request,'expectedVersion') && Object.hasOwn(request,'enabled'), 'native_api_usage_authorization_required');
       ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
       const result = this.velaApiRuntime.authorizeUsage(request.expectedVersion,request.enabled);
+      if (!result.enabled) {
+        for (const [id, preview] of this.velaPreviews) {
+          if (preview.sendDisposition === 'standing-selected-evidence') this.velaPreviews.delete(id);
+        }
+      }
       this.record('vela.api/usage-authorization','observed',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,detached:true,payload:{redacted:true,api:{enabled:result.enabled}}});
       return result as CommandMap[K]['output'];
     }
