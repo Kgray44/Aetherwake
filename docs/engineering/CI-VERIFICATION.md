@@ -55,6 +55,8 @@ try {
 }
 ```
 
+Hosted Windows runs [43331374031](https://github.com/Kgray44/Aetherwake/actions/runs/43331374031) and [43331521324](https://github.com/Kgray44/Aetherwake/actions/runs/43331521324) also failed the temporary-specialist handoff scenario in different producer PRs. That scenario now supplies a labeled synthetic CPU observation through the existing executor fixture seam and retains the production verifier, real scheduler, API adapter, identity and coverage assertions. The adjacent native CPU/RAM scenario still reads the OS. The standing-action API fixture now pins its test clock to one UTC day because the usage query counts only the current UTC day's admissions. It still requires all three transport requests and durable usage admissions.
+
 ## Physical Windows qualification
 
 1. Check out the exact clean SHA and provision the locked Windows dependencies, Node 24.18.0, MSVC and Electron. Use a disposable synthetic profile and a foreground desktop session. Check both drive reserves before setup, build and execution and at least every five minutes during long writes. Record Node/Electron/Windows versions and device class.
