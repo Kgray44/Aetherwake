@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs/promises');
 const {promisify}=require('node:util'),{execFile}=require('node:child_process');
-const FLAG='--missions-folders-only',MiB=1024*1024;
+const FLAG='--missions-folders-only',COMPOSER_ONLY='--vela-composer-source-only',MiB=1024*1024;
 function assertFoldersJourney({argv,profile,localAppData=process.env.LOCALAPPDATA}){
  assert(argv.includes('--integration-vela-missions')&&argv.includes(FLAG),'explicit_folder_journey_required');
  assert(!argv.some(value=>value.startsWith('--missions-')&&value!==FLAG)&&!argv.includes('--bootstrap-vela-api')&&!argv.includes('--voice-synthetic-input'),'folder_journey_is_offline_and_exclusive');
@@ -76,7 +76,11 @@ throw 'source_dialog_exact_owned_window_unavailable'
 }catch{[Console]::Error.WriteLine('OWNED_SOURCE_WINDOWS '+(ConvertTo-Json -InputObject @([SourceOwnedWindow]::Owned([uint32]$ownedProcess)) -Compress));throw}`;
 }
 const SOURCE_DIALOG_FAILURES=new Set(['source_dialog_not_foreground','source_dialog_wrong_process','source_dialog_wrong_owner_chain','source_dialog_exact_filename_control_unavailable','source_dialog_filename_readonly','source_dialog_primary_button_unavailable','source_dialog_exact_owned_window_unavailable']);
-function safeDialogFailure(stderr){const code=String(stderr??'').replace(/_x[0-9a-f]{4}_/giu,' ').match(/FullyQualifiedErrorId\s*:\s*(source_dialog_[a-z_]+)/u)?.[1];return SOURCE_DIALOG_FAILURES.has(code)?code:'source_dialog_unclassified_failure';}
+function safeDialogFailure(stderr){
+ const clean=String(stderr??'').replace(/_x[0-9a-f]{4}_/giu,' ');
+ const code=clean.match(/(?:FullyQualifiedErrorId\s*:\s*|<S S="Error">)(source_dialog_[a-z_]+)\b/u)?.[1];
+ return SOURCE_DIALOG_FAILURES.has(code)?code:'source_dialog_unclassified_failure';
+}
 async function selectOwnedSource(input){
  try{const {stdout}=await promisify(execFile)('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(sourceDialogScript(input),'utf16le').toString('base64')],{windowsHide:true,timeout:5000,maxBuffer:4096});
   assert.equal(stdout.trim(),'EXACT_OWNED_SOURCE_SELECTED');return {foregroundPid:input.pid,ownerChainVerified:true,title:input.kind==='folder'?'Choose a folder':'Choose files',kind:input.kind,selection:'exact-owned-neutral-fixture'};
@@ -93,6 +97,12 @@ async function run({argv,profile,documents,receipt,rpc,js,click,fill,wait,captur
  receipt.profileContent='Workspace created through actual native Environment Navigator input; actual native file/folder pickers select only owned neutral Documents fixtures. Metadata browsing, no implicit child import, zero provider calls.';
  receipt.folders={fixtureDirectory:path.basename(fixture.root),fixtureAllocationBoundBytes:fixture.allocationBoundBytes,nativeDialogs:[],externalExplorerOpen:'not invoked'};
  const resources='[data-surface-id="resources"]',q=JSON.stringify;
+ if(argv.includes(COMPOSER_ONLY)){
+  receipt.profileContent='Vela composer attaches a neutral local text fixture using the owned Windows file picker.';
+  await checkComposerSource({fixture,profile,receipt,rpc,js,click,fill,wait,withNativeSourceDialog,ownerHwnd});
+  await capture('00-vela-composer-source');
+  return;
+ }
  // Private RPC mutation does not drive the renderer's navigation/panel scope.
  // Use the ordinary workspace creation UI so Resources captures its real scope.
  await click('#workspace-manager');await click('.en-navigator [data-action="toggle-create"]');await click('.en-navigator [data-action="create-workspace"]');
@@ -123,6 +133,9 @@ async function run({argv,profile,documents,receipt,rpc,js,click,fill,wait,captur
  assert.ok(!JSON.stringify(final).includes(fixture.root));assert.doesNotMatch(JSON.stringify(final),/sourceGrantId|selected_path/);
  assert.equal(activity.providerRequests,0);assert.equal(activity.codexConnections,0);await capture('02-folder-metadata-browse');
  receipt.folders.canonical={folderId,folders:1,independentFiles:1,placements:2,implicitChildResources:0};receipt.providerActivity={after:activity};
+}
+async function checkComposerSource({fixture,profile,receipt,rpc,js,click,fill,wait,withNativeSourceDialog,ownerHwnd}){
+ const beforePick=await rpc('desktop',{type:'snapshot'}),q=JSON.stringify;
  const vela='#vela-assistant-surface[data-surface-id="vela"]';
  const composer=vela+' textarea[aria-label="Message Vela"]',draft='Synthetic draft awaiting its source.';
  if(!await js(`document.querySelector(${q(composer)})?.getClientRects().length>0`))await click('#vela');
@@ -134,9 +147,12 @@ async function run({argv,profile,documents,receipt,rpc,js,click,fill,wait,captur
  });
  await wait('Composer keeps the draft and adds the exact local source chip',()=>js(`(()=>{const composer=document.querySelector(${q(composer)});return composer?.value===${q(draft)}&&document.activeElement===composer&&!!document.querySelector(${q(vela+' button[aria-label="Remove source Independent.txt"]')});})()`));
  const afterPick=await rpc('desktop',{type:'snapshot'}),afterActivity=await rpc('providerActivity',{});
- assert.equal(afterPick.blocks.length,final.blocks.length,'composer_pick_does_not_place_blocks');
+ assert.equal(afterPick.blocks.length,beforePick.blocks.length,'composer_pick_does_not_place_blocks');
+ assert.equal(afterPick.resources.length,beforePick.resources.length+1,'composer_pick_creates_one_canonical_source');
+ const resource=afterPick.resources.find(item=>item.kind==='file'&&item.title==='Independent.txt');
+ assert.ok(resource?.id,'canonical_composer_source_required');
  assert.equal(afterActivity.providerRequests,0);assert.equal(afterActivity.codexConnections,0);
- receipt.folders.composerSource={title:'Independent.txt',draftPreserved:true,providerRequests:0};
- receipt.providerActivity.after=afterActivity;
+ receipt.folders.composerSource={resourceId:resource.id,title:'Independent.txt',draftPreserved:true,providerRequests:0};
+ receipt.providerActivity={after:afterActivity};
 }
 module.exports={assertFoldersJourney,assertFixtureTarget,prepareFixture,sourceDialogScript,safeDialogFailure,selectOwnedSource,run};
