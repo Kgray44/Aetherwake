@@ -32,7 +32,7 @@ export interface ContextItem {
   factId: string; version: number; scope: PersonalScope; purpose: ReviewedFact['purpose']; category: Category;
   text: string; certainty: Certainty; provenance: Provenance; reviewedAt: string;
 }
-export type OmissionReason = 'disabled' | 'outside-scope' | 'not-shared' | 'unavailable' | 'inactive' | 'expired' | 'sensitive-disabled' | 'source-changed' | 'irrelevant' | 'scan-limit' | 'byte-budget' | 'item-budget';
+export type OmissionReason = 'disabled' | 'outside-scope' | 'not-shared' | 'unavailable' | 'inactive' | 'expired' | 'sensitive-disabled' | 'source-changed' | 'irrelevant' | 'unmatched-evidence-query' | 'scan-limit' | 'byte-budget' | 'item-budget';
 export interface PersonalContextManifest {
   contract: typeof PERSONAL_CONTEXT_CONTRACT; id: string; createdAt: string;
   ownerId: string; hostPolicyVersion: string; policyVersion: number; requestDigest: string;

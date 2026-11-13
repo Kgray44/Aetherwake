@@ -243,7 +243,7 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
       return { version: 2, objective: 'Recall the decision', clarification: '',
         perception: { kind: 'recall', explicitGoals: [], inferredGoals: [], constraints: [],
           capabilityHints: [], deliverables: ['text'], verification: [] },
-        needs: [{ key: 'relay', question: 'Which relay was approved?', query: 'quartz relay' }] };
+        needs: [{ key: 'relay', question: 'Which relay was approved?', query: 'quartz relay' }, { key: 'shipment', question: 'Which shipment date was approved?', query: 'shipment date' }] };
     };
     const queryReview = await core.command('velaMemorySearchNative', searchBinding);
     assert.equal(queryReview.kind, 'review');
@@ -259,6 +259,9 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
       /vela_memory_requires_conversation/);
     const expandedReview = await core.command('velaNativeReview', { previewId: base.id, signature: expanded.signature });
     assert.match(expandedReview.prompt, new RegExp(saved.id));
+    assert.equal(expandedReview.memory?.partialCoverage, true);
+    assert.match(expandedReview.prompt, /Some interpreted evidence queries had no included match/);
+    assert.doesNotMatch(expandedReview.prompt, /shipment date/);
     assert.equal(calls, 1);
     const recall = () => core.command('velaRequestPreview', { ...input, resourceIds: [] });
     const preview = await recall();
@@ -266,6 +269,7 @@ test('Vela prepares reviewed project memory from the real private-profile owner 
     const binding = { previewId: preview.id, signature: preview.signature };
     const reviewed = await core.command('velaNativeReview', binding);
     assert.match(reviewed.prompt, /synthetic quartz relay is the approved part/);
+    assert.equal(reviewed.memory?.partialCoverage, undefined);
     assert.match(reviewed.prompt, new RegExp(saved.id));
     const bySource = () => core.command('velaRequestPreview', { ...input, resourceIds: [],
       intent: `What was decided in message:${message.id}?`, includeRecentHistory: false });
