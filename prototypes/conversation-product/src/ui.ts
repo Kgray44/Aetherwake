@@ -155,19 +155,22 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const readMatches=async(scope:SearchQuery):Promise<ProductCommandMap['search']['output']>=>{const request={...scope,offset:scope.offset??0,limit:50};if(!scope.text?.trim()&&!scope.collectionId&&(!scope.searchMode||['all','conversations'].includes(scope.searchMode))){const page=await call('list',request);return {...page,items:page.items.map(summary=>({kind:'conversation' as const,resourceId:summary.resourceId,title:summary.title,excerpt:'',providerId:summary.providerId,summary,sourceTime:summary.lastActivityAt??undefined}))};}return call('search',{...request,searchMode:scope.searchMode??'all'});};
  const invalidateSwitcher=()=>{
   clearTimeout(switchTimer);
+  switchTimer=undefined;
   switchResults.replaceChildren();
   switchStatus.textContent='Finding conversations…';
   return ++switchGeneration;
  };
- const loadSwitcher=async()=>{
+ let switchOpenGeneration:number|undefined;
+ const loadSwitcher=async(openFirst=false)=>{
   const generation=invalidateSwitcher(),text=switchQuery.value.trim(),mode=switchMode.value;
+  if(openFirst)switchOpenGeneration=generation;
   const stillCurrent=()=>!disposed&&!closing&&generation===switchGeneration&&switcher.node.open;
   const scope:SearchQuery={projectId:state.query.projectId,...(mode==='favorite'?{favorite:true}:{}),sort:mode==='running'?'active':'activity',limit:12};
   switchLoading=true;
   try{
    // The Running group uses the canonical execution summary from the list projection.
    const exact=!!text&&mode!=='running';
-   const page=exact?await call('search',{...scope,text,searchMode:'all'}):await call('list',{...scope,...(text?{text}:{})});
+   const page=exact?await call('search',{...scope,text,searchMode:'chat-history'}):await call('list',{...scope,...(text?{text}:{})});
    if(!stillCurrent())return;
    const hits:SearchHit[]=(page.items as (SearchHit|ConversationSummary)[]).flatMap(item=>{
     if('kind' in item)return item.kind==='resource'?[]:[item];
@@ -199,6 +202,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    });
    switchResults.replaceChildren(...rows);
    switchStatus.textContent=rows.length?`${rows.length} ${exact?'matches':'conversations'}${page.hasMore?' · more in history':''}`:text?'No matches in this group.':'No conversations in this group.';
+   if(switchOpenGeneration===generation)rows[0]?.click();
   }catch(error){if(stillCurrent())switchStatus.textContent=error instanceof Error?error.message:String(error);}
   finally{if(generation===switchGeneration)switchLoading=false;}
  };
@@ -210,7 +214,11 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   if(event.isComposing||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
   const first=switchResults.querySelector('button');
   if(event.key==='ArrowDown'){event.preventDefault();first?.focus();}
-  if(event.key==='Enter'&&first){event.preventDefault();first.click();}
+  if(event.key!=='Enter'||!switcher.node.open)return;
+  event.preventDefault();
+  if(first)first.click();
+  else if(switchTimer!==undefined)void loadSwitcher(true);
+  else if(switchLoading)switchOpenGeneration=switchGeneration;
  });
  const renderBranchNavigator=(d:Detail)=>{
   const view=disclosure('Branch lineage','cp-branch-navigator');view.node.dataset.resourceId=d.conversation.resourceId;let generation=0;
