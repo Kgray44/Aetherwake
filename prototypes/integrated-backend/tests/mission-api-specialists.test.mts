@@ -5,8 +5,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve, isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
+import { nativeMissionDiagnostics } from './fixtures/native-mission-diagnostics.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
-import type { MissionPlanningOffer, MissionPreview, MissionProjection } from '../src/mission-contracts.mts';
+import type { MissionExecutor, MissionPlanningOffer, MissionPreview, MissionProjection } from '../src/mission-contracts.mts';
 
 const marker = 'SYNTHETIC_ONLY_API_SPECIALIST_KEY';
 const objective = 'Research reproducible event loop experiments with two independent specialists';
@@ -139,7 +140,8 @@ test('native measured objectives retain domain verification when API workers add
     const preview = await f.preview('Measure CPU and RAM with two independent specialists');
     assert.equal(preview.plan.coverage, undefined);
     const mission = await f.start(preview), done = await settled(f, mission.id);
-    assert.equal(done.outcome, 'verified'); assert.ok(done.tasks.every(task => task.state === 'verified'));
+    assert.equal(done.outcome, 'verified', nativeMissionDiagnostics(done));
+    assert.ok(done.tasks.every(task => task.state === 'verified'), nativeMissionDiagnostics(done));
     assert.equal(done.tasks.find(task => task.id === 'cpu')!.attempts[0].evidence?.source, 'node:os.cpus');
     assert.equal(done.tasks.find(task => task.id === 'ram')!.attempts[0].evidence?.source, 'node:os.totalmem+freemem');
     assert.ok(done.tasks.filter(task => task.specialist).every(task => task.attempts[0].evidence?.source === 'openai-api-vela:reported'));
@@ -164,6 +166,18 @@ test('API workers revalidate usage, key version and settings before Start; an ex
 test('API planned temporary specialists consume only named verified handoffs and retain separate roles and partial coverage', async () => {
   const f = fixture(); try {
     await f.ready(); f.release();
+    // This scenario verifies handoff identity and coverage. The preceding
+    // native-measurement scenario still exercises real host CPU/RAM sampling.
+    const { missionExecutors } = f.core as unknown as { missionExecutors: Record<string, MissionExecutor> };
+    const cpu = missionExecutors['sample.cpu'];
+    missionExecutors['sample.cpu'] = {
+      ...cpu,
+      async run({ signal }) {
+        signal.throwIfAborted();
+        return { source: 'node:os.cpus', value: { metric: 'cpu', source: 'node:os.cpus', percent: 25,
+          measuredAt: new Date().toISOString(), sampleMs: 250, logicalCpus: 4 } };
+      },
+    };
     const text = 'Can you investigate processor and memory experiment design and independently review both recommendations?';
     const graph = { tasks: [
       { capability: 'cpu', after: [] }, { capability: 'ram', after: [] },
@@ -186,7 +200,9 @@ test('API planned temporary specialists consume only named verified handoffs and
     const planned = await f.core.command('missionPlanReviewed', { objective: text, fingerprint: offer.fingerprint, requestId: randomUUID() }) as MissionPreview;
     assert.equal(planned.externalReview?.calls, 3);
     const mission = await f.start(planned), done = await settled(f, mission.id);
-    assert.equal(done.outcome, 'blocked'); assert.ok(done.tasks.every(task => task.state === 'verified'));
+    assert.equal(done.outcome, 'blocked', JSON.stringify(done.tasks.map(task => [task.id, task.state,
+      task.attempts.at(-1)?.verification?.detail ?? null])));
+    assert.ok(done.tasks.every(task => task.state === 'verified'));
     const tasks = new Map(done.tasks.map(task => [task.id, task]));
     for (const task of done.tasks) for (const dependency of task.dependencies) assert.ok(Date.parse(task.attempts[0].admittedAt) >= Date.parse(tasks.get(dependency)!.attempts[0].finishedAt!));
     assert.equal(f.requests.length, 4); assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 4);
