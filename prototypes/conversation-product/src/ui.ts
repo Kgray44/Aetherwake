@@ -469,8 +469,22 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const reloadCollections=async(provided?:Collection[])=>{collections=provided??await call('collections',{});const previous=collection.value;collection.replaceChildren(el('option','All collections'));collection.options[0].value='';for(const c of collections){const o=el('option',`${c.parentId?'↳ ':''}${c.title}${c.rule?' (smart)':''}`);o.value=c.id;collection.append(o);}collection.value=state.query.collectionId??previous;syncFilterControls();};
  type CatalogRead={collections:Collection[];list:ProductCommandMap['search']['output'];providers:ProductCommandMap['providers']['output'];projects:ProductCommandMap['projects']['output']};
  const refresh=async(provided?:CatalogRead)=>{
-  const generation=++request,scope={...state.query};save();const visible=provided?.collections??await call('collections',{});
-  const [list,providers,projects]=provided?[provided.list,provided.providers,provided.projects]:await Promise.all([readMatches(scope),call('providers',{}),call('projects',{})]);if(disposed||generation!==request)return;
+  const generation=++request,scope={...state.query};save();
+  const catalogRead=provided?[provided.collections,provided.list,provided.providers,provided.projects] as const:
+   await call('collections',{}).then(async visible=>
+    [visible,...await Promise.all([readMatches(scope),call('providers',{}),call('projects',{})])] as const).catch(()=>null);
+  if(disposed||generation!==request)return;
+  if(!catalogRead){
+   const notice=el('p','Couldn’t load conversation history.');notice.setAttribute('role','status');
+   const retry=button('Retry history search',()=>{
+    if(disposed||closing||generation!==request)return;
+    query.focus();return run(refresh);
+   });
+   resultCount.textContent='';paging.replaceChildren();paging.hidden=true;
+   results.replaceChildren(notice,retry);
+   return;
+  }
+  const [visible,list,providers,projects]=catalogRead;
   await reloadCollections(visible);if(disposed||generation!==request)return;
   newProviderCatalog=providers;newProvider.replaceChildren();for(const p of providers.filter(p=>p.record||p.id===explicitNewProvider)){const o=el('option',p.label+(p.record?'':' · unavailable'));o.value=p.id;o.disabled=!p.record;newProvider.append(o);}
   const preferred=explicitNewProvider??providers.find(p=>p.default&&p.available&&p.execute&&p.record)?.id??providers.find(p=>p.record&&!p.execute)?.id;

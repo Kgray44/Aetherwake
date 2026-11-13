@@ -1761,6 +1761,29 @@ test('an acknowledged Send retains its exact follow target while geometry is zer
   finally{f.pending?.reject(new Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();f.restore();}
 });
 
+test('History retries a failed search with the same query and keeps the open chat',async()=>{
+ const f=fixture();let manager;
+ try{
+  manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});
+  await manager.ready;
+  named(f.view.root,'History').fire('click');
+  const editor=f.view.root.querySelector('textarea');
+  const query=f.view.root.querySelector('input[aria-label="Search conversation history"]');
+  f.failSearch('backend_disconnected');
+  query.value='exact retry';
+  f.view.root.querySelector('[aria-label="Sort conversations"]').fire('change');
+  await until(()=>!!named(f.view.root,'Retry history search'));
+  f.history.items.push({kind:'conversation',resourceId:f.draft.resourceId,title:'Recovered result',excerpt:''});
+  f.history.total=1;f.failSearch(null);
+  named(f.view.root,'Retry history search').fire('click');
+  await until(()=>!!named(f.view.root,'Recovered result'));
+  assert.equal(query.value,'exact retry');
+  assert.equal(f.view.root.querySelector('textarea'),editor);
+  assert.equal(f.view.doc.activeElement,query);
+  assert.deepEqual(f.calls.filter(call=>call.name==='search').map(call=>call.input.text),['exact retry','exact retry']);
+ }finally{await manager?.dispose();f.restore();}
+});
+
 test('filter and clear-search changes made during an existing read drain to the latest actual query without replaying actions',async()=>{
   const f=fixture();let manager,release!:()=>void;
   try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;const priorDetails=f.calls.filter(call=>call.name==='detail').length;f.gateDetail(new Promise<void>(resolve=>{release=resolve;}));const reading=manager.refresh();await until(()=>f.calls.filter(call=>call.name==='detail').length>priorDetails);
