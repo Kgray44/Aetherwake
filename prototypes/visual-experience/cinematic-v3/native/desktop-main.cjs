@@ -683,7 +683,7 @@ app.whenReady().then(async () => {
     try {
       if (typeof command === "string" && command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture")
         throw Error("unauthorized_private_command");
-      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative'].includes(command))throw Error('unauthorized_private_command');
+      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative','aepExperimentNative'].includes(command))throw Error('unauthorized_private_command');
       if (
         event.sender !== win.webContents ||
         event.senderFrame !== win.webContents.mainFrame ||
@@ -768,7 +768,7 @@ app.whenReady().then(async () => {
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && (isVelaRead(input) || input?.name === "submissionStatus")) &&
-        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experiment-hypothesis", "compare-native-samples", "resource-experiment-preview", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
+        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experience-list", "experience-evidence", "experience-finding", "experiment-hypothesis", "compare-native-samples", "resource-experiment-preview", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
         !(command === "workspaceRecovery" && ["state", "preview"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
