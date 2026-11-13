@@ -469,6 +469,38 @@ test('Vela source search keeps the latest query when an older lookup finishes la
   } finally { panel.dispose(); }
 });
 
+test('Vela waits for the file selection before sending the versioned sources', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  const file = { id: 'file:pending', kind: 'file' as const, title: 'Pending.docx', version: 2, projectId: null };
+  let finish!: (result: { resources: typeof file[] }) => void;
+  const pending = new Promise<{ resources: typeof file[] }>(resolve => { finish = resolve; });
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  let picks = 0;
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    pickSources: async () => { picks++; return pending; },
+    request: async input => { turns.push(input); return request({ state: 'responded' }); },
+  }));
+  try {
+    await panel.open();
+    const editor = root.querySelector('textarea')!;
+    editor.value = 'Summarize the selected file.';
+    editor.fire('input');
+    named(root, 'Choose files…').fire('click');
+    named(root, 'Choose a folder…').fire('click');
+    editor.fire('keydown', { key: 'Enter' });
+    assert.equal(turns.length, 0);
+    assert.equal(picks, 1);
+    assert.equal(named(root, 'Send to Vela').disabled, true);
+    finish({ resources: [file] });
+    await settles(() => !!named(root, 'Remove source Pending.docx'));
+    assert.equal(turns.length, 0);
+    editor.fire('keydown', { key: 'Enter' });
+    await settles(() => turns.length === 1);
+    assert.deepEqual(turns[0].resourceRefs, [{ ...file, kind: 'resource', resourceKind: 'file' }]);
+  } finally { finish({ resources: [] }); panel.dispose(); }
+});
+
 test('a rejected file selection leaves the previous Vela sources intact', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];

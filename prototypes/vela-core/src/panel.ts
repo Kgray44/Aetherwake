@@ -151,19 +151,31 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const contextualClose = icon('Close Vela controls', '×', 'close', () => closeContext()); contextualClose.className += ' vela-core-contextual-close';
   const sourcePanel = disclosure('Find and add sources', 'vela-core-source-panel');
   const localFilesPanel=disclosure('Add files or folders','vela-core-local-files');
+  let pickingSources=false;
   const pickLocalSources=async(kind:'files'|'folder')=>{
+    if(disposed||busy||pickingSources)return;
     if(!client.pickSources)throw Error('source_picker_unavailable');
-    const picked=await client.pickSources({kind,destination:'context'});
-    if(disposed)return;
-    const refs=picked.resources.map((source):ResourceRef=>{
-      const version=source.version;
-      if(!Number.isSafeInteger(version)||!version||version<1)throw Error('source_version_unavailable');
-      return {id:source.id,kind:'resource',resourceKind:source.kind,title:source.title,version,projectId:source.projectId};
-    });
-    for(const ref of refs)selected.set(ref.id,ref);
-    renderSelection();
+    pickingSources=true;
+    pickFilesButton.disabled=pickFolderButton.disabled=send.disabled=true;
+    try{
+      const picked=await client.pickSources({kind,destination:'context'});
+      if(disposed)return;
+      const refs=picked.resources.map((source):ResourceRef=>{
+        const version=source.version;
+        if(!Number.isSafeInteger(version)||!version||version<1)throw Error('source_version_unavailable');
+        return {id:source.id,kind:'resource',resourceKind:source.kind,title:source.title,version,projectId:source.projectId};
+      });
+      for(const ref of refs)selected.set(ref.id,ref);
+      renderSelection();
+    }finally{
+      pickingSources=false;
+      pickFilesButton.disabled=pickFolderButton.disabled=false;
+      send.disabled=busy||!intent.value.trim();
+    }
   };
-  localFilesPanel.body.append(button('Choose files…',()=>pickLocalSources('files')),button('Choose a folder…',()=>pickLocalSources('folder')));
+  const pickFilesButton=button('Choose files…',()=>pickLocalSources('files'));
+  const pickFolderButton=button('Choose a folder…',()=>pickLocalSources('folder'));
+  localFilesPanel.body.append(pickFilesButton,pickFolderButton);
   const searchForm = el('form', 'vela-core-search'), search = el('input'), searchButton = el('button', 'vela-core-button', 'Search');
   search.type = 'search'; search.placeholder = 'Find a note, chat, task, or workspace'; search.maxLength = 200; search.setAttribute('aria-label', 'Search your work'); searchButton.type = 'submit';
   const searchResults = el('div', 'vela-core-results'); searchResults.setAttribute('aria-live', 'polite'); searchForm.append(search, searchButton);
@@ -519,9 +531,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   composeActions.append(stop, send);
   connection.body.append(providerChoice);
   form.append(intent, selection, selectedEvidenceOption, composeActions);
-  intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
+  intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || pickingSources || !intent.value.trim(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
-  form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return;
+  form.addEventListener('submit', event => { event.preventDefault(); if (busy || pickingSources || !intent.value.trim() || composing) return;
     if (semanticContext.checked && !evidenceApiAvailable()) {
       status.hidden = false;
       status.textContent = 'Vela API is unavailable. Reconnect to investigate the selected sources. Your question is still here.';
