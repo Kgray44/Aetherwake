@@ -32,6 +32,12 @@ export interface VelaApiRunReceipt extends ApiRunDiagnostics {executionId:string
 export type VelaApiLedgerProfile = {profileId:string;configurationVersion:number|null;usage:VelaApiUsageStatus};
 type LedgerExecutionRef = {requestId:string;executionId:string};
 export type VelaEvaluationClaim = {profileId:string;configurationVersion:number;claimToken:string;bindingDigest:string};
+export type VelaSyntheticEvaluationBatch = Pick<VelaEvaluationClaim, 'profileId' | 'configurationVersion'> & {
+  batchId: string;
+  maxCalls: number;
+  expiresAt: number;
+};
+type SyntheticClaimReservation = { batchId: string; maxCalls: number };
 type LedgerReceipt = LedgerExecutionRef & {
   outcome:'completed'|'incomplete'|'failed'|'cancelled-before-dispatch';
   elapsedMs:number|null;totalTokens:number|null;
@@ -70,7 +76,12 @@ export interface VelaMissionCognitiveReceipts {
   truncated: boolean;
 }
 export interface VelaApiWeatherTool {run(input:WeatherQuery,signal:AbortSignal):Promise<WeatherData>}
-export interface VelaApiRuntimeTestServices { fetch: typeof fetch; voice?: {fetch:typeof fetch;acknowledgementMs?:number};wake?:import('./vela-wake-runtime.mts').VelaWakeTestServices }
+export interface VelaApiRuntimeTestServices {
+  fetch: typeof fetch;
+  syntheticBatchAccounting?: boolean;
+  voice?: {fetch:typeof fetch;acknowledgementMs?:number};
+  wake?: import('./vela-wake-runtime.mts').VelaWakeTestServices;
+}
 export interface VelaApiRuntimeOptions {
   db: DatabaseSync; transaction<T>(work: () => T): T; connection: VelaApiConnection;
   /** Shares the outer commit with canonical execution callbacks when present. */
@@ -151,6 +162,11 @@ export class VelaApiRuntime {
     db.exec(`CREATE TABLE IF NOT EXISTS vela_api_usage(id INTEGER PRIMARY KEY CHECK(id=1),configuration_version INTEGER NOT NULL,enabled INTEGER NOT NULL CHECK(enabled IN(0,1)),observed_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS vela_api_ledger_identity(id INTEGER PRIMARY KEY CHECK(id=1),profile_id TEXT NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS vela_api_evaluation_claims(claim_token TEXT PRIMARY KEY,configuration_version INTEGER NOT NULL,binding_digest TEXT NOT NULL) STRICT;
+      CREATE TABLE IF NOT EXISTS vela_api_synthetic_evaluation_batches(
+        batch_id TEXT PRIMARY KEY, configuration_version INTEGER NOT NULL, runtime_id TEXT NOT NULL,
+        utc_day TEXT NOT NULL, expires_at INTEGER NOT NULL, max_calls INTEGER NOT NULL,
+        revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN(0,1))
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS vela_api_runs(execution_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,configuration_version INTEGER NOT NULL,utc_day TEXT NOT NULL,body_digest TEXT NOT NULL,context_digest TEXT NOT NULL,state TEXT NOT NULL,result_digest TEXT,response_id TEXT,usage_json TEXT,elapsed_ms INTEGER,error_code TEXT,http_diagnostic_json TEXT);
       CREATE INDEX IF NOT EXISTS vela_api_runs_day ON vela_api_runs(utc_day);
       CREATE INDEX IF NOT EXISTS vela_api_runs_request ON vela_api_runs(request_id);
@@ -163,6 +179,15 @@ export class VelaApiRuntime {
     if(!columns.has('cognition_owner'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN cognition_owner TEXT');
     if(!columns.has('cognition_json'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN cognition_json TEXT');
     if(!columns.has('evaluation_claim'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN evaluation_claim TEXT REFERENCES vela_api_evaluation_claims(claim_token)');
+    const claimColumns = new Set(db.prepare('PRAGMA table_info(vela_api_evaluation_claims)').all().map(row => row.name));
+    if (!claimColumns.has('synthetic_batch'))
+      db.exec('ALTER TABLE vela_api_evaluation_claims ADD COLUMN synthetic_batch TEXT REFERENCES vela_api_synthetic_evaluation_batches(batch_id)');
+    if (!claimColumns.has('max_calls'))
+      db.exec('ALTER TABLE vela_api_evaluation_claims ADD COLUMN max_calls INTEGER');
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS vela_api_synthetic_evaluation_case
+      ON vela_api_evaluation_claims(binding_digest) WHERE synthetic_batch IS NOT NULL`);
+    db.exec(`CREATE INDEX IF NOT EXISTS vela_api_synthetic_evaluation_claim_batch
+      ON vela_api_evaluation_claims(synthetic_batch) WHERE synthetic_batch IS NOT NULL`);
     db.exec('CREATE INDEX IF NOT EXISTS vela_api_runs_evaluation_claim ON vela_api_runs(evaluation_claim) WHERE evaluation_claim IS NOT NULL');
     db.exec('CREATE INDEX IF NOT EXISTS vela_api_runs_cognition_owner ON vela_api_runs(cognition_owner) WHERE cognition_owner IS NOT NULL');
     const toolColumns=new Set(db.prepare('PRAGMA table_info(vela_api_tool_receipts)').all().map(row=>row.name));
@@ -190,17 +215,76 @@ export class VelaApiRuntime {
       return {profileId:row.profile_id,configurationVersion:usage.configurationVersion,usage};
     });
   }
+  private get syntheticBatchAccounting(): boolean {
+    return this.options.test?.syntheticBatchAccounting === true;
+  }
+  /** Hold unused slots in the existing daily admission pool. Only canonical run rows count as usage. */
+  private requireDailyCapacity(now: number, day: string, additional: number): void {
+    const db = this.options.db;
+    const used = Number(db.prepare('SELECT count(*) AS n FROM vela_api_runs WHERE utc_day=?').get(day)!.n);
+    const reserved = this.syntheticBatchAccounting ? Number(db.prepare(`
+      SELECT COALESCE(SUM(b.max_calls - (SELECT count(*) FROM vela_api_runs r
+        JOIN vela_api_evaluation_claims c ON c.claim_token=r.evaluation_claim WHERE c.synthetic_batch=b.batch_id)),0) AS n
+      FROM vela_api_synthetic_evaluation_batches b
+      WHERE b.utc_day=? AND b.expires_at>? AND b.revoked=0 AND b.configuration_version=?
+    `).get(day,now,this.configurationVersion())!.n) : 0;
+    check(used + reserved + additional <= VELA_API_RUNTIME_LIMITS.requestsPerDay, 'vela_api_daily_limit_reached');
+  }
+  /** Synthetic fixture accounting only. Existing native authorization is still required. */
+  beginSyntheticEvaluationBatch(batch: Readonly<VelaSyntheticEvaluationBatch>): void {
+    check(this.syntheticBatchAccounting, 'vela_synthetic_evaluation_batch_disabled');
+    this.options.transaction(() => {
+      const now = Date.now(), day = new Date(now).toISOString().slice(0,10);
+      check(/^[a-f0-9]{64}$/.test(batch.batchId) && Number.isSafeInteger(batch.maxCalls) &&
+        batch.maxCalls >= 1 && batch.maxCalls <= VELA_API_RUNTIME_LIMITS.requestsPerDay &&
+        Number.isSafeInteger(batch.expiresAt) && batch.expiresAt > now, 'vela_synthetic_evaluation_batch_invalid');
+      this.validate(batch.configurationVersion);
+      this.requireLedgerProfile(batch.profileId);
+      const db = this.options.db;
+      check(!db.prepare('SELECT 1 FROM vela_api_synthetic_evaluation_batches WHERE batch_id=?').get(batch.batchId),
+        'vela_synthetic_evaluation_batch_exists');
+      this.requireDailyCapacity(now,day,batch.maxCalls);
+      db.prepare(`INSERT INTO vela_api_synthetic_evaluation_batches
+        (batch_id,configuration_version,runtime_id,utc_day,expires_at,max_calls) VALUES(?,?,?,?,?,?)`)
+        .run(batch.batchId,batch.configurationVersion,this.cognitionClock,day,batch.expiresAt,batch.maxCalls);
+    });
+  }
+  private requireLedgerProfile(profileId: string): void {
+    check(this.options.db.prepare('SELECT profile_id FROM vela_api_ledger_identity WHERE id=1').get()?.profile_id === profileId,
+      'vela_evaluation_profile_mismatch');
+  }
+  private requireSyntheticBatch(batchId: string, version: number, now: number, day: string): number {
+    this.validate(version);
+    const row = this.options.db.prepare(`SELECT max_calls FROM vela_api_synthetic_evaluation_batches
+      WHERE batch_id=? AND configuration_version=? AND runtime_id=? AND utc_day=? AND expires_at>? AND revoked=0`)
+      .get(batchId,version,this.cognitionClock,day,now);
+    check(typeof row?.max_calls === 'number', 'vela_synthetic_evaluation_batch_unavailable');
+    return row.max_calls;
+  }
   /** Trusted host only. Record the attempt before entering provider-capable preflight. */
-  beginEvaluationClaim(claim: Readonly<VelaEvaluationClaim>): void {
+  beginEvaluationClaim(claim: Readonly<VelaEvaluationClaim>, reservation?: Readonly<SyntheticClaimReservation>): void {
     check(/^[a-f0-9]{64}$/.test(claim.claimToken) && /^[a-f0-9]{64}$/.test(claim.bindingDigest),
       'vela_evaluation_claim_invalid');
+    check(!reservation || this.syntheticBatchAccounting, 'vela_synthetic_evaluation_batch_disabled');
+    check(!this.syntheticBatchAccounting || reservation, 'vela_synthetic_evaluation_batch_required');
     this.options.transaction(() => {
       this.validate(claim.configurationVersion);
       const db = this.options.db;
-      check(db.prepare('SELECT profile_id FROM vela_api_ledger_identity WHERE id=1').get()?.profile_id === claim.profileId,
-        'vela_evaluation_profile_mismatch');
-      const written = db.prepare('INSERT OR IGNORE INTO vela_api_evaluation_claims VALUES(?,?,?)')
-        .run(claim.claimToken,claim.configurationVersion,claim.bindingDigest);
+      this.requireLedgerProfile(claim.profileId);
+      if (reservation) {
+        check(Number.isSafeInteger(reservation.maxCalls) && reservation.maxCalls >= 1 && reservation.maxCalls <= 6,
+          'vela_synthetic_evaluation_batch_invalid');
+        const now = Date.now();
+        const limit = this.requireSyntheticBatch(reservation.batchId,claim.configurationVersion,now,new Date(now).toISOString().slice(0,10));
+        check(!db.prepare('SELECT 1 FROM vela_api_evaluation_claims WHERE binding_digest=? AND synthetic_batch IS NOT NULL')
+          .get(claim.bindingDigest), 'vela_evaluation_claim_exists');
+        const allocated = Number(db.prepare('SELECT COALESCE(SUM(max_calls),0) AS n FROM vela_api_evaluation_claims WHERE synthetic_batch=?')
+          .get(reservation.batchId)!.n);
+        check(allocated + reservation.maxCalls <= limit, 'vela_synthetic_evaluation_batch_limit');
+      }
+      const written = db.prepare(`INSERT OR IGNORE INTO vela_api_evaluation_claims
+        (claim_token,configuration_version,binding_digest,synthetic_batch,max_calls) VALUES(?,?,?,?,?)`)
+        .run(claim.claimToken,claim.configurationVersion,claim.bindingDigest,reservation?.batchId ?? null,reservation?.maxCalls ?? null);
       check(written.changes === 1,'vela_evaluation_claim_exists');
     });
     this.activeEvaluationClaims.add(claim.claimToken);
@@ -212,6 +296,18 @@ export class VelaApiRuntime {
     return !!this.options.db.prepare(`SELECT 1 FROM vela_api_evaluation_claims c, vela_api_ledger_identity p
       WHERE p.id=1 AND p.profile_id=? AND c.claim_token=? AND c.configuration_version=? AND c.binding_digest=?`)
       .get(claim.profileId,claim.claimToken,claim.configurationVersion,claim.bindingDigest);
+  }
+  private requireSyntheticClaim(claim: Readonly<VelaEvaluationClaim>, now: number, day: string): number {
+    const row = this.options.db.prepare('SELECT synthetic_batch,max_calls FROM vela_api_evaluation_claims WHERE claim_token=?')
+      .get(claim.claimToken);
+    check(typeof row?.synthetic_batch === 'string' && typeof row.max_calls === 'number', 'vela_synthetic_evaluation_batch_required');
+    this.requireSyntheticBatch(row.synthetic_batch,claim.configurationVersion,now,day);
+    return row.max_calls;
+  }
+  private validateSyntheticClaim(claim: Readonly<VelaEvaluationClaim>): void {
+    check(this.activeEvaluationClaims.has(claim.claimToken), 'vela_evaluation_claim_invalid');
+    const now = Date.now();
+    this.requireSyntheticClaim(claim,now,new Date(now).toISOString().slice(0,10));
   }
   /** Admitted stages only. A partial list never proves completion or non-dispatch. */
   readEvaluationAdmissions(claim: Readonly<VelaEvaluationClaim>): LedgerExecutionRef[] | null {
@@ -268,6 +364,9 @@ export class VelaApiRuntime {
       check(this.configurationVersion() === expectedVersion, 'api_configuration_changed');
       this.options.db.prepare('INSERT INTO vela_api_usage VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET configuration_version=excluded.configuration_version,enabled=excluded.enabled,observed_at=excluded.observed_at')
         .run(expectedVersion, Number(enabled), new Date().toISOString());
+      if (!enabled && this.syntheticBatchAccounting)
+        this.options.db.prepare('UPDATE vela_api_synthetic_evaluation_batches SET revoked=1 WHERE configuration_version=? AND revoked=0')
+          .run(expectedVersion);
     });
     this.qualificationEpoch++;
     this.structuredQualifications.clear();
@@ -327,11 +426,12 @@ export class VelaApiRuntime {
       const started = performance.now();
       this.options.transaction(() => {
         fence();
-        check(this.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay, 'vela_api_daily_limit_reached');
+        const now = Date.now(), day = new Date(now).toISOString().slice(0,10);
+        this.requireDailyCapacity(now,day,1);
         this.options.db.prepare(`INSERT INTO vela_api_runs
           (execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state)
           VALUES(?,?,?,?,?,?,'dispatching')`).run(input.attemptId, input.attemptId, input.version,
-          new Date().toISOString().slice(0,10), review.digest, review.digest);
+          day, review.digest, review.digest);
       });
       try {
         const result = await sendReviewedImageGeneration(review, input.approvedDigest, credential.bearer, combined, this.options.test?.fetch);
@@ -397,6 +497,7 @@ export class VelaApiRuntime {
       this.activeEvaluationClaims.has(evaluationClaim.claimToken) &&
       !input.tools && !input.catalog && !input.weatherTool && !input.resume && this.hasEvaluationClaim(evaluationClaim),
       'vela_evaluation_claim_invalid');
+    if (evaluationClaim && this.syntheticBatchAccounting) this.validateSyntheticClaim(evaluationClaim);
     check(!input.missionCognition || input.outputSchema && !input.tools && !input.weatherTool, 'vela_mission_cognition_requires_structured_output');
     const attribution = input.missionCognition && structuredClone(input.missionCognition);
     const owner = attribution?.owner;
@@ -525,19 +626,26 @@ export class VelaApiRuntime {
               let afterCommit: void | (() => void);
               try {
                 afterCommit = commitExecution(() => {
-                  fence(); check(this.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay, 'vela_api_daily_limit_reached');
+                  fence();
+                  const now = Date.now(), day = new Date(now).toISOString().slice(0,10);
+                  const reserved = evaluationClaim && this.syntheticBatchAccounting;
+                  this.requireDailyCapacity(now,day,reserved ? 0 : 1);
                   if(evaluationClaim){
                     check(this.activeEvaluationClaims.has(evaluationClaim.claimToken) && this.hasEvaluationClaim(evaluationClaim),
                       'vela_evaluation_claim_invalid');
                     check(!this.options.db.prepare(
                       'SELECT 1 FROM vela_api_runs WHERE evaluation_claim=? AND request_id=?'
                     ).get(evaluationClaim.claimToken,input.requestId),'vela_evaluation_stage_already_admitted');
-                    check(!this.options.db.prepare('SELECT 1 FROM vela_api_runs WHERE evaluation_claim=? LIMIT 1 OFFSET 11')
-                      .get(evaluationClaim.claimToken),'vela_evaluation_stage_limit');
+                    const limit = reserved ? this.requireSyntheticClaim(evaluationClaim,now,day) : 12;
+                    check(!this.options.db.prepare('SELECT 1 FROM vela_api_runs WHERE evaluation_claim=? LIMIT 1 OFFSET ?')
+                      .get(evaluationClaim.claimToken,limit - 1),'vela_evaluation_stage_limit');
+                    if (reserved) check(!this.options.db.prepare(
+                      "SELECT 1 FROM vela_api_runs WHERE evaluation_claim=? AND state<>'completed' LIMIT 1"
+                    ).get(evaluationClaim.claimToken),'vela_evaluation_claim_unresolved');
                   }
                   if(semantic){check(semantic.budget.providerRequests<semantic.budget.maxProviderRequests,'vela_workflow_budget_exhausted');semantic.budget.providerRequests++;fence();checkpoint('running');}
                   this.options.db.prepare('INSERT INTO vela_api_runs(execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state,cognition_owner,cognition_json,evaluation_claim) VALUES(?,?,?,?,?,?,?,?,?,?)')
-                    .run(executionId,input.requestId,input.version,new Date().toISOString().slice(0,10),review.bodyDigest,currentContext,'dispatching',
+                    .run(executionId,input.requestId,input.version,day,review.bodyDigest,currentContext,'dispatching',
                       cognitionOwner, cognition ? JSON.stringify(cognition) : null,evaluationClaim?.claimToken??null);
                   return input.stage ? input.stage(executionId, review) : this.options.observe?.stage(executionId, input.requestId, review);
                 });
@@ -563,7 +671,12 @@ export class VelaApiRuntime {
               fence();
               return current;
             },
-            revalidate: async (review, boundaryDigest) => { exactReview(review); await this.options.connection.revalidate(input.version,boundaryDigest); fence(); },
+            revalidate: async (review, boundaryDigest) => {
+              exactReview(review);
+              await this.options.connection.revalidate(input.version,boundaryDigest);
+              fence();
+              if (evaluationClaim && this.syntheticBatchAccounting) this.validateSyntheticClaim(evaluationClaim);
+            },
           } });
         let result = await transport.turn(turn, combined);
         const settle = (receipt: TurnResult) => commitExecution(() => {
@@ -766,5 +879,14 @@ export class VelaApiRuntime {
     }
     try{return JSON.parse(result.partialText);}catch{throw new VelaError('vela_api_proposal_invalid');}
   }
-  close() { this.lifetime.abort(); }
+  close() {
+    this.lifetime.abort();
+    if (!this.syntheticBatchAccounting) return;
+    // Release this owner's unused slots. Other runtime IDs may still be live.
+    // Canonical run rows, including uncertain dispatches, remain charged.
+    this.options.transaction(() => {
+      this.options.db.prepare(`UPDATE vela_api_synthetic_evaluation_batches SET revoked=1
+        WHERE runtime_id=? AND revoked=0`).run(this.cognitionClock);
+    });
+  }
 }
