@@ -25,6 +25,9 @@ test("memory review presents the exact escaped source, fact and scope", () => {
   assert.match(html, /Enable local memory storage/);
   assert.match(html, /script-src 'none'/);
   assert.doesNotMatch(html, /<script>/);
+  const global = { ...review, draft: { ...review.draft, category: "preferences", scope: { kind: "assistant.ordinary" } } };
+  assert.match(reviewPage(global, "", "memory-capture"), /Preference · All ordinary chats/);
+  assert.throws(() => reviewPage({ ...global, draft: { ...global.draft, category: "decisions" } }, "", "memory-capture"), /invalid_native_memory_review/);
   assert.throws(() => reviewPage({ ...review, sourceText: "x".repeat(16385) }, "", "memory-capture"), /invalid_native_memory_review/);
 });
 function disclosure() {

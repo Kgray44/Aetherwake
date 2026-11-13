@@ -36,7 +36,8 @@ export function createPersonalMemoryView(command: Command): HTMLElement {
       + ' · Vela memory: ' + (page.policy.velaEnabled ? 'Enabled' : 'Off');
     for (const record of page.records) {
       const row = document.createElement('li');
-      row.append(button(`Memory ${record.id} · ${record.scope.kind} · ${record.state}`, () => inspect(record)));
+      const scope = record.scope.kind === 'assistant.ordinary' ? 'All ordinary chats' : record.scope.kind;
+      row.append(button(`Memory ${record.id} · ${scope} · ${record.state}`, () => inspect(record)));
       list.append(row);
     }
     next = page.next;

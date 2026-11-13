@@ -199,16 +199,17 @@ export class PersonalContextService {
       source.role === 'user' && id(source.version) && digest(source.contentDigest) &&
       (source.projectId === null || id(source.projectId)) && typeof source.sensitive === 'boolean' ? source : null;
   }
-  private sourceScopeMatches(scopeValue: PersonalScope, source: ConversationSourceProof): boolean {
+  private sourceScopeMatches(scopeValue: PersonalScope, source: ConversationSourceProof, category: Category): boolean {
     return (scopeValue.kind === 'conversation' && scopeValue.id === source.conversationId) ||
-      (scopeValue.kind === 'project' && scopeValue.id === source.projectId);
+      (scopeValue.kind === 'project' && scopeValue.id === source.projectId) ||
+      (scopeValue.kind === 'assistant.ordinary' && source.projectId === null && category === 'preferences');
   }
   private currentConversationSource(value: ReviewedFact): ConversationSourceProof | null {
     const provenance = value.provenance;
     if (provenance.kind !== 'conversation-message') return null;
     const source = this.conversationSource(provenance);
     return source && source.version === provenance.version && source.contentDigest === provenance.contentDigest &&
-      this.sourceScopeMatches(value.scope, source) && (!source.sensitive || value.sensitive) ? source : null;
+      this.sourceScopeMatches(value.scope, source, value.category) && (!source.sensitive || value.sensitive) ? source : null;
   }
   private requireCurrentConversationSource(value: ReviewedFact): void {
     if (value.provenance.kind === 'conversation-message')
@@ -220,7 +221,7 @@ export class PersonalContextService {
       const source = this.conversationSource(input.source);
       check(source, 'conversation_source_unavailable');
       check(source.version === input.source.version && source.contentDigest === input.source.contentDigest, 'stale_conversation_source');
-      check(input.purpose === 'knowledge' && this.sourceScopeMatches(input.scope, source), 'conversation_source_scope_mismatch');
+      check(input.purpose === 'knowledge' && this.sourceScopeMatches(input.scope, source, input.category), 'conversation_source_scope_mismatch');
       check(!source.sensitive || input.sensitive, 'sensitive_source_requires_sensitive_fact');
       return structuredClone(input.source);
     }

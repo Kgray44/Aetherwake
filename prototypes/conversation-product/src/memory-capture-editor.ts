@@ -44,7 +44,7 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
   field('Memory', text);
   const scope = select('Scope', options.projectAvailable
     ? [['conversation', 'This conversation'], ['project', 'This project']]
-    : [['conversation', 'This conversation']]);
+    : [['conversation', 'This conversation'], ['assistant.ordinary', 'All ordinary chats (preferences only)']]);
   const category = select('Category', [['technical', 'Technical fact'], ['decisions', 'Decision'],
     ['preferences', 'Preference'], ['projects', 'Project detail']]);
   const keywords = document.createElement('input');
@@ -64,6 +64,10 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
   form.addEventListener('submit', event => {
     event.preventDefault();
     if (review.disabled) return;
+    if (scope.value === 'assistant.ordinary' && category.value !== 'preferences') {
+      options.report('Choose Preference to save a memory for all ordinary chats.');
+      return;
+    }
     const terms = [...new Set(keywords.value.split(',').map(term => term.trim()).filter(Boolean))];
     if (!text.value.trim() || text.value.length > 4096 || !terms.length || terms.length > 16 || terms.some(term => term.length > 64)) {
       options.report('Enter a memory and up to 16 search terms of 64 characters each.');
