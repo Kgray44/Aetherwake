@@ -40,7 +40,7 @@ export class ConversationDraftSession {
   private documents: DraftDocument[] = [];
   private editRevision = 0;
   private known: ConversationDraftRecord | null = null;
-  private unconfirmedSave: (Pick<ConversationDraftRecord,'version'|'content'|'documents'> & { editRevision: number }) | null = null;
+  private unconfirmedSave: (Pick<ConversationDraftRecord,'version'|'content'|'documents'> & { editRevision: number; acceptedClear: boolean }) | null = null;
   private remote: ConversationDraftRecord | null = null;
   private error: string | null = null;
   private loading = true;
@@ -146,8 +146,8 @@ export class ConversationDraftSession {
       } catch (error) {
         // A failed delivery can leave the local CAS write committed. Keep the
         // exact attempted draft only until a canonical read establishes its state.
-        if (task?.kind !== 'acknowledge' && /(?:^|: )(?:backend_disconnected|backend_timeout)$/.test(failure(error)))
-          this.unconfirmedSave = {version:expectedVersion+1,content,documents,editRevision};
+        if (/(?:^|: )(?:backend_disconnected|backend_timeout)$/.test(failure(error)))
+          this.unconfirmedSave = {version:expectedVersion+1,content,documents,editRevision,acceptedClear:task?.kind==='acknowledge'};
         await this.recordError(error); const errorValue = new Error(this.blocked() ?? failure(error)); task?.reject(errorValue); this.rejectTasks(errorValue); return;
       } finally { this.saving = false; this.emit(); }
     }
@@ -203,6 +203,7 @@ export class ConversationDraftSession {
     const attempted = this.unconfirmedSave;
     const confirmedSave = attempted?.version === record.version && !differs(attempted);
     this.unconfirmedSave = null;
+    const clearAcceptedDraft = confirmedSave && attempted.acceptedClear && this.editRevision === attempted.editRevision;
     const localIntent = this.dirty() || this.editRevision !== readRevision ||
       (attempted !== null && this.editRevision !== attempted.editRevision) ||
       (!this.known && (this.initialLocal || this.editRevision > 0));
@@ -210,8 +211,10 @@ export class ConversationDraftSession {
     if (this.remote && differsLocally) { this.remote = record; this.error = null; }
     else if (!confirmedSave && localIntent && differsLocally && record.version > (this.known?.version ?? 0)) this.remote = record;
     else {
-      if (!localIntent && !confirmedSave) this.content = record.content;
-      if ((!localIntent && !confirmedSave) || sameDocuments(this.documents, record.documents)) this.documents = record.documents ?? [];
+      const adoptStoredDraft = clearAcceptedDraft || (!localIntent && !confirmedSave);
+      if (adoptStoredDraft) this.content = record.content;
+      if (adoptStoredDraft || sameDocuments(this.documents, record.documents)) this.documents = record.documents ?? [];
+      if (clearAcceptedDraft) this.editRevision++;
       this.known = record; this.remote = null; this.error = null;
     }
     this.emit(); if (this.dirty() && !this.blocked()) this.schedule();

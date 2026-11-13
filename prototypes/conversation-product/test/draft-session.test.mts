@@ -98,6 +98,25 @@ test('an edit generation is retained even when later typing returns to identical
   const f = fixture(), session = f.create(); await session.ready; session.update('Submitted text'); const sent = await session.checkpoint(); session.update('Later typing'); session.update('Submitted text'); assert.equal(await session.acknowledgeSent(sent), false); assert.equal(session.snapshot().content, 'Submitted text'); await session.dispose();
 });
 
+for (const laterEdit of [undefined, 'A later draft', 'Accepted draft']) test('recovery of a committed accepted-draft clear preserves later edits ('+String(laterEdit)+')', async () => {
+  const f = fixture({content:'Accepted draft',version:1,documents:[{id:'note:example',title:'Synthetic note',version:1}]}), session = f.create();
+  await session.ready;
+  const checkpoint = await session.checkpoint();
+  f.loseResponse('backend_disconnected');
+  await assert.rejects(session.acknowledgeSent(checkpoint), /backend_disconnected/);
+  if (laterEdit !== undefined) {
+    session.update('Intermediate edit');
+    session.update(laterEdit);
+  }
+  await session.reload();
+  await session.flush();
+  assert.equal(session.snapshot().phase, 'clean');
+  assert.equal(session.snapshot().content, laterEdit ?? '');
+  assert.equal(session.snapshot().documents.length, laterEdit === undefined ? 0 : 1);
+  assert.equal(f.writes.length, laterEdit === undefined ? 2 : 3);
+  await session.dispose();
+});
+
 test('lost draft response and access denial preserve text; explicit reload reconciles actual saved recovery without replay', async () => {
   const f = fixture(), session = f.create(); await session.ready; f.loseResponse(); session.update('Recovery whose response was lost'); await assert.rejects(session.flush(), /synthetic_response_lost/); assert.equal(session.snapshot().content, 'Recovery whose response was lost'); assert.equal(session.snapshot().phase, 'error');
   await session.reload(); await session.flush(); assert.equal(f.writes.length, 1); assert.equal(session.snapshot().phase, 'clean'); f.deny(true); await assert.rejects(session.reload(), /source_unavailable/); assert.equal(session.snapshot().content, 'Recovery whose response was lost'); f.deny(false); await session.reload(); await session.dispose();
