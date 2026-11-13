@@ -79,6 +79,10 @@ For tasks involving **Vela's visual mind/Presence, GPU nebula, living tendrils, 
 - `prototypes/visual-experience/`: experiments establishing Liquid Intelligence interaction and performance before production commitments.
 - `src/`: application source once implementation is authorized.
 
+## Windows desktop verification
+
+Use the [shared Windows native test slot](docs/engineering/AERYNTH-DESKTOP-TEST-ADMISSION.md) for any already-authorized verifier that can show or activate a window or simulate input. During gaming, only genuinely headless launch and failure paths are permitted. Relay the restriction to child workers and confirm receipt before claiming coverage.
+
 ## Engineering conduct
 
 - Treat the visual experience and Motion Coordinator as first-class work; benchmark framework/rendering alternatives before cementing a stack.
