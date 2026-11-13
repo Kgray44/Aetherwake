@@ -39,7 +39,10 @@ const {
 } = require("./conversation-broker.cjs");
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
+const { memoryRecallUnavailable } = require('./memory-recall-fallback.cjs');
 const {showVelaReview,projectEvidenceMatches}=require('./vela-review.cjs');
+const {capturePersonalMemory}=require('./personal-memory-capture.cjs');
+const {managePersonalMemory}=require('./personal-memory-management.cjs');
 const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
@@ -670,6 +673,10 @@ app.whenReady().then(async () => {
   win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
+      if (typeof command === "string" && ((command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture") ||
+          ["personalMemoryPolicyNative", "personalMemoryManagementNative", "personalMemoryRevokeSourceNative", "authorizeConversationSend",
+           "velaRequestPreview", "velaNativeReview", "authorizeVelaRequest", "velaMemorySearchNative"].includes(command)))
+        throw Error("unauthorized_private_command");
       if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative'].includes(command))throw Error('unauthorized_private_command');
       if (
         event.sender !== win.webContents ||
@@ -790,7 +797,50 @@ app.whenReady().then(async () => {
           event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
         throw new Error("unauthorized_sender");
       let result;
-      if (command === "desktop") result = await call("desktop", input);
+      if (command === "personalMemory") {
+        const currentFrame = () => !closing && !backendFailed && trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized();
+        result = await managePersonalMemory({
+          input, trustedFrame: currentFrame,
+          observeGesture: () => trustedActiveFrame(event) &&
+            event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false),
+          allowWrite: () => storage.allowWrite(), call,
+          confirm: async review => {
+            const labels = { correct: "Correct memory", revoke: "Revoke memory", delete: "Delete memory", export: "Export memory", revokeSource: "Revoke original message" };
+            const detail = review.action === "revokeSource"
+              ? "Hide this message from the app and remove all saved memories that depend on it. The original remains in local history storage. Previous exports, backups, and provider copies may still contain it.\n\nOriginal message\n" + review.sourceText
+              : review.action === "correct" ? "Current memory\n" + review.fact.text + "\n\nReplacement\n" + review.text
+                + "\n\nSearch terms\n" + (review.keywords ?? review.fact.keywords).join(", ")
+              : review.action === "export" ? "Export this fact and its retained revisions to a JSON file you choose. The file contains readable memory text.\n\n" + review.fact.text
+              : (review.action === "delete" ? "Remove this memory and its retained revisions from the profile."
+                : "Keep the record for inspection and exclude it from future recall.")
+                + " Older backups and exports may still contain this memory."
+                + "\n\nMemory " + review.id + " · revision " + review.version;
+            const choice = await reviewDialogs.showMessageBox(win, { type: "question", title: "Aerynth memory",
+              message: labels[review.action] + "?", detail, buttons: ["Cancel", labels[review.action]], defaultId: 0, cancelId: 0, noLink: true });
+            return choice.response === 1;
+          },
+          chooseExport: async () => {
+            const choice = await reviewDialogs.showSaveDialog(win, { title: "Export memory",
+              defaultPath: "aerynth-memory.json", filters: [{ name: "JSON", extensions: ["json"] }] });
+            return choice.canceled ? null : choice.filePath ?? null;
+          },
+          writeExport: (path, bundle) => writeFileSync(path, JSON.stringify(bundle, null, 2), { flag: "wx", mode: 0o600 }),
+        });
+      }
+      else if (command === "personalMemoryCapture") {
+        result = await capturePersonalMemory({
+          input,
+          trustedFrame: () => !closing && !backendFailed && trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized(),
+          observeGesture: () => trustedActiveFrame(event) &&
+            event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false),
+          allowWrite: () => storage.allowWrite(),
+          preview: value => call("personalMemoryCapturePreviewNative", value),
+          showReview: review => reviewProvider({ parent: win, review, experience: "memory-capture", expiresAt: review.expiresAt }),
+          commit: review => call("personalMemoryCaptureCommitNative", review),
+          cancel: id => call("personalMemoryCaptureCancelNative", { id }),
+        });
+      }
+      else if (command === "desktop") result = await call("desktop", input);
       else if (command === "openResource")
         result = await call("openResource", input);
       else if (command === "providerConnection")
@@ -847,7 +897,34 @@ app.whenReady().then(async () => {
           openExternal: (url) => shell.openExternal(url),
         });
       } else if (command === "conversation") {
-        result = await conversationCommand({ win, call, input,reviewSources:reviewProvider, openExternal: (url) => shell.openExternal(url) });
+        result = await conversationCommand({ win, call, input,reviewSources:reviewProvider, openExternal: (url) => shell.openExternal(url),
+          beforeMemoryPreview: async () => {
+            if (!trustedActiveFrame(event) ||
+                await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
+                !trustedActiveFrame(event)) throw Error("personal_memory_user_gesture_required");
+            const policy = await call("personalMemoryPolicyNative", {});
+            if (policy.ordinaryEnabled) return;
+            if (!policy.storageEnabled) throw Error("personal_memory_no_eligible_context");
+            const choice = await reviewDialogs.showMessageBox(win, {
+              type: "question", title: "Aerynth memory", message: "Enable memory for ChatGPT conversations?",
+              detail: "Aerynth will look for relevant saved facts when you send a ChatGPT message. If it finds a match, you’ll review the exact request before it is shared. You can turn this off in Saved memories.",
+              buttons: ["Cancel", "Enable memory"], defaultId: 0, cancelId: 0, noLink: true,
+            });
+            if (choice.response !== 1) throw Error("authorization_cancelled");
+            if (!trustedApplicationFrame(event) || !await storage.allowWrite() || !trustedApplicationFrame(event))
+              throw Error("personal_memory_frame_changed");
+            await call("personalMemoryPolicyNative", { enable: true, expectedVersion: policy.version });
+          },
+          shouldPreviewMemory: async () => {
+            if (!trustedActiveFrame(event)) return false;
+            const policy = await call("personalMemoryPolicyNative", {}).catch(error => {
+              if (memoryRecallUnavailable(error)) return null;
+              throw error;
+            });
+            return trustedActiveFrame(event) && policy?.storageEnabled === true && policy.ordinaryEnabled === true;
+          },
+          validateMemoryReview: () => !closing && !backendFailed && trustedApplicationFrame(event),
+        });
       } else if (command === "vela") {
         if (input?.name === "submissionStatus") {
           const submissionId = input.input?.submissionId;
@@ -894,6 +971,41 @@ app.whenReady().then(async () => {
             reviewProvider,
             missionFileEditRequest:request=>missionFileEditBroker.prepare(event,request),
             observeNativeRequest: observeVelaRequest,
+            beforeMemoryPreview: async () => {
+              if (!trustedActiveFrame(event) ||
+                  await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
+                  !trustedActiveFrame(event)) return false;
+              const policy = await call("personalMemoryPolicyNative", {});
+              if (policy.velaEnabled) return trustedApplicationFrame(event);
+              if (!policy.storageEnabled) throw Error("personal_memory_no_eligible_context");
+              const choice = await reviewDialogs.showMessageBox(win, {
+                type: "question", title: "Aerynth memory", message: "Enable saved memory for the Vela API?",
+                detail: "Vela will look for relevant saved facts in eligible Vela API conversations. If it finds a match, you’ll review the exact request before it is shared. You can turn this off in Saved memories.",
+                buttons: ["Cancel", "Enable memory"], defaultId: 0, cancelId: 0, noLink: true,
+              });
+              if (choice.response !== 1) throw Error("authorization_cancelled");
+              if (!trustedApplicationFrame(event) || !await storage.allowWrite() || !trustedApplicationFrame(event)) return false;
+              await call("personalMemoryPolicyNative", { assistant: "vela", enable: true, expectedVersion: policy.version });
+              return trustedApplicationFrame(event);
+            },
+            shouldPreviewMemory: async () => {
+              if (!trustedActiveFrame(event)) return false;
+              const policy = await call("personalMemoryPolicyNative", {}).catch(error => {
+                if (memoryRecallUnavailable(error)) return null;
+                throw error;
+              });
+              return trustedActiveFrame(event) && policy?.storageEnabled === true && policy.velaEnabled === true;
+            },
+            validateMemoryReview: () => !closing && !backendFailed && trustedApplicationFrame(event),
+            reviewMemorySearch: async ({ request, model }) => {
+              if (!trustedActiveFrame(event)) return false;
+              const choice = await reviewDialogs.showMessageBox(win, {
+                type: "question", title: "Search saved memory", message: "Let the Vela API interpret this request for a memory search?",
+                detail: "The Vela API will send the request below to OpenAI using " + model + ". Saved memories and conversation history stay local during this search. You can review selected facts before sending a reply request.\n\n" + request,
+                buttons: ["Skip search", "Interpret request"], defaultId: 0, cancelId: 0, noLink: true,
+              });
+              return choice.response === 1 && trustedApplicationFrame(event);
+            },
             offerPlanningByDefault: !verify || verifyAirLocal,
             directMessageSend: !verify || verifyAirLocal || verifyMissions && (process.argv.includes('--missions-api-live-only')||process.argv.includes('--missions-persistence-live-only')),
             routeNative: true,

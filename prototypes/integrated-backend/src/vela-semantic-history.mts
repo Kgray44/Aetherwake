@@ -155,6 +155,40 @@ function reviewedCitationText(source: ReviewedEvidenceSource, quote: string) {
   return Buffer.byteLength(text) <= 512 && text.includes(quote) ? text : quote;
 }
 
+export function qualifiedVelaMemoryQueryRoute(api: Pick<VelaApiRuntime, 'qualifiedStructuredRoute'>, version: number, model: string) {
+  return api.qualifiedStructuredRoute(version, [model], semanticHistoryFormats.interpret.schema, instructions.interpret);
+}
+
+/** Native memory review may authorize a single query-only call using an already qualified route. */
+export async function interpretVelaMemoryQuery(
+  api: Pick<VelaApiRuntime, 'qualifiedStructuredRoute' | 'isStructuredQualificationCurrent' | 'structuredProposal'>,
+  input: { request: string; model: string; configurationVersion: number; reviewDigest: string },
+  validateReview: () => void,
+  signal: AbortSignal,
+) {
+  const schema = semanticHistoryFormats.interpret.schema;
+  const instruction = instructions.interpret;
+  const { request, model, configurationVersion, reviewDigest } = input;
+  if (!request.trim() || Buffer.byteLength(request) > 4000) return;
+  validateReview();
+  signal.throwIfAborted();
+  const qualification = qualifiedVelaMemoryQueryRoute(api, configurationVersion, model);
+  if (!qualification) return;
+  const payload = { stage: 'interpret' as const, request };
+  const contextDigest = historyDigest({ configurationVersion, model, reviewDigest, payload });
+  const validate = () => {
+    signal.throwIfAborted();
+    validateReview();
+    if (!api.isStructuredQualificationCurrent(qualification)) throw Error('semantic_history_disclosure_denied');
+  };
+  validate();
+  const output = await api.structuredProposal({ requestId: randomUUID(), model, payload, instruction,
+    schema, binding: { configurationVersion, contextDigest }, validate }, signal);
+  validate();
+  const proposal = parseSemanticHistoryProposal(output);
+  if (proposal?.version === 2) return proposal;
+}
+
 /** Search can expand only within the source bodies approved for this turn. */
 export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, intent: string,
   sources: readonly ReviewedEvidenceSource[], configurationVersion: number, model: string,
