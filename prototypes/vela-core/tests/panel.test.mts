@@ -432,6 +432,33 @@ test('terminal status survives request completion and refresh; connection probe 
   panel.dispose(); assert.equal(root.children.length, 0);
 });
 
+test('Vela source search keeps the latest query when an older lookup finishes last', async () => {
+  const doc = new Document(), root = doc.createElement('main');
+  type Results = Awaited<ReturnType<VelaClient['search']>>;
+  let resolvePrevious!: (results: Results) => void;
+  const previous = new Promise<Results>(resolve => { resolvePrevious = resolve; });
+  const newest = { id: 'file:new', kind: 'resource' as const, title: 'Latest source', version: 2 };
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => state(), {
+    search: async text => text === 'old' ? previous : [newest],
+  }));
+  try {
+    await panel.open();
+    const input = root.find(node => node.getAttribute('aria-label') === 'Search your work')!;
+    input.value = 'old';
+    input.fire('input');
+    input.closest('form')!.fire('submit');
+    input.value = 'latest';
+    input.fire('input');
+    input.closest('form')!.fire('submit');
+    const results = root.find(node => node.className === 'vela-core-results')!;
+    await settles(() => results.textContent.includes(newest.title));
+    resolvePrevious([{ ...newest, id: 'file:old', title: 'Outdated source' }]);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(results.textContent, /Latest source/);
+    assert.doesNotMatch(results.textContent, /Outdated source/);
+  } finally { panel.dispose(); }
+});
+
 test('a rejected file selection leaves the previous Vela sources intact', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];

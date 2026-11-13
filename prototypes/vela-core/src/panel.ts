@@ -168,12 +168,24 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   search.type = 'search'; search.placeholder = 'Find a note, chat, task, or workspace'; search.maxLength = 200; search.setAttribute('aria-label', 'Search your work'); searchButton.type = 'submit';
   const searchResults = el('div', 'vela-core-results'); searchResults.setAttribute('aria-live', 'polite'); searchForm.append(search, searchButton);
   sourcePanel.body.append(searchForm, searchResults);
+  let sourceSearchGeneration = 0;
+  const invalidateSourceSearch = () => {
+    sourceControls.clear();
+    searchResults.replaceChildren();
+    return ++sourceSearchGeneration;
+  };
+  search.addEventListener('input', () => {
+    invalidateSourceSearch();
+    searchButton.disabled = false;
+  });
   searchForm.addEventListener('submit', event => { event.preventDefault(); void run(async () => {
+    const generation = invalidateSourceSearch();
+    const isCurrent = () => !disposed && generation === sourceSearchGeneration;
     searchButton.disabled = true;
-    try { const results = await client.search(search.value); if (disposed) return; sourceControls.clear(); searchResults.replaceChildren();
+    try { const results = await client.search(search.value); if (!isCurrent()) return;
       if (!results.length) searchResults.append(el('p', 'vela-core-secondary', 'No matching items are available in this view.'));
       for (const ref of results) { const row = el('div', 'vela-core-result');
-        if (ref.kind === 'resource') { const include = el('input'); include.type = 'checkbox'; include.checked = selected.has(ref.id); sourceControls.set(ref.id, include); include.addEventListener('change', () => { if (include.checked) selected.set(ref.id, ref); else selected.delete(ref.id); renderSelection(); }); row.append(label(ref.title, include), el('span', 'vela-core-meta', ref.resourceKind || 'Item')); }
+        if (ref.kind === 'resource') { const include = el('input'); include.type = 'checkbox'; include.checked = selected.has(ref.id); sourceControls.set(ref.id, include); include.addEventListener('change', () => { if (!isCurrent()) return; if (include.checked) selected.set(ref.id, ref); else selected.delete(ref.id); renderSelection(); }); row.append(label(ref.title, include), el('span', 'vela-core-meta', ref.resourceKind || 'Item')); }
         else row.append(el('span', undefined, ref.title), el('span', 'vela-core-meta', ref.kind));
         if (ref.resourceKind === 'agent' && current?.planningProviders) row.append(button('Use agent profile', () => {
           if (busy) return;
@@ -184,7 +196,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         }));
         if (options.onOpenSubject) row.append(button('Open', () => options.onOpenSubject?.(ref))); searchResults.append(row);
       }
-    } finally { searchButton.disabled = false; }
+    } catch (error) { if (isCurrent()) throw error; }
+    finally { if (isCurrent()) searchButton.disabled = false; }
   }); });
   const native = disclosure('Create locally', 'vela-core-tools'), nativeTitle = el('input'), nativeProject = el('select'); let projectChosen = false;
   nativeTitle.maxLength = 200; nativeTitle.placeholder = 'Give it a name'; nativeProject.setAttribute('aria-label', 'New workspace project'); nativeProject.addEventListener('change', () => { projectChosen = true; updateWorkspaceAvailability(); });
