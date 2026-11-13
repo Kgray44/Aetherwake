@@ -90,6 +90,16 @@ test('native capture reviews exact source, saves once, and leaves provider use o
     assert.throws(() => recall.approve('0'.repeat(64)), /personal_memory_body_changed/);
     recall.approve(recall.bodyDigest);
     assert.doesNotThrow(() => recall.validate(recall.turn));
+    const followupTurn = { ...turn, messages: [{ role: 'user', content: 'What did we settle on?' }] } as const;
+    const sourceAnchors = [{ kind: 'conversation-message' as const, conversationId: input.conversationId, messageId: input.messageId }];
+    assert.equal(await review.prepareOrdinaryRecall('other-chat', followupTurn), null);
+    const ordinaryAnchored = await review.prepareOrdinaryRecall('other-chat', followupTurn, sourceAnchors);
+    assert.ok(ordinaryAnchored);
+    assert.deepEqual(ordinaryAnchored.manifest.items.map(item => item.factId), [saved.id]);
+    ordinaryAnchored.approve(ordinaryAnchored.bodyDigest);
+    assert.doesNotThrow(() => ordinaryAnchored.validate(ordinaryAnchored.turn));
+    assert.equal(await review.prepareOrdinaryRecall('foreign-chat', followupTurn, sourceAnchors), null);
+    assert.equal(await review.prepareOrdinaryRecall('other-chat', { ...followupTurn, webSearch: true }, sourceAnchors), null);
     const velaInput = { conversationId: 'vela-chat', projectId: 'project', requestId: 'vela-recall',
       intent: 'Which relay?', prompt: 'Trusted Vela envelope\n{"intent":"Which relay?"}' };
     assert.equal(await review.prepareVelaRecall(velaInput), null);
