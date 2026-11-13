@@ -154,11 +154,13 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const pickLocalSources=async(kind:'files'|'folder')=>{
     if(!client.pickSources)throw Error('source_picker_unavailable');
     const picked=await client.pickSources({kind,destination:'context'});
-    for(const source of picked.resources){
+    if(disposed)return;
+    const refs=picked.resources.map((source):ResourceRef=>{
       const version=source.version;
       if(!Number.isSafeInteger(version)||!version||version<1)throw Error('source_version_unavailable');
-      selected.set(source.id,{id:source.id,kind:'resource',resourceKind:source.kind,title:source.title,version,projectId:source.projectId});
-    }
+      return {id:source.id,kind:'resource',resourceKind:source.kind,title:source.title,version,projectId:source.projectId};
+    });
+    for(const ref of refs)selected.set(ref.id,ref);
     renderSelection();
   };
   localFilesPanel.body.append(button('Choose files…',()=>pickLocalSources('files')),button('Choose a folder…',()=>pickLocalSources('folder')));

@@ -432,6 +432,33 @@ test('terminal status survives request completion and refresh; connection probe 
   panel.dispose(); assert.equal(root.children.length, 0);
 });
 
+test('a rejected file selection leaves the previous Vela sources intact', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  const original = { id: 'file:original', kind: 'file' as const, title: 'Original.docx', version: 2, projectId: null };
+  const extra = { ...original, id: 'file:extra', title: 'Extra.docx' };
+  let files = [original];
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    pickSources: async () => ({ resources: files }),
+    request: async input => { turns.push(input); return request({ state: 'responded' }); },
+  }));
+  try {
+    await panel.open();
+    named(root, 'Choose files…').fire('click');
+    await settles(() => !!named(root, 'Remove source Original.docx'));
+    files = [extra, { ...extra, id: 'file:invalid', version: 0 }];
+    named(root, 'Choose files…').fire('click');
+    await settles(() => !!root.find(node => node.className === 'vela-core-error' && !node.hidden && !!node.textContent));
+    const composer = root.querySelector('textarea')!;
+    composer.value = 'Review the original.';
+    composer.fire('input');
+    composer.fire('keydown', { key: 'Enter' });
+    await settles(() => turns.length === 1);
+    assert.deepEqual(turns[0].resourceIds, [original.id]);
+  } finally { panel.dispose(); }
+});
+
 for (const outcome of ['responded', 'provider-unavailable', 'cancelled', 'unknown'] as const) test('the selected file composer preserves explicit Send and handles '+outcome, async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
