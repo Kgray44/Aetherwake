@@ -362,10 +362,22 @@ test('composed artifact mission retains verified files when a native branch fail
     assert.deepEqual(result.tasks.find(task => task.id === notes.id)?.attempts.map(attempt => attempt.outcome), ['failed', 'verified']);
     assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, usage.usedToday + 1);
     const trace = await f.core.command('missions', { name: 'execution-profile', input: { id } }) as MissionExecutionProfile;
+    const imageSpan = image.attempts[0].timing?.phases?.execution;
+    assert.ok(imageSpan);
+    const imageNativeOverlapMs = Math.max(0, ...first.tasks.filter(task => task.id !== image.id).flatMap(task =>
+      task.attempts.flatMap(attempt => {
+        const span = attempt.timing?.phases?.execution;
+        return span && attempt.timing?.phases?.clock === image.attempts[0].timing?.phases?.clock ?
+          [Math.min(span[1], imageSpan[1]) - Math.max(span[0], imageSpan[0])] : [];
+      })));
     if (serial) {
       assert.equal(trace.work.peakWorkers, 1);
       assert.equal(trace.work.overlapMs, 0);
-    } else assert.ok(trace.work.overlapMs && trace.work.overlapMs > 0);
+      assert.equal(imageNativeOverlapMs, 0);
+    } else {
+      assert.ok(trace.work.overlapMs && trace.work.overlapMs > 0);
+      assert.ok(imageNativeOverlapMs > 0);
+    }
     assert.ok(trace.work.criticalPath);
     const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
     const report = state.conversation?.messages.find(message => message.missionReport?.missionId === id);
@@ -390,7 +402,7 @@ test('composed artifact mission retains verified files when a native branch fail
     assert.equal(stale?.missionReport?.stale, true);
     if (destination) retainArtifactEvidence(destination, { ...retained, provider: 'real-openai-api',
       objective: goal, missionId: id, reportId: report.id });
-    t.diagnostic(JSON.stringify({ live, serial, id, verified: true, overlapMs: trace.work.overlapMs,
+    t.diagnostic(JSON.stringify({ live, serial, id, verified: true, overlapMs: trace.work.overlapMs, imageNativeOverlapMs,
       criticalPathMs: trace.work.criticalPath.durationMs, elapsedMs, processCpu,
       reportRestored: true, imageRequests: 1, nativeRetries: 1, costCoverage: trace.economics.costCoverage }));
   } finally { await f.close(); }
