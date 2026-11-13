@@ -185,9 +185,11 @@ test('quick search Enter submits pending text immediately and opens the first ex
   input.value='exact phrase ';
   input.fire('input');
   input.fire('keydown',{key:'Enter'});
-  await until(()=>opened.length===1);
+  const switcher=f.view.root.querySelector('.cp-switcher');
+  await until(()=>opened.length===1&&!switcher.open);
   assert.deepEqual(opened,[[resourceId,messageId]]);
   assert.equal(searches,1);
+  assert.equal(f.view.doc.activeElement===switcher.querySelector('summary'),true);
  } finally {await manager?.dispose();f.restore();}
 });
 
