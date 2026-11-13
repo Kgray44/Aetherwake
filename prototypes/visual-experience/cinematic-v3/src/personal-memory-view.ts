@@ -38,21 +38,31 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
   let next: string | null = null;
   let selection = 0;
   let currentPolicy: PersonalPolicy | undefined;
-  const disableMemory = (assistant: 'ordinary' | 'vela', name: string) => button(`Turn off ${name} memory`, async () => {
-    if (!(assistant === 'ordinary' ? currentPolicy?.ordinaryEnabled : currentPolicy?.velaEnabled) || !currentPolicy) return;
-    const version = currentPolicy.version;
-    const updated = await command({ type: 'disableProviderMemory', assistant, version }) as PersonalPolicy;
+  const providerMemory = (assistant: 'ordinary' | 'vela', name: string, enable: boolean) => button(`Turn ${enable ? 'on' : 'off'} ${name} memory`, async () => {
+    if (!currentPolicy || (assistant === 'ordinary' ? currentPolicy.ordinaryEnabled : currentPolicy.velaEnabled) === enable ||
+        (enable && !currentPolicy.storageEnabled)) return;
+    const updated = await command({
+      type: enable ? 'enableProviderMemory' : 'disableProviderMemory', assistant, version: currentPolicy.version,
+    }) as PersonalPolicy | { status: 'cancelled' };
+    if ('status' in updated) {
+      status.textContent = 'Memory settings were not changed.';
+      return;
+    }
     if (!currentPolicy || updated.version >= currentPolicy.version) renderPolicy(updated);
-    status.textContent = `${name} memory is off. Your saved memories are still available here.`;
+    status.textContent = enable ? `${name} memory is on for reviewed sends.` : `${name} memory is off. Your saved memories are still available here.`;
   });
-  const disableChatGPT = disableMemory('ordinary', 'ChatGPT');
-  const disableVela = disableMemory('vela', 'Vela');
-  disableChatGPT.hidden = disableVela.hidden = true;
+  const enableChatGPT = providerMemory('ordinary', 'ChatGPT', true);
+  const disableChatGPT = providerMemory('ordinary', 'ChatGPT', false);
+  const enableVela = providerMemory('vela', 'Vela', true);
+  const disableVela = providerMemory('vela', 'Vela', false);
+  enableChatGPT.hidden = disableChatGPT.hidden = enableVela.hidden = disableVela.hidden = true;
   function renderPolicy(value: PersonalPolicy) {
     currentPolicy = value;
     policy.textContent = 'ChatGPT memory: ' + (value.ordinaryEnabled ? 'Enabled for reviewed sends' : 'Off')
       + ' · Vela memory: ' + (value.velaEnabled ? 'Enabled for reviewed sends' : 'Off');
+    enableChatGPT.hidden = !value.storageEnabled || value.ordinaryEnabled;
     disableChatGPT.hidden = !value.ordinaryEnabled;
+    enableVela.hidden = !value.storageEnabled || value.velaEnabled;
     disableVela.hidden = !value.velaEnabled;
   }
   async function load(after: string | null) {
@@ -168,6 +178,6 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
   }
   const more = button('More memories', async () => { if (next !== null) await load(next); });
   more.hidden = true;
-  section.append(button('Load saved memories', () => load(null)), policy, disableChatGPT, disableVela, status, list, more, detail);
+  section.append(button('Load saved memories', () => load(null)), policy, enableChatGPT, disableChatGPT, enableVela, disableVela, status, list, more, detail);
   return section;
 }

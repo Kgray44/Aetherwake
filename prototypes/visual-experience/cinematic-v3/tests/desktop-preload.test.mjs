@@ -62,15 +62,19 @@ test("saved memory preload routes reads and requires a gesture for mutations wit
   const passive = bridge();
   await passive.host.command("personalMemory", { type: "list", after: null });
   await passive.host.command("personalMemory", { type: "read", id: "synthetic" });
-  for (const type of ["manage", "revokeSource", "disableProviderMemory"])
+  for (const type of ["manage", "revokeSource", "enableProviderMemory", "disableProviderMemory"])
     await assert.rejects(passive.host.command("personalMemory", { type }), /personal_memory_user_gesture_required/);
   assert.equal(passive.calls.length, 2);
   const active = bridge(true);
   for (const command of ["personalMemoryManagementNative", "personalMemoryPolicyNative", "personalMemoryRevokeSourceNative"])
     await assert.rejects(active.host.command(command, {}), /unsupported_command/);
   assert.equal(active.calls.length, 0);
+  await active.host.command("personalMemory", { type: "enableProviderMemory", assistant: "ordinary", version: 2 });
   await active.host.command("personalMemory", { type: "disableProviderMemory", assistant: "vela", version: 2 });
-  assert.deepEqual(active.calls, [["application-command", "personalMemory", { type: "disableProviderMemory", assistant: "vela", version: 2 }]]);
+  assert.deepEqual(active.calls, [
+    ["application-command", "personalMemory", { type: "enableProviderMemory", assistant: "ordinary", version: 2 }],
+    ["application-command", "personalMemory", { type: "disableProviderMemory", assistant: "vela", version: 2 }],
+  ]);
 });
 
 test("explicit native Copy requires current isolated-world activation and never exposes reads or generic clipboard commands", async () => {

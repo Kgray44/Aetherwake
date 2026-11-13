@@ -3,6 +3,40 @@ import test from 'node:test';
 import { componentDocument, named, until } from '../../../conversation-product/test/component-dom.mts';
 import { createPersonalMemoryView } from '../src/personal-memory-view.ts';
 
+test('the inspector requests separate versioned provider opt-ins and handles declined consent', async () => {
+  const f = componentDocument(), restore = f.install(), calls = [];
+  const policy = { version: 3, storageEnabled: true, ordinaryEnabled: false, velaEnabled: false };
+  let storageEnabled = false;
+  try {
+    const view = createPersonalMemoryView(async request => {
+      calls.push(request);
+      if (request.type === 'list') return { records: [], next: null, policy: { ...policy, storageEnabled } };
+      if (request.assistant === 'ordinary') return { status: 'cancelled' };
+      return { ...policy, version: 4, velaEnabled: true };
+    });
+    const ordinary = named(view, 'Turn on ChatGPT memory');
+    const vela = named(view, 'Turn on Vela memory');
+    const load = named(view, 'Load saved memories');
+    load.fire('click');
+    await until(() => !load.disabled && calls.length === 1);
+    assert.equal(ordinary.hidden, true);
+    assert.equal(vela.hidden, true);
+    storageEnabled = true;
+    load.fire('click');
+    await until(() => !ordinary.hidden && !vela.hidden);
+    ordinary.fire('click');
+    await until(() => /Memory settings were not changed/.test(view.textContent));
+    assert.equal(ordinary.hidden, false);
+    vela.fire('click');
+    await until(() => vela.hidden);
+    assert.deepEqual(calls.slice(2), [
+      { type: 'enableProviderMemory', assistant: 'ordinary', version: 3 },
+      { type: 'enableProviderMemory', assistant: 'vela', version: 3 },
+    ]);
+    assert.match(view.textContent, /ChatGPT memory: Off.*Vela memory: Enabled for reviewed sends/);
+  } finally { restore(); }
+});
+
 test('the inspector turns off Vela memory without changing ChatGPT consent or removing saved records', async () => {
   const f = componentDocument(), restore = f.install(), calls = [];
   const policy = { version: 3, ordinaryEnabled: true, velaEnabled: true };

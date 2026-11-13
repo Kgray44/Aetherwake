@@ -55,6 +55,50 @@ test("turning off ChatGPT memory requires current gesture and forwards only a ve
   ]);
 });
 
+test("provider memory opt-in requires native consent and a current version, frame and write admission", async () => {
+  for (const outcome of ["ordinary", "vela", "cancelled", "stale", "storage off", "frame", "reserve", "changed during review", "lost result"]) {
+    const assistant = outcome === "ordinary" ? "ordinary" : "vela";
+    const calls = [];
+    let current = true;
+    let writesAllowed = true;
+    let confirmed = false;
+    const policy = { version: outcome === "stale" ? 4 : 3, storageEnabled: outcome !== "storage off" };
+    const operation = managePersonalMemory({
+      input: { type: "enableProviderMemory", assistant, version: 3, confirmed: true },
+      trustedFrame: () => current,
+      observeGesture: () => true,
+      allowWrite: () => writesAllowed,
+      async confirm(review) {
+        assert.deepEqual(review, { action: "enableProviderMemory", assistant });
+        confirmed = true;
+        if (outcome === "frame") current = false;
+        if (outcome === "reserve") writesAllowed = false;
+        return outcome !== "cancelled";
+      },
+      async call(command, request) {
+        assert.equal(command, "personalMemoryPolicyNative");
+        calls.push(request);
+        if (calls.length === 1) return policy;
+        assert.equal(confirmed, true);
+        if (outcome === "changed during review") throw Error("stale_personal_context_version");
+        if (outcome === "lost result") current = false;
+        return { ...policy, version: 4, [assistant === "ordinary" ? "ordinaryEnabled" : "velaEnabled"]: true };
+      },
+    });
+    const errors = {
+      stale: /stale_personal_context_version/, "storage off": /personal_storage_disabled/,
+      frame: /personal_memory_frame_changed/, reserve: /storage_reserve_admission_denied/,
+      "changed during review": /stale_personal_context_version/, "lost result": /personal_memory_frame_changed/,
+    };
+    if (errors[outcome]) await assert.rejects(operation, errors[outcome]);
+    else if (outcome === "cancelled") assert.deepEqual(await operation, { status: "cancelled" });
+    else assert.equal((await operation).version, 4);
+    const attemptedWrite = ["ordinary", "vela", "changed during review", "lost result"].includes(outcome);
+    assert.deepEqual(calls, attemptedWrite ? [{}, { assistant, enable: true, expectedVersion: 3 }] : [{}], outcome);
+    assert.equal(confirmed, !["stale", "storage off"].includes(outcome));
+  }
+});
+
 test("source revocation only commits the native binding after confirmation and renewed admission", async () => {
   const binding = { conversationId: "chat", messageId: "message", expectedRevision: 7, reviewedFact: { id: "fact", version: 3 } };
   for (const outcome of ["apply", "cancel", "frame", "reserve", "gesture", "stale", "changed source", "unbound", "changed fact binding"]) {

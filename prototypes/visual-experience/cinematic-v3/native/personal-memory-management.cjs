@@ -11,15 +11,31 @@ async function managePersonalMemory({ input, trustedFrame, observeGesture, allow
     requireFrame();
     return result;
   }
-  if (!["manage", "disableProviderMemory", "revokeSource"].includes(input?.type)) throw Error("invalid_personal_memory_management");
+  if (!["manage", "enableProviderMemory", "disableProviderMemory", "revokeSource"].includes(input?.type))
+    throw Error("invalid_personal_memory_management");
   if (!await observeGesture()) throw Error("personal_memory_user_gesture_required");
   requireFrame();
   if (!await allowWrite()) throw Error("storage_reserve_admission_denied");
   requireFrame();
-  if (input.type === "disableProviderMemory") {
-    if (!["ordinary", "vela"].includes(input.assistant) || !Number.isSafeInteger(input.version) || input.version < 1)
+  if (input.type === "enableProviderMemory" || input.type === "disableProviderMemory") {
+    const { assistant, version } = input;
+    if (!["ordinary", "vela"].includes(assistant) || !Number.isSafeInteger(version) || version < 1)
       throw Error("invalid_privacy_policy");
-    return call("personalMemoryPolicyNative", { assistant: input.assistant, enable: false, expectedVersion: input.version });
+    const enable = input.type === "enableProviderMemory";
+    if (enable) {
+      const policy = await call("personalMemoryPolicyNative", {});
+      requireFrame();
+      if (policy.version !== version) throw Error("stale_personal_context_version");
+      if (!policy.storageEnabled) throw Error("personal_storage_disabled");
+      if (policy[assistant === "ordinary" ? "ordinaryEnabled" : "velaEnabled"]) return policy;
+      if (await confirm({ action: "enableProviderMemory", assistant }) !== true) return { status: "cancelled" };
+      requireFrame();
+      if (!await allowWrite()) throw Error("storage_reserve_admission_denied");
+      requireFrame();
+    }
+    const updated = await call("personalMemoryPolicyNative", { assistant, enable, expectedVersion: version });
+    requireFrame();
+    return updated;
   }
   if (input.type === "revokeSource") {
     const { id, version } = input;

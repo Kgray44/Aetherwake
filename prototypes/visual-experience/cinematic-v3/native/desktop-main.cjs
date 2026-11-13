@@ -849,6 +849,15 @@ app.whenReady().then(async () => {
             event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false),
           allowWrite: () => storage.allowWrite(), call,
           confirm: async review => {
+            if (review.action === "enableProviderMemory") {
+              const name = review.assistant === "ordinary" ? "ChatGPT" : "Vela’s OpenAI API";
+              const choice = await reviewDialogs.showMessageBox(win, {
+                type: "question", title: "Aerynth memory", message: `Enable saved memory for ${name}?`,
+                detail: "Aerynth can look for relevant saved memories in eligible conversations. You’ll review the exact request before anything is shared. You can turn this off in Saved memories.",
+                buttons: ["Cancel", "Enable memory"], defaultId: 0, cancelId: 0, noLink: true,
+              });
+              return choice.response === 1;
+            }
             const labels = { correct: "Correct memory", revoke: "Revoke memory", delete: "Delete memory", export: "Export memory", revokeSource: "Revoke original message" };
             const scope = review.target?.scope;
             const detail = review.action === "revokeSource"
