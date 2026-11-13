@@ -3476,6 +3476,20 @@ export class BackendCore {
       state.activeAnswer = { requestId: live.requestId, providerId: this.active.providerId, text: this.assistantText.slice(0, 480), truncated: this.assistantText.length > 480 };
     }
     const context=this.velaHost.context(),scope=this.velaHost.scope();
+    const conversationId = state.conversation?.resourceId;
+    if (conversationId && this.conversationAccess.resource(conversationId, 'read')) {
+      const executions = new Map(Object.values(this.state.executions)
+        .filter(execution => execution.resourceId === conversationId && execution.providerId === VELA_API_PROVIDER &&
+          execution.responseId && execution.memoryDisclosure)
+        .map(execution => [execution.commandId, execution]));
+      for (const request of state.requests) {
+        if (request.conversationId !== conversationId || !request.reviewedMemory) continue;
+        const execution = executions.get('vela-api:' + request.id);
+        if (execution?.memoryDisclosure && execution.inputMessageId === request.inputMessageId &&
+            request.inputMessageId && this.conversationReadAccess(conversationId, request.inputMessageId))
+          request.memoryDisclosure = structuredClone(execution.memoryDisclosure);
+      }
+    }
     const jobScopeDigest=this.toolPermissionScopeDigest();
     for(const request of state.requests)if(request.toolWorkflow){
       const input=state.conversation?.messages.find(message=>message.id===request.inputMessageId&&message.requestId===request.id&&message.role==='user');
