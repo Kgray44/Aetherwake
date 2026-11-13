@@ -13,6 +13,7 @@ import type { NoteExperiencePort } from "../note-contracts.ts";
 import { mountNoteExperience } from "../note-view.ts";
 import { blockDocument } from "./component-dom.mts";
 import { until } from "../../conversation-product/test/component-dom.mts";
+import { createHash } from "node:crypto";
 
 function fixture(path = ":memory:") {
   const kernel = WorkspaceKernel.open(path),
@@ -84,6 +85,52 @@ function sessionPort(f: ReturnType<typeof fixture>): NoteExperiencePort {
     renameNote: async (input) => f.service.renameNote(input),
   };
 }
+
+test("saving a reply creates one editable note and exact provenance in the same transaction", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "aerynth-reply-note-"));
+  const dbPath = join(directory, "canonical.sqlite");
+  const f = fixture(dbPath);
+  let reopened: ReturnType<typeof fixture> | undefined, closed = false;
+  t.after(() => {
+    if (!closed) f.kernel.close();
+    reopened?.kernel.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const conversation = f.kernel.createConversationRef("Source conversation");
+  const reply = { resourceId: conversation.id, messageId: "msg-7", sequence: 7, content: "## Answer\n\nUse the canonical source.", projectId: null };
+  let readable = true, fail = false;
+  const host = {
+    resolveReply: () => readable ? reply : null,
+    createNote: ({ title, content, projectId }) => {
+      const note = f.kernel.createNote(title, content, projectId);
+      if (fail) throw Error("synthetic_write_failure");
+      return note.id;
+    },
+  };
+  const command = { resourceId: conversation.id, messageId: reply.messageId, commandId: "save:reply" };
+  fail = true;
+  assert.throws(() => f.service.captureConversationReply(command, host), /synthetic_write_failure/);
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM notes").get()?.count, 0);
+  fail = false;
+  const receipt = f.service.captureConversationReply(command, host);
+  assert.equal(f.service.readNote(receipt.noteId).resource.content, reply.content);
+  assert.deepEqual(receipt.source, { resourceId: reply.resourceId, messageId: reply.messageId, sequence: 7, digest: createHash("sha256").update(reply.content).digest("hex") });
+  f.service.commitNote({ resourceId: receipt.noteId, expectedResourceVersion: 1, expectedDraftVersion: 0, content: "Edited copy" });
+  assert.deepEqual(f.service.captureConversationReply(command, host), receipt);
+  assert.equal(f.service.readNote(receipt.noteId).resource.content, "Edited copy");
+  assert.throws(() => f.service.captureConversationReply(command, { ...host, resolveReply: () => ({ ...reply, content: "Changed source" }) }), /reply_capture_command_conflict/);
+  assert.throws(() => f.service.captureConversationReply({ ...command, messageId: "other" }, host), /source_unavailable/);
+  readable = false;
+  assert.throws(() => f.service.captureConversationReply(command, host), /source_unavailable/);
+  assert.equal(f.service.readNote(receipt.noteId).resource.content, "Edited copy");
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM notes").get()?.count, 1);
+  f.kernel.close();
+  closed = true;
+  reopened = fixture(dbPath);
+  readable = true;
+  assert.deepEqual(reopened.service.captureConversationReply(command, { ...host, createNote() { throw Error("replay must not create another note"); } }), receipt);
+  assert.equal(reopened.service.readNote(receipt.noteId).resource.content, "Edited copy");
+});
 
 test("editor recovers the durable draft and commits through the same canonical note service", async (t) => {
   const f = fixture();

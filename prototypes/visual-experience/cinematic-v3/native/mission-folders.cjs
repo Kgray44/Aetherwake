@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs/promises');
 const {promisify}=require('node:util'),{execFile}=require('node:child_process');
-const FLAG='--missions-folders-only',MiB=1024*1024;
+const FLAG='--missions-folders-only',COMPOSER_ONLY='--vela-composer-source-only',MiB=1024*1024;
 function assertFoldersJourney({argv,profile,localAppData=process.env.LOCALAPPDATA}){
  assert(argv.includes('--integration-vela-missions')&&argv.includes(FLAG),'explicit_folder_journey_required');
  assert(!argv.some(value=>value.startsWith('--missions-')&&value!==FLAG)&&!argv.includes('--bootstrap-vela-api')&&!argv.includes('--voice-synthetic-input'),'folder_journey_is_offline_and_exclusive');
@@ -37,6 +37,7 @@ $ownedProcess=${pid}
 $ownedMain=[IntPtr]${ownerHwnd}
 $target=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encoded}'))
 $deadline=[DateTime]::UtcNow.AddSeconds(4)
+$lastEditIds=@();$sawDialog=$false
 function Assert-ExactOwner([IntPtr]$handle){
  if([SourceOwnedWindow]::GetForegroundWindow() -ne $handle){throw 'source_dialog_not_foreground'}
  $nativeProcess=[uint32]0;[void][SourceOwnedWindow]::GetWindowThreadProcessId($handle,[ref]$nativeProcess)
@@ -56,27 +57,35 @@ try{do{
     continue
    }
    Assert-ExactOwner $handle
+   $sawDialog=$true
    $window=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
    $editType=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Edit)
-   $edits=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$editType)|Where-Object {$_.Current.AutomationId -ceq '1148' -or $_.Current.AutomationId -ceq '1001'})
-   if($edits.Count -ne 1){$controls=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$editType)|Select-Object -First 16|ForEach-Object {@{automationId=$_.Current.AutomationId;class=$_.Current.ClassName;type=$_.Current.ControlType.ProgrammaticName;enabled=$_.Current.IsEnabled;offscreen=$_.Current.IsOffscreen}});throw ('source_dialog_exact_filename_control_unavailable '+(ConvertTo-Json -InputObject $controls -Compress))}
+   $controls=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$editType))
+   $edits=@($controls|Where-Object {$_.Current.IsEnabled -and ($_.Current.AutomationId -ceq '1148' -or $_.Current.AutomationId -ceq '1001' -or $_.Current.Name -match '^(File name|Folder):?$')})
+   if($edits.Count -ne 1){$lastEditIds=@($controls|ForEach-Object {$_.Current.AutomationId}|Sort-Object -Unique|Select-Object -First 24);continue}
+   $buttonMatch=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1'))
+   $buttons=$window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$buttonMatch)
+   if($buttons.Count -ne 1){throw 'source_dialog_primary_button_unavailable'}
    $value=$edits[0].GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
    if($value.Current.IsReadOnly){throw 'source_dialog_filename_readonly'}
    Assert-ExactOwner $handle;$value.SetValue($target)
-   $buttonMatch=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1'))
-   $buttons=$window.FindAll([System.Windows.Automation.TreeScope]::Descendants,$buttonMatch)
-   if($buttons.Count -ne 1 -or !$buttons[0].Current.IsEnabled){throw 'source_dialog_primary_button_unavailable'}
+   if(!$buttons[0].Current.IsEnabled){throw 'source_dialog_primary_button_unavailable'}
    Assert-ExactOwner $handle;$buttons[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
    Write-Output 'EXACT_OWNED_SOURCE_SELECTED';exit 0
   }
  }
  Start-Sleep -Milliseconds 40
 }while([DateTime]::UtcNow -lt $deadline)
+if($sawDialog){throw ('source_dialog_exact_filename_control_unavailable '+(ConvertTo-Json -InputObject $lastEditIds -Compress))}
 throw 'source_dialog_exact_owned_window_unavailable'
 }catch{[Console]::Error.WriteLine('OWNED_SOURCE_WINDOWS '+(ConvertTo-Json -InputObject @([SourceOwnedWindow]::Owned([uint32]$ownedProcess)) -Compress));throw}`;
 }
 const SOURCE_DIALOG_FAILURES=new Set(['source_dialog_not_foreground','source_dialog_wrong_process','source_dialog_wrong_owner_chain','source_dialog_exact_filename_control_unavailable','source_dialog_filename_readonly','source_dialog_primary_button_unavailable','source_dialog_exact_owned_window_unavailable']);
-function safeDialogFailure(stderr){const code=String(stderr??'').replace(/_x[0-9a-f]{4}_/giu,' ').match(/FullyQualifiedErrorId\s*:\s*(source_dialog_[a-z_]+)/u)?.[1];return SOURCE_DIALOG_FAILURES.has(code)?code:'source_dialog_unclassified_failure';}
+function safeDialogFailure(stderr){
+ const clean=String(stderr??'').replace(/_x[0-9a-f]{4}_/giu,' ');
+ const code=clean.match(/(?:FullyQualifiedErrorId\s*:\s*|<S S="Error">)(source_dialog_[a-z_]+)\b/u)?.[1];
+ return SOURCE_DIALOG_FAILURES.has(code)?code:'source_dialog_unclassified_failure';
+}
 async function selectOwnedSource(input){
  try{const {stdout}=await promisify(execFile)('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(sourceDialogScript(input),'utf16le').toString('base64')],{windowsHide:true,timeout:5000,maxBuffer:4096});
   assert.equal(stdout.trim(),'EXACT_OWNED_SOURCE_SELECTED');return {foregroundPid:input.pid,ownerChainVerified:true,title:input.kind==='folder'?'Choose a folder':'Choose files',kind:input.kind,selection:'exact-owned-neutral-fixture'};
@@ -93,6 +102,12 @@ async function run({argv,profile,documents,receipt,rpc,js,click,fill,wait,captur
  receipt.profileContent='Workspace created through actual native Environment Navigator input; actual native file/folder pickers select only owned neutral Documents fixtures. Metadata browsing, no implicit child import, zero provider calls.';
  receipt.folders={fixtureDirectory:path.basename(fixture.root),fixtureAllocationBoundBytes:fixture.allocationBoundBytes,nativeDialogs:[],externalExplorerOpen:'not invoked'};
  const resources='[data-surface-id="resources"]',q=JSON.stringify;
+ if(argv.includes(COMPOSER_ONLY)){
+  receipt.profileContent='Vela composer attaches a neutral local text fixture using the owned Windows file picker.';
+  await checkComposerSource({fixture,profile,receipt,rpc,js,click,fill,wait,withNativeSourceDialog,ownerHwnd});
+  await capture('00-vela-composer-source');
+  return;
+ }
  // Private RPC mutation does not drive the renderer's navigation/panel scope.
  // Use the ordinary workspace creation UI so Resources captures its real scope.
  await click('#workspace-manager');await click('.en-navigator [data-action="toggle-create"]');await click('.en-navigator [data-action="create-workspace"]');
@@ -123,5 +138,26 @@ async function run({argv,profile,documents,receipt,rpc,js,click,fill,wait,captur
  assert.ok(!JSON.stringify(final).includes(fixture.root));assert.doesNotMatch(JSON.stringify(final),/sourceGrantId|selected_path/);
  assert.equal(activity.providerRequests,0);assert.equal(activity.codexConnections,0);await capture('02-folder-metadata-browse');
  receipt.folders.canonical={folderId,folders:1,independentFiles:1,placements:2,implicitChildResources:0};receipt.providerActivity={after:activity};
+}
+async function checkComposerSource({fixture,profile,receipt,rpc,js,click,fill,wait,withNativeSourceDialog,ownerHwnd}){
+ const beforePick=await rpc('desktop',{type:'snapshot'}),q=JSON.stringify;
+ const vela='#vela-assistant-surface[data-surface-id="vela"]';
+ const composer=vela+' textarea[aria-label="Message Vela"]',draft='Synthetic draft awaiting its source.';
+ if(!await js(`document.querySelector(${q(composer)})?.getClientRects().length>0`))await click('#vela');
+ await fill(composer,draft);
+ await withNativeSourceDialog(async()=>{
+  const selected=selectOwnedSource({pid:process.pid,ownerHwnd,documents:fixture.documents,fixtureRoot:fixture.root,target:fixture.file,kind:'files',diagnosticDirectory:path.join(profile,'mission-evidence')});selected.catch(()=>{});
+  await click(vela+' button[aria-label="Attach files"]');
+  receipt.folders.composerDialog=await selected;
+ });
+ await wait('Composer keeps the draft and adds the exact local source chip',()=>js(`(()=>{const composer=document.querySelector(${q(composer)});return composer?.value===${q(draft)}&&document.activeElement===composer&&!!document.querySelector(${q(vela+' button[aria-label="Remove source Independent.txt"]')});})()`));
+ const afterPick=await rpc('desktop',{type:'snapshot'}),afterActivity=await rpc('providerActivity',{});
+ assert.equal(afterPick.blocks.length,beforePick.blocks.length,'composer_pick_does_not_place_blocks');
+ assert.equal(afterPick.resources.length,beforePick.resources.length+1,'composer_pick_creates_one_canonical_source');
+ const resource=afterPick.resources.find(item=>item.kind==='file'&&item.title==='Independent.txt');
+ assert.ok(resource?.id,'canonical_composer_source_required');
+ assert.equal(afterActivity.providerRequests,0);assert.equal(afterActivity.codexConnections,0);
+ receipt.folders.composerSource={resourceId:resource.id,title:'Independent.txt',draftPreserved:true,providerRequests:0};
+ receipt.providerActivity={after:afterActivity};
 }
 module.exports={assertFoldersJourney,assertFixtureTarget,prepareFixture,sourceDialogScript,safeDialogFailure,selectOwnedSource,run};

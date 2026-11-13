@@ -78,6 +78,7 @@ export interface OrdinaryResponsesPreview {
  instructions:string;instructionVersion:string;messages:TurnInput['messages'];
  history:{resourceId:string;messageId:string;digest:string;providerId?:string}[];
  contextDigest:string;bodyDigest:string;bodyBytes:number;requiresSourceReview:boolean;
+ memoryDigest?: string;
 }
 export type ProviderAuthRequest={providerId:'chatgpt-plan-responses'}&(
  |{type:'begin'}|{type:'maintain'}|{type:'finish';attemptId:string}|{type:'cancel';attemptId?:string}
@@ -263,6 +264,17 @@ export interface Options {
   syntheticTimerClock?: TimerClockReading;
 }
 export interface CommandMap {
+  personalMemoryCapturePreviewNative: { input: import('./personal-memory-review.mts').CaptureRequest; output: import('./personal-memory-review.mts').CaptureReview };
+  personalMemoryCaptureCommitNative: { input: import('./personal-memory-review.mts').CaptureReview; output: { id: string } };
+  personalMemoryCaptureCancelNative: { input: { id: string }; output: null };
+  personalMemoryPolicyNative: { input: { enable?: true; expectedVersion?: number }; output: import('../../personal-context/src/contracts.ts').PersonalPolicy };
+  personalMemoryManagementNative: {
+    input: { type: 'list'; after: string | null } | { type: 'read'; id: string }
+      | { type: 'preview'; request: import('./personal-memory-review.mts').ManagementRequest }
+      | { type: 'commit'; review: import('./personal-memory-review.mts').ManagementReview }
+      | { type: 'cancel'; ticket: string };
+    output: unknown;
+  };
   hostOperationReviewNative:{input:{operationId:string;selection?:{kind:'codex-directory';directory:string}};output:import('../../application-contract/vela-host-operations.ts').VelaHostReviewBinding};
   hostOperationDispatchNative:{input:{binding:import('../../application-contract/vela-host-operations.ts').VelaHostReviewBinding;identityDigest:string;approvalDigest:string};output:import('../../application-contract/windows-maintenance.ts').WindowsMaintenanceDispatchClaim};
   hostOperationResultNative:{input:import('../../application-contract/vela-host-operations.ts').VelaHostOperationNativeResult;output:import('../../application-contract/vela-tools.ts').VelaHostOperationView};
@@ -379,7 +391,7 @@ export interface CommandMap {
   conversationClock: { input: ConversationSendInput; output: { id: string; resourceId: string; role: 'user'; content: string; revision: number; deviceClockMessageId: string } | null };
   conversationSendPreview: { input: ConversationSendInput; output: ConversationSendPreview };
   /** Trusted native host only; MUST NOT be exposed to a renderer or tool caller. */
-  authorizeConversationSend: { input: { previewId:string; fingerprint:string; commandId:string }; output: { grantId:string; expiresAt:string } };
+  authorizeConversationSend: { input: { previewId:string; fingerprint:string; commandId:string; reviewedBodyDigest?:string }; output: { grantId:string; expiresAt:string } };
   conversationSend: { input: { previewId:string; grantId:string; fingerprint:string; commandId:string }; output: Execution };
   desktop: { input: DesktopCommand; output: DesktopSnapshot };
   viewState: { input: { state?: unknown; panels?: WorkspacePanelRequest }; output: unknown };
