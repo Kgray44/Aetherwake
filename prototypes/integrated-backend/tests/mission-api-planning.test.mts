@@ -1994,16 +1994,21 @@ test('project evidence supplies a mission plan across workspaces and remains bou
     }) as Promise<VelaRequest>;
     await assert.rejects(send(false), /authorization_cancelled/);
     assert.equal(f.requests.length, 6);
+    const now = Date.now.bind(Date);
+    let catalogClockOffsetMs = 0;
+    t.mock.method(Date, 'now', () => now() + catalogClockOffsetMs);
     f.replies.push(body => {
       const packet = JSON.parse(body.input[0].content);
       assert.equal(packet.reviewedMissionGap, 'The host counters do not certify readiness.');
-      const now = Date.now.bind(Date);
-      t.mock.method(Date, 'now', () => now() + 61_000);
+      catalogClockOffsetMs = 61_000;
       return reply(perceive('signoff', 'release duty engineer signed handoff'))(body);
     }, body => {
       const packet = JSON.parse(body.input[0].content);
       const source = packet.excerpts.find((item: { title: string }) => item.title === 'Duty review record');
       assert.ok(source);
+      // The catalog refresh happened before this dispatch. Keep the simulated
+      // catalog age out of the native grant check during answer composition.
+      catalogClockOffsetMs = 0;
       return reply({ version: 3, clarification: '', assessment: [
         { key: 'signoff', status: 'supported', passages: [{ source: source.handle, quote: signoffText }], query: '' },
       ] })(body);
@@ -2014,7 +2019,7 @@ test('project evidence supplies a mission plan across workspaces and remains bou
       return response('The duty review record reports sign-off at 16:20.', body.model);
     });
     const followup = await send(true);
-    assert.equal(followup.state, 'responded');
+    assert.equal(followup.state, 'responded', `${followup.errorCode ?? 'no error code'}; provider calls: ${f.requests.length}`);
     assert.equal(followup.missionGapEvidence?.checkpoint.selection.gapIndex, 0);
     assert.ok(followup.missionGapEvidence?.project.sourceIds.includes(signoff.id));
     assert.equal((await read()).revision, recorded.revision, 'investigation does not revise the mission');
