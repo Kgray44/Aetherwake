@@ -144,7 +144,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
   let webSearchCommandId: string|undefined;
   const documentList = el('div', undefined, 'cp-composer-documents');
-  const documentStatus = el('span', 'Remove or reattach the unavailable documents to send.');
+  const documentStatus = el('span', 'Remove or replace the unavailable documents to send.');
   documentStatus.setAttribute('role', 'status');
   documentList.hidden = true;
   composer.insertBefore(documentList, tools);
@@ -154,42 +154,61 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   function renderDocuments(documents: readonly DraftDocument[]) {
     if (documents === renderedDocuments) return;
     renderedDocuments = documents;
-    documentList.replaceChildren(...documents.map(document => {
+    documentList.replaceChildren(...documents.flatMap(document => {
       const label = document.title + (document.unavailable === 'changed' ? ' (changed)' : '');
       const remove = el('button', label + ' ×');
       remove.type = 'button';
       decorateConversationControl(remove,{identity:'source',emphasis:'secondary'});
       remove.setAttribute('aria-label', 'Remove attachment ' + label);
       remove.addEventListener('click', () => {
-        if (sending) return;
+        if (remove.disabled) return;
         session.updateDocuments(session.snapshot().documents.filter(item => item.id !== document.id));
         textarea.focus();
       });
-      return remove;
+      if (!document.unavailable || !options.chooseDocument) return [remove];
+      const replace = el('button', 'Replace');
+      replace.type = 'button';
+      decorateConversationControl(replace,{identity:'source',emphasis:'secondary'});
+      replace.dataset.replaceDocument = 'true';
+      replace.setAttribute('aria-label', 'Replace attachment ' + label);
+      replace.addEventListener('click', () => {
+        if (!replace.disabled) void chooseAttachment(document);
+      });
+      return [remove, replace];
     }), documentStatus);
+  }
+  async function chooseAttachment(replacing?: DraftDocument) {
+    if (choosingDocument || !options.chooseDocument) return;
+    choosingDocument = true;
+    renderDraft();
+    try {
+      const document = await options.chooseDocument();
+      if (!document || disposed || accessRevoked || !ordinaryPlan()) return;
+      const { documents, phase } = session.snapshot();
+      if (['loading', 'conflict', 'error'].includes(phase)) return;
+      if (replacing) {
+        if (!documents.some(item => item.id === replacing.id && item.version === replacing.version)) return;
+        session.updateDocuments(documents
+          .filter(item => item.id !== document.id || item.id === replacing.id)
+          .map(item => item.id === replacing.id ? document : item));
+        textarea.focus();
+      } else {
+        session.updateDocuments([...documents.filter(item => item.id !== document.id), document]);
+      }
+    } catch (error) {
+      if (!disposed) report(errorText(error));
+    } finally {
+      choosingDocument = false;
+      if (!disposed) renderDraft();
+    }
   }
   if (options.chooseDocument) {
     attachDocument.type = 'button';
     attachDocument.hidden = true;
     decorateConversationControl(attachDocument,{identity:'source',emphasis:'secondary'});
     tools.insertBefore(attachDocument, hint);
-    attachDocument.addEventListener('click', async () => {
-      if (attachDocument.disabled || attachDocument.hidden || !options.chooseDocument) return;
-      choosingDocument = true;
-      renderDraft();
-      try {
-        const document = await options.chooseDocument();
-        if (document && !disposed && !accessRevoked && ordinaryPlan() &&
-            !['loading', 'conflict', 'error'].includes(session.snapshot().phase)) {
-          const documents = session.snapshot().documents;
-          session.updateDocuments([...documents.filter(item => item.id !== document.id), document]);
-        }
-      } catch (error) {
-        if (!disposed) report(errorText(error));
-      } finally {
-        choosingDocument = false;
-        if (!disposed) renderDraft();
-      }
+    attachDocument.addEventListener('click', () => {
+      if (!attachDocument.disabled && !attachDocument.hidden) void chooseAttachment();
     });
   }
   let sendTask: Promise<void>|null = null, stopRequestedFor: string|null = null, streamLimited = false, accessRevoked = false;
@@ -419,14 +438,15 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     checkOutcome.disabled = recovering;
     send.disabled = choosingDocument || planDisconnected || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
     web.hidden = !plan?.execute || !webSearchModel();
-    send.title = unavailableDocuments ? 'Remove or reattach the unavailable documents to send.' : planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : documentsUnsupported ? 'Switch to ChatGPT or remove the documents to send.' : '';
+    send.title = unavailableDocuments ? documentStatus.textContent ?? '' : planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : documentsUnsupported ? 'Switch to ChatGPT or remove the documents to send.' : '';
     web.disabled = send.disabled || web.hidden || !plan?.available || documents.length > 0;
     attachDocument.hidden = !plan || !options.chooseDocument;
     attachDocument.disabled = choosingDocument || sending || draftNeedsAttention || documents.length >= 4;
     renderDocuments(documents);
     documentList.hidden = !documents.length;
     documentStatus.hidden = !unavailableDocuments;
-    for (const remove of documentList.querySelectorAll('button')) remove.disabled = sending || draftNeedsAttention;
+    for (const button of documentList.querySelectorAll('button'))
+      button.disabled = sending || choosingDocument || draftNeedsAttention || (button.dataset.replaceDocument === 'true' && !plan);
     send.dataset.state=needsSendReview()?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=stopRequestedFor?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = !!stopRequestedFor || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
   }

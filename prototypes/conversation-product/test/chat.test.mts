@@ -1316,7 +1316,7 @@ test('a recovered unavailable document can be removed without losing the draft o
   await chat.ready;
   const send = f.view.root.querySelector('[data-cp-control="send"]');
   assert.equal(send.disabled, true);
-  assert.match(send.title, /reattach/);
+  assert.match(send.title, /replace/);
   f.view.root.querySelector('form').fire('submit');
   named(f.view.root, 'Unavailable document ×').fire('click');
   await chat.flush();
@@ -1324,4 +1324,37 @@ test('a recovered unavailable document can be removed without losing the draft o
   assert.equal(f.draft.content, 'Saved unsent text');
   assert.equal(f.calls.some(call => call.name === 'send'), false);
  } finally { await chat?.dispose(); f.restore(); }
+});
+
+test('replace at the attachment limit preserves the old selection on cancellation and checkpoints the explicit replacement', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ let chat;
+ try {
+  const documents = [
+   { id: 'file:old', version: 1, title: 'Unavailable document', unavailable: 'inaccessible' as const },
+   ...[1, 2, 3].map(i => ({ id: 'file:' + i, version: 1, title: 'Document ' + i })),
+  ];
+  await f.port.command('saveDraft', { resourceId: f.draft.resourceId, expectedVersion: f.draft.version, content: f.draft.content, documents });
+  const replacement = { id: 'file:new', version: 2, title: 'Replacement.pdf' };
+  let picks = 0;
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId, chooseDocument: async () => ++picks === 1 ? null : replacement });
+  await chat.ready;
+  const attach = named(f.view.root, 'Attach document');
+  const replace = named(f.view.root, 'Replace');
+  assert.equal(attach.disabled, true);
+  replace.fire('click');
+  await until(() => picks === 1 && !replace.disabled);
+  assert.deepEqual(f.draft.documents, documents);
+  replace.fire('click');
+  await until(() => !!named(f.view.root, 'Replacement.pdf ×'));
+  await chat.flush();
+  assert.deepEqual(f.draft.documents, [replacement, ...documents.slice(1)]);
+  assert.equal(f.draft.content, 'Saved unsent text');
+  assert.equal(f.calls.some(call => call.name === 'send'), false);
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  assert.deepEqual(f.pending!.input.documents, [replacement, ...documents.slice(1)].map(({ id, version }) => ({ id, version })));
+  f.pending!.reject(Error('authorization_cancelled'));
+  await chat.whenSubmissionSettled();
+ } finally { f.pending?.reject(Error('synthetic cleanup')); await chat?.dispose(); f.restore(); }
 });
