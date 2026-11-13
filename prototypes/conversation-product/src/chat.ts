@@ -171,6 +171,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const selected = options.models?.selections.get(resourceId);
     return selected ? catalog.find(item => item.id === selected.id) : catalog[0];
   };
+  const webSearchModel = () => {
+    const selected = effectiveModel();
+    // A pinned model or a one-turn thinking choice binds the current draft.
+    if (options.models?.selections.has(resourceId) || thinking)
+      return selected?.eligibleTools?.includes('web_search') ? selected : undefined;
+    return ordinaryPlan()?.modelOptions?.find(model => model.eligibleTools?.includes('web_search'));
+  };
   if(options.motion&&options.onProviderChange){provider.hidden=true;providerPicker=mountConversationPicker(providerSlot,{motion:options.motion,viewId:options.viewId!+':provider',label:'Conversation provider',identity:'providers',async onSelect(targetProviderId){
     const before=current;if(!before||accessRevoked||sending||active()||before.conversation.state==='archived')return;
     const empty=before.messages.total===0&&before.messages.items.length===0&&['local','mock-ordinary','chatgpt-plan-responses'].includes(before.conversation.providerId),mode=empty?'empty':'continuation';
@@ -327,7 +334,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
     checkOutcome.disabled = recovering;
     send.disabled = sending || !!active() || codexOutcomeUnknown || uncertain || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
-    web.hidden = !plan?.execute || !selectedModel?.eligibleTools?.includes('web_search');
+    web.hidden = !plan?.execute || !webSearchModel();
     web.disabled = send.disabled || web.hidden || !plan?.available;
     send.dataset.state=uncertain?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=cancelPending?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = cancelPending || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
@@ -507,7 +514,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const webSearch = event.submitter === web;
     if (send.disabled || !current || webSearch && web.disabled) return;
     const before = current, content = textarea.value, commandId = crypto.randomUUID();
-    const plan = ordinaryPlan(), selectedModel = effectiveModel();
+    const plan = ordinaryPlan(), selectedModel = webSearch ? webSearchModel() : effectiveModel();
+    if (webSearch && !selectedModel) return;
     const reasoningEffort = plan ? thinking?.effort : undefined;
     if (reasoningEffort !== undefined && (selectedModel?.id !== thinking?.modelId ||
         !selectedModel?.reasoningEfforts?.includes(reasoningEffort))) {
