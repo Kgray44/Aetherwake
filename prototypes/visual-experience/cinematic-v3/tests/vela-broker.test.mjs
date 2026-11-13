@@ -2,10 +2,47 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-const { velaCommand, isVelaRead, prepareAppOwnedVelaRequest } = createRequire(import.meta.url)(
+const { velaCommand, isVelaRead, prepareAppOwnedVelaRequest, prepareVelaInitiatedAnalysis } = createRequire(import.meta.url)(
   "../native/vela-broker.cjs",
 );
 const { reviewPage } = createRequire(import.meta.url)("../native/vela-review.cjs");
+
+test("Vela initiator refuses missing action authority and effectful routes before dispatch", async () => {
+  for (const route of [null, {kind:"file-edit"}, {kind:"agentic"}, {kind:"app-planning"},
+    {kind:"conversational", nativeLog:true}, {kind:"conversational", workflow:true}]) {
+    const calls = [];
+    const run = prepareVelaInitiatedAnalysis({
+      initiatorId: "synthetic-monitor", intent: "Inspect this synthetic source",
+      configurationVersion: 1, expiresAt: Date.now() + 60_000,
+      resourceRefs: [{id:"selected", kind:"resource", resourceKind:"file", version:3, title:"Synthetic"}],
+      isAuthorized: () => route !== null,
+      async call(name) {
+        calls.push(name);
+        if (name === "velaApiUsageStatus") return { enabled:true, configurationVersion:1 };
+        assert.equal(name, "velaRequestPreview");
+        return { route, ...(route.workflow ? { workflowScope: { effect: "remove" } } : {}) };
+      },
+    });
+    await assert.rejects(run(), route ? /vela_app_request_effect_unavailable/ : /vela_app_request_owner_unavailable/);
+    await assert.rejects(run(), /vela_app_request_consumed/);
+    assert.deepEqual(calls, route ? ["velaApiUsageStatus", "velaRequestPreview"] : []);
+  }
+});
+
+test("Vela initiator refuses stale provider authority before reading selected sources", async () => {
+  for (const status of [{ enabled:false, configurationVersion:1 }, { enabled:true, configurationVersion:2 }]) {
+    const calls = [];
+    const run = prepareVelaInitiatedAnalysis({
+      initiatorId:"synthetic-monitor", intent:"Inspect this synthetic source",
+      configurationVersion:1, expiresAt:Date.now() + 60_000,
+      resourceRefs:[{id:"selected",kind:"resource",resourceKind:"note",version:3,title:"Synthetic"}],
+      isAuthorized: () => true,
+      async call(name) { calls.push(name); return status; },
+    });
+    await assert.rejects(run(), /vela_app_request_provider_authority_changed/);
+    assert.deepEqual(calls, ["velaApiUsageStatus"]);
+  }
+});
 
 test("app-owned Vela rejects a reviewed source of the wrong kind before minting a grant", async () => {
   const ref = { id: "selected", kind: "resource", version: 3 };

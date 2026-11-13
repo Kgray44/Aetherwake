@@ -204,6 +204,53 @@ exports.prepareAppOwnedVelaRequest = ({ call, isCurrent, preview, resourceRefs }
   };
 };
 
+// Private host entry. The native owner supplies its profile-bound command port
+// and checks its scoped action grant. No renderer caller or schedule is registered.
+exports.prepareVelaInitiatedAnalysis = ({ call, isAuthorized, initiatorId, configurationVersion, expiresAt, intent, resourceRefs }) => {
+  if (typeof call !== "function" || typeof isAuthorized !== "function" ||
+      typeof initiatorId !== "string" || !initiatorId.trim() ||
+      !Number.isSafeInteger(configurationVersion) || configurationVersion < 1 ||
+      !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt - Date.now() > 300_000 ||
+      typeof intent !== "string" || !intent.trim() || !Array.isArray(resourceRefs) || !resourceRefs.length || resourceRefs.length > 4 ||
+      !resourceRefs.every(ref => ref?.kind === "resource" && ["file", "note"].includes(ref.resourceKind) &&
+        typeof ref.id === "string" && ref.id.length && typeof ref.title === "string" &&
+        Number.isSafeInteger(ref.version) && ref.version > 0)) {
+    throw Error("vela_app_request_scope_required");
+  }
+  const refs = Object.freeze(resourceRefs.map(({ kind, resourceKind, id, version, title }) =>
+    Object.freeze({ kind, resourceKind, id, version, title })));
+  const ids = Object.freeze(refs.map(ref => ref.id));
+  if (new Set(ids).size !== ids.length) throw Error("vela_app_request_scope_required");
+  const scope = Object.freeze({ initiatorId, configurationVersion, expiresAt, intent, resourceRefs: refs,
+    providerId: "openai-api-vela", capability: "selected-source-analysis" });
+  const isCurrent = () => Date.now() < expiresAt && isAuthorized(scope) === true;
+  const checkedCall = async (name, input) => {
+    if (!isCurrent()) throw Error("vela_app_request_owner_unavailable");
+    const usage = await call("velaApiUsageStatus", {});
+    if (!isCurrent()) throw Error("vela_app_request_owner_unavailable");
+    if (usage?.enabled !== true || usage.configurationVersion !== configurationVersion)
+      throw Error("vela_app_request_provider_authority_changed");
+    return call(name, input);
+  };
+  let consumed = false;
+  return async () => {
+    if (consumed) throw Error("vela_app_request_consumed");
+    consumed = true;
+    if (!isCurrent()) throw Error("vela_app_request_owner_unavailable");
+    const preview = await checkedCall("velaRequestPreview", {
+      intent, resourceIds: ids, resourceRefs: refs, providerId: scope.providerId,
+      adaptive: true, semanticContext: true, includeRecentHistory: false,
+    });
+    const route = preview?.route;
+    if (route?.kind !== "conversational" || route.nativeMetric || route.nativeLog || route.escalation ||
+        preview.workflowScope || preview.projectEvidence || preview.workspaceState || preview.missionCheckpoint ||
+        preview.handoff || preview.routingAgent || preview.history) throw Error("vela_app_request_effect_unavailable");
+    if (preview.intent !== intent || !Array.isArray(preview.resourceIds) || preview.resourceIds.length !== ids.length ||
+        ids.some((id, index) => id !== preview.resourceIds[index])) throw Error("vela_app_request_scope_required");
+    return exports.prepareAppOwnedVelaRequest({ call: checkedCall, isCurrent, preview, resourceRefs: refs })();
+  };
+};
+
 /** Called only after the host verifies its exact local main frame. Grants never enter IPC results. */
 exports.velaCommand = async ({
   win,

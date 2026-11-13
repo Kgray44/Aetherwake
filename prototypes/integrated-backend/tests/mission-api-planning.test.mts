@@ -2085,15 +2085,16 @@ for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke', '
     const resourceIds = [resource.id];
     const resourceRefs = [{ id: resource.id, kind: 'resource' as const, resourceKind: 'file',
       title: resource.title, version: resource.version }];
-    const preview = await f.core.command('velaRequestPreview', { intent, resourceIds, adaptive: true, providerId: 'openai-api-vela',
+    let preview = await f.core.command('velaRequestPreview', { intent, resourceIds, adaptive: true, providerId: 'openai-api-vela',
       model: 'gpt-6-luna', semanticContext: true, resourceRefs });
     assert.equal(preview.sendDisposition, 'standing-selected-evidence');
     const review = await f.core.command('velaNativeReview', { previewId: preview.id, signature: preview.signature });
     assert.match(review.context.included[0].content, /Extracted DOCX body text/);
-    const { velaCommand, prepareAppOwnedVelaRequest } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    const { velaCommand, prepareAppOwnedVelaRequest, prepareVelaInitiatedAnalysis } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
     let ownerCurrent = true;
     const call = async <K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']) => {
       const result = await f.core.command(name, input);
+      if (name === 'velaRequestPreview') preview = result as typeof preview;
       if (scenario === 'app-owned retired' && name === 'authorizeVelaRequest') ownerCurrent = false;
       if (scenario === 'app-owned revoked after grant' && name === 'authorizeVelaRequest') {
         await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
@@ -2102,7 +2103,16 @@ for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke', '
     };
     const selectedRefs = scenario === 'app-owned wrong version'
       ? resourceRefs.map(ref => ({ ...ref, version: ref.version + 1 })) : resourceRefs;
-    const send = scenario.startsWith('app-owned') ? prepareAppOwnedVelaRequest({
+    const usesInitiator = ['app-owned', 'app-owned interrupted', 'app-owned retired'].includes(scenario);
+    const expiresAt = Date.now() + 60_000;
+    const send = usesInitiator ? prepareVelaInitiatedAnalysis({
+      call, initiatorId: 'synthetic-document-monitor', configurationVersion: 1, expiresAt, intent, resourceRefs,
+      isAuthorized: (scope: unknown) => {
+        assert.deepEqual(scope, { initiatorId: 'synthetic-document-monitor', configurationVersion: 1, expiresAt, intent, resourceRefs,
+          providerId: 'openai-api-vela', capability: 'selected-source-analysis' });
+        return ownerCurrent;
+      },
+    }) as () => Promise<VelaRequest> : scenario.startsWith('app-owned') ? prepareAppOwnedVelaRequest({
       call, isCurrent: () => ownerCurrent, preview, resourceRefs: selectedRefs,
     }) as () => Promise<VelaRequest> : () => velaCommand({
       win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
