@@ -1,7 +1,7 @@
 import { createAepNativeHost } from './aep-native-host.mts';
 import { resolveAepEvaluationReference } from './aep-evaluation-reference.mts';
 import { randomUUID, createHash } from 'node:crypto';
-import { realpathSync,openSync,closeSync,lstatSync,fstatSync,readdirSync,writeFileSync } from 'node:fs';
+import { realpathSync,openSync,closeSync,lstatSync,fstatSync,readdirSync,readSync,writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, isAbsolute,sep,extname } from 'node:path';
 import { MissionFileEdits, type MissionEditScope, type NativeSelectedCodeFile, type ApiFileProposalProvenance } from './mission-file-edits.mts';
 import { fileURLToPath } from 'node:url';
@@ -96,6 +96,7 @@ import { projectTurnHttpDiagnostic } from '../../application-contract/provider-d
 import { nativeProvider, fixtureProvider } from './providers.mts';
 import { CodexTurnOutput } from './codex-turn-output.mts';
 import { ConversationProduct, type AttachedContext, type ConversationReadView } from '../../conversation-product/src/service.mts';
+import type { SyntheticMemoryRestartDescriptor } from './synthetic-memory-protector.mts';
 import type { NativeHostServices } from './native-host.mts';
 import { createCanonicalOrganizationAdapter, createCanonicalAccessHelper, createObservedCapabilityCache } from '../../conversation-product/src/canonical-host.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
@@ -236,17 +237,20 @@ export interface MemoryFixtureBootstrap {
 }
 
 type MemoryFixture = {
-  descriptor: MemoryFixtureBootstrap;
+  descriptor: MemoryFixtureDescriptor;
   protector: NativeHostServices['secrets'];
 };
 
+export type MemoryFixtureDescriptor = MemoryFixtureBootstrap | SyntheticMemoryRestartDescriptor;
+
 /** Called only after the desktop supervisor consumes its lease. Recheck at the
  * worker boundary before claiming the database. No caller-supplied DB path. */
-export function memoryFixtureOptions(descriptor: MemoryFixtureBootstrap): Options {
+export function memoryFixtureOptions(descriptor: MemoryFixtureDescriptor): Options {
   const time = Date.now();
   const invalid = 'memory_fixture_bootstrap_invalid';
+  const restarting = descriptor?.contract === 'aerynth.memory-fixture-restart@1';
   ensure(descriptor && Object.keys(descriptor).length === 3 &&
-    descriptor.contract === 'aerynth.memory-fixture-bootstrap@1' &&
+    (descriptor.contract === 'aerynth.memory-fixture-bootstrap@1' || restarting) &&
     Number.isSafeInteger(descriptor.expiresAt) && descriptor.expiresAt > time && descriptor.expiresAt <= time + 45_000 &&
     typeof descriptor.profileRoot === 'string' && isAbsolute(descriptor.profileRoot) &&
     resolve(descriptor.profileRoot) === descriptor.profileRoot &&
@@ -257,12 +261,30 @@ export function memoryFixtureOptions(descriptor: MemoryFixtureBootstrap): Option
     const fromSource = relative(source, root);
     ensure(fromSource.startsWith('..' + sep) || isAbsolute(fromSource), invalid);
     ensure(lstatSync(root).isDirectory() && realpathSync.native(root) === root, invalid);
-    const names = readdirSync(root).sort();
-    ensure(names.length === 2 && names[0] === 'synthetic-packaged.consumed' &&
-      names[1] === 'synthetic-packaged.started', invalid);
-    for (const [name, maxBytes] of [[names[0], 0], [names[1], 8192]] as const) {
-      const stat = lstatSync(join(root, name));
-      ensure(stat.isFile() && stat.nlink === 1 && stat.size <= maxBytes, invalid);
+    const required = new Map([['synthetic-packaged.consumed', 0], ['synthetic-packaged.started', 8192]]);
+    if (restarting) {
+      required.set('synthetic-backend.started', 0);
+      required.set('synthetic-backend.restart', 0);
+      required.set('aerynth.sqlite', 128 * 1024 * 1024);
+    }
+    const names = readdirSync(root);
+    ensure(names.length === required.size, invalid);
+    for (const [name, maxBytes] of required) {
+      const path = join(root, name);
+      const stat = lstatSync(path);
+      ensure(stat.isFile() && stat.nlink === 1 && stat.size <= maxBytes &&
+        (maxBytes === 0 || stat.size > 0) && realpathSync.native(path) === path, invalid);
+    }
+    if (restarting) {
+      const fd = openSync(join(root, 'synthetic-packaged.started'), 'r');
+      try {
+        const buffer = Buffer.alloc(8193);
+        const length = readSync(fd, buffer);
+        ensure(length <= 8192, invalid);
+        const admission = JSON.parse(buffer.subarray(0, length).toString('utf8'));
+        ensure(admission.contract === 'aerynth.memory-fixture-descriptor@1' &&
+          admission.profileRoot === root && admission.expiresAt === descriptor.expiresAt, invalid);
+      } finally { closeSync(fd); }
     }
   } catch {
     throw new ServiceError(invalid);
@@ -459,7 +481,9 @@ export class BackendCore {
         options.path === expected.path && options.provider === 'fixture' && options.contentPolicy === 'synthetic-only',
         'memory_fixture_bootstrap_invalid');
       try {
-        writeFileSync(join(memoryFixture.descriptor.profileRoot, 'synthetic-backend.started'), '',
+        const marker = memoryFixture.descriptor.contract === 'aerynth.memory-fixture-restart@1'
+          ? 'synthetic-backend.restart-claimed' : 'synthetic-backend.started';
+        writeFileSync(join(memoryFixture.descriptor.profileRoot, marker), '',
           { flag: 'wx', mode: 0o600 });
       } catch {
         throw new ServiceError('memory_fixture_bootstrap_invalid');
@@ -495,7 +519,8 @@ export class BackendCore {
     const connect=this.port.connect.bind(this.port),turn=this.port.turn.bind(this.port);
     this.port.connect=()=>{this.providerActivity.codexConnections=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.codexConnections+1);return connect();};
     this.port.turn=(...args)=>{this.providerActivity.providerRequests=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.providerRequests+1);return turn(...args);};
-    this.kernel = WorkspaceKernel.open(options.path);
+    this.kernel = memoryFixture?.descriptor.contract === 'aerynth.memory-fixture-restart@1'
+      ? WorkspaceKernel.openExisting(options.path) : WorkspaceKernel.open(options.path);
     try {
       this.kernel.withTransaction(db => {
         this.db = db;

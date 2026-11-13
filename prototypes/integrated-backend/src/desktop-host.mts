@@ -3,7 +3,8 @@ import { timingSafeEqual } from "node:crypto";
 import { basename } from "node:path";
 import { Backend } from "./service.mts";
 import type { Options } from "./contracts.mts";
-import type { MemoryFixtureBootstrap } from "./core.mts";
+import type { MemoryFixtureDescriptor } from "./core.mts";
+import type { ReviewedFact } from "../../personal-context/src/contracts.ts";
 import {createNativeHostClient,isNativeHostEnvelope} from './native-host.mts';
 import {createNativeLiveHostClient,isNativeLiveHostEnvelope} from './live-media-host.mts';
 import {createSystemFactsClient,isSystemFactsEnvelope} from './system-facts-host.mts';
@@ -14,12 +15,15 @@ import {createWindowsComputerClient,isWindowsComputerEnvelope} from './windows-c
 const argv = process.argv.slice(2);
 const [path, privateRoot, cwd,...flags] = argv;
 const fixtureFlag = '--memory-fixture-bootstrap-v1';
-const fixtureLaunch = path === fixtureFlag;
-let fixtureStartup: { descriptor: MemoryFixtureBootstrap; options: Options } | undefined;
+const fixtureRestart = path === '--memory-fixture-restart-v1';
+const fixtureLaunch = path === fixtureFlag || fixtureRestart;
+let fixtureStartup: { descriptor: MemoryFixtureDescriptor; options: Options } | undefined;
 if (fixtureLaunch) {
   if (argv.length !== 2 || Buffer.byteLength(privateRoot) > 8192) throw Error('memory_fixture_bootstrap_invalid');
   try {
-    const descriptor: MemoryFixtureBootstrap = JSON.parse(privateRoot);
+    const descriptor: MemoryFixtureDescriptor = JSON.parse(privateRoot);
+    if (descriptor?.contract !== (fixtureRestart ? 'aerynth.memory-fixture-restart@1' : 'aerynth.memory-fixture-bootstrap@1'))
+      throw Error('memory_fixture_bootstrap_invalid');
     const { memoryFixtureOptions } = await import('./core.mts');
     fixtureStartup = { descriptor, options: memoryFixtureOptions(descriptor) };
   } catch { throw Error('memory_fixture_bootstrap_invalid'); }
@@ -28,7 +32,7 @@ if (fixtureLaunch) {
 }
 const fixtureSeedMode = process.env.AERYNTH_MEMORY_FIXTURE_SEED;
 delete process.env.AERYNTH_MEMORY_FIXTURE_SEED;
-if (fixtureSeedMode !== undefined && (!fixtureStartup || fixtureSeedMode !== 'inspector-v1'))
+if (fixtureSeedMode !== undefined && (!fixtureStartup || fixtureRestart || fixtureSeedMode !== 'inspector-v1'))
   throw Error('memory_fixture_seed_invalid');
 
 // The native acceptance parent holds this separate startup capability.
@@ -94,11 +98,12 @@ const lines = createInterface({ input: process.stdin });
 
 // Bootstrap-owned synthetic data. Keep the seed outside the RPC command map
 // and route each mutation through its existing canonical owner.
+const inspectorFactText = 'I prefer numbered lists.';
 async function seedFixtureInspector() {
   const conversation = await backend.call('createConversation', {
     title: 'Synthetic memory source', providerId: 'local', commandId: 'fixture-inspector-conversation',
   });
-  const text = 'I prefer numbered lists.';
+  const text = inspectorFactText;
   const message = await backend.call('addMessage', {
     resourceId: conversation.resourceId, expectedRevision: conversation.revision,
     commandId: 'fixture-inspector-message', role: 'user', content: text,
@@ -112,14 +117,32 @@ async function seedFixtureInspector() {
     conversationId: conversation.resourceId, messageId: message.id, factId: fact.id } });
 }
 
-const seedReady = fixtureSeedMode === 'inspector-v1'
-  ? seedFixtureInspector().then(() => true, () => {
-      write({ startupError: 'memory_fixture_seed_failed' });
-      process.exitCode = 1;
-      lines.close();
-      return false;
-    })
-  : undefined;
+async function readRestartedFixtureInspector() {
+  const listing = await backend.call('personalMemoryManagementNative', { type: 'list', after: null }) as
+    { records: { id: string }[] };
+  if (listing.records.length !== 1) throw Error('memory_fixture_restart_failed');
+  const fact = await backend.call('personalMemoryManagementNative', { type: 'read', id: listing.records[0].id }) as ReviewedFact;
+  if (fact.text !== inspectorFactText || fact.provenance.kind !== 'conversation-message')
+    throw Error('memory_fixture_restart_failed');
+  const { conversationId, messageId } = fact.provenance;
+  const validated = await backend.call('personalMemoryManagementNative', {
+    type: 'previewSourceRevocation', id: fact.id, version: fact.version,
+  }) as { binding: { conversationId: string; messageId: string }; sourceText: string };
+  if (validated.binding.conversationId !== conversationId || validated.binding.messageId !== messageId ||
+      validated.sourceText !== inspectorFactText)
+    throw Error('memory_fixture_restart_failed');
+  write({ fixtureRestart: { contract: 'aerynth.memory-fixture-restart-ready@1',
+    conversationId, messageId, factId: fact.id } });
+}
+
+const startup = fixtureRestart ? readRestartedFixtureInspector()
+  : fixtureSeedMode === 'inspector-v1' ? seedFixtureInspector() : undefined;
+const startupReady = startup?.then(() => true, () => {
+  write({ startupError: fixtureRestart ? 'memory_fixture_restart_failed' : 'memory_fixture_seed_failed' });
+  process.exitCode = 1;
+  lines.close();
+  return false;
+});
 lines.on("line", async (line) => {
   let id: unknown;
   try {
@@ -140,7 +163,8 @@ lines.on("line", async (line) => {
     }
     id = request.id;
     // Custody replies above must be serviced while startup awaits the protector.
-    if (seedReady && !await seedReady) throw Error('memory_fixture_seed_failed');
+    if (startupReady && !await startupReady)
+      throw Error(fixtureRestart ? 'memory_fixture_restart_failed' : 'memory_fixture_seed_failed');
     if (fixtureStartup && request.command === 'personalMemoryPolicyNative' &&
         Object.hasOwn(request, 'fixturePolicyToken')) {
       if (Object.keys(request).length !== 4 ||
