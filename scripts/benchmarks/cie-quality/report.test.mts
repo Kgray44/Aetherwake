@@ -32,6 +32,20 @@ test('missing end-to-end and simulated provider remain visible instead of zero',
   assert.deepEqual(result.rows[0].issues, ['end-to-end-unavailable', 'simulated-provider']);
 });
 
+test('prices cache writes separately and rejects unknown write pricing and overlapping counts', () => {
+  const rate = { model: 'test-model', currency: 'USD', source: 'synthetic-fixture', effectiveAt: '2026-11-12',
+    inputPerMillion: 2, cachedInputPerMillion: 1, outputPerMillion: 8 };
+  const withWrites = { ...run, usage: { ...run.usage!, cacheWriteInputTokens: 10 } };
+  const call = (usage: typeof withWrites, rateWithWrites: typeof rate & { cacheWriteInputPerMillion?: number }) =>
+    reportCognitiveRepetitions([repetition('r1', 10, [usage])], [rateWithWrites]).rows[0].calls[0];
+  assert.equal(call(withWrites, rate).cost, null);
+  assert.equal(call(withWrites, { ...rate, cacheWriteInputPerMillion: 3 }).cost?.amount, .00051);
+  assert.equal(reportCognitiveRepetitions([repetition('r1', 10)],
+    [{ ...rate, cacheWriteInputPerMillion: 3 }]).rows[0].calls[0].cost, null);
+  const overlap = { ...withWrites, usage: { ...withWrites.usage, cacheWriteInputTokens: 90 } };
+  assert.equal(call(overlap, { ...rate, cacheWriteInputPerMillion: 3 }).cost, null);
+});
+
 test('groups settled reported calls by exact model and preserves unknown dispatch and usage', () => {
   const result = reportCognitiveRepetitions([repetition('r1', 400, [
     run, { ...run, executionId: 'e2', elapsedMs: 30, dispatched: null, usage: null },
