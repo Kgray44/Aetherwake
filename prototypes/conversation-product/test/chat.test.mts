@@ -993,7 +993,7 @@ test('Enter submits once; Shift+Enter and IME do not submit; draft draining is i
   }finally{await chat?.dispose();f.restore();}
 });
 
-test('access loss during a send checkpoint retains the draft without dispatch',async()=>{
+for (const restoresAccess of [false,true]) test('access loss during a send checkpoint retains the draft without dispatch (restored: '+restoresAccess+')',async()=>{
   const f=fixture('chatgpt-plan-responses');
   const checkpoint=Promise.withResolvers<void>();
   let chat, started=false, observe!:(value:ConversationExecutionObservation)=>void;
@@ -1010,11 +1010,12 @@ test('access loss during a send checkpoint retains the draft without dispatch',a
     f.view.root.querySelector('form').fire('submit');
     await until(()=>started);
     observe({resourceAvailable:false});
+    if (restoresAccess) await chat.refresh();
     checkpoint.resolve();
     await chat.whenSubmissionSettled();
     assert.equal(f.calls.filter(call=>call.name==='send').length,0);
     assert.equal(f.draft.content,'Saved unsent text');
-    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/no longer available/);
+    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,restoresAccess?/access changed.*send again/i:/no longer available/);
   } finally {checkpoint.resolve();await chat?.dispose();f.restore();}
 });
 

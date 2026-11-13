@@ -279,6 +279,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     });
   }
   let sendTask: Promise<void>|null = null, stopRequestedFor: string|null = null, streamLimited = false, accessRevoked = false;
+  let accessRevision = 0;
   let submittedTurn: { commandId: string; providerId: string; webSearch: boolean } | undefined;
   let reconcileSubmittedTurn: ((observed: ConversationExecution) => Promise<void>) | undefined;
   let reviewedExecutionId: string | undefined;
@@ -502,6 +503,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   });
   if(layoutHost)resizeObserver?.observe(layoutHost);
   function revokeView() {
+    accessRevision++;
     followingLatest=false;
     stopRequestedFor=null;
     const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=pendingAnchor=presentationAnchor=null;viewWanted=userScroll=false;inspectionFollow=liveFollow=false;inspectionReturn=null;root.dataset.resourceAvailable='false';current=null;thinking=undefined;cache.clear();days.clear();messages.replaceChildren(stream,feedbackBody);
@@ -840,6 +842,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const webSearch = event.submitter === web;
     if (send.disabled || !current || webSearch && web.disabled) return;
     const before = current, commandId = crypto.randomUUID();
+    const submittedAccessRevision = accessRevision;
     const plan = ordinaryPlan(), selectedModel = webSearch ? webSearchModel() : effectiveModel();
     let attachments: { id: string; version: number }[] | undefined;
     let sendStarted = false;
@@ -861,7 +864,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     report(webSearch?'Preparing web search. Your draft remains saved.':providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
-      if (accessRevoked) return;
+      if (submittedAccessRevision !== accessRevision) {
+        if (!accessRevoked) report('Conversation access changed. Your draft is saved. Press Send again to submit it.');
+        return;
+      }
       const content = checkpoint.record.content;
       if (checkpoint.record.documents?.some(item => item.unavailable)) {
         report('A selected document is unavailable or has changed. Remove or reattach it before sending.');
