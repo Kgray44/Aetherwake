@@ -353,14 +353,24 @@ test('a research mission authorizes web search only for the source specialist an
     ]);
     f.responses.push(result('resp_research', true), result('resp_review', false));
     const run = await f.core.command('missionStartReviewed', { objective, requestId: randomUUID(), fingerprint: preview.fingerprint }) as MissionProjection;
-    const end = performance.now() + 5000;
+    const waitStarted = performance.now();
+    const end = waitStarted + 5000;
     let mission: MissionProjection;
     do {
       mission = await f.core.command('missions', { name: 'read', input: { id: run.id } }) as MissionProjection;
       if (mission.outcome !== 'queued' && mission.outcome !== 'running') break;
       await wait(25);
     } while (performance.now() < end);
-    assert.equal(mission.outcome, 'blocked');
+    assert.equal(mission.outcome, 'blocked', mission.outcome === 'blocked' ? undefined : JSON.stringify({
+      postStartWaitMs: Math.round(performance.now() - waitStarted),
+      waits: Object.entries(mission.waits).slice(0, 8),
+      syntheticRequests: f.requests.length,
+      tasks: mission.tasks.slice(0, 8).map(task => {
+        const attempt = task.attempts.at(-1);
+        return { id: task.id, state: task.state, dispatch: attempt?.dispatch?.state,
+          admittedAt: attempt?.admittedAt, finishedAt: attempt?.finishedAt, outcome: attempt?.outcome };
+      }),
+    }));
     assert.equal(mission.coverage?.status,'partial');assert.ok(mission.tasks.every(task=>task.state==='verified'));
     assert.match(mission.coverage!.limitations.join(' '),/citations are provider reports.*do not independently verify/su);
     const researcher = mission.tasks.find(t => t.specialist?.webSearch)!;
