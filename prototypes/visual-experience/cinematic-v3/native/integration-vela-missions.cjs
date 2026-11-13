@@ -975,26 +975,15 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
           assert.deepEqual(after.viewport, before.viewport);
         };
         await witnessEntry(SURFACE, "00-aiw-from-vela");
-        await click(reportLink);
-        await click(RECORD + ' [data-mission-focus="preview-workroom"]');
-        await click(RECORD + ' [data-mission-focus="apply-workroom"]');
-        const selector = '[data-mission-workroom-card="stream"] .aw-intelligence-inspection';
-        const workroom = await wait("Canonical workroom and stream placement", async () => {
-          const projection = await read(missionId);
-          const state = await desktop();
-          if (projection.workroom?.workspaceId !== state.activeWorkspaceId) return false;
-          const placement = state.blocks.find(item => item.workspace_id === state.activeWorkspaceId &&
-            item.resource_id === projection.workroom.missionCards.stream);
-          return placement && { workspaceId: state.activeWorkspaceId, x: placement.x, y: placement.y };
-        });
-        await js(`window.__aerynth.execute(${quote({ type: "setViewport", workspaceId: workroom.workspaceId,
-          viewport: { x: workroom.x - 60, y: workroom.y - 180, zoom: 1 } })})`);
         const stream = '[data-surface-id="intelligence-stream"]';
         await click("#application-stream");
         await witnessEntry(stream, "00-aiw-from-stream");
+        const page = await rpc("rendererEventPage", { recent: true, limit: 250 });
+        assert.ok(page.events.some(event => event.mission?.id === missionId), "originating_stream_mission_event_required");
         const eventDetails = stream + ' [data-stream-mission-id=' + quote(missionId) + '] details';
         const eventAction = eventDetails + ' [data-inspect-mission=' + quote(missionId) + ']';
         const beforeEventInspection = await desktop();
+        assert.equal(beforeEventInspection.activeWorkspaceId, verifiedMission.scope.workspaceId);
         await click(eventDetails + ' > summary');
         await click(eventAction);
         await wait("Recorded event opens AIW with its mission selected", () => js(`(() => {
@@ -1010,7 +999,21 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         assert.equal(afterEventInspection.activeWorkspaceId, beforeEventInspection.activeWorkspaceId);
         assert.deepEqual(afterEventInspection.viewport, beforeEventInspection.viewport);
         await click(stream + ' [aria-label="Close panel"]');
-        await wait("Stream returns to the workroom", () => js(`!document.querySelector(${quote(stream)})`));
+        await wait("Stream closes after event inspection", () => js(`!document.querySelector(${quote(stream)})`));
+        await click(reportLink);
+        await click(RECORD + ' [data-mission-focus="preview-workroom"]');
+        await click(RECORD + ' [data-mission-focus="apply-workroom"]');
+        const selector = '[data-mission-workroom-card="stream"] .aw-intelligence-inspection';
+        const workroom = await wait("Canonical workroom and stream placement", async () => {
+          const projection = await read(missionId);
+          const state = await desktop();
+          if (projection.workroom?.workspaceId !== state.activeWorkspaceId) return false;
+          const placement = state.blocks.find(item => item.workspace_id === state.activeWorkspaceId &&
+            item.resource_id === projection.workroom.missionCards.stream);
+          return placement && { workspaceId: state.activeWorkspaceId, x: placement.x, y: placement.y };
+        });
+        await js(`window.__aerynth.execute(${quote({ type: "setViewport", workspaceId: workroom.workspaceId,
+          viewport: { x: workroom.x - 60, y: workroom.y - 180, zoom: 1 } })})`);
         await click(selector + ' > summary');
         await click(selector + ' [data-intelligence-zone="profiler"]');
         const profile = await rpc("missions", { name: "execution-profile", input: { id: missionId } });
