@@ -50,7 +50,7 @@ export interface ProductCommandMap {
  favorite: { input: { resourceId: string; favorite: boolean }; output: boolean };
  create: { input: { title?: string; providerId?: string; commandId: string }; output: { resourceId: string } };
  archive: { input: { resourceId: string; archived: boolean; expectedVersion: number }; output: unknown };
- send: { input: { resourceId: string; content: string; expectedRevision: number; commandId: string; model?: string; reasoningEffort?: ReasoningEffort; webSearch?: true }; output: unknown };
+ send: { input: { resourceId: string; content: string; expectedRevision: number; commandId: string; model?: string; reasoningEffort?: ReasoningEffort; webSearch?: true; useMemory?: true }; output: unknown };
  openCitation: { input: { resourceId: string; messageId: string; index: number }; output: { requested: true } };
  branch: { input: { resourceId: string; messageId: string; includeMessageIds: string[]; providerId: string; title: string; commandId: string; tokenBudget: number; expectedRevision: number }; output: { resourceId: string; handoffId: string; fingerprint: string; mode: string } };
  reviewBranch: { input: { handoffId: string; fingerprint: string; approve: boolean }; output: unknown };
