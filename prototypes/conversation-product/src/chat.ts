@@ -910,7 +910,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         await refresh({latest:true,...(followMessageId?{followMessageId}:{})}).catch(error => { if (!failed&&!interrupted) throw error; });
         if(!disposed)await options.onChanged?.();
       }
-    })().catch(error=>{
+    })().catch(async error=>{
       const code = errorText(error);
       if (acceptedNotice) {
         if (!accessRevoked) report(acceptedNotice + ' The chat could not refresh.');
@@ -921,8 +921,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       else if (code === 'unsupported_model') report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');
       else if (code === 'unsupported_reasoning_effort') report('This model cannot use the requested thinking level. Your draft is still here.');
       else if (code === 'unsupported_web_search_model') report('This model cannot use web search. Your draft is still here.');
-      else if (attachments && ['document_text_unavailable','unsupported_document_attachment','source_selection_unavailable','source_selection_changed','source_changed','media_source_unavailable','document_extraction_busy'].includes(code))
+      else if (attachments && ['document_text_unavailable','unsupported_document_attachment','source_selection_unavailable','source_selection_changed','source_changed','media_source_unavailable','document_extraction_busy'].includes(code)) {
+        if (!disposed && !accessRevoked && ['source_selection_unavailable','source_selection_changed','source_changed','media_source_unavailable'].includes(code)) {
+          // Refresh the canonical projection of the saved versions without replacing them.
+          await session.reload().catch(() => {});
+        }
         report('A selected document could not be read. Remove or reattach it before sending.');
+      }
       else { uncertain=true;report('Send could not be confirmed: '+code); }
     }).finally(()=>{if(!uncertain){submittedTurn=undefined;reconcileSubmittedTurn=undefined;}sending=false;sendTask=null;webSearchCommandId=undefined;renderDraft();if(execution)reconcileLateCompletion(execution);});
   });

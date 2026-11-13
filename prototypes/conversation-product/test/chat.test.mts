@@ -1523,6 +1523,44 @@ for (const empty of [true,false]) test('attachment continuation uses the existin
  } finally {release();await chat?.dispose();f.restore();}
 });
 
+for (const reason of ['source_selection_changed', 'source_selection_unavailable']) test('a refused document send refreshes the saved attachment ('+reason+')', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const source = { id:'file:brief', version:3, title:'Brief.pdf' };
+ const projection = reason === 'source_selection_changed'
+  ? { ...source, unavailable:'changed' }
+  : { ...source, title:'Unavailable document', unavailable:'inaccessible' };
+ let chat, refused = false;
+ const port = { async command(name:string,input:any) {
+  if (name==='send') {
+   f.calls.push({name,input});
+   refused = true;
+   throw Error(reason);
+  }
+  const result = await (f.port.command as any)(name,input);
+  if (name==='readDraft' && refused) {
+   return { ...result, documents: [projection] };
+  }
+  return result;
+ } } as ConversationProductPort;
+ try {
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:[source]});
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId,chooseDocument:async()=>null});
+  await chat.ready;
+  const send=f.view.root.querySelector('[data-cp-control="send"]');
+  assert.equal(send.disabled,false);
+  f.view.root.querySelector('form').fire('submit');
+  await chat.whenSubmissionSettled();
+  assert.equal(send.disabled,true);
+  const attachments = f.view.root.querySelector('.cp-composer-documents').textContent;
+  if (reason === 'source_selection_changed') assert.match(attachments,/Brief\.pdf \(changed\)/);
+  else assert.doesNotMatch(attachments,/Brief\.pdf/);
+  assert.ok(named(f.view.root,'Replace'));
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.deepEqual(f.draft.documents,[source]);
+  assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
 test('a recovered unavailable document can be removed without losing the draft or sending', async () => {
  const f = fixture('chatgpt-plan-responses');
  let chat;
