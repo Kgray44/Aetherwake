@@ -94,6 +94,24 @@ test('retrieves reviewed references from a cited partial match within the follow
   assert.deepEqual(result.coverage[0].sources, [anchor, candidate]);
 });
 
+test('reviewed discovery can recover from a lossy search query using the evidence question', async () => {
+  const need = { ...evidence, question: 'Which idempotency key was used?' };
+  const searches: string[] = [];
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search: query => {
+      searches.push(query);
+      return { sources: query === need.question ? [candidate] : [], scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? { ...proposal, needs: [need] } : call.round === 1
+      ? { version: 1, assessment: [{ key: 's1', status: 'missing', sources: [], query: '' }] }
+      : answer,
+  });
+  assert.deepEqual(searches, [need.query, need.question]);
+  assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
 test('a novel model refinement takes precedence over another page of the original query', async () => {
   const initial = { ...candidate, sourceId: 'initial' };
   const result = await investigateSemanticHistory(request, {
