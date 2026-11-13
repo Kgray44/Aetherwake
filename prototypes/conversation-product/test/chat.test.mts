@@ -352,6 +352,72 @@ test('quick search Enter submits pending text immediately and opens the first ex
  } finally {await manager?.dispose();f.restore();}
 });
 
+test('Switch chat retries a failed query with Enter and keeps the exact text', async () => {
+ const f=fixture(), resourceId=f.draft.resourceId, messageId=f.detail.messages.items[0].id;
+ const searches:string[]=[], opened:string[][]=[];
+ let manager;
+ const port={async command(name:string,input:any){
+  if(name==='search'&&input.searchMode==='chat-history'){
+   searches.push(input.text);
+   if(searches.length===1)throw Error('temporary synthetic transport failure');
+   return {items:[{kind:'message',resourceId,messageId,title:'Synthetic chat',excerpt:input.text}],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId,onResource:(id,message)=>opened.push([id,message??''])});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
+  input.value='exact phrase';input.fire('input');input.fire('keydown',{key:'Enter'});
+  await until(()=>switcher.querySelector('.cp-switcher-status').textContent.includes('Press Enter to retry'));
+  assert.deepEqual(opened,[]);
+  assert.equal(input.value,'exact phrase');
+  input.fire('keydown',{key:'Enter'});
+  await until(()=>opened.length===1);
+  assert.deepEqual(searches,['exact phrase','exact phrase']);
+  assert.deepEqual(opened,[[resourceId,messageId]]);
+ } finally {await manager?.dispose();f.restore();}
+});
+
+test('Switch chat waits for composed text and Escape invalidates a pending open', async () => {
+ const f=fixture();
+ const searches:string[]=[], opened:string[]=[];
+ let manager,release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const port={async command(name:string,input:any){
+  if(name==='search'){
+   searches.push(input.text);
+   await gate;
+   return {items:[{kind:'message',resourceId:f.draft.resourceId,messageId:f.detail.messages.items[0].id,
+    title:'Synthetic chat',excerpt:'完成'}],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId:f.draft.resourceId,onResource:id=>opened.push(id)});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
+  input.fire('compositionstart');
+  input.value='未';input.fire('input',{isComposing:true});
+  input.fire('keydown',{key:'Enter'});
+  await new Promise(resolve=>setTimeout(resolve,140));
+  assert.deepEqual(searches,[]);
+  input.value='完成';input.fire('compositionend');
+  input.fire('keydown',{key:'Enter'});
+  assert.deepEqual(searches,['完成']);
+  const escaped=input.fire('keydown',{key:'Escape'});
+  assert.equal(escaped.defaultPrevented,true);
+  assert.equal(switcher.open,false);
+  assert.equal(f.view.doc.activeElement,switcher.querySelector('summary'));
+  release();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(opened,[]);
+  assert.equal(switcher.querySelector('.cp-switcher-results').querySelector('button'),null);
+ } finally {release();await manager?.dispose();f.restore();}
+});
+
 test('mounted manager menus, branch/context and canonical nested folders borrow the same frame lifecycle without replacing the live composer',async()=>{
  const f=fixture(),m=pickerMotion();let manager;try{f.projects.push({id:'project:canonical',title:'Canonical project',version:1});f.collections.push({id:'folder:canonical',title:'Canonical folder',projectId:'project:canonical',version:1,ruleRevision:0,state:'active',parentId:null,rule:null,memberIds:[f.draft.resourceId],pinnedIds:[f.draft.resourceId]});manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId,motion:m.motion,viewId:'manager:disclosures'});await manager.ready;manager.frame();const editor=f.view.root.querySelector('textarea');editor.value='Same canonical draft through menu motion 🧭';editor.fire('input');editor.setSelectionRange(2,8);await manager.flush();const draft=f.draft;
   for(const selector of ['.cp-new-chat','.cp-switcher','.cp-filters','.cp-history-tools','.cp-chat-options','.cp-chat-extras','[data-collection-id="folder:canonical"]']){const node=f.view.root.querySelector(selector);assert.ok(node,selector);assert.equal(node.dataset.cpMotionDisclosure,'true',selector);const body=node.querySelector('.cp-motion-disclosure-body');node.open=true;node.fire('toggle');manager.frame();assert.equal(body.inert,false,selector);assert.equal(body.hidden,false,selector);m.step(.5);manager.frame();assert.ok(Number.parseFloat(body.style.height)>0,selector);node.open=false;node.fire('toggle');manager.frame();assert.equal(body.inert,true,selector);assert.equal(body.hidden,false,selector+' retains closing paint');m.step();manager.frame();assert.equal(body.hidden,true,selector);assert.equal(f.view.root.querySelector('textarea')===editor,true);assert.deepEqual([editor.selectionStart,editor.selectionEnd],[2,8]);}
