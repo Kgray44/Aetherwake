@@ -4,11 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   validate:
+    name: Aerynth governance
     timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
@@ -26,3 +29,5 @@ jobs:
         run: node scripts/benchmark-governance-context.mjs
       - name: Audit engineering-context sufficiency against independent required rules
         run: node scripts/evaluate-governance-engineering.mjs --strict
+      - name: Validate Current State engineering references
+        run: node scripts/verify-current-state.mjs
