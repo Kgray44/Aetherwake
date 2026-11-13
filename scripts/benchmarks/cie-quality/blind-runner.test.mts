@@ -4,6 +4,20 @@ import { mkdtempSync, readFileSync, rmSync, rmdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openBlindJournal } from './blind-journal.mts';
+
+test('a durable batch journal cannot be reopened against a different native profile', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'aerynth-cie-profile-binding-'));
+  const path = join(directory, 'batch.sqlite');
+  try {
+    openBlindJournal(path, { profileId: 'native-profile-a' }).close();
+    assert.throws(() => openBlindJournal(path, { profileId: 'native-profile-b' }).close(), /blind_journal_profile_mismatch/);
+    assert.throws(() => openBlindJournal(path).close(), /blind_journal_profile_mismatch/);
+    openBlindJournal(path, { profileId: 'native-profile-a' }).close();
+  } finally {
+    rmSync(path, { force: true });
+    rmdirSync(directory);
+  }
+});
 import { canStartReviewedCieCase } from './native-budget.mts';
 import { readBlindInputs, runBlindCie } from './blind-runner.mts';
 const bytes = readFileSync(new URL('./cases.public.json', import.meta.url));

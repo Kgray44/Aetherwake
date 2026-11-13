@@ -13,7 +13,8 @@ function encode(state: JournalState): string {
 }
 
 /** Open a dedicated evaluation checkpoint file in the host's evidence directory. */
-export function openBlindJournal(path: string): BlindJournal & { close(): void } {
+export function openBlindJournal(path: string, options?: { profileId: string }): BlindJournal & { close(): void } {
+  if (options && !/^[a-zA-Z0-9:_-]{1,128}$/.test(options.profileId)) throw new Error('blind_journal_profile_invalid');
   const db = new DatabaseSync(path);
   try {
     db.exec(`PRAGMA busy_timeout = 5000;
@@ -22,7 +23,22 @@ export function openBlindJournal(path: string): BlindJournal & { close(): void }
       CREATE TABLE IF NOT EXISTS cie_blind_journal (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         state TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS cie_blind_profile (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        profile_id TEXT NOT NULL
       ) STRICT;`);
+    db.exec('BEGIN IMMEDIATE');
+    const binding = db.prepare('SELECT profile_id FROM cie_blind_profile WHERE singleton = 1').get();
+    const profileId = options?.profileId ?? '';
+    if (binding && binding.profile_id !== profileId) throw new Error('blind_journal_profile_mismatch');
+    if (!binding) {
+      if (options && db.prepare('SELECT 1 FROM cie_blind_journal WHERE singleton = 1').get()) {
+        throw new Error('blind_journal_profile_unbound');
+      }
+      db.prepare('INSERT INTO cie_blind_profile VALUES (1, ?)').run(profileId);
+    }
+    db.exec('COMMIT');
     const read = db.prepare('SELECT state FROM cie_blind_journal WHERE singleton = 1');
     const insert = db.prepare('INSERT INTO cie_blind_journal VALUES (1, ?) ON CONFLICT(singleton) DO NOTHING');
     const replace = db.prepare('UPDATE cie_blind_journal SET state = ? WHERE singleton = 1 AND state = ?');

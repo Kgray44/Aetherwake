@@ -23,9 +23,10 @@ import { docxFixture } from '../../block-library/tests/media-fixtures.mts';
 import { missionDraftImageModel, missionImageModel } from '../../openai-provider/images.mts';
 import { writeMissionArtifacts } from '../src/mission-artifacts.mts';
 import { preflightArtifactEvidence, retainArtifactEvidence, verifyArtifactEvidence } from './helpers/artifact-evidence.mts';
-import { runBlindCie } from '../../../scripts/benchmarks/cie-quality/blind-runner.mts';
+import { runBlindCie, type BlindPayload } from '../../../scripts/benchmarks/cie-quality/blind-runner.mts';
 import { openBlindJournal } from '../../../scripts/benchmarks/cie-quality/blind-journal.mts';
 import { canStartReviewedCieCase } from '../../../scripts/benchmarks/cie-quality/native-budget.mts';
+import { runNativeCieBatch } from '../../../scripts/benchmarks/cie-quality/native-batch.mts';
 const objective='Can you investigate why the Minecraft server is lagging?';
 const marker='SYNTHETIC_ONLY_MISSION_API_KEY';
 const graph={tasks:[{capability:'cpu',after:[]},{capability:'ram',after:[]},{capability:'backend',after:['cpu','ram']}],unsupported:['Server tick timings and logs are unavailable.']};
@@ -1305,13 +1306,15 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
     assessment: [{ key, status: 'supported', query: '', passages: [{ source: 'e1', quote }] }] });
   const reply = (value: unknown) => (body: { model: string }) => response(JSON.stringify(value), body.model);
   const predictions = [];
+  const profileId = randomUUID();
+  const route = { provider: 'openai-api-vela', model: live?.model ?? 'gpt-6-luna',
+    transport: live ? 'live' as const : 'synthetic' as const };
   try {
     await f.ready();
     for (const expectedCase of live ? ['blind-001'] : ['blind-001', 'blind-002']) {
-      const journal = openBlindJournal(journalPath);
-      try {
+      {
         let hostError: unknown;
-        const checkpoint = await runBlindCie(bytes, identity, async input => {
+        const runCase = async (input: Readonly<BlindPayload>) => {
           try {
             assert.equal(input.id, expectedCase);
             const project = await f.core.command('desktop', { type: 'createProject', title: input.id });
@@ -1330,7 +1333,7 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
             const requestStart = requests.length;
             const eventCursor = (await f.core.command('replay', { limit: 1 })).latest;
             const before = await usage();
-            if (!live && !before.usedToday) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
+            if (!live) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
               reply(assess('day', 'The pump inspection is on Tuesday.')));
             if (!live) f.replies.push(reply(interpret(input.request, input.sources[0].title)), reply(assess('fact', quote)),
               body => {
@@ -1359,7 +1362,7 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
             assert.equal(f.replies.length, 0);
             const calls = (await usage()).usedToday - before.usedToday;
             if (live) assert.ok(calls >= 3 && calls <= 6);
-            else assert.equal(calls, expectedCase === 'blind-001' ? 5 : 3);
+            else assert.equal(calls, 5);
             const replay = await f.core.command('replay', { after: eventCursor, limit: 500 });
             assert.equal(replay.truncated, false);
             const classification = live ? 'reported' : 'simulated';
@@ -1398,15 +1401,30 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
             return { answer, calls, totalTokens, tokenSamples: tokenSamples.length, settlements, requestedModel: live?.model ?? 'gpt-6-luna',
               transport: live ? 'live' : 'synthetic', evidenceAudit };
           } catch (error) { hostError = error; throw error; }
-        }, signal, { journal, maxCases: 1, route: { provider: 'openai-api-vela', model: live?.model ?? 'gpt-6-luna',
-          transport: live ? 'live' : 'synthetic' }, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
+        };
+        let checkpoint;
+        if (live) {
+          const journal = openBlindJournal(journalPath);
+          try {
+            checkpoint = await runBlindCie(bytes, identity, runCase, signal,
+              { journal, maxCases: 1, route, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
+          } finally { journal.close(); }
+        } else {
+          checkpoint = await runNativeCieBatch(bytes, identity, { profileId, route, readUsage: usage, runReviewedCase: runCase },
+            journalPath, 1, signal);
+        }
         if (hostError) throw hostError;
         assert.equal(checkpoint.stopped, null);
         assert.equal(checkpoint.results.at(-1)?.id, expectedCase);
         predictions.push(checkpoint);
-      } finally { journal.close(); }
+      }
+      if (!live && expectedCase === 'blind-001') {
+        const before = await usage();
+        await f.reopen();
+        assert.equal((await usage()).usedToday, before.usedToday);
+      }
     }
-    if (!live) assert.equal((await usage()).usedToday, 8);
+    if (!live) assert.equal((await usage()).usedToday, 10);
     return predictions.at(-1)!;
   } finally { await f.close(); }
 }
