@@ -49,6 +49,39 @@ test('the inspector loads only on request and sends a version-bound correction',
   } finally { restore(); }
 });
 
+test('the inspector sends only the selected fact revision and refreshes after confirmed source revocation', async () => {
+  const f = componentDocument(), restore = f.install(), calls = [];
+  const record = { id: 'fact-1', version: 3, scope: { kind: 'project' }, state: 'active' };
+  const fact = { ...record, text: 'Synthetic decision', provenance: {
+    kind: 'conversation-message', conversationId: 'chat', messageId: 'message',
+  } };
+  let outcome = 'cancelled';
+  try {
+    const view = createPersonalMemoryView(async request => {
+      calls.push(request);
+      if (request.type === 'list') return { records: outcome === 'applied' ? [] : [record], next: null, policy: { version: 1 } };
+      if (request.type === 'read') return fact;
+      return { status: outcome };
+    });
+    named(view, 'Load saved memories').fire('click');
+    await until(() => !!named(view, 'Memory fact-1 · project · active'));
+    named(view, 'Memory fact-1 · project · active').fire('click');
+    await until(() => !!named(view, 'Revoke original message'));
+    const revoke = named(view, 'Revoke original message');
+    revoke.fire('click');
+    await until(() => !revoke.disabled);
+    const expected = { type: 'revokeSource', id: 'fact-1', version: 3 };
+    assert.deepEqual(calls.slice(2), [expected]);
+    assert.match(view.textContent, /Synthetic decision/);
+    outcome = 'applied';
+    revoke.fire('click');
+    await until(() => view.textContent.includes('Original message revoked'));
+    assert.deepEqual(calls.slice(3), [expected, { type: 'list', after: null }]);
+    assert.equal(named(view, 'Revoke original message'), undefined);
+    assert.doesNotMatch(view.textContent, /Synthetic decision/);
+  } finally { restore(); }
+});
+
 test('opening a saved memory source rechecks the record and opens its exact message', async () => {
   const f = componentDocument(), restore = f.install();
   const opened = [];
