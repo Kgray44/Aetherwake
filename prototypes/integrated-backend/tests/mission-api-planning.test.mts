@@ -2609,7 +2609,7 @@ for (const outcome of ['failure', 'cancel', 'revoke']) test('standing selected e
 });
 
 for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation interrupt', 'provider failure', 'interrupt', 'revoke', 'app-owned', 'app-owned stale',
-  'app-owned revoked', 'app-owned revoked after grant', 'app-owned wrong scope', 'app-owned wrong version',
+  'app-owned revoked', 'app-owned revoked after grant', 'app-owned rotated after grant', 'app-owned wrong scope', 'app-owned wrong version',
   'app-owned interrupted', 'app-owned retired'] as const) test('selected evidence broker analysis: '+scenario, {timeout:15_000}, async () => {
   const evaluation = scenario.startsWith('evaluation');
   const noteCase = scenario === 'evaluation note';
@@ -2661,6 +2661,12 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
       if (scenario === 'app-owned revoked after grant' && name === 'authorizeVelaRequest') {
         await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
       }
+      if (scenario === 'app-owned rotated after grant' && name === 'authorizeVelaRequest') {
+        await f.core.command('velaApiConfigure', { expectedVersion: 1,
+          credential: { configurationId: 'vela-primary', apiKey: marker } });
+        const usage = await f.core.command('velaApiUsageAuthorize', { expectedVersion: 2, enabled: true });
+        assert.equal(usage.configurationVersion, 2);
+      }
       return result;
     };
     const selectedRefs = scenario === 'app-owned wrong version'
@@ -2679,7 +2685,7 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
       input: { name: 'request', input: { intent, resourceIds, resourceRefs, authorizeProvider: true,
         providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
     }) as Promise<VelaRequest>;
-    if (scenario === 'app-owned stale' || scenario === 'app-owned revoked' || scenario === 'app-owned revoked after grant' ||
+    if (scenario === 'app-owned stale' || scenario === 'app-owned revoked' || scenario === 'app-owned revoked after grant' || scenario === 'app-owned rotated after grant' ||
         scenario === 'app-owned wrong scope' || scenario === 'app-owned wrong version' || scenario === 'app-owned retired') {
       if (scenario === 'app-owned stale') writeFileSync(path, 'Replaced synthetic source');
       if (scenario === 'app-owned revoked') await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
@@ -2688,12 +2694,17 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
         'app-owned stale': /source_changed|stale_vela_preview/,
         'app-owned revoked': /approval_scope_mismatch/,
         'app-owned revoked after grant': /native_vela_grant_expired/,
+        'app-owned rotated after grant': /vela_api_connection_changed/,
         'app-owned wrong scope': /stale_vela_preview/,
         'app-owned wrong version': /vela_app_request_scope_required/,
         'app-owned retired': /vela_app_request_owner_unavailable/,
       }[scenario];
       await assert.rejects(send(), expected);
       await assert.rejects(send(), /vela_app_request_consumed/);
+      if (scenario === 'app-owned retired') {
+        const replacement = prepareAppOwnedVelaRequest({ call, isCurrent: () => true, preview, resourceRefs });
+        await assert.rejects(replacement(), /vela_standing_preview_already_authorized/);
+      }
       assert.equal(f.requests.length, 0);
       assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 0);
       return;
@@ -2799,8 +2810,12 @@ for (const scenario of ['standing', 'evaluation', 'evaluation note', 'evaluation
       assert.equal(f.requests.length,5);
       return;
     }
-    if (scenario === 'app-owned') await assert.rejects(send(), /vela_app_request_consumed/);
-    else {
+    if (scenario === 'app-owned') {
+      await assert.rejects(send(), /vela_app_request_consumed/);
+      const second = prepareAppOwnedVelaRequest({ call, isCurrent: () => ownerCurrent, preview, resourceRefs });
+      await assert.rejects(second(), /stale_vela_input_revision/);
+      assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 5);
+    } else {
       writeFileSync(path, 'Replaced synthetic source');
       await assert.rejects(send(), /source_changed|stale_vela_preview/);
     }

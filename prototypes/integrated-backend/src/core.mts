@@ -201,6 +201,7 @@ const toVelaReviewedEvidenceSource = (source: ContextManifest['included'][number
 };
 
 interface PrivateVelaPreview extends VelaRequestPreview {
+  standingGrantIssued?: true;
   evaluationClaim?: VelaApiRun['evaluationClaim'];
   explicitSourceSelection?: true;
   projectEvidenceSources?: ContextManifest['included'];
@@ -5184,6 +5185,7 @@ export class BackendCore {
   }
   private authorizeVelaRequest(input:CommandMap['authorizeVelaRequest']['input']) {
     this.pruneVelaGrants();const preview=this.velaPreviews.get(input.previewId);ensure(preview,'vela_preview_expired');ensure(preview.signature===input.signature,'approval_scope_mismatch');
+    ensure(!preview.standingGrantIssued,'vela_standing_preview_already_authorized');
     this.validateFrozenVelaPreview(preview);ensure(this.velaGrants.size<64,'approval_backpressure');
     if (input.directSend) ensure(preview.nativeReviewed && preview.sendDisposition !== 'review-required' &&
       preview.sendDisposition === this.velaSendDisposition(preview), 'vela_attached_context_review_required');
@@ -5193,6 +5195,7 @@ export class BackendCore {
     const grantId = randomUUID(), expiresAt = new Date(Math.min(Date.now() + grantLifetime, Date.parse(preview.expiresAt))).toISOString();
     this.velaGrants.set(grantId, { previewId: preview.id, expiresAt, consumed: false,
       ...(preview.nativeReviewed ? { reviewDigest: preview.reviewDigest } : {}) });
+    if(preview.sendDisposition==='standing-selected-evidence')preview.standingGrantIssued=true;
     return { grantId, expiresAt };
   }
   private validateVelaGrant(id:string) {const g=this.velaGrants.get(id);ensure(g&&!g.consumed,'native_vela_grant_required');ensure(Date.parse(g.expiresAt)>Date.now()&&this.velaPreviews.has(g.previewId),'native_vela_grant_expired');if(g.reviewDigest)ensure(this.velaPreviews.get(g.previewId)!.reviewDigest===g.reviewDigest,'native_vela_review_mismatch');return g;}
