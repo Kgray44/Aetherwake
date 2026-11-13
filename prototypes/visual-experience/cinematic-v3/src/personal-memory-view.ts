@@ -63,7 +63,19 @@ export function createPersonalMemoryView(command: Command, openSource?: OpenSour
       next = null;
       more.hidden = true;
     }
-    const page = await command({ type: 'list', after }) as Page;
+    const policyAtStart = currentPolicy;
+    let page: Page;
+    try {
+      page = await command({ type: 'list', after }) as Page;
+    } catch (error) {
+      if (intent !== selection) return;
+      if (after === null && currentPolicy === policyAtStart) {
+        currentPolicy = undefined;
+        policy.textContent = 'Memory settings could not be verified.';
+        disableChatGPT.hidden = disableVela.hidden = true;
+      }
+      throw error;
+    }
     if (intent !== selection) return;
     if (!currentPolicy || page.policy.version >= currentPolicy.version) renderPolicy(page.policy);
     for (const record of page.records) {

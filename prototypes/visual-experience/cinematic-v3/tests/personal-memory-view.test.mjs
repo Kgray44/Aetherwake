@@ -208,5 +208,13 @@ test('a failed full reload clears stale memory rows, details, and the page curso
     assert.equal(named(view, 'Memory fact-1 · project · active'), undefined);
     assert.doesNotMatch(view.textContent, /Synthetic memory/);
     assert.equal(named(view, 'More memories').hidden, true);
+    assert.match(view.textContent, /Memory settings could not be verified/);
+    assert.doesNotMatch(view.textContent, /Enabled for reviewed sends/);
+    assert.equal(named(view, 'Turn off Vela memory').hidden, true);
+    fail = false;
+    load.fire('click');
+    await until(() => !load.disabled);
+    assert.match(view.textContent, /Vela memory: Enabled for reviewed sends/);
+    assert.equal(named(view, 'Turn off Vela memory').hidden, false);
   } finally { restore(); }
 });
