@@ -157,6 +157,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     if(!client.pickSources)throw Error('source_picker_unavailable');
     pickingSources=true;
     pickFilesButton.disabled=pickFolderButton.disabled=send.disabled=true;
+    pickerStatus.textContent=kind==='files'?'Waiting for file selection…':'Waiting for folder selection…';
+    pickerStatus.hidden=false;
     try{
       const picked=await client.pickSources({kind,destination:'context'});
       if(disposed)return;
@@ -169,6 +171,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       renderSelection();
     }finally{
       pickingSources=false;
+      pickerStatus.textContent='';
+      pickerStatus.hidden=true;
       pickFilesButton.disabled=pickFolderButton.disabled=false;
       send.disabled=busy||!intent.value.trim();
     }
@@ -530,7 +534,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   if (options.voice) composeActions.append(voiceControl);
   composeActions.append(stop, send);
   connection.body.append(providerChoice);
-  form.append(intent, selection, selectedEvidenceOption, composeActions);
+  const pickerStatus=el('span','vela-core-secondary');
+  pickerStatus.setAttribute('role','status');
+  pickerStatus.hidden=true;
+  form.append(intent, selection, selectedEvidenceOption, pickerStatus, composeActions);
   intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || pickingSources || !intent.value.trim(); updateSemanticContext(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
   form.addEventListener('submit', event => { event.preventDefault(); if (busy || pickingSources || !intent.value.trim() || composing) return;

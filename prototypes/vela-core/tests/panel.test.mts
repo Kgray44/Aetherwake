@@ -492,8 +492,12 @@ test('Vela waits for the file selection before sending the versioned sources', a
     assert.equal(turns.length, 0);
     assert.equal(picks, 1);
     assert.equal(named(root, 'Send to Vela').disabled, true);
+    const notice = root.find(node => node.getAttribute('role') === 'status' &&
+      node.textContent === 'Waiting for file selection…');
+    assert.ok(notice && !notice.hidden, 'the pending selection explains why Send is disabled');
     finish({ resources: [file] });
     await settles(() => !!named(root, 'Remove source Pending.docx'));
+    assert.equal(notice.textContent, '');
     assert.equal(turns.length, 0);
     editor.fire('keydown', { key: 'Enter' });
     await settles(() => turns.length === 1);
