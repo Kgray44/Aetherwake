@@ -112,6 +112,8 @@ export function createConversationExecutionPort(
       execution.providerId !== delta.providerId
     )
       return false;
+    // A matching terminal snapshot retires this stream, including queued deltas.
+    if (!active(execution)) return true;
     const key = delta.executionId + ":" + delta.eventId;
     if (seen.has(key)) return true;
     seen.add(key);
