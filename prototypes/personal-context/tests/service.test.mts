@@ -258,6 +258,12 @@ test('a long-running project can recall an older decision after restart within t
     assert.deepEqual(f.service.previewContext({ ...query, maxScan: 128 }).items, []);
     const result = f.service.previewContext(query);
     assert.deepEqual(result.items.map(item => item.factId), [older.id]);
+    const multipleNeeds = { ...recentQuery, evidenceQueries: ['maintenance interval', 'chalcedony relay'], maxItems: 2 };
+    const expanded = f.service.previewContext(multipleNeeds);
+    assert.equal(expanded.items.length, 2);
+    assert.ok(expanded.items.some(item => item.factId === older.id), 'a recent match must not hide an older evidence need');
+    assert.equal(f.service.previewContext({ ...multipleNeeds, maxScan: 128 }).items.some(item => item.factId === older.id), false);
+    assert.equal(f.service.previewContext({ ...multipleNeeds, projectId: 'p2' }).items.length, 0);
     assert.equal(f.service.previewContext({ ...query, projectId: 'p2' }).items.length, 0);
     assert.equal(f.service.previewContext({ ...query, query: 'Unrelated photography' }).items.length, 0);
     f.service.revoke({ id: older.id, expectedVersion: older.version });
