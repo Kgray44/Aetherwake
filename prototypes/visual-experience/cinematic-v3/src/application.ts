@@ -764,6 +764,17 @@ export function installApplication(hooks: Hooks) {
       })) as ProductCommandMap[K]["output"];
     },
   };
+  const replyNoteActions = {
+    async saveReplyNote(input: ProductCommandMap["captureReplyNote"]["input"]) {
+      const receipt = await composerPort.command("captureReplyNote", input);
+      // The canonical save has committed. Refresh the workspace independently.
+      void command({ type: "snapshot" }).catch(() => {
+        if (!eventClosed) hooks.status("Note saved. The workspace could not refresh.");
+      });
+      return receipt;
+    },
+    openReplyNote: (noteId: string) => openCanonicalResource(noteId),
+  };
   const chatViewPersistence = new ConversationViewPersistence({
     port: composerPort,
     onError: (error) => report(error),
@@ -804,6 +815,28 @@ export function installApplication(hooks: Hooks) {
       height: 16,
     }),
     failed: report,
+    placeNote: (resource) => {
+      const workspaceId = state?.activeWorkspaceId;
+      if (!workspaceId || !notePlacementAllowed(resource, workspaceId)) return;
+      return () => enqueueResult(async () => {
+        await flush();
+        const current = state?.resources.find((item) => item.id === resource.id);
+        if (!current || !notePlacementAllowed(current, workspaceId))
+          throw Error("note_placement_context_changed");
+        const attach = libraryClient.attachBlock;
+        if (!attach || !state) throw Error("attachment_unavailable");
+        await attach({
+          commandId: crypto.randomUUID(),
+          workspaceId,
+          expectedLayoutVersion: state.layoutVersion,
+          bounds: viewBounds(),
+          resourceId: current.id,
+          kind: "note",
+          expectedResourceVersion: current.version,
+        });
+        hooks.status("Note added to this workspace.");
+      });
+    },
     mount: (root, resource) =>
       mountDirectResourceExperience(root, resource, {
         notes: notesClient,
@@ -2470,6 +2503,7 @@ export function installApplication(hooks: Hooks) {
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
+      ...replyNoteActions,
       onOpenChatGPT: async (reference) => {
         const receipt = (await host.command!(
           "firstPartyChat",
@@ -3804,6 +3838,15 @@ export function installApplication(hooks: Hooks) {
       throw error;
     }
   }
+  function notePlacementAllowed(resource: Resource, workspaceId: string): boolean {
+    const workspace = state?.workspaces.find((item) => item.id === workspaceId);
+    return !!workspace && !!libraryClient.attachBlock &&
+      state?.navigation.kind === "workspace" && state.activeWorkspaceId === workspaceId &&
+      resource.kind === "note" && resource.state !== "archived" &&
+      resource.available !== false && resource.visible !== false &&
+      (resource.project_id == null || resource.project_id === workspace.project_id) &&
+      !state.blocks.some((block) => block.workspace_id === workspaceId && block.resource_id === resource.id);
+  }
   function openCanonicalResource(resourceId: string, messageId?: string) {
     void resourceOpener
       .open({
@@ -4301,6 +4344,7 @@ export function installApplication(hooks: Hooks) {
       if (!view && activeBlocks.get(b.id)) {
         const session = composerSession(r.id);
         view = mountBlockChat(surface, {
+          ...replyNoteActions,
           copy: copyText,
           motion: experienceMotion,
           viewId: "block:" + b.id + ":conversation",

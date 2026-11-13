@@ -3,7 +3,8 @@
  *               moduleStartedMonotonicMs}) --integration-resource-opening
  * Optional --record-resource-opening; --verify-restore uses the SAME profile,
  * resource-opening-expected.json and exact original source/build identities.
- * Initial/restore global slots: 45s/12s, including cleanup. Combined evidence:
+ * Initial/restore global slots: 45s/12s, or 60s/30s for --verify-reply-note.
+ * Combined evidence:
  * <=6 PNG/24MiB and one exact-window WebM/48MiB. Root's caller must confirm exit.
  * Requires production library.inspectWorkspace({workspaceId}) ->
  * {result:WorkspaceProjection}; no private-command or partial-layout fallback.
@@ -95,7 +96,7 @@ function targetScript(selector, action, value) {
 exports.createSlot = createSlot; exports.canonicalProjection = canonicalProjection; exports.sourceIdentity = sourceIdentity; exports.targetScript = targetScript; exports.unplacedSelector = unplacedSelector; exports.waitForCondition = waitForCondition; exports.assertWorkspaceProjection = assertWorkspaceProjection;
 
 exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], session, localURL, moduleStartedMonotonicMs }) {
-  const restore = process.argv.includes('--verify-restore'), limitMs = restore ? 12000 : 45000, started = performance.now(), root = path.resolve(privateRoot), out = path.join(root, 'resource-opening-evidence', (restore ? 'restore-' : 'initial-') + Date.now());
+  const restore = process.argv.includes('--verify-restore'), replyNote = process.argv.includes('--verify-reply-note'), limitMs = restore ? (replyNote ? 30000 : 12000) : (replyNote ? 60000 : 45000), started = performance.now(), root = path.resolve(privateRoot), out = path.join(root, 'resource-opening-evidence', (restore ? 'restore-' : 'initial-') + Date.now());
   const expectedFile = path.join(root, 'resource-opening-expected.json'), budgetFile = path.join(root, 'resource-opening-capture-budget.json');
   const receipt = { contract: 'aerynth.resource-opening-integration@1', source, passed: false, restore, syntheticOnly: true, inputMethod: 'Renderer integration: actual visible DOM click/input handlers and application capabilities; no OS mouse/keyboard input', limits: { milliseconds: limitMs, combinedPNGs: 6, combinedPNGBytes: 24 * 1024 * 1024, combinedVideos: 1, videoBytes: 48 * 1024 * 1024 }, actions: [], checks: [], captures: [], errors: [], coverage: {}, limitations: ['No physical input, live model, sign-in, multiuser revocation, artistic or production qualification.', 'F covers the real Vela source-search Open control; natural-language interpretation is untested.', 'Fresh positive GPU draw acknowledgement is not monitor-presentation or performance acceptance.'] };
   let slot, driver, recorder, budget = { count: 0, bytes: 0, videos: 0, files: [] }, pendingExpected, runPassed = false, owned = false, admitted = false, hardTimer, workTimer, abortReject;
@@ -113,7 +114,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     workTimer = setTimeout(() => abort('resource_opening_work_deadline'), slot.workRemaining());
     win.on('blur', blur); win.on('hide', blur); win.on('minimize', blur); win.webContents.on('before-input-event', escape); win.webContents.on('console-message', consoleError);
     const guardFile = path.join(process.env.LOCALAPPDATA || '', 'AeroStorageWatch', 'ReserveGuard.ps1');
-    const guard = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-File', guardFile, '-EstimatedCBytes', String(160 * 1024 * 1024), '-EstimatedDBytes', '0'], { windowsHide: true, timeout: 5000, maxBuffer: 8192, encoding: 'utf8' })); assert.equal(guard.allowed, true, 'storage_reserve_denied'); receipt.reserve = guard; admitted = true; slot.check();
+    const guard = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-File', guardFile, '-EstimatedCBytes', String(160 * 1024 * 1024), '-EstimatedDBytes', '0'], { windowsHide: true, timeout: Math.min(10000, slot.workRemaining()), maxBuffer: 8192, encoding: 'utf8' })); assert.equal(guard.allowed, true, 'storage_reserve_denied'); receipt.reserve = guard; admitted = true; slot.check();
     if (!restore) { await assert.rejects(fs.stat(expectedFile), { code: 'ENOENT' }); await assert.rejects(fs.stat(budgetFile), { code: 'ENOENT' }); }
     else { budget = JSON.parse(await fs.readFile(budgetFile, 'utf8')); assert(Number.isSafeInteger(budget.count) && budget.count >= 0 && budget.count <= 4 && Number.isSafeInteger(budget.bytes) && budget.bytes >= 0 && budget.bytes <= receipt.limits.combinedPNGBytes && budget.videos <= 1 && Array.isArray(budget.files), 'invalid_combined_evidence_budget'); }
     await fs.mkdir(out, { recursive: true });
@@ -131,7 +132,12 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const diagnose = () => js("(()=>{const a=window.__aerynth?.application?.(),s=window.__aerynth?.snapshot?.(),where=s?.spatial?.location??a?.navigation;return{status:(document.querySelector('#status')?.textContent??'').slice(0,240),location:where?{kind:where.kind,projectId:where.projectId,workspaceId:where.workspaceId,blockId:where.blockId}:null,anchors:[...document.querySelectorAll('.aw-anchor[data-key]')].slice(0,16).map(e=>({key:e.dataset.key.slice(0,160),label:(e.querySelector('strong')?.textContent??'').slice(0,80),visible:!!e.getClientRects().length&&!e.closest('[hidden],[inert]')&&getComputedStyle(e).visibility!=='hidden'}))}})()");
     const wait = async (label, check) => { receipt.phase = label; try { return await waitForCondition({ slot, label, check, diagnose }); } catch (error) { if (error.diagnostics) receipt.conditionFailure = { label, diagnostics: error.diagnostics }; throw error; } };
     const expression = (label, code) => wait(label, () => js(`(()=>{try{return (${code})}catch{return false}})()`));
-    const action = async (selector, kind = 'click', value) => { await wait('Visible renderer target ' + selector, async () => { const result = await js(targetScript(selector, 'inspect')); return result.ready; }); const result = await js(targetScript(selector, kind, value)); assert.equal(result.ready, true, 'renderer_target_changed'); receipt.actions.push({ method: 'renderer-DOM-' + kind, selector, ...(kind === 'input' ? { characters: value.length } : {}) }); };
+    const action = async (selector, kind = 'click', value) => {
+      await wait('Visible renderer target ' + selector, async () => {
+        const result = await js(targetScript(selector, kind, value));
+        assert(result && typeof result === 'object', 'renderer_action_outcome_unknown');
+        return result.ready === true;
+      }); receipt.actions.push({ method: 'renderer-DOM-' + kind, selector, ...(kind === 'input' ? { characters: value.length } : {}) }); };
     const application = async input => { receipt.actions.push({ method: 'application-capability-fixture', type: input.type }); return js(`window.__aerynth.execute(${JSON.stringify(input)})`); };
     const open = async (resourceId, extra = {}) => { receipt.actions.push({ method: 'application-openResource', resourceId, ...extra }); const result = await js(`window.__aerynth.openResource(${JSON.stringify({ resourceId, ...extra })})`); assert.equal(result.resourceId, resourceId); return result; };
     const flush = () => js('window.__aerynth.flush()');
@@ -144,7 +150,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const note = async resourceId => (await rpc('notes', { name: 'readNote', input: resourceId })).result;
     const directSelector = id => `.application-direct-resource[data-resource-id="${id}"]`;
     const waitNote = id => expression('Actual direct Note session', `(()=>{const r=document.querySelector(${JSON.stringify(directSelector(id))});return r?.querySelector('.aw-direct-editor')&&!r.querySelector('.aw-direct-editor').disabled&&['ready','saved','recovered'].includes(r.querySelector('[data-note-state]')?.dataset.noteState)})()`);
-    const close = async id => { const selector = `[data-surface-id="${id}"]`; await action(selector + ' .aw-contextual-dismiss'); await expression('Surface closes after actual flush', `!document.querySelector(${JSON.stringify(selector)})`); };
+    const close = async id => { const selector = `[data-surface-id="${id}"]`; const control = id === 'conversations' ? ' .cp-header-actions [data-cp-control="close"]' : ' .aw-contextual-dismiss'; await action(selector + control); await expression('Surface closes after actual flush', `!document.querySelector(${JSON.stringify(selector)})`); };
     const canonical = async () => {
       const d = await desktop(), core = await rpc('snapshot', {}), layouts = {};
       assert.equal(Object.keys(core.executions).length, 0, 'No provider execution authorized'); assert.equal(Object.keys(core.handoffs).length, 0, 'No delegated handoff authorized');
@@ -178,9 +184,28 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     await expression('Real application capabilities ready', "typeof window.__aerynth.openResource==='function'&&document.body.dataset.applicationHydrated==='true'");
     if (restore) {
       const expected = JSON.parse(await fs.readFile(expectedFile, 'utf8')); assert.equal(expected.contract, 'aerynth.resource-opening-checkpoint@1'); assert.equal(expected.initialPassed, true); assert.deepEqual(sourceIdentity(source), expected.source);
+      assert.equal(!!expected.fixture.replyNoteId, replyNote, 'reply_note_scope_mismatch');
       const current = await canonical(); assert.deepEqual(current.projection, expected.canonical); receipt.fixture = expected.fixture;
       await viewOnly('A/restart exact Note identity/content', async () => { const prior = await graphics(); assert.equal((await open(expected.fixture.noteId)).status, 'ready'); await waitNote(expected.fixture.noteId); assert.equal(await js(`document.querySelector(${JSON.stringify(directSelector(expected.fixture.noteId) + ' .aw-direct-editor')}).value`), expected.fixture.noteText); await capture('05-restart-note', directSelector(expected.fixture.noteId), prior); await close('canonical-resource'); });
       await viewOnly('C/restart exact local transcript/draft', async () => { const prior = await graphics(); assert.equal((await open(expected.fixture.chatId)).status, 'ready'); await expression('Actual saved chat draft', `document.querySelector('.cp-chat[data-resource-id="${expected.fixture.chatId}"] .cp-composer textarea')?.value===${JSON.stringify(expected.fixture.chatDraft)}`); await capture('06-restart-chat', '.cp-manager', prior); await close('conversations'); });
+      if (expected.fixture.replyNoteId) {
+        assert.equal((await open(expected.fixture.replyNoteId)).status, 'ready');
+        await waitNote(expected.fixture.replyNoteId);
+        assert.equal((await note(expected.fixture.replyNoteId)).resource.content, expected.fixture.editedReplyNote);
+        await close('canonical-resource');
+        receipt.checks.push('Edited reply note reopened after restart with the same canonical ID');
+        assert.equal(current.desktop.activeWorkspaceId, expected.fixture.replyWorkspaceId);
+        const placements = current.desktop.blocks.filter(block => block.resource_id === expected.fixture.replyNoteId);
+        assert.deepEqual(placements.map(block => [block.id, block.workspace_id]), [
+          [expected.fixture.replyBlockId, expected.fixture.replyWorkspaceId],
+        ]);
+        const card = `[data-block="${expected.fixture.replyBlockId}"]`;
+        await action(card + ' .unfold');
+        const editor = card + ' .working-content textarea';
+        await expression('Restored workspace Note has the exact saved edit',
+          `document.querySelector(${JSON.stringify(editor)})?.value===${JSON.stringify(expected.fixture.editedReplyNote)}`);
+        receipt.checks.push('The same placed note and edit survived a fresh process');
+      }
       receipt.checks.push('same-source fresh-process canonical restore, zero new executions/grants/handoffs');
     } else {
       const initial = await desktop(); assert.equal(initial.projects.length, 0); assert.equal(initial.workspaces.length, 0); assert.equal(initial.resources.length, 0, 'Only a fresh empty synthetic profile is authorized');
@@ -203,7 +228,97 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       // C: real default local chat, one recorded user message, then durable unsent draft.
       const chatDraw = await graphics(); await action('#application-new-chat'); await wait('Actual new local conversation', async () => { const value = await js("document.querySelector('.cp-chat')?.dataset.resourceId"); if (value) fixture.chatId = value; return !!value; });
       assert.equal((await chat(fixture.chatId)).conversation.providerId, 'local'); await action('.cp-composer textarea', 'input', fixture.chatMessage); await action('.cp-composer button[type="submit"]'); await wait('Local message durably recorded', async () => (await chat(fixture.chatId)).messages.items.some(message => message.role === 'user' && message.content === fixture.chatMessage));
+      if (replyNote) {
+        fixture.replyText = 'Synthetic assistant reply for editable artifact acceptance.';
+        fixture.editedReplyNote = fixture.replyText + ' Edited in the native note.';
+        const detail = await chat(fixture.chatId);
+        const reply = await rpc('addMessage', { resourceId: fixture.chatId, role: 'assistant', content: fixture.replyText, expectedRevision: detail.conversation.revision });
+        receipt.actions.push({ method: 'canonical-fixture-add-assistant-reply', provider: 'none' });
+        await action('[data-surface-id="conversations"] .cp-header-actions [data-cp-control="close"]');
+        await expression('Chat closes before canonical reopen', '!document.querySelector(\'[data-surface-id="conversations"]\')');
+        assert.equal((await open(fixture.chatId, { selection: { messageId: reply.id } })).status, 'ready');
+        const message = `[data-message-id=${JSON.stringify(reply.id)}]`;
+        const hover = await wait('Assistant reply body is visible for pointer reveal', async () => {
+          const result = await js(targetScript(message + ' .cp-message-content', 'inspect'));
+          return result.ready && result.rect;
+        });
+        slot.check();
+        win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(hover.x + hover.width / 2), y: Math.round(hover.y + hover.height / 2) });
+        receipt.actions.push({ method: 'software-native-window-mouse-move', selector: message + ' .cp-message-content' });
+        const summarySelector = message + ' .cp-message-actions > summary';
+        const summary = await wait('Message action summary can receive native click', async () => {
+          const result = await js(targetScript(summarySelector, 'inspect'));
+          return result.ready && result.rect;
+        });
+        const point = { x: Math.round(summary.x + summary.width / 2), y: Math.round(summary.y + summary.height / 2) };
+        slot.check();
+        win.webContents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...point });
+        win.webContents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...point });
+        await expression('Native message menu open and focused', `(()=>{const n=document.querySelector(${JSON.stringify(summarySelector)});return n?.parentElement.open&&document.activeElement===n})()`);
+        for (let i = 0; i < 3; i++) {
+          slot.check();
+          for (const type of ['keyDown', 'keyUp']) win.webContents.sendInputEvent({ type, keyCode: 'Tab' });
+        }
+        await expression('Save reply control reached by keyboard', `document.activeElement===document.querySelector(${JSON.stringify(message + ' [data-reply-note]')})`);
+        receipt.actions.push({ method: 'software-native-window-menu-keyboard', selector: message + ' [data-reply-note]' });
+        const activateReplyAction = async () => {
+          await expression('Reply action focused and enabled', `(()=>{const n=document.querySelector(${JSON.stringify(message + ' [data-reply-note]')});return n&&document.activeElement===n&&!n.disabled})()`);
+          slot.check();
+          assert.equal(await js(`(()=>{const n=document.querySelector(${JSON.stringify(message + ' [data-reply-note]')});if(!n||document.activeElement!==n||n.disabled)return false;n.click();return true})()`), true);
+        };
+        await activateReplyAction();
+        await wait('Exact reply copied into one canonical note', async () => {
+          const status = await js("document.querySelector('.cp-chat-status')?.textContent");
+          if (status?.includes('could not be confirmed')) throw Error('reply_note_save_unconfirmed');
+          const matches = (await desktop()).resources.filter(resource => resource.kind === 'note' && resource.title === 'Saved chat reply');
+          if (matches.length !== 1) return false;
+          fixture.replyNoteId = matches[0].id;
+          return (await note(fixture.replyNoteId)).resource.content === fixture.replyText;
+        });
+        await expression('Saved reply action can open the note', `document.querySelector(${JSON.stringify(message + ' [data-reply-note]')})?.textContent.includes('Open saved note')`);
+        assert.equal(await js(`(()=>{const n=document.querySelector(${JSON.stringify(message + ' [data-reply-note]')});if(!n||n.disabled||!n.closest('details')?.open||!n.textContent.includes('Open saved note'))return false;n.click();return true})()`), true);
+        await waitNote(fixture.replyNoteId);
+        const editor = directSelector(fixture.replyNoteId) + ' .aw-direct-editor';
+        await action(editor, 'input', fixture.editedReplyNote);
+        await flushEditor(editor);
+        assert.equal((await note(fixture.replyNoteId)).resource.content, fixture.editedReplyNote);
+        await close('canonical-resource');
+        if (!await js("!!document.querySelector('.cp-composer textarea')")) assert.equal((await open(fixture.chatId)).status, 'ready');
+        receipt.checks.push('Visible reply action created and opened one editable canonical note');
+      }
       await action('.cp-composer textarea', 'input', fixture.chatDraft); await flushEditor('.cp-composer textarea'); assert.equal((await rpc('conversation', { name: 'readDraft', input: { resourceId: fixture.chatId } })).content, fixture.chatDraft); await capture('03-local-chat-draft', '.cp-manager', chatDraw); await close('conversations'); d = await desktop(); assert.equal(d.workspaces.length, 0); assert.equal(d.projects.length, 0);
+      if (replyNote) {
+        await application({ type: 'createWorkspace', title: 'Synthetic reply-note workspace', projectId: null });
+        fixture.replyWorkspaceId = (await desktop()).activeWorkspaceId;
+        assert(fixture.replyWorkspaceId, 'reply_note_workspace_required');
+        assert.equal((await open(fixture.replyNoteId)).status, 'ready');
+        await waitNote(fixture.replyNoteId);
+        const placement = directSelector(fixture.replyNoteId) + ' .aw-note-placement';
+        await action(placement);
+        await wait('The visible Add note action placed the exact saved note once', async () => {
+          const snapshot = await desktop();
+          const blocks = snapshot.blocks.filter(block => block.resource_id === fixture.replyNoteId);
+          assert(blocks.length <= 1, 'duplicate_reply_note_placement');
+          if (!blocks.length) return false;
+          assert.equal(blocks[0].workspace_id, fixture.replyWorkspaceId);
+          fixture.replyBlockId = blocks[0].id;
+          return true;
+        });
+        await expression('The placement control hides while the same note editor remains open',
+          `document.querySelector(${JSON.stringify(placement)})?.hidden===true &&
+            document.querySelector(${JSON.stringify(directSelector(fixture.replyNoteId) + ' .aw-direct-editor')})?.value===
+            ${JSON.stringify(fixture.editedReplyNote)}`);
+        await close('canonical-resource');
+        receipt.checks.push('The visible action placed the saved reply without creating another note');
+        const final = await canonical();
+        pendingExpected = { contract: 'aerynth.resource-opening-checkpoint@1', initialPassed: true, source: sourceIdentity(source), fixture, canonical: final.projection };
+        assert.equal(startupErrors.length, 0, 'startup_console_error');
+        assert.equal(receipt.errors.length, 0, 'renderer_console_error');
+        slot.check();
+        receipt.coverage = { A: true, B: true, C: true, replyNote: true, replyNotePlacement: true };
+        runPassed = true;
+        return;
+      }
       // F: actual Vela source-search Open handler, explicitly NOT NL/model proof.
       await viewOnly('F/Vela source Open uses the same canonical unplaced resource', async () => { await action('#vela'); await action('.vela-core-compose-actions button[aria-label="Add sources"]'); await action('.vela-core-search input', 'input', 'Untitled note'); await action('.vela-core-search button[type="submit"]'); await expression('Vela resource search result', `!![...document.querySelectorAll('.vela-core-result')].find(row=>row.textContent.includes('Untitled note'))?.querySelector('button')`); await action('.vela-core-result button'); await waitNote(fixture.noteId); await close('canonical-resource'); });
       // D: explicit fixture organization; subsequent Open operations are read-only.
@@ -231,10 +346,10 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       await application({ type: 'createResource', kind: 'note', title: 'Synthetic actually unavailable Note', workspaceId: null }); d = await desktop(); const unavailable = d.resources.find(resource => resource.title === 'Synthetic actually unavailable Note'); fixture.unavailableId = unavailable.id; await application({ type: 'archiveSubject', kind: 'resource', id: unavailable.id, expectedVersion: unavailable.version, archived: true });
       await viewOnly('G/real archived resource is unavailable without bypass or placeholder editor', async () => { const result = await rpc('openResource', { resourceId: unavailable.id }); assert.equal(result.status, 'unavailable'); assert.equal((await open(unavailable.id)).status, 'unavailable'); await expression('Truthful unavailable application status', "document.querySelector('#status').textContent.toLowerCase().includes('unavailable')"); assert.equal(await js(`!!document.querySelector(${JSON.stringify(directSelector(unavailable.id))})`), false); });
       for (let repeat = 0; repeat < 2; repeat++) await viewOnly('H/repeated Open/close has no canonical mutations ' + repeat, async () => { await open(fixture.noteId); await waitNote(fixture.noteId); await close('canonical-resource'); });
-      await flush(); const final = await canonical(); assert.equal(final.desktop.projects.length, 0); assert.equal(final.desktop.workspaces.length, 2); assert.equal(final.projection.chats[fixture.chatId].conversation.providerId, 'local'); assert.deepEqual(final.projection.chats[fixture.chatId].messages.items.map(message => [message.role, message.content]), [['user', fixture.chatMessage]]); assert.equal(final.projection.draft[fixture.chatId].content, fixture.chatDraft);
+      await flush(); const final = await canonical(); assert.equal(final.desktop.projects.length, 0); assert.equal(final.desktop.workspaces.length, 2); assert.equal(final.projection.chats[fixture.chatId].conversation.providerId, 'local'); assert.deepEqual(final.projection.chats[fixture.chatId].messages.items.map(message => [message.role, message.content]), [['user', fixture.chatMessage], ...(fixture.replyText ? [['assistant', fixture.replyText]] : [])]); assert.equal(final.projection.draft[fixture.chatId].content, fixture.chatDraft);
       pendingExpected = { contract: 'aerynth.resource-opening-checkpoint@1', initialPassed: true, source: sourceIdentity(source), fixture, canonical: final.projection };
     }
-    assert.equal(startupErrors.length, 0, 'startup_console_error'); assert.equal(receipt.errors.length, 0, 'renderer_console_error'); slot.check(); receipt.coverage = { A: true, B: !restore, C: true, D: !restore, E: !restore, F: !restore ? 'Actual Vela source-search Open; no natural-language inference claim' : false, G: !restore ? 'Actual archived canonical resource; no multiuser revocation claim' : false, H: true }; runPassed = true;
+    assert.equal(startupErrors.length, 0, 'startup_console_error'); assert.equal(receipt.errors.length, 0, 'renderer_console_error'); slot.check(); receipt.coverage = { A: true, B: !restore, C: true, ...(replyNote ? { replyNote: true, replyNotePlacement: true } : {}), D: !restore, E: !restore, F: !restore ? 'Actual Vela source-search Open; no natural-language inference claim' : false, G: !restore ? 'Actual archived canonical resource; no multiuser revocation claim' : false, H: true }; runPassed = true;
   };
   try { await Promise.race([run(), abortPromise]); }
   catch (error) { receipt.error = { message: String(error.message).slice(0, 1000), stack: String(error.stack).slice(0, 4000) }; }
