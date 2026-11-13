@@ -42,7 +42,7 @@ test('Core composes a lazy private memory owner only in a native private profile
   }
 });
 
-test('Core native capture persists a canonical user message across a private profile restart', async () => {
+test('Core native project capture recalls across conversations after restart and respects correction and revocation', async () => {
   const root = mkdtempSync(join(tmpdir(), 'aerynth-memory-capture-'));
   let wrapped: string;
   const secrets = {
@@ -55,13 +55,24 @@ test('Core native capture persists a canonical user message across a private pro
   let core: BackendCore | undefined;
   try {
     core = open();
+    const project = (await core.command('desktop', { type: 'createProject', title: 'Synthetic relay project' })).projects[0];
     const chat = await core.command('createConversation', { title: 'Synthetic chat', commandId: 'chat' });
+    const target = await core.command('createConversation', { title: 'Synthetic follow-up', commandId: 'target' });
+    const unrelated = await core.command('createConversation', { title: 'Synthetic unrelated chat', commandId: 'unrelated' });
+    for (const resourceId of [chat.resourceId, target.resourceId]) {
+      await core.command('conversation', { name: 'organize', input: {
+        type: 'associateProject', resourceId, projectId: project.id, expectedVersion: 1,
+      } });
+    }
     const content = 'I prefer a synthetic relay.';
+    const source = await core.command('conversation', {
+      name: 'detail', input: { resourceId: chat.resourceId },
+    }) as { conversation: { revision: number } };
     const message = await core.command('addMessage', { resourceId: chat.resourceId, role: 'user',
-      content, expectedRevision: chat.revision, commandId: 'message' });
+      content, expectedRevision: source.conversation.revision, commandId: 'message' });
     const preview = await core.command('personalMemoryCapturePreviewNative', {
       conversationId: chat.resourceId, messageId: message.id,
-      scope: 'conversation', category: 'preferences', text: content, keywords: ['relay'],
+      scope: 'project', category: 'preferences', text: content, keywords: ['relay'],
     });
     assert.equal(preview.sourceText, content);
     const saved = await core.command('personalMemoryCaptureCommitNative', preview);
@@ -72,7 +83,31 @@ test('Core native capture persists a canonical user message across a private pro
     const fact = await inspection.read(saved.id);
     assert.equal(fact.text, content);
     assert.equal(fact.provenance.kind, 'conversation-message');
-    assert.equal((await inspection.inspect({ after: null, limit: 8 })).policy.ordinaryEnabled, false);
+    const turn = {
+      executionId: 'synthetic-execution', requestId: 'synthetic-request', configurationId: 'synthetic-fixture',
+      providerId: 'chatgpt-plan-responses', assistant: 'ordinary', model: 'synthetic-fixture', instructions: 'Synthetic instructions',
+      messages: [{ role: 'user', content: 'Which relay?' }], contextDigest: '0'.repeat(64),
+    } as const;
+    assert.equal(await inspection.prepareOrdinaryRecall(target.resourceId, turn), null);
+    const policy = await core.command('personalMemoryPolicyNative', {});
+    assert.equal(policy.ordinaryEnabled, false);
+    await core.command('personalMemoryPolicyNative', { enable: true, expectedVersion: policy.version });
+    const recall = await inspection.prepareOrdinaryRecall(target.resourceId, turn);
+    assert.ok(recall);
+    recall.approve(recall.bodyDigest);
+    assert.match(recall.turn.messages[0].content, /prefer a synthetic relay/);
+    assert.doesNotThrow(() => recall.validate(recall.turn));
+    assert.equal(await inspection.prepareOrdinaryRecall(unrelated.resourceId, turn), null);
+    const corrected = await inspection.commitManagement(await inspection.previewManagement({
+      action: 'correct', id: saved.id, version: fact.version, text: 'I prefer a different synthetic relay.',
+    }));
+    assert.throws(() => recall.validate(recall.turn), /stale_personal_context/);
+    const next = await inspection.prepareOrdinaryRecall(target.resourceId, turn);
+    assert.ok(next);
+    assert.match(next.turn.messages[0].content, /prefer a different synthetic relay/);
+    assert.doesNotMatch(next.turn.messages[0].content, /prefer a synthetic relay/);
+    await inspection.commitManagement(await inspection.previewManagement({ action: 'revoke', id: corrected.id, version: 1 }));
+    assert.equal(await inspection.prepareOrdinaryRecall(target.resourceId, turn), null);
   } finally {
     await core?.command('close', {});
     rmSync(root, { recursive: true, force: true });
