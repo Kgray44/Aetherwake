@@ -91,7 +91,7 @@ Both arms returned zero denied and unknown fixture IDs after eligibility filteri
 
 ### Lexical and FTS rank fusion
 
-The same command now emits a third arm. It combines the two top-three lists with reciprocal rank fusion, puts exact eligible source IDs first, and returns at most three sources. The fused timing includes both candidate channels run serially and the merge. Eligibility and query normalization are shared setup outside the candidate-stage timers.
+The same command now emits a third arm. It combines the two top-three lists with reciprocal rank fusion, puts exact eligible source IDs first, and returns at most three sources. Direct exact-ID admission applies only to fusion, so this comparison measures both changes together. The fused timing includes both candidate channels run serially and the merge. Eligibility and query normalization are shared setup outside the candidate-stage timers.
 
 | Candidate metric | Lexical | SQLite FTS | Fusion |
 | --- | ---: | ---: | ---: |
@@ -103,3 +103,9 @@ The same command now emits a third arm. It combines the two top-three lists with
 | Candidate-stage p50 / p95 (48 cases) | 0.021 / 0.444 ms | 0.347 / 0.761 ms | 0.385 / 1.309 ms |
 
 Independent scoring used the original labels after predictions were frozen at `f2c1d9b7a28b4ac92cc590af36692008188d9f0e`. Prediction SHA-256 was `25d09bcaed9a46069d45c46e7b4b4363995a54ed60a74545c8fc266dcccecf84`. Fusion tied FTS on the graded candidate measures and took longer in this run. It remains offline. This experiment used zero provider calls and leaves end-to-end latency, authorization under native dispatch, and answer quality unmeasured.
+
+### Authorized native Luna smoke
+
+One public synthetic case ran through the native review broker and canonical answer readback at `95e529f86f60a53d5f49cee44f449a42899db82c`. The frozen prediction SHA-256 was `50db173924456d88f7565733c43d1530f8165a1f44a82c04612a85627895f7d9`. An independent reviewer verified the sealed digest and graded the answer correct. The journal did not capture evidence passages or a disclosure audit sufficient to grade citation accuracy, candidate recall, or live disclosure.
+
+The request took 18,393.5 ms, from before host fixture setup and native review through canonical answer readback and receipt collection. Five Responses calls settled, with individual reported durations of 2,141–5,277 ms. All five supplied usage. They reported 4,500 input tokens (2,178 cache writes, zero cache reads) and 685 output tokens. At published standard rates the token estimate is USD 0.00084695, assuming standard tier and no regional premium. The run contains one case, so it cannot estimate live request p50, p95, or between-request/provider variability. [GPT-6 Luna pricing](https://developers.openai.com/api/docs/models/gpt-6-luna)

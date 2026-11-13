@@ -17,6 +17,7 @@ export interface Rate {
   effectiveAt: string;
   inputPerMillion: number;
   cachedInputPerMillion: number;
+  cacheWriteInputPerMillion?: number;
   outputPerMillion: number;
 }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -26,14 +27,19 @@ function cost(run: Run, rates: readonly Rate[]) {
   const candidates = rates.filter(rate => rate.model === run.reportedModel);
   if (run.providerEvidence !== 'reported' || candidates.length !== 1 || !run.usage) return null;
   const rate = candidates[0], usage = run.usage;
+  const cacheWrites = usage.cacheWriteInputTokens === undefined ? 0 : usage.cacheWriteInputTokens;
+  if (rate.cacheWriteInputPerMillion !== undefined && !nonnegative(rate.cacheWriteInputPerMillion)) return null;
+  if (rate.cacheWriteInputPerMillion !== undefined && usage.cacheWriteInputTokens === undefined) return null;
   if (!rate.source || !rate.effectiveAt || !rate.currency ||
     ![rate.inputPerMillion, rate.cachedInputPerMillion, rate.outputPerMillion].every(nonnegative) ||
     ![usage.inputTokens, usage.outputTokens, usage.cachedInputTokens].every(tokens) ||
-    usage.cachedInputTokens! > usage.inputTokens! || !tokens(usage.totalTokens) ||
+    !tokens(cacheWrites) || (cacheWrites > 0 && rate.cacheWriteInputPerMillion === undefined) ||
+    usage.cachedInputTokens! + cacheWrites > usage.inputTokens! || !tokens(usage.totalTokens) ||
     usage.inputTokens! + usage.outputTokens! !== usage.totalTokens) return null;
   return { kind: 'estimate' as const, currency: rate.currency,
-    amount: ((usage.inputTokens! - usage.cachedInputTokens!) * rate.inputPerMillion +
-      usage.cachedInputTokens! * rate.cachedInputPerMillion + usage.outputTokens! * rate.outputPerMillion) / 1e6,
+    amount: ((usage.inputTokens! - usage.cachedInputTokens! - cacheWrites) * rate.inputPerMillion +
+      usage.cachedInputTokens! * rate.cachedInputPerMillion + cacheWrites * (rate.cacheWriteInputPerMillion ?? 0) +
+      usage.outputTokens! * rate.outputPerMillion) / 1e6,
     rate: { ...rate }, scope: 'reported cognitive token usage only; not an invoice or subscription quota' };
 }
 function distribution(values: number[]) {
