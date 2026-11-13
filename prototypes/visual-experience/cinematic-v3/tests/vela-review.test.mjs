@@ -9,6 +9,24 @@ const { validateReview, reviewPage, showVelaReview, isOwnedVelaReviewWindow } =
   createRequire(import.meta.url)("../native/vela-review.cjs");
 const digest = (text) =>
   createHash("sha256").update(JSON.stringify(text)).digest("hex");
+test("memory review presents the exact escaped source, fact and scope", () => {
+  const review = {
+    sourceText: "User source </pre><script>capture()</script>",
+    draft: { text: "Save <relay>", category: "decisions", keywords: ["relay", "<budget>"],
+      scope: { kind: "project", id: "project-1" } },
+    enableStorage: true,
+  };
+  const html = reviewPage(review, "", "memory-capture");
+  assert.match(html, /Save this memory\?/);
+  assert.match(html, /User source &lt;\/pre&gt;&lt;script&gt;capture/);
+  assert.match(html, /Save &lt;relay&gt;/);
+  assert.match(html, /project-1/);
+  assert.match(html, /relay, &lt;budget&gt;/);
+  assert.match(html, /Enable local memory storage/);
+  assert.match(html, /script-src 'none'/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.throws(() => reviewPage({ ...review, sourceText: "x".repeat(16385) }, "", "memory-capture"), /invalid_native_memory_review/);
+});
 function disclosure() {
   const prompt = 'Exact provider text\n{"source":"untrusted <script>"}';
   return {
@@ -391,6 +409,27 @@ test("ordinary review reuses the same sandbox, authenticated readiness and child
   f.decide(child, "approve", { sender: f.parent.webContents }); assert.equal(child.destroyed, false);
   f.decide(child, "cancel"); assert.equal(await pending, false);
   assert.equal(isOwnedVelaReviewWindow(child, f.parent), false);
+  assert.equal(f.ipcMain.listenerCount("vela-review-decision"), 0);
+});
+
+test("only the owned memory review window can approve a save", async () => {
+  const f = runtime();
+  const pending = showVelaReview({
+    parent: f.parent, runtime: f.runtime, experience: "memory-capture",
+    expiresAt: new Date(Date.now() + 30000).toISOString(),
+    review: { sourceText: "Synthetic source", enableStorage: false, draft: {
+      text: "Synthetic fact", category: "technical", keywords: ["synthetic"],
+      scope: { kind: "conversation", id: "synthetic-chat" },
+    } },
+  });
+  const child = f.children[0];
+  await Promise.resolve();
+  assert.equal(child.options.title, "Aerynth · Review memory");
+  assert.equal(isOwnedVelaReviewWindow(child, f.parent), true);
+  f.decide(child, "approve", { sender: f.parent.webContents });
+  assert.equal(child.destroyed, false);
+  f.decide(child, "approve");
+  assert.equal(await pending, true);
   assert.equal(f.ipcMain.listenerCount("vela-review-decision"), 0);
 });
 
