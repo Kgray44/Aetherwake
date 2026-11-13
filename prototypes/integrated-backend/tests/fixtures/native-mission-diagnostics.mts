@@ -6,6 +6,11 @@ export function nativeMissionDiagnostics(mission: MissionProjection): string {
   return JSON.stringify(mission.tasks.map(task => ({
     task: task.id,
     state: task.state,
+    wait: mission.waits[task.id],
+    admission: task.state === 'queued' && mission.admission ? {
+      workerLimit: mission.admission.workerLimit,
+      reasons: mission.admission.reasons,
+    } : undefined,
     detail: task.detail,
     attempts: task.attempts.map(attempt => {
       const value = attempt.evidence?.value as { sampleMs?: unknown } | undefined;
