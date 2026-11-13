@@ -224,6 +224,10 @@ test('reviewed conversation memory travels within its project and stops recallin
     present = false;
     assert.throws(() => memory.validateContext(context, query), /stale_personal_context/);
     assert.equal(memory.previewContext(query).items.length, 0);
+    assert.throws(() => memory.readFact(saved.id), /conversation_source_unavailable/);
+    assert.throws(() => memory.correctFact({ id: saved.id, expectedVersion: 1, replacement: fact() }), /conversation_source_unavailable/);
+    assert.throws(() => memory.export({ ids: [saved.id], maxBytes: 8192 }), /conversation_source_unavailable/);
+    assert.deepEqual(memory.hardDelete({ id: saved.id, expectedVersion: saved.version }).deleted.map(value => value.id), [saved.id]);
   } finally { f.close(); }
 });
 
