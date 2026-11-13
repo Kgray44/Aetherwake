@@ -1448,7 +1448,6 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
     assessment: [{ key, status: 'supported', query: '', passages: [{ source: 'e1', quote }] }] });
   const reply = (value: unknown) => (body: { model: string }) => response(JSON.stringify(value), body.model);
   const predictions = [];
-  const runtime = () => (f.core as unknown as { velaApiRuntime: VelaApiRuntime }).velaApiRuntime;
   const route = { provider: 'openai-api-vela', model: live?.model ?? 'gpt-6-luna',
     transport: live ? 'live' as const : 'synthetic' as const };
   try {
@@ -1542,7 +1541,7 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
                 [{ sourceId: resourceIds[0], title: input.sources[0].title, quote }]);
               assert.deepEqual(evidenceAudit.outbound.at(-1)?.textSourceIds, [input.sources[0].id]);
             }
-            const admissions = claim ? runtime().readEvaluationAdmissions(claim) : undefined;
+            const admissions = claim ? f.core.readVelaEvaluationAdmissions(claim) : undefined;
             if (claim) assert.deepEqual(admissions?.map(row => row.executionId), settlements.map(row => row.executionId));
             return { answer, requestId: result.id, messageId: result.response!.messageId, calls, totalTokens,
               tokenSamples: tokenSamples.length, settlements, ...(admissions ? { admissions } : {}), requestedModel: live?.model ?? 'gpt-6-luna',
@@ -1557,9 +1556,9 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
               { journal, maxCases: 1, route, canStartCase: signal => canStartReviewedCieCase(usage, signal) });
           } finally { journal.close(); }
         } else {
-          const profile = runtime().readLedgerProfile();
+          const profile = f.core.readVelaEvaluationProfile();
           assert.ok(profile && profile.configurationVersion !== null);
-          await runtime().models(profile.configurationVersion);
+          await f.core.command('vela', { name: 'routingOptions', input: { providerId: 'openai-api-vela' } });
           let interruptPromotion = expectedCase === 'blind-001';
           const runBatch = () => runNativeCieBatch(bytes, identity, {
             profileId: profile.profileId, configurationVersion: profile.configurationVersion!, route,
@@ -1586,7 +1585,7 @@ async function verifySealedReviewedCie(live?: { credential: string; model: strin
             const before = await usage();
             const callsBefore = f.requests.length;
             await f.reopen();
-            assert.equal(runtime().readLedgerProfile()?.profileId, profile.profileId);
+            assert.equal(f.core.readVelaEvaluationProfile()?.profileId, profile.profileId);
             assert.equal((await usage()).usedToday, before.usedToday);
             checkpoint = await runBatch();
             assert.deepEqual(checkpoint.results.at(-1), staged);
