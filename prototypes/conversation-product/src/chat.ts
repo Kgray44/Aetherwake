@@ -6,6 +6,7 @@ import type { ExperienceMotionPort, ExperiencePose } from '../../application-con
 import { mountConversationPicker, conversationControlStates, conversationDisclosures, type ConversationPicker } from './picker.ts';
 import type { ConversationViewCapture, ConversationViewPersistence } from './view-persistence.ts';
 import type { ReasoningEffort } from '../../openai-provider/model-controls.ts';
+import type { CaptureConversationReply } from '../../block-library/note-contracts.ts';
 let chatSerial=0;
 const effortLabels: Record<ReasoningEffort, string> = {
   none: 'None', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Maximum',
@@ -70,6 +71,8 @@ export interface ConversationChatOptions {
   models?: ConversationModelControls;
   onDetail?: (detail: Detail) => void; onUnavailable?: () => void; onChanged?: () => void | Promise<void>;
   onMessageAction?: (event: ConversationMessageAction) => void | Promise<void>;
+  saveReplyNote?: (input: CaptureConversationReply) => Promise<{ noteId: string }>;
+  openReplyNote?: (noteId: string) => void | Promise<void>;
   onViewState?: (state: { resourceId: string; content: string; scroll: number; offset: number; view?:ConversationViewCapture }) => void;
 }
 export interface ConversationChat {
@@ -376,6 +379,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   for(const name of ['wheel','pointerdown','touchstart'])messages.addEventListener(name,event=>{pendingFollow=pendingAnchor=presentationAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;if(name!=='pointerdown'||event.target===messages)beginTranscriptScroll();},{passive:true});
   messages.addEventListener('keydown',event=>{if(event.target===messages&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)){pendingFollow=pendingAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;beginTranscriptScroll();}});
   const doAction = (event: ConversationMessageAction) => { Promise.resolve(options.onMessageAction?.(event)).catch(error=>report(errorText(error))); };
+  const replyNotes = new Map<string, { commandId: string; pending: boolean; noteId?: string }>();
+  const updateReplyNoteControl = (messageId: string, button: HTMLButtonElement) => {
+    const capture = replyNotes.get(messageId);
+    button.disabled = !!capture?.pending || !!capture?.noteId && !options.openReplyNote;
+    const label = capture?.noteId ? options.openReplyNote ? 'Open saved note' : 'Reply saved as note' : capture?.pending ? 'Saving reply…' : 'Save reply as note';
+    setConversationControlLabel(button, label);
+  };
   function messageNode(message: MessageView,clock:ReturnType<typeof canonicalClock>): HTMLElement {
     const signature = JSON.stringify([message,clock]), cached = cache.get(message.id); if (cached?.signature === signature) return cached.node;
     const article = el('article', undefined, 'cp-message cp-message-'+message.role); article.dataset.messageId = message.id; article.dataset.sourceResourceId = message.resourceId;article.dataset.aerynthMotionControl='true';
@@ -405,6 +415,36 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const action = (label:string, work:()=>void|Promise<void>,identity:ConversationControlIdentity='action') => { const b = el('button',label); b.type='button';decorateConversationControl(b,{identity}); b.addEventListener('click',()=>{if(!b.disabled)Promise.resolve(work()).catch(error=>report(errorText(error)));});panel.append(b);return b; };
     action('Copy',async()=>{await copy(message.content);report('Copied');actions.open=false;},'copy');
     action('Quote',()=>{session.update(session.snapshot().content+(session.snapshot().content?'\n\n':'')+`> ${message.content.replaceAll('\n','\n> ')}\n`);actions.open=false;textarea.focus();},'quote');
+    if (options.saveReplyNote && message.role === 'assistant' && message.resourceId === resourceId &&
+        !message.inherited && message.outputState !== 'partial' && message.sensitivity !== 'restricted' && message.content.trim()) {
+      const save = action('Save reply as note', async () => {
+        if (disposed || accessRevoked || !root.contains(save)) return;
+        let capture = replyNotes.get(message.id);
+        if (capture?.pending) return;
+        if (capture?.noteId) {
+          await options.openReplyNote?.(capture.noteId);
+          return;
+        }
+        capture ??= { commandId: crypto.randomUUID(), pending: false };
+        replyNotes.set(message.id, capture);
+        capture.pending = save.disabled = true;
+        setConversationControlLabel(save, 'Saving reply…');
+        try {
+          const receipt = await options.saveReplyNote!({ resourceId, messageId: message.id, commandId: capture.commandId });
+          if (typeof receipt?.noteId !== 'string' || !receipt.noteId) throw new Error('Missing saved note receipt');
+          capture.noteId = receipt.noteId;
+          if (!accessRevoked) report('Reply saved as a note.');
+        } catch {
+          if (!accessRevoked) report('The save could not be confirmed. Retry to check the same save.');
+        } finally {
+          capture.pending = false;
+          const control = cache.get(message.id)?.node.querySelector<HTMLButtonElement>('[data-reply-note]');
+          if (control) updateReplyNoteControl(message.id, control);
+        }
+      });
+      save.dataset.replyNote = 'true';
+      updateReplyNoteControl(message.id, save);
+    }
     if (options.onMessageAction) {
       action('Source',()=>doAction({action:'source',message}),'source'); action('Branch from here',()=>{actions.open=false;doAction({action:'branch',message});},'branch');
       const source = el('pre',message.content,'cp-message-raw'), note = el('p','Select an exact source passage below to publish an excerpt. Markdown source offsets are preserved.','cp-selection-note');
