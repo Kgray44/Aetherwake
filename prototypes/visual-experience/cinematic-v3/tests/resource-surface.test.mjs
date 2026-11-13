@@ -97,6 +97,24 @@ test("the document action stages the current authorized file and hides when its 
   } finally { f.surface.dispose(); f.restore(); }
 });
 
+test("a retired document action cannot stage a file after a new viewer opens the same resource", () => {
+  const selected = [];
+  const f = fixture(undefined, value => selected.push(value));
+  try {
+    const media = { source: "file", format: "pdf", name: "Brief.pdf", mime: "application/pdf", byteLength: 300, sourceRevision: "first" };
+    const initial = resource("brief", { kind: "file", media });
+    f.surface.show(initial);
+    const retiredButton = f.request().content.querySelector("button");
+    f.surface.reconcile([{ ...initial, available: false }]);
+    const updated = { ...initial, version: 2 };
+    f.surface.show(updated);
+    retiredButton.fire("click");
+    assert.deepEqual(selected, []);
+    f.request().content.querySelector("button").fire("click");
+    assert.deepEqual(selected, [updated]);
+  } finally { f.surface.dispose(); f.restore(); }
+});
+
 test("focused resource reopens the same editor DOM and keeps its caret, draft and scroll", () => {
   const f = fixture();
   try {

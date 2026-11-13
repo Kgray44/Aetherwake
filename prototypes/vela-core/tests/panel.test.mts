@@ -77,7 +77,7 @@ test('a document opened from the viewer enters Vela’s existing draft and waits
     assert.equal(doc.activeElement, editor);
     assert.equal(editor.value, 'Explain the findings in this document.');
     assert.equal(root.querySelectorAll('button').filter(node => node.getAttribute('aria-label') === 'Remove source Brief.pdf').length, 1);
-    assert.deepEqual(turns, []);
+    assert.equal(turns.length, 0);
     form.fire('submit');
     await settles(() => turns.length === 1);
     assert.deepEqual(turns[0].resourceIds, [ref.id]);

@@ -101,7 +101,7 @@ export function createResourceSurface(options: {
           };
           button.addEventListener("click", () => {
             const entry = entries.get(resource.id);
-            if (!entry?.authorized || !entry.active || button.hidden) return;
+            if (!entry?.authorized || entry.updateDocumentAction !== updateDocumentAction || !entry.active || button.hidden) return;
             try {
               documentAction(current);
             } catch (error) {
