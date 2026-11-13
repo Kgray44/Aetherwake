@@ -177,6 +177,7 @@ exports.conversationCommand = async ({
           providerId: PLAN,
           prompt: body,
           promptDigest: digest,
+          ...(reviewedMemory ? { memory: { manifestDigest: r.memoryDigest } } : {}),
           context: { included: reviewedResources(preview, state.resources, "invalid_native_responses_preview") },
           history: {
             messages: r.messages
