@@ -44,6 +44,7 @@ const {
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
 const {showVelaReview,projectEvidenceMatches}=require('./vela-review.cjs');
+const {capturePersonalMemory}=require('./personal-memory-capture.cjs');
 const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
@@ -68,6 +69,15 @@ const { createVelaWakeBroker } = require('./vela-wake-broker.cjs');
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
 const moduleStartedMonotonicMs = performance.now();
+const offscreenStartup = process.argv.includes("--integration-benchmark") &&
+  process.argv.includes("--offscreen-renderer") &&
+  process.argv.includes("--offscreen-checkpoints") ? [] : null;
+function markOffscreenStartup(stage) {
+  offscreenStartup?.push({
+    stage,
+    elapsedMs: Math.round(performance.now() - moduleStartedMonotonicMs),
+  });
+}
 const repository = path.resolve(root, "../../..");
 const sourceHashes = {};
 function hashFolder(folder) {
@@ -119,6 +129,7 @@ const source = {
   ),
 };
 const verifyAirPlan = process.argv.includes("--integration-vela-air-plan");
+markOffscreenStartup("source-hashed");
 const verifyMissions = process.argv.includes("--integration-vela-missions");
 const missionProfilerFlags = process.argv.filter(arg => arg.startsWith("--missions-aep-benchmark="));
 const missionProfilerMode = missionProfilerFlags[0]?.slice("--missions-aep-benchmark=".length);
@@ -172,11 +183,13 @@ if (verifyMissions) {
   if(process.argv.includes('--missions-persistence-reopen-only'))require('./mission-persistence.cjs').assertMissionPersistenceReopen({profile:privateRoot,argv:process.argv,source});
   else if(!/^review-vela-missions-\d+$/u.test(path.basename(privateRoot))||existsSync(privateRoot))throw Error('fresh_offline_mission_profile_required');
 }
+if (process.argv.includes("--missions-aiw-experience") && !process.argv.includes("--missions-aiw-inspection"))
+  throw Error("owned_offline_aiw_verification_required");
 if (process.argv.includes("--missions-aiw-inspection") &&
   (!verifyMissions || !process.argv.includes("--missions-aep-presentation-only") ||
     process.argv.includes("--bootstrap-vela-api") ||
     process.argv.some(arg => arg.startsWith("--integration-") && arg !== "--integration-vela-missions" ||
-      arg.startsWith("--missions-") && !["--missions-aep-presentation-only", "--missions-aiw-inspection"].includes(arg))))
+      arg.startsWith("--missions-") && !["--missions-aep-presentation-only", "--missions-aiw-inspection", "--missions-aiw-experience"].includes(arg))))
   throw Error("owned_offline_aiw_verification_required");
 if (missionProfilerFlags.length && (missionProfilerFlags.length !== 1 || !verifyMissions ||
   !["off", "minimal", "full"].includes(missionProfilerMode) ||
@@ -225,6 +238,7 @@ if (!startupReserve()) {
   console.error("storage_reserve_admission_denied");
   app.exit(1);
 }
+markOffscreenStartup("storage-admitted");
 mkdirSync(privateRoot, { recursive: true });
 app.commandLine.appendSwitch("disk-cache-size", "33554432");
 app.setPath("userData", path.join(privateRoot, "chromium"));
@@ -262,6 +276,7 @@ if (deadlineArgument) {
             deadlineMs,
             at: new Date().toISOString(),
             complete: false,
+            ...(offscreenStartup ? { startup: offscreenStartup } : {}),
           },
           null,
           2,
@@ -383,6 +398,7 @@ function sendMissionHostSignal(missionHostSignal) {
 }
 app.whenReady().then(async () => {
   checkDesktopTest();
+  markOffscreenStartup("electron-ready");
   nativeTheme.themeSource = "dark";
   const localURL = pathToFileURL(path.join(root, "dist/index.html")).href;
   child = spawn(
@@ -403,6 +419,7 @@ app.whenReady().then(async () => {
     { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
   );
   child.stdin.on("error", failBackend);
+  markOffscreenStartup("backend-spawned");
   child.on("error", failBackend);
   child.on("exit", failBackend);
   powerMonitor?.on?.('resume', () => {
@@ -508,6 +525,7 @@ app.whenReady().then(async () => {
     },
   });
   const owner = win.webContents;
+  markOffscreenStartup("window-created");
   let displayFrameBudget = null;
   const publishDisplayBudget = (force = false) => {
     if (win.isDestroyed() || owner.isDestroyed() || owner.getURL() !== localURL) return;
@@ -626,15 +644,32 @@ app.whenReady().then(async () => {
   const nativeReviewGate=async work=>{checkDesktopTest();if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
   const reviewProvider=args=>nativeReviewGate(()=>showVelaReview({ ...args, runtime: args.runtime ?? { BrowserWindow, ipcMain, session } }));
   const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
+  const policyReady = () => !closing && !backendFailed && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
+  const { reviewMode, reviewRollback, ...performanceMenu } = require("./resource-policy-menu.cjs").resourcePolicyMenu({
+    call, show: options => reviewDialogs.showMessageBox(win, options),
+    ready: policyReady, canWrite: () => storage.allowWrite(),
+  });
   if (!verify) {
     const menu = Menu.getApplicationMenu() ?? new Menu();
-    menu.append(new MenuItem(require("./resource-policy-menu.cjs").resourcePolicyMenu({
-      call, show: options => reviewDialogs.showMessageBox(win, options),
-      ready: () => !closing && !backendFailed && !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
-      canWrite: () => storage.allowWrite(),
-    })));
+    menu.append(new MenuItem(performanceMenu));
     Menu.setApplicationMenu(menu);
   }
+  ipcMain.handle("application-resource-policy-inspection", require("./resource-policy-inspection.cjs").resourcePolicyInspection({
+    trusted: event => policyReady() && trustedActiveFrame(event),
+    hasGesture: event => !verify && event.senderFrame.executeJavaScript(
+      "navigator.userActivation.isActive && document.hasFocus()", false,
+    ).catch(() => false),
+    inspect: () => call("resourcePolicyNative", { name: "inspect" }),
+    reviewMode, reviewRollback,
+  }));
+  ipcMain.handle("application-experience-policy-rollback", require("./experience-policy-review.cjs").experiencePolicyReview({
+    trusted: event => policyReady() && trustedActiveFrame(event),
+    hasGesture: event => !verify && event.senderFrame.executeJavaScript(
+      "navigator.userActivation.isActive && document.hasFocus()", false,
+    ).catch(() => false),
+    call, show: options => reviewDialogs.showMessageBox(win, options),
+    canWrite: () => storage.allowWrite(),
+  }));
   const validateHostOperation=async(binding,{phase='before-dispatch'}={})=>{
       const frame=maintenanceReviewFrames.get(binding.operationId);
       const trusted=()=>!closing&&!backendFailed&&!!frame&&maintenanceReviewFrames.get(binding.operationId)===frame&&(phase==='after-dispatch'?trustedApplicationFrame:trustedActiveFrame)({sender:win.webContents,senderFrame:frame});
@@ -680,7 +715,10 @@ app.whenReady().then(async () => {
   win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
-      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative'].includes(command))throw Error('unauthorized_private_command');
+      if ((typeof command === "string" && command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture") ||
+          ["personalMemoryManagementNative", "personalMemoryPolicyNative", "personalMemoryRevokeSourceNative"].includes(command))
+        throw Error("unauthorized_private_command");
+      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative','aepExperimentNative'].includes(command))throw Error('unauthorized_private_command');
       if (
         event.sender !== win.webContents ||
         event.senderFrame !== win.webContents.mainFrame ||
@@ -765,7 +803,7 @@ app.whenReady().then(async () => {
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && (isVelaRead(input) || input?.name === "submissionStatus")) &&
-        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experiment-hypothesis", "compare-native-samples", "resource-experiment-preview", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
+        !(command === "missions" && ["preview", "list", "read", "execution-profile", "experience-list", "experience-evidence", "experience-finding", "experiment-hypothesis", "compare-native-samples", "resource-experiment-preview", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
         !(command === "workspaceRecovery" && ["state", "preview"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
@@ -800,7 +838,20 @@ app.whenReady().then(async () => {
           event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
         throw new Error("unauthorized_sender");
       let result;
-      if (command === "desktop") result = await call("desktop", input);
+      if (command === "personalMemoryCapture") {
+        result = await capturePersonalMemory({
+          input,
+          trustedFrame: () => !closing && !backendFailed && trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized(),
+          observeGesture: () => trustedActiveFrame(event) &&
+            event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false),
+          allowWrite: () => storage.allowWrite(),
+          preview: value => call("personalMemoryCapturePreviewNative", value),
+          showReview: review => reviewProvider({ parent: win, review, experience: "memory-capture", expiresAt: review.expiresAt }),
+          commit: review => call("personalMemoryCaptureCommitNative", review),
+          cancel: id => call("personalMemoryCaptureCancelNative", { id }),
+        });
+      }
+      else if (command === "desktop") result = await call("desktop", input);
       else if (command === "openResource")
         result = await call("openResource", input);
       else if (command === "providerConnection")
@@ -1074,7 +1125,9 @@ app.whenReady().then(async () => {
     const denied=await call('velaWeatherPermissionNative',{type:'set',expectedVersion:permission.version,decision:'deny'});
     if(denied.decision!=='deny')throw Error('weather_fixture_deny_required');
   }
+  markOffscreenStartup("load-requested");
   await win.loadURL(localURL);
+  markOffscreenStartup("load-finished");
   // Restores explicit local detection consent only; this command never starts paid voice.
   void call('velaWakeNative',{name:'ready',input:{}}).catch(()=>{});
   if (process.argv.includes('--bootstrap-vela-api')) {
@@ -1089,6 +1142,7 @@ app.whenReady().then(async () => {
   if (offscreenScale) {
     await require("./integration-offscreen-scale.cjs").verify({
       win, app, privateRoot, call, source, moduleStartedMonotonicMs, startupErrors,
+      startup: offscreenStartup,
     });
     return;
   }

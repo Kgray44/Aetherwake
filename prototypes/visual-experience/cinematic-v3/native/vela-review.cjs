@@ -145,6 +145,7 @@ function validateReview(preview, review) {
 /** Presentation only. Each trusted native caller validates its own exact DTO,
  * body digest, source policy and capacity before opening this read-only pane. */
 function presentation(experience) {
+  if (experience === "memory-capture") return { title: "Aerynth · Review memory", htmlBytes: 196608 };
   if (!["vela", "ordinary", "codex", "file-edit"].includes(experience))
     throw Error("invalid_native_review_experience");
   if (experience === "file-edit")
@@ -177,6 +178,26 @@ function presentation(experience) {
 function reviewPage(review, intent = "", experience = "vela", workflow, decisionMode) {
   if(decisionMode!==undefined&&(decisionMode!=='three-way'||experience!=='file-edit'))throw Error('invalid_native_review_decision_mode');
   const view = presentation(experience);
+  if (experience === "memory-capture") {
+    const draft = review?.draft;
+    const scope = draft?.scope;
+    if (typeof review?.sourceText !== "string" || Buffer.byteLength(review.sourceText) > 16384 ||
+        typeof draft?.text !== "string" || !draft.text.trim() || draft.text.length > 4096 ||
+        !["preferences", "projects", "technical", "decisions"].includes(draft.category) ||
+        !["project", "conversation"].includes(scope?.kind) || typeof scope?.id !== "string" ||
+        !scope.id.trim() || scope.id.length > 200 || typeof review.enableStorage !== "boolean" ||
+        !Array.isArray(draft.keywords) || !draft.keywords.length || draft.keywords.length > 16 ||
+        draft.keywords.some(keyword => typeof keyword !== "string" || !keyword.trim() || keyword.length > 64))
+      throw Error("invalid_native_memory_review");
+    const styleHash = createHash("sha256").update(css).digest("base64");
+    const scopeName = scope.kind === "project" ? "Project" : "Conversation";
+    const categoryName = { preferences: "Preference", projects: "Project detail", technical: "Technical fact", decisions: "Decision" }[draft.category];
+    const storage = review.enableStorage ? "<p>Enable local memory storage and save this fact. Provider sharing settings stay as they are.</p>"
+      : "<p>Save this fact to local memory.</p>";
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">Save this memory?</h1>${storage}</header><div class="content" tabindex="0" aria-label="Review memory and source"><article><h2>Memory to save</h2><small>${categoryName} · ${scopeName} ${escape(scope.id)}</small><pre>${escape(draft.text)}</pre><p>Search terms: ${escape(draft.keywords.join(", "))}</p></article><article><h2>Original message</h2><pre>${escape(review.sourceText)}</pre></article></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">Save memory</button></footer></main></body></html>`;
+    if (Buffer.byteLength(html) > view.htmlBytes) throw Error("invalid_native_memory_review");
+    return html;
+  }
   if (experience === "file-edit") {
     const styleHash = createHash("sha256").update(css).digest("base64");
     const fileEvidence = (body, sha) => {

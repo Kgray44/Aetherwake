@@ -24,6 +24,9 @@ export function mountVelaApiConnection(root: HTMLElement, command: VelaApiContro
   actions.append(setup, catalog, disconnect, usage); section.append(heading, status, boundary, actions, models, usageLabel); root.append(section);
   let current: RedactedApiConnectionView | null = null, busy = false, disposed = false, revision = 0, failed = false;
   let usageState: VelaApiUsageStatus | null = null;
+  function currentUsage() {
+    return current?.version != null && usageState?.configurationVersion === current.version ? usageState : null;
+  }
   function paint() {
     if (disposed) return;
     section.dataset.apiConnectionState = current?.state ?? 'unknown';
@@ -31,10 +34,12 @@ export function mountVelaApiConnection(root: HTMLElement, command: VelaApiContro
     catalog.disabled = busy || current?.state !== 'configured' || current?.version == null;
     disconnect.disabled = busy || current?.version == null || !current.configured;
     usage.disabled = busy || current?.version == null || !current.configured || !current.storageAvailable;
-    usage.textContent = usageState?.enabled ? 'Disable Vela API usage' : 'Enable Vela API usage';
-    usageLabel.textContent = usageState?.enabled
-      ? `Vela API usage is enabled for this key. ${usageState.usedToday} of ${usageState.requestsPerDay} daily requests used; up to ${usageState.maxOutputTokens} output tokens per request. API charges apply.`
-      : 'Vela API usage is disabled. Enabling permits Vela requests with API charges: up to 64 requests per day and 2,048 output tokens per request. No request starts just by enabling.';
+    const authorization = currentUsage();
+    const authorized = authorization?.enabled === true;
+    usage.textContent = authorized ? 'Disable Vela API usage' : 'Enable Vela API usage';
+    usageLabel.textContent = authorized
+      ? `Vela can send eligible requests with this API key without asking again, including read-only analysis of notes or files you explicitly select. Broader evidence and new permissions still require review. ${authorization.usedToday} of ${authorization.requestsPerDay} daily requests used. Up to ${authorization.maxOutputTokens} output tokens per request. API charges apply.`
+      : 'Vela API usage is disabled. Enabling allows eligible requests without a separate approval each time, including read-only analysis of notes or files you explicitly select. API charges apply up to 64 requests per day and 2,048 output tokens per request.';
     setup.textContent = current?.configured ? 'Replace API connection' : 'Set up API connection';
     if (failed) status.textContent = 'The Vela API connection could not be updated. Check the connection and try again.';
     else if (busy) status.textContent = 'Updating Vela API connection…';
@@ -78,10 +83,10 @@ export function mountVelaApiConnection(root: HTMLElement, command: VelaApiContro
   usage.onclick = () => {
     if (disposed || busy || usage.disabled || current?.version == null) return;
     busy = true; failed = false; paint();
-    void command({type:'authorizeUsage',expectedVersion:current.version,enabled:!usageState?.enabled}).then(value => {
+    void command({type:'authorizeUsage',expectedVersion:current.version,enabled:currentUsage()?.enabled !== true}).then(value => {
       if (!disposed && 'enabled' in value) usageState = value;
     }, () => { if (!disposed) failed = true; }).finally(() => { busy = false; paint(); });
   };
   paint();
-  return { ready: refresh(), refresh, dispose() { disposed = true; revision++; setup.onclick = catalog.onclick = disconnect.onclick = null; } };
+  return { ready: refresh(), refresh, dispose() { disposed = true; revision++; setup.onclick = catalog.onclick = disconnect.onclick = usage.onclick = null; } };
 }

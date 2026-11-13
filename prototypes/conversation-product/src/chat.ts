@@ -2,6 +2,7 @@ import type { ConversationProductPort, ConversationView, ConversationViewPositio
 import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-session.ts';
 import { renderMarkdown } from './markdown.ts';
+import { createMemoryCaptureEditor, type MemoryCaptureRequest } from './memory-capture-editor.ts';
 import type { ExperienceMotionPort, ExperiencePose } from '../../application-contract/motion.ts';
 import { mountConversationPicker, conversationControlStates, conversationDisclosures, type ConversationPicker } from './picker.ts';
 import type { ConversationViewCapture, ConversationViewPersistence } from './view-persistence.ts';
@@ -80,6 +81,7 @@ export interface ConversationChatOptions {
   openDocument?: (document: DraftDocument) => Promise<'opened' | 'unavailable' | 'superseded'>;
   askVelaAboutDocument?: (document: DraftDocument, isCurrent: () => boolean) => Promise<void | 'unavailable'>;
   captureDocumentHandoffScope?: () => () => boolean;
+  onRememberMessage?: (request: MemoryCaptureRequest) => Promise<boolean>;
   onViewState?: (state: { resourceId: string; content: string; scroll: number; offset: number; view?:ConversationViewCapture }) => void;
 }
 export interface ConversationChat {
@@ -744,6 +746,20 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         publish.disabled=!selection;
       };
       source.addEventListener('mouseup',capture);source.addEventListener('keyup',capture);publish.addEventListener('pointerdown',capture);
+    }
+    const remember = options.onRememberMessage;
+    if (remember && message.role === 'user' && message.provenance === 'user' && !message.inherited &&
+        ['internal', 'public'].includes(message.sensitivity) && message.content.length <= 4096) {
+      const button = action('Remember message', () => {
+        if (panel.querySelector('.cp-memory-editor')) return;
+        const editor = createMemoryCaptureEditor({
+          conversationId: resourceId, messageId: message.id, content: message.content,
+          projectAvailable: !!current?.conversation.projectId,
+          review: remember, report, returnFocus: () => button.focus(),
+        });
+        panel.append(editor);
+        editor.querySelector('textarea')?.focus();
+      });
     }
     article.append(by,content,actions); cache.set(message.id,{signature,node:article});return article;
   }

@@ -400,6 +400,7 @@ export interface ContextualStreamPort {
   refresh(): Promise<void>;
   openResource?(id: string): void;
   openMission?(id: string): void;
+  inspectMission?(id: string, anchor: HTMLButtonElement): void;
 }
 
 /** The same event view as a workspace block, with contextual optics and an
@@ -434,6 +435,7 @@ export function mountContextualStream(
         ? { openResource: (id: string) => port.openResource!(id) }
         : {}),
       ...(port.openMission ? { openMission: (id: string) => port.openMission!(id) } : {}),
+      inspectMission: port.inspectMission,
     },
     { active: options.active, presentation: "focused", motion: options.motion, viewId: options.viewId },
   );

@@ -1,4 +1,6 @@
-const {app,BrowserWindow,ipcMain}=require('electron');
+const {app,BrowserWindow:ElectronBrowserWindow,ipcMain}=require('electron');
+const {installDesktopTestAdmission}=require('./native-test-admission.cjs');
+const {BrowserWindow}=installDesktopTestAdmission({app,BrowserWindow:ElectronBrowserWindow});
 const fs=require('node:fs'),path=require('node:path'),{randomUUID,createHash}=require('node:crypto');
 const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const root=process.argv[2];if(!root||!path.isAbsolute(root)||!path.basename(root).startsWith('aerynth-document-native-'))throw Error('owned_document_smoke_profile_required');
