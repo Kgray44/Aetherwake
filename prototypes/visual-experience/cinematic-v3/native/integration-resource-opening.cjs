@@ -131,7 +131,12 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const diagnose = () => js("(()=>{const a=window.__aerynth?.application?.(),s=window.__aerynth?.snapshot?.(),where=s?.spatial?.location??a?.navigation;return{status:(document.querySelector('#status')?.textContent??'').slice(0,240),location:where?{kind:where.kind,projectId:where.projectId,workspaceId:where.workspaceId,blockId:where.blockId}:null,anchors:[...document.querySelectorAll('.aw-anchor[data-key]')].slice(0,16).map(e=>({key:e.dataset.key.slice(0,160),label:(e.querySelector('strong')?.textContent??'').slice(0,80),visible:!!e.getClientRects().length&&!e.closest('[hidden],[inert]')&&getComputedStyle(e).visibility!=='hidden'}))}})()");
     const wait = async (label, check) => { receipt.phase = label; try { return await waitForCondition({ slot, label, check, diagnose }); } catch (error) { if (error.diagnostics) receipt.conditionFailure = { label, diagnostics: error.diagnostics }; throw error; } };
     const expression = (label, code) => wait(label, () => js(`(()=>{try{return (${code})}catch{return false}})()`));
-    const action = async (selector, kind = 'click', value) => { await wait('Visible renderer target ' + selector, async () => { const result = await js(targetScript(selector, 'inspect')); return result.ready; }); const result = await js(targetScript(selector, kind, value)); assert.equal(result.ready, true, 'renderer_target_changed'); receipt.actions.push({ method: 'renderer-DOM-' + kind, selector, ...(kind === 'input' ? { characters: value.length } : {}) }); };
+    const action = async (selector, kind = 'click', value) => {
+      await wait('Visible renderer target ' + selector, async () => {
+        const result = await js(targetScript(selector, kind, value));
+        assert(result && typeof result === 'object', 'renderer_action_outcome_unknown');
+        return result.ready === true;
+      }); receipt.actions.push({ method: 'renderer-DOM-' + kind, selector, ...(kind === 'input' ? { characters: value.length } : {}) }); };
     const application = async input => { receipt.actions.push({ method: 'application-capability-fixture', type: input.type }); return js(`window.__aerynth.execute(${JSON.stringify(input)})`); };
     const open = async (resourceId, extra = {}) => { receipt.actions.push({ method: 'application-openResource', resourceId, ...extra }); const result = await js(`window.__aerynth.openResource(${JSON.stringify({ resourceId, ...extra })})`); assert.equal(result.resourceId, resourceId); return result; };
     const flush = () => js('window.__aerynth.flush()');
