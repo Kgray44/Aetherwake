@@ -200,7 +200,11 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
      const pending=requestOpen(hit.resourceId,hit.messageId,stillCurrent),intent=openIntent;
      try{
       await pending;
-      if(stillCurrent()&&intent===openIntent)switcher.node.open=false;
+      if(stillCurrent()&&intent===openIntent){
+       const returnFocus=switcher.node.contains(document.activeElement);
+       switcher.node.open=false;
+       if(returnFocus)switcher.summary.focus();
+      }
      }catch(error){
       if(stillCurrent()&&intent===openIntent){
        if(switcher.node.contains(document.activeElement))switchQuery.focus();
