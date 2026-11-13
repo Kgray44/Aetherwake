@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { BLIND_INPUT_SHA256, readBlindInputs, type BlindCheckpoint } from './blind-runner.mts';
+
 /** Scores are supplied by the independent evaluator after predictions are frozen. */
 export interface BlindCaseGrade {
   id: string;
@@ -7,17 +10,25 @@ export interface BlindCaseGrade {
   answer?: boolean;
 }
 
-export function reportBlindQuality(expectedCaseIds: readonly string[], predictionSha256: string, evaluation: {
+export function reportBlindQuality(input: Buffer, prediction: BlindCheckpoint, evaluation: {
   evaluator: string;
   predictionSha256: string;
   rubricSha256: string;
   grades: readonly BlindCaseGrade[];
 }) {
   const hash = /^[a-f0-9]{64}$/;
+  const { predictionSha256, ...payload } = prediction;
   if (!hash.test(predictionSha256) || predictionSha256 !== evaluation.predictionSha256 ||
-    !hash.test(evaluation.rubricSha256) || !evaluation.evaluator.trim()) throw new Error('blind_grade_binding');
-  const expected = new Set(expectedCaseIds);
-  if (!expected.size || expected.size !== expectedCaseIds.length) throw new Error('blind_grade_cases');
+    !hash.test(evaluation.rubricSha256) || !evaluation.evaluator.trim() ||
+    payload.contract !== 'aerynth.cie-blind-predictions@1' || payload.inputSha256 !== BLIND_INPUT_SHA256 ||
+    createHash('sha256').update(JSON.stringify(payload)).digest('hex') !== predictionSha256) throw new Error('blind_grade_binding');
+  const expected = readBlindInputs(input);
+  if (!Array.isArray(payload.results) || payload.results.length > expected.length ||
+    payload.results.some((result, index) => result?.id !== expected[index].id) ||
+    payload.complete !== (payload.results.length === expected.length && payload.stopped === null)) {
+    throw new Error('blind_grade_cases');
+  }
+  const predicted = new Set(payload.results.map(result => result.id));
   const scored = new Set<string>();
   const candidates = { cases: 0, relevant: 0, returned: 0, hits: 0 };
   const disclosure = { cases: 0, invalid: 0, casesWithInvalid: 0 };
@@ -25,7 +36,7 @@ export function reportBlindQuality(expectedCaseIds: readonly string[], predictio
   const answer = { cases: 0, passed: 0 };
   const count = (value: number) => Number.isSafeInteger(value) && value >= 0;
   for (const grade of evaluation.grades) {
-    if (!expected.has(grade.id) || scored.has(grade.id)) throw new Error('blind_grade_cases');
+    if (!predicted.has(grade.id) || scored.has(grade.id)) throw new Error('blind_grade_cases');
     scored.add(grade.id);
     if (grade.candidates) {
       const { relevant, returned, hits } = grade.candidates;
@@ -55,7 +66,8 @@ export function reportBlindQuality(expectedCaseIds: readonly string[], predictio
   return {
     contract: 'aerynth.cie-blind-quality@1',
     evaluator: evaluation.evaluator, predictionSha256, rubricSha256: evaluation.rubricSha256,
-    expectedCases: expected.size, casesWithGrades: scored.size,
+    expectedCases: expected.length, predictedCases: predicted.size, casesWithGrades: scored.size,
+    stopped: payload.stopped,
     candidates: { ...candidates, recall: candidates.relevant ? candidates.hits / candidates.relevant : null,
       precision: candidates.returned ? candidates.hits / candidates.returned : null },
     disclosure, contradiction, answer,

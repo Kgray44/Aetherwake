@@ -6,7 +6,7 @@ export type BlindPayload = Pick<BlindCase, 'id' | 'request' | 'sources'>;
 type Candidate = { commit: string; tree: string };
 type EvaluationRoute = { provider: string; model: string; transport: 'synthetic' | 'live' };
 type Prediction = { id: string; result: unknown; endToEndMs: number };
-interface BlindCheckpoint {
+export interface BlindCheckpoint {
   contract: 'aerynth.cie-blind-predictions@1';
   inputSha256: string;
   candidate: Candidate;
