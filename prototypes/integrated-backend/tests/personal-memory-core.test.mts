@@ -117,6 +117,14 @@ test('Core native capture persists a canonical user message across a private pro
     const correction = await inspection.previewManagement({ action: 'correct', id: saved.id, version: fact.version,
       text: 'I prefer a corrected synthetic relay.' });
     const corrected = await inspection.commitManagement(correction);
+    const initial = await core.command('personalMemoryPolicyNative', {});
+    const ordinary = await core.command('personalMemoryPolicyNative', { enable: true, expectedVersion: initial.version });
+    const both = await core.command('personalMemoryPolicyNative', { assistant: 'vela', enable: true, expectedVersion: ordinary.version });
+    await assert.rejects(core.command('personalMemoryPolicyNative', { pauseStorage: true, expectedVersion: ordinary.version }),
+      /stale_personal_context_version/);
+    const paused = await core.command('personalMemoryPolicyNative', { pauseStorage: true, expectedVersion: both.version });
+    assert.deepEqual(paused, { ...both, version: both.version + 1, storageEnabled: false, ordinaryEnabled: false, velaEnabled: false });
+    assert.equal((await inspection.read(saved.id)).text, content);
     await core.command('close', {});
     core = undefined;
     const legacy = WorkspaceKernel.openExisting(join(root, 'profile.sqlite'));

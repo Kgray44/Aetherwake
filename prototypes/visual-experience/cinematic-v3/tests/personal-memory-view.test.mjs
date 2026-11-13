@@ -5,7 +5,7 @@ import { createPersonalMemoryView } from '../src/personal-memory-view.ts';
 
 test('the inspector turns off Vela memory without changing ChatGPT consent or removing saved records', async () => {
   const f = componentDocument(), restore = f.install(), calls = [];
-  const policy = { version: 3, ordinaryEnabled: true, velaEnabled: true };
+  const policy = { version: 3, storageEnabled: true, ordinaryEnabled: true, velaEnabled: true };
   const record = { id: 'fact-1', scope: { kind: 'project' }, state: 'active' };
   try {
     const view = createPersonalMemoryView(async request => {
@@ -21,6 +21,27 @@ test('the inspector turns off Vela memory without changing ChatGPT consent or re
     await until(() => disable.hidden);
     assert.deepEqual(calls[1], { type: 'disableProviderMemory', assistant: 'vela', version: 3 });
     assert.match(view.textContent, /ChatGPT memory: Enabled for reviewed sends.*Vela memory: Off/);
+    assert.ok(named(view, 'Memory fact-1 · project · active'));
+  } finally { restore(); }
+});
+
+test('the inspector pauses storage while keeping saved records accessible', async () => {
+  const f = componentDocument(), restore = f.install(), calls = [];
+  const policy = { version: 3, storageEnabled: true, ordinaryEnabled: true, velaEnabled: true };
+  const record = { id: 'fact-1', scope: { kind: 'project' }, state: 'active' };
+  try {
+    const view = createPersonalMemoryView(async request => {
+      calls.push(request);
+      if (request.type === 'list') return { records: [record], next: null, policy };
+      return { ...policy, version: 4, storageEnabled: false, ordinaryEnabled: false, velaEnabled: false };
+    });
+    const pause = named(view, 'Pause memory');
+    named(view, 'Load saved memories').fire('click');
+    await until(() => !pause.hidden);
+    pause.fire('click');
+    await until(() => pause.hidden);
+    assert.deepEqual(calls[1], { type: 'pauseStorage', version: 3 });
+    assert.match(view.textContent, /Local memory: Off.*ChatGPT memory: Off.*Vela memory: Off/);
     assert.ok(named(view, 'Memory fact-1 · project · active'));
   } finally { restore(); }
 });
@@ -192,7 +213,7 @@ test('a failed full reload clears stale memory rows, details, and the page curso
     const view = createPersonalMemoryView(async request => {
       if (request.type === 'list') {
         if (fail) throw Error('Memory unavailable');
-        return { records: [record], next: 'next', policy: { version: 1, velaEnabled: true } };
+        return { records: [record], next: 'next', policy: { version: 1, storageEnabled: true, velaEnabled: true } };
       }
       return { ...record, text: 'Synthetic memory', keywords: ['memory'], provenance: { kind: 'user-statement' } };
     });

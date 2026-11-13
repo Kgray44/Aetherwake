@@ -109,6 +109,14 @@ export function createPersonalMemoryReview(options: Options) {
       return withPermission(input => input.operation === 'policy.write',
         () => service.setPolicy({ expectedVersion, patch }));
     },
+    async pauseStorage(expectedVersion: number) {
+      requireOpen();
+      const service = await options.open();
+      requireOpen();
+      return withPermission(input => input.operation === 'policy.write', () => service.setPolicy({
+        expectedVersion, patch: { storageEnabled: false, ordinaryEnabled: false, velaEnabled: false },
+      }));
+    },
     async prepareOrdinaryRecall(conversationId: string, turn: TurnInput, sourceAnchors?: readonly ConversationSourceRef[], onPartialMiss?: () => void) {
       requireOpen();
       const exactTurn = structuredClone(turn);

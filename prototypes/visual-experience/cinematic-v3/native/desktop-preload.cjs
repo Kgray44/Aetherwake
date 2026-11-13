@@ -96,7 +96,7 @@ contextBridge.exposeInMainWorld(
         ].includes(name)
       )
         throw new Error("unsupported_command");
-      if ((name === "personalMemoryCapture" || name === "personalMemory" && ["manage", "revokeSource", "disableProviderMemory"].includes(input?.type)) &&
+      if ((name === "personalMemoryCapture" || name === "personalMemory" && ["manage", "revokeSource", "disableProviderMemory", "pauseStorage"].includes(input?.type)) &&
           navigator.userActivation?.isActive !== true)
         throw new Error("personal_memory_user_gesture_required");
       if ((name === 'clockTimers' && ['create', 'mutate'].includes(input?.name) ||

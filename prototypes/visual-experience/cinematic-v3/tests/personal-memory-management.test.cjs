@@ -24,6 +24,20 @@ test("turning off ChatGPT memory requires current gesture and forwards only a ve
   ]);
 });
 
+test("pausing memory forwards only a version-bound pause after gesture and admission", async () => {
+  const calls = [];
+  const options = {
+    input: { type: "pauseStorage", version: 3, enable: true, assistant: "vela" },
+    trustedFrame: () => true, observeGesture: () => true, allowWrite: () => true,
+    async call(...args) { calls.push(args); return { storageEnabled: false }; },
+  };
+  await assert.rejects(managePersonalMemory({ ...options, allowWrite: () => false }), /storage_reserve_admission_denied/);
+  assert.deepEqual(calls, []);
+  await assert.rejects(managePersonalMemory({ ...options, input: { type: "pauseStorage", version: 0 } }), /invalid_privacy_policy/);
+  assert.deepEqual(await managePersonalMemory(options), { storageEnabled: false });
+  assert.deepEqual(calls, [["personalMemoryPolicyNative", { pauseStorage: true, expectedVersion: 3 }]]);
+});
+
 test("source revocation only commits the native binding after confirmation and renewed admission", async () => {
   const binding = { conversationId: "chat", messageId: "message", expectedRevision: 7 };
   for (const outcome of ["apply", "cancel", "frame", "reserve", "gesture"]) {
