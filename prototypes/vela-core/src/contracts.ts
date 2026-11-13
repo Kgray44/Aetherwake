@@ -400,6 +400,7 @@ export interface VelaState {
   conversation: CanonicalConversation | null;
   planner: { providerId: string | null; available: boolean; busy: boolean; reason?: string };
   planningProviders?: { providerId: string; available: boolean }[];
+  reviewedMemoryAvailable?: true;
   routingSettings?: import('./routing-settings.ts').VelaRoutingSettingsView;
   fileEdits?: VelaFileEditView[];
   missionFileEdits?: import('../../application-contract/mission-file-edits.ts').MissionFileEditView[];

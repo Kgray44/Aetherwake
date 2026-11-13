@@ -402,6 +402,36 @@ test('ordinary sends use runtime history by default and Start fresh applies to o
   panel.dispose();
 });
 
+test('reviewed memory is capability-gated and applies to one Vela send', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'openai-api-vela', available: true }];
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => { turns.push(input); return request({ state: 'responded' }); },
+  }));
+  try {
+    const control = () => root.find(node => node.tagName === 'label' && node.textContent === 'Review saved memory for this send')!;
+    await settles(() => !!control());
+    assert.equal(control().hidden, true);
+    canonical.reviewedMemoryAvailable = true;
+    await panel.refresh();
+    assert.equal(control().hidden, false);
+    const checkbox = control().children[1];
+    assert.equal(checkbox.disabled, false);
+    const composer = root.find(node => node.tagName === 'textarea')!;
+    checkbox.checked = true;
+    for (const [index, intent] of ['Which relay?', 'What about the switch?'].entries()) {
+      composer.value = intent;
+      composer.fire('input');
+      composer.fire('keydown', { key: 'Enter' });
+      await settles(() => turns.length === index + 1 && root.find(node => node.className === 'vela-core-status')?.dataset.requestState !== 'submitting');
+      assert.equal(turns[index].useMemory, index === 0 ? true : undefined);
+      assert.equal(turns[index].providerId, index === 0 ? 'openai-api-vela' : undefined);
+      assert.equal(checkbox.checked, false);
+    }
+  } finally { panel.dispose(); }
+});
+
 test('continuing an answer selects one exchange and preserves that selection after cancelling review', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   const source = request({ id: '11111111-1111-4111-8111-111111111111', state: 'responded',
