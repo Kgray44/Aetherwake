@@ -1989,10 +1989,10 @@ test('reviewed CIE cites a selected local file and fences physical replacement b
 });
 
 test('reviewed CIE treats extracted document coverage as partial and keeps extraction notices out of citations', async () => {
+  const { extractDocumentText } = await import('../../visual-experience/cinematic-v3/src/document-text-worker.ts');
   const bytes = docxFixture();
   let bodyText: string;
   const f = fixture(true, true, { extract: async (input, signal) => {
-    const { extractDocumentText } = await import('../../visual-experience/cinematic-v3/src/document-text-worker.ts');
     const extracted = await extractDocumentText(bytes, input.format, input.maxTextBytes, signal);
     assert.equal(extracted.state, 'complete');
     bodyText = extracted.text;
