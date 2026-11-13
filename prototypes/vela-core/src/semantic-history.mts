@@ -70,10 +70,12 @@ export interface ReviewedProjectCheckContext {
 export type SemanticHistoryCall = (
   | { stage: 'interpret'; request: string; reviewedSourceTitles?: readonly string[]; reviewedMissionGap?: string }
   | { stage: 'assess'; request: string; proposedClarification?: string; needs: readonly Need[];
-    excerpts: readonly { handle: string; text: string; title?: string; partial?: true; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number }
+    excerpts: readonly { handle: string; text: string; title?: string; partial?: true; sourceKind?: SemanticHistorySource['sourceKind'] }[]; round: number;
+    priorDisputes?: readonly { key: string; sources: readonly string[];
+      passages: readonly { source: string; start: number; end: number }[] }[] }
 ) & { missionPlanning?: true; reviewedProjectCheck?: ReviewedProjectCheckContext; reviewedMissionCapabilities?: readonly string[] };
 
-interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan }
+interface SemanticHistoryCandidates<T> { sources: readonly T[]; scan: SemanticHistoryScan; moreMatches?: boolean }
 interface SemanticHistoryOwner<T extends SemanticHistorySource> {
   /** Longer reviewed investigations can retain the same call and evidence limits. */
   timeBudgetMs?: number;
@@ -83,8 +85,14 @@ interface SemanticHistoryOwner<T extends SemanticHistorySource> {
   adaptiveDiscovery?: boolean;
   // The owner authorizes the current scope on every search and resolves canonical revisions.
   search(query: string): SemanticHistoryCandidates<T>;
+  /** Return a bounded next page for a previously truncated query in the same review. */
+  widen?(query: string): SemanticHistoryCandidates<T>;
+  /** Discover reviewed references from sources cited for unresolved needs. */
+  related?(sources: readonly T[]): SemanticHistoryCandidates<T>;
   selected?(): SemanticHistoryCandidates<T>;
   recent?(): SemanticHistoryCandidates<T>;
+  /** When present, validates the whole immutable review for a synchronous batch. */
+  isSnapshotCurrent?(): boolean;
   isCurrent(source: T): boolean;
   // Native-only disclosure gateway. Check the exact payload/destination on every call.
   // Sources are supplied to validate their current consent and lineage, never as wire metadata.
@@ -219,7 +227,10 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     let assessmentBytes = Buffer.byteLength(JSON.stringify({ ...assessmentInput, excerpts: [] }));
     const assessmentLimit = maxSemanticAssessmentBytes - (owner.assessmentMetadataBytes ?? 0);
     const queries = new Set<string>();
+    const truncatedQueries = new Set<string>();
     let next = needs.map(need => need.query).filter(Boolean);
+    let widen: { query: string; digest: string; refinement?: string }[] = [];
+    let related: T[] = [];
     let anchorsRead = false;
     let priorAssessment: EvidenceReview | undefined;
     let investigateAnchors = false;
@@ -238,9 +249,12 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       if (searchCoverage === null || searchCoverage === 'bounded' || scan === 'unavailable') searchCoverage = scan;
     };
     const addCandidates = ({ sources, scan }: SemanticHistoryCandidates<T>, limit = candidateLimit) => {
+      signal.throwIfAborted();
       recordScan(scan);
+      if (sources.length && owner.isSnapshotCurrent?.() === false) { partial(); return; }
       if (sources.length > 2 * maxCandidates) partial();
       for (const source of sources.slice(0, 2 * maxCandidates)) {
+        signal.throwIfAborted();
         if (observed.has(source.sourceId)) continue;
         const textLimit = source.sourceKind === 'file' ? maxReviewedFileBytes :
           source.sourceKind === 'mission-checkpoint' || source.sourceKind === 'workspace-state' || source.sourceKind === 'conversation-exchange'
@@ -259,6 +273,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         const bytes = Buffer.byteLength(JSON.stringify(excerpt)) + Number(excerpts.length > 0);
         const byteLimit = rounds === 1 && owner.adaptiveDiscovery ? assessmentLimit - gapReserveBytes : assessmentLimit;
         if (assessmentBytes + bytes > byteLimit) { partial(); continue; }
+        if (source.partial) partial();
         assessmentBytes += bytes;
         excerpts.push(excerpt);
         observed.add(source.sourceId);
@@ -269,52 +284,185 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     if (owner.selected) addCandidates(owner.selected());
 
     while (rounds < maxRounds) {
+      signal.throwIfAborted();
       rounds++;
       const priorCount = evidence.size;
+      const priorDisputes = priorAssessment?.rows.filter(row => row.status === 'contradicted').map(row => ({
+        key: row.key, sources: row.sources,
+        passages: (row.passages ?? []).map(({ source, quote }) => {
+          const start = evidence.get(source)!.text.indexOf(quote);
+          return { source, start, end: start + quote.length };
+        }),
+      }));
       // Preserve selected evidence and leave discovery slots for refined queries.
       const limit = rounds < maxRounds ? Math.max(priorCount, candidateLimit - 2) : candidateLimit;
       const matches: T[][] = [];
+      const followupResults = new Map<string, { query: string; sources: readonly T[] }>();
+      const previouslyObserved = rounds > 1 ? new Set(observed) : undefined;
       for (const query of next) {
+        signal.throwIfAborted();
         const digest = canonicalRetrievalQuery(query)!.digest;
         if (queries.has(digest)) continue;
         if (evidence.size >= limit) { partial(); break; }
         queries.add(digest);
-        const { sources, scan } = owner.search(query);
+        const { sources, scan, moreMatches } = owner.search(query);
+        if (moreMatches) truncatedQueries.add(digest);
         recordScan(scan);
         if (sources.length > 2 * maxCandidates) partial();
-        matches.push(sources.slice(0, 2 * maxCandidates));
+        const batch = sources.slice(0, 2 * maxCandidates);
+        matches.push(batch);
+        if (previouslyObserved) followupResults.set(digest, { query, sources: batch });
       }
-      // Admit the top result from each query before lower-ranked results.
-      for (let rank = 0; rank < Math.max(0, ...matches.map(sources => sources.length)); rank++) {
-        const sources = matches.flatMap(group => group[rank] ? [group[rank]] : []);
-        addCandidates({ sources, scan: searchCoverage ?? 'bounded' }, limit);
-        if (evidence.size >= limit && matches.some(group => group.length > rank + 1)) { partial(); break; }
+      // Give each query a turn to contribute one usable source. Rejected and
+      // already admitted hits do not consume that query's turn.
+      const groups = matches.map(sources => ({ sources, cursor: 0 }));
+      let relatedRead = false;
+      const readRelated = () => {
+        signal.throwIfAborted();
+        relatedRead = true;
+        return owner.related!(related);
+      };
+      if (owner.adaptiveDiscovery && owner.related && related.length && evidence.size < limit) {
+        const { sources, scan } = readRelated();
+        recordScan(scan);
+        if (sources.length > 2 * maxCandidates) partial();
+        groups.push({ sources: [...sources.slice(0, 2 * maxCandidates)], cursor: 0 });
+      }
+      for (let pass = 0; groups.some(group => group.cursor < group.sources.length); pass++) {
+        for (const group of groups) {
+          const before = evidence.size;
+          while (group.cursor < group.sources.length && evidence.size === before && evidence.size < limit) {
+            const source = group.sources[group.cursor++];
+            if (observed.has(source.sourceId)) continue;
+            addCandidates({ sources: [source], scan: searchCoverage ?? 'bounded' }, limit);
+          }
+        }
+        if (pass === 0 && matches.some(group => group.length > 1) &&
+          owner.adaptiveDiscovery && owner.recent && !anchorsRead && investigateAnchors && evidence.size < limit) {
+          signal.throwIfAborted();
+          anchorsRead = true;
+          addCandidates(owner.recent(), Math.min(limit, evidence.size + 1));
+        }
+        if (evidence.size >= limit) {
+          if (groups.some(group => group.sources.slice(group.cursor).some(source => !observed.has(source.sourceId)))) partial();
+          break;
+        }
+      }
+      const admittedNewSource = (sources: readonly T[]) =>
+        sources.some(source => !previouslyObserved?.has(source.sourceId) && observed.has(source.sourceId));
+      const remainingPages = widen.filter(({ refinement }) => !refinement ||
+        !admittedNewSource(followupResults.get(refinement)?.sources ?? []));
+      // A follow-up can also be truncated. Page it once if its first results
+      // added no evidence, within the same assessment round and source budget.
+      for (const [digest, { query, sources }] of followupResults) {
+        if (truncatedQueries.has(digest) && !admittedNewSource(sources)) remainingPages.push({ query, digest });
       }
       if (owner.recent && !anchorsRead && ((rounds === 1 && evidence.size === priorCount) || investigateAnchors)) {
+        signal.throwIfAborted();
         anchorsRead = true;
         addCandidates(owner.recent(), limit);
       }
+      if (owner.related && related.length && !relatedRead && evidence.size < limit) {
+        addCandidates(readRelated(), limit);
+      }
+      // Keep the existing refinement and recent-evidence priorities.
+      if (owner.widen && remainingPages.length) {
+        if (evidence.size >= limit) partial();
+        else {
+          const pages = remainingPages.filter(({ digest }) => truncatedQueries.delete(digest))
+            .map(({ query }) => {
+              signal.throwIfAborted();
+              return owner.widen!(query);
+            });
+          for (const page of pages) {
+            recordScan(page.scan);
+            if (page.sources.length > 2 * maxCandidates) partial();
+          }
+          const ranks = Math.min(2 * maxCandidates, Math.max(0, ...pages.map(page => page.sources.length)));
+          for (let rank = 0; rank < ranks; rank++) {
+            addCandidates({ sources: pages.flatMap(page => page.sources[rank] ? [page.sources[rank]] : []),
+              scan: searchCoverage ?? 'bounded' }, limit);
+            if (evidence.size >= limit && rank + 1 < ranks) { partial(); break; }
+          }
+        }
+      }
+      signal.throwIfAborted();
       if (priorAssessment && evidence.size === priorCount) {
-        if (![...evidence.values()].every(owner.isCurrent)) return empty('stale', 'source-changed');
+        if (owner.isSnapshotCurrent?.() === false || ![...evidence.values()].every(owner.isCurrent)) return empty('stale', 'source-changed');
         return assessed(priorAssessment);
       }
 
       if (pendingClarification && !evidence.size) return { ...empty('assessed'), proposal, clarification: pendingClarification };
       const sources = [...evidence.values()];
-      if (!sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
-      const reviewed = await disclose(structuredClone({ ...assessmentInput, round: rounds, excerpts }), sources);
-      if (!sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
+      if (owner.isSnapshotCurrent?.() === false || !sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
+      const disputePointers = priorDisputes?.length ? { priorDisputes } : {};
+      const pointerBytes = priorDisputes?.length ? Buffer.byteLength(JSON.stringify(disputePointers)) - 1 : 0;
+      // Prefer the actual evidence. The host still retains prior dispute citations.
+      const followup = assessmentBytes + pointerBytes <= assessmentLimit ? disputePointers : {};
+      const reviewed = await disclose(structuredClone({ ...assessmentInput, round: rounds, excerpts, ...followup }), sources);
+      if (owner.isSnapshotCurrent?.() === false || !sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
       if (reviewed == null) return empty('unavailable', 'no-provider-result');
       let rejection: AssessmentRejection = 'assessment-shape';
       const assessment = parseSemanticHistoryAssessment(reviewed, needs, evidence, reason => { rejection = reason; });
       if (!assessment) return empty('invalid', rejection);
+      if (priorAssessment) {
+        const disputed = new Map(priorAssessment.rows.filter(row => row.status === 'contradicted').map(row => [row.key, row]));
+        assessment.rows = assessment.rows.map(row => {
+          const prior = disputed.get(row.key);
+          if (!prior) return row;
+          // A new citation can support a model-proposed resolution. Picking one
+          // side of the already cited conflict cannot establish a resolution.
+          if (row.status === 'supported' && row.passages?.some(passage =>
+            Number(passage.source.slice(1)) > priorCount)) return row;
+          if (row.status !== 'supported' && prior.passages && row.passages?.length) {
+            const combined = [...prior.passages];
+            for (const passage of row.passages) {
+              if (!combined.some(previous => previous.source === passage.source && previous.quote === passage.quote)) {
+                combined.push(passage);
+              }
+            }
+            let passages = combined;
+            if (combined.length > maxPassagesPerNeed) {
+              partial();
+              const firstBySource = new Map<string, Passage>();
+              for (const passage of combined) {
+                if (!firstBySource.has(passage.source)) firstBySource.set(passage.source, passage);
+              }
+              const first = [...firstBySource.values()];
+              passages = [...first, ...combined.filter(passage => firstBySource.get(passage.source) !== passage)].slice(0, maxPassagesPerNeed);
+            }
+            return { ...row, status: 'contradicted', passages, sources: [...new Set(passages.map(passage => passage.source))] };
+          }
+          return row.status === 'contradicted' ? row : prior;
+        });
+      }
       priorAssessment = assessment;
       const gaps = assessment.rows.filter(row => row.status !== 'supported');
-      next = gaps.filter(row => row.query && !queries.has(canonicalRetrievalQuery(row.query)!.digest)).map(row => row.query);
+      related = owner.related ? [...new Set(gaps.flatMap(row => row.sources))].map(handle => evidence.get(handle)!) : [];
+      const gapsByKey = new Map(gaps.map(row => [row.key, row]));
+      const refinements = new Map(gaps.flatMap(row => {
+        const query = canonicalRetrievalQuery(row.query);
+        return query && !queries.has(query.digest) ? [[row.key, row.query] as const] : [];
+      }));
+      next = [...refinements.values()];
+      if (owner.adaptiveDiscovery && rounds < maxRounds) {
+        for (const need of needs) {
+          if (gapsByKey.get(need.key)?.status !== 'missing' || refinements.has(need.key)) continue;
+          const question = canonicalRetrievalQuery(need.question);
+          if (question && !queries.has(question.digest)) next.push(need.question);
+        }
+      }
+      widen = owner.widen ? needs.flatMap(need => {
+        const gap = gapsByKey.get(need.key);
+        const digest = canonicalRetrievalQuery(need.query)?.digest;
+        if (!gap || !digest || !truncatedQueries.has(digest)) return [];
+        return [{ query: need.query, digest, refinement: canonicalRetrievalQuery(gap.query)?.digest }];
+      }) : [];
       investigateAnchors = !!owner.recent && !anchorsRead && gaps.length > 0;
       const budgetExhausted = rounds === maxRounds || evidence.size === candidateLimit;
-      if ((next.length || investigateAnchors) && budgetExhausted) partial();
-      if ((!next.length && !investigateAnchors) || budgetExhausted) return assessed(assessment);
+      const hasFollowup = next.length || widen.length || related.length || investigateAnchors;
+      if (hasFollowup && budgetExhausted) partial();
+      if (!hasFollowup || budgetExhausted) return assessed(assessment);
     }
     return empty('invalid', 'assessment-shape');
   } catch {
