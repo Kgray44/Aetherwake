@@ -2,7 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
 const { join, resolve } = require('node:path');
-const { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot } = require('./personal-memory-review-guard.cjs');
+const { mkdtempSync, unlinkSync, rmdirSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot, claimMemoryWitnessPhase } = require('./personal-memory-review-guard.cjs');
 
 test('memory approval accepts only the current authenticated review child', () => {
   const parent = {}, review = {}, foreign = {};
@@ -74,4 +76,18 @@ test('witness profile must be the admitted canonical synthetic directory', () =>
   const regularProfile = resolve('Aerynth');
   assert.throws(() => memoryWitnessRoot({ profileRoot: regularProfile }, regularProfile, () => regularProfile),
     /native_memory_profile_mismatch/);
+});
+
+test('save and restore are individually one-shot even if the first attempt fails', () => {
+  const root = mkdtempSync(join(tmpdir(), 'memory-witness-phase-'));
+  try {
+    claimMemoryWitnessPhase(root, 'save');
+    assert.throws(() => claimMemoryWitnessPhase(root, 'save'), /native_memory_phase_already_started/);
+    claimMemoryWitnessPhase(root, 'restore');
+    assert.throws(() => claimMemoryWitnessPhase(root, 'restore'), /native_memory_phase_already_started/);
+  } finally {
+    unlinkSync(join(root, 'synthetic-save.started'));
+    unlinkSync(join(root, 'synthetic-restore.started'));
+    rmdirSync(root);
+  }
 });

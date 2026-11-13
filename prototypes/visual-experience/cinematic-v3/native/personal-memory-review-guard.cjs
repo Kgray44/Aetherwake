@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
-const { realpathSync } = require('node:fs');
-const { basename, isAbsolute, resolve } = require('node:path');
+const { realpathSync, writeFileSync } = require('node:fs');
+const { basename, isAbsolute, join, resolve } = require('node:path');
 
 function createMemoryReviewGuard({ parent, focusedWindow, isOwned, deadline, now = () => performance.now() }) {
   assert(Number.isFinite(deadline) && deadline > now(), 'native_memory_deadline_required');
@@ -37,4 +37,14 @@ function memoryWitnessRoot(admission, requested, canonical = realpathSync) {
   return root;
 }
 
-module.exports = { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot };
+function claimMemoryWitnessPhase(root, mode) {
+  assert(['save', 'restore'].includes(mode), 'native_memory_invalid_phase');
+  try {
+    writeFileSync(join(root, `synthetic-${mode}.started`), '', { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (error.code === 'EEXIST') throw Error('native_memory_phase_already_started');
+    throw error;
+  }
+}
+
+module.exports = { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot, claimMemoryWitnessPhase };

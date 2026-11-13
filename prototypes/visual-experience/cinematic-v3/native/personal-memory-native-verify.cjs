@@ -3,7 +3,7 @@ const { mkdirSync, readFileSync, readdirSync, writeFileSync } = require('node:fs
 const { spawnSync } = require('node:child_process');
 const { join } = require('node:path');
 const { setTimeout: pause } = require('node:timers/promises');
-const { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot } = require('./personal-memory-review-guard.cjs');
+const { createMemoryReviewGuard, memoryWitnessDeadline, memoryWitnessRoot, claimMemoryWitnessPhase } = require('./personal-memory-review-guard.cjs');
 
 const mode = process.argv[3];
 assert(['save', 'restore'].includes(mode));
@@ -18,10 +18,6 @@ try {
   process.exitCode = 1;
   return;
 }
-const { app, BrowserWindow, safeStorage } = require('electron');
-const { createProtectedStorageBroker } = require('./protected-storage.cjs');
-const { capturePersonalMemory } = require('./personal-memory-capture.cjs');
-const { showVelaReview, isOwnedVelaReviewWindow } = require('./vela-review.cjs');
 const drive = root[0].toUpperCase();
 assert(['C', 'D'].includes(drive));
 function allowWrite() {
@@ -36,10 +32,14 @@ function allowWrite() {
 }
 assert(allowWrite(), 'storage_reserve_admission_denied');
 const profile = join(root, 'electron-profile');
-if (mode === 'save') {
-  assert.equal(readdirSync(root).length, 0);
-  mkdirSync(profile);
-}
+if (mode === 'save') assert.equal(readdirSync(root).length, 0);
+else readFileSync(join(root, 'synthetic-receipt.json'));
+claimMemoryWitnessPhase(root, mode);
+const { app, BrowserWindow, safeStorage } = require('electron');
+const { createProtectedStorageBroker } = require('./protected-storage.cjs');
+const { capturePersonalMemory } = require('./personal-memory-capture.cjs');
+const { showVelaReview, isOwnedVelaReviewWindow } = require('./vela-review.cjs');
+if (mode === 'save') mkdirSync(profile);
 app.setPath('userData', profile);
 app.setPath('sessionData', profile);
 const path = join(root, 'profile.sqlite');
