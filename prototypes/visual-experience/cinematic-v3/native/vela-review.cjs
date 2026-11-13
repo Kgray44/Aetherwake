@@ -238,10 +238,16 @@ function reviewPage(review, intent = "", experience = "vela", workflow, decision
     )
       resources.push(source);
   const sources = resources
-    .map(
-      (source) =>
-        `<article><h2>${escape(source.title ?? source.id ?? "Selected resource")}</h2><small>${source.kind === "resource" && source.id === review.context.activeResourceId ? "Selected card · " : ""}${included.has(sourceKey(source)) ? "Selected excerpt" : "Metadata only"}</small>${included.has(sourceKey(source)) ? `<pre>${escape(included.get(sourceKey(source)).content)}</pre>` : ""}</article>`,
-    )
+    .map((source) => {
+      const excerpt = included.get(sourceKey(source));
+      let label = excerpt ? "Selected excerpt" : "Metadata only";
+      if (Number.isSafeInteger(excerpt?.version)) {
+        if (excerpt.attachmentType === "note") label = "Saved note · version " + excerpt.version;
+        if (excerpt.attachmentType === "document") label = "Document · version " + excerpt.version;
+      }
+      const selected = source.kind === "resource" && source.id === review.context.activeResourceId ? "Selected card · " : "";
+      return `<article><h2>${escape(source.title ?? source.id ?? "Selected resource")}</h2><small>${selected}${label}</small>${excerpt ? `<pre>${escape(excerpt.content)}</pre>` : ""}</article>`;
+    })
     .join("");
   const history = (review.history?.messages ?? [])
     .map(

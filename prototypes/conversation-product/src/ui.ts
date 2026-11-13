@@ -7,7 +7,7 @@ import type { ConversationViewPersistence } from './view-persistence.ts';
 export { acceptedConversationSubmission } from './chat.ts';
 
 export type ManagerState = { selectedResourceId: string | null; drafts: Record<string,string>; scroll: Record<string,number>; query: SearchQuery; messageOffset: Record<string,number> };
-export type ManagerOptions = Pick<ConversationChatOptions, 'saveReplyNote' | 'openReplyNote' | 'chooseDocument' | 'listDocuments'> & { models?: ConversationModelControls; embedded?: boolean; motion?:ExperienceMotionPort;viewId?:string;execution?: ConversationExecutionPort; draftSession?: (resourceId: string) => ConversationDraftSession; state?: ManagerState; resourceId?: string; initialMessageId?:string;viewPersistence?:ConversationViewPersistence;onClose?: () => void; onResource?: (resourceId: string, messageId?: string) => void; onState?: (state: ManagerState) => void; copy?: (text: string) => Promise<void>; download?: (name: string, content: string) => void; /** Explicit host-owned creation using this canonical conversation resource; no workspace or transcript mutation here. */ onCreateChecklist?: (canonicalConversationResourceId: string) => void | Promise<void>; /** Explicit ChatGPT site/reviewed documentation navigation only; host revalidates an exact allowlist. Never account connection or sync. */ onOpenChatGPT?: (reference?: string) => Promise<{status:'requested'|'unknown'|'unavailable'}> };
+export type ManagerOptions = Pick<ConversationChatOptions, 'saveReplyNote' | 'openReplyNote' | 'chooseDocument' | 'listDocuments' | 'openDocument' | 'askVelaAboutDocument'> & { models?: ConversationModelControls; embedded?: boolean; motion?:ExperienceMotionPort;viewId?:string;execution?: ConversationExecutionPort; draftSession?: (resourceId: string) => ConversationDraftSession; state?: ManagerState; resourceId?: string; initialMessageId?:string;viewPersistence?:ConversationViewPersistence;onClose?: () => void; onResource?: (resourceId: string, messageId?: string) => void; onState?: (state: ManagerState) => void; copy?: (text: string) => Promise<void>; download?: (name: string, content: string) => void; /** Explicit host-owned creation using this canonical conversation resource; no workspace or transcript mutation here. */ onCreateChecklist?: (canonicalConversationResourceId: string) => void | Promise<void>; /** Explicit ChatGPT site/reviewed documentation navigation only; host revalidates an exact allowlist. Never account connection or sync. */ onOpenChatGPT?: (reference?: string) => Promise<{status:'requested'|'unknown'|'unavailable'}> };
 export const createManagerState = (): ManagerState => ({selectedResourceId:null,drafts:{},scroll:{},query:{},messageOffset:{}});
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, label?: string, className?: string): HTMLElementTagNameMap[K] => { const node=document.createElement(tag); if(label!==undefined)node.textContent=label;if(className)node.className=className;return node; };
 const button = (label: string, action: () => void | Promise<void>, presentation: ConversationControlPresentation={identity:'action'}) => { const b=el('button',label);b.type='button';decorateConversationControl(b,presentation);b.addEventListener('click',()=>{if(!b.disabled)void action();});return b; };
@@ -123,7 +123,12 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   if(!session){if(options.draftSession)session=options.draftSession(resourceId);else{session=new ConversationDraftSession({resourceId,port,...(Object.hasOwn(state.drafts,resourceId)?{initialContent:state.drafts[resourceId]}:{})});ownedDraftSessions.add(session);}if(session.resourceId!==resourceId)throw new Error('draft_resource_mismatch');draftSessions.set(resourceId,session);}else await session.reload();
   const initialView=restoredView?.resourceId===resourceId?restoredView:undefined;restoredView=null;
   chatResource=resourceId;chat=mountConversationChat(chatHost,{port,resourceId,draftSession:session,execution:options.execution,copy:options.copy,motion:options.motion,models:options.models,viewId:options.viewId?options.viewId+':chat:'+resourceId:undefined,onProviderChange:requestProviderChange,initialScroll:options.viewPersistence?undefined:state.scroll[resourceId],initialOffset:options.viewPersistence?undefined:state.messageOffset[resourceId],viewPersistence:options.viewPersistence,initialView,initialAroundMessageId:aroundMessageId,
-   saveReplyNote:options.saveReplyNote,openReplyNote:options.openReplyNote,chooseDocument:options.chooseDocument,listDocuments:options.listDocuments,
+   saveReplyNote:options.saveReplyNote,openReplyNote:options.openReplyNote,chooseDocument:options.chooseDocument,listDocuments:options.listDocuments,openDocument:options.openDocument,
+   askVelaAboutDocument:options.askVelaAboutDocument,
+   captureDocumentHandoffScope:()=>{
+    const navigation=openIntent;
+    return ()=>!disposed&&!closing&&navigation===openIntent&&chatResource===resourceId;
+   },
    onViewState:view=>{state.drafts[view.resourceId]=view.content;state.scroll[view.resourceId]=view.scroll;state.messageOffset[view.resourceId]=view.offset;save();},onDetail:renderDetail,onUnavailable:()=>{current=null;detailHeader.replaceChildren();secondary.replaceChildren();extras.open=false;},onChanged:refresh,
    onMessageAction:async event=>{if(event.action==='source'){options.onResource?.(event.message.resourceId,event.message.id);return;}if(event.action==='branch'){if(current)showBranch(current,event.message.id);return;}
     const selection=event.selection;if(!selection||event.message.content.slice(selection.start,selection.end)!==selection.text)throw new Error('Select a current source excerpt');
@@ -162,6 +167,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   return ++switchGeneration;
  };
  let switchOpenGeneration:number|undefined;
+ let switchComposing=false;
  const loadSwitcher=async(openFirst=false)=>{
   const generation=invalidateSwitcher(),text=switchQuery.value.trim(),mode=switchMode.value;
   if(openFirst)switchOpenGeneration=generation;
@@ -208,11 +214,23 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   finally{if(generation===switchGeneration)switchLoading=false;}
  };
  const openSwitcher=()=>{if(disposed)return Promise.reject(new Error('conversation_manager_closed'));switcher.node.open=true;switchQuery.focus();return loadSwitcher();};
- switcher.node.addEventListener('toggle',()=>{if(switcher.node.open){switchQuery.focus();if(!switchLoading)void loadSwitcher();}else{switchGeneration++;switchLoading=false;clearTimeout(switchTimer);}});
- switchQuery.addEventListener('input',()=>{invalidateSwitcher();switchTimer=setTimeout(()=>void loadSwitcher(),120);});
+ const resetSwitcher=()=>{invalidateSwitcher();switchLoading=false;switchOpenGeneration=undefined;switchComposing=false;};
+ switcher.node.addEventListener('toggle',()=>{if(switcher.node.open){switchQuery.focus();if(!switchLoading&&switchTimer===undefined&&!switchComposing)void loadSwitcher();}else resetSwitcher();});
+ const scheduleSwitcher=()=>{invalidateSwitcher();if(switcher.node.open&&!switchComposing)switchTimer=setTimeout(()=>void loadSwitcher(),120);};
+ switchQuery.addEventListener('compositionstart',()=>{switchComposing=true;invalidateSwitcher();});
+ switchQuery.addEventListener('compositionend',()=>{switchComposing=false;scheduleSwitcher();});
+ switchQuery.addEventListener('input',event=>{if(!(event as InputEvent).isComposing)scheduleSwitcher();});
+ switcher.node.addEventListener('keydown',event=>{
+  if(event.key!=='Escape'||event.isComposing||switchComposing||!switcher.node.open)return;
+  event.preventDefault();
+  event.stopPropagation();
+  switcher.node.open=false;
+  resetSwitcher();
+  switcher.summary.focus();
+ });
  switchMode.addEventListener('change',()=>void loadSwitcher());
  switchQuery.addEventListener('keydown',event=>{
-  if(event.isComposing||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
+  if(event.isComposing||switchComposing||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
   const first=switchResults.querySelector('button');
   if(event.key==='ArrowDown'){event.preventDefault();first?.focus();}
   if(event.key!=='Enter'||!switcher.node.open)return;

@@ -197,7 +197,11 @@ export class ConversationDraftSession {
     const differsLocally = differs({content:this.content,documents:this.documents});
     if (this.remote && differsLocally) { this.remote = record; this.error = null; }
     else if (localIntent && differsLocally && record.version > (this.known?.version ?? 0)) this.remote = record;
-    else { if (!localIntent) { this.content = record.content; this.documents = record.documents ?? []; } this.known = record; this.remote = null; this.error = null; }
+    else {
+      if (!localIntent) this.content = record.content;
+      if (!localIntent || sameDocuments(this.documents, record.documents)) this.documents = record.documents ?? [];
+      this.known = record; this.remote = null; this.error = null;
+    }
     this.emit(); if (this.dirty() && !this.blocked()) this.schedule();
   }
   /** The owner must await flush before unmount/shutdown; a conflict prevents disposal instead of losing text. */

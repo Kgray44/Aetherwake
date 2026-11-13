@@ -23,7 +23,7 @@ async function note(f:ReturnType<typeof fixture>,kind:'note'|'research'|'task'|'
 }
 
 test('browser-safe exact opening schema retains canonical IDs and rejects grants, unknown hints and accessors',()=>{
- const valid={resourceId:'canonical-resource',origin:{source:'constellation' as const,nodeKey:'resource:canonical-resource'},selection:{messageId:'canonical-message'},preferredPlacement:{workspaceId:'canonical-workspace',blockId:'canonical-block'}};
+ const valid={resourceId:'canonical-resource',expectedVersion:3,origin:{source:'constellation' as const,nodeKey:'resource:canonical-resource'},selection:{messageId:'canonical-message'},preferredPlacement:{workspaceId:'canonical-workspace',blockId:'canonical-block'}};
  const parsed=parseResourceOpeningInput(valid);assert.deepEqual(parsed,valid);valid.selection.messageId='Caller mutation';assert.equal(parsed.selection!.messageId,'canonical-message');
  let accessed=false;const getter={get resourceId(){accessed=true;return 'resource';}};
  for(const value of [null,[],{},'resource',{resourceId:''},{resourceId:'x'.repeat(257)},{resourceId:'x',authorized:true},{resourceId:'x',preferredPresentation:'editor'},{resourceId:'x',origin:'constellation'},{resourceId:'x',origin:{source:'unknown'}},{resourceId:'x',origin:{source:'library',nodeKey:' '}},{resourceId:'x',origin:{source:'vela',grantId:'no'}},{resourceId:'x',selection:{messageId:'m',include:true}},{resourceId:'x',preferredPlacement:{workspaceId:'w'}},getter])assert.throws(()=>parseResourceOpeningInput(value),/invalid_resource_opening_request/);
@@ -37,6 +37,10 @@ test('unplaced canonical note and conversation open directly with exact identity
   await f.core.command('conversation',{name:'saveDraft',input:{resourceId:c.resourceId,expectedVersion:0,content:'Synthetic unsent exact draft'}});
   await f.core.command('notes',{name:'commitNote',input:{resourceId:n.id,expectedResourceVersion:n.version,expectedDraftVersion:0,content:'Synthetic canonical note body'}});
   const baseline=state(f);assert.equal(f.db.prepare('SELECT count(*) AS n FROM workspaces').get()!.n,0);assert.equal(f.db.prepare('SELECT count(*) AS n FROM blocks').get()!.n,0);
+ const stale=await f.core.command('openResource',{resourceId:n.id,expectedVersion:n.version});
+ assert.deepEqual(stale,{contract:RESOURCE_OPENING_CONTRACT,status:'unavailable',resourceId:n.id,reason:'resource-unavailable'});
+ const current=await f.core.command('openResource',{resourceId:n.id,expectedVersion:n.version+1});
+ assert.equal(current.status,'ready');
   const desktop=f.owner.desktop.snapshot;f.owner.desktop.snapshot=()=>{throw Error('Opening must not normalize desktop navigation');};
   try{for(let i=0;i<5;i++){
    const opened=await f.core.command('openResource',{resourceId:n.id,origin:{source:'library'}});assert.equal(opened.contract,RESOURCE_OPENING_CONTRACT);assert.equal(opened.status,'ready');if(opened.status!=='ready')throw Error('Expected note');assert.equal(opened.resource.id,n.id);assert.equal(opened.resource.content,'Synthetic canonical note body');assert.deepEqual(opened.presentation,{kind:'note',mode:'direct'});assert.equal(opened.placement,undefined);

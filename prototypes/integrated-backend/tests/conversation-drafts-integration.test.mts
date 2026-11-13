@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, relative, isAbsolute } from 'node:path';
+import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { Backend } from '../src/service.mts';
 import { BackendCore } from '../src/core.mts';
 import type { Detail, Page, SearchHit } from '../../conversation-product/src/contracts.ts';
+const { conversationCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/conversation-broker.cjs');
 
 const temporary = () => {
   const dir = mkdtempSync(join(tmpdir(), 'aerynth-draft-integration-'));
@@ -48,6 +50,43 @@ test('canonical draft recovery remains available under the explicit synthetic bu
     const snapshot = await core.command('snapshot', {});
     assert.equal(snapshot.graph.messages.filter(message => message.conversationId === snapshot.resourceMap[chat.resourceId]).length, 0);
   } finally { (core as any).active = undefined; await core.command('close', {}); temp.cleanup(); }
+});
+
+test('the desktop broker and backend worker restore an offline document draft without sending', async () => {
+  const temp = temporary();
+  const options = { path: temp.path, provider: 'fixture' as const, contentPolicy: 'synthetic-only' as const, nativeMedia: true };
+  let backend = new Backend(options);
+  try {
+    const chat = await backend.call('createConversation', { title: 'Synthetic offline document chat', providerId: 'local', commandId: randomUUID() });
+    const path = join(dirname(temp.path), 'Synthetic field note.txt');
+    const body = 'Synthetic field note body kept in the selected file.';
+    writeFileSync(path, body);
+    const { resource } = await backend.call('mediaImportTrusted', {
+      kind: 'file', variant: 'document', commandId: randomUUID(), selection: { kind: 'file', path },
+    });
+    const resourceId = chat.resourceId, documents = [{ id: resource.id, version: resource.version }];
+    const draft = (name: 'saveDraft' | 'readDraft', input: Record<string, unknown>) =>
+      conversationCommand({ call: backend.call.bind(backend), input: { name, input } });
+    const saved = await draft('saveDraft', { resourceId, expectedVersion: 0, content: 'Synthetic unsent question', documents });
+    await backend.close();
+    backend = new Backend(options);
+    const restored = await draft('readDraft', { resourceId });
+    assert.deepEqual(restored, saved);
+    assert.deepEqual(restored.documents, [{ ...documents[0], title: resource.title }]);
+    assert.ok(!JSON.stringify(restored).includes(path) && !JSON.stringify(restored).includes(body));
+    const opened = await backend.call('openResource', { resourceId: resource.id, expectedVersion: resource.version });
+    assert.equal(opened.status, 'ready');
+    const description = await backend.call('mediaDescribe', { resourceId: resource.id });
+    assert.equal(description.metadata.format, 'text');
+    const readback = await backend.call('mediaReadChunk', {
+      resourceId: resource.id, expectedVersion: resource.version, sourceRevision: description.metadata.sourceRevision,
+      offset: 0, length: Buffer.byteLength(body),
+    });
+    assert.equal(Buffer.from(readback.base64, 'base64').toString('utf8'), body);
+    const snapshot = await backend.call('snapshot', {});
+    assert.equal(snapshot.graph.messages.length, 0);
+    assert.equal(Object.keys(snapshot.executions).length, 0);
+  } finally { await backend.close().catch(() => {}); temp.cleanup(); }
 });
 
 test('an inherited search hit reopens at the exact message after worker restart with its unsent draft', async () => {

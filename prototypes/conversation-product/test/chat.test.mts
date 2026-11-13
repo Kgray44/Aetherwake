@@ -429,6 +429,44 @@ test('quick search Enter submits pending text immediately and opens the first ex
  } finally {await manager?.dispose();f.restore();}
 });
 
+test('Switch chat waits for composed text and Escape invalidates a pending open', async () => {
+ const f=fixture();
+ const searches:string[]=[], opened:string[]=[];
+ let manager,release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const port={async command(name:string,input:any){
+  if(name==='search'){
+   searches.push(input.text);
+   await gate;
+   return {items:[{kind:'message',resourceId:f.draft.resourceId,messageId:f.detail.messages.items[0].id,
+    title:'Synthetic chat',excerpt:'完成'}],total:1,offset:0,limit:12,hasMore:false};
+  }
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ try {
+  manager=mountConversationManager(f.view.root,port,{resourceId:f.draft.resourceId,onResource:id=>opened.push(id)});
+  await manager.ready;
+  await manager.openSwitcher();
+  const switcher=f.view.root.querySelector('.cp-switcher'), input=switcher.querySelector('input');
+  input.fire('compositionstart');
+  input.value='未';input.fire('input',{isComposing:true});
+  input.fire('keydown',{key:'Enter'});
+  await new Promise(resolve=>setTimeout(resolve,140));
+  assert.deepEqual(searches,[]);
+  input.value='完成';input.fire('compositionend');
+  input.fire('keydown',{key:'Enter'});
+  assert.deepEqual(searches,['完成']);
+  const escaped=input.fire('keydown',{key:'Escape'});
+  assert.equal(escaped.defaultPrevented,true);
+  assert.equal(switcher.open,false);
+  assert.equal(f.view.doc.activeElement,switcher.querySelector('summary'));
+  release();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(opened,[]);
+  assert.equal(switcher.querySelector('.cp-switcher-results').querySelector('button'),null);
+ } finally {release();await manager?.dispose();f.restore();}
+});
+
 test('mounted manager menus, branch/context and canonical nested folders borrow the same frame lifecycle without replacing the live composer',async()=>{
  const f=fixture(),m=pickerMotion();let manager;try{f.projects.push({id:'project:canonical',title:'Canonical project',version:1});f.collections.push({id:'folder:canonical',title:'Canonical folder',projectId:'project:canonical',version:1,ruleRevision:0,state:'active',parentId:null,rule:null,memberIds:[f.draft.resourceId],pinnedIds:[f.draft.resourceId]});manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId,motion:m.motion,viewId:'manager:disclosures'});await manager.ready;manager.frame();const editor=f.view.root.querySelector('textarea');editor.value='Same canonical draft through menu motion 🧭';editor.fire('input');editor.setSelectionRange(2,8);await manager.flush();const draft=f.draft;
   for(const selector of ['.cp-new-chat','.cp-switcher','.cp-filters','.cp-history-tools','.cp-chat-options','.cp-chat-extras','[data-collection-id="folder:canonical"]']){const node=f.view.root.querySelector(selector);assert.ok(node,selector);assert.equal(node.dataset.cpMotionDisclosure,'true',selector);const body=node.querySelector('.cp-motion-disclosure-body');node.open=true;node.fire('toggle');manager.frame();assert.equal(body.inert,false,selector);assert.equal(body.hidden,false,selector);m.step(.5);manager.frame();assert.ok(Number.parseFloat(body.style.height)>0,selector);node.open=false;node.fire('toggle');manager.frame();assert.equal(body.inert,true,selector);assert.equal(body.hidden,false,selector+' retains closing paint');m.step();manager.frame();assert.equal(body.hidden,true,selector);assert.equal(f.view.root.querySelector('textarea')===editor,true);assert.deepEqual([editor.selectionStart,editor.selectionEnd],[2,8]);}
@@ -1443,6 +1481,63 @@ test('a disconnected ChatGPT plan keeps the draft editable and enables an explic
  }finally{await chat?.dispose();f.restore();}
 });
 
+test('local chat can stage an offline attachment without sending or changing provider', async () => {
+ const f = fixture('local');
+ let chat;
+ try {
+  const selected = {id:'file:offline',version:2,title:'Offline brief.txt'};
+  chat = mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   chooseDocument:async()=>selected});
+  await chat.ready;
+  const attach = named(f.view.root,'Attach document');
+  assert.equal(attach.hidden,false);
+  attach.fire('click');
+  await until(()=>!!named(f.view.root,'Offline brief.txt ×'));
+  await chat.flush();
+  assert.deepEqual(f.draft.documents,[selected]);
+  assert.equal(f.draft.content,'Saved unsent text');
+  assert.match(f.view.root.querySelector('.cp-composer-documents').textContent,/Switch to ChatGPT/);
+  const composer = f.view.root.querySelector('form');
+  composer.fire('submit');
+  assert.equal(f.calls.some(call=>call.name==='send'||call.name==='selectProvider'),false);
+  named(f.view.root,'Offline brief.txt ×').fire('click');
+  await chat.flush();
+  assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,false);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+for (const empty of [true,false]) test('attachment continuation uses the existing provider action (empty: '+empty+')', async () => {
+ const f=fixture('local');
+ let chat,release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const requested:unknown[]=[];
+ try {
+  if(empty){f.detail.messages.items=[];f.detail.messages.total=f.detail.conversation.messageCount=0;}
+  const target={...f.detail.providers[0],id:'chatgpt-plan-responses',label:'ChatGPT',available:false};
+  f.detail.providers.push(target);
+  const documents=[{id:'file:offline',version:2,title:'Offline brief.txt'}];
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,
+   content:f.draft.content,documents});
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   onProviderChange:async change=>{requested.push(change);await gate;}});
+  await chat.ready;
+  const button=named(f.view.root,'Continue with ChatGPT');
+  assert.equal(button.hidden,true);
+  target.available=true;
+  await chat.refresh();
+  assert.equal(button.hidden,false);
+  const draft=f.draft;
+  button.fire('click');button.fire('click');
+  assert.equal(button.disabled,true);
+  assert.deepEqual(requested,[{resourceId:draft.resourceId,targetProviderId:target.id,
+   expectedRevision:f.detail.conversation.revision,mode:empty?'empty':'continuation'}]);
+  assert.deepEqual(f.draft,draft);
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+  release();
+  await until(()=>!button.disabled);
+ } finally {release();await chat?.dispose();f.restore();}
+});
+
 test('a recovered unavailable document can be removed without losing the draft or sending', async () => {
  const f = fixture('chatgpt-plan-responses');
  let chat;
@@ -1498,19 +1593,93 @@ test('replace at the attachment limit preserves the old selection on cancellatio
  } finally { f.pending?.reject(Error('synthetic cleanup')); await chat?.dispose(); f.restore(); }
 });
 
-test('saved document picker reuses an exact current resource without importing or sending it', async () => {
+for (const action of ['close', 'switch', 'switch during save'] as const) test('chat manager '+action+' immediately invalidates a pending attachment handoff', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const resourceId = f.draft.resourceId;
+ const document = { id: 'file:brief', version: 1, title: 'Brief.pdf' };
+ const destination = 'chat:other';
+ let saving = false;
+ let releaseSave!: () => void;
+ const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+ const port = { async command(name: string, input: any) {
+  if (name === 'saveDraft' && input.content === 'Edited before handoff') {
+   saving = true;
+   await saveGate;
+  }
+  if (name === 'detail' && input.resourceId === destination) {
+   const detail = structuredClone(f.detail);
+   detail.conversation.resourceId = destination;
+   detail.policy.resourceId = destination;
+   return detail;
+  }
+  if (name === 'readDraft' && input.resourceId === destination)
+   return { resourceId: destination, content: '', version: 0, updatedAt: null };
+  return (f.port.command as any)(name, input);
+ }} as ConversationProductPort;
+ let manager, isCurrent: (() => boolean) | undefined, closed = false;
+ let release!: () => void;
+ const gate = new Promise<void>(resolve => { release = resolve; });
+ try {
+  await f.port.command('saveDraft',{resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:[document]});
+  manager = mountConversationManager(f.view.root,port,{resourceId,onClose:()=>{closed=true;},openDocument:async ()=>'opened',
+   askVelaAboutDocument:async (_document, current)=>{isCurrent=current;await gate;}});
+  await manager.ready;
+  if (action === 'switch during save') {
+   const editor = f.view.root.querySelector('textarea');
+   editor.value = 'Edited before handoff';
+   editor.fire('input');
+   named(f.view.root,'Ask Vela').fire('click');
+   await until(()=>saving);
+   const navigation = manager.open(destination);
+   releaseSave();
+   await navigation;
+   assert.equal(isCurrent,undefined);
+   assert.equal(manager.state.selectedResourceId,destination);
+   assert.equal(f.draft.content,'Edited before handoff');
+   assert.deepEqual(f.draft.documents,[document]);
+   return;
+  }
+  named(f.view.root,'Ask Vela').fire('click');
+  await until(()=>!!isCurrent);
+  assert.equal(isCurrent?.(),true);
+  const navigation = action === 'switch' ? manager.open(destination) : undefined;
+  if (action === 'close') named(f.view.root,'Close').fire('click');
+  assert.equal(isCurrent?.(),false);
+  if (navigation) {
+   await navigation;
+   assert.equal(manager.state.selectedResourceId,destination);
+  } else await until(()=>closed);
+  assert.deepEqual(f.draft.documents,[document]);
+ } finally { releaseSave(); release(); await manager?.dispose(); f.restore(); }
+});
+
+for (const closeDuringHandoff of [false, true]) test('saved document picker reuses an exact current resource (close during handoff: '+closeDuringHandoff+')', async () => {
  const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
  let chat;
+ let releaseHandoff!: () => void;
+ const handoffGate = new Promise<void>(resolve => { releaseHandoff = resolve; });
  try {
   const saved = { id: 'file:saved', version: 1, title: 'Saved brief.pdf' };
   let available = [saved];
+  const opened: typeof available = [];
+  const staged: typeof available = [];
+  let verifyHandoff: (() => boolean) | undefined;
+  let opening: 'opened' | 'unavailable' = 'opened';
   chat = mountConversationChat(f.view.root, {
    port: f.port, resourceId: f.draft.resourceId, motion: motion.motion, viewId: 'chat:saved-document',
    listDocuments: id => { assert.equal(id, f.draft.resourceId); return available; },
+   openDocument: async document => { opened.push(document); return opening; },
+   askVelaAboutDocument: async (document, isCurrent) => {
+    if (staged.length) {
+      verifyHandoff = isCurrent;
+      await handoffGate;
+    }
+    if (isCurrent()) staged.push(document);
+   },
    chooseDocument: async () => { throw Error('Saved selection must not use the file picker'); },
   });
   await chat.ready;
-  const picker = f.view.root.querySelector('[data-cp-picker-for="Attach saved document"]');
+  const picker = f.view.root.querySelector('[data-cp-picker-for="Attach saved note or document"]');
   picker.fire('click');
   available = [{ ...saved, version: 2 }];
   f.view.root.querySelector('[data-cp-option-value="file:saved:1"]').fire('click');
@@ -1520,8 +1689,39 @@ test('saved document picker reuses an exact current resource without importing o
   f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').fire('click');
   await chat.flush();
   assert.deepEqual(f.draft.documents, available);
+  const draft = f.draft;
+  const openAttachment = named(f.view.root,'Saved brief.pdf');
+  assert.equal(openAttachment.getAttribute('aria-label'),'Open attachment Saved brief.pdf');
+  openAttachment.fire('click');
+  assert.deepEqual(opened,available);
+  const askVela = named(f.view.root,'Ask Vela');
+  assert.equal(askVela.getAttribute('aria-label'),'Ask Vela about Saved brief.pdf');
+  askVela.fire('click');askVela.fire('click');
+  await until(()=>staged.length===1&&!askVela.disabled);
+  assert.deepEqual(staged,available);
+  assert.deepEqual(f.draft,draft);
   assert.equal(f.calls.some(call => call.name === 'send'), false);
   picker.fire('click');
   assert.equal(f.view.root.querySelector('[data-cp-option-value="file:saved:2"]').disabled, true);
- } finally { await chat?.dispose(); assert.equal(motion.poses.size, 0); f.restore(); }
+  picker.fire('click');
+  if (!closeDuringHandoff) {
+   opening = 'unavailable';
+   const changed = [{ ...available[0], unavailable: 'changed' as const }];
+   await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:changed});
+   openAttachment.fire('click');
+   await until(() => !!named(f.view.root,'Replace'));
+   assert.equal(f.draft.content,draft.content);
+   assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,true);
+   return;
+  }
+  named(f.view.root,'Ask Vela').fire('click');
+  await until(()=>!!verifyHandoff);
+  assert.equal(verifyHandoff?.(),true);
+  const closing = chat.dispose();
+  assert.equal(verifyHandoff?.(),false,'closing retires the handoff before draft flushing finishes');
+  releaseHandoff();
+  await closing;
+  assert.equal(staged.length,1);
+  assert.deepEqual(f.draft,draft);
+ } finally { releaseHandoff(); await chat?.dispose(); assert.equal(motion.poses.size, 0); f.restore(); }
 });

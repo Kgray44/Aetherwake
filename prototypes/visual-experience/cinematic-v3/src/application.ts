@@ -2513,6 +2513,8 @@ export function installApplication(hooks: Hooks) {
       models: ordinaryModelControls,
       chooseDocument: chooseChatDocument,
       listDocuments: listChatDocuments,
+      openDocument: openChatDocument,
+      askVelaAboutDocument: askVelaAboutChatDocument,
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
@@ -2560,12 +2562,38 @@ export function installApplication(hooks: Hooks) {
     const chat = state?.resources.find(resource => resource.id === conversationId);
     if (!chat || chat.visible === false || chat.available === false || chat.state === "archived") return [];
     return (state?.resources ?? [])
-      .filter(resource => resource.kind === "file" && resource.visible !== false &&
+      .filter(resource => resource.visible !== false &&
         resource.available !== false && resource.state !== "archived" &&
         (resource.project_id == null || resource.project_id === chat.project_id) &&
-        resource.media?.source === "file" && ["pdf", "docx", "text"].includes(resource.media.format))
+        (resource.kind === "note" || resource.kind === "file" && resource.media?.source === "file" &&
+          ["pdf", "docx", "text"].includes(resource.media.format)))
       .map(({ id, version, title }) => ({ id, version, title }))
       .sort((left, right) => left.title.localeCompare(right.title));
+  }
+  async function openChatDocument(document: {id: string; version: number}) {
+    const result = await resourceOpener.open({
+      resourceId: document.id,
+      expectedVersion: document.version,
+      preferredPresentation: "direct",
+      origin: { source: "application" },
+    });
+    return result.status === "ready" ? "opened" as const
+      : result.status === "superseded" ? "superseded" as const : "unavailable" as const;
+  }
+  async function askVelaAboutChatDocument(document: {id: string; version: number}, isCurrent: () => boolean) {
+    const result = await host.command!("openResource", {
+      resourceId: document.id, expectedVersion: document.version, origin: { source: "application" },
+    }) as ResourceOpeningResult;
+    if (!isCurrent()) return;
+    if (result.status !== "ready" || result.resource.kind !== "note" && !supportsDocumentQuestion(result.resource))
+      throw Error("The selected attachment is no longer available.");
+    if (!velaOpen) openVela();
+    if (!velaPanel) throw Error("Vela could not open.");
+    const resource = result.resource;
+    velaPanel.addDocumentSource({
+      id: resource.id, kind: "resource", resourceKind: resource.kind, version: resource.version,
+      title: resource.title, projectId: resource.project_id,
+    });
   }
   function openVela() {
     if (velaOpen) {
@@ -4381,6 +4409,8 @@ export function installApplication(hooks: Hooks) {
           models: ordinaryModelControls,
           chooseDocument: chooseChatDocument,
           listDocuments: listChatDocuments,
+          openDocument: openChatDocument,
+          askVelaAboutDocument: askVelaAboutChatDocument,
           viewPersistence: chatViewPersistence,
           onProviderChange: async (change) => {
             if (change.mode === "continuation") {

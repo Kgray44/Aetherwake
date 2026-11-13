@@ -214,10 +214,44 @@ test('a captured chat reply retains the edited note, workspace placement and sav
     expectedDraftVersion:note.draftRevision,content:edited,
   }})).result as NoteDocument;
   assert.equal(updated.resource.content,edited);
+  const target=await f.core.command('createConversation',{providerId,commandId:randomUUID()});
+  const documents=[{id:receipt.noteId,version:updated.resource.version}];
+  const draft=await f.core.command('conversation',{name:'saveDraft',input:{
+   resourceId:target.resourceId,expectedVersion:0,content:'Summarize my saved note.',documents,
+  }}) as import('../../conversation-product/src/contracts.ts').ConversationDraft;
+  const send=()=>({name:'send',input:{resourceId:target.resourceId,content:draft.content,
+   expectedRevision:target.revision,commandId:randomUUID(),draftVersion:draft.version,documents}});
+  const call=f.core.command.bind(f.core);
+  await assert.rejects(conversationCommand({call,input:send(),reviewSources:async()=>false}),/authorization_cancelled/);
+  assert.equal(f.requests.length,0);
+  f.responses.push(()=>complete('resp-saved-note','Synthetic grounded summary.'));
+  const sent=await conversationCommand({call,input:send(),reviewSources:async({review}:any)=>{
+   assert.equal(review.context.included[0].id,receipt.noteId);
+   assert.equal(review.context.included[0].content,edited);
+   const {reviewPage}=createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-review.cjs');
+   const html=reviewPage(review,draft.content);
+   assert.ok(html.includes('Saved note · version '+updated.resource.version));
+   assert.ok(html.includes(edited));
+   return true;
+  }});
+  assert.equal(sent.state,'provider_completed');
+  assert.equal(f.requests.length,1);
+  assert.match(JSON.stringify(f.requests[0].input),/Synthetic edited reply note/);
+  assert.doesNotMatch(JSON.stringify(f.requests[0].input),/Synthetic complete reply/);
+  const staleSend={name:'send',input:{...send().input,expectedRevision:target.revision+2}};
+  await assert.rejects(conversationCommand({call,input:staleSend,reviewSources:async()=>{
+   await f.core.command('desktop',{type:'archiveSubject',kind:'resource',id:receipt.noteId,
+    expectedVersion:updated.resource.version,archived:true});
+   return true;
+  }}),/source_selection_unavailable|stale_send_preview/);
+  const restoredSnapshot=await f.core.command('desktop',{type:'archiveSubject',kind:'resource',id:receipt.noteId,
+   expectedVersion:updated.resource.version+1,archived:false});
+  const restoredVersion=restoredSnapshot.resources.find(resource=>resource.id===receipt.noteId)!.version;
+  assert.equal(f.requests.length,1);
   const workspace=await f.core.command('desktop',{type:'createWorkspace',title:'Synthetic saved reply workspace',projectId:null});
   const workspaceId=workspace.activeWorkspaceId!;
   const attachInput={commandId:randomUUID(),workspaceId,expectedLayoutVersion:workspace.layoutVersion,
-    resourceId:receipt.noteId,expectedResourceVersion:updated.resource.version,kind:'note' as const};
+    resourceId:receipt.noteId,expectedResourceVersion:restoredVersion,kind:'note' as const};
   const place=async()=>(await f.core.command('library',{name:'attachBlock',input:attachInput})).result as CreatedBlock;
   const placement=await place();
   assert.equal(placement.resourceId,receipt.noteId);
