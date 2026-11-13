@@ -6,6 +6,7 @@ const test = require("node:test");
 const { createAdmission } = require("../native/native-test-admission.cjs");
 const { superviseMemoryFixture } = require("../native/memory-fixture-supervisor.cjs");
 const { enterMemoryFixture } = require("../native/memory-fixture-entry.cjs");
+const { startMemoryInspectorFixture } = require("../native/memory-inspector-fixture-startup.cjs");
 
 function setup(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "memory-supervisor-")));
@@ -144,4 +145,88 @@ test("consumer releases its lease if the permit is revoked during reserve admiss
   }), /slot_closed/);
   assert.equal(admission.status().lease, null);
   assert.deepEqual(readdirSync(profileRoot), ["synthetic-packaged.started"]);
+});
+
+test("inspector startup gates all fixture effects and sends policy authority only after native consent", async t => {
+  const { options, admission, profileRoot } = setup(t);
+  const handoff = {
+    ...options,
+    ...superviseMemoryFixture({ ...options, startFixture: value => value }),
+  };
+  const steps = [], calls = [];
+  const rendererURL = "file:///fixture/index.html";
+  let approve = false, token;
+  const frame = { url: rendererURL, executeJavaScript: async (_script, userGesture) => {
+    assert.equal(userGesture, false);
+    return true;
+  } };
+  const contents = { mainFrame: frame, isDestroyed: () => false };
+  const event = { sender: contents, senderFrame: frame };
+  const runtime = {
+    createProtector({ profileRoot: root, fixtureKey, mode }) {
+      steps.push("custody");
+      assert.equal(root, profileRoot);
+      assert.equal(mode, "create");
+      assert.equal(fixtureKey.length, 32);
+      return { close: () => steps.push("custody closed") };
+    },
+    startBackend({ args, env, protector }) {
+      steps.push("worker");
+      assert.ok(protector);
+      assert.equal(args[1], "--memory-fixture-bootstrap-v1");
+      assert.deepEqual(JSON.parse(args[2]), {
+        contract: "aerynth.memory-fixture-bootstrap@1", profileRoot, expiresAt: handoff.expiresAt,
+      });
+      assert.deepEqual(Object.keys(env), ["AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN"]);
+      token = env.AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN;
+      return {
+        ready: () => true,
+        async call(request) {
+          calls.push(request);
+          return { version: 3, storageEnabled: true, velaEnabled: false };
+        },
+        close: () => steps.push("worker closed"),
+      };
+    },
+    createSurface({ preloadPath }) {
+      steps.push("surface");
+      assert.equal(preloadPath, "production-preload");
+      return {
+        win: { webContents: contents, isDestroyed: () => false, isVisible: () => true,
+          isMinimized: () => false, isFocused: () => true },
+        dialog: { showMessageBox: async () => ({ response: approve ? 1 : 0 }) },
+        close: () => steps.push("surface closed"),
+        async mount({ dispatch, rendererURL: url }) {
+          assert.equal(url, rendererURL);
+          const input = { type: "enableProviderMemory", assistant: "vela", version: 3, fixturePolicyToken: "forged" };
+          for (const command of ["personalMemoryPolicyNative", "providerAuth", "velaApiConfigure"])
+            assert.deepEqual(await dispatch(event, command, input), { ok: false, error: "memory_fixture_command_denied" });
+          assert.equal((await dispatch({ ...event, senderFrame: {} }, "personalMemory", input)).ok, false);
+          assert.deepEqual(await dispatch(event, "personalMemory", input), { ok: true, result: { status: "cancelled" } });
+          assert.equal(calls.some(request => request.fixturePolicyToken), false);
+          approve = true;
+          assert.equal((await dispatch(event, "personalMemory", input)).ok, true);
+          assert.deepEqual(calls.at(-1), {
+            command: "personalMemoryPolicyNative", input: { assistant: "vela", enable: true, expectedVersion: 3 },
+            fixturePolicyToken: token,
+          });
+        },
+      };
+    },
+  };
+  const startup = {
+    handoff, runtime, allowWrite: () => true,
+    verifyArtifact({ check }) {
+      steps.push("artifact");
+      check();
+      assert.equal(admission.status().lease.pid, process.pid);
+      return { rendererURL, preloadPath: "production-preload", hostPath: "fixture-host", nodePath: "fixture-node" };
+    },
+  };
+  await assert.rejects(startMemoryInspectorFixture({ ...startup, handoff: { ...handoff, token: "wrong" } }), /slot_closed/);
+  assert.deepEqual(steps, []);
+  const fixture = await startMemoryInspectorFixture(startup);
+  await fixture.close();
+  assert.deepEqual(steps, ["artifact", "custody", "worker", "surface", "surface closed", "worker closed", "custody closed"]);
+  assert.equal(admission.status().lease, null);
 });
