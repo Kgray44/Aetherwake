@@ -388,7 +388,11 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
       // pages here would retain headers that policy may revoke between queries.
       current = document; unavailable = false; window = next;
       if (!dirty) selected = document.view.selection; else if (baseVersion !== document.resource.version) needsReview = true;
-      needsRefresh = false; await planning?.reload(document); if (disposed || !active || token !== sequence) return; paintFields(); restoreFields(); paint(); options.onProjection?.(document, window);
+      needsRefresh = false;
+      paintFields(); restoreFields(); paint();
+      await planning?.reload(document);
+      if (disposed || !active || token !== sequence) return;
+      options.onProjection?.(document, window);
       status.textContent = request ? 'An earlier save is unconfirmed. Retry save checks the same attempt.' : needsReview ? 'View settings changed elsewhere. Your local settings are retained.' : '';
     } catch {
       if (disposed || !active || token !== sequence) return;
