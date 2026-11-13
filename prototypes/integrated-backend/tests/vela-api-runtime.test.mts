@@ -313,7 +313,10 @@ test('actual Core routine API Send uses durable explicit usage consent, shared i
   } finally { await f.close(); }
 });
 
-test('actual Core semantic application action uses standing source policy and continues with its real canonical receipt and fresh context', async () => {
+test('actual Core semantic application action uses standing source policy and continues with its real canonical receipt and fresh context', async t => {
+  // Keep the admission counter on one UTC day. Crossing midnight can split
+  // the three durable rows even though all three requests were dispatched.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-12T12:00:00Z') });
   const f=fixture();
   try {
     await f.configure(); await f.authorize();
