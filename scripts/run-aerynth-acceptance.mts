@@ -1,8 +1,9 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { release } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { acceptanceSchema, backendTestGlob, hasPassingCase, planBackendShards, windowsAddonCase, workerLossCase } from './aerynth-backend-shards.mjs';
 
 const root = new URL('../prototypes/', import.meta.url);
 const repository = fileURLToPath(new URL('../', import.meta.url));
@@ -23,12 +24,20 @@ const suites = [
   ['Can I connect ChatGPT or the Vela API and verify voice and response boundaries?', 'openai-provider', 'test/*.test.mts', 'tests/*.test.mts'],
   ['Can I run and follow a Codex task?', 'codex-bridge', 'tests/*.test.ts'],
   ['Can Vela answer or act, and does it ask before doing sensitive work?', 'vela-core', 'tests/*.test.mts', 'tests/*.test.mjs', 'test/*.test.cjs'],
-  ['Do the app tools work together and survive a restart?', 'integrated-backend', 'tests/*.test.mts'],
+  ['Do the app tools work together and survive a restart?', 'integrated-backend', backendTestGlob],
   ['Do the desktop controls show the right state and reviews?', 'visual-experience/cinematic-v3', 'tests/*.test.mjs', 'tests/*.test.cjs', 'native/run-application-check.test.cjs'],
 ];
 
 const requested = process.argv.slice(2);
-const selected = suites.filter(([, directory]) => requested.length === 0 || requested.includes(directory));
+const shardInput = process.env.AERYNTH_WINDOWS_SHARD || undefined;
+if (shardInput !== undefined && (!['0', '1'].includes(shardInput) || process.platform !== 'win32' || requested.length)) {
+  throw new Error('Windows sharding requires shard 0 or 1 and no acceptance group arguments');
+}
+const windowsShard = shardInput === undefined ? null : Number(shardInput);
+const backendLanes = windowsShard === null ? null
+  : planBackendShards(fileURLToPath(new URL('integrated-backend/', root)))[windowsShard];
+const selected = suites.filter(([, directory]) => windowsShard === 1 ? directory === 'integrated-backend'
+  : requested.length === 0 || requested.includes(directory));
 if (requested.some(name => !suites.some(([, directory]) => directory === name))) {
   throw new Error('Unknown acceptance group. Use a prototype directory name.');
 }
@@ -39,44 +48,59 @@ const environment = { platform: process.platform, architecture: process.arch, os
 const output = resolve(process.env.AERYNTH_ACCEPTANCE_OUTPUT ?? '.runtime/acceptance');
 mkdirSync(output, { recursive: true });
 type Case = { file: string | null; line: number | null; name: string; status: string; durationMs: number | null };
+type TestDetails = { counts: Record<string, number> | null; tests: Case[] };
 type Group = { directory: string; classifications: string[]; status: string; exitCode: number | null;
-  signal: string | null; durationMs: number; counts: Record<string, number> | null; tests: Case[];
+  signal: string | null; durationMs: number; counts: Record<string, number> | null; tests: Case[]; backendLanes?: string[][];
   missingRequiredCases: { file: string; name: string }[] };
-const groups: Group[] = [];
-const failures: string[] = [];
-for (const [question, directory, ...tests] of selected) {
-  console.log(`\n${question} (${directory})`);
-  const groupReport = join(output, directory.replaceAll('/', '-') + '.json');
-  rmSync(groupReport, { force: true });
-  const start = performance.now();
-  const result = spawnSync(process.execPath, ['--test', '--test-concurrency=2',
+async function runTests(directory: string, files: string[], concurrency: number, lane: number) {
+  const report = join(output, `${directory.replaceAll('/', '-')}-${lane}.json`);
+  rmSync(report, { force: true });
+  const child = spawn(process.execPath, ['--test', `--test-concurrency=${concurrency}`,
     '--test-reporter=spec', '--test-reporter-destination=stdout',
-    '--test-reporter=' + reporter.href, '--test-reporter-destination=stdout', ...tests], {
+    '--test-reporter=' + reporter.href, '--test-reporter-destination=stdout', ...files], {
     cwd: fileURLToPath(new URL(`${directory}/`, root)),
     stdio: 'inherit',
     windowsHide: true,
-    env: { ...process.env, AERYNTH_TEST_REPORT: groupReport },
+    env: { ...process.env, AERYNTH_TEST_REPORT: report },
   });
-  let details: Pick<Group, 'counts' | 'tests'> = { counts: null, tests: [] };
+  const result = await new Promise<{ status: number | null; signal: string | null }>(resolve => {
+    child.once('error', error => console.error(error.message));
+    child.once('close', (status, signal) => resolve({ status, signal }));
+  });
+  let details: TestDetails = { counts: null, tests: [] };
   try {
-    details = JSON.parse(readFileSync(groupReport, 'utf8'));
+    details = JSON.parse(readFileSync(report, 'utf8'));
   } catch {
-    console.error(`No readable test report for ${directory}.`);
+    console.error(`No readable test report for ${directory} lane ${lane}.`);
   } finally {
-    rmSync(groupReport, { force: true });
+    rmSync(report, { force: true });
   }
+  return { ...result, ...details };
+}
+
+const groups: Group[] = [];
+const failures: string[] = [];
+for (const [question, directory, ...files] of selected) {
+  console.log(`\n${question} (${directory})`);
+  const start = performance.now();
+  const lanes = directory === 'integrated-backend' ? backendLanes : null;
+  const runs = await Promise.all((lanes ?? [files]).map((laneFiles, lane) =>
+    runTests(directory, laneFiles, lanes ? 1 : 2, lane)));
+  const result = runs.find(run => run.status !== 0) ?? runs[0];
+  const tests = runs.flatMap(run => run.tests);
+  const counts = runs.every(run => run.counts) ? Object.fromEntries(Object.keys(runs[0].counts!).map(key =>
+    [key, runs.reduce((sum, run) => sum + run.counts![key], 0)])) : null;
   const requiredCases = [];
-  if (directory === 'integrated-backend') requiredCases.push({ file: 'tests/mission-integration.test.mts',
-    name: 'a lost worker never treats its in-flight native work as verified on reopen' });
-  if (directory === 'visual-experience/cinematic-v3' && process.platform === 'win32') requiredCases.push({
-    file: 'tests/windows-system-build.test.mjs',
-    name: 'fixed Windows addon reads real memory/process facts, preserves consent diagnoses and rejects an unissued reclaim',
+  if (directory === 'integrated-backend' && (!lanes || lanes.flat().includes(workerLossCase.file))) requiredCases.push(workerLossCase);
+  if (directory === 'visual-experience/cinematic-v3' && process.platform === 'win32') requiredCases.push(windowsAddonCase);
+  const missingRequiredCases = requiredCases.filter(required => !hasPassingCase(tests, required));
+  const laneCoverage = !lanes || runs.every((run, lane) => {
+    const observed = new Set(run.tests.map(test => test.file));
+    return observed.size === lanes[lane].length && lanes[lane].every(file => observed.has(file));
   });
-  const missingRequiredCases = requiredCases.filter(required =>
-    !details.tests.some(test => test.file === required.file && test.name === required.name && test.status === 'passed'));
-  const passed = result.status === 0 && missingRequiredCases.length === 0 && (details.counts?.tests ?? 0) > 0
-    && details.counts?.failed === 0 && details.counts?.cancelled === 0 && (details.counts?.passed ?? 0) > 0
-    && !details.tests.some(test => test.status === 'failed');
+  const passed = result.status === 0 && missingRequiredCases.length === 0 && (counts?.tests ?? 0) > 0
+    && counts?.failed === 0 && counts?.cancelled === 0 && (counts?.passed ?? 0) > 0 && laneCoverage
+    && !tests.some(test => test.status === 'failed');
   groups.push({
     directory,
     classifications: [
@@ -90,22 +114,25 @@ for (const [question, directory, ...tests] of selected) {
     signal: result.signal,
     durationMs: Math.round(performance.now() - start),
     missingRequiredCases,
-    ...details,
+    ...(lanes ? { backendLanes: lanes } : {}),
+    counts,
+    tests,
   });
   if (!passed) {
-    if (result.status !== 0) console.error(result.error?.message ?? result.signal ?? `Test process exited with ${result.status}.`);
+    if (result.status !== 0) console.error(result.signal ?? `Test process exited with ${result.status}.`);
+    if (!laneCoverage) console.error('Observed backend files differ from their assigned lanes.');
     for (const item of missingRequiredCases) console.error(`Required case did not pass: ${item.file}: ${item.name}`);
     failures.push(directory);
   }
 }
 
-const schema = 'aerynth.acceptance@1';
+const schema = acceptanceSchema;
 const comparison = process.env.AERYNTH_ACCEPTANCE_PREVIOUS;
 const flakyTests: { group: string; file: string | null; line: number | null; name: string }[] = [];
 let flakyComparison = 'no-baseline';
 if (comparison) {
   const previous = JSON.parse(readFileSync(comparison, 'utf8'));
-  if (previous.schema !== schema || previous.revision !== revision || !previous.clean || !clean ||
+  if (previous.schema !== schema || previous.revision !== revision || (previous.windowsShard ?? null) !== windowsShard || !previous.clean || !clean ||
     previous.environment.platform !== environment.platform || previous.environment.architecture !== environment.architecture ||
     previous.environment.node !== environment.node || previous.environment.runnerImage !== environment.runnerImage ||
     previous.environment.runnerImageVersion !== environment.runnerImageVersion ||
@@ -133,6 +160,7 @@ const gates = [
   { classification: 'owner-acceptance', gate: 'owner-observed-product-acceptance', status: 'unqualified' },
 ];
 const report = { schema, revision, clean, environment, event: process.env.GITHUB_EVENT_NAME ?? null,
+  runId: process.env.GITHUB_RUN_ID ?? null, windowsShard,
   runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT ?? 1), groups, failures, flakyComparison, flakyTests, gates };
 writeFileSync(join(output, 'acceptance.json'), JSON.stringify(report, null, 2) + '\n');
 console.log(`\n${selected.length - failures.length} of ${selected.length} test groups passed.`);
