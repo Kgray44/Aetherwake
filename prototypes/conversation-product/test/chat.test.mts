@@ -1015,6 +1015,15 @@ test('real-observation port alone drives live text/cancel; foreign, duplicate an
     const execution={id:'execution:observed',resourceId:f.draft.resourceId,providerId:'codex:native',commandId:'command:observed',state:'running' as const,startedAt:'2026-11-02T00:00:00Z',endedAt:null,taskVerified:false as const};
     observe!({execution:{...execution,resourceId:'chat:other'},delta:{eventId:'foreign',cursor:1,text:'Not this chat'}});assert.equal(f.view.root.querySelector('.cp-stream').hidden,true);
     observe!({execution});observe!({execution,delta:{eventId:'event:2',cursor:2,text:'Actual synthetic delta'}});observe!({execution,delta:{eventId:'event:2',cursor:2,text:' duplicated'}});assert.equal(f.view.root.querySelector('.cp-stream-text').textContent,'Actual synthetic delta');assert.equal(named(f.view.root,'Stop').hidden,false);assert.equal(named(f.view.root,'Send').disabled,true);
+    const announcements: string[] = [];
+    const status = f.view.root.querySelector('.cp-chat-status');
+    const text = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(status), 'textContent')!;
+    Object.defineProperty(status, 'textContent', {
+      get: () => text.get!.call(status),
+      set: (value: string) => { announcements.push(value); text.set!.call(status, value); },
+    });
+    observe!({execution,delta:{eventId:'event:3',cursor:3,text:' continues'}});
+    assert.deepEqual(announcements, []);
     observe!({connection:'unavailable'});assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Last observed: running.*unconfirmed/);assert.equal(f.view.root.querySelector('.cp-chat').dataset.executionState,'running');assert.equal(named(f.view.root,'Stop').disabled,true);
     observe!({execution,preview:{executionId:execution.id,cursor:20,text:'Stale disconnected preview'}});
     observe!({execution,delta:{eventId:'event:21',cursor:21,text:'Stale disconnected delta'}});

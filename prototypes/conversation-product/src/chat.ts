@@ -430,7 +430,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   }
   const session = options.draftSession ?? new ConversationDraftSession({ resourceId, port, ...(options.initialDraft === undefined ? {} : { initialContent: options.initialDraft }) });
   const copy = options.copy ?? (text => navigator.clipboard.writeText(text));
-  const report = (text: string,kind:'notice'|'send-accepted'='notice') => { if (!disposed){status.textContent=statusDetail.textContent=text;status.dataset.statusKind=kind;renderFeedback();} };
+  const report = (text: string,kind:'notice'|'send-accepted'='notice') => {
+    if (disposed) return;
+    if (status.textContent !== text) status.textContent = statusDetail.textContent = text;
+    else if (status.dataset.statusKind === kind) return;
+    status.dataset.statusKind = kind;
+    renderFeedback();
+  };
   const active = () => execution && ['dispatching','running'].includes(execution.state);
   const viewState = () => {
     let view:ConversationViewCapture|undefined;
