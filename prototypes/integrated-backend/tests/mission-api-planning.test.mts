@@ -408,6 +408,9 @@ test('composed artifact mission retains verified files when a native branch fail
 
 test('reviewed mixed mission sends the work clause to specialists and the prompt only to the image route', { timeout: 145_000 }, async t => {
   const live = process.env.AERYNTH_VERIFY_LIVE_CODEX_ARTIFACT === '1';
+  const serial = live && process.env.AERYNTH_MIXED_ARTIFACT_SEQUENTIAL === '1';
+  const destination = live ? process.env.AERYNTH_MIXED_ARTIFACT_EVIDENCE_DIR : undefined;
+  if (destination) preflightArtifactEvidence(destination);
   const testPath = live ? process.env.AERYNTH_MIXED_CODEX_TEST : undefined;
   const credential = live ? process.env.OPENAI_API_KEY : undefined;
   if (live) {
@@ -433,7 +436,10 @@ test('reviewed mixed mission sends the work clause to specialists and the prompt
       : response(answer, body.model)));
     const input = { objective, fingerprint: preview.fingerprint, requestId: randomUUID() };
     const approval = { ...input, approvedArtifactDigest: preview.artifactReview!.digest };
-    const { id } = testPath ? await (async () => {
+    const usageBefore = await f.core.command('velaApiUsageStatus', {});
+    let started = performance.now(), cpuStarted = process.cpuUsage();
+    let replayStart: (() => Promise<MissionProjection>) | undefined;
+    const { id, revision } = testPath ? await (async () => {
       assert.equal(preview.localReview?.kind, 'node-test');
       await assert.rejects(f.core.command('missionStartReviewed', approval), /mission_project_check_review_required/);
       const { startReviewedMission } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/mission-start-broker.cjs');
@@ -441,8 +447,13 @@ test('reviewed mixed mission sends the work clause to specialists and the prompt
       const webContents = { mainFrame, isDestroyed: () => false, getURL: () => localURL };
       const win = { webContents, isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => true };
       const reviews: string[] = [];
-      const result = await startReviewedMission({ win, localURL, event: { sender: webContents, senderFrame: mainFrame },
-        input: { name: 'start', input }, storage: { allowWrite: async () => true }, call: f.core.command.bind(f.core),
+      const start = (hold: boolean) => startReviewedMission({ win, localURL, event: { sender: webContents, senderFrame: mainFrame },
+        input: { name: 'start', input }, storage: { allowWrite: async () => true },
+        call: (...args: Parameters<typeof f.core.command>) => {
+          const command = f.core.command(...args);
+          if (hold && args[0] === 'missionStartReviewed') void f.core.command('missionHostSignal', { storageAdmitted: false });
+          return command;
+        },
         dialog: {
           showOpenDialog: async () => ({ canceled: false, filePaths: [testPath] }),
           showMessageBox: async (_window: unknown, review: { title: string; detail: string }) => {
@@ -451,13 +462,25 @@ test('reviewed mixed mission sends the work clause to specialists and the prompt
               assert.ok(review.detail.includes(work));
               assert.ok(!review.detail.includes(imagePrompt));
             }
+            if (review.title === 'Review read-only project tests' && !replayStart) {
+              started = performance.now();
+              cpuStarted = process.cpuUsage();
+            }
             return { response: 1 };
           },
         },
-      }) as MissionProjection;
+      }) as Promise<MissionProjection>;
+      const result = await start(serial);
       assert.deepEqual(reviews, ['Review illustration mission', 'Review specialist mission', 'Review read-only project tests']);
+      replayStart = () => start(false);
       return result;
     })() : await f.core.command('missionStartReviewed', approval) as MissionProjection;
+    if (serial) {
+      const controlled = await f.core.command('missions', { name: 'control', input: { id, revision,
+        control: { type: 'concurrency', concurrency: 1 } } }) as MissionProjection;
+      assert.ok(controlled.tasks.every(task => task.attempts.length === 0));
+      await f.core.command('missionHostSignal', { storageAdmitted: true });
+    }
     let result: MissionProjection;
     const deadline = performance.now() + (live ? 125_000 : 7000);
     do {
@@ -465,6 +488,8 @@ test('reviewed mixed mission sends the work clause to specialists and the prompt
       if (!['queued', 'running'].includes(result.outcome)) break;
       await delay(25);
     } while (performance.now() < deadline);
+    const elapsedMs = performance.now() - started, processCpu = process.cpuUsage(cpuStarted);
+    const processPeakRssKiB = process.resourceUsage().maxRSS;
     assert.equal(result.outcome, 'verified', JSON.stringify(result.tasks.map(task => [task.id, task.state, task.detail])));
     if (live) {
       const check = result.tasks.find(task => task.executor === 'codex.project-check')?.attempts[0];
@@ -473,15 +498,44 @@ test('reviewed mixed mission sends the work clause to specialists and the prompt
       assert.equal((check?.evidence?.value as { testCount?: number })?.testCount, 1);
       const trace = await f.core.command('missions', { name: 'execution-profile', input: { id } }) as MissionExecutionProfile;
       assert.equal(trace.economics.providerCalls, 3);
-      assert.ok(trace.work.overlapMs && trace.work.overlapMs > 0);
+      if (serial) {
+        assert.equal(trace.work.peakWorkers, 1);
+        assert.equal(trace.work.overlapMs, 0);
+      } else assert.ok(trace.work.overlapMs && trace.work.overlapMs > 0);
       assert.ok(trace.work.criticalPath);
       const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
       const report = state.conversation?.messages.find(message => message.missionReport?.missionId === id);
-      assert.match(report?.content ?? '', /1 test passed/);
-      assert.match(report?.content ?? '', /illustration\.png.*illustration-notes\.txt/u);
-      assert.match(report?.content ?? '', /Specialist reported:/u);
-      t.diagnostic(JSON.stringify({ id, providerCalls: 3, codexTests: 1, overlapMs: trace.work.overlapMs,
-        criticalPathMs: trace.work.criticalPath.durationMs, reportedTokens: trace.economics.reportedTotalTokens }));
+      assert.ok(report);
+      assert.match(report.content, /1 test passed/);
+      assert.match(report.content, /illustration\.png.*illustration-notes\.txt/u);
+      assert.match(report.content, /Specialist reported:/u);
+      const image = result.tasks.find(task => task.id === 'illustration');
+      const artifacts = (image?.attempts[0]?.evidence?.value as { artifacts: { name: string; resourceId: string }[] }).artifacts;
+      assert.deepEqual(artifacts.map(file => file.name), ['illustration.png', 'illustration-notes.txt']);
+      const desktop = await f.core.command('desktop', { type: 'snapshot' });
+      assert.ok(artifacts.every(file => desktop.resources.some(resource => resource.id === file.resourceId)));
+      const root = join(f.directory, 'mission-artifacts', id);
+      const png = readFileSync(join(root, 'illustration.png')), notes = readFileSync(join(root, 'illustration-notes.txt'));
+      await f.reopen();
+      const reportAfterRestart = async () => ((await f.core.command('vela', { name: 'state', input: {} })) as VelaBackendState)
+        .conversation?.messages.find(message => message.missionReport?.missionId === id);
+      assert.deepEqual(await reportAfterRestart(), report);
+      assert.equal((await f.core.command('missions', { name: 'read', input: { id } }) as MissionProjection).outcome, 'verified');
+      assert.equal((await replayStart?.())?.id, id);
+      const usage = await f.core.command('velaApiUsageStatus', {});
+      assert.equal(usage.usedToday - usageBefore.usedToday, 3);
+      writeFileSync(join(root, 'illustration-notes.txt'), 'Changed after verification.');
+      assert.equal((await f.core.command('missions', { name: 'read', input: { id } }) as MissionProjection).outcome, 'blocked');
+      const stale = await reportAfterRestart();
+      assert.equal(stale?.id, report.id);
+      assert.equal(stale?.missionReport?.stale, true);
+      if (destination) retainArtifactEvidence(destination, {
+        png, notes, report: report.content, provider: 'real-openai-api', objective, missionId: id, reportId: report.id,
+        verifiedInferenceRequests: 3,
+      });
+      t.diagnostic(JSON.stringify({ id, serial, elapsedMs, processCpu, processPeakRssKiB, providerCalls: 3, codexTests: 1,
+        peakWorkers: trace.work.peakWorkers, overlapMs: trace.work.overlapMs, criticalPathMs: trace.work.criticalPath.durationMs,
+        reportedTokens: trace.economics.reportedTotalTokens, costCoverage: trace.economics.costCoverage }));
       return;
     }
     assert.equal(f.requests.length, 3);
