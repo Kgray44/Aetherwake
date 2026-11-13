@@ -5,13 +5,14 @@ import { ConversationDraftSession } from "../../conversation-product/src/draft-s
 import type {
   ConversationProductPort,
   Detail,
+  DraftDocument,
 } from "../../conversation-product/src/contracts.ts";
 import type { ConversationExecutionObservation } from "../../conversation-product/src/chat.ts";
 import { blockDocument, card } from "./component-dom.mts";
-import { until } from "../../conversation-product/test/component-dom.mts";
+import { named, until } from "../../conversation-product/test/component-dom.mts";
 
 // Synthetic port, actual shared component/session. No provider, layout or native claim.
-function fixture(t: any) {
+function fixture(t: any, documents?: DraftDocument[]) {
   const view = blockDocument();
   t.after(view.install());
   const calls: { name: string; input: any }[] = [];
@@ -20,6 +21,7 @@ function fixture(t: any) {
     content: "Synthetic durable draft",
     version: 2,
     updatedAt: "2026-11-02T00:00:00Z",
+    documents,
   };
   const detail: Detail = {
     conversation: {
@@ -128,6 +130,47 @@ function fixture(t: any) {
     },
   };
 }
+
+test("a late Ask Vela lookup cannot stage an attachment after its workspace block deactivates", async (t) => {
+  const attachment = { id: "file:brief", version: 1, title: "Brief.pdf" };
+  const f = fixture(t, [attachment]);
+  const staged: DraftDocument[] = [];
+  let lookups = 0;
+  let settled = 0;
+  let releaseLookup!: () => void;
+  const pendingLookup = new Promise<void>(resolve => { releaseLookup = resolve; });
+  const block = mountBlockChat(f.view.root, {
+    port: f.port,
+    resourceId: f.draft.resourceId,
+    openHistory() {},
+    failed(error) { throw error; },
+    async openDocument() { return "opened"; },
+    async askVelaAboutDocument(document, isCurrent) {
+      if (++lookups === 1) await pendingLookup;
+      if (isCurrent()) staged.push(document);
+      settled++;
+    },
+  });
+  try {
+    await block.ready;
+    named(f.view.root, "Ask Vela").fire("click");
+    await until(() => lookups === 1);
+    block.setActive(false);
+    block.setActive(true);
+    releaseLookup();
+    await until(() => settled === 1 && !named(f.view.root, "Ask Vela").disabled);
+    assert.deepEqual(staged, []);
+
+    named(f.view.root, "Ask Vela").fire("click");
+    await until(() => settled === 2);
+    assert.deepEqual(staged, [attachment]);
+    assert.deepEqual(f.draft.documents, [attachment]);
+    assert.equal(f.calls.some(({ name }) => name === "send"), false);
+  } finally {
+    releaseLookup();
+    await block.dispose();
+  }
+});
 
 test("pause and resize retain the exact shared transcript/composer/caret, with one active execution observer", async (t) => {
   const f = fixture(t);
