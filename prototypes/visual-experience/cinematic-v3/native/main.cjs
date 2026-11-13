@@ -6,7 +6,8 @@ const {
   nativeTheme,
 } = require("electron");
 const { installDesktopTestAdmission } = require("./native-test-admission.cjs");
-const verifyMode = process.argv.includes("--verify");
+const relationshipOnly = process.argv.includes("--verify-relationship-only");
+const verifyMode = relationshipOnly || process.argv.includes("--verify");
 const recordMode = process.argv.includes("--record");
 const previewMode = process.argv.includes("--preview");
 const soakMode = process.argv.includes("--soak");
@@ -21,6 +22,20 @@ const { readFileSync, readdirSync } = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const root = path.resolve(__dirname, "..");
+if (relationshipOnly) {
+  try {
+    if (process.platform !== "win32") throw Error("relationship_witness_requires_windows");
+    if (recordMode || previewMode || soakMode) throw Error("relationship_witness_conflicting_mode");
+    const drive = path.parse(root).root.toUpperCase();
+    if (drive !== "C:\\" && drive !== "D:\\") throw Error("relationship_witness_storage_drive_unsupported");
+    admitStorage(drive === "C:\\" ? 64 * 1024 * 1024 : 0, drive === "D:\\" ? 64 * 1024 * 1024 : 0);
+    checkDesktopTest();
+  } catch (error) {
+    console.error(error);
+    app.exit(1);
+    return;
+  }
+}
 const sourceHashesAtLaunch = Object.fromEntries(
   [
     "native/main.cjs",
@@ -70,7 +85,7 @@ app.setPath(
       : recordMode
         ? "recording-profile"
         : verifyMode
-          ? "verification-profile"
+          ? relationshipOnly ? `relationship-profile-${process.pid}-${Date.now()}` : "verification-profile"
           : previewMode
             ? "ambient-review-profile"
             : "profile",
@@ -145,6 +160,7 @@ app
       (recordMode && process.argv.includes("--ambient-study"))
     ) {
       win.setIgnoreMouseEvents(true);
+      checkDesktopTest();
       win.showInactive();
     }
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -157,8 +173,10 @@ app
     win.webContents.on("render-process-gone", (_event, detail) =>
       errors.push(`Renderer gone: ${detail.reason}`),
     );
-    win.webContents.on("console-message", (details) => {
-      if (details.level === "error") errors.push(details.message);
+    win.webContents.on("console-message", (event, details, legacyMessage) => {
+      const entry = details ?? event;
+      if (entry?.level === "error") errors.push(entry.message);
+      else if (entry === 3) errors.push(legacyMessage);
     });
     let suspended = false;
     const active = () =>
@@ -183,11 +201,13 @@ app
       win.on(name, () => setImmediate(active));
     await win.loadURL(localURL);
     moduleToLoadMs = Date.now() - moduleStarted;
-    if (renderWhileVisible)
+    if (renderWhileVisible) {
+      checkDesktopTest();
       await win.webContents.executeJavaScript(
         "document.querySelector('#settings p:last-child').textContent='Visible reviews keep ambient motion while you use another window. Minimize or choose Quiet to still it. No other apps are monitored.'",
         true,
       );
+    }
     if (previewMode)
       await win.webContents.executeJavaScript(
         "window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setEnvironmentPhase(null)",
@@ -246,6 +266,16 @@ app
       }
       return;
     }
+    if (relationshipOnly) {
+      try {
+        await verifyRelationship();
+        app.exit(0);
+      } catch (error) {
+        console.error(error);
+        app.exit(1);
+      }
+      return;
+    }
     if (verifyMode) {
       try {
         await verify();
@@ -279,7 +309,63 @@ app.on("window-all-closed", () => app.quit());
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evaluate = (code) => win.webContents.executeJavaScript(code, true);
-function admitStorage(estimatedCBytes) {
+async function verifyRelationship() {
+  const out = path.join(runtime, `relationship-witness-${process.pid}-${Date.now()}`);
+  const receipt = {
+    sourceRevisionAtLaunch, sourceHashesAtLaunch, buildAssetHashesAtLaunch,
+    syntheticStudy: true, passed: false,
+  };
+  const guardedEvaluate = (code) => {
+    checkDesktopTest();
+    return evaluate(code);
+  };
+  const read = () => guardedEvaluate(`(() => {
+    const path = document.querySelector("#relationships path");
+    const snapshot = window.__aerynth?.snapshot();
+    return { path: path.getAttribute("d"), opacity: Number(path.style.opacity),
+      draws: snapshot?.metrics.draws, errors: snapshot?.metrics.errors,
+      target: document.body.dataset.related };
+  })()`);
+  async function waitFor(predicate) {
+    const end = performance.now() + 6000;
+    do {
+      const value = await read();
+      if (predicate(value)) return value;
+      await delay(50);
+    } while (performance.now() < end);
+    throw new Error("Relationship study did not reach its expected state");
+  }
+  checkDesktopTest();
+  await fs.mkdir(runtime, { recursive: true });
+  await fs.mkdir(out);
+  try {
+    const before = await waitFor((value) => value.draws > 0);
+    await guardedEvaluate("window.__aerynth.demo()");
+    receipt.visible = await waitFor((value) =>
+      value.target && value.opacity > 0 && /^M.+ C/.test(value.path) && value.draws > before.draws);
+    if (!win.isVisible() || win.isMinimized()) throw new Error("Native study window is not visible");
+    checkDesktopTest();
+    const png = (await win.webContents.capturePage()).toPNG();
+    checkDesktopTest();
+    if (png.length === 0 || png.length > 8 * 1024 * 1024) throw new Error("Invalid native capture size");
+    await fs.writeFile(path.join(out, "relationship.png"), png, { flag: "wx" });
+    receipt.captureSha256 = createHash("sha256").update(png).digest("hex");
+    await guardedEvaluate("window.__aerynth.demo()");
+    receipt.hidden = await waitFor((value) => !value.target && value.opacity === 0);
+    if (errors.length || receipt.visible.errors?.length || receipt.hidden.errors?.length) {
+      throw new Error("Native relationship study reported renderer errors");
+    }
+    checkDesktopTest();
+    receipt.passed = true;
+  } catch (error) {
+    receipt.error = String(error.message);
+    throw error;
+  } finally {
+    await fs.writeFile(path.join(out, "relationship.json"), JSON.stringify(receipt, null, 2), { flag: "wx" });
+    console.log(JSON.stringify({ passed: receipt.passed, evidence: out }));
+  }
+}
+function admitStorage(estimatedCBytes, estimatedDBytes = 0) {
   const guard = path.join(
     process.env.LOCALAPPDATA,
     "AeroStorageWatch",
@@ -301,7 +387,7 @@ function admitStorage(estimatedCBytes) {
       "-EstimatedCBytes",
       String(estimatedCBytes),
       "-EstimatedDBytes",
-      "0",
+      String(estimatedDBytes),
     ],
     { encoding: "utf8", windowsHide: true, timeout: 15000 },
   );

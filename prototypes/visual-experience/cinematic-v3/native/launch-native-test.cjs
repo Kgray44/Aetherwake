@@ -10,12 +10,14 @@ function checkNativeTestLaunch(env = process.env) {
 const appRoot = path.resolve(__dirname, "..");
 const prototypeModes = new Map([
   ["verify", ["--verify"]],
+  ["relationship", ["--verify", "--verify-relationship-only"]],
   ["record", ["--record"]],
   ["preview", ["--preview"]],
   ["soak", ["--soak", "--soak-seconds=90"]],
 ]);
 
 function launchNativeTest(mode) {
+  if (mode === "relationship" && process.platform !== "win32") throw Error("relationship_witness_requires_windows");
   const prototypeArgs = prototypeModes.get(mode);
   if (!prototypeArgs && mode !== "constellation") throw Error("unknown_native_test_mode");
   const env = { ...process.env };

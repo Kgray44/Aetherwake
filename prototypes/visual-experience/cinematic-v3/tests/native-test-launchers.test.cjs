@@ -4,7 +4,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const appRoot = path.resolve(__dirname, "..");
-const modes = ["verify", "record", "preview", "soak", "constellation"];
+const modes = ["verify", "relationship", "record", "preview", "soak", "constellation"];
 const launchers = [
   ...modes.map(mode => [`prototype or Constellation launcher: ${mode}`, ["native/launch-native-test.cjs", mode]]),
   ["expanded application", ["native/run-application-check.cjs"]],
@@ -78,7 +78,7 @@ test("prototype preflight rechecks the same directory after executable resolutio
 }, () => {
   const env = { ...process.env, AERYNTH_STUB_REVOKE_DURING_RESOLUTION: "1", AERYNTH_NATIVE_TEST_SLOT: "stub-token" };
   delete env.ELECTRON_RUN_AS_NODE;
-  const child = spawnSync(process.execPath, ["--import", forbidChildren, "native/launch-native-test.cjs", "verify"], {
+  const child = spawnSync(process.execPath, ["--import", forbidChildren, "native/launch-native-test.cjs", "relationship"], {
     cwd: appRoot, env, windowsHide: true, shell: false, encoding: "utf8", timeout: 5000,
   });
   assert.ifError(child.error);
