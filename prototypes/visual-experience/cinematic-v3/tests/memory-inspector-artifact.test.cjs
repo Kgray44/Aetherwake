@@ -9,7 +9,7 @@ const { digest } = require("../native/memory-fixture-entry.cjs");
 const { manifestName, paths, resolveMemoryInspectorArtifact } = require("../native/memory-inspector-artifact.cjs");
 const { startIsolatedMemoryInspector } = require("../native/memory-inspector-electron-adapter.cjs");
 const { createAdmission } = require("../native/native-test-admission.cjs");
-const { superviseMemoryFixture } = require("../native/memory-fixture-supervisor.cjs");
+const { superviseMemoryInspectorExecutable } = require("../native/memory-fixture-supervisor.cjs");
 
 test("acceptance artifact verifies exact inventory and refuses mutations, missing files and extra files", t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "memory-artifact-")));
@@ -40,7 +40,7 @@ test("acceptance artifact verifies exact inventory and refuses mutations, missin
   assert.throws(() => resolveMemoryInspectorArtifact(input), /artifact_unverified/);
 });
 
-test("isolated Electron adapter owns storage, IPC and worker exit under a fixture permit", async t => {
+for (const outcome of ["ready", "unresolved", "unready"]) test(`isolated Electron adapter handles ${outcome} worker under a fixture permit`, async t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "memory-electron-stub-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const artifactRoot = join(root, "artifact");
@@ -60,10 +60,18 @@ test("isolated Electron adapter owns storage, IPC and worker exit under a fixtur
   const permit = admission.open("memory-inspector", 1);
   const gate = { profileRoot, artifactPath, token: permit.token,
     locateDesktop: () => directory, openAdmission: () => admission };
-  const handoff = { ...gate, ...superviseMemoryFixture({
+  const supervisor = {
     ...gate, allocation: { ...permit, profileRoot, expiresAt: Date.now() + 30_000, contract: "aerynth.memory-fixture-allocation@1" },
     allowWrite: () => true, startFixture: value => value,
-  }) };
+  };
+  const bundle = join(artifactRoot, paths.bundle);
+  writeFileSync(bundle, "changed");
+  assert.throws(() => superviseMemoryInspectorExecutable({
+    ...supervisor, startFixture: () => assert.fail("mutated package reached process start"),
+  }), /artifact_unverified/);
+  writeFileSync(bundle, paths.bundle);
+  const handoff = { ...gate, ...superviseMemoryInspectorExecutable(supervisor) };
+  assert.equal(handoff.entryPath, join(artifactRoot, paths.executable));
   const effects = [], handlers = new Map();
   let storage, win, blockRequest;
   const app = Object.assign(new EventEmitter(), {
@@ -101,18 +109,28 @@ test("isolated Electron adapter owns storage, IPC and worker exit under a fixtur
     destroy() { this.destroyed = true; this.emit("closed"); }
   }
   const child = new EventEmitter();
+  child.pid = 321;
+  let kills = 0;
+  child.kill = () => { kills++; };
   child.stdout = new PassThrough();
   child.stdin = new Writable({
     write(bytes, _encoding, done) {
       const request = JSON.parse(bytes);
+      if (request.command === "capabilities") {
+        if (outcome !== "unready") child.stdout.write(JSON.stringify({
+          id: request.id, result: { providerId: "fixture-codex" },
+        }) + "\n");
+        done();
+        return;
+      }
       assert.equal(request.command, "personalMemoryManagementNative");
       child.stdout.write(JSON.stringify({ id: request.id, result: { records: [] } }) + "\n");
       done();
     },
   });
-  child.stdin.on("finish", () => child.emit("close", 0));
+  if (outcome !== "unresolved") child.stdin.on("finish", () => child.emit("close", 0));
   const config = {
-    handoff, allowWrite: () => true,
+    handoff, allowWrite: () => true, readinessMs: 20, shutdownMs: 20,
     electron: {
       app, BrowserWindow, dialog: {},
       ipcMain: { handle: (name, handler) => handlers.set(name, handler), removeHandler: name => handlers.delete(name) },
@@ -140,7 +158,13 @@ test("isolated Electron adapter owns storage, IPC and worker exit under a fixtur
   await assert.rejects(startIsolatedMemoryInspector({ ...config, handoff: { ...handoff, token: "wrong" } }), /slot_closed/);
   assert.deepEqual(effects, []);
   assert.equal(win, undefined);
-  await startIsolatedMemoryInspector(config);
+  if (outcome === "unready") {
+    await assert.rejects(startIsolatedMemoryInspector(config), /worker_not_ready/);
+    assert.equal(win, undefined);
+    assert.equal(admission.status().lease, null);
+    return;
+  }
+  const fixture = await startIsolatedMemoryInspector(config);
   assert.deepEqual(effects.slice(0, 5), ["userData", "sessionData", "crashDumps", "logs", "worker"]);
   blockRequest({ url: "https://example.invalid" }, result => assert.deepEqual(result, { cancel: true }));
   const dispatch = handlers.get("application-command");
@@ -149,6 +173,14 @@ test("isolated Electron adapter owns storage, IPC and worker exit under a fixtur
     { ok: false, error: "unauthorized_sender" });
   assert.deepEqual(await dispatch(event, "providerAuth", {}), { ok: false, error: "memory_fixture_command_denied" });
   assert.deepEqual(await dispatch(event, "personalMemory", { type: "list" }), { ok: true, result: { records: [] } });
+  if (outcome === "unresolved") {
+    await assert.rejects(fixture.close(), /worker_outcome_unresolved/);
+    assert.equal(kills, 1);
+    assert.equal(handlers.size, 0);
+    assert.equal(admission.status().lease.pid, process.pid);
+    assert.equal(JSON.parse(require("node:fs").readFileSync(join(profileRoot, "synthetic-worker-unresolved.json"))).workerPid, 321);
+    return;
+  }
   const workerExit = once(child, "close");
   win.destroy();
   await workerExit;

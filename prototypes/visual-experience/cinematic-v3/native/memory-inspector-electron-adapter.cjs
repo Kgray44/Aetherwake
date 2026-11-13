@@ -1,6 +1,6 @@
 const { spawn } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
-const { mkdtempSync } = require("node:fs");
+const { mkdtempSync, writeFileSync } = require("node:fs");
 const { dirname, join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { startMemoryInspectorFixture } = require("./memory-inspector-fixture-startup.cjs");
@@ -8,7 +8,7 @@ const { startMemoryInspectorFixture } = require("./memory-inspector-fixture-star
 // Dormant entry. The dedicated caller owns its Electron process and binds the
 // handoff to the verified fixture artifact before supplying Electron.
 function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWorker = spawn,
-  importModule = url => import(url) }) {
+  importModule = url => import(url), readinessMs = 3000, shutdownMs = 1000 }) {
   const { app, BrowserWindow, ipcMain, session, dialog } = electron;
   let storage;
   const runtime = {
@@ -30,9 +30,13 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
     async startBackend({ executable, args, env, protector, wirePath, check, close }) {
       const { createNativeHostServer } = await importModule(pathToFileURL(wirePath).href);
       check();
-      const child = spawnWorker(executable, args, {
-        env, cwd: storage, windowsHide: true, stdio: ["pipe", "pipe", "ignore"],
-      });
+      let child;
+      const wire = createNativeHostServer({ secrets: protector }, message => write(message));
+      try {
+        child = spawnWorker(executable, args, {
+          env, cwd: storage, windowsHide: true, stdio: ["pipe", "pipe", "ignore"],
+        });
+      } catch (error) { wire.close(); throw error; }
       const pending = new Map();
       let sequence = 0, active = true, stopping = false, buffer = "";
       const exited = new Promise(resolve => {
@@ -42,7 +46,6 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
         check();
         child.stdin.write(JSON.stringify(message) + "\n");
       };
-      const wire = createNativeHostServer({ secrets: protector }, write);
       const fail = () => {
         active = false;
         for (const request of pending.values()) request.reject(Error("memory_fixture_worker_disconnected"));
@@ -62,7 +65,7 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
           while ((split = buffer.indexOf("\n")) !== -1) {
             const message = JSON.parse(buffer.slice(0, split));
             buffer = buffer.slice(split + 1);
-            if (wire.handle(message) || message.event) continue;
+            if (wire?.handle(message) || message.event) continue;
             const request = pending.get(message.id);
             if (!request) throw Error("memory_fixture_unexpected_reply");
             pending.delete(message.id);
@@ -71,8 +74,9 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
           }
         } catch { fail(); }
       });
-      return {
-        ready: () => active,
+      let ready = false;
+      const worker = {
+        ready: () => active && ready,
         call(request) {
           if (!active || pending.size >= 16) throw Error("memory_fixture_worker_unavailable");
           const id = ++sequence;
@@ -82,16 +86,25 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
             catch (error) { pending.delete(id); reject(error); }
           });
         },
+        async waitUntilReady() {
+          const reply = await bounded(worker.call({ command: "capabilities", input: {} }), readinessMs);
+          if (reply?.providerId !== "fixture-codex") throw Error("memory_fixture_worker_not_ready");
+          ready = true;
+        },
         async close() {
           stopping = true;
           fail();
-          wire.close();
+          wire?.close();
           child.stdin.end();
-          const timeout = setTimeout(() => child.kill(), 1000);
-          try { await exited; }
-          finally { clearTimeout(timeout); }
+          if (await bounded(exited.then(() => true), shutdownMs)) return;
+          try { child.kill(); } catch { /* Exit acknowledgement is authoritative. */ }
+          if (await bounded(exited.then(() => true), shutdownMs)) return;
+          writeFileSync(join(handoff.profileRoot, "synthetic-worker-unresolved.json"),
+            JSON.stringify({ workerPid: child.pid ?? null, ownerPid: process.pid }), { flag: "wx", mode: 0o600 });
+          throw Error("memory_fixture_worker_outcome_unresolved");
         },
       };
+      return worker;
     },
     async createSurface({ preloadPath, check, close }) {
       await app.whenReady();
@@ -159,6 +172,12 @@ function startIsolatedMemoryInspector({ electron, handoff, allowWrite, spawnWork
     },
   };
   return startMemoryInspectorFixture({ handoff, runtime, allowWrite });
+}
+
+async function bounded(result, ms) {
+  let timer;
+  try { return await Promise.race([result, new Promise(resolve => { timer = setTimeout(resolve, ms); })]); }
+  finally { clearTimeout(timer); }
 }
 
 module.exports = { startIsolatedMemoryInspector };

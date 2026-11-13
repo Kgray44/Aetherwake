@@ -2,11 +2,12 @@ const { lstatSync, readdirSync, realpathSync, writeFileSync } = require("node:fs
 const { basename, isAbsolute, join, resolve } = require("node:path");
 const { createAdmission, desktopDirectory } = require("./native-test-admission.cjs");
 const { artifactDigest, descriptorName, digest } = require("./memory-fixture-entry.cjs");
+const { resolveMemoryInspectorArtifact } = require("./memory-inspector-artifact.cjs");
 
 // The fixture host must supply its own launcher and claim the canonical lease.
 // There is deliberately no executable, CLI, or inherited child environment here.
 function superviseMemoryFixture({
-  allocation, profileRoot, artifactPath, token, allowWrite, startFixture,
+  allocation, profileRoot, artifactPath, token, allowWrite, startFixture, verifyArtifact,
   locateDesktop = desktopDirectory, openAdmission = createAdmission, now = Date.now,
 }) {
   const directory = locateDesktop();
@@ -35,9 +36,11 @@ function superviseMemoryFixture({
   };
   requireFreshProfile();
   if (typeof startFixture !== "function") throw Error("native_memory_fixture_host_unavailable");
+  const artifactSha256 = artifactDigest(artifactPath, check);
+  const assets = verifyArtifact?.({ artifactPath, artifactSha256, profileRoot, check });
   const descriptor = JSON.stringify({
     contract: "aerynth.memory-fixture-descriptor@1",
-    profileRoot, artifactPath, artifactDigest: artifactDigest(artifactPath, check),
+    profileRoot, artifactPath, artifactDigest: artifactSha256,
     owner: allocation.owner, availabilityId: allocation.availabilityId,
     permitDigest: digest(token), expiresAt: allocation.expiresAt,
   });
@@ -51,8 +54,18 @@ function superviseMemoryFixture({
   return startFixture({
     profileRoot, artifactPath, descriptorDigest: digest(descriptor),
     expiresAt: allocation.expiresAt,
+    ...(assets ? { entryPath: assets.entryPath } : {}),
     env: { AERYNTH_NATIVE_TEST_SLOT: token },
   });
 }
 
-module.exports = { superviseMemoryFixture };
+function superviseMemoryInspectorExecutable({ startFixture, ...options }) {
+  if (typeof startFixture !== "function") throw Error("native_memory_fixture_host_unavailable");
+  return superviseMemoryFixture({
+    ...options,
+    verifyArtifact: resolveMemoryInspectorArtifact,
+    startFixture,
+  });
+}
+
+module.exports = { superviseMemoryFixture, superviseMemoryInspectorExecutable };

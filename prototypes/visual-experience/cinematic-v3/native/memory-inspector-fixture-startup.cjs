@@ -13,14 +13,16 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
   let backend, protector, surface;
   let closed = false;
   let starting = true, shutdownRequested = false;
-  let cleanup;
+  let cleanup, earlyShutdown;
   const check = () => {
     entered.check();
     if (closed || shutdownRequested) throw Error("memory_fixture_closed");
   };
   const requestClose = () => {
     shutdownRequested = true;
-    return starting ? Promise.resolve() : close();
+    if (!starting) return close();
+    earlyShutdown ??= Promise.withResolvers();
+    return earlyShutdown.promise;
   };
   function close() {
     if (cleanup) return cleanup;
@@ -28,10 +30,16 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
     cleanup = (async () => {
       try { await surface?.close(); }
       finally {
-        try { await backend?.close(); }
-        finally { try { protector?.close(); } finally { release(); } }
+        let workerExited = false;
+        try {
+          await backend?.close();
+          workerExited = true;
+        } finally {
+          try { protector?.close(); } finally { if (workerExited) release(); }
+        }
       }
     })();
+    if (earlyShutdown) cleanup.then(earlyShutdown.resolve, earlyShutdown.reject);
     return cleanup;
   }
   try {
@@ -40,6 +48,8 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
     });
     if (!assets?.rendererURL?.startsWith("file:") || !assets.preloadPath || !assets.hostPath || !assets.nodePath)
       throw Error("memory_fixture_artifact_unverified");
+    if (handoff.entryPath !== undefined && handoff.entryPath !== assets.entryPath)
+      throw Error("memory_fixture_entry_mismatch");
     check();
     runtime.prepareStorage?.({ profileRoot: backendDescriptor.profileRoot, check });
     const key = randomBytes(32);
@@ -58,6 +68,7 @@ async function startMemoryInspectorFixture({ handoff, verifyArtifact = resolveMe
       env: { AERYNTH_MEMORY_FIXTURE_POLICY_TOKEN: policyToken },
       protector, wirePath: assets.wirePath, check, close: requestClose,
     });
+    await backend.waitUntilReady?.();
     check();
     surface = await runtime.createSurface({
       profileRoot: backendDescriptor.profileRoot, preloadPath: assets.preloadPath, check, close: requestClose,
