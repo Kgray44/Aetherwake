@@ -913,13 +913,21 @@ app.whenReady().then(async () => {
             if (!policy.storageEnabled) throw Error("personal_memory_no_eligible_context");
             const choice = await reviewDialogs.showMessageBox(win, {
               type: "question", title: "Aerynth memory", message: "Enable memory for ChatGPT conversations?",
-              detail: "Aerynth will look for relevant saved facts when you choose Send with memory. You’ll review the exact request before it is shared.",
+              detail: "Aerynth will look for relevant saved facts when you send a ChatGPT message. If it finds a match, you’ll review the exact request before it is shared. You can turn this off in Saved memories.",
               buttons: ["Cancel", "Enable memory"], defaultId: 0, cancelId: 0, noLink: true,
             });
             if (choice.response !== 1) throw Error("authorization_cancelled");
             if (!trustedApplicationFrame(event) || !await storage.allowWrite() || !trustedApplicationFrame(event))
               throw Error("personal_memory_frame_changed");
             await call("personalMemoryPolicyNative", { enable: true, expectedVersion: policy.version });
+          },
+          shouldPreviewMemory: async () => {
+            if (!trustedActiveFrame(event)) return false;
+            const policy = await call("personalMemoryPolicyNative", {}).catch(error => {
+              if (["private_key_unavailable", "personal_memory_native_required"].includes(error?.message)) return null;
+              throw error;
+            });
+            return trustedActiveFrame(event) && policy?.storageEnabled === true && policy.ordinaryEnabled === true;
           },
           validateMemoryReview: () => !closing && !backendFailed && trustedApplicationFrame(event),
         });
