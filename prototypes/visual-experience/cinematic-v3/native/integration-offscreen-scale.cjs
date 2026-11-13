@@ -28,6 +28,19 @@ exports.verify = async ({
   const seed = JSON.parse(await readFile(path.join(privateRoot, "block-scale-seed.json"), "utf8"));
   const projection = (state) => Object.fromEntries(Object.keys(seed.expected).map((key) => [key, state[key]]));
   const expectedPath = path.join(privateRoot, "offscreen-scale-expected.json");
+  const pinWitness = process.argv.includes("--offscreen-saved-pin");
+  const pinPath = path.join(privateRoot, "offscreen-scale-pin.json");
+  async function verifySavedPin() {
+    const expected = JSON.parse(await readFile(pinPath, "utf8"));
+    assert.equal(expected.key, "resource:" + seed.primaryBlockId);
+    assert.equal(expected.anchor.pinned, true);
+    const stored = await call("viewState", {});
+    const rendered = await js("window.__aerynth.snapshot().spatial?.anchors");
+    assert.deepEqual(stored?.anchors?.[expected.key], expected.anchor, "saved Constellation pin");
+    assert.deepEqual(rendered?.[expected.key], expected.anchor, "rendered Constellation pin");
+    receipt.savedPin = { key: expected.key, storageMatched: true, rendererMatched: true };
+  }
+
   const paintIntervals = [];
   let lastPaint = 0, paintCount = 0;
   const onPaint = () => {
@@ -164,6 +177,7 @@ exports.verify = async ({
     await js("window.__aerynth.setActive(true)");
     await wait("window.__aerynth.snapshot().metrics.draws > 0");
     const initial = await snapshot();
+    if (pinWitness) await verifySavedPin();
     if (selected.restore) {
       sameState(JSON.parse(await readFile(expectedPath, "utf8")), initial);
       await visibleWorkspace();
@@ -257,6 +271,7 @@ exports.verify = async ({
       receipt.reducedMotion = true;
       receipt.graphicsRecovered = true;
     }
+    if (pinWitness) await verifySavedPin();
     receipt.capture = await capture("offscreen-scale-" + receipt.phase + ".png");
     assert.deepEqual(startupErrors, []);
     assert.deepEqual(Object.keys((await call("snapshot", {})).executions), []);
