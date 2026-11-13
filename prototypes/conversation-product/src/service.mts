@@ -392,7 +392,7 @@ export class ConversationProduct implements ConversationProductPort {
  nativeAuthorizeContextSources(target:string,sources:readonly {resourceId:string;messageId:string;sensitivity:string;evidence?:Evidence}[]):void {
   check(this.host.canonicalReadBatch,'canonical_read_batch_required');this.host.canonicalReadBatch(view=>this.contextSources(this.indexed(view,true),target,sources));
  }
- private async providers(v: View): Promise<ProviderCapability[]> {
+ private async providers(v: ConversationReadView): Promise<ProviderCapability[]> {
   let live: CommandMap['capabilities']['output'] | undefined; try { live = this.host.capabilitySnapshot ? this.host.capabilitySnapshot() : await this.host.command('capabilities',{}); } catch { /* catalog is not proof of a connected provider */ }
   const local = v.graphMetadata.providers.find(p => p.id === 'local') ?? v.graphMetadata.providers.find(p=>p.id==='mock-ordinary');
   const items: ProviderCapability[] = [{ id: local?.id ?? 'local', label: 'Local transcript', available: true, record: true, execute: false, nativeFork:false, history:'local', simulated:false, models:[], reason:'Save messages in Aerynth without AI replies.' }];
