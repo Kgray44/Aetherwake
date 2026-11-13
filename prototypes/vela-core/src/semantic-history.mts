@@ -410,8 +410,11 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         assessment.rows = assessment.rows.map(row => {
           const prior = disputed.get(row.key);
           if (!prior) return row;
-          if (row.status === 'contradicted') {
-            if (!prior.passages || !row.passages) return row;
+          // A new citation can support a model-proposed resolution. Picking one
+          // side of the already cited conflict cannot establish a resolution.
+          if (row.status === 'supported' && row.passages?.some(passage =>
+            Number(passage.source.slice(1)) > priorCount)) return row;
+          if (row.status !== 'supported' && prior.passages && row.passages?.length) {
             const combined = [...prior.passages];
             for (const passage of row.passages) {
               if (!combined.some(previous => previous.source === passage.source && previous.quote === passage.quote)) {
@@ -428,13 +431,9 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
               const first = [...firstBySource.values()];
               passages = [...first, ...combined.filter(passage => firstBySource.get(passage.source) !== passage)].slice(0, maxPassagesPerNeed);
             }
-            return { ...row, passages, sources: [...new Set(passages.map(passage => passage.source))] };
+            return { ...row, status: 'contradicted', passages, sources: [...new Set(passages.map(passage => passage.source))] };
           }
-          // A new citation can support a model-proposed resolution. Picking one
-          // side of the already cited conflict cannot establish a resolution.
-          if (row.status === 'supported' && row.passages?.some(passage =>
-            Number(passage.source.slice(1)) > priorCount)) return row;
-          return prior;
+          return row.status === 'contradicted' ? row : prior;
         });
       }
       priorAssessment = assessment;

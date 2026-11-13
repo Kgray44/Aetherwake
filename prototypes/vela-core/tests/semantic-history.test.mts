@@ -511,7 +511,7 @@ test('a later assessment cannot erase an earlier sourced conflict by dropping a 
   }
 });
 
-test('an unresolved follow-up retains earlier conflicting passages alongside new evidence', async () => {
+test('an unresolved follow-up retains earlier conflicting passages alongside a partial new account', async () => {
   const accounts = ['Inspection is Monday.', 'Inspection is Tuesday.', 'Inspection is Wednesday.']
     .map((text, index) => ({ ...candidate, sourceId: String(index), text }));
   const result = await investigateSemanticHistory(request, {
@@ -519,9 +519,9 @@ test('an unresolved follow-up retains earlier conflicting passages alongside new
     isCurrent: () => true,
     disclose: async call => {
       if (call.stage === 'interpret') return proposal;
-      const cited = call.round === 1 ? [0, 1] : [1, 2];
+      const cited = call.round === 1 ? [0, 1] : [2];
       return { version: 3, clarification: '', assessment: [{
-        key: 's1', status: 'contradicted', query: call.round === 1 ? 'inspection correction' : '',
+        key: 's1', status: call.round === 1 ? 'contradicted' : 'partial', query: call.round === 1 ? 'inspection correction' : '',
         passages: cited.map(index => ({ source: 'e' + (index + 1), quote: accounts[index].text })),
       }] };
     },
