@@ -45,6 +45,32 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', h
 }
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
+
+test('connected chat saves an exact assistant reply as an editable note and recovers the same receipt after restart', async () => {
+ const f=fixture();
+ try {
+  const chat=await f.core.command('createConversation',{providerId:'local',commandId:randomUUID()});
+  const user=await f.core.command('addMessage',{resourceId:chat.resourceId,role:'user',content:'Synthetic question',expectedRevision:chat.revision});
+  const reply=await f.core.command('addMessage',{resourceId:chat.resourceId,role:'assistant',content:'Synthetic complete reply',expectedRevision:user.revision});
+  const input={resourceId:chat.resourceId,messageId:reply.id,commandId:randomUUID()};
+  const capture=(request:typeof input)=>f.core.command('conversation',{name:'captureReplyNote',input:request}) as Promise<{noteId:string}>;
+  const receipt=await capture(input);
+  const opened=await f.core.command('openResource',{resourceId:receipt.noteId,origin:{source:'application'}});
+  assert.equal(opened.status,'ready');
+  const note=(await f.core.command('notes',{name:'readNote',input:receipt.noteId})).result as {resource:{content:string}};
+  assert.equal(note.resource.content,reply.content);
+  await assert.rejects(capture({...input,messageId:user.id}),/source_unavailable/);
+  const unrelated=await f.core.command('createConversation',{providerId:'local',commandId:randomUUID()});
+  await assert.rejects(capture({...input,resourceId:unrelated.resourceId}),/source_unavailable/);
+  f.owner.state.messageEvidence[reply.id]={outputState:'partial'};
+  await assert.rejects(capture(input),/source_unavailable/);
+  delete f.owner.state.messageEvidence[reply.id];
+  await f.reopen();
+  assert.deepEqual(await capture(input),receipt);
+  const desktop=await f.core.command('desktop',{type:'snapshot'});
+  assert.equal(desktop.resources.filter(resource=>resource.kind==='note').length,1);
+ } finally {await f.close();}
+});
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
 
 test('a reviewed planning request compiles one graph and runs native dependencies and a specialist after review', async () => {

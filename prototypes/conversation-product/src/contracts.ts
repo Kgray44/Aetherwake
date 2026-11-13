@@ -2,6 +2,7 @@
 import type { NativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity.ts';
 import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 import type { OrdinaryModelOption, ReasoningEffort } from '../../openai-provider/model-controls.ts';
+import type { CaptureConversationReply, ReplyNoteReceipt } from '../../block-library/note-contracts.ts';
 export type { FidelityStatus, NativeChatGPTAimId, NativeChatGPTAimAssessment, NativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity.ts';
 export type SharingMode = 'independent' | 'connected' | 'collaborative';
 export type Evidence = 'excerpt' | 'reported' | 'observed' | 'hypothesis' | 'decision' | 'disputed';
@@ -52,6 +53,7 @@ export interface ProductCommandMap {
  archive: { input: { resourceId: string; archived: boolean; expectedVersion: number }; output: unknown };
  send: { input: { resourceId: string; content: string; expectedRevision: number; commandId: string; model?: string; reasoningEffort?: ReasoningEffort; webSearch?: true }; output: unknown };
  openCitation: { input: { resourceId: string; messageId: string; index: number }; output: { requested: true } };
+ captureReplyNote: { input: CaptureConversationReply; output: ReplyNoteReceipt };
  branch: { input: { resourceId: string; messageId: string; includeMessageIds: string[]; providerId: string; title: string; commandId: string; tokenBudget: number; expectedRevision: number }; output: { resourceId: string; handoffId: string; fingerprint: string; mode: string } };
  reviewBranch: { input: { handoffId: string; fingerprint: string; approve: boolean }; output: unknown };
  policy: { input: Omit<BranchPolicy, 'revision'> & { expectedRevision: number }; output: BranchPolicy };
