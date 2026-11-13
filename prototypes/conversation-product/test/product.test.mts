@@ -285,7 +285,8 @@ test('canonical chat search reads an inherited message once per query and rechec
   const original=graph.visibleMessages.bind(graph);
   let bodyCopies=0;
   graph.visibleMessages=id=>{bodyCopies++;return original(id);};
-  const search=async()=>(await f.core.command('conversation',{name:'search',input:{text:'performance needle',searchMode:'chat-history'}})) as {items:{resourceId:string;messageId?:string}[]};
+  const query={text:'performance needle',searchMode:'chat-history' as const};
+  const search=async()=>(await f.core.command('conversation',{name:'search',input:query})) as {items:{resourceId:string;messageId?:string}[]};
   let hits=(await search()).items;
   assert.equal(hits.length,3);
   assert.ok(hits.some(hit=>hit.resourceId===child.resourceId&&hit.messageId===source.id));
@@ -293,6 +294,11 @@ test('canonical chat search reads an inherited message once per query and rechec
   assert.ok(!hits.some(hit=>hit.resourceId===child.resourceId&&hit.messageId===afterFork.id));
   assert.equal(bodyCopies,0,'chat search must avoid cloning complete visible transcripts');
   assert.equal(inheritedReads,1,'both branches share one search of the authorized source');
+  for (const searchMode of ['all','chat-history','messages','conversations'] as const) {
+   const input={...query,searchMode,sort:'title' as const,limit:1,offset:1};
+   assert.deepEqual(await f.core.command('conversation',{name:'search',input}),
+    await f.product.command('search',input), 'optimized and compatibility queries preserve exact ordering and pages');
+  }
   graph.markUnavailable(source.id);
   inheritedReads=0;
   hits=(await search()).items;
