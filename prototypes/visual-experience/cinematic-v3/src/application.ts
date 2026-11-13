@@ -594,41 +594,43 @@ export function installApplication(hooks: Hooks) {
     anchor.textContent = "Inspect intelligence";
     anchor.className = "aw-adaptive-workspace-entry";
     anchor.setAttribute("aria-haspopup", "dialog");
-    anchor.onclick = () => {
-      closeAdaptiveWorkspace();
-      const content = document.createElement("div");
-      const workspace = state?.navigation.kind === "workspace"
-        ? state.workspaces.find(item => item.id === state?.activeWorkspaceId) : undefined;
-      const view = mountAdaptiveWorkspace(content, {
-        experience: workspace ? {
-          scope: { workspaceId: workspace.id, projectId: workspace.project_id },
-          read: (name, input) => host.command!("missions", { name, input }),
-        } : undefined,
-        viewId: "adaptive-intelligence-workspace",
-        list: async () => {
-          const result = await host.command!("missions", { name: "list", input: {} });
-          if (!Array.isArray(result)) throw new Error("mission_list_unavailable");
-          return result as MissionSummary[];
-        },
-        readMission: readAuthorizedMission,
-        readProfile: readMissionProfile,
-        resourcePolicy: host.resourcePolicyInspection,
-      });
-      adaptiveWorkspace = view;
-      surfaces.open({
-        id: "adaptive-intelligence-workspace", anchor, content,
-        label: "Adaptive Intelligence Workspace", placement: "bottom",
-        minSize: { width: 350, height: 230 },
-        maxSize: { width: 770, height: 760 },
-        preferredSize: { width: 660, height: 620 },
-        initialFocus: view.focus,
-        onClose: () => {
-          view.dispose();
-          if (adaptiveWorkspace === view) adaptiveWorkspace = undefined;
-        },
-      });
-    };
+    anchor.onclick = () => openAdaptiveWorkspace(anchor);
     return anchor;
+  }
+  function openAdaptiveWorkspace(anchor: HTMLButtonElement, initialMissionId?: string) {
+    closeAdaptiveWorkspace();
+    const content = document.createElement("div");
+    const workspace = state?.navigation.kind === "workspace"
+      ? state.workspaces.find(item => item.id === state?.activeWorkspaceId) : undefined;
+    const view = mountAdaptiveWorkspace(content, {
+      experience: workspace ? {
+        scope: { workspaceId: workspace.id, projectId: workspace.project_id },
+        read: (name, input) => host.command!("missions", { name, input }),
+      } : undefined,
+      viewId: "adaptive-intelligence-workspace",
+      initialMissionId,
+      list: async () => {
+        const result = await host.command!("missions", { name: "list", input: {} });
+        if (!Array.isArray(result)) throw new Error("mission_list_unavailable");
+        return result as MissionSummary[];
+      },
+      readMission: readAuthorizedMission,
+      readProfile: readMissionProfile,
+      resourcePolicy: host.resourcePolicyInspection,
+    });
+    adaptiveWorkspace = view;
+    surfaces.open({
+      id: "adaptive-intelligence-workspace", anchor, content,
+      label: "Adaptive Intelligence Workspace", placement: "bottom",
+      minSize: { width: 350, height: 230 },
+      maxSize: { width: 770, height: 760 },
+      preferredSize: { width: 660, height: 620 },
+      initialFocus: view.focus,
+      onClose: () => {
+        view.dispose();
+        if (adaptiveWorkspace === view) adaptiveWorkspace = undefined;
+      },
+    });
   }
   let missionWorkroomSerial = 0;
   function mountWorkroomCard(
@@ -5004,6 +5006,7 @@ export function installApplication(hooks: Hooks) {
       refresh: refreshEvents,
       openResource: openCanonicalResource,
       openMission: openStreamMission,
+      inspectMission: (id, source) => openAdaptiveWorkspace(source, id),
     }, { motion: experienceMotion, viewId });
     const motion = conversationDisclosures(content, { motion: experienceMotion, viewId });
     const pickers = [...content.querySelectorAll<HTMLSelectElement>("select")]

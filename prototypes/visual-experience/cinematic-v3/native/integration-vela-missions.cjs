@@ -992,6 +992,23 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         const stream = '[data-surface-id="intelligence-stream"]';
         await click("#application-stream");
         await witnessEntry(stream, "00-aiw-from-stream");
+        const eventDetails = stream + ' [data-stream-mission-id=' + quote(missionId) + '] details';
+        const eventAction = eventDetails + ' [data-inspect-mission=' + quote(missionId) + ']';
+        const beforeEventInspection = await desktop();
+        await click(eventDetails + ' > summary');
+        await click(eventAction);
+        await wait("Recorded event opens AIW with its mission selected", () => js(`(() => {
+          const panel = document.querySelector(${quote(aiw)});
+          return panel?.open && panel.querySelector('select')?.value === ${quote(missionId)} &&
+            panel.querySelector('.aw-intelligence-inspection')?.textContent.includes(${quote(missionId)});
+        })()`));
+        await capture("00-aiw-from-recorded-event");
+        await click(aiw + ' [aria-label="Close panel"]');
+        await wait("AIW returns focus to the disclosed event action", () => js(`!document.querySelector(${quote(aiw)}) &&
+          document.querySelector(${quote(stream)})?.open && document.activeElement?.matches(${quote(eventAction)})`));
+        const afterEventInspection = await desktop();
+        assert.equal(afterEventInspection.activeWorkspaceId, beforeEventInspection.activeWorkspaceId);
+        assert.deepEqual(afterEventInspection.viewport, beforeEventInspection.viewport);
         await click(stream + ' [aria-label="Close panel"]');
         await wait("Stream returns to the workroom", () => js(`!document.querySelector(${quote(stream)})`));
         await click(selector + ' > summary');
@@ -1011,7 +1028,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         const detail = await js(`document.querySelector(${quote(trace + ' > dl')}).textContent`);
         assert(detail.includes(attempt.id) && attempt.verifiedEvidenceIds.every(id => detail.includes(id)));
         receipt.workroomInspection.traceAttempt = { id: attempt.id, verifiedEvidenceCount: attempt.verifiedEvidenceIds.length };
-        receipt.workroomInspection.entryPoints = ['vela', 'intelligence-stream'];
+        receipt.workroomInspection.entryPoints = ['vela', 'intelligence-stream', 'recorded-mission-event'];
         await capture("01-adaptive-intelligence-profiler");
         receipt.workroomInspection.renderer = await js(`new Promise(resolve => {
           requestAnimationFrame(start => {
