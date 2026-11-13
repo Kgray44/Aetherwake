@@ -631,6 +631,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       report('Connection unavailable. '+(execution?'Last observed: '+execution.state+'. Outcome unconfirmed.':'Execution state is unavailable.'));renderDraft();
     }
     const next=observation.execution??execution;if(!next)return;
+    const canonical = current?.conversation.execution;
+    if(canonical && (next.id !== canonical.id && next.startedAt < canonical.startedAt ||
+      next.id === canonical.id && !['dispatching','running'].includes(canonical.state) &&
+      ['dispatching','running'].includes(next.state)))return;
     if(execution&&next.id!==execution.id&&next.startedAt<execution.startedAt)return;
     if(execution?.id===next.id&&!['dispatching','running'].includes(execution.state)&&['dispatching','running'].includes(next.state))return;
     execution=next;

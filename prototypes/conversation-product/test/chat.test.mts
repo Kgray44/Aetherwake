@@ -30,6 +30,26 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('a reopened chat ignores active observations older than its canonical turn', async () => {
+ const f=fixture('chatgpt-plan-responses'), resourceId=f.draft.resourceId;
+ const latest={id:'execution:latest',resourceId,providerId:'chatgpt-plan-responses',commandId:'send:latest',
+  state:'provider_completed' as const,startedAt:'2026-11-02T00:00:04Z',endedAt:'2026-11-02T00:00:05Z',taskVerified:false as const};
+ f.detail.conversation.execution=latest;
+ let chat, observe!: (value:ConversationExecutionObservation)=>void;
+ try {
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId,execution:{
+   observe(_id,listener){observe=listener;return()=>{};},async cancel(){throw Error('Unexpected Stop');},
+  }});
+  await chat.ready;
+  observe({execution:{...latest,id:'execution:old',commandId:'send:old',state:'running',startedAt:'2026-11-02T00:00:02Z',endedAt:null}});
+  assert.equal(named(f.view.root,'Send').disabled,false);
+  assert.equal(named(f.view.root,'Stop').hidden,true);
+  observe({execution:{...latest,id:'execution:new',commandId:'send:new',state:'running',startedAt:'2026-11-02T00:00:06Z',endedAt:null}});
+  assert.equal(named(f.view.root,'Send').disabled,true);
+  assert.equal(named(f.view.root,'Stop').hidden,false);
+ } finally {await chat?.dispose();f.restore();}
+});
+
 test('reopening an ordinary chat with an unresolved turn requires explicit review before another send', async () => {
  const f=fixture('chatgpt-plan-responses'), resourceId=f.draft.resourceId;
  const execution={id:'execution:unknown',resourceId,providerId:'chatgpt-plan-responses',commandId:'send:unknown',state:'unknown' as const,startedAt:'2026-11-02T00:00:02Z',endedAt:null,taskVerified:false as const};
