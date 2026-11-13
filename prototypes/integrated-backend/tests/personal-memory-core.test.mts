@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { createPersonalMemoryReview } from '../src/personal-memory-review.mts';
 import { BackendCore } from '../src/core.mts';
 import type { NativePersonalMemory } from '../src/personal-memory.mts';
+import type { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 
 function memoryOwner(core: BackendCore) {
   return (core as unknown as { personalMemory?: NativePersonalMemory }).personalMemory;
@@ -50,8 +51,8 @@ test('Core native project capture recalls across conversations after restart and
     async seal(value: string) { wrapped = value; return randomBytes(64); },
     async open() { return wrapped; },
   };
-  const open = () => new BackendCore({ path: join(root, 'profile.sqlite'), privateRoot: root,
-    provider: 'fixture', contentPolicy: 'local-private' }, undefined, { secrets });
+  const open = (filename = 'profile.sqlite', custody = secrets) => new BackendCore({ path: join(root, filename), privateRoot: root,
+    provider: 'fixture', contentPolicy: 'local-private' }, undefined, { secrets: custody });
   let core: BackendCore | undefined;
   try {
     core = open();
@@ -77,8 +78,15 @@ test('Core native project capture recalls across conversations after restart and
     assert.equal(preview.sourceText, content);
     const saved = await core.command('personalMemoryCaptureCommitNative', preview);
     await assert.rejects(core.command('personalMemoryCaptureCommitNative', preview), /personal_memory_review_mismatch/);
+    const backup = 'restored.sqlite';
+    const kernel = (core as unknown as { kernel: WorkspaceKernel }).kernel;
+    await kernel.backupTo(join(root, backup));
+    assert.equal(readFileSync(join(root, backup)).includes(Buffer.from(wrapped!)), false);
     await core.command('close', {});
-    core = open();
+    core = open(backup, { ...secrets, async open() { throw Error('synthetic OS key unavailable'); } });
+    await assert.rejects(core.command('personalMemoryManagementNative', { type: 'read', id: saved.id }), /private_key_unavailable/);
+    await core.command('close', {});
+    core = open(backup);
     const inspection = (core as unknown as { personalMemoryReview: ReturnType<typeof createPersonalMemoryReview> }).personalMemoryReview;
     const fact = await inspection.read(saved.id);
     assert.equal(fact.text, content);
@@ -108,6 +116,10 @@ test('Core native project capture recalls across conversations after restart and
     assert.doesNotMatch(next.turn.messages[0].content, /prefer a synthetic relay/);
     await inspection.commitManagement(await inspection.previewManagement({ action: 'revoke', id: corrected.id, version: 1 }));
     assert.equal(await inspection.prepareOrdinaryRecall(target.resourceId, turn), null);
+    await core.command('close', {});
+    core = open(backup);
+    const restored = (core as unknown as { personalMemoryReview: typeof inspection }).personalMemoryReview;
+    assert.equal(await restored.prepareOrdinaryRecall(target.resourceId, turn), null);
   } finally {
     await core?.command('close', {});
     rmSync(root, { recursive: true, force: true });
