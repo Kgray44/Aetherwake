@@ -1457,7 +1457,7 @@ test('authorized live CIE smoke returns a sealed native prediction', {
 });
 
 test('benchmark native reviewed CIE from request through canonical answer readback', {
-  skip: process.env.AERYNTH_BENCHMARK_SYNTHETIC_CIE !== '1', timeout: 180_000,
+  skip: process.env.AERYNTH_BENCHMARK_SYNTHETIC_CIE !== '1', timeout: 600_000,
 }, async () => {
   const require = createRequire(import.meta.url);
   const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
@@ -1475,6 +1475,7 @@ test('benchmark native reviewed CIE from request through canonical answer readba
   });
   const reply = (value: unknown) => (body: { model: string }) => response(JSON.stringify(value), body.model);
   const samples: Record<'cold' | 'warm', number[]> = { cold: [], warm: [] };
+  const pairedDifferences: number[] = [];
   const projectEvidence = process.env.AERYNTH_BENCHMARK_SYNTHETIC_CIE_PROJECT === '1';
   for (let pair = 0; pair < 12; pair++) {
     const f = fixture(true);
@@ -1498,8 +1499,8 @@ test('benchmark native reviewed CIE from request through canonical answer readba
         title: 'Lift inspection', workspaceId });
       const note = created.resources.find(item => item.title === 'Lift inspection')!;
       await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: text });
-      for (const arm of ['cold', 'warm'] as const) {
-        if (arm === 'cold') f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
+      const measure = async (qualificationRequired: boolean) => {
+        if (qualificationRequired) f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
           reply(assess('The pump inspection is on Tuesday.', 'day')));
         f.replies.push(reply(interpret(intent, 'west lift inspection')), body => {
           if (projectEvidence) assert.equal(JSON.parse(body.input[0].content).excerpts.length, 4);
@@ -1517,13 +1518,24 @@ test('benchmark native reviewed CIE from request through canonical answer readba
           input: { name: 'request', input: { intent, resourceIds: [note.id], authorizeProvider: true,
             providerId: 'openai-api-vela', model, semanticContext: true, ...(projectEvidence ? { projectEvidence: true } : {}) } },
         }) as VelaRequest;
-        assert.equal(result.state, 'responded', `${arm}: ${result.errorCode}; calls: ${f.requests.length - priorCalls}`);
+        assert.equal(result.state, 'responded', `${result.errorCode}; calls: ${f.requests.length - priorCalls}`);
         const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
         assert.equal(state.conversation?.messages.find(message => message.id === result.response?.messageId)?.content, text);
-        samples[arm].push(performance.now() - started);
-        assert.equal(f.requests.length - priorCalls, arm === 'cold' ? 5 : 3);
+        const elapsedMs = performance.now() - started;
+        assert.equal(f.requests.length - priorCalls, qualificationRequired ? 5 : 3);
         assert.equal(f.replies.length, 0);
+        return elapsedMs;
+      };
+      await measure(true);
+      const order = pair % 2 === 0 ? ['cold', 'warm'] as const : ['warm', 'cold'] as const;
+      for (const arm of order) {
+        if (arm === 'cold') {
+          await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
+          await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: true });
+        }
+        samples[arm].push(await measure(arm === 'cold'));
       }
+      pairedDifferences.push(samples.cold[pair] - samples.warm[pair]);
     } finally { await f.close(); }
   }
   const distribution = (values: number[]) => {
@@ -1532,7 +1544,8 @@ test('benchmark native reviewed CIE from request through canonical answer readba
       p95Ms: sorted[Math.ceil(sorted.length * .95) - 1] };
   };
   console.log(JSON.stringify({ benchmark: 'native-reviewed-cie', projectEvidence, transport: 'synthetic', paidCalls: 0,
-    through: 'canonical answer readback', cold: { ...distribution(samples.cold), simulatedCallsPerRequest: 5 },
+    through: 'canonical answer readback', design: 'warmed-profile-counterbalanced', pairedColdMinusWarmMs: distribution(pairedDifferences),
+    cold: { ...distribution(samples.cold), simulatedCallsPerRequest: 5 },
     warm: { ...distribution(samples.warm), simulatedCallsPerRequest: 3 } }));
 });
 
