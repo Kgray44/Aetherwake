@@ -980,3 +980,54 @@ test('a detached send rejection is caught and leaves exact durable recovery with
 test('composer keyboard policy keeps newline and composition distinct from submit',()=>{
   const event={key:'Enter',shiftKey:false,isComposing:false,altKey:false,ctrlKey:false,metaKey:false};assert.equal(composerShouldSubmit(event),true);for(const field of ['shiftKey','isComposing','altKey']as const)assert.equal(composerShouldSubmit({...event,[field]:true}),false);assert.equal(composerShouldSubmit({...event,key:'Escape'}),false);
 });
+
+test('Save reply as note sends exact IDs, recovers the same command and preserves the draft',{timeout:5000},async()=>{
+ const f=fixture(),attempts:unknown[]=[],opened:string[]=[];
+ let chat,complete!:(receipt:{noteId:string})=>void,reject!:(error:Error)=>void;
+ let acknowledgeAttempt!:()=>void;
+ const nextAttempt=()=>new Promise<void>(resolve=>{acknowledgeAttempt=resolve;});
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   async saveReplyNote(input){attempts.push(input);acknowledgeAttempt();return new Promise((resolve,fail)=>{complete=resolve;reject=fail;});},
+   openReplyNote(id){opened.push(id);},
+  });
+  await chat.ready;
+  const user=f.view.root.querySelector('.cp-message-user'),assistant=f.view.root.querySelector('.cp-message-assistant');
+  assert.equal(!!named(user,'Save reply as note'),false);
+  const save=named(assistant,'Save reply as note');
+  assert.ok(save);
+  const firstAttempt=nextAttempt();
+  save.fire('click');save.fire('click');
+  await firstAttempt;
+  assert.equal(attempts.length,1);
+  const request=attempts[0] as Record<string,string>;
+  assert.deepEqual(Object.keys(request).sort(),['commandId','messageId','resourceId']);
+  assert.equal(request.resourceId,f.draft.resourceId);
+  assert.equal(request.messageId,'message:assistant');
+  reject(Error('connection lost'));
+  await until(()=>!save.disabled);
+  const retryAttempt=nextAttempt();
+  save.fire('click');
+  await retryAttempt;
+  assert.deepEqual(attempts,[request,request]);
+  f.detail.messages.items[1].outputState='complete';
+  await chat.refresh();
+  const refreshed=f.view.root.querySelector('.cp-message-assistant');
+  assert.equal(named(refreshed,'Saving reply…').disabled,true);
+  complete({noteId:'note:saved'});
+  await until(()=>!!named(refreshed,'Open saved note'));
+  named(refreshed,'Open saved note').fire('click');
+  assert.deepEqual(opened,['note:saved']);
+  assert.equal(f.draft.content,'Saved unsent text');
+  await chat.dispose();
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   async saveReplyNote(input){attempts.push(input);acknowledgeAttempt();return {noteId:'note:saved'};},
+  });
+  await chat.ready;
+  const remountAttempt=nextAttempt();
+  named(f.view.root.querySelector('.cp-message-assistant'),'Save reply as note').fire('click');
+  await remountAttempt;
+  assert.equal(attempts.length,3);
+  assert.deepEqual(attempts[2],request,'a fresh view must recover the same canonical capture');
+ }finally{await chat?.dispose();f.restore();}
+});
