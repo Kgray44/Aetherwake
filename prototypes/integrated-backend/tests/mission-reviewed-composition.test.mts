@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { MissionPlan } from '../src/mission-contracts.mts';
 import { nativeMissionExecutors, nativeMissionPlan } from '../src/mission-native.mts';
-import { composeReviewedArtifactMission } from '../src/mission-reviewed-composition.mts';
+import { composeReviewedArtifactMission, parseReviewedArtifactMission, resolveReviewedArtifactMission } from '../src/mission-reviewed-composition.mts';
 import { validateMissionPlan } from '../src/mission-service.mts';
 import { missionImageSettings, prepareImageGeneration } from '../../openai-provider/images.mts';
 
@@ -51,4 +51,47 @@ test('composition rejects foreign scope, duplicate effects and changes to review
   const changed = illustration();
   changed.tasks[0].artifactImage!.prompt = 'Different illustration';
   assert.throws(() => composeReviewedArtifactMission(objective, native(), changed), /mission_composition_artifact_changed/);
+});
+
+test('a combined explicit request separates native work from the exact image prompt', () => {
+  const prompt = 'Draw a blue square: keep “and generate an illustration” as text.\nUse a plain background.';
+  assert.deepEqual(parseReviewedArtifactMission(
+    'Vela, run a mission to Run selected Node tests and measure CPU and RAM; generate an illustration [draft, high]: ' + prompt,
+  ), {
+    workObjective: 'Run selected Node tests and measure CPU and RAM',
+    imageOptions: 'draft, high',
+    imagePrompt: prompt,
+  });
+});
+
+test('plain chat, standalone image prompts, and ambiguous or empty work do not enter composition', () => {
+  for (const objective of [
+    'Measure CPU and RAM; generate an illustration: Draw a square',
+    'Run a mission to generate an illustration: draw a sign; generate an illustration: draw a square',
+    'Run a mission to ; generate an illustration: Draw a square',
+    'Run a mission to measure CPU and RAM; generate an illustration:   ',
+    'Run a mission to measure CPU and RAM; upload logs; generate an illustration: Draw a square',
+    'Run a mission to measure CPU and RAM; generate an illustration: ' + 'a'.repeat(4096),
+  ]) assert.equal(parseReviewedArtifactMission(objective), null, objective.slice(0, 100));
+});
+
+test('mixed request resolves native work before preparing the exact reviewed image', () => {
+  const request = 'Run a mission to measure CPU and RAM; generate an illustration: Make a geometric illustration';
+  const prepared: unknown[] = [];
+  const plan = resolveReviewedArtifactMission(request, text => nativeMissionPlan(text, scope), (prompt, options) => {
+    prepared.push({ prompt, options });
+    return illustration();
+  });
+  assert.deepEqual(prepared, [{ prompt: 'Make a geometric illustration', options: undefined }]);
+  assert.equal(plan?.objective, request);
+  assert.deepEqual(plan?.tasks.map(task => task.id), ['cpu', 'ram', 'illustration', 'report']);
+  assert.throws(() => resolveReviewedArtifactMission(request.replace('measure CPU and RAM', 'install a new system service'),
+    text => nativeMissionPlan(text, scope), () => assert.fail('Unsupported work cannot prepare an image request')),
+  /mission_composition_work_unsupported/);
+});
+
+test('an unconfigured image provider can be disclosed as unavailable in a mixed preview', () => {
+  const image = illustration();
+  image.tasks[0].artifactImage!.configurationVersion = 0;
+  assert.equal(composeReviewedArtifactMission(objective, native(), image).tasks[2].artifactImage?.configurationVersion, 0);
 });

@@ -4,6 +4,8 @@ The host composes an existing mission plan with one existing, separately reviewe
 
 The source-mode test supplies the composed host proposal directly to Core. It then exercises the existing mission preview, digest-checked Start, artifact producer, workspace registration, MissionService and AEP. The user-facing planner still needs the Core composition wiring and review UI integration. The test uses a fixed synthetic objective and temporary workspace.
 
+The staged explicit request format is `Run a mission to measure CPU and RAM; generate an illustration: Draw a blue square`. The existing image options, such as `[draft, high]`, go before the colon. The host resolves the work clause through its existing planners before it prepares the image preview. Unsupported work fails before preparing the image. The native broker tests exercise separate decisions for the image, specialist calls, and exact local Codex test, and prove that declining any decision prevents Start.
+
 The first live Windows run used one actual image request. The mission verified host measurements, the shipped source observation, a 1024 × 1024 PNG and companion notes. The workspace notes branch failed independently. After adding the missing note, Retry reused the verified image attempt and produced a combined report that survived restart. AEP recorded 891 ms of overlapping attempt occupancy and 23.66 seconds on the occupied critical path.
 
 Four alternating pairs repeated the same live workload and recovery. All eight trials verified the same deliverable requirements, used one image request each and retained artifact manifests. A separate read verified all eight bundles.

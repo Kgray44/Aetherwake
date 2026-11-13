@@ -1,6 +1,32 @@
 import { prepareImageGeneration } from '../../openai-provider/images.mts';
 import { ensure } from './contracts.mts';
-import { MISSION_LIMITS, type MissionPlan } from './mission-contracts.mts';
+import { ARTIFACT_MISSION_PREFIX, EXPLICIT_MISSION_PREFIX, MISSION_LIMITS, type MissionPlan } from './mission-contracts.mts';
+
+/** The semicolon introduces an explicit artifact request. The image prompt stays opaque. */
+export function parseReviewedArtifactMission(objective: string) {
+  if (typeof objective !== 'string' || Buffer.byteLength(objective) > 4096) return null;
+  const text = objective.trim();
+  const prefix = EXPLICIT_MISSION_PREFIX.exec(text);
+  if (!prefix) return null;
+  const work = text.slice(prefix[0].length);
+  const boundary = work.indexOf(';');
+  if (boundary < 1) return null;
+  const workObjective = work.slice(0, boundary).trim();
+  if (!workObjective || /^generate an illustration\b/iu.test(workObjective)) return null;
+  const artifact = 'run a mission to ' + work.slice(boundary + 1).trimStart();
+  const request = ARTIFACT_MISSION_PREFIX.exec(artifact);
+  return request ? { workObjective, imageOptions: request[1]?.trim(), imagePrompt: artifact.slice(request[0].length) } : null;
+}
+
+/** Use only existing host planners. A recognized request must cover both parts. */
+export function resolveReviewedArtifactMission(objective: string, workPlan: (objective: string) => MissionPlan | null,
+  imagePlan: (prompt: string, options?: string) => MissionPlan): MissionPlan | null {
+  const request = parseReviewedArtifactMission(objective);
+  if (!request) return null;
+  const work = workPlan(request.workObjective);
+  ensure(work, 'mission_composition_work_unsupported');
+  return composeReviewedArtifactMission(objective, work, imagePlan(request.imagePrompt, request.imageOptions));
+}
 
 /**
  * Combine host-built plans before Start review. Callers still validate the
@@ -27,7 +53,8 @@ export function composeReviewedArtifactMission(objective: string, work: MissionP
     branches.every(task => report.dependencies.includes(task.id) && !task.dependencies.includes(report.id) &&
       task.executor !== 'join.samples' && task.executor !== 'join.team'),
     'invalid_mission_composition');
-  ensure(image && Number.isSafeInteger(image.configurationVersion) && image.configurationVersion > 0 &&
+  // Version zero represents an unconfigured provider in the existing preview.
+  ensure(image && Number.isSafeInteger(image.configurationVersion) && image.configurationVersion >= 0 &&
     prepareImageGeneration(image.prompt, image.settings).digest === image.digest, 'mission_composition_artifact_changed');
 
   return structuredClone({
