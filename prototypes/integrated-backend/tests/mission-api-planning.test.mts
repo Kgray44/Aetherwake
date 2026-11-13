@@ -14,7 +14,7 @@ import { nativeMissionExecutors, nativeMissionPlan, missionResultAvailable } fro
 import { composeReviewedArtifactMission } from '../src/mission-reviewed-composition.mts';
 import type { MissionExecutor,MissionPlan,MissionPlanningOffer,MissionPreview,MissionProjection } from '../src/mission-contracts.mts';
 import type { NativeHostServices } from '../src/native-host.mts';
-import type { ProviderPort, VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
+import type { CommandMap, ProviderPort, VelaBackendState, VelaNativeReview } from '../src/contracts.mts';
 import { createMissionProjectCheck } from '../src/mission-project-check.mts';
 import { planningDigest } from '../../vela-core/src/codex-planning-adapter.mts';
 import type { VelaRequest } from '../../vela-core/src/contracts.ts';
@@ -2063,7 +2063,8 @@ for (const outcome of ['failure', 'cancel', 'revoke']) test('standing selected e
   }
 });
 
-for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke'] as const) test('standing selected DOCX broker analysis: '+scenario, {timeout:15_000}, async () => {
+for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke', 'app-owned', 'app-owned stale',
+  'app-owned revoked', 'app-owned wrong scope', 'app-owned interrupted', 'app-owned retired'] as const) test('standing selected DOCX broker analysis: '+scenario, {timeout:15_000}, async () => {
   const bytes = docxFixture();
   let bodyText: string;
   const f = fixture(true, true, { extract: async (input, signal) => {
@@ -2088,8 +2089,16 @@ for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke'] a
     assert.equal(preview.sendDisposition, 'standing-selected-evidence');
     const review = await f.core.command('velaNativeReview', { previewId: preview.id, signature: preview.signature });
     assert.match(review.context.included[0].content, /Extracted DOCX body text/);
-    const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
-    const send = () => velaCommand({
+    const { velaCommand, prepareAppOwnedVelaRequest } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+    let ownerCurrent = true;
+    const call = async <K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']) => {
+      const result = await f.core.command(name, input);
+      if (scenario === 'app-owned retired' && name === 'authorizeVelaRequest') ownerCurrent = false;
+      return result;
+    };
+    const send = scenario.startsWith('app-owned') ? prepareAppOwnedVelaRequest({
+      call, isCurrent: () => ownerCurrent, preview, resourceRefs,
+    }) as () => Promise<VelaRequest> : () => velaCommand({
       win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
       directMessageSend: true, routeNative: true, dialog: {},
       call: f.core.command.bind(f.core),
@@ -2097,6 +2106,16 @@ for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke'] a
       input: { name: 'request', input: { intent, resourceIds, resourceRefs, authorizeProvider: true,
         providerId: 'openai-api-vela', model: 'gpt-6-luna', semanticContext: true } },
     }) as Promise<VelaRequest>;
+    if (scenario === 'app-owned stale' || scenario === 'app-owned revoked' || scenario === 'app-owned wrong scope' || scenario === 'app-owned retired') {
+      if (scenario === 'app-owned stale') writeFileSync(path, 'Replaced synthetic source');
+      if (scenario === 'app-owned revoked') await f.core.command('velaApiUsageAuthorize', { expectedVersion: 1, enabled: false });
+      if (scenario === 'app-owned wrong scope') await f.core.command('desktop', { type: 'createWorkspace', title: 'Different synthetic scope', projectId: null });
+      await assert.rejects(send(), scenario === 'app-owned retired' ? /vela_app_request_owner_unavailable/ : /source_changed|stale_vela_preview|approval_scope_mismatch/);
+      await assert.rejects(send(), /vela_app_request_consumed/);
+      assert.equal(f.requests.length, 0);
+      assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 0);
+      return;
+    }
     const proposal = (key: string) => ({ version: 2, objective: intent, clarification: '',
       perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
       needs: [{ key, question: intent, query: 'table text' }] });
@@ -2119,16 +2138,16 @@ for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke'] a
         assert.doesNotMatch(JSON.stringify(body.input), /Extracted DOCX body text/);
         signalFinalDispatch();
         if (scenario === 'provider failure') return new Response(null,{status:400});
-        if (scenario === 'interrupt' || scenario === 'revoke') await providerReleased;
+        if (scenario === 'interrupt' || scenario === 'revoke' || scenario === 'app-owned interrupted') await providerReleased;
         return response('The extracted body contains “Table cell.”', body.model);
       });
     const pending = send();
-    if (scenario === 'interrupt' || scenario === 'revoke') {
+    if (scenario === 'interrupt' || scenario === 'revoke' || scenario === 'app-owned interrupted') {
       try {
         await Promise.race([finalDispatch,pending.then(()=>assert.fail('request settled before final dispatch'))]);
         const running = Object.values((await f.core.command('snapshot',{})).executions).find(execution=>execution.state==='dispatching' && execution.commandId.startsWith('vela-api:'));
         assert.ok(running);
-        if (scenario === 'interrupt') {
+        if (scenario === 'interrupt' || scenario === 'app-owned interrupted') {
           assert.deepEqual(await f.core.command('interrupt',{executionId:running.id}),{requested:true,confirmed:false});
         } else {
           assert.equal((await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:false})).enabled,false);
@@ -2138,10 +2157,11 @@ for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke'] a
       }
     }
     const result = await pending;
-    if (scenario === 'provider failure' || scenario === 'interrupt' || scenario === 'revoke') {
+    if (scenario === 'provider failure' || scenario === 'interrupt' || scenario === 'revoke' || scenario === 'app-owned interrupted') {
       const outcome = scenario === 'provider failure' ? 'failed' : 'unknown';
       assert.equal(result.state,outcome);
       assert.equal(result.response,undefined);
+      if (scenario === 'app-owned interrupted') await assert.rejects(send(), /vela_app_request_consumed/);
       assert.equal(f.requests.length,5);
       assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,5);
       await f.reopen();
@@ -2158,8 +2178,11 @@ for (const scenario of ['standing', 'provider failure', 'interrupt', 'revoke'] a
     assert.equal(result.state, 'responded');
     assert.equal(f.requests.length, 5);
     assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 5);
-    writeFileSync(path, 'Replaced synthetic source');
-    await assert.rejects(send(), /source_changed|stale_vela_preview/);
+    if (scenario === 'app-owned') await assert.rejects(send(), /vela_app_request_consumed/);
+    else {
+      writeFileSync(path, 'Replaced synthetic source');
+      await assert.rejects(send(), /source_changed|stale_vela_preview/);
+    }
     assert.equal(f.requests.length, 5);
   } finally {
     await f.close();
