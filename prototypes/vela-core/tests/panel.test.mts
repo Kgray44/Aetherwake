@@ -451,7 +451,7 @@ test('the composer can explicitly investigate an attached file without opening p
     assert.equal(checkbox.checked, false);
     checkbox.checked = true;
     checkbox.fire('change');
-    assert.deepEqual(turns, []);
+    assert.equal(turns.length, 0);
     const composer = root.find(node => node.tagName === 'textarea')!;
     composer.value = 'What does this file say about the schedule?';
     composer.fire('input');
@@ -459,13 +459,13 @@ test('the composer can explicitly investigate an attached file without opening p
     canonical.planningProviders = undefined;
     await panel.refresh();
     composer.fire('keydown', { key: 'Enter' });
-    assert.deepEqual(turns, []);
+    assert.equal(turns.length, 0);
     assert.equal(checkbox.checked, true);
     assert.equal(composer.value, 'What does this file say about the schedule?');
     assert.match(root.find(node => node.className === 'vela-core-status')!.textContent, /Reconnect/);
     canonical.planningProviders = connected;
     await panel.refresh();
-    assert.deepEqual(turns, []);
+    assert.equal(turns.length, 0);
     composer.fire('keydown', { key: 'Enter' });
     await settles(() => turns.length === 1);
     assert.equal(turns[0].providerId, 'openai-api-vela');
