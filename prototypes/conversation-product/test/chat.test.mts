@@ -2286,6 +2286,37 @@ for (const reason of ['source_selection_changed', 'source_selection_unavailable'
  } finally { await chat?.dispose(); f.restore(); }
 });
 
+test('document extraction contention leaves the exact draft ready for a manual retry', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ const source = { id:'file:brief', version:3, title:'Brief.pdf' };
+ let chat;
+ const port = { async command(name:string,input:any) {
+  if (name==='send') {
+   f.calls.push({name,input});
+   throw Error('document_extraction_busy');
+  }
+  return (f.port.command as any)(name,input);
+ } } as ConversationProductPort;
+ try {
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents:[source]});
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId});
+  await chat.ready;
+  const form=f.view.root.querySelector('form');
+  form.fire('submit');
+  await chat.whenSubmissionSettled();
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Another document is being prepared.*press Send again/);
+  assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,false);
+  assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+  form.fire('submit');
+  await chat.whenSubmissionSettled();
+  const sends=f.calls.filter(call=>call.name==='send');
+  assert.equal(sends.length,2);
+  for (const {input} of sends) assert.deepEqual(input.documents,[{id:source.id,version:source.version}]);
+  assert.deepEqual(f.draft.documents,[source]);
+  assert.equal(f.draft.content,'Saved unsent text');
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
 test('a recovered unavailable document can be removed without losing the draft or sending', async () => {
  const f = fixture('chatgpt-plan-responses');
  let chat;
