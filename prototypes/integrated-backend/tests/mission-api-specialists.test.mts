@@ -186,7 +186,20 @@ test('API planned temporary specialists consume only named verified handoffs and
     const planned = await f.core.command('missionPlanReviewed', { objective: text, fingerprint: offer.fingerprint, requestId: randomUUID() }) as MissionPreview;
     assert.equal(planned.externalReview?.calls, 3);
     const mission = await f.start(planned), done = await settled(f, mission.id);
-    assert.equal(done.outcome, 'blocked'); assert.ok(done.tasks.every(task => task.state === 'verified'));
+    const diagnostic = () => JSON.stringify({
+      tasks: done.tasks.map(task => ({
+        id: task.id, state: task.state, detail: task.detail, wait: done.waits[task.id],
+        attempts: task.attempts.map(attempt => ({
+          outcome: attempt.outcome, executionMs: attempt.timing?.executionMs,
+          verification: attempt.verification?.passed, providerCalls: attempt.telemetry?.providerCalls,
+        })),
+      })),
+      syntheticRequests: f.requests.length,
+    });
+    if (done.outcome !== 'blocked') assert.equal(done.outcome, 'blocked', diagnostic());
+    if (done.tasks.some(task => task.state !== 'verified')) {
+      assert.fail(`Expected all specialist handoffs to verify. ${diagnostic()}`);
+    }
     const tasks = new Map(done.tasks.map(task => [task.id, task]));
     for (const task of done.tasks) for (const dependency of task.dependencies) assert.ok(Date.parse(task.attempts[0].admittedAt) >= Date.parse(tasks.get(dependency)!.attempts[0].finishedAt!));
     assert.equal(f.requests.length, 4); assert.equal((await f.core.command('velaApiUsageStatus', {})).usedToday, 4);
