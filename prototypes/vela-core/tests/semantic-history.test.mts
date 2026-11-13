@@ -171,6 +171,27 @@ test('a refinement that returns only previously reviewed sources falls back to t
   assert.deepEqual(result.coverage[0].sources, [candidate]);
 });
 
+test('a truncated refinement can advance when its first page repeats reviewed sources', async () => {
+  const initial = { ...candidate, sourceId: 'initial', text: 'Earlier inspection planning.' };
+  const refinement = 'replacement inspection';
+  const pages: string[] = [];
+  const result = await investigateSemanticHistory(request, {
+    adaptiveDiscovery: true,
+    search: query => ({ sources: [initial], scan: 'bounded', moreMatches: query === refinement }),
+    widen(query) {
+      pages.push(query);
+      return { sources: [candidate], scan: 'bounded' };
+    },
+    isCurrent: () => true,
+    disclose: async call => call.stage === 'interpret' ? proposal : { version: 1, assessment: [{
+      key: evidence.key, status: call.round === 1 ? 'missing' : 'supported',
+      sources: call.round === 1 ? [] : ['e2'], query: call.round === 1 ? refinement : '',
+    }] },
+  });
+  assert.deepEqual(pages, [refinement]);
+  assert.deepEqual(result.coverage[0].sources, [candidate]);
+});
+
 test('the current correction gets a slot ahead of lower-ranked matches', async () => {
   const needs = [evidence, { key: 'second', question: 'What else?', query: 'other result' }];
   const recent = { ...candidate, sourceId: 'recent', text: 'Current correction supplies the missing fact.' };

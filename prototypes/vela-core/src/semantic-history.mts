@@ -297,8 +297,8 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
       // Preserve selected evidence and leave discovery slots for refined queries.
       const limit = rounds < maxRounds ? Math.max(priorCount, candidateLimit - 2) : candidateLimit;
       const matches: T[][] = [];
-      const refinementResults = new Map<string, readonly T[]>();
-      const previouslyObserved = widen.length ? new Set(observed) : undefined;
+      const followupResults = new Map<string, { query: string; sources: readonly T[] }>();
+      const previouslyObserved = rounds > 1 ? new Set(observed) : undefined;
       for (const query of next) {
         signal.throwIfAborted();
         const digest = canonicalRetrievalQuery(query)!.digest;
@@ -311,7 +311,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         if (sources.length > 2 * maxCandidates) partial();
         const batch = sources.slice(0, 2 * maxCandidates);
         matches.push(batch);
-        if (previouslyObserved) refinementResults.set(digest, batch);
+        if (previouslyObserved) followupResults.set(digest, { query, sources: batch });
       }
       // Give each query a turn to contribute one usable source. Rejected and
       // already admitted hits do not consume that query's turn.
@@ -336,8 +336,15 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
           break;
         }
       }
+      const admittedNewSource = (sources: readonly T[]) =>
+        sources.some(source => !previouslyObserved?.has(source.sourceId) && observed.has(source.sourceId));
       const remainingPages = widen.filter(({ refinement }) => !refinement ||
-        !refinementResults.get(refinement)?.some(source => !previouslyObserved?.has(source.sourceId) && observed.has(source.sourceId)));
+        !admittedNewSource(followupResults.get(refinement)?.sources ?? []));
+      // A follow-up can also be truncated. Page it once if its first results
+      // added no evidence, within the same assessment round and source budget.
+      for (const [digest, { query, sources }] of followupResults) {
+        if (truncatedQueries.has(digest) && !admittedNewSource(sources)) remainingPages.push({ query, digest });
+      }
       if (owner.recent && !anchorsRead && ((rounds === 1 && evidence.size === priorCount) || investigateAnchors)) {
         signal.throwIfAborted();
         anchorsRead = true;
