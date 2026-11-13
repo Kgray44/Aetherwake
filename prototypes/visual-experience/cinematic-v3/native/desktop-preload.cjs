@@ -56,6 +56,18 @@ contextBridge.exposeInMainWorld(
         text,
       });
     },
+    resourcePolicyInspection(action) {
+      if (action !== "inspect" && action !== "mode" && action !== "rollback")
+        throw new Error("invalid_resource_inspection_action");
+      if (action !== "inspect" && navigator.userActivation?.isActive !== true)
+        throw new Error("resource_policy_user_gesture_required");
+      return ipcRenderer.invoke("application-resource-policy-inspection", action);
+    },
+    experiencePolicyRollback(review) {
+      if (navigator.userActivation?.isActive !== true)
+        throw new Error("experience_policy_user_gesture_required");
+      return ipcRenderer.invoke("application-experience-policy-rollback", review);
+    },
     async command(name, input) {
       if (
         ![
