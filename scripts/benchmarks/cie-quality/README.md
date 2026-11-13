@@ -42,6 +42,15 @@ The benchmark measures from native broker entry through canonical answer readbac
 
 On Windows with Node 24.18.0, 12 paired profiles measured 1,437 ms p50 and 2,233 ms p95 cold, and 1,163 ms p50 and 1,736 ms p95 warm. These are synthetic full-request observations. They do not estimate provider latency, cost, or the causal effect of qualification reuse.
 
+Set `AERYNTH_BENCHMARK_SYNTHETIC_CIE_PROJECT=1` as well to exercise four excerpts, including three discovered project notes. With that fixture, the comparison below isolates the two runtime files changed by batched snapshot validation. Each revision passed all 24 canonical answer checks and used the same five cold and three warm simulated calls per request.
+
+| Runtime revision | Cold p50 | Cold p95 | Warm p50 | Warm p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Before batching, `c35cca5e` | 2,220 ms | 2,900 ms | 2,001 ms | 2,401 ms |
+| With batching, `16bc7660` | 1,822 ms | 2,708 ms | 1,542 ms | 1,960 ms |
+
+These observations come from 12 profiles per revision on Windows. The candidate ran first and the baseline second in separate runs, so background load and run order may affect the difference. Both used synthetic transport.
+
 ## Independent blind corpus
 
 `cases.public.json` is the independently authored, frozen input-only 48-case corpus (six examples in each of eight categories). Its exact SHA-256 is pinned in `blind-runner.mts`. Labels and adjudication rationales are deliberately not checked in and have not been consulted by the implementer. The fixture file expands semantic evaluation inputs sixfold over the original eight-case set; **that is corpus expansion, not a claimed measured accuracy gain**.

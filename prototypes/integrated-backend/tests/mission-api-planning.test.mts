@@ -1266,19 +1266,36 @@ test('benchmark native reviewed CIE from request through canonical answer readba
   });
   const reply = (value: unknown) => (body: { model: string }) => response(JSON.stringify(value), body.model);
   const samples: Record<'cold' | 'warm', number[]> = { cold: [], warm: [] };
+  const projectEvidence = process.env.AERYNTH_BENCHMARK_SYNTHETIC_CIE_PROJECT === '1';
   for (let pair = 0; pair < 12; pair++) {
     const f = fixture(true);
     try {
       await f.ready();
       const workspace = await f.core.command('desktop', { type: 'snapshot' });
+      let workspaceId = workspace.activeWorkspaceId;
+      if (projectEvidence) {
+        const project = await f.core.command('desktop', { type: 'createProject', title: 'Lift service' });
+        const projectId = project.projects.find(item => item.title === 'Lift service')!.id;
+        const createdWorkspace = await f.core.command('desktop', { type: 'createWorkspace', title: 'Lift service', projectId });
+        workspaceId = createdWorkspace.activeWorkspaceId;
+        for (const title of ['Lift inspection history', 'Lift inspection procedure', 'Lift inspection equipment']) {
+          const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title, workspaceId });
+          const resource = created.resources.find(item => item.title === title)!;
+          await f.core.command('desktop', { type: 'content', resourceId: resource.id, expectedVersion: resource.version,
+            content: 'The west lift inspection concerns a separate maintenance record.' });
+        }
+      }
       const created = await f.core.command('desktop', { type: 'createResource', kind: 'note',
-        title: 'Lift inspection', workspaceId: workspace.activeWorkspaceId });
+        title: 'Lift inspection', workspaceId });
       const note = created.resources.find(item => item.title === 'Lift inspection')!;
       await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: text });
       for (const arm of ['cold', 'warm'] as const) {
         if (arm === 'cold') f.replies.push(reply(interpret('Which weekday?', 'pump inspection')),
           reply(assess('The pump inspection is on Tuesday.', 'day')));
-        f.replies.push(reply(interpret(intent, 'west lift inspection')), reply(assess(text)), body => response(text, body.model));
+        f.replies.push(reply(interpret(intent, 'west lift inspection')), body => {
+          if (projectEvidence) assert.equal(JSON.parse(body.input[0].content).excerpts.length, 4);
+          return reply(assess(text))(body);
+        }, body => response(text, body.model));
         const priorCalls = f.requests.length;
         const started = performance.now();
         const result = await velaCommand({
@@ -1289,7 +1306,7 @@ test('benchmark native reviewed CIE from request through canonical answer readba
             return true;
           },
           input: { name: 'request', input: { intent, resourceIds: [note.id], authorizeProvider: true,
-            providerId: 'openai-api-vela', model, semanticContext: true } },
+            providerId: 'openai-api-vela', model, semanticContext: true, ...(projectEvidence ? { projectEvidence: true } : {}) } },
         }) as VelaRequest;
         assert.equal(result.state, 'responded', `${arm}: ${result.errorCode}; calls: ${f.requests.length - priorCalls}`);
         const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
@@ -1305,7 +1322,7 @@ test('benchmark native reviewed CIE from request through canonical answer readba
     return { samples: sorted.length, p50Ms: sorted[Math.ceil(sorted.length * .5) - 1],
       p95Ms: sorted[Math.ceil(sorted.length * .95) - 1] };
   };
-  console.log(JSON.stringify({ benchmark: 'native-reviewed-cie', transport: 'synthetic', paidCalls: 0,
+  console.log(JSON.stringify({ benchmark: 'native-reviewed-cie', projectEvidence, transport: 'synthetic', paidCalls: 0,
     through: 'canonical answer readback', cold: { ...distribution(samples.cold), simulatedCallsPerRequest: 5 },
     warm: { ...distribution(samples.warm), simulatedCallsPerRequest: 3 } }));
 });
