@@ -6,6 +6,7 @@ const { app, BrowserWindow, safeStorage } = require('electron');
 const { createProtectedStorageBroker } = require('./protected-storage.cjs');
 const { capturePersonalMemory } = require('./personal-memory-capture.cjs');
 const { showVelaReview, isOwnedVelaReviewWindow } = require('./vela-review.cjs');
+const { createMemoryReviewGuard } = require('./personal-memory-review-guard.cjs');
 
 const root = realpathSync(process.argv[2]);
 const mode = process.argv[3];
@@ -90,8 +91,10 @@ async function run() {
     parent = new BrowserWindow({ width: 820, height: 630, show: false, webPreferences: { sandbox: true } });
     await parent.loadURL('data:text/html,<title>Aerynth synthetic memory check</title><button>Review memory</button>');
     parent.show();
-    parent.focus();
     await waitFor(() => parent.isFocused());
+    const guard = createMemoryReviewGuard({ parent, focusedWindow: () => BrowserWindow.getFocusedWindow(),
+      isOwned: isOwnedVelaReviewWindow, deadline: performance.now() + 10000 });
+    guard.checkParent();
     stage = 'review and save';
     let reviewed;
     const saved = await capturePersonalMemory({
@@ -101,6 +104,7 @@ async function run() {
       cancel: id => backend.call('personalMemoryCaptureCancelNative', { id }),
       commit: review => backend.call('personalMemoryCaptureCommitNative', review),
       async showReview(review) {
+        guard.checkParent();
         reviewed = review;
         const result = showVelaReview({ parent, review, expiresAt: review.expiresAt, experience: 'memory-capture' });
         const child = await waitFor(() => BrowserWindow.getAllWindows().find(win =>
@@ -110,9 +114,12 @@ async function run() {
         assert.deepEqual(contents, { text: [factText, text], bridge: 'undefined' });
         const point = await child.webContents.executeJavaScript(
           '(() => { const r = document.querySelector("#approve").getBoundingClientRect(); return { x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2) }; })()');
+        guard.checkReview(child);
         child.webContents.sendInputEvent({ type: 'mouseMove', ...point });
-        for (const type of ['mouseDown', 'mouseUp'])
+        for (const type of ['mouseDown', 'mouseUp']) {
+          guard.checkReview(child);
           child.webContents.sendInputEvent({ type, button: 'left', clickCount: 1, ...point });
+        }
         return result;
       },
     });
