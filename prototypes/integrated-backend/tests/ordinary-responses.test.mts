@@ -56,10 +56,39 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', h
     ...(result.state === 'complete' ? { textDigest: createHash('sha256').update(result.text).digest('hex') } : {}) } as Awaited<ReturnType<NativeDocumentTextServices['extract']>>;
   },
  };
- const create=()=>{core=new BackendCore({path,...provider,nativeMedia:true,contentPolicy:'synthetic-only',...(historyContext===undefined?{}:{velaHistoryContext:historyContext})},event=>events.push(event),{...(fileEditRoots?fixtureFileEditHost([dir,...fileEditRoots]):{}),documents},{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
+ const {fileEditAdmission,secrets}=fixtureFileEditHost([dir,...(fileEditRoots??[])]);
+ const create=()=>{core=new BackendCore({path,...provider,nativeMedia:true,contentPolicy:'synthetic-only',...(historyContext===undefined?{}:{velaHistoryContext:historyContext})},event=>events.push(event),{secrets,...(fileEditRoots?{fileEditAdmission}:{}),documents},{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
  return {dir,get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(realpathSync.native(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
+test('ordinary document draft survives restart without persisting file contents or a path in the draft', async () => {
+ const f = fixture();
+ try {
+  const path = join(f.dir, 'Synthetic draft brief.txt');
+  writeFileSync(path, 'Synthetic private file body');
+  const { resource } = await f.core.command('mediaImportTrusted', {
+   kind: 'file', variant: 'document', commandId: randomUUID(), selection: { kind: 'file', path },
+  });
+  const { resourceId } = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+  const ref = { id: resource.id, version: resource.version };
+  const read = () => f.core.command('conversation', { name: 'readDraft', input: { resourceId } });
+  const save = (expectedVersion: number, documents?: typeof ref[]) => f.core.command('conversation', {
+   name: 'saveDraft', input: { resourceId, expectedVersion, content: 'Summarize this', documents },
+  }) as Promise<import('../../conversation-product/src/contracts.ts').ConversationDraft>;
+  await assert.rejects(save(0, [{ ...ref, version: ref.version + 1 }]), /source_unavailable/);
+  const saved = await save(0, [ref]);
+  assert.deepEqual(saved.documents, [{ ...ref, title: resource.title }]);
+  const row = f.owner.db.prepare('SELECT documents_json FROM cp_drafts WHERE resource_id=?').get(resourceId);
+  assert.deepEqual(JSON.parse(row.documents_json), [ref]);
+  await f.reopen();
+  assert.deepEqual(await read(), saved);
+  const textOnlySave = await save(saved.version);
+  assert.deepEqual(textOnlySave.documents, saved.documents);
+  await assert.rejects(save(saved.version, []), /stale_draft_version/);
+  assert.equal((await save(textOnlySave.version, [])).documents, undefined);
+  assert.equal(f.requests.length, 0);
+ } finally { await f.close(); }
+});
 for (const format of ['txt', 'pdf', 'docx'] as const) test('ordinary document send reviews ' + format + ' text and refuses replacement during review', async () => {
  const f = fixture();
  try {

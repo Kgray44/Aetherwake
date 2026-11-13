@@ -13,12 +13,12 @@ import { ConversationViewPersistence } from '../src/view-persistence.ts';
 /** Synthetic port receipts only: these tests make no database, provider, native-window or network claims. */
 function fixture(providerId='local') {
   const view=componentDocument(),restore=view.install(),calls:{name:string;input:any}[]=[];
-  let draft={resourceId:'chat:synthetic',version:3,content:'Saved unsent text',updatedAt:'2026-11-02T00:00:00Z'},denied=false,detailGate:Promise<void>|null=null,searchError:string|null=null;
+  let draft={resourceId:'chat:synthetic',version:3,content:'Saved unsent text',updatedAt:'2026-11-02T00:00:00Z',documents:undefined as {id:string;version:number;title:string}[]|undefined},denied=false,detailGate:Promise<void>|null=null,searchError:string|null=null;
   const detail:Detail={conversation:{resourceId:draft.resourceId,conversationId:'graph:synthetic',title:'Synthetic conversation',providerId,revision:2,version:1,projectId:null,projectIds:[],state:'active',createdAt:'2026-11-02T00:00:00Z',favorite:false,messageCount:2,collectionIds:[]},messages:{items:[{id:'message:user',resourceId:draft.resourceId,role:'user',content:'A user message',createdAt:'2026-11-02T00:00:00Z',provenance:'user',inherited:false,sensitivity:'internal'},{id:'message:assistant',resourceId:draft.resourceId,role:'assistant',content:'A **readable** response.\n\n```ts\nconst answer = 42;\n```',createdAt:'2026-11-02T00:00:01Z',provenance:'application',inherited:false,sensitivity:'internal'}],total:2,offset:0,limit:50,hasMore:false},lineage:[],policy:{resourceId:draft.resourceId,revision:1,mode:'independent',allowedSourceIds:[],allowCrossProject:false,maxSensitivity:'internal',categories:['excerpt']},shares:[],providers:[{id:providerId,label:providerId==='local'?'Local recording':'Native Codex',available:true,record:true,execute:providerId!=='local',nativeFork:false,history:'local',simulated:false,models:[]}]};
   let pending: {input:any;resolve:(value:unknown)=>void;reject:(error:Error)=>void}|null=null;
   const collections:Collection[]=[],projects:{id:string;title:string;version:number}[]=[],history={items:[] as SearchHit[],total:0};
   const port={async command(name:string,input:any):Promise<any>{calls.push({name,input});if(denied)throw new Error('source_unavailable');
-    if(name==='readDraft')return {...draft};if(name==='saveDraft'){if(input.expectedVersion!==draft.version)throw new Error('stale_draft_version');draft={...draft,version:draft.version+1,content:input.content};return {...draft};}
+    if(name==='readDraft')return {...draft};if(name==='saveDraft'){if(input.expectedVersion!==draft.version)throw new Error('stale_draft_version');draft={...draft,version:draft.version+1,content:input.content,documents:input.documents??draft.documents};return {...draft};}
     if(name==='detail'){const captured=structuredClone(detail);await detailGate;return captured;}if(name==='send')return new Promise((resolve,reject)=>{pending={input,resolve,reject};}).finally(()=>{pending=null;});
     if(name==='providers')return detail.providers;if(name==='collections')return structuredClone(collections);if(name==='projects')return structuredClone(projects);if(name==='list'){if(searchError)throw new Error(searchError);return {items:history.items.filter(hit=>hit.kind==='conversation').map(hit=>hit.summary??{...detail.conversation,resourceId:hit.resourceId,title:hit.title}).slice(input.offset??0,(input.offset??0)+(input.limit??50)),total:history.total,offset:input.offset??0,limit:input.limit??50,hasMore:(input.offset??0)+(input.limit??50)<history.total};}if(name==='search'){if(searchError)throw new Error(searchError);const items=input.searchMode&&input.searchMode!=='all'?history.items.filter(hit=>hit.kind===input.searchMode.replace(/s$/,'')):history.items;return {...history,items,offset:input.offset??0,limit:50,hasMore:(input.offset??0)+50<history.total};}if(name==='favorite'){detail.conversation.favorite=input.favorite;return input.favorite;}throw new Error('Unexpected command '+name);
   }} as ConversationProductPort;
@@ -781,7 +781,7 @@ test('only an earlier successful send acknowledgement clears on new editor input
   try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,draftSession:session,presentation:'workspace'});await chat.ready;const editor=f.view.root.querySelector('textarea'),form=f.view.root.querySelector('.cp-composer'),status=f.view.root.querySelector('.cp-chat-status');form.fire('submit');await until(()=>!!f.pending);f.accept();await chat.whenSubmissionSettled();assert.equal(status.dataset.statusKind,'send-accepted');assert.match(status.textContent,/Message accepted/);
     await chat.refresh();editor.fire('input');assert.match(status.textContent,/Message accepted/,'Refresh and unchanged input do not erase an acknowledgement');session.update('Shared session recovery update');assert.match(status.textContent,/Message accepted/,'A programmatic recovery notification is not new user input');editor.value='Actual next draft';editor.setSelectionRange(3,3);editor.fire('input');assert.equal(status.textContent,'');assert.equal(status.dataset.statusKind,'notice');assert.equal(f.view.root.querySelector('textarea'),editor);assert.deepEqual([editor.selectionStart,editor.selectionEnd],[3,3]);await chat.flush();assert.equal(f.draft.content,'Actual next draft');
     form.fire('submit');await until(()=>!!f.pending);f.pending!.reject(new Error('provider_unavailable'));await chat.whenSubmissionSettled();const failed=status.textContent;editor.value='Text after failure';editor.fire('input');assert.equal(status.textContent,failed);assert.match(failed,/provider_unavailable/);assert.equal(status.dataset.statusKind,'notice');named(f.view.root,'I reviewed the send outcome').fire('click');form.fire('submit');await until(()=>!!f.pending);f.pending!.resolve({id:'execution:unknown',resourceId:f.draft.resourceId,state:'unknown'});await chat.whenSubmissionSettled();const unknown=status.textContent;editor.value='Text after unknown outcome';editor.fire('input');assert.equal(status.textContent,unknown);assert.match(unknown,/not confirmed/);await chat.flush();
-    f.external('Concurrent canonical recovery');editor.value='This editor conflict';editor.fire('input');await assert.rejects(chat.flush(),/stale_draft_version/);editor.value='Further conflict edit';editor.fire('input');assert.equal(status.textContent,unknown);assert.equal(f.view.root.querySelector('.cp-draft-status').dataset.phase,'conflict');assert.match(f.view.root.querySelector('.cp-draft-status').textContent,/Choose which text to keep/);assert.equal(session.snapshot().content,'Further conflict edit');
+    f.external('Concurrent canonical recovery');editor.value='This editor conflict';editor.fire('input');await assert.rejects(chat.flush(),/stale_draft_version/);editor.value='Further conflict edit';editor.fire('input');assert.equal(status.textContent,unknown);assert.equal(f.view.root.querySelector('.cp-draft-status').dataset.phase,'conflict');assert.match(f.view.root.querySelector('.cp-draft-status').textContent,/Choose which draft to keep/);assert.equal(session.snapshot().content,'Further conflict edit');
   }finally{f.pending?.reject(new Error('synthetic cleanup'));await chat?.whenSubmissionSettled();const remote=session.snapshot().remote;if(remote)await session.resolve('keep-local',remote.version);await chat?.dispose();await session.dispose();f.restore();}
 });
 
@@ -1259,6 +1259,12 @@ test('an ordinary chat sends only the selected document identity and retains it 
   await new Promise(resolve=>setImmediate(resolve));
   assert.ok(named(f.view.root,'Brief.pdf ×'),f.view.root.querySelector('.cp-chat-status').textContent);
   assert.equal(f.calls.some(call=>call.name==='send'),false);
+  await chat.dispose();
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   chooseDocument:async()=>{throw Error('Recovered attachment must not reopen the picker');},
+  });
+  await chat.ready;
+  assert.ok(named(f.view.root,'Brief.pdf ×'));
   f.view.root.querySelector('form').fire('submit');
   await until(()=>!!f.pending);
   assert.deepEqual(f.pending!.input.documents,[{id:'file:brief',version:3}]);
@@ -1268,6 +1274,8 @@ test('an ordinary chat sends only the selected document identity and retains it 
   assert.equal(f.draft.content,'Saved unsent text');
   named(f.view.root,'Brief.pdf ×').fire('click');
   assert.equal(!!named(f.view.root,'Brief.pdf ×'),false);
+  await chat.flush();
+  assert.deepEqual(f.draft.documents,[]);
  } finally {f.pending?.reject(Error('synthetic cleanup'));await chat?.dispose();f.restore();}
 });
 

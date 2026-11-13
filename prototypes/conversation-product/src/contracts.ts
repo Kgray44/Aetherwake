@@ -19,7 +19,9 @@ export type Share = { id: string; sourceResourceId: string; sourceMessageId: str
 export type ProviderCapability = { id: string; label: string; available: boolean; record: boolean; execute: boolean; nativeFork: boolean; history: 'local' | 'unavailable'; reason?: string; reasonCode?: string; simulated: boolean; models: string[]; modelOptions?: OrdinaryModelOption[];default?:boolean;catalogOnly?:true; /** Documentation support is separate from the runtime booleans above. */ accountFidelity?: NativeChatGPTFidelityDescriptor };
 export type Detail = { conversation: ConversationSummary & {messageCount:number}; messages: Page<MessageView>; lineage: { id: string; parentResourceId: string; childResourceId: string; sourceMessageId: string; mode: string; createdAt: string }[]; policy: BranchPolicy; shares: Share[]; providers: ProviderCapability[] };
 /** Unsent local text. Its revision is independent from the canonical transcript. */
-export type ConversationDraft = { resourceId: string; version: number; content: string; updatedAt: string | null };
+export type DraftDocumentRef = { id: string; version: number };
+export type DraftDocument = DraftDocumentRef & { title: string };
+export type ConversationDraft = { resourceId: string; version: number; content: string; updatedAt: string | null; documents?: DraftDocument[] };
 export const CONVERSATION_DRAFT_LIMITS = { contentUnits: 16384, contentBytes: 65536, aggregateBytes: 8 * 1024 * 1024, records: 4096 } as const;
 /** Local recovery metadata only. No draft text, transcript, provider or title copy. */
 export type ConversationViewPosition = { conversationRevision:number;anchor:{messageId:string;offsetY:number}|null };
@@ -40,7 +42,7 @@ export interface ProductCommandMap {
  search: { input: SearchQuery; output: Page<SearchHit> };
  detail: { input: { resourceId: string; offset?: number; limit?: number; aroundMessageId?: string }; output: Detail };
  readDraft: { input: { resourceId: string }; output: ConversationDraft };
- saveDraft: { input: { resourceId: string; expectedVersion: number; content: string }; output: ConversationDraft };
+ saveDraft: { input: { resourceId: string; expectedVersion: number; content: string; documents?: DraftDocumentRef[] }; output: ConversationDraft };
  readViewState: {input:{resourceId?:string};output:ConversationViewState};
  saveViewState: {input:{resourceId:string;expectedVersion:number;position:ConversationViewPosition|null;selection:ConversationViewSelection|null};output:ConversationView};
  selectView: {input:{expectedVersion:number;resourceId:string|null};output:ConversationViewSelected};
