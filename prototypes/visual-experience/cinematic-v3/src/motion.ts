@@ -15,9 +15,12 @@ export const clamp = (x: number, low: number, high: number) =>
 /** Exact critically damped spring; retargeting preserves position and velocity. */
 export function advance(c: Channel, seconds: number, frequency = 13): void {
   const t = clamp(seconds, 0, 0.12);
+  advanceWithDecay(c, t, frequency, Math.exp(-frequency * t));
+}
+
+function advanceWithDecay(c: Channel, t: number, frequency: number, decay: number) {
   const offset = c.value - c.target;
   const j = c.velocity + frequency * offset;
-  const decay = Math.exp(-frequency * t);
   c.value = c.target + (offset + j * t) * decay;
   c.velocity = (c.velocity - frequency * j * t) * decay;
   if (Math.abs(c.value - c.target) < 0.015 && Math.abs(c.velocity) < 0.05) {
@@ -84,7 +87,8 @@ export class MotionCoordinator {
   }
   snap(id: string) {
     const b = this.bodies.get(id)!;
-    for (const c of Object.values(b.channels)) {
+    for (const key of channels) {
+      const c = b.channels[key];
       c.value = c.target;
       c.velocity = 0;
     }
@@ -100,12 +104,23 @@ export class MotionCoordinator {
   }
   step(dt: number): boolean {
     let active = false;
+    const t = clamp(dt, 0, 0.12);
+    const decay = Math.exp(-13 * t);
     for (const [id, b] of this.bodies) {
-      if (this.reduced) this.snap(id);
-      else for (const c of Object.values(b.channels)) advance(c, dt);
-      const moving = Object.values(b.channels).some(
-        (c) => c.value !== c.target || c.velocity !== 0,
-      );
+      if (this.reduced) {
+        this.snap(id);
+        active ||= channels.some((key) => {
+          const c = b.channels[key];
+          return c.value !== c.target;
+        });
+        continue;
+      }
+      let moving = false;
+      for (const key of channels) {
+        const c = b.channels[key];
+        advanceWithDecay(c, t, 13, decay);
+        if (c.value !== c.target || c.velocity !== 0) moving = true;
+      }
       if (!moving && b.transitioning) {
         this.record(id, "reconciliation", "settled", b.transition);
         b.transitioning = false;
@@ -115,10 +130,16 @@ export class MotionCoordinator {
     return active;
   }
   pose(id: string): Pose {
-    const b = this.bodies.get(id)!;
-    return Object.fromEntries(
-      channels.map((k) => [k, b.channels[k].value]),
-    ) as Pose;
+    const { x, y, w, h, lift, yaw, opacity } = this.bodies.get(id)!.channels;
+    return {
+      x: x.value,
+      y: y.value,
+      w: w.value,
+      h: h.value,
+      lift: lift.value,
+      yaw: yaw.value,
+      opacity: opacity.value,
+    };
   }
 }
 
