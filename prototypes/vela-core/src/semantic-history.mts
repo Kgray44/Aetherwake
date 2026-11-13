@@ -91,6 +91,8 @@ interface SemanticHistoryOwner<T extends SemanticHistorySource> {
   related?(sources: readonly T[]): SemanticHistoryCandidates<T>;
   selected?(): SemanticHistoryCandidates<T>;
   recent?(): SemanticHistoryCandidates<T>;
+  /** When present, validates the whole immutable review for a synchronous batch. */
+  isSnapshotCurrent?(): boolean;
   isCurrent(source: T): boolean;
   // Native-only disclosure gateway. Check the exact payload/destination on every call.
   // Sources are supplied to validate their current consent and lineage, never as wire metadata.
@@ -248,6 +250,7 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
     };
     const addCandidates = ({ sources, scan }: SemanticHistoryCandidates<T>, limit = candidateLimit) => {
       recordScan(scan);
+      if (sources.length && owner.isSnapshotCurrent?.() === false) { partial(); return; }
       if (sources.length > 2 * maxCandidates) partial();
       for (const source of sources.slice(0, 2 * maxCandidates)) {
         if (observed.has(source.sourceId)) continue;
@@ -332,15 +335,15 @@ export async function investigateSemanticHistory<T extends SemanticHistorySource
         }
       }
       if (priorAssessment && evidence.size === priorCount) {
-        if (![...evidence.values()].every(owner.isCurrent)) return empty('stale', 'source-changed');
+        if (owner.isSnapshotCurrent?.() === false || ![...evidence.values()].every(owner.isCurrent)) return empty('stale', 'source-changed');
         return assessed(priorAssessment);
       }
 
       if (pendingClarification && !evidence.size) return { ...empty('assessed'), proposal, clarification: pendingClarification };
       const sources = [...evidence.values()];
-      if (!sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
+      if (owner.isSnapshotCurrent?.() === false || !sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
       const reviewed = await disclose(structuredClone({ ...assessmentInput, round: rounds, excerpts, ...followup }), sources);
-      if (!sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
+      if (owner.isSnapshotCurrent?.() === false || !sources.every(source => owner.isCurrent(source))) return empty('stale', 'source-changed');
       if (reviewed == null) return empty('unavailable', 'no-provider-result');
       let rejection: AssessmentRejection = 'assessment-shape';
       const assessment = parseSemanticHistoryAssessment(reviewed, needs, evidence, reason => { rejection = reason; });

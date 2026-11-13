@@ -234,7 +234,8 @@ export async function investigateReviewedVelaEvidence(api: VelaApiRuntime, inten
             bodies.some(body => body.includes(' ' + title + ' ')));
           return { sources: matches.slice(0, 2).map(match => match.source), scan: matches.length > 2 ? 'partial' as const : scan };
         } } : {}),
-        isCurrent: source => isApproved(source) && authorize(),
+        isSnapshotCurrent: authorize,
+        isCurrent: isApproved,
         disclose: (call, sources, abort) => {
           observations?.validateReviewedTests?.();
           return disclose({ ...call,

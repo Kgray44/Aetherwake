@@ -127,3 +127,43 @@ test('a cited note leads to a uniquely named reviewed source outside the lexical
   assert.equal(result.coverage[0].status, 'supported');
   assert.deepEqual(result.coverage[0].passages.map(passage => passage.sourceId), ['c', 'd']);
 });
+
+test('a reviewed snapshot is revalidated at disclosure boundaries regardless of excerpt count', async () => {
+  const receipt = { model: 'synthetic-model' };
+  const request = 'Who signs the inspection?';
+  const quote = 'The duty engineer signs.';
+  const api = {
+    qualifiedStructuredRoute: () => receipt,
+    resolveQualifiedStructuredRoute: async () => receipt,
+    isStructuredQualificationCurrent: () => true,
+    async structuredProposal(input: any) {
+      input.validate();
+      if (input.payload.stage === 'interpret') return { version: 2, objective: request, clarification: '',
+        perception: { kind: 'answer', explicitGoals: [], inferredGoals: [], constraints: [], capabilityHints: [], deliverables: ['text'], verification: [] },
+        needs: [{ key: 'signer', question: request, query: 'inspection' }] };
+      return { version: 3, clarification: '', assessment: [{ key: 'signer', status: 'supported', query: '',
+        passages: [{ source: 'e1', quote }] }] };
+    },
+  } as unknown as VelaApiRuntime;
+  async function investigate(count: number, revokeAtAssessment = false) {
+    let validations = 0;
+    let revoked = false;
+    const sources = Array.from({ length: count }, (_, index) => ({
+      sourceId: String(index), title: 'Reviewed note', text: quote, revision: '1', proofDigest: String(index), sourceKind: 'note' as const,
+    }));
+    const runtime = revokeAtAssessment ? { ...api, async structuredProposal(input: Parameters<VelaApiRuntime['structuredProposal']>[0]) {
+      const result = await api.structuredProposal(input, new AbortController().signal);
+      if ((input.payload as { stage: string }).stage === 'assess') revoked = true;
+      return result;
+    } } as unknown as VelaApiRuntime : api;
+    const run = investigateReviewedVelaEvidence(runtime, request, sources, 1, 'synthetic-model', () => {
+      validations++;
+      if (revoked) throw new Error('review revoked');
+    }, new AbortController().signal);
+    if (revokeAtAssessment) await assert.rejects(run, /review revoked/);
+    else assert.equal((await run).coverage[0].status, 'supported');
+    return validations;
+  }
+  assert.equal(await investigate(4), await investigate(1));
+  await investigate(4, true);
+});
