@@ -159,6 +159,7 @@ function ordinaryTurnClock(): OrdinaryResponsesPreview['clock'] {
   return { utc: instant.toISOString(), local: local + (offset < 0 ? '-' : '+') + hours + ':' + minutes };
 }
 type OrdinarySendBinding = Pick<OrdinaryResponsesPreview, 'executionId' | 'clock' | 'purpose'>;
+type OrdinaryMemoryRecall = NonNullable<Awaited<ReturnType<ReturnType<typeof createPersonalMemoryReview>['prepareOrdinaryRecall']>>>;
 type PendingVelaWorkflow = {
   analysis: PrivateVelaPreview;
   codex: PrivateVelaPreview;
@@ -294,7 +295,7 @@ export class BackendCore {
   private conversationBatch:{active:boolean;access:Map<string,boolean>}|null=null;
   private conversationAccess!: ReturnType<typeof createCanonicalAccessHelper>;
   private capabilityCache = createObservedCapabilityCache();
-  private sendPreviews = new Map<string,{input:ConversationSendInput;preview:ConversationSendPreview}>();
+  private sendPreviews = new Map<string,{input:ConversationSendInput;preview:ConversationSendPreview;memory?:OrdinaryMemoryRecall}>();
   private sendGrants = new Map<string,{previewId:string;fingerprint:string;commandId:string;expiresAt:string;consumed:boolean}>();
   private vela!: VelaService;
   private velaHost!: CanonicalVelaHost;
@@ -5978,7 +5979,7 @@ export class BackendCore {
       return { id: message.id, resourceId: input.resourceId, role: 'user', content: message.content, revision: this.state.revisions[input.resourceId], deviceClockMessageId: reply.id };
     }));
   }
-  private async ordinaryEgress(input:ConversationSendInput,revisionOffset:number,binding: OrdinarySendBinding, context:AttachedContext[],handoff:ConversationSendPreview['handoff']):Promise<OrdinaryResponsesPreview> {
+  private async ordinaryEgress(input:ConversationSendInput,revisionOffset:number,binding: OrdinarySendBinding, context:AttachedContext[],handoff:ConversationSendPreview['handoff'], captureMemory?: (memory: OrdinaryMemoryRecall) => void):Promise<OrdinaryResponsesPreview> {
     await this.refreshOrdinaryStatus();if(!this.ordinaryAvailable())await this.checkOrdinaryModels();
     const catalog=this.ordinaryCatalog!,model=input.model??catalog.models[0].id;ensure(catalog.models.some(m=>m.id===model),'unsupported_model');
     const { executionId, clock, purpose } = binding;
@@ -6012,7 +6013,8 @@ export class BackendCore {
       ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),
       ...(input.webSearch ? { webSearch: true } : {}),
     };
-    let remaining = RESPONSES_REQUEST_BYTES - prepareResponsesTurn(turn).review.bodyBytes;
+    // Leave room for the bounded memory manifest and JSON escaping.
+    let remaining = RESPONSES_REQUEST_BYTES - prepareResponsesTurn(turn).review.bodyBytes - (input.useMemory ? 32768 : 0);
     const history: OrdinaryResponsesPreview['history'] = [];
     const recent: TurnInput['messages'][number][] = [];
     const ownMessages = input.webSearch ? new Map<string, GraphData['messages'][number]>() : new Map(this.state.graph.messages.filter(message => message.conversationId === gid).map(message => [message.id, message]));
@@ -6030,7 +6032,7 @@ export class BackendCore {
       ensure(message.role === 'user' || message.role === 'assistant', 'ordinary_history_role_unsupported');
       const item = { role: message.role, content: message.content };
       const bytes = Buffer.byteLength(JSON.stringify(item)) + 1;
-      if (bytes > remaining || recent.length + required.length === RESPONSES_MESSAGE_LIMIT) { truncated = true; break; }
+      if (bytes > remaining || recent.length + required.length + (input.useMemory ? 1 : 0) >= RESPONSES_MESSAGE_LIMIT) { truncated = true; break; }
       remaining -= bytes;
       recent.push(item);
       history.push({ resourceId: input.resourceId, messageId: id, digest: createHash('sha256').update(message.content).digest('hex'), ...(evidence ? { providerId: evidence.providerId } : {}) });
@@ -6042,10 +6044,15 @@ export class BackendCore {
     const requiresSourceReview = !!context.length || !!handoff || recent.some((item, index) => item.role === 'assistant' && history[index].providerId !== CHATGPT_PLAN_PROVIDER);
     const messages = [...recent, ...required];
     const contextDigest = hash({history,context,handoff,clock,instructions,instructionVersion:packet.version});
-    const prepared = prepareResponsesTurn({ ...turn, messages, contextDigest });
-    return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions, instructionVersion: packet.version, messages, history, contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview };
+    const baseTurn = { ...turn, messages, contextDigest };
+    const memory = input.useMemory ? await this.personalMemoryReview?.prepareOrdinaryRecall(input.resourceId, baseTurn) : null;
+    if (input.useMemory) ensure(memory, 'personal_memory_no_eligible_context');
+    if (memory) captureMemory?.(memory);
+    const exact = memory?.turn ?? baseTurn;
+    const prepared = prepareResponsesTurn(exact);
+    return { executionId, clock, ...(purpose ? { purpose } : {}), ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions, instructionVersion: packet.version, messages: exact.messages, history, contextDigest: exact.contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview: requiresSourceReview || !!memory, ...(memory ? { memoryDigest: memory.manifest.digest } : {}) };
   }
-  private async prepareConversationSend(input:ConversationSendInput,revisionOffset=0,dispatchingHandoffId?:string,ordinaryBinding?: OrdinarySendBinding):Promise<Omit<ConversationSendPreview,'id'|'expiresAt'>> {
+  private async prepareConversationSend(input:ConversationSendInput,revisionOffset=0,dispatchingHandoffId?:string,ordinaryBinding?: OrdinarySendBinding,captureMemory?: (memory: OrdinaryMemoryRecall) => void):Promise<Omit<ConversationSendPreview,'id'|'expiresAt'>> {
     ensure(input&&typeof input.content==='string'&&input.content.trim()&&Buffer.byteLength(input.content)<=16384,'invalid_prompt');
     ensure(typeof input.commandId==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,198}$/.test(input.commandId),'invalid_command_id');
     ensure(Number.isSafeInteger(input.expectedRevision)&&input.expectedRevision>0,'invalid_expected_version');
@@ -6057,6 +6064,8 @@ export class BackendCore {
     ensure(input.reasoningEffort === undefined || c.providerId === CHATGPT_PLAN_PROVIDER &&
       input.model !== undefined && supportsOrdinaryReasoning(input.model, input.reasoningEffort), 'unsupported_reasoning_effort');
     ensure(input.webSearch === undefined || input.webSearch === true && c.providerId === CHATGPT_PLAN_PROVIDER, 'invalid_web_search_scope');
+    ensure(input.useMemory === undefined || input.useMemory === true && !input.webSearch && !ordinaryBinding?.purpose &&
+      c.providerId === CHATGPT_PLAN_PROVIDER && this.personalMemoryReview, 'invalid_memory_scope');
     if(c.providerId===CHATGPT_PLAN_PROVIDER&&!ordinaryBinding)
       await this.maintainOrdinarySession();
     // A public lookup sends only the draft submitted for search.
@@ -6079,19 +6088,25 @@ export class BackendCore {
     ensure(Buffer.byteLength(executionText)<=65536,'context_budget_exceeded');
     if(handoff)ensure(Buffer.byteLength(executionText)<=this.package(handoff.id).tokenBudget,'context_budget_exceeded');
     const exact={commandId:input.commandId,resourceId:input.resourceId,providerId:c.providerId,expectedRevision:input.expectedRevision,prompt:input.content,...(input.model?{model:input.model}:{}),context,...(handoff?{handoff}:{}),executionText};
-    if(c.providerId===CHATGPT_PLAN_PROVIDER){const responses=await this.ordinaryEgress(input,revisionOffset,ordinaryBinding ?? { executionId: randomUUID(), clock: ordinaryTurnClock() },context,handoff),ordinary={...exact,model:responses.model,responses};return {...ordinary,fingerprint:hash({contract:'aerynth.conversation-send@1',...ordinary,boundaryDigest:this.ordinaryCatalog!.boundaryDigest})};}
+    if(c.providerId===CHATGPT_PLAN_PROVIDER){const responses=await this.ordinaryEgress(input,revisionOffset,ordinaryBinding ?? { executionId: randomUUID(), clock: ordinaryTurnClock() },context,handoff,captureMemory),ordinary={...exact,model:responses.model,responses};return {...ordinary,fingerprint:hash({contract:'aerynth.conversation-send@1',...ordinary,boundaryDigest:this.ordinaryCatalog!.boundaryDigest})};}
     return {...exact,fingerprint:hash({contract:'aerynth.conversation-send@1',...exact,instanceId:this.port.instanceId,accountScope:this.port.accountScope})};
   }
   private async previewConversationSend(input:ConversationSendInput):Promise<ConversationSendPreview> {
-    this.pruneSendApprovals();ensure(this.sendPreviews.size<64,'approval_backpressure');const prepared=await this.prepareConversationSend(input);
+    this.pruneSendApprovals();ensure(this.sendPreviews.size<64,'approval_backpressure');
+    let memory: OrdinaryMemoryRecall | undefined;
+    const prepared=await this.prepareConversationSend(input,0,undefined,undefined,value => { memory=value; });
     ensure(this.sendPreviews.size<64,'approval_backpressure');
     const preview={...prepared,id:randomUUID(),expiresAt:new Date(Date.now()+300000).toISOString()};
-    this.sendPreviews.set(preview.id,{input:structuredClone(input),preview});return structuredClone(preview);
+    this.sendPreviews.set(preview.id,{input:structuredClone(input),preview,memory});return structuredClone(preview);
   }
   private async authorizeConversationSend(input:CommandMap['authorizeConversationSend']['input']) {
     this.pruneSendApprovals();ensure(!this.active,'execution_busy');const entry=this.sendPreviews.get(input.previewId);ensure(entry,'send_preview_expired');
     ensure(entry.preview.fingerprint===input.fingerprint&&entry.input.commandId===input.commandId,'approval_scope_mismatch');
     const current=await this.prepareConversationSend(entry.input,0,undefined,entry.preview.responses);ensure(current.fingerprint===input.fingerprint,'stale_send_preview');ensure(this.sendGrants.size<64,'approval_backpressure');
+    if (entry.memory) {
+      ensure(input.reviewedBodyDigest === entry.memory.bodyDigest, 'personal_memory_disclosure_review_required');
+      entry.memory.approve(input.reviewedBodyDigest);
+    }
     const grantId=randomUUID(),expiresAt=new Date(Math.min(Date.now()+60000,Date.parse(entry.preview.expiresAt))).toISOString();
     this.sendGrants.set(grantId,{previewId:input.previewId,fingerprint:input.fingerprint,commandId:input.commandId,expiresAt,consumed:false});return {grantId,expiresAt};
   }
@@ -6106,7 +6121,7 @@ export class BackendCore {
     ensure(this.sendGrants.get(input.grantId) === grant && Date.parse(grant.expiresAt) > Date.now(), 'native_send_grant_expired');
     ensure(this.sendPreviews.get(input.previewId) === entry && Date.parse(entry.preview.expiresAt) > Date.now(), 'send_preview_expired');
     grant.consumed = true;
-    if(current.responses){const task=this.runOrdinary(entry.input,current);this.ordinaryTask=task;try{return await task;}finally{if(this.ordinaryTask===task)this.ordinaryTask=null;}}
+    if(current.responses){const task=this.runOrdinary(entry.input,current,undefined,entry.memory);this.ordinaryTask=task;try{return await task;}finally{entry.memory?.revoke();if(this.ordinaryTask===task)this.ordinaryTask=null;}}
     return this.runExecution({resourceId:entry.input.resourceId,prompt:entry.input.content,commandId:entry.input.commandId,expectedRevision:entry.input.expectedRevision,authorized:true,...(entry.input.model?{model:entry.input.model}:{}),...(current.handoff?{handoffId:current.handoff.id}:{})},{input:entry.input,preview:current});
   }
   private createGraph(imported?: GraphData): ConversationGraph {
@@ -6371,10 +6386,13 @@ export class BackendCore {
     }
     this.conversations.nativeAuthorizeContextSources(input.resourceId,sources);
   }
-  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer'];requestId?:string;preview?:{id:string;clock?:VelaRouteTiming['previewClock']}}):Promise<Execution> {
+  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer'];requestId?:string;preview?:{id:string;clock?:VelaRouteTiming['previewClock']}}, memory?:OrdinaryMemoryRecall):Promise<Execution> {
     const started = performance.now();
     const measuredStart = authority?.measure ? started : undefined;
     const p=preview.responses;ensure(p&&preview.providerId===CHATGPT_PLAN_PROVIDER&&!this.active&&!this.velaApiTask&&this.missionSpecialistsInFlight<2,'ordinary_execution_unavailable');
+    ensure(!!memory === !!p.memoryDigest, 'personal_memory_disclosure_review_required');
+    const turn: TurnInput = { executionId:p.executionId,requestId:input.commandId,configurationId:p.configurationId,providerId:CHATGPT_PLAN_PROVIDER,assistant:'ordinary',model:p.model,instructions:p.instructions,messages:p.messages,contextDigest:p.contextDigest,...(p.reasoningEffort === undefined ? {} : { reasoningEffort: p.reasoningEffort }),...(p.webSearch?{webSearch:true}:{}) };
+    memory?.validate(turn);
     ensure(this.conv(input.resourceId).providerId===CHATGPT_PLAN_PROVIDER&&!this.state.bindings[input.resourceId]?.length,'invalid_cross_provider_reference');
     ensure(this.state.revisions[input.resourceId]===input.expectedRevision,'stale_resource_version');
     const fingerprint=hash({type:'ordinary-responses',...input}),prior=this.state.receipts[input.commandId];
@@ -6388,9 +6406,9 @@ export class BackendCore {
     this.atomic(()=>{if(authority?.countVelaAttempt)this.admitVelaAttempt(e);e.inputMessageId=this.graph.addMessage(this.gid(e.resourceId),'user',input.content,{provenance:'user'}).id;this.state.revisions[e.resourceId]++;this.state.executions[e.id]=e;this.state.receipts[input.commandId]={fingerprint,result:e.id};if(handoff)handoff.state='dispatching';});
     this.active=e;this.assistantText='';this.assistantCursor=0;this.ordinaryController=controller;
     this.liveVelaAnswer = authority?.liveVelaAnswer;
-    this.activeSourceFence = () => { this.finalOrdinaryFence(input, preview); authority?.validate(); };
+    this.activeSourceFence = () => { this.finalOrdinaryFence(input, preview); memory?.validate(turn); authority?.validate(); };
     const catalog=this.ordinaryCatalog!,classification=this.ordinaryTest?'simulated' as const:'reported' as const;
-    const fence=async()=>{authority?.validate();ensure(this.active?.id===e.id&&this.conversationAccess.resource(e.resourceId),'source_unavailable');const current=await this.prepareConversationSend(input,1,preview.handoff?.id,p);ensure(current.fingerprint===preview.fingerprint,'stale_send_preview');await this.ordinaryConnections.revalidateCredential(p.connectionVersion,catalog.boundaryDigest);this.finalOrdinaryFence(input,preview);authority?.validate();};
+    const fence=async()=>{authority?.validate();ensure(this.active?.id===e.id&&this.conversationAccess.resource(e.resourceId),'source_unavailable');const current=await this.prepareConversationSend(input,1,preview.handoff?.id,p);ensure(current.fingerprint===preview.fingerprint,'stale_send_preview');await this.ordinaryConnections.revalidateCredential(p.connectionVersion,catalog.boundaryDigest);this.finalOrdinaryFence(input,preview);memory?.validate(turn);authority?.validate();};
     const supply=async(responseId:string)=>{
       this.atomic(()=>{e.responseId=responseId;e.state='running';this.state.contextSupplies![e.id]={resourceId:e.resourceId,responseId,suppliedAt:now(),items:preview.context.map(i=>({shareId:i.shareId,digest:i.digest,sourceResourceId:i.sourceResourceId,sourceMessageId:i.sourceMessageId}))};});
       for(const item of preview.context)await this.conversations.confirmSupplied(e.resourceId,item.shareId,e.id);
@@ -6431,12 +6449,12 @@ export class BackendCore {
         revalidate:async(review,boundary)=>{ensure(review.bodyDigest===p.bodyDigest&&boundary===catalog.boundaryDigest,'approval_scope_mismatch');await fence();},
       }});
       this.providerActivity.providerRequests=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.providerRequests+1);
-      result=await transport.turn({executionId:e.id,requestId:input.commandId,configurationId:p.configurationId,providerId:CHATGPT_PLAN_PROVIDER,assistant:'ordinary',model:p.model,instructions:p.instructions,messages:p.messages,contextDigest:p.contextDigest,...(p.reasoningEffort === undefined ? {} : { reasoningEffort: p.reasoningEffort }),...(p.webSearch?{webSearch:true}:{})},controller.signal);
+      result=await transport.turn(turn,controller.signal);
       timing.observeResult();
       let valid=true;try{await fence();}catch{valid=false;}
       if (result.responseId && !e.responseId && valid) {
         await supply(result.responseId);
-        try { this.finalOrdinaryFence(input, preview); authority?.validate(); } catch { valid = false; }
+        try { this.finalOrdinaryFence(input, preview); memory?.validate(turn); authority?.validate(); } catch { valid = false; }
       }
       this.atomic(()=>{
         e.responseOutcome=result!.outcome;e.cancellation=result!.cancellation;if(result!.incompleteReason)e.incompleteReason=result!.incompleteReason;if(result!.httpDiagnostic)e.httpDiagnostic=projectTurnHttpDiagnostic(result!.httpDiagnostic);if(result!.responseId)e.responseId=result!.responseId;if(result!.usage)e.usage=result!.usage;if(result!.reportedModel)e.reportedModel=result!.reportedModel;
@@ -6638,6 +6656,16 @@ export class BackendCore {
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
+    if (name === 'personalMemoryPolicyNative') {
+      const review = this.personalMemoryReview;
+      ensure(review && !this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+      const policy = input as CommandMap['personalMemoryPolicyNative']['input'];
+      if (policy.enable === true) {
+        ensure(Number.isSafeInteger(policy.expectedVersion), 'invalid_privacy_policy');
+        return await review.setProviderUse('ordinary', true, policy.expectedVersion!) as CommandMap[K]['output'];
+      }
+      return (await review.inspect({ after: null, limit: 1 })).policy as CommandMap[K]['output'];
+    }
     if (name === 'personalMemoryCapturePreviewNative' || name === 'personalMemoryCaptureCommitNative' || name === 'personalMemoryCaptureCancelNative') {
       const review = this.personalMemoryReview;
       ensure(review && !this.closed, 'personal_memory_native_required');

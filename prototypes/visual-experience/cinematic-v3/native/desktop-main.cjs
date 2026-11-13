@@ -680,7 +680,8 @@ app.whenReady().then(async () => {
   win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close();windowsMaintenanceBroker?.close();windowsComputerBroker?.close();maintenanceReviewFrames.clear(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
-      if (typeof command === "string" && command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture")
+      if (typeof command === "string" && ((command.startsWith("personalMemoryCapture") && command !== "personalMemoryCapture") ||
+          ["personalMemoryPolicyNative", "authorizeConversationSend"].includes(command)))
         throw Error("unauthorized_private_command");
       if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command)||['hostOperationReviewNative','hostOperationDispatchNative','hostOperationResultNative','resourcePolicyNative','gpuReadbackNative','aepExperimentNative'].includes(command))throw Error('unauthorized_private_command');
       if (
@@ -872,7 +873,26 @@ app.whenReady().then(async () => {
           openExternal: (url) => shell.openExternal(url),
         });
       } else if (command === "conversation") {
-        result = await conversationCommand({ win, call, input,reviewSources:reviewProvider, openExternal: (url) => shell.openExternal(url) });
+        result = await conversationCommand({ win, call, input,reviewSources:reviewProvider, openExternal: (url) => shell.openExternal(url),
+          beforeMemoryPreview: async () => {
+            if (!trustedActiveFrame(event) ||
+                await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
+                !trustedActiveFrame(event)) throw Error("personal_memory_user_gesture_required");
+            const policy = await call("personalMemoryPolicyNative", {});
+            if (policy.ordinaryEnabled) return;
+            if (!policy.storageEnabled) throw Error("personal_memory_no_eligible_context");
+            const choice = await reviewDialogs.showMessageBox(win, {
+              type: "question", title: "Aerynth memory", message: "Enable memory for ChatGPT conversations?",
+              detail: "Aerynth will look for relevant saved facts when you choose Send with memory. You’ll review the exact request before it is shared.",
+              buttons: ["Cancel", "Enable memory"], defaultId: 0, cancelId: 0, noLink: true,
+            });
+            if (choice.response !== 1) throw Error("authorization_cancelled");
+            if (!trustedApplicationFrame(event) || !await storage.allowWrite() || !trustedApplicationFrame(event))
+              throw Error("personal_memory_frame_changed");
+            await call("personalMemoryPolicyNative", { enable: true, expectedVersion: policy.version });
+          },
+          validateMemoryReview: () => !closing && !backendFailed && trustedApplicationFrame(event),
+        });
       } else if (command === "vela") {
         if (input?.name === "submissionStatus") {
           const submissionId = input.input?.submissionId;
