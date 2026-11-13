@@ -40,10 +40,7 @@ import {
   createManagerState,
   mountConversationManager,
 } from "../../../conversation-product/src/ui.ts";
-import {
-  ConversationDraftSession,
-  flushConversationDraftSessions,
-} from "../../../conversation-product/src/draft-session.ts";
+import { createConversationDrafts } from "./conversation-drafts.ts";
 import { ConversationViewPersistence } from "../../../conversation-product/src/view-persistence.ts";
 import type {
   ConversationProductPort,
@@ -734,7 +731,6 @@ export function installApplication(hooks: Hooks) {
     string,
     { content: string; timer?: ReturnType<typeof setTimeout> }
   >();
-  const composerSessions = new Map<string, ConversationDraftSession>();
   const chatViews = new Map<string, ReturnType<typeof mountBlockChat>>();
   const chatRefreshKeys = new Map<string, string>();
   const ordinaryModelControls = {
@@ -760,6 +756,21 @@ export function installApplication(hooks: Hooks) {
       })) as ProductCommandMap[K]["output"];
     },
   };
+  const conversationDrafts = createConversationDrafts({
+    port: composerPort,
+    available: (resourceId) => !!state?.resources.some(
+      (resource) => resource.id === resourceId &&
+        resource.kind === "conversation" && resource.available !== false,
+    ),
+    changed: (resourceId) => {
+      for (const block of state?.blocks.filter(
+        (block) => block.resource_id === resourceId,
+      ) ?? []) {
+        const article = document.querySelector<HTMLElement>(`[data-block="${block.id}"]`);
+        if (article) refreshBlockIdentity(article, block.id);
+      }
+    },
+  });
   const chatViewPersistence = new ConversationViewPersistence({
     port: composerPort,
     onError: (error) => report(error),
@@ -1553,7 +1564,7 @@ export function installApplication(hooks: Hooks) {
     for (const entry of timelineViews.values()) await entry.view.flush();
     await directResources.flush();
     for (;;) {
-      await flushConversationDraftSessions(() => composerSessions.values());
+      await conversationDrafts.flush();
       await chatViewPersistence.flush();
       await conversationManager?.flush();
       const ids = new Set([
@@ -1563,12 +1574,7 @@ export function installApplication(hooks: Hooks) {
           .map(([id]) => id),
       ]);
       if (!ids.size) {
-        if (
-          [...composerSessions.values()].every(
-            (session) => session.snapshot().phase === "clean",
-          )
-        )
-          break;
+        if (conversationDrafts.isClean()) break;
         continue;
       }
       for (const resourceId of ids) {
@@ -1679,8 +1685,7 @@ export function installApplication(hooks: Hooks) {
     if (!previewCommitting) cancelPreview();
     cardConfiguration?.dispose();
     cardConfiguration = null;
-    for (const session of composerSessions.values())
-      void session.reload().catch(report);
+    conversationDrafts.reload(report);
   });
   addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || (!presenceDrag && !cancelResize)) return;
@@ -2392,7 +2397,7 @@ export function installApplication(hooks: Hooks) {
         };
       },
       execution: conversationExecution,
-      draftSession: composerSession,
+      draftSession: conversationDrafts.get,
       state: conversationView,
       ...(resourceId ? { resourceId, initialMessageId: messageId } : {}),
       onClose: () => surfaces.close("conversations"),
@@ -3477,36 +3482,6 @@ export function installApplication(hooks: Hooks) {
         })
       : Promise.resolve();
   }
-  function composerSession(resourceId: string) {
-    let session = composerSessions.get(resourceId);
-    if (!session) {
-      if (
-        !state?.resources.some(
-          (resource) =>
-            resource.id === resourceId &&
-            resource.kind === "conversation" &&
-            resource.available !== false,
-        )
-      )
-        throw new Error("conversation_unavailable");
-      session = new ConversationDraftSession({
-        resourceId,
-        port: composerPort,
-        onChange: () => {
-          for (const block of state?.blocks.filter(
-            (block) => block.resource_id === resourceId,
-          ) ?? []) {
-            const article = document.querySelector<HTMLElement>(
-              `[data-block="${block.id}"]`,
-            );
-            if (article) refreshBlockIdentity(article, block.id);
-          }
-        },
-      });
-      composerSessions.set(resourceId, session);
-    }
-    return session;
-  }
   function noteSession(resourceId: string) {
     let session = noteSessions.get(resourceId);
     if (!session) {
@@ -4179,7 +4154,7 @@ export function installApplication(hooks: Hooks) {
       const surface = el(".working-content", article);
       let view = chatViews.get(b.id);
       if (!view && activeBlocks.get(b.id)) {
-        const session = composerSession(r.id);
+        const session = conversationDrafts.get(r.id);
         view = mountBlockChat(surface, {
           copy: copyText,
           motion: experienceMotion,
@@ -4823,19 +4798,7 @@ export function installApplication(hooks: Hooks) {
       velaMissions.observe();
       refreshMissionWorkroomCards();
       hooks.status("Storage check passed. Saving is available again.");
-      void enqueue(async () => {
-        for (const session of composerSessions.values()) {
-          if (session.snapshot().error !== "storage_reserve_admission_denied") continue;
-          // Re-read before retrying so an intervening draft becomes a conflict,
-          // while the retained local text and the canonical version stay intact.
-          try {
-            await session.reload();
-            if (session.snapshot().phase === "dirty") await session.flush();
-          } catch (error) {
-            report(error);
-          }
-        }
-      });
+      void enqueue(() => conversationDrafts.recoverStorage(report));
       return;
     }
     // Assistant text is handled by the one shared execution adapter. It is not
@@ -4999,12 +4962,7 @@ export function installApplication(hooks: Hooks) {
     if (
       drafts.size ||
       [...noteSessions.values()].some((session) => session.hasPendingEdits) ||
-      [...composerSessions.values()].some(
-        (session) =>
-          ["dirty", "saving", "conflict"].includes(session.snapshot().phase) ||
-          (session.snapshot().phase === "error" &&
-            session.snapshot().editRevision > 0),
-      )
+      conversationDrafts.hasPendingEdits()
     ) {
       event.preventDefault();
       event.returnValue = "";
