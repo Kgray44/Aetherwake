@@ -6783,7 +6783,7 @@ export class BackendCore {
       ensure(request && identifier(request.conversationId) && identifier(request.messageId) &&
         Number.isSafeInteger(request.expectedRevision) && request.expectedRevision >= 1, 'invalid_personal_memory_source');
       const { conversationId, messageId, expectedRevision } = request;
-      return this.atomic(() => {
+      const revoke = () => this.atomic(() => {
         ensure(this.state.revisions[conversationId] === expectedRevision, 'stale_source_revision');
         const graphId = this.gid(conversationId);
         const message = this.graph.readOwnMessage(graphId, messageId);
@@ -6793,7 +6793,15 @@ export class BackendCore {
         const { deleted } = review.withSourceErasure(source, () => memory.eraseConversationSource(source));
         this.graph.markUnavailable(messageId);
         return { revision: ++this.state.revisions[conversationId], erasedFacts: deleted.length };
-      }) as CommandMap[K]['output'];
+      });
+      try { return revoke() as CommandMap[K]['output']; }
+      catch (error) {
+        if (!(error instanceof Error) || error.message !== 'personal_context_lineage_repair_required') throw error;
+        // Upgrade legacy erasure dependencies under protected custody, then retry the same source revision.
+        await memory.open();
+        ensure(!this.closed && this.missionStorageAdmitted, 'personal_memory_native_required');
+        return revoke() as CommandMap[K]['output'];
+      }
     }
     if (name === 'personalMemoryManagementNative') {
       const review = this.personalMemoryReview;
