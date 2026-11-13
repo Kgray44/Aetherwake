@@ -76,7 +76,7 @@ export interface ConversationChatOptions {
   onViewState?: (state: { resourceId: string; content: string; scroll: number; offset: number; view?:ConversationViewCapture }) => void;
 }
 export interface ConversationChat {
-  ready: Promise<void>; refresh(options?: { aroundMessageId?: string; latest?: boolean }): Promise<void>;
+  ready: Promise<void>; refresh(options?: { aroundMessageId?: string; latest?: boolean; stillRequested?: () => boolean }): Promise<void>;
   focusComposer(): void; flush(): Promise<void>; dispose(): Promise<void>;
   setPresentation(mode: ConversationChatPresentation, options?: { captureOnly: boolean }): void;
   frame():void;
@@ -566,16 +566,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       }
     }
   }
-  async function refresh(input: {aroundMessageId?:string;latest?:boolean;followMessageId?:string;restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>;restoreIntent?:number;preserveReading?:boolean}={}) {
+  async function refresh(input: {aroundMessageId?:string;latest?:boolean;followMessageId?:string;restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>;restoreIntent?:number;preserveReading?:boolean;stillRequested?:()=>boolean}={}) {
     const request=++generation;
+    const isCurrent=()=>!disposed&&request===generation&&(input.stillRequested?.()??true);
     const around=input.followMessageId??input.aroundMessageId??input.restoreAnchor?.messageId;
     let d: Detail;
     try { d=await port.command('detail',{resourceId,limit:50,...(around?{aroundMessageId:around}:offset===undefined||input.latest?{offset:Math.max(0,(current?.conversation.messageCount??50)-50)}:{offset})}); }
     catch(error){if(!disposed&&request===generation&&/source_unavailable|access_denied|not_found/.test(errorText(error)))revokeView();throw error;}
-    if(disposed||request!==generation)return;
+    if(!isCurrent())return;
     if(input.restoreAnchor&&input.restoreIntent!==viewIntent){await refresh({latest:true});return;}
     // Opening uses a bounded page, then fetches the actual latest page when count was not known.
-    if((offset===undefined||input.latest)&&!around&&d.messages.hasMore){offset=Math.max(0,d.conversation.messageCount-50);await refresh();return;}
+    if((offset===undefined||input.latest)&&!around&&d.messages.hasMore){offset=Math.max(0,d.conversation.messageCount-50);await refresh({stillRequested:input.stillRequested});return;}
     accessRevoked=false;root.dataset.resourceAvailable='true';offset=d.messages.offset;render(d,input.aroundMessageId,input.followMessageId,input.restoreAnchor,input.preserveReading);
   }
   composer.addEventListener('submit',event=>{

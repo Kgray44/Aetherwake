@@ -223,25 +223,29 @@ test('Switch chat Escape cancels a result still waiting for the draft to save', 
 });
 
 test('Switch chat Escape preserves the prior message when a same-chat result is still loading', async () => {
- const f=fixture(), resourceId=f.draft.resourceId;
+ const f=fixture(), v=viewPort(f), resourceId=f.draft.resourceId;
  const [previous,target]=f.detail.messages.items;
  let manager, reading=false, release!:()=>void;
  const gate=new Promise<void>(resolve=>{release=resolve;});
  const port={async command(name:string,input:any){
   if(name==='search')return {items:[{kind:'message',resourceId,messageId:target.id,title:'Match',excerpt:target.content}],total:1,offset:0,limit:12,hasMore:false};
   if(name==='detail'&&input.aroundMessageId===target.id){reading=true;await gate;}
-  return (f.port.command as any)(name,input);
+  return (v.port.command as any)(name,input);
  }} as ConversationProductPort;
  try {
-  manager=mountConversationManager(f.view.root,port,{resourceId,initialMessageId:previous.id});
+  manager=mountConversationManager(f.view.root,port,{resourceId,initialMessageId:previous.id,viewPersistence:v.persistence});
   await manager.ready;
   await manager.openSwitcher();
+  const detailReads=f.calls.filter(call=>call.name==='detail').length;
   const input=f.view.root.querySelector('.cp-switcher').querySelector('input');
   input.value='Match';input.fire('input');input.fire('keydown',{key:'Enter'});
   await until(()=>reading);
   input.fire('keydown',{key:'Escape'});release();
   await until(()=>!f.view.root.querySelector('.cp-manager').getAttribute('aria-busy'));
-  assert.equal(f.calls.filter(call=>call.name==='detail').at(-1)?.input.aroundMessageId,previous.id);
+  await manager.flush();
+  assert.equal(f.calls.filter(call=>call.name==='detail').length,detailReads+1);
+  assert.equal(v.view.position?.anchor?.messageId,previous.id);
+  assert.equal(v.trace.some(call=>call.name==='saveViewState'&&call.input.position?.anchor?.messageId===target.id),false);
   assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
  } finally {release();await manager?.dispose();f.restore();}
 });

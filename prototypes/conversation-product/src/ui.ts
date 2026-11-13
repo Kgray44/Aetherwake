@@ -115,8 +115,8 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const detachChat=async()=>{if(!chat)return;const previous=chat,pending=previous.whenSubmissionSettled();await previous.dispose();chat=null;chatResource=null;detachedSubmissions.add(pending);void pending.finally(()=>detachedSubmissions.delete(pending)).catch(()=>{});};
  async function closeManager(){if(closing||disposed)return;closing=true;openIntent++;request++;switchGeneration++;close.disabled=true;try{await flush();options.onClose?.();}catch(error){status.textContent='Draft recovery needs attention before closing: '+(error instanceof Error?error.message:String(error));}finally{closing=false;close.disabled=false;}}
  const run=(action:()=>Promise<void>,propagate=false):Promise<void>=>{if(disposed)return Promise.resolve();const previous=running;busy=true;root.setAttribute('aria-busy','true');const operation=(previous??Promise.resolve()).catch(()=>{}).then(async()=>{if(disposed)return;status.textContent='';await action();}).catch(error=>{if(!disposed)status.textContent=error instanceof Error?error.message:String(error);if(propagate)throw error;}).finally(()=>{if(running!==operation)return;busy=false;running=null;root.removeAttribute('aria-busy');save();if(filterQueued&&!disposed){filterQueued=false;void run(refresh);}});running=operation;return operation;};
- const bindChat=async(resourceId:string,aroundMessageId?:string)=>{
-  if(chatResource===resourceId&&chat){await chat.refresh(aroundMessageId?{aroundMessageId}:{});return;}
+ const bindChat=async(resourceId:string,aroundMessageId?:string,stillRequested?:()=>boolean)=>{
+  if(chatResource===resourceId&&chat){await chat.refresh({aroundMessageId,stillRequested});return;}
   await detachChat();
   if(disposed||closing)return;
   let session=draftSessions.get(resourceId);
@@ -135,19 +135,20 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   await flush();
   if(!canOpen())return;
   const previousResourceId=state.selectedResourceId,previousMessageId=selectedMessageId;
-  const restorePrevious=async()=>{
+  const restorePrevious=async(rebind=true)=>{
    if(!disposed&&!closing&&(intent===undefined||intent===openIntent)&&(previousResourceId!==resourceId||previousMessageId!==messageId)){
     state.selectedResourceId=previousResourceId;selectedMessageId=previousMessageId;
+    if(!rebind)return;
     if(previousResourceId)await bindChat(previousResourceId,previousMessageId).catch(()=>{});
     else await detachChat();
    }
   };
   state.selectedResourceId=resourceId;selectedMessageId=messageId;
-  try{await bindChat(resourceId,messageId);}catch(error){
+  try{await bindChat(resourceId,messageId,canOpen);}catch(error){
    await restorePrevious();
    throw error;
   }
-  if(!canOpen()){await restorePrevious();return;}
+  if(!canOpen()){await restorePrevious(previousResourceId!==resourceId);return;}
   root.classList.remove('cp-history-open');historyToggle.setAttribute('aria-expanded','false');
   if(current?.conversation.resourceId===resourceId&&current.conversation.state==='active')await saveSelection(resourceId);
   if(canOpen())options.onResource?.(resourceId,messageId);
