@@ -832,7 +832,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const around=input.followMessageId??input.aroundMessageId??input.restoreAnchor?.messageId;
     let d: Detail;
     try { d=await port.command('detail',{resourceId,limit:50,...(around?{aroundMessageId:around}:offset===undefined||input.latest?{offset:Math.max(0,(current?.conversation.messageCount??50)-50)}:{offset})}); }
-    catch(error){if(!disposed&&request===generation&&/source_unavailable|access_denied|not_found/.test(errorText(error)))revokeView();throw error;}
+    catch(error){
+      if(!isCurrent())return;
+      if(/source_unavailable|access_denied|not_found/.test(errorText(error)))revokeView();
+      throw error;
+    }
     if(!isCurrent())return;
     if(input.restoreAnchor&&input.restoreIntent!==viewIntent){await refresh({latest:true});return;}
     // Opening uses a bounded page, then fetches the actual latest page when count was not known.

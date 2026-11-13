@@ -529,7 +529,7 @@ test('Switch chat Escape cancels a result still waiting for the draft to save', 
  } finally {release();await manager?.dispose();f.restore();}
 });
 
-test('Switch chat Escape preserves the prior message when a same-chat result is still loading', async () => {
+for (const unavailable of [false,true]) test('Switch chat Escape preserves the prior message when a same-chat result is still loading (unavailable: '+unavailable+')', async () => {
  const f=fixture(), v=viewPort(f), resourceId=f.draft.resourceId;
  const [previous,target]=f.detail.messages.items;
  let manager, reading=false, release!:()=>void;
@@ -537,6 +537,10 @@ test('Switch chat Escape preserves the prior message when a same-chat result is 
  const port={async command(name:string,input:any){
   if(name==='search')return {items:[{kind:'message',resourceId,messageId:target.id,title:'Match',excerpt:target.content}],total:1,offset:0,limit:12,hasMore:false};
   if(name==='detail'&&input.aroundMessageId===target.id){reading=true;await gate;}
+  if(name==='detail'&&input.aroundMessageId===target.id&&unavailable){
+   await (v.port.command as any)(name,input);
+   throw Error('source_unavailable');
+  }
   return (v.port.command as any)(name,input);
  }} as ConversationProductPort;
  try {
@@ -551,6 +555,8 @@ test('Switch chat Escape preserves the prior message when a same-chat result is 
   await until(()=>!f.view.root.querySelector('.cp-manager').getAttribute('aria-busy'));
   await manager.flush();
   assert.equal(f.calls.filter(call=>call.name==='detail').length,detailReads+1);
+  assert.equal(f.view.root.querySelector('.cp-chat').dataset.resourceAvailable,'true');
+  assert.ok(f.view.root.querySelector('.cp-message'));
   assert.equal(v.view.position?.anchor?.messageId,previous.id);
   assert.equal(v.trace.some(call=>call.name==='saveViewState'&&call.input.position?.anchor?.messageId===target.id),false);
   assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
