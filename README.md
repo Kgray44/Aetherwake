@@ -23,9 +23,9 @@ The [official Aerynth mark](assets/brand/aerynth-mark-master.png) is committed a
 9. **Make consequential actions inspectable, permissioned, and reversible where possible.**
 10. **Design the UI and motion architecture first, with an early real Codex connection.**
 
-## Owner-accepted product baseline (2026-11-05)
+## Owner-accepted product baseline
 
-The repository owner explicitly accepted Constitution 00 and governing Charters 01–16, together with the capability-first API architecture, Spatial Intelligence/Stream V2 requirements and unified memory architecture. This is binding design direction rather than a collection of suggestions. Implementation and independent test qualification remain separate.
+The repository owner accepted Constitution 00 and governing Charters 01–16 on 2026-11-05, together with the capability-first API architecture, Spatial Intelligence/Stream V2 requirements and unified memory architecture. The governance registry also records the binding Fluid Intelligence amendments of 2026-11-10. This is binding design direction rather than a collection of suggestions. Implementation and independent test qualification remain separate.
 
 Key accepted architecture: [Unified Memory Runtime](docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md), [Vela Capability Execution Fabric](docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md), [Unified Spatial Runtime](docs/architecture/UNIFIED-SPATIAL-INTELLIGENCE-RUNTIME-AND-NAVIGATION.md), [Volumetric GPU Rendering Contract](docs/architecture/VELA-PRESENCE-GPU-RENDERING-CONTRACT.md), and [Stream V2 Experience](docs/specifications/INTELLIGENCE-STREAM-V2-EXPERIENCE-AND-ACCEPTANCE.md). The [governance registry](governance/README.md) is authoritative for status and ownership.
 
@@ -33,11 +33,21 @@ Key accepted architecture: [Unified Memory Runtime](docs/architecture/VELA-UNIFI
 
 The governing foundation lives in [`governance/`](governance/README.md), beginning with **[the Aetherwake Master Constitution](governance/00-AETHERWAKE-CONSTITUTION.md)**. It establishes the project's binding principles, the Liquid Intelligence experience, user-control requirements, agent and context integrity, observability, and the reserved specialized charters. **Publication and acceptance are separate statuses.** Consult the [live governance registry](governance/README.md) for which numbered charters exist, which are pending, and which have been accepted. Missing charters are authored separately; do not create placeholders for them.
 
-## Current engineering workstreams (2026-11-05)
+## Start here
 
-**Architecture Recovery, current priority:** inventory, consolidate, simplify and independently verify the existing integrated Aerynth desktop/backend; correct source-ownership, CIE, storage, CI and stale-document boundaries **without** treating cleanup as permission to implement the entire future product.
+- [Documentation index](docs/README.md): setup, current source checkpoints, governance, acceptance evidence and historical reports.
+- [Windows application guide](prototypes/visual-experience/cinematic-v3/APPLICATION.md): prerequisites, launch, private profiles, recovery and offline native verification.
+- [Fluid Intelligence roadmap](plans/milestones/FLUID-INTELLIGENCE-REALIZATION.md): intended sequencing and gates, not a completion ledger.
 
-**Full Aerynth Realization, separate longer program:** complete the owner-ratified intelligence, CIE, adaptive learning, 3D Vela Mind, Stream V2 and seamless spatial experience against native acceptance criteria. Missing future functionality is not evidence that present-day code cleanup failed.
+## Engineering checkpoint (2026-11-12)
+
+This summary describes main at [`c470a5d`](https://github.com/Kgray44/Aetherwake/commit/c470a5d23786ea2d5022553a1472e3643a619bb1). Recheck later changes before treating it as current.
+
+**Architecture Recovery, Program A:** the A3/A4 work was integrated with FI-0–FI-3 in [PR #53](https://github.com/Kgray44/Aetherwake/pull/53). Consult the [A4 handoff](docs/engineering/A4-ARCHITECTURE-RECOVERY-HANDOFF.md) and [pinned integration report](docs/engineering/MISSION-01-04-INTEGRATION.md) for source ownership and verification boundaries. Historical A0/A1 and A2 reports remain evidence for their named checkpoints.
+
+**Full Aerynth Realization, Program B:** [PR #59](https://github.com/Kgray44/Aetherwake/pull/59) added scoped acceptance evidence and the [FI acceptance registry](docs/engineering/FI-ACCEPTANCE-REGISTRY.json). [PR #60](https://github.com/Kgray44/Aetherwake/pull/60) added scoped FI-2 illustration and reviewed mission-planning qualification. Formal FI-2 acceptance remains open. The original strict retrieval result remains 7/8; broader independent cross-source retrieval and model-comparison claims remain unproven. [PR #61](https://github.com/Kgray44/Aetherwake/pull/61) is a separate draft follow-up at this checkpoint, not part of this main snapshot.
+
+**Still separate:** native and provider qualification, independent quality/performance evidence, full spatial experience, and owner product/visual/release acceptance. A merged implementation, registered scenario or green fixture suite does not close these gates. Recovery cleanup remains distinct from permission to implement future product capabilities.
 
 **Existing implementation:** the connected Electron desktop and cinematic application live primarily under `prototypes/visual-experience/cinematic-v3/`, with `prototypes/integrated-backend/`, `prototypes/vela-core/` and other source-owned domain modules. The `prototypes/` naming is historical; neither source location nor merged PR proves complete product acceptance. Keep synthetic experience previews separate from real native provider/tool execution and evidence.
 
@@ -69,6 +79,6 @@ See the [Architecture Recovery A0/A1 report](docs/engineering/A0-A1-RECOVERY.md)
 
 Git cannot track empty directories, so currently empty locations are reserved using `.gitkeep` placeholders. They are not substantive specifications or completed implementations.
 
-See the project design and architecture documents in `docs/` as they are developed.
+Use the [documentation index](docs/README.md) to distinguish governing requirements, current source checkpoints and historical evidence.
 
 > This repository is currently **public**. Do not commit credentials, private conversation history, personal notes, private project files, API keys, or real agent telemetry containing sensitive data.
