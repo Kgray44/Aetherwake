@@ -42,8 +42,9 @@ export class NativePersonalMemory {
    * authority is established. Erasure needs metadata, including when locked. */
   eraseConversationSource(source: ConversationSourceRef) {
     this.requireOpen();
-    return this.options.kernel.withTransaction(db =>
-      this.createService(db, lockedCrypto).eraseConversationSource(source));
+    return this.transaction(db => PersonalContextService.eraseExistingConversationSource({
+      db, transaction: this.transaction, host: this.options.host, crypto: lockedCrypto,
+    }, source));
   }
 
   private createService(db: DatabaseSync, crypto: PersonalCrypto) {

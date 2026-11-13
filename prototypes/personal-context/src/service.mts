@@ -62,10 +62,13 @@ function request(value: ContextRequest) {
 }
 const words = (v: string) => new Set(v.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu)?.filter(w => w.length >= 2).slice(0, 128) ?? []);
 
+const existingSchemaOnly = Symbol('existing personal context schema only');
+
 export class PersonalContextService {
   private opts: PersonalContextServiceOptions;
-  constructor(options: PersonalContextServiceOptions) {
+  constructor(options: PersonalContextServiceOptions, mode?: typeof existingSchemaOnly) {
     this.opts = options;
+    if (mode === existingSchemaOnly) return;
     this.tx(() => {
       options.db.exec('CREATE TABLE IF NOT EXISTS personal_context_schema(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL)');
       const row = options.db.prepare('SELECT version FROM personal_context_schema WHERE id=1').get();
@@ -77,6 +80,10 @@ export class PersonalContextService {
         CREATE INDEX IF NOT EXISTS personal_context_conversation_sources_by_fact ON personal_context_conversation_sources(owner,dependent);`);
       if (!row) options.db.prepare('INSERT INTO personal_context_schema VALUES(1,1)').run();
     });
+  }
+  /** Source-owner cleanup may run before the user has initialized memory. */
+  static eraseExistingConversationSource(options: PersonalContextServiceOptions, source: ConversationSourceRef) {
+    return new PersonalContextService(options, existingSchemaOnly).eraseConversationSource(source);
   }
   private tx<T>(work: () => T): T { return this.opts.transaction(db => { check(db === this.opts.db, 'canonical_database_connection_mismatch'); return work(); }); }
   private read<T>(work: () => T): T { return (this.opts.readTransaction ?? this.opts.transaction)(db => { check(db === this.opts.db, 'canonical_database_connection_mismatch'); return work(); }); }
@@ -260,6 +267,10 @@ export class PersonalContextService {
     return this.tx(() => {
       const owner = this.identity().userId;
       this.authorize('source.erase', null, null, { conversationSource: source });
+      const schema = this.opts.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('personal_context_schema','personal_context_heads','personal_context_revisions','personal_context_dependencies','personal_context_conversation_sources')").all();
+      if (schema.length === 0) return { deleted: [] };
+      check(schema.length === 5 && this.opts.db.prepare('SELECT version FROM personal_context_schema WHERE id=1').get()?.version === 1,
+        'unsupported_personal_context_schema');
       const rows = this.opts.db.prepare('SELECT dependent FROM personal_context_conversation_sources WHERE owner=? AND conversation_id=? AND message_id=? ORDER BY dependent')
         .all(owner, source.conversationId, source.messageId);
       const heads = rows.map(row => this.required(String(row.dependent), 'fact'));
