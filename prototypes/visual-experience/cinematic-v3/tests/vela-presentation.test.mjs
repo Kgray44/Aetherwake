@@ -10,6 +10,21 @@ const context = () => ({
   bounds: { x: -20, y: 10, width: 1200, height: 700 },
 });
 
+test("Vela memory Send does not silently attach the active workspace card", async () => {
+  const calls = [];
+  const activeCard = { workspaceId: "workspace", blockId: "card" };
+  const client = createVelaClient({
+    command: async (_name, input) => { calls.push(input); return { id: "synthetic-request" }; },
+    changed: async () => {},
+    observed() {},
+    activeCard: () => activeCard,
+  });
+  const input = { intent: "What did I save?", resourceIds: [], authorizeProvider: true, providerId: "openai-api-vela" };
+  await client.request({ ...input, useMemory: true });
+  await client.request(input);
+  assert.deepEqual(calls.map(call => call.input), [{ ...input, useMemory: true }, { ...input, activeCard }]);
+});
+
 test("a completed Vela submission survives a lost reply without sending again", async () => {
   const recorded = { id: "canonical-request", state: "responded" };
   const changed = [];

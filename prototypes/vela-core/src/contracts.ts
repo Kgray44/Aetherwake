@@ -209,6 +209,7 @@ export interface VelaRequest {
   routingSettings?: Pick<import('./routing-settings.ts').VelaRoutingSettingsView, 'effective' | 'origins'>;
   /** Schema-3 provenance is absent on legacy requests; unavailable origin is never inferred as known-null. */
   origin?: HistoryOrigin; inputMessageId?: string; inputContentDigest?: string; provenance?: HistoryProvenance;
+  reviewedMemory?: true;
   /** References/proofs only; actual history text remains in the canonical conversation. */
   history?: { schemaVersion: 1; fenceDigest: string; historyDigest: string; messages: readonly HistoryMessageDependency[] };
   operationContext?: { contract: 'aerynth.vela-operations@1'; digest: string; receiptIds: string[] };
@@ -400,6 +401,7 @@ export interface VelaState {
   conversation: CanonicalConversation | null;
   planner: { providerId: string | null; available: boolean; busy: boolean; reason?: string };
   planningProviders?: { providerId: string; available: boolean }[];
+  reviewedMemoryAvailable?: true;
   routingSettings?: import('./routing-settings.ts').VelaRoutingSettingsView;
   fileEdits?: VelaFileEditView[];
   missionFileEdits?: import('../../application-contract/mission-file-edits.ts').MissionFileEditView[];

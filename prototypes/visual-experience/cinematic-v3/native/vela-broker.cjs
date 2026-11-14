@@ -148,12 +148,40 @@ async function reviewProjectCheck({ win, dialog, call, requestId, kind, intent, 
 }
 
 /** Called only after the host verifies its exact local main frame. Grants never enter IPC results. */
+exports.ensureVelaMemoryConsent = async ({ win, call, dialog, allowWrite, isCurrent }) => {
+  const check = () => {
+    if (isCurrent() !== true) throw Error("personal_memory_frame_changed");
+  };
+  check();
+  const policy = await call("personalMemoryPolicyNative", {});
+  check();
+  if (!policy.storageEnabled) throw Error("personal_memory_no_eligible_context");
+  if (policy.velaEnabled) return;
+  const choice = await dialog.showMessageBox(win, {
+    type: "question", title: "Aerynth memory", message: "Enable saved memory for Vela?",
+    detail: "Vela can find saved memories when you select memory for a send. You’ll review the exact request before it is sent.",
+    buttons: ["Cancel", "Enable memory"], defaultId: 0, cancelId: 0, noLink: true,
+  });
+  if (choice.response !== 1) throw Error("authorization_cancelled");
+  check();
+  if (!await allowWrite()) throw Error("storage_reserve_admission_denied");
+  check();
+  const updated = await call("personalMemoryPolicyNative", {
+    assistant: "vela", enable: true, expectedVersion: policy.version,
+  });
+  check();
+  if (updated?.storageEnabled !== true || updated.velaEnabled !== true)
+    throw Error("personal_memory_no_eligible_context");
+};
+
 exports.velaCommand = async ({
   win,
   dialog,
   call,
   input,
   reviewProvider = showVelaReview,
+  validateMemoryReview,
+  beforeMemoryPreview,
   offerPlanningByDefault = false,
   directMessageSend = false,
   routeNative = directMessageSend,
@@ -237,6 +265,17 @@ exports.velaCommand = async ({
       (value.reasoningEffort !== undefined && !["none", "low", "medium", "high", "xhigh", "max"].includes(value.reasoningEffort))
     )
       throw Error("invalid_vela_request");
+    const reviewedMemory = value.useMemory === true;
+    if (value.useMemory !== undefined && (!reviewedMemory || !directMessageSend || !value.authorizeProvider ||
+        value.providerId !== "openai-api-vela" || value.resourceIds.length || value.resourceRefs?.length ||
+        value.semanticContext || value.activeCard || value.handoffSourceRequestId ||
+        value.routingAgentId || value.allowEscalation || value.mode === "codex" || validateMemoryReview?.() !== true))
+      throw Error("vela_memory_requires_conversation");
+    if (reviewedMemory) {
+      if (typeof beforeMemoryPreview !== "function") throw Error("vela_memory_requires_conversation");
+      await beforeMemoryPreview();
+      if (validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
+    }
     // Renderer intent carries no grant. The host binds the exact prompt below.
     const request = {
       intent: value.intent,
@@ -251,7 +290,7 @@ exports.velaCommand = async ({
     const localDocuments=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you|I want(?: you)? to|I(?: would|'d) like(?: you)? to)\s+)*(?:add|attach|import|bring|put|load)\b[\s\S]*\b(?:docs?|documents?|files?|folders?|sources?|resources?|results?|these|those|them)\b[\s\S]*\b(?:(?:this|current|the)\s+)?workspace\b/iu.test(request.intent);
     const localFolderList=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you)\s+)*(?:(?:what(?:'s| is)\s+in\s+(?:this|the selected)\s+folder)|(?:what\s+(?:files|folders|items)\s+(?:are\s+)?(?:in|inside)\s+(?:this|the selected)\s+folder)|(?:(?:list|show)\s+(?:(?:the\s+)?(?:files|folders|items|contents)\s+(?:in|of|inside)\s+)?(?:this|the selected)\s+folder(?:['’]s\s+contents)?))[.!?]*\s*$/iu.test(request.intent);
     const selectedFileEdit=/\b(?:fix|edit|change|update|correct|modify|repair|refactor|replace)\b/iu.test(request.intent)&&/\b(?:file|code|function|selected|attached)\b/iu.test(request.intent);
-    if (routeNative && !value.semanticContext && !request.handoffSourceRequestId && !request.routingAgentId && (!request.resourceIds.length||localDocuments||localFolderList||selectedFileEdit) && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
+    if (routeNative && !reviewedMemory && !value.semanticContext && !request.handoffSourceRequestId && !request.routingAgentId && (!request.resourceIds.length||localDocuments||localFolderList||selectedFileEdit) && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
       const settings = directMessageSend
         ? Object.fromEntries(Object.entries({ providerId, mode, model, reasoningEffort, overrideDefaults, budgetLimit }).filter(([, option]) => option !== undefined))
         : {};
@@ -313,6 +352,7 @@ exports.velaCommand = async ({
         ...(providerId === undefined ? {} : { providerId }),
         ...(directMessageSend ? { adaptive: true, model, reasoningEffort, mode, budgetLimit, allowEscalation, includeRecentHistory, overrideDefaults } : {}),
         ...(value.semanticContext ? { semanticContext: true } : {}),
+        ...(reviewedMemory ? { useMemory: true } : {}),
         ...(value.workspaceState ? { workspaceState: true } : {}),
         ...(value.projectEvidence ? { projectEvidence: true } : {}),
         ...(value.missionCheckpoint ? { missionCheckpoint: value.missionCheckpoint } : {}),
@@ -324,6 +364,7 @@ exports.velaCommand = async ({
     const preview = await stage("preview", async () => {
       try { return await call("velaRequestPreview", previewInput); }
       catch (error) {
+        if (reviewedMemory) throw error;
         const code = error?.code ?? error?.message;
         if (directMessageSend && requireInspectionDirectory && code === "vela_codex_inspection_target_required") {
           if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
@@ -343,6 +384,9 @@ exports.velaCommand = async ({
         return call("velaRequestPreview", { ...previewInput, ...paths });
       }
     });
+    if (!!preview.memory !== reviewedMemory || (reviewedMemory &&
+        (preview.providerId !== "openai-api-vela" || preview.route?.kind !== "conversational" || preview.workflowScope ||
+          preview.route.nativeMetric || preview.route.nativeLog || preview.route.escalation))) throw Error("invalid_native_vela_review");
     if (preview.handoff?.sourceRequestId !== request.handoffSourceRequestId) throw Error("invalid_native_vela_review");
     if (preview.routingAgent?.resourceId !== request.routingAgentId) throw Error("invalid_native_vela_review");
     if (preview.semanticContext !== value.semanticContext) throw Error("invalid_native_vela_review");
@@ -387,7 +431,8 @@ exports.velaCommand = async ({
       Array.isArray(request.resourceRefs) && request.resourceRefs.length === review.context.included.length &&
       request.resourceRefs.every(ref => review.context.included.some(source =>
         source.id === ref?.id && source.version === ref.version));
-    const direct = directMessageSend && (standingEvidence || (preview.sendDisposition === "routine" &&
+    if (reviewedMemory && validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
+    const direct = directMessageSend && !reviewedMemory && (standingEvidence || (preview.sendDisposition === "routine" &&
       (preview.providerId === "chatgpt-plan-responses" && (!preview.route || preview.route.kind === "conversational") ||
         preview.providerId === "openai-api-vela" && ['conversational', 'app-planning'].includes(preview.route?.kind)) &&
       !preview.route?.nativeMetric && !preview.route?.nativeLog &&
@@ -398,10 +443,12 @@ exports.velaCommand = async ({
       review,
       intent: preview.intent,
       expiresAt: preview.expiresAt,
+      ...(reviewedMemory ? { isCurrent: validateMemoryReview } : {}),
     });
     if (approved !== true) throw Error("authorization_cancelled");
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
+    if (reviewedMemory && validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
     const grant = await stage("grant", () =>
       call("authorizeVelaRequest", {
         previewId: preview.id,
@@ -412,6 +459,7 @@ exports.velaCommand = async ({
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
+    if (reviewedMemory && validateMemoryReview() !== true) throw Error("personal_memory_frame_changed");
     const result = await stage("request", () =>
       call("vela", {
         name: "request",
