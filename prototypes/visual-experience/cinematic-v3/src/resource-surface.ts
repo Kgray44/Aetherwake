@@ -25,6 +25,7 @@ export function createResourceSurface(options: {
   mount(root: HTMLElement, resource: Resource): DirectResourceView;
   anchor(): SurfaceAnchor;
   failed(error: unknown): void;
+  placeNote?(resource: Resource): (() => Promise<void>) | undefined;
 }) {
   const entries = new Map<
     string,
@@ -36,6 +37,7 @@ export function createResourceSurface(options: {
       authorized: boolean;
       active: boolean;
       request: ContextualSurfaceRequest;
+      updatePlacement?: (resource: Resource) => void;
       width?: number;
       height?: number;
     }
@@ -73,12 +75,52 @@ export function createResourceSurface(options: {
         const root = document.createElement("section");
         root.className = "application-direct-resource";
         root.dataset.resourceId = resource.id;
-        const view = options.mount(root, resource);
+        const placementEnabled = resource.kind === "note" && options.placeNote;
+        const editor = placementEnabled ? document.createElement("div") : root;
+        if (placementEnabled) root.append(editor);
+        const view = options.mount(editor, resource);
+        let updatePlacement: ((resource: Resource) => void) | undefined;
+        if (resource.kind === "note" && options.placeNote) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "aw-note-placement";
+          button.textContent = "Add note to this workspace";
+          button.dataset.aerynthMotionControl = "true";
+          let current = resource;
+          let pending = false;
+          const refresh = () => {
+            button.hidden = !options.placeNote?.(current);
+            button.disabled = pending;
+          };
+          updatePlacement = (next) => {
+            current = next;
+            refresh();
+          };
+          button.addEventListener("click", async () => {
+            const entry = entries.get(resource.id);
+            if (!entry?.authorized || !entry.active || pending) return;
+            const place = options.placeNote?.(current);
+            if (!place) return;
+            pending = true;
+            refresh();
+            try {
+              await place();
+            } catch (error) {
+              options.failed(error);
+            } finally {
+              pending = false;
+              refresh();
+            }
+          });
+          root.prepend(button);
+          refresh();
+        }
         const created = {
           resourceId: resource.id,
           kind: resource.kind,
           root,
           view,
+          updatePlacement,
           active: false,
           authorized: true,
           request: undefined as unknown as ContextualSurfaceRequest,
@@ -120,6 +162,7 @@ export function createResourceSurface(options: {
         previous.view.setActive(false);
       }
       entry.view.update(resource);
+      entry.updatePlacement?.(resource);
       entry.request.label = resource.title;
       if (anchor) entry.request.anchor = anchor;
       // The existing surface manager moves this same content node and reverses
@@ -151,7 +194,10 @@ export function createResourceSurface(options: {
           resource.state === "archived"
         )
           release(id);
-        else entry.view.update(resource);
+        else {
+          entry.view.update(resource);
+          entry.updatePlacement?.(resource);
+        }
       }
     },
     unavailable(resourceId: string) {
