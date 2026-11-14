@@ -819,6 +819,9 @@ app.whenReady().then(async () => {
         throw new Error("unauthorized_sender");
       let result;
       if (command === "personalMemoryCapture") {
+        if (input?.expectedProjectId !== null &&
+            (typeof input?.expectedProjectId !== "string" || !input.expectedProjectId.trim() || input.expectedProjectId.length > 200))
+          throw Error("invalid_personal_memory_capture");
         result = await capturePersonalMemory({
           input,
           trustedFrame: () => !closing && !backendFailed && trustedApplicationFrame(event) && win.isVisible() && !win.isMinimized(),
