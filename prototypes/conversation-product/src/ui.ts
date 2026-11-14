@@ -164,6 +164,8 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   return ++switchGeneration;
  };
  let switchOpenGeneration:number|undefined;
+ let switchFailedGeneration:number|undefined;
+ let switchComposing=false;
  const loadSwitcher=async(openFirst=false)=>{
   const generation=invalidateSwitcher(),text=switchQuery.value.trim(),mode=switchMode.value;
   if(openFirst)switchOpenGeneration=generation;
@@ -206,15 +208,32 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
    switchResults.replaceChildren(...rows);
    switchStatus.textContent=rows.length?`${rows.length} ${exact?'matches':'conversations'}${page.hasMore?' · more in history':''}`:text?'No matches in this group.':'No conversations in this group.';
    if(switchOpenGeneration===generation)rows[0]?.click();
-  }catch(error){if(stillCurrent())switchStatus.textContent=error instanceof Error?error.message:String(error);}
+  }catch{
+   if(stillCurrent()){
+    switchFailedGeneration=generation;
+    switchStatus.textContent='Couldn’t load conversations. Press Enter to retry.';
+   }
+  }
   finally{if(generation===switchGeneration)switchLoading=false;}
  };
  const openSwitcher=()=>{if(disposed)return Promise.reject(new Error('conversation_manager_closed'));switcher.node.open=true;switchQuery.focus();return loadSwitcher();};
- switcher.node.addEventListener('toggle',()=>{if(switcher.node.open){switchQuery.focus();if(!switchLoading)void loadSwitcher();}else{switchGeneration++;switchLoading=false;clearTimeout(switchTimer);}});
- switchQuery.addEventListener('input',()=>{invalidateSwitcher();switchTimer=setTimeout(()=>void loadSwitcher(),120);});
+ const resetSwitcher=()=>{invalidateSwitcher();switchLoading=false;switchOpenGeneration=undefined;switchComposing=false;};
+ switcher.node.addEventListener('toggle',()=>{if(switcher.node.open){switchQuery.focus();if(!switchLoading&&switchTimer===undefined&&!switchComposing)void loadSwitcher();}else resetSwitcher();});
+ const scheduleSwitcher=()=>{invalidateSwitcher();if(switcher.node.open&&!switchComposing)switchTimer=setTimeout(()=>void loadSwitcher(),120);};
+ switchQuery.addEventListener('compositionstart',()=>{switchComposing=true;invalidateSwitcher();});
+ switchQuery.addEventListener('compositionend',()=>{switchComposing=false;scheduleSwitcher();});
+ switchQuery.addEventListener('input',event=>{if(!(event as InputEvent).isComposing)scheduleSwitcher();});
+ switcher.node.addEventListener('keydown',event=>{
+  if(event.key!=='Escape'||event.isComposing||switchComposing||!switcher.node.open)return;
+  event.preventDefault();
+  event.stopPropagation();
+  switcher.node.open=false;
+  resetSwitcher();
+  switcher.summary.focus();
+ });
  switchMode.addEventListener('change',()=>void loadSwitcher());
  switchQuery.addEventListener('keydown',event=>{
-  if(event.isComposing||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
+  if(event.isComposing||switchComposing||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
   const first=switchResults.querySelector('button');
   if(event.key==='ArrowDown'){event.preventDefault();first?.focus();}
   if(event.key!=='Enter'||!switcher.node.open)return;
@@ -222,6 +241,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   if(first)first.click();
   else if(switchTimer!==undefined)void loadSwitcher(true);
   else if(switchLoading)switchOpenGeneration=switchGeneration;
+  else if(switchFailedGeneration===switchGeneration)void loadSwitcher(true);
  });
  const renderBranchNavigator=(d:Detail)=>{
   const view=disclosure('Branch lineage','cp-branch-navigator');view.node.dataset.resourceId=d.conversation.resourceId;let generation=0;
