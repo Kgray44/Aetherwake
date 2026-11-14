@@ -1,3 +1,4 @@
+import { createRelationshipPaint } from "./relationship-paint.ts";
 import {
   registerResourceMaterial,
   targetResourceMaterial,
@@ -1321,6 +1322,7 @@ function velaPlacementClip({ x, y, w, h }: Pick<ReturnType<typeof motion.pose>, 
 function velaPlacementUnclipped(pose: ReturnType<typeof motion.pose>) {
   return !velaPlacementClip(pose);
 }
+const paintRelationship = createRelationshipPaint($<SVGPathElement & HTMLElement>("#relationships path"));
 function renderDOM() {
   surfaceView = (
     application as (Application & { surfaceView?: () => SurfaceView }) | null
@@ -1494,22 +1496,10 @@ function renderDOM() {
     }
   }
   const target = document.body.dataset.related;
-  const visible =
-    !!target && elements.has(target) && !["idle", "unavailable"].includes(vela);
-  const path = $<SVGPathElement & HTMLElement>("#relationships path");
-  if (visible) {
-    const p = motion.pose(target!);
-    const start = {
-      x: innerWidth * (expanded ? 0.88 : 0.63),
-      y: innerHeight * (expanded ? 0.32 : 0.4),
-    };
-    const end = { x: p.x + p.w * 0.5, y: p.y + 8 };
-    path.setAttribute(
-      "d",
-      `M${start.x},${start.y} C${start.x},${end.y} ${end.x},${start.y} ${end.x},${end.y}`,
-    );
-    path.style.opacity = String(0.2 + attention * 0.55);
-  } else path.style.opacity = "0";
+  const relatedPose = target && elements.has(target) && vela !== "idle" && vela !== "unavailable"
+    ? motion.pose(target)
+    : undefined;
+  paintRelationship(relatedPose, innerWidth, innerHeight, !!expanded, attention);
   return { workspaceVisible, projected };
 }
 function tick(now: number) {
