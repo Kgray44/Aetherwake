@@ -79,7 +79,12 @@ export function createMemoryCaptureEditor(options: EditorOptions): HTMLFormEleme
     };
     void options.review(request).then(saved => {
       if (saved) { options.report('Memory saved'); close(); }
-    }, error => options.report(error instanceof Error ? error.message : 'Memory review could not open.')).finally(() => {
+    }, error => {
+      const message = error instanceof Error ? error.message : 'Memory review could not open.';
+      options.report(message === 'stale_personal_memory_source'
+        ? 'The original message or its project changed. Open Remember message again to review the current source.'
+        : message);
+    }).finally(() => {
       review.disabled = cancel.disabled = false;
     });
   });
