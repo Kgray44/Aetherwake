@@ -1,0 +1,16 @@
+[package]
+name = "aerynth_visual_lab"
+version = "0.1.0"
+description = "Aerynth Liquid Intelligence Tauri visual candidate"
+authors = ["Project Aetherwake"]
+edition = "2021"
+
+[lib]
+name = "aerynth_visual_lab_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
