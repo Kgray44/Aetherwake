@@ -283,7 +283,7 @@ test('reviewed mission runs two isolated stateless specialists concurrently and 
       }),
     });
     while (f.requests.length < 2 && performance.now() < until) await wait(25);
-    const dispatched = f.requests.length;
+    const dispatched = Number(f.requests.length);
     if (dispatched !== 2) {
       const elapsedMs = Math.round(performance.now() - dispatchStarted);
       const snapshot = await Promise.race([
