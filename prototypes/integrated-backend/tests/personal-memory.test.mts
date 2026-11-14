@@ -72,3 +72,66 @@ test('closing the native owner while OS custody is pending rejects the open', as
     if (!kernelClosed) kernel.close();
   }
 });
+
+test('native source erasure joins the canonical transaction even when OS custody is locked', async () => {
+  const kernel = WorkspaceKernel.open(':memory:');
+  const source = { kind: 'conversation-message', conversationId: 'source-chat', messageId: 'source-message' } as const;
+  const provenance = { ...source, version: '1', contentDigest: 'a'.repeat(64) };
+  const scope = { kind: 'conversation', id: source.conversationId } as const;
+  const proof = { ...provenance, projectId: null, role: 'user' as const, sensitive: false };
+  const transaction = kernel.withTransaction.bind(kernel);
+  let wrapped: string;
+  const secrets = {
+    async available() { return true; },
+    async seal(value: string) { wrapped = value; return randomBytes(64); },
+    async open() { return wrapped; },
+  };
+  let eraseAllowed = false;
+  const ownerHost: PersonalContextHost = {
+    ...host, resolveConversationSource: () => proof,
+    authorize(input) {
+      if (['source.erase', 'record.delete'].includes(input.operation) && !eraseAllowed) return { decision: 'deny' };
+      return { decision: 'allow', policyVersion: '1', authorizationRef: 'synthetic-owner-review' };
+    },
+  };
+  const writer = new NativePersonalMemory({ kernel, host: ownerHost, secrets });
+  let credentialCalls = 0;
+  const locked = new NativePersonalMemory({ kernel, host: ownerHost, secrets: {
+    async available() { credentialCalls++; return false; },
+    async seal() { throw Error('unexpected seal'); }, async open() { throw Error('unexpected open'); },
+  } });
+  try {
+    const tables = () => transaction(db => db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'personal_context_%' ORDER BY name").all());
+    assert.throws(() => locked.eraseConversationSource(source), /personal_context_not_authorized/);
+    eraseAllowed = true;
+    assert.deepEqual(locked.eraseConversationSource(source).deleted, []);
+    assert.deepEqual(tables(), []);
+    assert.equal(credentialCalls, 0);
+    eraseAllowed = false;
+    const service = await writer.open();
+    service.setPolicy({ expectedVersion: 0, patch: { storageEnabled: true } });
+    const draft = { scope, purpose: 'knowledge', category: 'preferences', text: 'Synthetic relay', keywords: ['relay'],
+      certainty: 'explicit-statement', sensitive: false, expiresAt: null } as const;
+    const linked = service.reviewFact({ ...draft, keywords: [...draft.keywords], source: provenance });
+    const independent = service.reviewFact({ ...draft, keywords: [...draft.keywords], source: { kind: 'user-statement' } });
+    assert.throws(() => locked.eraseConversationSource(source), /personal_context_not_authorized/);
+    eraseAllowed = true;
+    assert.throws(() => transaction(() => {
+      assert.deepEqual(locked.eraseConversationSource(source).deleted.map(record => record.id), [linked.id]);
+      throw Error('synthetic source-owner failure');
+    }), /synthetic source-owner failure/);
+    assert.equal(service.readFact(linked.id).id, linked.id);
+    assert.deepEqual(locked.eraseConversationSource(source).deleted.map(record => record.id), [linked.id]);
+    assert.throws(() => service.readFact(linked.id), /personal_record_unavailable/);
+    assert.equal(service.readFact(independent.id).id, independent.id);
+    assert.deepEqual(locked.eraseConversationSource(source).deleted, []);
+    assert.equal(credentialCalls, 0);
+    transaction(db => db.exec('DROP TABLE personal_context_conversation_sources'));
+    assert.throws(() => locked.eraseConversationSource(source), /unsupported_personal_context_schema/);
+    assert(!tables().some(table => table.name === 'personal_context_conversation_sources'));
+  } finally {
+    locked.close();
+    writer.close();
+    kernel.close();
+  }
+});
