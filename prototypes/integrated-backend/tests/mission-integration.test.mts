@@ -129,10 +129,24 @@ test('canonical backend runs a native mission without inference, restores eviden
     const read = async () => await backend.call('missions', { name: 'read', input: { id } }) as MissionProjection;
     let mission = await read();
     const expires = performance.now() + 7000;
+    let finalPollStarted = expires - 7000;
+    let polls = 0;
     while (['running', 'queued'].includes(mission.outcome) && performance.now() < expires) {
-      await delay(25); mission = await read();
+      await delay(25);
+      finalPollStarted = performance.now();
+      mission = await read();
+      polls++;
     }
-    assert.equal(mission.outcome, 'verified', JSON.stringify(mission.tasks.map(t => [t.id, t.state, t.detail])));
+    assert.equal(mission.outcome, 'verified', mission.outcome === 'verified' ? undefined : JSON.stringify({
+      polls,
+      finalPollStartedMs: Math.round(finalPollStarted - (expires - 7000)),
+      finalPollFinishedMs: Math.round(performance.now() - (expires - 7000)),
+      tasks: mission.tasks.map(task => {
+        const attempt = task.attempts.at(-1);
+        return { id: task.id, state: task.state, detail: task.detail, attemptOutcome: attempt?.outcome,
+          dispatchState: attempt?.dispatch?.state };
+      }),
+    }));
     assert.equal(mission.tasks.find(t => t.id === 'code')?.attempts[0].evidence?.source, 'aerynth.shipped-backend-source');
     assert.equal(mission.tasks.find(t => t.id === 'code')?.attempts[0].resourceLease?.kind, 'cpu');
     assert.equal(mission.tasks.find(t => t.id === 'code')?.attempts[0].resourceLease?.reservedRamBytes, 64 * 2 ** 20);
