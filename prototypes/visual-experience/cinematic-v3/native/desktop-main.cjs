@@ -41,7 +41,7 @@ const {
   conversationCommand,
   isConversationRead,
 } = require("./conversation-broker.cjs");
-const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
+const { velaCommand, isVelaRead, ensureVelaMemoryConsent } = require("./vela-broker.cjs");
 const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
 const {showVelaReview,projectEvidenceMatches}=require('./vela-review.cjs');
 const {capturePersonalMemory}=require('./personal-memory-capture.cjs');
@@ -946,18 +946,26 @@ app.whenReady().then(async () => {
         } else {
           const { submissionId, ...brokerInput } = input ?? {};
           const frame = event.senderFrame;
+          const memoryBackend = child;
           let submission;
           if (submissionId !== undefined) {
             if (input.name !== "request" || !isVelaSubmissionId(submissionId)) throw Error("invalid_vela_submission");
             submission = { id: submissionId, requestId: null };
             velaSubmissions.set(frame, submission);
           }
+          const memoryCurrent = () => !closing && backendWritable() && child === memoryBackend &&
+            !!submission && velaSubmissions.get(frame) === submission && trustedApplicationFrame(event) &&
+            win.isVisible() && !win.isMinimized();
           result = await velaCommand({
             win,
             dialog:reviewDialogs,
             call,
             input: brokerInput,
             reviewProvider,
+            validateMemoryReview: memoryCurrent,
+            beforeMemoryPreview: () => ensureVelaMemoryConsent({
+              win, call, dialog: reviewDialogs, allowWrite: () => storage.allowWrite(), isCurrent: memoryCurrent,
+            }),
             missionFileEditRequest:request=>missionFileEditBroker.prepare(event,request),
             observeNativeRequest: observeVelaRequest,
             offerPlanningByDefault: !verify || verifyAirLocal,
