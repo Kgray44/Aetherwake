@@ -96,6 +96,7 @@ import { projectTurnHttpDiagnostic } from '../../application-contract/provider-d
 import { nativeProvider, fixtureProvider } from './providers.mts';
 import { CodexTurnOutput } from './codex-turn-output.mts';
 import { ConversationProduct, type AttachedContext, type ConversationReadView } from '../../conversation-product/src/service.mts';
+import { resolveReplyNoteSource } from '../../conversation-product/src/reply-note-source.ts';
 import type { NativeHostServices } from './native-host.mts';
 import { createCanonicalOrganizationAdapter, createCanonicalAccessHelper, createObservedCapabilityCache } from '../../conversation-product/src/canonical-host.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
@@ -7217,6 +7218,23 @@ export class BackendCore {
         return { url: citation.url } as any;
       }
       case 'conversation': {
+        if (a.name === 'captureReplyNote') {
+          return this.notes.captureConversationReply(a.input, {
+            resolveReply: (resourceId, messageId) => resolveReplyNoteSource({
+              readScope: (id, sourceId) => {
+                const graphId = this.state.resources[id];
+                if (!graphId || !this.graph.ownsMessage(graphId, sourceId) ||
+                    this.state.messageEvidence[sourceId]?.outputState === 'partial' ||
+                    !this.conversationReadAccess(id, sourceId)) return null;
+                const row = this.db.prepare("SELECT project_id FROM resources WHERE id=? AND state='active'").get(id);
+                return row ? { graphId, projectId: row.project_id === null ? null : String(row.project_id) } : null;
+              },
+              readOwnMessage: (graphId, sourceId) =>
+                this.state.graph.messages.find(message => message.id === sourceId && message.conversationId === graphId) ?? null,
+            }, resourceId, messageId),
+            createNote: ({ title, content, projectId }) => this.kernel.createNote(title, content, projectId).id,
+          }) as any;
+        }
         if(a.name==='send'){
           const request=a.input as ConversationSendInput,conversation=this.conv(request.resourceId);
           if(['local','mock-ordinary'].includes(conversation.providerId)){
