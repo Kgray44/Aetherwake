@@ -260,7 +260,7 @@ The earlier #271 Windows failures remain recorded: a rejected 5,463 ms CPU sampl
 
 ## Landed source and qualification on `3964c50b`
 
-Main `3964c50bdbde3fdb0ee8f240d9cba2265de70a0c` has tree `f423baa63b2b88da6f737c0ed2562c96adf01220`. The verified projection of the original 177 pull requests contains 21 merged, 23 closed with source proof, and 133 retained. Newer carriers are tracked separately.
+Main `3964c50bdbde3fdb0ee8f240d9cba2265de70a0c` has tree `f423baa63b2b88da6f737c0ed2562c96adf01220`. The verified projection of the original 177 pull requests contains 22 merged, 23 closed with source proof, and 132 retained. GitHub records #80 and #155 as merged at the same commit, `c860c4e9`. The open collection at this checkpoint contains 133 unique PRs, including the newer integration checkpoint #272.
 
 | Source | Landed behavior and evidence | Remaining acceptance |
 | --- | --- | --- |
