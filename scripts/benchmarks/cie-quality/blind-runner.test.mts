@@ -241,3 +241,41 @@ test('a late result after cancellation stays outside the sealed prefix and the c
   assert.deepEqual(cancelled.results, []);
   assert.deepEqual(dispatched, ['blind-001', 'blind-002']);
 });
+
+
+test('a failed or cancelled read-only preflight releases its claim before any host dispatch', async () => {
+  for (const preflight of ['error', 'cancelled'] as const) {
+    const journal = openBlindJournal(':memory:');
+    const candidate = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
+    const controller = new AbortController();
+    const dispatches: string[] = [];
+    const host: Parameters<typeof runBlindCie>[2] = async input => {
+      dispatches.push(input.id);
+      return { answer: input.id };
+    };
+    const options = {
+      journal, maxCases: 1,
+      route: { provider: 'native-provider', model: 'fixture', transport: 'synthetic' as const },
+      recovery: { binding: 'profile:1', verify: async () => true },
+    };
+    try {
+      const attempt = runBlindCie(bytes, candidate, host, controller.signal, {
+        ...options,
+        canStartCase: async () => {
+          assert.equal((await journal.read())?.inFlight, 'blind-001');
+          if (preflight === 'error') throw new Error('usage unavailable');
+          controller.abort();
+          return true;
+        },
+      });
+      if (preflight === 'error') await assert.rejects(attempt, /usage unavailable/);
+      else assert.equal((await attempt).stopped?.kind, 'cancelled');
+
+      assert.deepEqual(dispatches, []);
+      assert.equal((await journal.read())?.inFlight, null);
+      const resumed = await runBlindCie(bytes, candidate, host, new AbortController().signal, options);
+      assert.equal(resumed.results.length, 1);
+      assert.deepEqual(dispatches, ['blind-001']);
+    } finally { journal.close(); }
+  }
+});
