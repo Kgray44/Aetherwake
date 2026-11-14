@@ -1,4 +1,4 @@
-import type { ConversationProductPort, ConversationView, ConversationViewPosition, Detail, MessageView } from './contracts.ts';
+import type { ConversationProductPort, ConversationView, ConversationViewPosition, Detail, DraftDocument, MessageView } from './contracts.ts';
 import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-session.ts';
 import { renderMarkdown } from './markdown.ts';
@@ -72,6 +72,9 @@ export interface ConversationChatOptions {
   onDetail?: (detail: Detail) => void; onUnavailable?: () => void; onChanged?: () => void | Promise<void>;
   onMessageAction?: (event: ConversationMessageAction) => void | Promise<void>;
   onRememberMessage?: (request: MemoryCaptureRequest) => Promise<boolean>;
+  chooseDocument?: (projectId: string | null) => Promise<{ id: string; version: number; title: string } | null>;
+  listDocuments?: (conversationId: string) => readonly DraftDocument[];
+  openDocument?: (document: DraftDocument) => Promise<'opened' | 'unavailable' | 'superseded'>;
   onViewState?: (state: { resourceId: string; content: string; scroll: number; offset: number; view?:ConversationViewCapture }) => void;
 }
 export interface ConversationChat {
@@ -145,8 +148,99 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   feedbackToggle.type='button';feedbackToggle.dataset.aerynthMotionControl='true';feedbackToggle.setAttribute('aria-expanded','false');feedbackToggle.setAttribute('aria-label','Conversation status, context and draft details');feedbackBody.id='cp-chat-inspection-'+ ++chatSerial;feedbackToggle.setAttribute('aria-controls',feedbackBody.id);feedbackBody.hidden=true;feedbackBody.inert=true;feedbackContents.append(statusDetail,capabilityNote,contextNote,draftStatus,recovery);feedbackBody.append(feedbackContents);feedbackLine.append(status,feedbackToggle);feedback.append(feedbackLine);
   root.append(top,messages,paging,feedback,composer);messages.append(stream,feedbackBody);container.append(root);
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
+  const documentList = el('div', undefined, 'cp-composer-documents');
+  const documentStatus = el('span', 'Remove or replace the unavailable documents to send.');
+  documentStatus.setAttribute('role', 'status');
+  const continueDocuments = el('button', 'Continue with ChatGPT');
+  continueDocuments.type = 'button';
+  continueDocuments.hidden = true;
+  decorateConversationControl(continueDocuments,{identity:'providers',emphasis:'secondary'});
+  documentList.hidden = true;
+  composer.insertBefore(documentList, tools);
+  const attachDocument = el('button', 'Attach document');
+  let choosingDocument = false;
+  let renderedDocuments: readonly DraftDocument[] | undefined;
+  function renderDocuments(documents: readonly DraftDocument[]) {
+    if (documents === renderedDocuments) return;
+    renderedDocuments = documents;
+    documentList.replaceChildren(...documents.flatMap(document => {
+      const label = document.title + (document.unavailable === 'changed' ? ' (changed)' : '');
+      const remove = el('button', label + ' ×');
+      remove.type = 'button';
+      decorateConversationControl(remove,{identity:'source',emphasis:'secondary'});
+      remove.setAttribute('aria-label', 'Remove attachment ' + label);
+      remove.addEventListener('click', () => {
+        if (remove.disabled) return;
+        session.updateDocuments(session.snapshot().documents.filter(item => item.id !== document.id));
+        textarea.focus();
+      });
+      if (!document.unavailable && options.openDocument) {
+        const open = el('button', label);
+        open.type = 'button';
+        decorateConversationControl(open,{identity:'source',emphasis:'secondary'});
+        open.setAttribute('aria-label', 'Open attachment ' + label);
+        open.addEventListener('click', async () => {
+          if (open.disabled || accessRevoked) return;
+          try {
+            if (await options.openDocument!(document) === 'unavailable' && !disposed && !accessRevoked) {
+              await session.reload();
+              report('This attachment could not be opened. Check the selected document before sending.');
+            }
+          } catch (error) { report(errorText(error)); }
+        });
+        remove.textContent = '×';
+        return [open, remove];
+      }
+      if (!document.unavailable || !options.chooseDocument) return [remove];
+      const replace = el('button', 'Replace');
+      replace.type = 'button';
+      decorateConversationControl(replace,{identity:'source',emphasis:'secondary'});
+      replace.dataset.replaceDocument = 'true';
+      replace.setAttribute('aria-label', 'Replace attachment ' + label);
+      replace.addEventListener('click', () => {
+        if (!replace.disabled) void chooseAttachment(document);
+      });
+      return [remove, replace];
+    }), documentStatus, continueDocuments);
+  }
+  async function chooseAttachment(replacing?: DraftDocument) {
+    if (choosingDocument || !options.chooseDocument || !current || !canStageDocuments()) return;
+    const projectId = current.conversation.projectId;
+    choosingDocument = true;
+    renderDraft();
+    try {
+      const document = await options.chooseDocument(projectId);
+      if (!document || disposed || current?.conversation.projectId !== projectId || !canStageDocuments()) return;
+      const { documents, phase } = session.snapshot();
+      if (['loading', 'conflict', 'error'].includes(phase)) return;
+      if (replacing) {
+        if (!documents.some(item => item.id === replacing.id && item.version === replacing.version)) return;
+        session.updateDocuments(documents
+          .filter(item => item.id !== document.id || item.id === replacing.id)
+          .map(item => item.id === replacing.id ? document : item));
+        textarea.focus();
+      } else {
+        session.updateDocuments([...documents.filter(item => item.id !== document.id), document]);
+      }
+    } catch (error) {
+      if (!disposed) report(errorText(error));
+    } finally {
+      choosingDocument = false;
+      if (!disposed) renderDraft();
+    }
+  }
+  if (options.chooseDocument) {
+    attachDocument.type = 'button';
+    attachDocument.hidden = true;
+    decorateConversationControl(attachDocument,{identity:'source',emphasis:'secondary'});
+    tools.insertBefore(attachDocument, hint);
+    attachDocument.addEventListener('click', () => {
+      if (!attachDocument.disabled && !attachDocument.hidden) void chooseAttachment();
+    });
+  }
   let sendTask: Promise<void>|null = null, stopRequestedFor: string|null = null, streamLimited = false, accessRevoked = false;
   let submittedTurn: { commandId: string; providerId: string } | undefined;
+  let reconcileSubmittedTurn: ((observed: ConversationExecution) => Promise<void>) | undefined;
   let reviewedExecutionId: string | undefined;
   const unresolvedOrdinaryExecution = () => {
     const canonical = current?.conversation.execution;
@@ -186,11 +280,39 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let providerPicker: ConversationPicker | null = null;
   let modelPicker: ConversationPicker | null = null;
   let thinkingPicker: ConversationPicker | null = null;
+  let documentPicker: ConversationPicker | null = null;
+  if (options.motion && options.listDocuments) {
+    const slot = el('span');
+    tools.insertBefore(slot, hint);
+    const list = () => options.listDocuments!(resourceId);
+    const key = (item: DraftDocument) => item.id + ':' + item.version;
+    documentPicker = mountConversationPicker(slot, {
+      motion: options.motion, viewId: options.viewId! + ':saved-document',
+      label: 'Attach saved document', identity: 'source',
+      itemsOnOpen: () => {
+        const attached = session.snapshot().documents;
+        return list().map(item => ({
+          value: key(item), label: item.title, disabled: attached.some(ref => key(ref) === key(item)),
+        }));
+      },
+      onSelect(value) {
+        const { documents, phase } = session.snapshot();
+        if (disposed || !canStageDocuments() || sending || choosingDocument ||
+            documents.length >= 4 || ['loading', 'conflict', 'error'].includes(phase)) return;
+        const selected = list().find(item => key(item) === value);
+        if (!selected) { report('This document is no longer available.'); return; }
+        session.updateDocuments([...documents.filter(item => item.id !== selected.id), selected]);
+        textarea.focus();
+      },
+    });
+  }
   let thinking: { modelId: string; effort: ReasoningEffort } | undefined;
   let loadingModels = false;
   const ordinaryPlan = () => current?.conversation.providerId === 'chatgpt-plan-responses'
     ? current.providers.find(item => item.id === 'chatgpt-plan-responses')
     : undefined;
+  const canStageDocuments = () => !accessRevoked && current?.conversation.state === 'active' &&
+    ['chatgpt-plan-responses','local'].includes(current.conversation.providerId);
   const effectiveModel = () => {
     const catalog = ordinaryPlan()?.modelOptions ?? [];
     const selected = options.models?.selections.get(resourceId);
@@ -203,12 +325,33 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       return selected?.eligibleTools?.includes('web_search') ? selected : undefined;
     return ordinaryPlan()?.modelOptions?.find(model => model.eligibleTools?.includes('web_search'));
   };
-  if(options.motion&&options.onProviderChange){provider.hidden=true;providerPicker=mountConversationPicker(providerSlot,{motion:options.motion,viewId:options.viewId!+':provider',label:'Conversation provider',identity:'providers',async onSelect(targetProviderId){
-    const before=current;if(!before||accessRevoked||sending||active()||before.conversation.state==='archived')return;
+  let changingProvider = false;
+  async function changeProvider(targetProviderId: string) {
+    const before=current;
+    if (!before || !options.onProviderChange || accessRevoked || sending || changingProvider || active() ||
+        before.conversation.state!=='active' || before.conversation.providerId===targetProviderId ||
+        !before.providers.some(item=>item.id===targetProviderId&&item.available&&item.record)) return;
     const empty=before.messages.total===0&&before.messages.items.length===0&&['local','mock-ordinary','chatgpt-plan-responses'].includes(before.conversation.providerId),mode=empty?'empty':'continuation';
-    await options.onProviderChange!({resourceId,targetProviderId,expectedRevision:before.conversation.revision,mode});
-    if(!disposed&&mode==='empty')textarea.focus({preventScroll:true});
-  },onError:()=>report('Provider selection could not be confirmed. Refresh this conversation before retrying.')});}
+    changingProvider=true;
+    renderDraft();
+    try {
+      await options.onProviderChange({resourceId,targetProviderId,expectedRevision:before.conversation.revision,mode});
+      if(!disposed&&mode==='empty')textarea.focus({preventScroll:true});
+    } catch {
+      report('Provider selection could not be confirmed. Refresh this conversation before retrying.');
+    } finally {
+      changingProvider=false;
+      renderDraft();
+    }
+  }
+  continueDocuments.addEventListener('click',()=>{
+    if(!continueDocuments.disabled&&!continueDocuments.hidden)void changeProvider('chatgpt-plan-responses');
+  });
+  if(options.motion&&options.onProviderChange){
+    provider.hidden=true;
+    providerPicker=mountConversationPicker(providerSlot,{motion:options.motion,viewId:options.viewId!+':provider',
+      label:'Conversation provider',identity:'providers',onSelect:changeProvider});
+  }
   if (options.motion && options.models) {
     const models = options.models;
     modelPicker = mountConversationPicker(modelSlot, {
@@ -316,9 +459,15 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   function renderDraft(snapshot: DraftSessionSnapshot = session.snapshot()) {
     if (disposed) return;
     const plan = ordinaryPlan();
+    const mayStageDocuments = canStageDocuments();
+    const documents = accessRevoked ? [] : snapshot.documents;
+    const documentsUnsupported = documents.length > 0 && current?.conversation.providerId === 'local';
+    const unavailableDocuments = documents.some(item => item.unavailable);
+    const draftNeedsAttention = ['loading', 'conflict', 'error'].includes(snapshot.phase);
+    const planDisconnected = plan?.available === false;
     const selectedModel = effectiveModel();
     const modelControlsDisabled = !plan?.available || sending || !!active() || accessRevoked || current?.conversation.state !== 'active';
-    if(providerPicker){providerPicker.update({items:current?.providers.map(item=>({value:item.id,label:item.label,disabled:!item.available||!item.record,description:item.reason}))??[],value:current?.conversation.providerId??'',disabled:!current||accessRevoked||sending||!!active()||current.conversation.state==='archived'});}
+    if(providerPicker){providerPicker.update({items:current?.providers.map(item=>({value:item.id,label:item.label,disabled:!item.available||!item.record,description:item.reason}))??[],value:current?.conversation.providerId??'',disabled:!current||accessRevoked||sending||changingProvider||!!active()||current.conversation.state==='archived'});}
     if (modelPicker) {
       modelSlot.hidden = !plan;
       const chosen = options.models?.selections.get(resourceId);
@@ -353,22 +502,43 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     // Do not assign equal values: native caret, selection and composition remain intact.
     if (textarea.value !== snapshot.content) { const start = textarea.selectionStart, end = textarea.selectionEnd,direction=textarea.selectionDirection??'none'; textarea.value = snapshot.content; if (document.activeElement === textarea) textarea.setSelectionRange(Math.min(start,snapshot.content.length),Math.min(end,snapshot.content.length),direction); resize(); }
     draftStatus.dataset.phase = draftStatus.dataset.draftState = snapshot.phase; draftStatus.dataset.version = snapshot.version === null ? '' : String(snapshot.version);
-    draftStatus.textContent = snapshot.phase === 'clean' ? (snapshot.content ? 'Draft saved' : '') : snapshot.phase === 'saving' ? 'Saving draft…' : snapshot.phase === 'dirty' ? 'Unsaved changes' : snapshot.phase === 'loading' ? 'Loading saved draft…' : snapshot.phase === 'conflict' ? 'This draft changed in another view. Choose which text to keep.' : 'Draft recovery needs attention: '+snapshot.error;
+    draftStatus.textContent = snapshot.phase === 'clean' ? (snapshot.content || documents.length ? 'Draft saved' : '') : snapshot.phase === 'saving' ? 'Saving draft…' : snapshot.phase === 'dirty' ? 'Unsaved changes' : snapshot.phase === 'loading' ? 'Loading saved draft…' : snapshot.phase === 'conflict' ? 'This draft changed in another view. Choose which draft to keep.' : 'Draft recovery needs attention: '+snapshot.error;
     if (snapshot.remote) {
-      localText.textContent = snapshot.content; storedText.textContent = snapshot.remote.content;
+      localText.textContent = [snapshot.content, ...documents.map(item => item.title)].filter(Boolean).join('\n');
+      storedText.textContent = [snapshot.remote.content, ...(!accessRevoked ? snapshot.remote.documents ?? [] : []).map(item => item.title)].filter(Boolean).join('\n');
       if (recoveryDetails.parentNode !== recovery) { recovery.replaceChildren(recoveryDetails); recoveryDetails.open = true; }
     } else if (snapshot.phase === 'error') { if (retry.parentNode !== recovery) recovery.replaceChildren(retry); }
     else if (!needsSendReview()) recovery.replaceChildren();
     if (needsSendReview() && reviewed.parentNode !== recovery) recovery.append(el('p','Send acceptance is not confirmed. Your draft is retained; inspect the chat before retrying.'),reviewed);
     keep.disabled = useStored.disabled = retry.disabled = recovering;
+    reviewed.disabled = sending;
     const codexOutcomeUnknown = execution?.providerId === 'codex-app-server' && execution.state === 'unknown';
     checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
     checkOutcome.disabled = recovering;
-    send.disabled = sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
-    web.hidden = !plan?.execute || !webSearchModel();
+    send.disabled = choosingDocument || changingProvider || planDisconnected || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
+    send.disabled ||= documents.length > 0;
     sendWithMemory.hidden = !options.onRememberMessage || !plan?.execute;
     sendWithMemory.disabled = send.disabled || sendWithMemory.hidden || !plan?.available;
-    web.disabled = send.disabled || web.hidden || !plan?.available;
+    web.hidden = !plan?.execute || !webSearchModel();
+    documentStatus.textContent = unavailableDocuments ? 'Remove or replace the unavailable documents to send.'
+      : documentsUnsupported ? 'Switch to ChatGPT to keep working with this attachment.'
+      : documents.length ? 'Attachments are saved in this draft. Document sending is unavailable.' : '';
+    send.title = documentStatus.textContent || (planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : '');
+    web.disabled = send.disabled || web.hidden || !plan?.available || documents.length > 0;
+    attachDocument.hidden = !mayStageDocuments || !options.chooseDocument;
+    attachDocument.disabled = !mayStageDocuments || choosingDocument || sending || changingProvider || draftNeedsAttention || documents.length >= 4;
+    if (documentPicker) {
+      documentPicker.element.hidden = !mayStageDocuments;
+      documentPicker.update({ items: [], value: '', disabled: attachDocument.disabled });
+    }
+    renderDocuments(documents);
+    documentList.hidden = !documents.length;
+    documentStatus.hidden = !documentStatus.textContent;
+    for (const button of documentList.querySelectorAll('button'))
+      button.disabled = sending || changingProvider || choosingDocument || draftNeedsAttention || (button.dataset.replaceDocument === 'true' && !mayStageDocuments);
+    continueDocuments.hidden = !documentsUnsupported || unavailableDocuments || !options.onProviderChange ||
+      !current?.providers.some(item=>item.id==='chatgpt-plan-responses'&&item.available&&item.record);
+    continueDocuments.disabled = sending || changingProvider || choosingDocument || draftNeedsAttention || !!active() || needsSendReview();
     send.dataset.state=needsSendReview()?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=stopRequestedFor?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = !!stopRequestedFor || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
   }
@@ -377,7 +547,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   keep.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('keep-local',remote.version));} });
   useStored.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('use-stored',remote.version));} });
   retry.addEventListener('click', () => { markViewIntent();void recover(async()=>{await session.reload();await session.flush();}); });
-  reviewed.addEventListener('click', () => { uncertain = false; submittedTurn = undefined; reviewedExecutionId = unresolvedOrdinaryExecution()?.id; recovery.replaceChildren(); renderDraft(); });
+  reviewed.addEventListener('click', () => { if(sending)return;uncertain = false; submittedTurn = undefined; reconcileSubmittedTurn = undefined; reviewedExecutionId = unresolvedOrdinaryExecution()?.id; recovery.replaceChildren(); renderDraft(); });
   checkOutcome.addEventListener('click', () => {
     const id = execution?.id, port = options.execution;
     if (!id || checkOutcome.hidden || !port?.recoverTurn) return;
@@ -711,7 +881,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       if (presentationAnchor && !pendingFollow && !pendingAnchor)
         alignReadingAnchor(presentationAnchor);
     }
-    providerPicker?.frame();modelPicker?.frame();thinkingPicker?.frame();disclosures?.frame();controlStates?.frame();reconcileFeedback();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
+    providerPicker?.frame();modelPicker?.frame();thinkingPicker?.frame();documentPicker?.frame();disclosures?.frame();controlStates?.frame();reconcileFeedback();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
     drainAnchor();
     if(inspectionFollow&&feedbackOpen&&messages.clientHeight>0){const box=messages.getBoundingClientRect(),body=feedbackBody.getBoundingClientRect(),scale=box.height/(messages.offsetHeight||messages.clientHeight);if(Number.isFinite(scale)&&scale>0&&body.height>0){const next=Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(body.top-box.top)/scale));setScroll(next);if(settled)inspectionFollow=false;}}
     if(liveFollow&&!feedbackOpen&&!stream.hidden&&messages.clientHeight>0){const next=Math.max(0,messages.scrollHeight-messages.clientHeight);setScroll(next);liveFollow=false;}
@@ -728,7 +898,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const scroll=messages.scrollTop;
     resize();if(!presentationAnchor)setScroll(scroll);drainPendingFollow();drainAnchor();
   },flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
-    if(disposed)return;await flush();disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();modelPicker?.dispose();thinkingPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
+    if(disposed)return;await flush();disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();modelPicker?.dispose();thinkingPicker?.dispose();documentPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){
       if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}
       else await session.dispose();

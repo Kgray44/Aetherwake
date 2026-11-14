@@ -2467,6 +2467,9 @@ export function installApplication(hooks: Hooks) {
       motion: experienceMotion,
       viewId: "conversation-manager",
       models: ordinaryModelControls,
+      chooseDocument: chooseChatDocument,
+      listDocuments: listChatDocuments,
+      openDocument: openChatDocument,
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
@@ -2506,6 +2509,34 @@ export function installApplication(hooks: Hooks) {
       },
     });
     await controller.ready;
+  }
+  async function chooseChatDocument(projectId: string | null) {
+    const picked = await mediaClient.chooseMediaForAdd({ kind: "file", variant: "document", projectId });
+    if (!picked) return null;
+    const { id, version, title } = picked.resource;
+    return { id, version, title };
+  }
+  function listChatDocuments(conversationId: string) {
+    const chat = state?.resources.find(resource => resource.id === conversationId);
+    if (!chat || chat.visible === false || chat.available === false || chat.state === "archived") return [];
+    return (state?.resources ?? [])
+      .filter(resource => resource.visible !== false &&
+        resource.available !== false && resource.state !== "archived" &&
+        (resource.project_id == null || resource.project_id === chat.project_id) &&
+        resource.kind === "file" && resource.media?.source === "file" &&
+          ["pdf", "docx", "text"].includes(resource.media.format))
+      .map(({ id, version, title }) => ({ id, version, title }))
+      .sort((left, right) => left.title.localeCompare(right.title));
+  }
+  async function openChatDocument(document: {id: string; version: number}) {
+    const result = await resourceOpener.open({
+      resourceId: document.id,
+      expectedVersion: document.version,
+      preferredPresentation: "direct",
+      origin: { source: "application" },
+    });
+    return result.status === "ready" ? "opened" as const
+      : result.status === "superseded" ? "superseded" as const : "unavailable" as const;
   }
   function openVela() {
     if (velaOpen) {
@@ -4309,6 +4340,9 @@ export function installApplication(hooks: Hooks) {
           motion: experienceMotion,
           viewId: "block:" + b.id + ":conversation",
           models: ordinaryModelControls,
+          chooseDocument: chooseChatDocument,
+          listDocuments: listChatDocuments,
+          openDocument: openChatDocument,
           viewPersistence: chatViewPersistence,
           onProviderChange: async (change) => {
             if (change.mode === "continuation") {
