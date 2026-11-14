@@ -336,22 +336,60 @@ test('reviewed mission runs two isolated stateless specialists concurrently and 
     f.responses.push(report('resp_synthetic_methods', ['Run multiple warmup iterations', 'Measure a fixed baseline workload']),
       report('resp_synthetic_review', ['Check competing processes during the run', 'Record CPU and renderer sampling windows']));
     const { id } = await f.core.command('missionStartReviewed', input) as MissionProjection;
-    const until = performance.now() + 5000;
+    const dispatchStarted = performance.now();
+    const until = dispatchStarted + 5000;
+    const read = async (started: number) => {
+      const startedMs = Math.round(performance.now() - started);
+      const mission = await f.core.command('missions', { name: 'read', input: { id } }) as MissionProjection;
+      return { mission, startedMs, finishedMs: Math.round(performance.now() - started),
+        syntheticRequests: f.requests.length };
+    };
+    const diagnostic = ({ mission, ...snapshot }: Awaited<ReturnType<typeof read>>) => ({
+      snapshot,
+      outcome: mission.outcome,
+      waits: Object.entries(mission.waits).slice(0, 8),
+      admission: mission.admission?.reasons,
+      backendTimerOvershootMs: (mission.tasks.find(task => task.id === 'backend')?.attempts[0]?.evidence?.value as
+        { timerOvershootMs?: number } | undefined)?.timerOvershootMs,
+      tasks: mission.tasks.slice(0, 8).map(task => {
+        const attempt = task.attempts.at(-1);
+        return { task: task.id, state: task.state, detail: task.detail, dispatch: attempt?.dispatch?.state,
+          admittedAt: attempt?.admittedAt, finishedAt: attempt?.finishedAt, outcome: attempt?.outcome,
+          executionMs: attempt?.timing?.executionMs };
+      }),
+    });
     while (f.requests.length < 2 && performance.now() < until) await wait(25);
-    assert.equal(f.requests.length, 2, 'Both requests must reach the transport before either can finish');
+    const dispatched = Number(f.requests.length);
+    if (dispatched !== 2) {
+      const elapsedMs = Math.round(performance.now() - dispatchStarted);
+      const snapshot = await Promise.race([
+        read(dispatchStarted).then(diagnostic, () => ({ snapshot: 'unavailable' })),
+        wait(250, { snapshot: 'timed-out' }, { ref: false }),
+      ]);
+      assert.equal(dispatched, 2, 'Both requests must reach the transport before either can finish: ' +
+        JSON.stringify({ phase: 'dispatch', elapsedMs, syntheticRequests: dispatched, ...snapshot }));
+    }
     assert.notEqual(f.requests[0].instructions, f.requests[1].instructions);
     assert.deepEqual(f.requests.map(req => req.input), Array(2).fill([{ role: 'user', content: objective }]));
     assert.ok(f.requests.every(req => !req.tools && req.store === false && req.reasoning?.effort === 'low'));
     release();
-    const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
     // Dispatch and post-release verification have separate bounded waits.
     // A slow dispatch must not spend the native follow-up/report settlement budget.
-    const settledUntil = performance.now() + 5000;
-    let completed = await read();
-    while (['queued', 'running'].includes(completed.outcome) && performance.now() < settledUntil) {
-      await wait(25); completed = await read();
+    const settlementStarted = performance.now();
+    const settledUntil = settlementStarted + 5000;
+    let snapshot = await read(settlementStarted);
+    let timerElapsedMs: number | undefined;
+    while (['queued', 'running'].includes(snapshot.mission.outcome) && performance.now() < settledUntil) {
+      const timerStarted = performance.now();
+      await wait(25);
+      timerElapsedMs = Math.round(performance.now() - timerStarted);
+      snapshot = await read(settlementStarted);
     }
-    assert.equal(completed.outcome, 'verified', JSON.stringify(completed.tasks.map(t => [t.id, t.state, t.detail])));
+    const completed = snapshot.mission;
+    assert.equal(completed.outcome, 'verified', completed.outcome === 'verified' ? undefined : JSON.stringify({
+      phase: 'settlement', elapsedMs: Math.round(performance.now() - settlementStarted), timerElapsedMs,
+      ...diagnostic(snapshot),
+    }));
     const specialists = completed.tasks.filter(t => t.specialist).map(t => t.attempts[0]);
     assert.equal(new Set(specialists.map(a => a.id)).size, 2);
     assert.equal(new Set(specialists.map(a => a.telemetry?.responseId)).size, 2);
