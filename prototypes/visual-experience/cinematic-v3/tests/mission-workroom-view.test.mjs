@@ -18,6 +18,50 @@ const fullMission = (revision = 1) => ({ contract: 'aerynth.vela-mission@1', id:
 const flowPort = () => { const poses = new Map(); return { poses, motion: { reduced: true, add(key, pose) { poses.set(key, pose); },
   target(key, pose) { poses.set(key, pose); }, pose(key) { assert(poses.has(key)); return poses.get(key); }, remove(key) { poses.delete(key); }, wake() {} } }; };
 
+test("disconnect immediately clears workroom evidence and fences a pending mission read", async t => {
+  const dom = blockDocument(), restore = dom.install(), port = flowPort();
+  const mission = fullMission();
+  const card = binding({ kind: "stream", events: [] });
+  let reads = 0, opened = 0, hold = false, release, started;
+  const pendingRead = new Promise(resolve => { release = resolve; });
+  const readStarted = new Promise(resolve => { started = resolve; });
+  const view = mountMissionWorkroomView(dom.root, "stream", "workroom", async () => card,
+    undefined, () => opened++, undefined, {
+      motion: port.motion,
+      viewId: "synthetic:disconnect",
+      readMission: async () => {
+        reads++;
+        if (!hold) return mission;
+        started();
+        return pendingRead;
+      },
+    });
+  t.after(() => { view.dispose(); restore(); });
+  await view.refresh();
+  assert.equal(port.poses.size, 3);
+  const open = dom.root.querySelectorAll("button").find(node => node.textContent === "Open mission plan");
+  hold = true;
+  const refreshing = view.refresh();
+  await readStarted;
+  view.disconnect();
+  assert.match(dom.root.textContent, /Backend disconnected/);
+  assert.equal(port.poses.size, 0);
+  assert.equal(open.hidden, true);
+  open.onclick();
+  assert.equal(opened, 0);
+
+  release(fullMission(2));
+  await refreshing;
+  const readsAtDisconnect = reads;
+  view.setScope("another-workroom");
+  view.setActive(true);
+  view.observe(true);
+  await view.refresh();
+  assert.equal(reads, readsAtDisconnect);
+  assert.equal(dom.root.querySelectorAll(".aw-mission-task").length, 0);
+  assert.match(dom.root.textContent, /Backend disconnected/);
+});
+
 for (const cardKind of ['stream', 'graph']) test(cardKind + ' workroom defaults to shared canonical Flow with real dependency joins and forensic rows', async t => {
   const dom = blockDocument(), restore = dom.install(), port = flowPort();
   const mission = fullMission(), dashboard = cardKind === 'graph' ? { kind: 'graph', objective: mission.objective, planRevision: 1,
