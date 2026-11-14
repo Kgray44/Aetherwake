@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCipheriv,createDecipheriv,createHash,randomBytes,randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
 import { existsSync,readFileSync,mkdirSync,mkdtempSync,realpathSync,renameSync,rmSync,symlinkSync,writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -37,7 +38,8 @@ function response(content:string,model:string,terminal:string|null=content, frag
     usage:{input_tokens:100,output_tokens:40,total_tokens:140}}}].map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});
 }
 function fixture(velaHistoryContext = false, nativeMedia = false, documents?: NativeDocumentTextServices, liveCredential?: string,
-  artifactFixture = false, alternateRootCase = false, codexCwd?: string) {
+  artifactFixture = false, alternateRootCase = false, codexCwd?: string,
+  evaluationAccounting?: Omit<NonNullable<ConstructorParameters<typeof BackendCore>[4]>, 'fetch'>) {
   const base=resolve(tmpdir()),directory=mkdtempSync(join(base,'aerynth-mission-api-')),path=join(alternateRootCase ? directory.toUpperCase() : directory,'canonical.sqlite'),key=randomBytes(32),requests:any[]=[],replies:((body:any)=>Response|Promise<Response>)[]=[];
   let catalogModels = ['gpt-6-luna', 'gpt-6.1-sol'];
   let beforeCredentialOpen: (() => Promise<void>) | undefined;
@@ -45,7 +47,7 @@ function fixture(velaHistoryContext = false, nativeMedia = false, documents?: Na
     seal:async value=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);return Buffer.concat([iv,cipher.update(value),cipher.final(),cipher.getAuthTag()]);},
     open:async value=>{const before=beforeCredentialOpen;beforeCredentialOpen=undefined;await before?.();
       const data=Buffer.from(value),cipher=createDecipheriv('aes-256-gcm',key,data.subarray(0,12));cipher.setAuthTag(data.subarray(-16));return Buffer.concat([cipher.update(data.subarray(12,-16)),cipher.final()]).toString();}}};
-  const api={fetch:(async(url,init)=>{if(String(url)==='https://api.openai.com/v1/models')return Response.json({data:catalogModels.map(id=>({id}))});
+  const api={...evaluationAccounting,fetch:(async(url,init)=>{if(String(url)==='https://api.openai.com/v1/models')return Response.json({data:catalogModels.map(id=>({id}))});
     assert.ok(String(url) === 'https://api.openai.com/v1/responses' ||
       artifactFixture && String(url) === 'https://api.openai.com/v1/images/generations');
     assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+marker);
@@ -2543,8 +2545,7 @@ test('reviewed CIE cites a selected local file and fences physical replacement b
 
 test('dormant CIE adapter recovers the original frozen source-free prediction without replay', async () => {
   const { createDormantNativeCieHost } = await import('../../../scripts/benchmarks/cie-quality/native-host-adapter.mts');
-  const { readBlindInputs } = await import('../../../scripts/benchmarks/cie-quality/blind-runner.mts');
-  const f = fixture(true, true);
+  const { BLIND_INPUT_SHA256, readBlindInputs } = await import('../../../scripts/benchmarks/cie-quality/blind-runner.mts');
   const bytes = readFileSync(new URL('../../../scripts/benchmarks/cie-quality/cases.public.json', import.meta.url));
   const cases = readBlindInputs(bytes);
   const emptyIndex = cases.findIndex(item => item.sources.length === 0);
@@ -2553,8 +2554,50 @@ test('dormant CIE adapter recovers the original frozen source-free prediction wi
   const candidate = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
   const route = { provider: 'openai-api-vela', model: 'gpt-6-luna', transport: 'synthetic' as const };
   const signal = new AbortController().signal;
-  const path = join(f.directory, 'dormant-cie.sqlite');
   const answer = 'No sources were supplied, so the evidence cannot establish an answer.';
+  type ReviewCallback = NonNullable<NonNullable<ConstructorParameters<typeof BackendCore>[4]>['reviewEvaluationReservation']>;
+  let ownerReceipt: ReturnType<ReviewCallback> = null;
+  let receiptMode: 'expired' | 'mismatched' | 'current' = 'current';
+  const ownsJournalClaim = (claim: NativeCieClaim) => {
+    if (!existsSync(path)) return false;
+    const journal = new DatabaseSync(path, { readOnly: true });
+    try {
+      const stateRow = journal.prepare('SELECT state FROM cie_blind_journal WHERE singleton=1').get();
+      const profileRow = journal.prepare('SELECT profile_id FROM cie_blind_profile WHERE singleton=1').get();
+      if (typeof stateRow?.state !== 'string' || profileRow?.profile_id !== claim.profileId) return false;
+      const state = JSON.parse(stateRow.state);
+      return state.inFlight === empty.id && state.checkpoint.inputSha256 === BLIND_INPUT_SHA256 &&
+        planningDigest(state.checkpoint.candidate) === planningDigest(candidate) &&
+        planningDigest(state.checkpoint.route) === planningDigest(route) &&
+        state.claim?.claimToken === claim.claimToken && state.claim?.bindingDigest === claim.bindingDigest;
+    } finally { journal.close(); }
+  };
+  const f = fixture(true, true, undefined, undefined, false, false, undefined, {
+    syntheticBatchAccounting: true,
+    hasEvaluationJournalClaim(claim, input) {
+      return input.intent === empty.request && input.resourceIds.length === 0 && input.resourceRefs?.length === 0 &&
+        input.model === route.model && input.providerId === route.provider && input.semanticContext === true &&
+        ownsJournalClaim(claim);
+    },
+    reviewEvaluationReservation(review) {
+      assert.ok(ownerReceipt);
+      const { corpusSha256, caseId, candidate: reviewedCandidate, catalogDigest, batch, expiresAt, ...reviewed } = ownerReceipt;
+      assert.deepEqual(review, reviewed);
+      assert.equal(corpusSha256, BLIND_INPUT_SHA256);
+      assert.equal(caseId, empty.id);
+      assert.deepEqual(reviewedCandidate, candidate);
+      assert.ok(ownsJournalClaim(review.claim));
+      if (receiptMode === 'expired') return { ...ownerReceipt, expiresAt: Date.now() - 1 };
+      if (receiptMode === 'mismatched') return { ...ownerReceipt, caseId: 'wrong-case' };
+      assert.match(catalogDigest, /^[a-f0-9]{64}$/);
+      assert.equal(batch.profileId, review.claim.profileId);
+      assert.equal(batch.configurationVersion, review.claim.configurationVersion);
+      assert.equal(batch.maxCalls, 1);
+      assert.ok(expiresAt > Date.now());
+      return ownerReceipt;
+    },
+  });
+  const path = join(f.directory, 'dormant-cie.sqlite');
   try {
     await f.ready();
     await f.core.command('vela', { name: 'routingOptions', input: { providerId: route.provider } });
@@ -2562,6 +2605,11 @@ test('dormant CIE adapter recovers the original frozen source-free prediction wi
     assert.ok(profile && profile.configurationVersion !== null);
     const { profileId, configurationVersion } = profile;
     const catalogDigest = createHash('sha256').update(JSON.stringify([configurationVersion, route.model])).digest('hex');
+    const previewInput = { intent: empty.request, resourceIds: [], resourceRefs: [], adaptive: true as const,
+      providerId: route.provider, model: route.model, semanticContext: true as const };
+    const missingClaim = { profileId, configurationVersion, claimToken: 'd'.repeat(64), bindingDigest: 'e'.repeat(64) };
+    await assert.rejects(f.core.previewVelaEvaluation(previewInput, missingClaim));
+    assert.equal(f.core.readVelaEvaluationAdmissions(missingClaim), null);
     if (emptyIndex > 0) {
       const journal = openBlindJournal(path, { profileId });
       try {
@@ -2592,14 +2640,33 @@ test('dormant CIE adapter recovers the original frozen source-free prediction wi
         assert.equal(++callbackCount, 1);
         assert.deepEqual(input, { id: empty.id, request: empty.request, sources: [] });
         const eventCursor = (await f.core.command('replay', { limit: 1 })).latest;
-        const preview = await f.core.previewVelaEvaluation({
-          intent: input.request, resourceIds: [], resourceRefs: [], adaptive: true,
-          providerId: route.provider, model: route.model, semanticContext: true,
-        }, claim);
+        const preview = await f.core.previewVelaEvaluation(previewInput, claim);
+        assert.equal(f.core.readVelaEvaluationAdmissions(claim), null);
         const binding = { previewId: preview.id, signature: preview.signature };
         const review = await f.core.command('velaNativeReview', binding);
         assert.deepEqual(review.context.included, []);
-        const grant = await f.core.command('authorizeVelaRequest', { ...binding, reviewDigest: review.reviewDigest });
+        assert.deepEqual(JSON.parse(review.prompt), { request: empty.request, evidence: [] });
+        assert.ok(review.route);
+        const previewExpiresAt = Date.parse(preview.expiresAt);
+        const expiresAt = Math.min(previewExpiresAt, Date.now() + 30_000);
+        ownerReceipt = {
+          ...binding, claim, reviewDigest: review.reviewDigest, promptDigest: review.promptDigest,
+          route: review.route, providerId: route.provider, previewExpiresAt, maxCalls: 1,
+          corpusSha256: BLIND_INPUT_SHA256, caseId: empty.id, candidate, catalogDigest, expiresAt,
+          batch: { batchId: 'c'.repeat(64), profileId, configurationVersion, maxCalls: 1, expiresAt },
+        };
+        const authorize = () => f.core.command('authorizeVelaRequest', { ...binding, reviewDigest: review.reviewDigest });
+        for (const mode of ['expired', 'mismatched'] as const) {
+          receiptMode = mode;
+          await assert.rejects(authorize());
+          assert.equal(f.core.readVelaEvaluationAdmissions(claim), null);
+          assert.equal(f.core.readVelaEvaluationProfile()?.usage.usedToday, 0);
+          assert.equal(f.requests.length, 0);
+        }
+        receiptMode = 'current';
+        const grant = await authorize();
+        assert.deepEqual(f.core.readVelaEvaluationAdmissions(claim), []);
+        assert.ok(Date.parse(grant.expiresAt) <= expiresAt);
         const result = await f.core.command('vela', { name: 'request', input: {
           intent: input.request, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId: grant.grantId,
         } }) as VelaRequest;
