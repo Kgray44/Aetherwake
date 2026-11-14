@@ -10,6 +10,7 @@ import { ServiceError } from './contracts.mts';
 import { summarizeMissionUsage } from './execution-profiler.mts';
 import { missionCompletion, missionMeasurementAnswer } from './mission-native.mts';
 import { buildMissionRevision } from './mission-revision.mts';
+import { specialistMissionObjective } from './mission-reviewed-composition.mts';
 import type { ResourceLease, ResourceLeaseRequest } from './resource-policy.mts';
 import { projectExecutiveCheckpoint } from './mission-executive.mts';
 import { reviewedMissionObjectiveVerified, reviewableMissionObjective } from './mission-objective-review.mts';
@@ -985,7 +986,8 @@ export class MissionService {
     const source = this.host.contextSource?.(m, plan);
     const reviewedNotes = task.executor === 'inspect.workspace-notes' ? m.planning?.context?.notes : undefined;
     const request = { missionId: m.id, revision: m.planRevision, taskId: task.id, scope: m.scope,
-      missionObjective: m.objective, taskObjective: task.objective, criteria: m.criteria, dependencyTaskIds: task.dependencies,
+      missionObjective: task.specialist ? specialistMissionObjective(m) : m.objective,
+      taskObjective: task.objective, criteria: m.criteria, dependencyTaskIds: task.dependencies,
       ...(reviewedNotes ? { requiredSources: reviewedNotes.map(note => ({
         kind: 'resource' as const, id: note.id, expectedVersion: note.version,
       })) } : {}),

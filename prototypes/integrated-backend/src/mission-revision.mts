@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ensure, ServiceError } from './contracts.mts';
+import { specialistMissionObjective } from './mission-reviewed-composition.mts';
 import { MISSION_LIMITS, type Mission, type MissionExecutor, type MissionRevisionChange,
   type MissionRevisionPreview, type MissionTask } from './mission-contracts.mts';
 
@@ -54,7 +55,8 @@ export function buildMissionRevision(mission: Mission, change: MissionRevisionCh
       tasks = tasks.map(item => item === task ? updated : item);
       summary = `Assign “${task.objective}” to ${specialist.role}. The task can send one request when the mission resumes.`;
       externalReview = { provider: specialist.provider === 'openai-api-vela' ? 'Vela dedicated API' : 'ChatGPT plan', model: specialist.model, effort: specialist.effort,
-        objective: mission.objective, instructions: specialist.instructions, ...(specialist.webSearch ? { webSearch: true } : {}) };
+        objective: specialistMissionObjective(mission), instructions: specialist.instructions,
+        ...(specialist.webSearch ? { webSearch: true } : {}) };
       break;
     }
     case 'replace':
