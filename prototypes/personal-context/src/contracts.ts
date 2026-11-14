@@ -23,6 +23,7 @@ export interface ContextRequest {
   requestId: string; assistant: 'ordinary' | 'vela'; providerId: string; query: string;
   projectId: string | null; conversationId: string | null;
   sharedFactIds: string[]; includeBehavior: boolean; maxBytes: number; maxItems: number; maxScan?: number;
+  sourceAnchors?: ConversationSourceRef[];
 }
 export interface ContextItem {
   factId: string; version: number; scope: PersonalScope; purpose: ReviewedFact['purpose']; category: Category;
