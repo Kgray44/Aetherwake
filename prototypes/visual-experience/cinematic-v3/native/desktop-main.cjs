@@ -873,7 +873,32 @@ app.whenReady().then(async () => {
           openExternal: (url) => shell.openExternal(url),
         });
       } else if (command === "conversation") {
-        result = await conversationCommand({ win, call, input,reviewSources:reviewProvider, openExternal: (url) => shell.openExternal(url) });
+        const memoryFrame = () => !closing && !backendFailed && trustedApplicationFrame(event) &&
+          win.isVisible() && !win.isMinimized();
+        result = await conversationCommand({
+          win, call, input, reviewSources: reviewProvider, openExternal: (url) => shell.openExternal(url),
+          beforeMemoryPreview: async () => {
+            if (!trustedActiveFrame(event) ||
+                await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
+                !trustedActiveFrame(event)) throw Error("personal_memory_user_gesture_required");
+            const policy = await call("personalMemoryPolicyNative", {});
+            if (!memoryFrame()) throw Error("personal_memory_frame_changed");
+            if (policy.ordinaryEnabled) return;
+            if (!policy.storageEnabled) throw Error("personal_memory_no_eligible_context");
+            const choice = await reviewDialogs.showMessageBox(win, {
+              type: "question", title: "Aerynth memory", message: "Enable saved memory for ChatGPT?",
+              detail: "Choose Send with memory when you want Aerynth to find relevant saved memories. Review the exact request before anything is sent to ChatGPT.",
+              buttons: ["Cancel", "Enable memory"], defaultId: 0, cancelId: 0, noLink: true,
+            });
+            if (choice.response !== 1) throw Error("authorization_cancelled");
+            if (!memoryFrame()) throw Error("personal_memory_frame_changed");
+            if (!await storage.allowWrite()) throw Error("storage_reserve_admission_denied");
+            if (!memoryFrame()) throw Error("personal_memory_frame_changed");
+            await call("personalMemoryPolicyNative", { assistant: "ordinary", enable: true, expectedVersion: policy.version });
+            if (!memoryFrame()) throw Error("personal_memory_frame_changed");
+          },
+          validateMemoryReview: memoryFrame,
+        });
       } else if (command === "vela") {
         if (input?.name === "submissionStatus") {
           const submissionId = input.input?.submissionId;
