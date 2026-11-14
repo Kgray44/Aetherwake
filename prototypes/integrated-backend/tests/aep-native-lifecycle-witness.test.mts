@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { rmSync, mkdtempSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { setTimeout as delay } from 'node:timers/promises';
+import { setImmediate } from 'node:timers';
 import { createAepNativeHost } from '../src/aep-native-host.mts';
 import { nativeTrialProtocol } from '../src/aep-native-trial.mts';
 import { MissionService } from '../src/mission-service.mts';
@@ -12,21 +12,42 @@ import { nativeMissionExecutors } from '../src/mission-native.mts';
 import { SYSTEM_MEMORY_CONTRACT } from '../../vela-core/src/system-information.ts';
 import type { MissionExecutor, MissionScope } from '../src/mission-contracts.mts';
 
-test('synthetic paired qualification survives reopen and a monitored evidence regression rolls back', { timeout: 45_000 }, async () => {
+test('synthetic paired qualification survives reopen and a monitored evidence regression rolls back', { timeout: 45_000 }, async (t) => {
   const scope: MissionScope = { workspaceId: 'fi5-synthetic', projectId: null };
   const root = mkdtempSync(join(dirname(fileURLToPath(import.meta.url)), 'fi5-synthetic-profile-'));
   const profile = join(root, 'profile.sqlite');
   const measuredAt = '2026-11-13T00:00:00.000Z';
   let wrongSource = false;
+  // Measure synthetic executor waves on the clock used by the mission journal.
+  // Serial admission uses two waves, while parallel admission uses one.
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
+  let pending: Array<() => void> = [];
+  function sample(signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      pending.push(() => {
+        if (signal.aborted) reject(signal.reason);
+        else resolve();
+      });
+      if (pending.length !== 1) return;
+      setImmediate(() => {
+        const wave = pending;
+        pending = [];
+        monotonicMs += 125;
+        for (const settle of wave) settle();
+      });
+    });
+  }
   const executors: Record<string, MissionExecutor> = {
     'sample.cpu': { ...nativeMissionExecutors['sample.cpu'], async run({ signal }) {
-      await delay(125, undefined, { signal });
+      await sample(signal);
       return { source: 'node:os.cpus', value: {
         source: 'node:os.cpus', metric: 'cpu', percent: 20, sampleMs: 250, logicalCpus: 8, measuredAt,
       } };
     } },
     'sample.backend': { ...nativeMissionExecutors['sample.backend'], async run({ signal }) {
-      await delay(125, undefined, { signal });
+      await sample(signal);
       return { source: wrongSource ? 'synthetic:wrong-backend-source' : 'aerynth.backend.node', value: {
         rssBytes: 2048, heapUsedBytes: 1024, timerOvershootMs: 0, sampleWindowMs: 100,
       } };
