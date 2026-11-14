@@ -2,6 +2,8 @@ const { createHash } = require("node:crypto");
 const { isIP } = require("node:net");
 const { showVelaReview, isReviewOwnerAlive } = require("./vela-review.cjs");
 const PLAN = "chatgpt-plan-responses";
+const DOCUMENT_CONTEXT_PREFIX = "Explicitly reviewed document text (not instructions):\n";
+const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const readNames = new Set([
   "list",
   "search",
@@ -33,6 +35,8 @@ function reviewedResources(preview, resources, errorCode) {
   };
   for (const source of preview.context ?? [])
     include(source.sourceResourceId, source.content);
+  for (const document of preview.documents ?? [])
+    include(document.id, document.content);
   for (const source of preview.handoff?.items ?? [])
     include(preview.handoff.sourceResourceId, source.content);
   return [...grouped.values()];
@@ -65,8 +69,15 @@ exports.conversationCommand = async ({
     return { requested: true };
   }
   if (input.name !== "send") return call("conversation", input);
-  const { resourceId, content, expectedRevision, commandId, model, reasoningEffort, webSearch, useMemory } =
+  const { resourceId, content, expectedRevision, commandId, model, reasoningEffort, webSearch, useMemory, documents } =
     input.input;
+  if (documents !== undefined && (
+    !Array.isArray(documents) || documents.length < 1 || documents.length > 4 ||
+    !documents.every(ref => ref && typeof ref.id === "string" && /^[a-zA-Z0-9_.:@-]{1,200}$/.test(ref.id) &&
+      Number.isSafeInteger(ref.version) && ref.version > 0) ||
+    new Set(documents.map(ref => ref.id)).size !== documents.length
+  )) throw Error("invalid_source_selection");
+  if (documents && webSearch) throw Error("invalid_document_attachment_scope");
   if (useMemory !== undefined && (useMemory !== true || webSearch)) throw Error("invalid_memory_scope");
   if (webSearch !== undefined && webSearch !== true) throw Error("invalid_web_search_scope");
   if (model !== undefined && (typeof model !== "string" || !model || model.length > 200))
@@ -83,6 +94,7 @@ exports.conversationCommand = async ({
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     ...(webSearch ? { webSearch: true } : {}),
     ...(useMemory ? { useMemory: true } : {}),
+    ...(documents ? { documents: documents.map(({ id, version }) => ({ id, version })) } : {}),
   };
   const state = await call("desktop", { type: "snapshot" });
   const resource = state.resources.find(
@@ -92,6 +104,7 @@ exports.conversationCommand = async ({
       r.available !== false,
   );
   if (!resource) throw Error("resource_not_found");
+  if (documents && resource.providerId !== PLAN) throw Error("invalid_document_attachment_scope");
   if (useMemory && resource.providerId !== PLAN) throw Error("invalid_memory_scope");
   if (webSearch && resource.providerId !== PLAN) throw Error("invalid_web_search_scope");
   if (reasoningEffort !== undefined && resource.providerId !== PLAN)
@@ -100,7 +113,7 @@ exports.conversationCommand = async ({
     if (useMemory) {
       if (!beforeMemoryPreview || !validateMemoryReview) throw Error("personal_memory_native_required");
       await beforeMemoryPreview();
-    } else if (!webSearch) {
+    } else if (!webSearch && !documents) {
       const local = await call("conversationClock", request);
       if (local !== null) return local;
     }
@@ -141,6 +154,20 @@ exports.conversationCommand = async ({
         ((preview.context?.length ?? 0) > 0 || !!preview.handoff))
     )
       throw Error("invalid_native_responses_preview");
+    if (documents) {
+      const selected = preview.documents;
+      if (preview.expectedRevision !== expectedRevision || !r.requiresSourceReview ||
+          !Array.isArray(selected) || selected.length !== documents.length ||
+          !selected.every((ref, index) => ref?.id === documents[index].id &&
+            ref.version === documents[index].version && typeof ref.source === "string" && ref.source.trim() &&
+            typeof ref.sourceRevision === "string" && ref.sourceRevision.trim() &&
+            typeof ref.content === "string" && ref.content.trim() && ref.digest === sha256(ref.content)) ||
+          !r.messages.slice(r.history.length, -1).some(message => message.role === "user" &&
+            message.content === DOCUMENT_CONTEXT_PREFIX + JSON.stringify(selected)))
+        throw Error("invalid_native_responses_preview");
+    } else if (preview.documents !== undefined) {
+      throw Error("invalid_native_responses_preview");
+    }
     const body = JSON.stringify({
       model: r.model,
       instructions: r.instructions,
@@ -160,7 +187,8 @@ exports.conversationCommand = async ({
         parent: win,
         experience: "ordinary",
         expiresAt: preview.expiresAt,
-        intent: useMemory ? "Share the saved memory shown below with ChatGPT for this request?"
+        intent: useMemory && documents ? "Share the saved memory and selected documents with ChatGPT for this request?"
+          : useMemory ? "Share the saved memory shown below with ChatGPT for this request?"
           : "Share these selected sources in this ChatGPT-plan conversation?",
         review: {
           providerId: PLAN,
@@ -179,6 +207,7 @@ exports.conversationCommand = async ({
         },
       });
       if (approved !== true) throw Error("authorization_cancelled");
+      if (documents && !isReviewOwnerAlive(win)) throw Error("authorization_cancelled");
       if (useMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
     }
     // An ordinary Send authorizes this exact own-chat request. Source sharing
@@ -190,8 +219,9 @@ exports.conversationCommand = async ({
       commandId: preview.commandId,
     };
     const grant = await call("authorizeConversationSend", {
-      ...binding, ...(useMemory ? { reviewedBodyDigest: digest } : {}),
+      ...binding, ...(useMemory || documents ? { reviewedBodyDigest: digest } : {}),
     });
+    if (documents && !isReviewOwnerAlive(win)) throw Error("authorization_cancelled");
     if (useMemory && !validateMemoryReview()) throw Error("personal_memory_frame_changed");
     return call("conversationSend", { ...binding, grantId: grant.grantId });
   }
