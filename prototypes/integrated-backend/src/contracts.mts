@@ -61,9 +61,13 @@ export type VelaBackendState = VelaState & { nativeCapabilities: Record<string,{
 export type ConversationProductRequest = { [K in keyof ProductCommandMap]: { name: K; input: ProductCommandMap[K]['input'] } }[keyof ProductCommandMap];
 export type ConversationProductOutput = ProductCommandMap[keyof ProductCommandMap]['output'];
 export type ConversationSendInput = ProductCommandMap['send']['input'];
+export type ConversationSendDocument = NonNullable<ConversationSendInput['documents']>[number] & {
+ source: string; sourceRevision: string; content: string; digest: string;
+};
 export interface ConversationSendPreview {
  id: string; commandId: string; resourceId: string; providerId: string; expectedRevision: number;
  prompt: string; model?: string; context: AttachedContext[];
+ documents?: ConversationSendDocument[];
  handoff?: { id:string; fingerprint:string; sourceResourceId:string; items:ContextPackage['items'];continued?:true };
  executionText: string; fingerprint: string; expiresAt: string;
  /** Exact stateless Responses egress, without credentials or account identifiers. */

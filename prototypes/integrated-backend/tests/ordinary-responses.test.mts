@@ -29,7 +29,7 @@ import type { MissionTeam } from '../src/mission-teams.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
 const documentedModel = { id: 'gpt-6.1-sol', label: 'Synthetic catalog Sol' };
 function sse(events:unknown[]){return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});}
-function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', historyContext?: boolean,fileEditRoots?:readonly string[]){
+function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', historyContext?: boolean,fileEditRoots?:readonly string[], nativeMedia = false){
  const dir=mkdtempSync(join(realpathSync.native(tmpdir()),'aerynth-ordinary-responses-')),path=join(dir,'canonical.sqlite'),events:StreamEvent[]=[],requests:Record<string,any>[]=[],responses:((init:RequestInit)=>Promise<Response>|Response)[]=[];
  let listedModels=[{id:model,label:'Synthetic eligible model'}];
  let version=1,ready=true,catalogReads=0,secretReads=0,codexCalls=0,finishResolve:(()=>void)|undefined,pending=false;
@@ -42,15 +42,86 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', h
  const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream',...(body.reasoning?['reasoning']:[]),...(body.tools?['tools','tool_choice']:[])]);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
  const provider = useCodexProtocolDouble ? { provider: 'codex' as const, codexExecutable: process.execPath,
    codexArgs: [fileURLToPath(new URL('../../codex-bridge/tests/catalog-server.mjs', import.meta.url)), codexMode] } : { provider: 'fixture' as const };
- let core:BackendCore;const create=()=>{core=new BackendCore({path,...provider,contentPolicy:'synthetic-only',...(historyContext===undefined?{}:{velaHistoryContext:historyContext})},event=>events.push(event),fileEditRoots?fixtureFileEditHost([dir,...fileEditRoots]):undefined,{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
- return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(realpathSync.native(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
+ let core:BackendCore;const create=()=>{core=new BackendCore({path,...provider,contentPolicy:'synthetic-only',nativeMedia,...(historyContext===undefined?{}:{velaHistoryContext:historyContext})},event=>events.push(event),fileEditRoots?fixtureFileEditHost([dir,...fileEditRoots]):undefined,{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
+ return {dir,get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(realpathSync.native(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
 
+test('ordinary document Send binds exact ordered text and rejects stale sources before transport', async () => {
+  const f = fixture(false, undefined, undefined, undefined, true);
+  const importText = async (name: string, text: string, projectId?: string) => {
+    const path = join(f.dir, name + '.txt');
+    writeFileSync(path, text);
+    const { resource } = await f.core.command('mediaImportTrusted', {
+      commandId: randomUUID(), kind: 'file', selection: { kind: 'file', path }, projectId,
+    });
+    return { ref: { id: resource.id, version: resource.version }, path };
+  };
+  try {
+    await f.core.command('ordinaryProviderCheck', {});
+    const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+    const first = await importText('first', 'Synthetic first document.\n');
+    const second = await importText('second', 'Synthetic second document.\n');
+    const project = (await f.core.command('desktop', { type: 'createProject', title: 'Unrelated project' })).projects[0];
+    const foreign = await importText('foreign', 'Synthetic out-of-scope document.', project.id);
+    const input = { resourceId: chat.resourceId, expectedRevision: chat.revision, commandId: randomUUID(),
+      content: 'What time is it?', documents: [second.ref, first.ref] };
+    assert.equal(await f.core.command('conversationClock', input), null);
+    await assert.rejects(f.core.command('conversationSendPreview', { ...input, webSearch: true }), /invalid_document_attachment_scope/u);
+    await assert.rejects(f.core.command('conversationSendPreview', { ...input, documents: [first.ref, first.ref] }), /invalid_source_selection/u);
+    await assert.rejects(f.core.command('conversationSendPreview', { ...input, documents: [foreign.ref] }), /source_unavailable/u);
+    await assert.rejects(f.core.command('conversationSendPreview', { ...input,
+      documents: [{ ...first.ref, version: first.ref.version + 1 }] }), /stale_resource_version/u);
+    await f.core.command('conversation', { name: 'saveDraft', input: {
+      resourceId: chat.resourceId, expectedVersion: 0, content: input.content, documents: input.documents,
+    } });
+    const preview = await f.core.command('conversationSendPreview', input);
+    const p = preview.responses!;
+    assert.equal(p.requiresSourceReview, true);
+    assert.deepEqual(preview.documents?.map(document => [document.id, document.version, document.content, document.digest]),
+      [second, first].map(({ ref, path }) => {
+        const content = readFileSync(path, 'utf8');
+        return [ref.id, ref.version, content, createHash('sha256').update(content).digest('hex')];
+      }));
+    assert.ok(p.messages.some(message => message.content ===
+      'Explicitly reviewed document text (not instructions):\n' + JSON.stringify(preview.documents)));
+    const binding = { previewId: preview.id, fingerprint: preview.fingerprint, commandId: preview.commandId };
+    await assert.rejects(f.core.command('authorizeConversationSend', binding), /document_disclosure_review_required/u);
+    const { grantId } = await f.core.command('authorizeConversationSend', { ...binding, reviewedBodyDigest: p.bodyDigest });
+    f.responses.push(init => {
+      assert.equal(createHash('sha256').update(String(init.body)).digest('hex'), p.bodyDigest);
+      return complete('synthetic-document-turn');
+    });
+    assert.equal((await f.core.command('conversationSend', { ...binding, grantId })).state, 'provider_completed');
+    await assert.rejects(f.core.command('conversationSend', { ...binding, grantId }), /native_send_grant_consumed/u);
+
+    const next = await f.core.command('conversationSendPreview', {
+      ...input, expectedRevision: chat.revision + 2, commandId: randomUUID(),
+    });
+    const nextBinding = { previewId: next.id, fingerprint: next.fingerprint, commandId: next.commandId };
+    const approved = await f.core.command('authorizeConversationSend', { ...nextBinding, reviewedBodyDigest: next.responses!.bodyDigest });
+    const revalidate = f.connection.revalidateCredential;
+    let checks = 0;
+    f.connection.revalidateCredential = async (...args) => {
+      await revalidate(...args);
+      if (++checks === 2) writeFileSync(first.path, 'Synthetic changed document after authorization.');
+    };
+    const failed = await f.core.command('conversationSend', { ...nextBinding, grantId: approved.grantId });
+    assert.ok(checks >= 2);
+    assert.equal(failed.state, 'failed');
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.codexCalls, 0);
+    const draft = await f.core.command('conversation', { name: 'readDraft', input: { resourceId: chat.resourceId } }) as
+      import('../../conversation-product/src/contracts.ts').ConversationDraft;
+    assert.equal(draft.content, input.content);
+    assert.deepEqual(draft.documents?.map(({ id, version }) => ({ id, version })), input.documents);
+  } finally { await f.close(); }
+});
+
 test('ordinary memory sends the exact reviewed body through Responses and fences stale sources', async () => {
-  const f = fixture();
+  const f = fixture(false, undefined, undefined, undefined, true);
   const sourceText = 'Synthetic project uses a quartz relay.';
   let sourceAvailable = true;
   let wrapped: string;
@@ -81,11 +152,19 @@ test('ordinary memory sends the exact reviewed body through Responses and fences
       scope: 'project', category: 'decisions', text: sourceText, keywords: ['quartz'] }));
     await review.setProviderUse('ordinary', true, 1);
     const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+    const documentPath = join(f.dir, 'memory-context.txt');
+    const documentText = 'Synthetic reviewed document alongside explicitly opted-in memory.';
+    writeFileSync(documentPath, documentText);
+    const { resource: document } = await f.core.command('mediaImportTrusted', {
+      commandId: randomUUID(), kind: 'file', selection: { kind: 'file', path: documentPath },
+    });
     const preview = await f.core.command('conversationSendPreview', { resourceId: chat.resourceId,
-      content: referencePrompt, expectedRevision: chat.revision, commandId: randomUUID(), useMemory: true });
+      content: referencePrompt, expectedRevision: chat.revision, commandId: randomUUID(), useMemory: true,
+      documents: [{ id: document.id, version: document.version }] });
     assert(preview.responses?.memoryDigest);
     assert.equal(preview.responses.requiresSourceReview, true);
     assert.match(JSON.stringify(preview.responses.messages), /Synthetic project uses a quartz relay/);
+    assert.match(JSON.stringify(preview.responses.messages), new RegExp(documentText));
     assert.equal(preview.responses.messages.at(-1)?.content, referencePrompt);
     const binding = { previewId: preview.id, fingerprint: preview.fingerprint, commandId: preview.commandId };
     await assert.rejects(f.core.command('authorizeConversationSend', binding), /personal_memory_disclosure_review_required/);

@@ -146,7 +146,7 @@ import { BUILTIN_BLOCKS, SUBJECT_BLOCKS,blockDefinition } from '../../block-libr
 import type { LibraryCapabilities, BlockKind, VelaTemplatePlan, VelaTemplateRequest } from '../../block-library/contracts.ts';
 import { validateSubjectRef, type NonResourceSubjectRef } from '../../workspace-kernel/subjects.ts';
 import type { LibraryRequest, LibraryResponse, NoteRequest } from './contracts.mts';
-import { CONTRACT, ensure, ServiceError, type Binding, type Execution, type HandoffReview, type Options, type ProviderPort, type StreamEvent, type CommandMap, type ConversationSendInput, type ConversationSendPreview } from './contracts.mts';
+import { CONTRACT, ensure, ServiceError, type Binding, type Execution, type HandoffReview, type Options, type ProviderPort, type StreamEvent, type CommandMap, type ConversationSendInput, type ConversationSendPreview, type ConversationSendDocument } from './contracts.mts';
 
 const now = () => new Date().toISOString();
 // The explicit Send includes a single time observation. No zone identifier,
@@ -6077,7 +6077,7 @@ export class BackendCore {
     return {contract:'aerynth.conversation-activity@1',resources,executions,preview,previewAllowedFor};
   }
   private answerConversationClock(input: ConversationSendInput): CommandMap['conversationClock']['output'] {
-    if (input?.webSearch) return null;
+    if (input?.webSearch || input?.documents !== undefined) return null;
     const capability = matchOrdinaryClockQuestion(input?.content);
     if (!capability) return null;
     ensure(this.conversationAccess.resource(input.resourceId), 'source_unavailable');
@@ -6095,7 +6095,37 @@ export class BackendCore {
       return { id: message.id, resourceId: input.resourceId, role: 'user', content: message.content, revision: this.state.revisions[input.resourceId], deviceClockMessageId: reply.id };
     }));
   }
-  private async ordinaryEgress(input:ConversationSendInput,revisionOffset:number,binding: OrdinarySendBinding, context:AttachedContext[],handoff:ConversationSendPreview['handoff'], captureMemory?: (memory: OrdinaryMemoryRecall) => void):Promise<OrdinaryResponsesPreview> {
+  private ordinaryDocumentSource(conversationId: string, id: string, version: number) {
+    const row = this.db.prepare(`SELECT r.version
+        FROM resources r JOIN desktop_resources d ON d.resource_id=r.id
+        JOIN resources chat ON chat.id=?
+        WHERE r.id=? AND d.kind='file' AND r.state='active'
+          AND (r.project_id IS NULL OR r.project_id=chat.project_id)`).get(conversationId, id);
+    ensure(row && this.conversationAccess.resource(id, 'read'), 'source_unavailable');
+    ensure(row.version === version, 'stale_resource_version');
+    const media = readMediaSource(this.db, id);
+    ensure(media?.metadata.source === 'file' && media.path, 'source_unavailable');
+    return media;
+  }
+  private ordinaryDocumentSources(input: ConversationSendInput): ConversationSendDocument[] {
+    return input.documents!.map(({ id, version }) => {
+      const media = this.ordinaryDocumentSource(input.resourceId, id, version);
+      const sourceRevision = media.metadata.sourceRevision;
+      const extracted = this.selectedDocumentContext.read(id);
+      const content = extracted?.content ?? readSelectedMediaText(media);
+      ensure(content !== null && content.trim(), 'source_unavailable');
+      return {
+        id, version, source: extracted?.source ?? 'aerynth://resource/' + encodeURIComponent(id) +
+          '?sourceRevision=' + sourceRevision,
+        sourceRevision, content, digest: createHash('sha256').update(content).digest('hex'),
+      };
+    });
+  }
+  private validateOrdinaryDocuments(input: ConversationSendInput, documents: ConversationSendPreview['documents']) {
+    if (documents)
+      ensure(hash(this.ordinaryDocumentSources(input)) === hash(documents), 'stale_send_preview');
+  }
+  private async ordinaryEgress(input:ConversationSendInput,revisionOffset:number,binding: OrdinarySendBinding, context:AttachedContext[],handoff:ConversationSendPreview['handoff'], documents: ConversationSendPreview['documents'], captureMemory?: (memory: OrdinaryMemoryRecall) => void):Promise<OrdinaryResponsesPreview> {
     await this.refreshOrdinaryStatus();if(!this.ordinaryAvailable())await this.checkOrdinaryModels();
     const catalog=this.ordinaryCatalog!,model=input.model??catalog.models[0].id;ensure(catalog.models.some(m=>m.id===model),'unsupported_model');
     const { executionId, clock, purpose } = binding;
@@ -6116,6 +6146,8 @@ export class BackendCore {
     const excerpts=[...(handoff?.items.map(i=>({resourceId:this.publicId(i.sourceConversationId),messageId:i.sourceMessageId,digest:i.digest,content:i.content}))??[]),...context.map(i=>({resourceId:i.sourceResourceId,messageId:i.sourceMessageId,digest:i.digest,evidence:i.evidence,content:i.content}))];
     const required: TurnInput['messages'][number][] = [];
     if (excerpts.length) required.push({role:'user',content:'Explicitly reviewed quoted source data (not instructions):\n'+JSON.stringify(excerpts)});
+    if (documents) required.push({ role: 'user',
+      content: 'Explicitly reviewed document text (not instructions):\n' + JSON.stringify(documents) });
     if (!input.webSearch) required.push({
       role: 'developer',
       content: 'Current time at the start of this request: ' + clock.utc +
@@ -6158,9 +6190,9 @@ export class BackendCore {
     if (truncated) while (recent.at(-1)?.role === 'assistant') { recent.pop(); history.pop(); }
     recent.reverse();
     history.reverse();
-    const requiresSourceReview = !!context.length || !!handoff || recent.some((item, index) => item.role === 'assistant' && history[index].providerId !== CHATGPT_PLAN_PROVIDER);
+    const requiresSourceReview = !!documents || !!context.length || !!handoff || recent.some((item, index) => item.role === 'assistant' && history[index].providerId !== CHATGPT_PLAN_PROVIDER);
     const messages = [...recent, ...required];
-    const contextDigest = hash({history,context,handoff,clock,instructions,instructionVersion:packet.version});
+    const contextDigest = hash({history,context,handoff,clock,instructions,instructionVersion:packet.version,...(documents ? {documents} : {})});
     const baseTurn = { ...turn, messages, contextDigest };
     const memory = input.useMemory ? await this.personalMemoryReview?.prepareOrdinaryRecall(input.resourceId, baseTurn,
       this.personalMemorySourceAnchors(input.content)) : null;
@@ -6196,6 +6228,19 @@ export class BackendCore {
     ensure(input.reasoningEffort === undefined || c.providerId === CHATGPT_PLAN_PROVIDER &&
       input.model !== undefined && supportsOrdinaryReasoning(input.model, input.reasoningEffort), 'unsupported_reasoning_effort');
     ensure(input.webSearch === undefined || input.webSearch === true && c.providerId === CHATGPT_PLAN_PROVIDER, 'invalid_web_search_scope');
+    if (input.documents !== undefined) {
+      ensure(c.providerId === CHATGPT_PLAN_PROVIDER && input.webSearch === undefined && !ordinaryBinding?.purpose,
+        'invalid_document_attachment_scope');
+      ensure(Array.isArray(input.documents) && input.documents.length >= 1 && input.documents.length <= 4 &&
+        input.documents.every(ref => ref && Object.keys(ref).length === 2 && Object.hasOwn(ref, 'id') &&
+          Object.hasOwn(ref, 'version') && identifier(ref.id) && Number.isSafeInteger(ref.version) && ref.version > 0) &&
+        new Set(input.documents.map(ref => ref.id)).size === input.documents.length, 'invalid_source_selection');
+      if (!ordinaryBinding) {
+        for (const { id, version } of input.documents) this.ordinaryDocumentSource(input.resourceId, id, version);
+        await this.selectedDocumentContext.prepare(input.documents.map(ref => ref.id));
+      }
+    }
+    const documents = input.documents && this.ordinaryDocumentSources(input);
     if(c.providerId===CHATGPT_PLAN_PROVIDER&&!ordinaryBinding)
       await this.maintainOrdinarySession();
     // A public lookup sends only the draft submitted for search.
@@ -6217,14 +6262,16 @@ export class BackendCore {
     const executionText=sections.length?[...sections,'User request:\n'+input.content].join('\n\n'):input.content;
     ensure(Buffer.byteLength(executionText)<=65536,'context_budget_exceeded');
     if(handoff)ensure(Buffer.byteLength(executionText)<=this.package(handoff.id).tokenBudget,'context_budget_exceeded');
-    const exact={commandId:input.commandId,resourceId:input.resourceId,providerId:c.providerId,expectedRevision:input.expectedRevision,prompt:input.content,...(input.model?{model:input.model}:{}),context,...(handoff?{handoff}:{}),executionText};
-    if(c.providerId===CHATGPT_PLAN_PROVIDER){const responses=await this.ordinaryEgress(input,revisionOffset,ordinaryBinding ?? { executionId: randomUUID(), clock: ordinaryTurnClock() },context,handoff,captureMemory),ordinary={...exact,model:responses.model,responses};return {...ordinary,fingerprint:hash({contract:'aerynth.conversation-send@1',...ordinary,boundaryDigest:this.ordinaryCatalog!.boundaryDigest})};}
+    const exact={commandId:input.commandId,resourceId:input.resourceId,providerId:c.providerId,expectedRevision:input.expectedRevision,prompt:input.content,...(input.model?{model:input.model}:{}),context,...(handoff?{handoff}:{}),...(documents?{documents}:{}),executionText};
+    if(c.providerId===CHATGPT_PLAN_PROVIDER){const responses=await this.ordinaryEgress(input,revisionOffset,ordinaryBinding ?? { executionId: randomUUID(), clock: ordinaryTurnClock() },context,handoff,documents,captureMemory),ordinary={...exact,model:responses.model,responses};return {...ordinary,fingerprint:hash({contract:'aerynth.conversation-send@1',...ordinary,boundaryDigest:this.ordinaryCatalog!.boundaryDigest})};}
     return {...exact,fingerprint:hash({contract:'aerynth.conversation-send@1',...exact,instanceId:this.port.instanceId,accountScope:this.port.accountScope})};
   }
   private async previewConversationSend(input:ConversationSendInput):Promise<ConversationSendPreview> {
     this.pruneSendApprovals();ensure(this.sendPreviews.size<64,'approval_backpressure');
+    input = structuredClone(input);
     let memory: OrdinaryMemoryRecall | undefined;
     const prepared=await this.prepareConversationSend(input,0,undefined,undefined,value => { memory=value; });
+    this.validateOrdinaryDocuments(input, prepared.documents);
     ensure(this.sendPreviews.size<64,'approval_backpressure');
     const preview={...prepared,id:randomUUID(),expiresAt:new Date(Date.now()+300000).toISOString()};
     this.sendPreviews.set(preview.id,{input:structuredClone(input),preview,memory});return structuredClone(preview);
@@ -6233,6 +6280,13 @@ export class BackendCore {
     this.pruneSendApprovals();ensure(!this.active,'execution_busy');const entry=this.sendPreviews.get(input.previewId);ensure(entry,'send_preview_expired');
     ensure(entry.preview.fingerprint===input.fingerprint&&entry.input.commandId===input.commandId,'approval_scope_mismatch');
     const current=await this.prepareConversationSend(entry.input,0,undefined,entry.preview.responses);ensure(current.fingerprint===input.fingerprint,'stale_send_preview');ensure(this.sendGrants.size<64,'approval_backpressure');
+    if (entry.preview.documents) {
+      ensure(!this.active && this.conversationAccess.resource(entry.input.resourceId) &&
+        this.state.revisions[entry.input.resourceId] === entry.input.expectedRevision, 'stale_send_preview');
+      ensure(input.reviewedBodyDigest === entry.preview.responses?.bodyDigest,
+        entry.memory ? 'personal_memory_disclosure_review_required' : 'document_disclosure_review_required');
+      this.validateOrdinaryDocuments(entry.input, entry.preview.documents);
+    }
     if (entry.memory) {
       ensure(input.reviewedBodyDigest === entry.memory.bodyDigest, 'personal_memory_disclosure_review_required');
       entry.memory.approve(input.reviewedBodyDigest);
@@ -6507,6 +6561,7 @@ export class BackendCore {
     ensure(this.ordinaryAvailable() && this.ordinaryCatalog!.version === p.connectionVersion &&
       this.ordinaryCatalog!.models.some(m => m.id === p.model), 'ordinary_connection_changed');
     this.finalConversationSourceFence(input, preview);
+    this.validateOrdinaryDocuments(input, preview.documents);
   }
   private finalConversationSourceFence(input: ConversationSendInput, preview: Omit<ConversationSendPreview, 'id' | 'expiresAt'>) {
     ensure(this.conversationAccess.resource(input.resourceId) &&
@@ -7220,6 +7275,7 @@ export class BackendCore {
       case 'conversation': {
         if(a.name==='send'){
           const request=a.input as ConversationSendInput,conversation=this.conv(request.resourceId);
+          ensure(request.documents === undefined, 'native_send_grant_required');
           if(['local','mock-ordinary'].includes(conversation.providerId)){
             ensure(request.webSearch === undefined, 'invalid_web_search_scope');
             ensure(this.conversationAccess.resource(request.resourceId),'source_unavailable');ensure(typeof request.content==='string'&&request.content.trim()&&Buffer.byteLength(request.content)<=16384,'invalid_prompt');
