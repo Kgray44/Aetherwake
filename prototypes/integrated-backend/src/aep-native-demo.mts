@@ -43,7 +43,9 @@ try {
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
     const learning = await backend.call('missions', { name: 'experience-finding', input: { id: accepted.id, cohort: nativeTrialProtocol } });
     const applied = await backend.call('aepExperimentNative', { name: 'start-probe' });
-    const rollback = await backend.call('aepExperimentNative', { name: 'rollback', policyVersion: promoted.version });
+    const rollback = await backend.call('aepExperimentNative', {
+      name: 'rollback-reviewed', ...promoted.scope, experimentId: accepted.id, policyVersion: promoted.version,
+    });
     const after = await backend.call('aepExperimentNative', { name: 'start-probe' });
     assert.ok(learning && 'policy' in learning && learning.policy?.version === promoted.version);
     assert.ok(applied && 'concurrency' in applied && applied.concurrency === 2);

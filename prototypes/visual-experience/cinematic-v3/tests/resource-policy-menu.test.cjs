@@ -16,12 +16,15 @@ test("native resource controls submit only a confirmed versioned selection", asy
     nvidiaGpuThermals: { temperatureCelsius: 60.81, slowdown: false, ageMs: 280 },
     effective: { cpu: 2, build: 1, host_io: 3, gpu: 0, remote: 3 },
   };
-  let response = 3, admitted = true;
+  let response = 3, admitted = true, frameCurrent = true;
   const menu = resourcePolicyMenu({
     call: async (command, input) => { calls.push([command, input]); return current; },
     show: async options => { dialogs.push(options); return { response }; },
     ready: () => true,
-    canWrite: async () => admitted,
+    canWrite: async () => {
+      frameCurrent = false;
+      return admitted;
+    },
   });
   await menu.submenu[0].click();
   assert.deepEqual(calls, [["resourcePolicyNative", { name: "inspect" }]]);
@@ -46,6 +49,10 @@ test("native resource controls submit only a confirmed versioned selection", asy
   await menu.submenu.find(item => item.label === "Desktop Activity Protection…").click();
   assert.match(dialogs.at(-2).detail, /system idle time and Aerynth focus.*Off/u);
   assert.deepEqual(calls.at(-1), ["resourcePolicyNative", { name: "set-external-activity-protection", enabled: true, expectedVersion: 7 }]);
+  frameCurrent = true;
+  const beforeFrameLoss = calls.length;
+  await menu.reviewMode(() => frameCurrent);
+  assert.deepEqual(calls.slice(beforeFrameLoss), [["resourcePolicyNative", { name: "inspect" }]]);
 });
 
 test("GPU diagnostic uses a native workspace review and submits only after confirmation", async () => {
