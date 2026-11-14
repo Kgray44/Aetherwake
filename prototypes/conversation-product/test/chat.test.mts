@@ -1330,6 +1330,39 @@ for (const empty of [true,false]) test('attachment continuation uses the existin
  } finally {release();await chat?.dispose();f.restore();}
 });
 
+test('document Send submits only the checkpoint refs and preserves the draft when review is cancelled or stale', async () => {
+ const f=fixture('chatgpt-plan-responses');
+ let chat;
+ try {
+  const documents=[{id:'file:brief',version:3,title:'Brief.pdf'}];
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:f.draft.content,documents});
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,onRememberMessage:async()=>true});
+  await chat.ready;
+  const saved=f.draft;
+  const form=f.view.root.querySelector('form');
+  const submit=async (submitter:unknown, code:string)=>{
+   form.fire('submit',{submitter});
+   await until(()=>!!f.pending);
+   assert.deepEqual(f.pending!.input.documents,[{id:'file:brief',version:3}]);
+   assert.equal(f.pending!.input.content,saved.content);
+   assert.equal(f.pending!.input.useMemory,submitter===named(form,'Send with memory')?true:undefined);
+   assert.equal(f.pending!.input.webSearch,undefined);
+   const checkpoint=f.draft;
+   assert.deepEqual(checkpoint.documents,saved.documents);
+   assert.equal(checkpoint.content,saved.content);
+   f.pending!.reject(Error(code));
+   await chat!.whenSubmissionSettled();
+   assert.deepEqual(f.draft,checkpoint);
+  };
+  assert.equal(f.calls.filter(call=>call.name==='send').length,0);
+  await submit(named(form,'Send'),'authorization_cancelled');
+  await submit(named(form,'Send with memory'),'stale_send_preview');
+  assert.equal(f.calls.filter(call=>call.name==='send').length,2);
+  assert.equal(named(form,'Send').disabled,false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Review the current chat and attachments/);
+ } finally { f.pending?.reject(Error('synthetic cleanup')); await chat?.dispose(); f.restore(); }
+});
+
 test('saved document picker reuses an exact current resource without importing or sending it', async () => {
  const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
  let chat;

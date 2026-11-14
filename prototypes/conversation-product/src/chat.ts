@@ -461,7 +461,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const plan = ordinaryPlan();
     const mayStageDocuments = canStageDocuments();
     const documents = accessRevoked ? [] : snapshot.documents;
-    const documentsUnsupported = documents.length > 0 && current?.conversation.providerId === 'local';
+    const documentsUnsupported = documents.length > 0 && !plan;
     const unavailableDocuments = documents.some(item => item.unavailable);
     const draftNeedsAttention = ['loading', 'conflict', 'error'].includes(snapshot.phase);
     const planDisconnected = plan?.available === false;
@@ -516,13 +516,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
     checkOutcome.disabled = recovering;
     send.disabled = choosingDocument || changingProvider || planDisconnected || documentsUnsupported || unavailableDocuments || sending || !!active() || codexOutcomeUnknown || needsSendReview() || !current || current.conversation.state !== 'active' || draftNeedsAttention || !snapshot.content.trim();
-    send.disabled ||= documents.length > 0;
     sendWithMemory.hidden = !options.onRememberMessage || !plan?.execute;
     sendWithMemory.disabled = send.disabled || sendWithMemory.hidden || !plan?.available;
     web.hidden = !plan?.execute || !webSearchModel();
     documentStatus.textContent = unavailableDocuments ? 'Remove or replace the unavailable documents to send.'
-      : documentsUnsupported ? 'Switch to ChatGPT to keep working with this attachment.'
-      : documents.length ? 'Attachments are saved in this draft. Document sending is unavailable.' : '';
+      : documentsUnsupported ? 'Switch to ChatGPT or remove the documents to send.' : '';
     send.title = documentStatus.textContent || (planDisconnected ? 'ChatGPT is disconnected. You can still edit and save this draft.' : '');
     web.disabled = send.disabled || web.hidden || !plan?.available || documents.length > 0;
     attachDocument.hidden = !mayStageDocuments || !options.chooseDocument;
@@ -751,14 +749,31 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const model = webSearch || reasoningEffort !== undefined
       ? selectedModel?.id
       : plan && options.models?.selections.get(resourceId)?.id;
+    let documentRequestPending = false;
     sending = true;
     submittedTurn = { commandId, providerId: before.conversation.providerId };
     renderDraft();
     report(webSearch?'Searching the web…':providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
+      if (disposed || accessRevoked) return;
+      const documents = checkpoint.record.documents ?? [];
+      if (documents.length && (!plan || webSearch || documents.some(document => document.unavailable))) {
+        report('Check the selected documents before sending. Your draft is still here.');
+        return;
+      }
+      const request = {
+        resourceId, content: checkpoint.record.content, expectedRevision: before.conversation.revision, commandId,
+        ...(model ? { model } : {}),
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        ...(webSearch ? { webSearch: true as const } : {}),
+        ...(useMemory ? { useMemory: true as const } : {}),
+        ...(documents.length ? { documents: documents.map(({ id, version }) => ({ id, version })) } : {}),
+      };
       if (reasoningEffort !== undefined) thinking = undefined;
-      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{}),...(useMemory?{useMemory:true}:{})});
+      documentRequestPending = documents.length > 0;
+      const result=await port.command('send',request);
+      documentRequestPending = false;
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
       const receipt = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
@@ -788,10 +803,14 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         await refresh({latest:true,...(followMessageId?{followMessageId}:{})}).catch(error => { if (!failed&&!interrupted) throw error; });
         if(!disposed)await options.onChanged?.();
       }
-    })().catch(error=>{
+    })().catch(async error=>{
       const code = errorText(error);
       if (observedSubmittedStop()) report('Reply stopped. Your draft is still here.');
       else if (code === 'authorization_cancelled') report('Send cancelled. Your saved draft was retained.');
+      else if (documentRequestPending && ['source_unavailable', 'stale_resource_version', 'stale_send_preview', 'source_changed', 'media_source_unavailable'].includes(code)) {
+        if (!disposed && !accessRevoked) await session.reload().catch(() => {});
+        if (!disposed && !accessRevoked) report('Review the current chat and attachments before sending again. Your draft is still here.');
+      }
       else if (useMemory && code === 'personal_memory_no_eligible_context') report('No eligible saved memories matched. Your draft is still here.');
       else if (useMemory && code === 'personal_memory_frame_changed') report('Memory review expired. Your draft is still here.');
       else if (useMemory && code === 'personal_memory_user_gesture_required') report('Choose Send with memory again from this conversation. Your draft is still here.');
