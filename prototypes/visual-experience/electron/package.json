@@ -1,0 +1,32 @@
+{
+  "name": "aerynth-electron-visual-lab",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Isolated Electron candidate for Aerynth Liquid Intelligence",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "fixtures": "node scripts/generate-fixtures.mjs",
+    "build": "npm run fixtures && vite build && tsc -p tsconfig.electron.json && node scripts/write-build-manifest.mjs",
+    "package:release": "npm run build && node scripts/package-release.mjs",
+    "start": "npm run build && electron .",
+    "benchmark": "npm run build && electron . --benchmark",
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "format": "prettier --write index.html vite.config.ts tsconfig*.json \"src/**/*.{ts,tsx,css}\" \"src-electron/**/*.ts\" \"scripts/**/*.mjs\" \"tests/**/*.mjs\"",
+    "format:check": "prettier --check index.html vite.config.ts tsconfig*.json \"src/**/*.{ts,tsx,css}\" \"src-electron/**/*.ts\" \"scripts/**/*.mjs\" \"tests/**/*.mjs\""
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "@types/node": "24.9.1",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "electron": "38.4.0",
+    "prettier": "^3.6.2",
+    "typescript": "5.9.3",
+    "vite": "7.1.12"
+  }
+}
