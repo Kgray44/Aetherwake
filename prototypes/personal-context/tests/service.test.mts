@@ -130,6 +130,27 @@ test('CAS edits and explicit corrections preserve history, supersede without sil
   const f = fixture(); try { f.enable(); const old = f.service.reviewFact(fact()), second = new PersonalContextService(f.options); const edited = second.editFact({ id: old.id, expectedVersion: 1, replacement: fact(undefined, { text: 'Synthetic corrected processor.' }) }); assert.equal(edited.version, 2); assert.throws(() => f.service.editFact({ id: old.id, expectedVersion: 1, replacement: fact() }), /stale_personal_context_version/); assert.equal(f.service.readFact(old.id, 1).text, old.text); const replacement = f.service.correctFact({ id: old.id, expectedVersion: 2, replacement: fact(undefined, { certainty: 'conflicting', text: 'Synthetic competing evidence, unresolved.' }) }); assert.equal(replacement.previous.state, 'superseded'); assert.equal(replacement.previous.supersededBy, replacement.replacement.id); const context = f.service.previewContext(request()); assert.deepEqual(context.items.map(item => item.factId), [replacement.replacement.id]); assert.equal(context.items[0].certainty, 'conflicting'); } finally { f.close(); }
 });
 
+test('revoked and superseded facts cannot be reactivated through an edit or correction', () => {
+  const f = fixture();
+  try {
+    f.enable();
+    const revoked = f.service.reviewFact(fact());
+    const previous = f.service.reviewFact(fact());
+    const { replacement } = f.service.correctFact({ id: previous.id, expectedVersion: previous.version,
+      replacement: fact(undefined, { text: 'Synthetic replacement processor.' }) });
+    f.service.revoke({ id: revoked.id, expectedVersion: revoked.version });
+    f.restart();
+    const before = f.counts();
+    for (const prior of [revoked, previous]) {
+      const input = { id: prior.id, expectedVersion: prior.version + 1, replacement: fact() };
+      assert.throws(() => f.service.editFact(input), /personal_fact_inactive/);
+      assert.throws(() => f.service.correctFact(input), /personal_fact_inactive/);
+    }
+    assert.deepEqual(f.counts(), before);
+    assert.deepEqual(f.service.previewContext(request()).items.map(item => item.factId), [replacement.id]);
+  } finally { f.close(); }
+});
+
 test('changed import, revoked source/fact, expiration and policy changes invalidate exact previously previewed context', () => {
   for (const change of ['import', 'revoke-source', 'revoke-fact', 'expire', 'policy', 'host-policy'] as const) { const f = fixture(); try { f.enable(); const source = f.service.importOriginal(original()), value = f.service.reviewFact(fact(source, { expiresAt: '2026-11-02T13:00:00.000Z' })), input = request(), context = f.service.previewContext(input); assert.equal(context.items.length, 1);
     if (change === 'import') f.service.editImport({ id: source.id, expectedVersion: 1, replacement: original({ text: 'Synthetic changed source' }) });

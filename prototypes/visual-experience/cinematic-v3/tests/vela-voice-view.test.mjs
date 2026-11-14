@@ -72,9 +72,19 @@ test('a genuine voice event refreshes a hidden idle view once and exposes automa
  }finally{unsubscribe();view.dispose();}
 });
 test('scoped Stop remains available while Speak awaits startup and a late startup result cannot replace the stopped or newer session',async()=>{
- const calls=[],message={id:'pending-primary',content:'A synthetic reply waiting for startup.'},contentDigest=createHash('sha256').update(message.content).digest('hex'),starting={...snapshot(),session:{state:'starting',attemptId:'pending-speech'},speech:{state:'starting',messageId:message.id,attemptId:'pending-speech',contentDigest}},closed={...starting,session:{state:'closed',attemptId:'pending-speech'},speech:{...starting.speech,state:'closed'}};let releaseSpeak,value=starting,presence;
- const {view,dom}=harness(async request=>{calls.push(request);if(request.name==='speak')return new Promise(resolve=>{releaseSpeak=resolve;});if(request.name==='stopSpeech'){value=closed;return closed;}return value;});dom.doc.defaultView={crypto:webcrypto};const unsubscribe=view.subscribe(next=>{presence=next;}),speaking=view.speak(message);
- try{await until(()=>calls.some(request=>request.name==='speak'));view.observe();await until(()=>presence.speech?.attemptId==='pending-speech');assert.equal(presence.speech.state,'starting');await view.stopSpeech('pending-speech');assert.deepEqual(calls.filter(request=>request.name==='stopSpeech'),[{name:'stopSpeech',input:{attemptId:'pending-speech'}}]);assert.equal(presence.speech.state,'closed');
+ const calls=[],message={id:'pending-primary',content:'A synthetic reply waiting for startup.'},contentDigest=createHash('sha256').update(message.content).digest('hex'),starting={...snapshot(),session:{state:'starting',attemptId:'pending-speech'},speech:{state:'starting',messageId:message.id,attemptId:'pending-speech',contentDigest}},closed={...starting,session:{state:'closed',attemptId:'pending-speech'},speech:{...starting.speech,state:'closed'}};let value=starting,presence;
+ const {promise: speakReply, resolve: releaseSpeak}=Promise.withResolvers();
+ const {promise: transportEntered, resolve: markTransportEntered}=Promise.withResolvers();
+ let entryTimer;
+ const {view,dom}=harness(async request=>{calls.push(request);if(request.name==='speak'){markTransportEntered();return speakReply;}if(request.name==='stopSpeech'){value=closed;return closed;}return value;});dom.doc.defaultView={crypto:webcrypto};const unsubscribe=view.subscribe(next=>{presence=next;}),speaking=view.speak(message);
+ try{
+  await Promise.race([
+    transportEntered,
+    speaking.then(()=>assert.fail('Speak settled before transport entry')),
+    new Promise((_,reject)=>{entryTimer=setTimeout(()=>reject(Error('Speak transport entry timed out')),2000);}),
+  ]);
+  clearTimeout(entryTimer);
+  view.observe();await until(()=>presence.speech?.attemptId==='pending-speech');assert.equal(presence.speech.state,'starting');await view.stopSpeech('pending-speech');assert.deepEqual(calls.filter(request=>request.name==='stopSpeech'),[{name:'stopSpeech',input:{attemptId:'pending-speech'}}]);assert.equal(presence.speech.state,'closed');
   value={...snapshot(),session:{state:'running',attemptId:'new-manual'},media:{microphoneAccess:'active',localTrackEnabled:true,playback:'idle',playbackObserved:false},speech:{...starting.speech,state:'closed'}};view.observe();await until(()=>presence.microphoneOn===true);releaseSpeak(starting);await speaking;assert.equal(presence.microphoneOn,true);assert.equal(presence.speech.state,'closed');const before=calls.length;await view.stopSpeech('pending-speech');assert.equal(calls.length,before);assert.equal(calls.filter(request=>request.name==='speak').length,1);assert(!calls.some(request=>['start','reconnect','audition'].includes(request.name)));
- }finally{releaseSpeak?.(starting);await speaking.catch(()=>{});unsubscribe();view.dispose();}
+ }finally{clearTimeout(entryTimer);releaseSpeak(starting);unsubscribe();view.dispose();}
 });
