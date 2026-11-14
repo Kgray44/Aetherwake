@@ -4,6 +4,7 @@ import type { ConversationProviderTiming, MissionReportTiming, ProviderStreamTim
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
 import type { TurnEvent, TurnTransportTiming } from '../../openai-provider/contracts.mts';
 import type { VelaMissionCognitiveReceipts } from './vela-api-runtime.mts';
+import { lastMissionVerificationEvent } from './mission-publication.mts';
 
 /** Bodyless milestones measured relative to the caller's monotonic start. */
 export function observeProviderStream(started: number) {
@@ -461,9 +462,19 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
   const requestAcknowledgement = initial ? {
     source: 'mission-created' as const, event: initial, intakeToAcknowledgementMs: intakeToAdmissionMs,
   } : null;
-  const verifiedAttempts = attempts.filter(attempt => attempt.verifiedEvidenceIds.length && attempt.end)
-    .sort((a, b) => a.end!.eventSeq - b.end!.eventSeq);
-  const firstVerified = verifiedAttempts[0]?.end ?? null;
+  const recoveredVerifications = new Map<string, MissionEvent>();
+  for (const event of events) {
+    if (event.attemptId && event.kind === 'recovered' &&
+      lastMissionVerificationEvent(mission, [event]) === event)
+      recoveredVerifications.set(event.attemptId, event);
+  }
+  const verifiedAttempts = attempts.flatMap(attempt => {
+    const terminal = terminals.get(attempt.id);
+    const event = terminal?.kind === 'settled' && terminal.detail === 'verified' ? terminal :
+      recoveredVerifications.get(attempt.id);
+    return event && attempt.verifiedEvidenceIds.length ? [{ attempt, verification: boundary(event) }] : [];
+  }).sort((a, b) => a.verification.eventSeq - b.verification.eventSeq);
+  const firstVerified = verifiedAttempts[0]?.verification ?? null;
   const currentProofs = new Map(mission.tasks.flatMap(task => {
     const attempt = task.attempts.at(-1);
     const verification = attempt?.verification;
@@ -472,12 +483,12 @@ export function projectMissionExecution(mission: MissionProjection, reportPublic
       !verification.evidenceIds.includes(attempt.evidence.id)) return [];
     return [[task.id, { taskId: task.id, attemptId: attempt.id, evidenceIds: [...verification.evidenceIds] }] as const];
   }));
-  const verifiedMilestones = verifiedAttempts.flatMap(({ id, taskId, planRevision, end, interrupted, verifiedEvidenceIds }) => {
+  const verifiedMilestones = verifiedAttempts.flatMap(({ attempt: { id, taskId, planRevision, verifiedEvidenceIds }, verification }) => {
     const source = byAttempt.get(id)?.attempt;
-    if (currentProofs.get(taskId)?.attemptId !== id || interrupted || !end || !source?.verification) return [];
-    const elapsed = intake && initial ? interval(id, { ...initial, monotonicMs: intake.monotonicMs }, end) : null;
+    if (currentProofs.get(taskId)?.attemptId !== id || !source?.verification) return [];
+    const elapsed = intake && initial ? interval(id, { ...initial, monotonicMs: intake.monotonicMs }, verification) : null;
     return [{ taskId, attemptId: id, planRevision, criterion: source.verification.criterion,
-      evidenceIds: verifiedEvidenceIds, settlement: end, intakeToSettlementMs: elapsed ? elapsed.end - elapsed.start : null }];
+      evidenceIds: verifiedEvidenceIds, settlement: verification, intakeToSettlementMs: elapsed ? elapsed.end - elapsed.start : null }];
   });
   const criterionCoverage = mission.criteria.map(criterion => {
     const taskIds = mission.tasks.filter(task => task.criterion === criterion).map(task => task.id);
