@@ -67,7 +67,7 @@ import type { OrdinaryConnectionPort,OrdinaryResponsesTestServices,OrdinaryRespo
 import { OpenAIConnections,CHATGPT_PLAN_REGISTRATION } from './openai-connections.mts';
 import { VelaApiConnection } from './vela-api-connection.mts';
 import { investigateReviewedVelaEvidence, investigateVelaHistoryWithApi, qualifyVelaHistoryModelWithApi, type SemanticHistoryAdmission, type SemanticHistoryProbeAdmission } from './vela-semantic-history.mts';
-import { VelaApiRuntime, VELA_API_RUNTIME_LIMITS, velaApiReasoningEfforts, type VelaApiRun, type VelaApiRuntimeTestServices } from './vela-api-runtime.mts';
+import { VelaApiRuntime, VELA_API_RUNTIME_LIMITS, velaApiReasoningEfforts, type VelaApiRun, type VelaApiRuntimeTestServices, type VelaSyntheticEvaluationBatch } from './vela-api-runtime.mts';
 import { VelaWakeRuntime } from './vela-wake-runtime.mts';
 import { VelaFileProposals, localDocumentIntent,localSourceAttachmentIntent,localFolderListIntent,folderListingAnswer } from './vela-file-proposals.mts';
 import { FolderSources,inspectFolderSelection,readFolderSource,findFolderResource,storeFolderSource,assertCurrentFolderSourceSync } from './folder-sources.mts';
@@ -202,8 +202,34 @@ const toVelaReviewedEvidenceSource = (source: ContextManifest['included'][number
     ...(extracted ? { partial: true as const } : {}) };
 };
 
+type EvaluationClaim = NonNullable<VelaApiRun['evaluationClaim']>;
+type EvaluationReservationReview = Readonly<{
+  claim: Readonly<EvaluationClaim>;
+  previewId: string;
+  signature: string;
+  reviewDigest: string;
+  promptDigest: string;
+  route: Readonly<VelaRouteDecision>;
+  providerId: string;
+  previewExpiresAt: number;
+  maxCalls: number;
+}>;
+export type SyntheticEvaluationReservationReceipt = EvaluationReservationReview & Readonly<{
+  corpusSha256: string;
+  caseId: string;
+  candidate: Readonly<{ commit: string; tree: string }>;
+  catalogDigest: string;
+  batch: Readonly<VelaSyntheticEvaluationBatch>;
+  expiresAt: number;
+}>;
+type CoreVelaApiTestServices = VelaApiRuntimeTestServices & {
+  hasEvaluationJournalClaim?(claim: Readonly<EvaluationClaim>, input: Readonly<CommandMap['velaRequestPreview']['input']>): boolean;
+  reviewEvaluationReservation?(review: EvaluationReservationReview): SyntheticEvaluationReservationReceipt | null;
+};
+
 interface PrivateVelaPreview extends VelaRequestPreview {
   evaluationClaim?: VelaApiRun['evaluationClaim'];
+  evaluationReservationExpiresAt?: number;
   explicitSourceSelection?: true;
   projectEvidenceSources?: ContextManifest['included'];
   voiceInput?: { messageId:string; context:LiveCanonicalContext };
@@ -288,7 +314,8 @@ export class BackendCore {
       previewOrigin?: ReturnType<typeof observeConversationProvider>['previewOrigin'];
       inputStaging?: PrivateVelaPreview['inputStaging'];
     } }>();
-  private readonly velaApiTest?: VelaApiRuntimeTestServices;
+  private readonly velaApiTest?: CoreVelaApiTestServices;
+  private syntheticEvaluationBatchDigest?: string;
   private ordinaryTest?:OrdinaryResponsesTestServices;
   private ordinaryAuth=new Map<string,Promise<void>>();
   private ordinaryRenewal:Promise<ProviderConnectionStatus>|null=null;
@@ -362,12 +389,16 @@ export class BackendCore {
   private syntheticTimerClock?: TimerClockReading;
   private timerResumeTask?: Promise<void>;
   private timerResumeRequired = false;
-  constructor(options: Options, emit: (event: StreamEvent) => void = () => {}, nativeHostServices?:NativeHostServices,ordinaryTest?:OrdinaryResponsesTestServices,velaApiTest?:VelaApiRuntimeTestServices) {
+  constructor(options: Options, emit: (event: StreamEvent) => void = () => {}, nativeHostServices?:NativeHostServices,ordinaryTest?:OrdinaryResponsesTestServices,velaApiTest?:CoreVelaApiTestServices) {
     this.nativeHostServices=nativeHostServices;
     this.nativeMedia = options.nativeMedia === true;
     this.rendererEventTransport = options.rendererEventTransport === true;
     this.privateMode = options.contentPolicy === 'local-private';
-    ensure(!velaApiTest || !this.privateMode, 'synthetic_api_services_forbidden'); this.velaApiTest = velaApiTest;
+    ensure(!velaApiTest || !this.privateMode, 'synthetic_api_services_forbidden');
+    ensure(!(velaApiTest?.reviewEvaluationReservation || velaApiTest?.hasEvaluationJournalClaim) ||
+      velaApiTest?.syntheticBatchAccounting === true &&
+      options.contentPolicy === 'synthetic-only' && options.provider === 'fixture', 'vela_evaluation_scope_invalid');
+    this.velaApiTest = velaApiTest && Object.freeze({ ...velaApiTest });
     ensure(!options.syntheticTimerClock || !this.privateMode, 'synthetic_timer_clock_forbidden');
     this.syntheticTimerClock = options.syntheticTimerClock;
     ensure(!ordinaryTest||!this.privateMode,'synthetic_ordinary_services_forbidden');this.ordinaryTest=ordinaryTest;
@@ -501,7 +532,7 @@ export class BackendCore {
       this.folderSources=new FolderSources(this.db,{privateRoot:this.privateRoot});
       this.selectedDocumentContext=new SelectedDocumentContext({scopeStamp:()=>this.velaScopeStamp(),documents:this.nativeHostServices?.documents,source:id=>{const scope=this.velaHost.scope(),ref=this.velaHost.resolve({id,kind:'resource'},scope);if(!ref||ref.resourceKind!=='file'||!this.productResourceAccess(id)||!this.conversationAccess.resource(id,'read'))return null;const source=readMediaSource(this.db,id);return source?{ref,source}:null;}});
       this.velaApiConnection = new VelaApiConnection({ db: this.db, transaction: work => this.kernel.withTransaction(() => work(this.db)), nativeHost: this.nativeHostServices, ...(velaApiTest ? { fetch: velaApiTest.fetch } : {}) });
-      this.velaApiRuntime = new VelaApiRuntime({ db: this.db, transaction: work => this.kernel.withTransaction(work), executionTransaction: work => this.atomic(work), connection: this.velaApiConnection, test: velaApiTest,
+      this.velaApiRuntime = new VelaApiRuntime({ db: this.db, transaction: work => this.kernel.withTransaction(work), executionTransaction: work => this.atomic(work), connection: this.velaApiConnection, test: this.velaApiTest,
         observe: {
           stage: (executionId, requestId, review) => {
             ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
@@ -3145,6 +3176,9 @@ export class BackendCore {
     const weatherTool=preview.semanticContext || preview.memoryRecall ? undefined : this.apiWeatherTool(input.requestId);
     const validate = () => {
       ensure(this.velaGrants.get(pair[0]) === grant && (grant.consumed || Date.parse(grant.expiresAt) > Date.now()), 'native_vela_grant_expired');
+      if (preview.evaluationClaim && this.velaApiTest?.syntheticBatchAccounting === true)
+        ensure(preview.evaluationReservationExpiresAt && preview.evaluationReservationExpiresAt > Date.now(),
+          'vela_evaluation_reservation_required');
       if (preview.semanticContext) ensure(!this.closed && !turnSignal.aborted && this.missionStorageAdmitted,
         'vela_semantic_context_unavailable');
       const run=this.toolWorkflowRuns.get(input.requestId);if(run?.advances?.length){this.validateToolFence(input.requestId,run.advances.at(-1)!.fence);for(const advance of run.advances)ensure(this.toolPlanDigest(advance.ownerRef)===advance.sourceDigest,'vela_tool_owner_receipt_changed');}
@@ -4782,9 +4816,61 @@ export class BackendCore {
       !input.projectEvidence&&!input.workspaceState&&!input.missionCheckpoint&&
       !input.handoffSourceRequestId&&!input.routingAgentId&&!input.activeCard&&input.useMemory===undefined,'vela_evaluation_scope_invalid');
     const evaluationClaim=Object.freeze({...claim});
+    if (this.velaApiTest.syntheticBatchAccounting === true) {
+      ensure(this.velaApiTest.reviewEvaluationReservation && /^[a-f0-9]{64}$/u.test(claim.claimToken) &&
+        /^[a-f0-9]{64}$/u.test(claim.bindingDigest) && !this.velaApiRuntime.readEvaluationAdmissions(claim),
+        'vela_evaluation_claim_invalid');
+      const frozenInput = structuredClone(input);
+      ensure(this.velaApiTest.hasEvaluationJournalClaim?.(evaluationClaim, structuredClone(frozenInput)) === true,
+        'vela_evaluation_journal_claim_required');
+      const profile = this.velaApiRuntime.readLedgerProfile();
+      ensure(profile?.profileId === claim.profileId && profile.configurationVersion === claim.configurationVersion,
+        'vela_evaluation_profile_mismatch');
+      // The evaluation route reads only the already-qualified catalog.
+      return this.previewVelaRequest(frozenInput, evaluationClaim);
+    }
     this.velaApiRuntime.beginEvaluationClaim(evaluationClaim);
     try { return await this.previewVelaRequest(input,evaluationClaim); }
     catch(error){this.velaApiRuntime.endEvaluationClaim(evaluationClaim);throw error;}
+  }
+  private reserveReviewedEvaluation(preview: PrivateVelaPreview): number | undefined {
+    if (!preview.evaluationClaim || this.velaApiTest?.syntheticBatchAccounting !== true) return;
+    const claim = preview.evaluationClaim;
+    ensure(!preview.evaluationReservationExpiresAt && preview.nativeReviewed && preview.reviewDigest &&
+      preview.route?.kind === 'conversational' && preview.route.model && preview.connectionVersion === claim.configurationVersion,
+      'vela_evaluation_reservation_required');
+    const review = Object.freeze({
+      claim, previewId: preview.id, signature: preview.signature, reviewDigest: preview.reviewDigest,
+      promptDigest: planningDigest(preview.prompt), route: Object.freeze(structuredClone(preview.route)),
+      providerId: preview.providerId, previewExpiresAt: Date.parse(preview.expiresAt),
+      maxCalls: preview.resourceIds.length ? 6 : 1,
+    });
+    const receipt = this.velaApiTest.reviewEvaluationReservation?.(review);
+    ensure(receipt, 'vela_evaluation_reservation_required');
+    const { batch, candidate, caseId, corpusSha256, catalogDigest, expiresAt } = receipt;
+    ensure(Object.keys(review).every(key => planningDigest(receipt[key as keyof EvaluationReservationReview] ?? null) ===
+      planningDigest(review[key as keyof EvaluationReservationReview] ?? null)) &&
+      /^[a-f0-9]{64}$/u.test(corpusSha256) && /^[a-f0-9]{64}$/u.test(catalogDigest) && identifier(caseId) &&
+      /^[a-f0-9]{40}$/u.test(candidate?.commit) && /^[a-f0-9]{40}$/u.test(candidate?.tree) &&
+      batch?.profileId === claim.profileId && batch.configurationVersion === claim.configurationVersion &&
+      Number.isSafeInteger(expiresAt) && expiresAt > Date.now() &&
+      expiresAt <= Math.min(review.previewExpiresAt, batch.expiresAt),
+      'vela_evaluation_reservation_mismatch');
+    const route = { provider: review.providerId, model: review.route.model, transport: 'synthetic' };
+    const binding = JSON.stringify([claim.profileId, claim.configurationVersion]);
+    ensure(createHash('sha256').update(JSON.stringify([corpusSha256, candidate.commit, candidate.tree, route, binding, caseId]))
+      .digest('hex') === claim.bindingDigest, 'vela_evaluation_reservation_mismatch');
+    const reservation = Object.freeze(structuredClone(batch));
+    const batchDigest = planningDigest({ reservation, corpusSha256, candidate, catalogDigest, route });
+    const registered = this.syntheticEvaluationBatchDigest;
+    ensure(!registered || registered === batchDigest, 'vela_evaluation_reservation_mismatch');
+    this.kernel.withTransaction(() => {
+      if (!registered) this.velaApiRuntime.beginSyntheticEvaluationBatch(reservation);
+      this.velaApiRuntime.beginEvaluationClaim(claim, { batchId: reservation.batchId, maxCalls: review.maxCalls });
+    });
+    this.syntheticEvaluationBatchDigest = batchDigest;
+    preview.evaluationReservationExpiresAt = expiresAt;
+    return expiresAt;
   }
   /** Reconcile a previously admitted synthetic claim without contacting a provider. */
   readVelaEvaluationResult(claim: NonNullable<VelaApiRun['evaluationClaim']>,
@@ -5229,9 +5315,11 @@ export class BackendCore {
       preview.memoryRecall.approve(preview.memoryRecall.promptDigest);
       preview.memoryRecall.validate(preview.prompt);
     }
+    const evaluationExpiresAt = this.reserveReviewedEvaluation(preview);
     // The read-only gap investigation can spend its turn budget before composition consumes the grant.
     const grantLifetime = preview.missionCheckpoint?.selection.gapIndex === undefined ? 60_000 : VELA_REVIEWED_GAP_TURN_MS + 5_000;
-    const grantId = randomUUID(), expiresAt = new Date(Math.min(Date.now() + grantLifetime, Date.parse(preview.expiresAt))).toISOString();
+    const grantId = randomUUID(), expiresAt = new Date(Math.min(Date.now() + grantLifetime, Date.parse(preview.expiresAt),
+      evaluationExpiresAt ?? Infinity)).toISOString();
     this.velaGrants.set(grantId, { previewId: preview.id, expiresAt, consumed: false,
       ...(preview.nativeReviewed ? { reviewDigest: preview.reviewDigest } : {}) });
     return { grantId, expiresAt };
