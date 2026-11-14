@@ -1,3 +1,4 @@
+import { createAepNativeHost } from './aep-native-host.mts';
 import { resolveAepEvaluationReference } from './aep-evaluation-reference.mts';
 import { randomUUID, createHash } from 'node:crypto';
 import { realpathSync,openSync,closeSync,lstatSync,fstatSync } from 'node:fs';
@@ -314,6 +315,7 @@ export class BackendCore {
   private velaWorkflows = new Map<string, PendingVelaWorkflow>();
   private velaWorkflowClaims = new Set<string>();
   private missions: MissionService;
+  private readonly aepNative?: ReturnType<typeof createAepNativeHost>;
   private missionAdmission: ReturnType<typeof createMissionAdmission>;
   private readonly missionCpuPool = createMissionCpuPool(MISSION_LIMITS.workers);
   private gpuReadback: ReturnType<typeof createGpuReadbackAdapter>;
@@ -639,6 +641,19 @@ export class BackendCore {
         stagePublication: (mission, from) => this.missionPublication.stage(mission, from),
         observe: () => {this.flushMissionPublication();this.queueToolOwnerJobResults();},
       });
+      if (this.privateMode && this.nativeHostServices) {
+        this.aepNative = createAepNativeHost(this.db, this.missions, {
+          atomic: operation => this.kernel.withTransaction(operation),
+          authorized: scope => this.missionScopeAllowed(scope),
+          governorVersion: () => this.missionAdmission.inspectPolicy().configVersion,
+          admit: scope => {
+            ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
+            const context = this.velaContext();
+            ensure(context.currentWorkspaceId === scope.workspaceId && context.currentProjectId === scope.projectId &&
+              this.missionScopeAllowed(scope), 'aep_scope_denied');
+          },
+        });
+      }
       this.missionConversations = new MissionConversationReceipts({
         db: this.db, atomic: work => this.atomic(work),
         read: id => {
@@ -1537,6 +1552,19 @@ export class BackendCore {
           Number.isSafeInteger(expectedRevision) && expectedRevision > 0 && Number.isSafeInteger(cpuSlots), 'invalid_mission_command');
         const observed = resolveMissionHypothesis(this.missions.read(id, scope), hypothesisId, expectedRevision);
         return observed ? this.missionAdmission.previewWorkerBudgetExperiment(observed, cpuSlots) : null;
+      }
+      case 'experience-list': {
+        ensure(Object.keys(request.input).length === 0, 'invalid_mission_command');
+        return this.aepNative?.list(scope) ?? null;
+      }
+      case 'experience-evidence': {
+        ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
+        return this.aepNative?.evidence(scope, request.input.id) ?? null;
+      }
+      case 'experience-finding': {
+        const { id, cohort } = request.input;
+        ensure(Object.keys(request.input).length === 2 && identifier(id) && identifier(cohort), 'invalid_mission_command');
+        return this.aepNative?.finding(scope, id, cohort) ?? null;
       }
       case 'evaluation-reference': return resolveAepEvaluationReference(request.input, this.missions, scope);
       case 'execution-profile': {
@@ -7040,6 +7068,13 @@ export class BackendCore {
       const mission = this.missions.create(review.id, { ...plan, originConversationId: this.vela.ensureMissionConversation() });
       this.gpuReadbackReview = undefined;
       return { kind: 'started', missionId: mission.id } as CommandMap[K]['output'];
+    }
+    if (name === 'aepExperimentNative') {
+      ensure(this.aepNative && !this.closed, 'native_aep_experiment_required');
+      const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
+      ensure(workspaceId, 'mission_workspace_required');
+      return await this.aepNative.command({ workspaceId, projectId },
+        input as CommandMap['aepExperimentNative']['input']) as CommandMap[K]['output'];
     }
     if (name === 'resourcePolicyNative') {
       ensure(!this.closed && this.privateMode && this.nativeHostServices, 'native_resource_policy_required');
