@@ -202,6 +202,7 @@ export function mountEventExperience(
     refresh(): Promise<void>;
     openResource?(resourceId: string): void;
     openMission?(missionId: string): void;
+    inspectMission?(missionId: string, anchor: HTMLButtonElement): void;
   },
   options: { active?: boolean; presentation?: "workspace" | "focused"; motion?: ExperienceMotionPort; viewId?: string } = {},
 ) {
@@ -499,13 +500,16 @@ export function mountEventExperience(
 
         let metadata: HTMLDListElement | undefined;
         let related: HTMLButtonElement | undefined;
+        let inspection: HTMLButtonElement | undefined;
         const isOpen = () =>
           active && !disposed && details.open && rows.get(event.eventId)?.element === element;
         const clearDetails = () => {
           metadata?.remove();
           related?.remove();
+          inspection?.remove();
           metadata = undefined;
           related = undefined;
+          inspection = undefined;
         };
         const syncDetails = () => {
           if (!isOpen()) {
@@ -529,6 +533,15 @@ export function mountEventExperience(
               if (related === action && isOpen()) port.openResource?.(resourceId);
             });
             related = action;
+            details.append(action);
+          }
+          if (missionId && port.inspectMission) {
+            const action = button("Inspect mission in AIW", () => {
+              if (inspection === action && isOpen()) port.inspectMission?.(missionId, action);
+            });
+            action.setAttribute("aria-haspopup", "dialog");
+            action.dataset.inspectMission = missionId;
+            inspection = action;
             details.append(action);
           }
         };
