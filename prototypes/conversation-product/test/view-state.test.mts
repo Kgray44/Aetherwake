@@ -31,9 +31,9 @@ async function seed(f:Fixture){
 test('schema2 upgrades additively and same-file restart preserves exact view, draft, IDs, title and separate Constellation row',async()=>{
  const f=fixture();let reopened:WorkspaceKernel|undefined;try{
   const {c,draft,input}=await seed(f),constellation={schema:'aerynth.constellation@1',anchors:{},bookmarks:[],history:[]};await f.core.command('viewState',{state:constellation});
-  f.db.exec('DROP TABLE cp_view_selection; DROP TABLE cp_views; UPDATE cp_schema SET version=2 WHERE id=1');
+  f.db.exec('DROP TABLE cp_view_selection; DROP TABLE cp_views; ALTER TABLE cp_drafts DROP COLUMN documents_json; UPDATE cp_schema SET version=2 WHERE id=1');
   const before=await f.core.command('snapshot',{}),desktop=await f.core.command('desktop',{type:'snapshot'}),integration=f.db.prepare('SELECT json FROM integration_state WHERE id=1').get()!.json,viewState=f.db.prepare('SELECT json FROM desktop_view_state WHERE id=1').get()!.json;
-  const product=new ConversationProduct(f.db,f.host);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,3);assert.deepEqual(await product.command('readDraft',{resourceId:c.resourceId}),draft);
+  const product=new ConversationProduct(f.db,f.host);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,4);assert.deepEqual(await product.command('readDraft',{resourceId:c.resourceId}),draft);
   assert.deepEqual(await product.command('readViewState',{}),{contract:'aerynth.conversation-view@1',selected:{version:0,resourceId:null,updatedAt:null},view:null});
   const selected=await product.command('selectView',{resourceId:c.resourceId,expectedVersion:0}),view=await product.command('saveViewState',input);
   assert.equal(view.positionStatus,'current');assert.equal(view.selectionStatus,'current');assert.equal(draftText.slice(view.selection!.start,view.selection!.end),'🧭');

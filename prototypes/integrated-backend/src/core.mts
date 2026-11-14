@@ -95,7 +95,7 @@ import { BridgeError } from '../../codex-bridge/src/transport.ts';
 import { projectTurnHttpDiagnostic } from '../../application-contract/provider-diagnostics.ts';
 import { nativeProvider, fixtureProvider } from './providers.mts';
 import { CodexTurnOutput } from './codex-turn-output.mts';
-import { ConversationProduct, type AttachedContext, type ConversationReadView } from '../../conversation-product/src/service.mts';
+import { ConversationProduct, CONVERSATION_PRODUCT_SCHEMA_VERSIONS, type AttachedContext, type ConversationReadView } from '../../conversation-product/src/service.mts';
 import type { NativeHostServices } from './native-host.mts';
 import { createCanonicalOrganizationAdapter, createCanonicalAccessHelper, createObservedCapabilityCache } from '../../conversation-product/src/canonical-host.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
@@ -395,7 +395,7 @@ export class BackendCore {
       this.kernel.withTransaction(db => {
         this.db = db;
         if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_schema'").get()){
-          const versions=db.prepare('SELECT version FROM cp_schema').all();ensure(versions.length===1&&[1,2,3].includes(Number(versions[0].version)),'unsupported_conversation_product_schema');
+          const versions=db.prepare('SELECT version FROM cp_schema').all();ensure(versions.length===1&&CONVERSATION_PRODUCT_SCHEMA_VERSIONS.includes(Number(versions[0].version)),'unsupported_conversation_product_schema');
         }
         if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vela_state'").get()){
           const versions=db.prepare('SELECT schema_version FROM vela_state').all();ensure(versions.length<=1&&versions.every(row=>[1,2,3].includes(Number(row.schema_version))),'unsupported_vela_schema');
