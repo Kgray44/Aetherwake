@@ -78,6 +78,7 @@ export interface OrdinaryResponsesPreview {
  instructions:string;instructionVersion:string;messages:TurnInput['messages'];
  history:{resourceId:string;messageId:string;digest:string;providerId?:string}[];
  contextDigest:string;bodyDigest:string;bodyBytes:number;requiresSourceReview:boolean;
+ memoryDigest?: string;
 }
 export type ProviderAuthRequest={providerId:'chatgpt-plan-responses'}&(
  |{type:'begin'}|{type:'maintain'}|{type:'finish';attemptId:string}|{type:'cancel';attemptId?:string}
@@ -105,6 +106,7 @@ export interface Binding {
   nativeThreadId: string; nativeSessionId: string | null;
 }
 export interface Execution extends PublicConversationExecution {
+  reviewedMemory?: true;
   binding: Binding | null; turnId: string | null;
   /** Actual Responses facts, never a fabricated Codex thread/turn binding. */
   responseId?:string;responseOutcome?:TurnOutcome;usage?:ReportedUsage;reportedModel?:string;
@@ -392,7 +394,7 @@ export interface CommandMap {
   conversationClock: { input: ConversationSendInput; output: { id: string; resourceId: string; role: 'user'; content: string; revision: number; deviceClockMessageId: string } | null };
   conversationSendPreview: { input: ConversationSendInput; output: ConversationSendPreview };
   /** Trusted native host only; MUST NOT be exposed to a renderer or tool caller. */
-  authorizeConversationSend: { input: { previewId:string; fingerprint:string; commandId:string }; output: { grantId:string; expiresAt:string } };
+  authorizeConversationSend: { input: { previewId:string; fingerprint:string; commandId:string; reviewedBodyDigest?:string }; output: { grantId:string; expiresAt:string } };
   conversationSend: { input: { previewId:string; grantId:string; fingerprint:string; commandId:string }; output: Execution };
   desktop: { input: DesktopCommand; output: DesktopSnapshot };
   viewState: { input: { state?: unknown; panels?: WorkspacePanelRequest }; output: unknown };
