@@ -281,3 +281,23 @@ Apple public research:
 - [Get to know the new design system, WWDC25](https://developer.apple.com/videos/play/wwdc2025/356/)
 
 **Design approval still required:** choose material reference captures and evaluate actual material constants on physical Windows hardware. Do not treat any Apple API names as implementation instructions for Electron/Windows.
+
+
+## November 15, 2026: Unified Optical Glass Engine research direction
+
+**Status:** owner-confirmed design direction; proposed engineering detail, not implementation or benchmark acceptance. This extends the existing AML-001 material vocabulary and Charter 02. The [Glass Laboratory contract](../specifications/AERYNTH-GLASS-LABORATORY.md) governs research tooling; [Design Engineering](../specifications/AERYNTH-DESIGN-ENGINEERING-SPECIFICATION.md) governs rendering interfaces. Neither replaces this material specification.
+
+Aerynth will own **one Optical Glass Engine**, rather than install multiple independent visual-component engines. Third-party resources are research and inspiration, with selective code reuse only after license, provenance, security and compatibility review. The existing Void, Instrument, Veil, Astral Glass Clear/Elevated/Prominent and Shield roles are retained.
+
+The engine's material description must separate *optical properties* from *rendering technology*: lens curvature and surface normals, effective optical thickness, refractive index, wavelength-dependent dispersion, roughness/frost/scattering, transmission, tint, Fresnel/specular response, lighting and shadow. CSS backdrop blur is a fallback or artistic frost effect, not physical refraction. Screen-space displacement is an approximation, not full path tracing; simulated dispersion must not be mislabeled as physical spectral accuracy.
+
+A shared material schema should declare units, numerical ranges, version, capabilities and graceful fallback. Candidate backends include native compositor, CSS/SVG displacement, WebGL/WebGPU shaders and CPU/reference renderers; none is presumed universally available. Scene background samples, foreign-window content, multi-layer glass, z-order, depth/occlusion, HDR/color space, high-DPI and cross-platform transparency are independently capability-gated. No renderer may capture another application or protected surface without explicit platform support and authority.
+
+**Comparison research candidates, not approved dependencies:**
+- [rukkiecodes/liquid-glass](https://github.com/rukkiecodes/liquid-glass): SDF normals and Snell-style optics.
+- [archisvaze/liquid-glass](https://github.com/archisvaze/liquid-glass): SVG/WebGL comparisons.
+- [xcyberpunkx0/liquid-glass](https://github.com/xcyberpunkx0/liquid-glass): adaptive quality tiers.
+
+For each, inspect actual code and license at a pinned revision; note limitations and only incorporate licensed, reviewed pieces. No paid kit is a required dependency. Optical effects must never degrade legibility, focus, approval surfaces, source provenance, hit-testing, reduced transparency or accessibility. The GPU-native volumetric Vela Presence remains a distinct canonical scene, not a flattened glass orb.
+
+**Acceptance boundary:** controlled identical-scene comparisons must measure appearance, overlap and animation, color accuracy, frame-time percentiles, input-to-paint delay, shader-compilation stalls, CPU/GPU/RAM/VRAM cost and fallback. Report unknown/unsupported distinctly from passing and from measured zero. Promotion requires reproducible evidence; a beautiful demo screenshot is not a benchmark.
