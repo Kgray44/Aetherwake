@@ -23,6 +23,15 @@ The current connected application lives under `prototypes/visual-experience/cine
 
 Browse [architecture](architecture/), [design](design/), [specifications](specifications/), [decisions](decisions/), [research](research/) and [vision](vision/) by purpose. These do not supersede the governing registry.
 
+## November 15 visual-engine documentation packet (proposed)
+
+- [Ownership and conflict register](DOCUMENTATION-OWNERSHIP-2026-11-15.md): existing authoritative owners, scope decisions, update/create inventory and independent AVEI exclusion.
+- [Glass Laboratory contract](specifications/AERYNTH-GLASS-LABORATORY.md): interactive optical research, comparison harness, material experiments and reproducible frame/GPU evidence.
+- Updated design authorities: [Materials](design/AERYNTH-MATERIALS-AND-LIGHTING-SPECIFICATION.md), [Motion](design/AERYNTH-MOTION-AND-INTERACTION-SPECIFICATION.md), [Design Engineering](specifications/AERYNTH-DESIGN-ENGINEERING-SPECIFICATION.md) and [Vela GPU Presence](architecture/VELA-PRESENCE-GPU-RENDERING-CONTRACT.md).
+- Integrated policy/evidence anchors: [ARIE](specifications/ARIE-RESOURCE-AND-SCHEDULER-CONTRACT.md), [AEP](specifications/AEP-ADAPTIVE-OPTIMIZATION-AND-EXPERIMENTS.md), [Reference Architecture](architecture/REFERENCE-ARCHITECTURE-v0.1.md).
+
+These are owner-confirmed **design directions proposed in a documentation PR**, not production acceptance. No AVEI specification is authored by this packet; separate virtual-environment architecture work is owned by another stream.
+
 ## Acceptance and evidence
 
 - [FI acceptance registry](engineering/FI-ACCEPTANCE-REGISTRY.json): scenario/evidence references and explicit adjudication status. Registration is not a pass.
