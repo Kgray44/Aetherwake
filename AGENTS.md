@@ -6,6 +6,21 @@ This file is a routing and collaboration guide, not a substitute for project gov
 
 Constitution 00 and Charters 01–16 are explicitly ratified by the repository owner as binding product and design requirements. The capability-first, Spatial Intelligence and Unified Memory amendments are included. Implementation status, API availability, security/performance qualification and release acceptance remain separately evidence-gated. See [the governance registry](governance/README.md), [Unified Memory Runtime](docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md), [Capability Runtime](docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md) and [Spatial Runtime](docs/architecture/UNIFIED-SPATIAL-INTELLIGENCE-RUNTIME-AND-NAVIGATION.md). Do not discard requirements or substitute 2D Mind visuals or parallel memory stores.
 
+## Engineering Task workflow (Phase B, contract v1)
+
+For engineering work tracked as a durable **Task** (not a numbered historical mission, and not Vela's product MissionService), use the shared v1 control-plane contract at [agent-system/README.md](agent-system/README.md) and [Phase B task routing](agent-system/PHASE-B.md). Before implementing a v1 Task, run:
+
+```bash
+node scripts/agent/task-router.mjs --task-file <task.json> --path <affected-repository-path> --json
+```
+
+- The Task's explicit primary classification selects the lead agent skill under `.agents/skills/`; secondary classes and sensitive affected paths **only add** checks and skills. Read all selected skills. If a Task record is not yet available, establish the objective, prerequisites, acceptance criteria and actual Git revision before claiming a routed/verified Task.
+- Run the existing governance-router and governance-context commands supplied as argument arrays by the router. **Never** treat the task router as a governance engine, authority waiver, task scheduler, security policy, or automatic approval.
+- Confirm real prerequisite readiness and canonical source owners. Record the exact revision and independently verify applicable requirements. Re-route if scope changes; a path heuristic cannot certify absence of security or visual obligations.
+- Choose focused evidence suited to the task class, preserve failed-attempt diagnoses, and never blindly repeat the same failed approach. No private data or fabricated token/quota metrics in this public repo.
+- A passing test, PR merge, or completed coding attempt is **not** an accepted Task. Respect all native-test admission, human review, owner artistic acceptance, and Trust Charter 14 requirements.
+- Phase B emits **proposed check IDs** only. Phase C owns measurements and context, Phase D owns formal VerificationProfile checks and CI enforcement, Phase E owns the observational UI. Do not misrepresent unimplemented Phase C/D/E functions as operational.
+
 ## Deterministic governance routing
 
 Before substantive work, use the repository's deterministic router instead of loading all 17 charter documents:
