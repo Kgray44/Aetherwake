@@ -1,7 +1,7 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {motion,AnimatePresence,useReducedMotion} from 'motion/react';
-import {Activity,ArrowLeft,ArrowRight,BarChart3,Boxes,CheckCircle2,ChevronRight,CircleAlert,Clock3,Cpu,Database,FileCheck2,Filter,GitBranch,Layers3,ListTodo,Plus,Radio,RefreshCw,Search,ShieldCheck,Sparkles,TerminalSquare,Workflow,X} from 'lucide-react';
+import {Activity,ArrowLeft,ArrowRight,BarChart3,Boxes,CheckCircle2,ChevronDown,ChevronRight,CircleAlert,Clock3,Cpu,Database,FileCheck2,Filter,GitBranch,Layers3,ListTodo,Plus,Radio,RefreshCw,Search,ShieldCheck,Sparkles,TerminalSquare,Workflow,X} from 'lucide-react';
 import {demoRecords} from './demo-data.js';
 import {GitHubFeed} from './github-feed.jsx';
 import './styles.css';
