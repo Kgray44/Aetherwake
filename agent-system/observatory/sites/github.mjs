@@ -30,22 +30,34 @@ export async function readBounded(stream, maxBytes) {
   }
 }
 
-function githubReader(fetcher, signal) {
-  return async function get(path, maxBytes = 512 * 1024) {
+function githubReader(fetcher, signal, token) {
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'Aetherwake-Engineering-Observatory' };
+  if (token) headers.Authorization = 'Bearer ' + token;
+  let retryAt = 0;
+  async function get(path, maxBytes = 512 * 1024) {
+    if (retryAt > Date.now()) throw new Error('GitHub rate limit reached');
     const response = await fetcher(API + path, {
-      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Aetherwake-Engineering-Observatory' },
+      headers,
       // Workers supports manual redirects. Reject 3xx below without following them.
       signal, redirect: 'manual',
     });
     if (!response.ok) {
       await response.body?.cancel();
-      const error = new Error(response.status === 429 || response.headers.get('x-ratelimit-remaining') === '0'
-        ? 'GitHub rate limit reached' : 'GitHub HTTP ' + response.status);
+      const exhausted = response.headers.get('x-ratelimit-remaining') === '0';
+      const retryAfter = Number(response.headers.get('retry-after')) * 1000;
+      const throttled = response.status === 429 || (response.status === 403 && (exhausted || retryAfter > 0));
+      if (throttled) {
+        const now = Date.now();
+        const resetAt = exhausted ? Number(response.headers.get('x-ratelimit-reset')) * 1000 : 0;
+        retryAt = Math.max(retryAt, resetAt, now + (retryAfter || (resetAt > now ? 0 : 60_000))) + 1000;
+      }
+      const error = new Error(throttled ? 'GitHub rate limit reached' : 'GitHub HTTP ' + response.status);
       error.status = response.status;
       throw error;
     }
     return JSON.parse(await readBounded(response.body, maxBytes));
-  };
+  }
+  return { get, retryAt: () => retryAt };
 }
 
 async function capture(work) {
@@ -134,8 +146,8 @@ function linkedItems(data, kind) {
     }));
 }
 
-export async function githubSnapshot(fetcher, validate) {
-  const get = githubReader(fetcher, AbortSignal.timeout(8000));
+export async function githubSnapshot(fetcher, validate, token) {
+  const { get, retryAt } = githubReader(fetcher, AbortSignal.timeout(8000), token);
   const [main, issues, pulls, ci] = await Promise.all([
     capture(async () => {
       const ref = await get('/git/ref/heads/main', 16 * 1024);
@@ -158,5 +170,5 @@ export async function githubSnapshot(fetcher, validate) {
   const records = main.revision
     ? await contractRecords(get, main.revision, validate)
     : { status: 'unavailable', reason: main.reason, items: [] };
-  return { repository: REPO, checked_at: new Date().toISOString(), main, records, issues, pulls, ci, page_size: PAGE_SIZE };
+  return { repository: REPO, retry_at: retryAt() || null, checked_at: new Date().toISOString(), main, records, issues, pulls, ci, page_size: PAGE_SIZE };
 }

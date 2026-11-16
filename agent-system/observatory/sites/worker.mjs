@@ -1,5 +1,6 @@
 import { proposedTask } from '../intake.mjs';
-import { githubSnapshot, isRevision, readBounded } from './github.mjs';
+import { isRevision, readBounded } from './github.mjs';
+import { cachedGitHub } from './github-cache.mjs';
 
 const MAX_PROPOSALS = 500;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -13,24 +14,6 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), { status
 const error = (message, status) => json({ error: message }, status);
 
 export function createWorker({ assets, validate, sourceRevision, fetcher = fetch }) {
-  let upstream;
-  let refreshAt = 0;
-  let cooldown = 0;
-  function getGitHub() {
-    const now = Date.now();
-    if (now >= refreshAt) {
-      refreshAt = now + 180_000;
-      upstream = githubSnapshot(fetcher, validate).then(snapshot => {
-        if (Object.values(snapshot).some(value => value?.reason === 'GitHub rate limit reached')) {
-          cooldown = Date.now() + 3_600_000;
-        }
-        return snapshot;
-      });
-    }
-    if (cooldown > now) refreshAt = Math.max(refreshAt, cooldown);
-    return upstream;
-  }
-
   async function api(request, env, url) {
     // Sites dispatch sets this header after authenticating the visitor and applying
     // the owner-only access policy. Service credentials lack visitor identity.
@@ -57,7 +40,7 @@ export function createWorker({ assets, validate, sourceRevision, fetcher = fetch
 
     if (overview) {
       const [snapshot, rows] = await Promise.all([
-        getGitHub(),
+        cachedGitHub(env.DB, fetcher, validate, env.GITHUB_READ_TOKEN),
         env.DB.prepare('SELECT record FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
           .bind(owner, namespace, MAX_PROPOSALS).all(),
       ]);
@@ -88,8 +71,10 @@ export function createWorker({ assets, validate, sourceRevision, fetcher = fetch
     } catch (cause) {
       return cause instanceof RangeError ? error('Payload too large', 413) : error('Invalid JSON', 400);
     }
-    const { main } = await getGitHub();
-    if (!isRevision(main.revision)) return error('GitHub main revision unavailable. Reload before submitting.', 503);
+    const { main } = await cachedGitHub(env.DB, fetcher, validate, env.GITHUB_READ_TOKEN);
+    if (main.status !== 'available' || !isRevision(main.revision)) {
+      return error('A current GitHub main revision is required before submitting. Check the GitHub feed for retry details.', 503);
+    }
 
     let task;
     try {

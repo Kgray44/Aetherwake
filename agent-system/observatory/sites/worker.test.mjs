@@ -19,6 +19,7 @@ const input = {
   primary: 'integration', profile_id: 'integration', criteria: ['Read it after reload'],
   state: 'accepted', owner_acceptance: 'accepted',
 };
+const cacheMigration = readFileSync(new URL('./drizzle/0001_github_snapshot.sql', import.meta.url), 'utf8');
 const namespace = 'c0cf1399-8a73-4f08-9b10-997063853638';
 const published = proposedTask({ ...input, title: 'Published contract record' }, rev);
 const ownerHeader = { 'oai-authenticated-user-id': 'owner-1' };
@@ -27,10 +28,13 @@ function fixture(t, { missingMain = false } = {}) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   sql.exec(migration);
+  sql.exec(cacheMigration);
+  let rateLimited = false;
   const DB = {
     prepare(statement) {
       const stmt = sql.prepare(statement);
       return { bind: (...args) => ({
+        first: async () => stmt.get(...args) ?? null,
         all: async () => ({ results: stmt.all(...args) }),
         run: async () => ({ meta: stmt.run(...args) }),
       }) };
@@ -42,6 +46,9 @@ function fixture(t, { missingMain = false } = {}) {
     assert.equal(options.redirect, 'manual');
     const { pathname, searchParams } = new URL(path);
     requests.push(path);
+    if (rateLimited) {
+      return new Response(null, { status: 429, headers: { 'retry-after': '120' } });
+    }
     if (pathname.endsWith('/git/ref/heads/main')) {
       return missingMain
         ? new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '0' } })
@@ -63,13 +70,18 @@ function fixture(t, { missingMain = false } = {}) {
     if (pathname.endsWith('/actions/runs')) return new Response(null, { status: 503 });
     assert.fail('Unexpected fetch: ' + pathname);
   };
-  const worker = createWorker({ validate, assets: {}, sourceRevision: blob, fetcher });
-  const call = (path, options) => worker.fetch(new Request(origin + path, options), { DB });
+  // A new Worker instance for each request exercises shared D1 rather than isolate memory.
+  const call = (path, options) => createWorker({ validate, assets: {}, sourceRevision: blob, fetcher })
+    .fetch(new Request(origin + path, options), { DB });
   const post = (headers = {}) => call('/api/tasks', {
     method: 'POST', body: JSON.stringify(input),
     headers: { ...ownerHeader, origin, 'content-type': 'application/json', ...headers },
   });
-  return { call, post, requests };
+  const hitLimit = () => {
+    sql.exec('UPDATE github_snapshot SET retry_at = 0');
+    rateLimited = true;
+  };
+  return { call, post, requests, hitLimit };
 }
 
 test('hosted API checks identity and same-origin JSON before touching upstream', async t => {
@@ -123,4 +135,31 @@ test('GitHub failure remains visible and intake requires a resolved main SHA', a
   assert.equal(data.github.records.status, 'unavailable');
   assert.equal(data.github.issues.status, 'available');
   assert.equal((await post()).status, 503);
+});
+
+
+test('Worker instances share GitHub results and keep last good data through a rate limit', async t => {
+  const { call, post, requests, hitLimit } = fixture(t);
+  const read = async () => {
+    const result = await call('/api/overview', { headers: ownerHeader });
+    assert.equal(result.status, 200);
+    return result.json();
+  };
+  const initial = await read();
+  const initialCount = requests.length;
+  assert.equal(initial.github.pulls.status, 'available');
+  assert.deepEqual((await read()).github, initial.github);
+  assert.equal(requests.length, initialCount);
+
+  hitLimit();
+  const limited = await read();
+  assert.equal(limited.github.pulls.status, 'stale');
+  assert.equal(limited.github.pulls.reason, 'GitHub rate limit reached');
+  assert.deepEqual(limited.github.pulls.items, initial.github.pulls.items);
+  assert.equal(limited.github.pulls.observed_at, initial.github.pulls.observed_at);
+  assert.ok(limited.github.retry_at >= Date.now() + 115_000);
+  const limitedCount = requests.length;
+  assert.deepEqual((await read()).github, limited.github);
+  assert.equal((await post()).status, 503);
+  assert.equal(requests.length, limitedCount);
 });
