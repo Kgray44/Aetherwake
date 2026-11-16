@@ -38,7 +38,8 @@ function fixture(t, { missingMain = false } = {}) {
   };
 
   const requests = [];
-  const fetcher = async path => {
+  const fetcher = async (path, options) => {
+    assert.equal(options.redirect, 'manual');
     const { pathname, searchParams } = new URL(path);
     requests.push(path);
     if (pathname.endsWith('/git/ref/heads/main')) {

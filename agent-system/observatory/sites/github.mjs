@@ -34,7 +34,8 @@ function githubReader(fetcher, signal) {
   return async function get(path, maxBytes = 512 * 1024) {
     const response = await fetcher(API + path, {
       headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Aetherwake-Engineering-Observatory' },
-      signal, redirect: 'error',
+      // Workers supports manual redirects. Reject 3xx below without following them.
+      signal, redirect: 'manual',
     });
     if (!response.ok) {
       await response.body?.cancel();
