@@ -20,3 +20,19 @@ test('private projection has idempotent retries, conflict/replay rejection and o
  assert.equal(await storeProjection(db,'a','verification:test',base),true);
  assert.equal(sql.prepare('SELECT COUNT(*) n FROM private_projection').get().n,3);sql.close();
 });
+test('future timestamp cannot pin projection and clock skew is bounded',()=>{
+ const now=Date.parse('2026-11-16T06:00:00.000Z');
+ assert.throws(()=>validateProjection({...base,generated_at:new Date(now+300001).toISOString()},valid,valid,now),/trusted clock/);
+ assert.doesNotThrow(()=>validateProjection({...base,generated_at:new Date(now+300000).toISOString()},valid,valid,now));
+});
+test('verification namespace quota is atomic, owner scoped and allows retry/live updates',async()=>{
+ const sql=new DatabaseSync(':memory:');sql.exec(readFileSync(new URL('./drizzle/0002_private_projection.sql',import.meta.url),'utf8'));
+ const db={prepare:q=>({bind:(...args)=>({run:async()=>({meta:sql.prepare(q).run(...args)})})})};
+ for(let i=0;i<8;i++)assert.equal(await storeProjection(db,'owner','verification:'+i,base),true);
+ assert.equal(await storeProjection(db,'owner','verification:excess',base),false);
+ assert.equal(await storeProjection(db,'owner','verification:0',base),true);
+ assert.equal(await storeProjection(db,'owner','verification:0',{...base,generated_at:'2026-11-16T06:01:00.000Z'}),true);
+ assert.equal(await storeProjection(db,'owner','live',base),true);
+ assert.equal(await storeProjection(db,'other','verification:excess',base),true);
+ assert.equal(sql.prepare('SELECT COUNT(*) n FROM private_projection WHERE owner_id=?').get('owner').n,9);sql.close();
+});

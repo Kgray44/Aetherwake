@@ -1,3 +1,4 @@
+import { mcp } from './mcp.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
 import { proposedTask } from '../intake.mjs';
 import { isRevision, readBounded } from './github.mjs';
@@ -45,7 +46,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       try { projection = validateProjection(JSON.parse(await readBounded(request.body, MAX_SYNC_BYTES)), validate, validateEvent); }
       catch (cause) { return error(cause instanceof RangeError ? 'Payload too large' : 'Invalid private projection', cause instanceof RangeError ? 413 : 400); }
       const saved = await storeProjection(env.DB, owner, namespace, projection);
-      return saved ? json({ stored: true, authority: 'local-task-records', approval: 'not-granted' }) : error('Older or conflicting projection', 409);
+      return saved ? json({ stored: true, authority: 'local-task-records', approval: 'not-granted' }) : error('Older/conflicting projection or verification namespace limit reached', 409);
     }
     if (overview) {
       const [snapshot, rows, projectionRow] = await Promise.all([
@@ -113,6 +114,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
   return {
     async fetch(request, env) {
       const url = new URL(request.url);
+      if(url.pathname === '/mcp') return mcp(request, env, {validate, validateEvent});
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
         try { return await api(request, env, url); }
         catch { return error('Observatory data temporarily unavailable', 503); }

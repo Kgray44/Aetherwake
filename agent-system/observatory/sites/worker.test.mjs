@@ -185,3 +185,21 @@ test('private export sync is authenticated, origin-bound, persistent and isolate
  envelope.events[0].prompt='must not leak';assert.equal((await send(headers)).status,400);delete envelope.events[0].prompt;
  envelope.records[0].owner_acceptance='accepted';assert.equal((await send(headers)).status,400);
 });
+test('MCP uses authenticated caller identity, narrow tools, private projection receipts and isolation',async t=>{
+ const {call}=fixture(t);
+ const rpc=(method,params,headers={...ownerHeader,'content-type':'application/json'})=>call('/mcp',{method:'POST',headers,body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
+ assert.equal((await rpc('tools/list',{}, {'content-type':'application/json'})).status,401);
+ assert.equal((await rpc('tools/list',{}, {...ownerHeader,'content-type':'application/json',origin:'https://attacker.example'})).status,403);
+ const listed=await(await rpc('tools/list')).json();assert.deepEqual(listed.result.tools.map(t=>t.name),['project_execution_snapshot','read_execution_projection']);
+ const envelope={export_version:1,authority:'local-task-records',repository:'Kgray44/Aetherwake',generated_at:'2026-11-16T06:00:00.000Z',records:[proposedTask(input,rev)],events:[],coverage:{}};
+ const params={name:'project_execution_snapshot',arguments:{projection:envelope,verification:namespace}};
+ const saved=await(await rpc('tools/call',params)).json();assert.equal(saved.result.isError,false);
+ const receipt=JSON.parse(saved.result.content[0].text);assert.match(receipt.digest,/^sha256:[a-f0-9]{64}$/);
+ const readParams={name:'read_execution_projection',arguments:{verification:namespace}};
+ const loaded=JSON.parse((await(await rpc('tools/call',readParams)).json()).result.content[0].text);assert.deepEqual(loaded.receipt,receipt);
+ const foreign=JSON.parse((await(await rpc('tools/call',readParams,{'oai-authenticated-user-id':'foreign','content-type':'application/json'})).json()).result.content[0].text);assert.equal(foreign.projection,null);
+ const live=JSON.parse((await(await rpc('tools/call',{name:'read_execution_projection',arguments:{}})).json()).result.content[0].text);assert.equal(live.projection,null);
+ assert.equal((await(await rpc('tools/call',{name:'execute',arguments:{}})).json()).error.code,-32601);
+ params.arguments.owner_id='foreign';assert.equal((await(await rpc('tools/call',params)).json()).error.code,-32602);delete params.arguments.owner_id;
+ envelope.records[0].owner_acceptance='accepted';assert.equal((await(await rpc('tools/call',params)).json()).result.isError,true);
+});
