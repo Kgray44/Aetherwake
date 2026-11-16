@@ -20,4 +20,4 @@ jobs:
         with:
           node-version: '22'
       - name: Foundation contract and evidence regressions
-        run: node --test tests/agent-contracts.test.mjs tests/agent/verify.test.mjs tests/agent/evidence-policy.test.mjs tests/agent/github-ci-evidence.test.mjs
+        run: node --test tests/agent-contracts.test.mjs tests/agent/verify.test.mjs tests/agent/evidence-policy.test.mjs tests/agent/github-ci-evidence.test.mjs tests/agent/validate-record.test.mjs

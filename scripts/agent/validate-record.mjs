@@ -11,7 +11,11 @@ function validate(value,s,path='$',depth=0) {
   if(s.$ref){const match=/^#\/\$defs\/([^/]+)$/.exec(s.$ref);if(!match||!schema.$defs[match[1]])return [...errors,path+': invalid schema ref'];return [...errors,...validate(value,schema.$defs[match[1]],path,depth+1)];}
   if(s.oneOf&&s.oneOf.filter(x=>validate(value,x,path,depth+1).length===0).length!==1) errors.push(path+': oneOf mismatch');
   const types={object:x=>x!==null&&typeof x==='object'&&!Array.isArray(x),array:Array.isArray,string:x=>typeof x==='string',number:x=>typeof x==='number'&&Number.isFinite(x),integer:Number.isInteger,boolean:x=>typeof x==='boolean',null:x=>x===null};
-  if(s.type&&!types[s.type]?.(value)) return [...errors,path+': expected '+s.type];
+  if(s.type) {
+    const alternatives=Array.isArray(s.type)?s.type:[s.type];
+    if(!alternatives.length||alternatives.some(type=>typeof type!=='string'||!Object.hasOwn(types,type))) return [...errors,path+': unsupported schema type'];
+    if(!alternatives.some(type=>types[type](value))) return [...errors,path+': expected '+alternatives.join(' or ')];
+  }
   if(Object.hasOwn(s,'const')&&canonical(value)!==canonical(s.const))errors.push(path+': const mismatch');
   if(s.enum&&!s.enum.some(x=>canonical(x)===canonical(value)))errors.push(path+': enum mismatch');
   if(typeof value==='string') {
