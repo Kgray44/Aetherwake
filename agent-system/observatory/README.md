@@ -7,8 +7,13 @@ A deliberately custom, dark engineering-control interface for **engineering Task
 From a checked-out repository with Node.js 20+:
 
 ```sh
-node agent-system/observatory/server.mjs
+cd agent-system/observatory
+npm install
+npm run build
+npm start
 ```
+
+For React development, run `npm run dev` in a second terminal while the API server is running. Vite proxies `/api` to port 4178. The production server serves only built `dist/` assets; there is no CDN dependency.
 
 Open `http://127.0.0.1:4178`. Optional: `PORT=4179` and `AETHERWAKE_OBSERVATORY_DATA_DIR=/private/local/path`. Server binds **only** to loopback, rejects non-local Host headers, sets a restrictive CSP, and has no external CDN dependencies or telemetry upload. Do **not** expose or proxy this server publicly without separate authentication and authorization work.
 
@@ -32,4 +37,8 @@ This PR owns `agent-system/observatory/` only. Phases B/C/D can integrate via th
 
 ## Verification
 
-Run `node --test agent-system/observatory/test.mjs` with Node.js 20+ after cloning. Tests cover task intake constraints, bounded demo fixtures, read-only overview, content-type rejection, and foreign-origin denial. The server remains a local-only prototype and does not provide authenticated multi-user access.
+From `agent-system/observatory/`, run `npm test` and `npm run build` with Node.js 20+ after installing dependencies. Tests cover task intake constraints, bounded demo fixtures, read-only overview, content-type rejection, and foreign-origin denial. The server remains a local-only prototype and does not provide authenticated multi-user access.
+
+## Motion system
+
+The React interface uses Motion for deliberate page enter/exit, navigation selection, detail inspections, card reveal, chart drawing, status progress, list rearrangement and button feedback. Ambient machinery atmosphere is composed of low-opacity CSS haze and grid motion plus a throttled 30 FPS Canvas particle/spark layer, with capped device pixel ratio, visibility-aware drawing, and `prefers-reduced-motion` support. Avoid unnecessary continuously animated React component state. The production bundle is self-hosted.

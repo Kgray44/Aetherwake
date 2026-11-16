@@ -1,0 +1,33 @@
+name: Engineering Observatory (Phase E)
+on:
+  pull_request:
+    paths:
+      - 'agent-system/observatory/**'
+      - 'agent-system/contracts/v1.schema.json'
+      - '.github/workflows/engineering-observatory.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'agent-system/observatory/**'
+      - 'agent-system/contracts/v1.schema.json'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  observatory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: agent-system/observatory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install UI dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build React UI
+        run: npm run build
+      - name: API and contract tests
+        run: npm test

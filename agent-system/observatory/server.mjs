@@ -4,7 +4,7 @@
 import http from 'node:http';
 import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, dirname, resolve, extname } from 'node:path';
+import { join, dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -14,6 +14,7 @@ const here=dirname(fileURLToPath(import.meta.url));
 const root=resolve(here,'../..');
 const localDir=resolve(process.env.AETHERWAKE_OBSERVATORY_DATA_DIR || join(homedir(),'.aetherwake','engineering-observatory'));
 const port=Number(process.env.PORT || 4178);
+const distDir=join(here,'dist');
 const HOST='127.0.0.1';
 const MAX_BODY=64*1024;
 const allowedTypes=new Set(['task','attempt','evidence','telemetry','context_snapshot','verification_profile']);
@@ -97,14 +98,18 @@ async function handler(req,res){
     }catch(e){return reply(res,400,{error:e.message})}
   }
   if(req.method!=='GET')return reply(res,405,{error:'Method not allowed'});
-  const files={'/':'index.html','/index.html':'index.html','/app.js':'app.js','/style.css':'style.css'};
-  const name=files[url.pathname];
-  if(!name)return reply(res,404,{error:'Not found'});
-  try{
-    const data=await readFile(join(here,name));
-    res.writeHead(200,{'content-type':mime[extname(name)]||'application/octet-stream','x-content-type-options':'nosniff','cache-control':'no-store','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});
+  // Serve only files from the Vite production build. Never allow arbitrary filesystem access.
+  let name;
+  try { name=decodeURIComponent(url.pathname==='/'?'/index.html':url.pathname) }
+  catch { return reply(res,400,{error:'Malformed path'}) }
+  if(name.includes('\0')||name.includes('\\'))return reply(res,404,{error:'Not found'});
+  const target=resolve(distDir,'.'+name);
+  if(target!==join(distDir,'index.html')&&!target.startsWith(distDir+sep))return reply(res,404,{error:'Not found'});
+  try {
+    const data=await readFile(target);
+    res.writeHead(200,{'content-type':mime[extname(target)]||'application/octet-stream','x-content-type-options':'nosniff','cache-control':'no-store','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});
     res.end(data);
-  }catch{return reply(res,404,{error:'Missing asset'})}
+  }catch{return reply(res,404,{error:'Build the React UI first: npm install && npm run build'})}
 }
 try{schema=JSON.parse(await readFile(join(root,'agent-system','contracts','v1.schema.json'),'utf8'))}catch{console.warn('Contract schema unavailable; required field guard disabled')}
 if(!process.env.OBSERVATORY_NO_LISTEN){
