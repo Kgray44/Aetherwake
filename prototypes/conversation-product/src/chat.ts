@@ -912,6 +912,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const label=current?.providers.find(p=>p.id===next.providerId)?.label??next.providerId;
     report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':stopRequestedFor?stopStatus:next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
     if(recoveredStop)report('Reply stopped. Your draft is still here.');
+    if (next.memoryDisclosure) report(status.textContent + (next.memoryDisclosure.state === 'simulated'
+      ? ' · Simulated saved-memory delivery.' : ' · Provider acknowledged the reviewed request with saved memory.'));
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
     if(!active()){
       if(uncertain&&reconcileLate)void reconcileLate();

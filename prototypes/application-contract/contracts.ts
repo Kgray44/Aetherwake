@@ -114,6 +114,8 @@ export type PublicConversationExecution = {
   startedAt: string;
   endedAt: string | null;
   taskVerified: false;
+  /** Provider response-created acknowledgement of the reviewed memory request, not output verification. */
+  memoryDisclosure?: { state: 'acknowledged' | 'simulated'; manifestDigest: string };
   recoveryAvailable?: true;
   inputMessageId?: string;
   errorCode?: string;
