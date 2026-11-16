@@ -33,3 +33,13 @@ Focused tests cover source/task mutation, stale revisions, command observation, 
 `lifecycle.mjs` provides a single-writer observational lifecycle API with persisted transition validation, interrupted/resumed/restarted paths, correlated operation callbacks, and summary timings. It refuses self-asserted owner acceptance. Full Task/Attempt orchestration is not invented; callers own canonical authorization and use these observations at real boundaries.
 
 Execution now requires `--context /private/context.json`; `runObserved` revalidates full Task digest, exact requirement coverage, repository HEAD and source hashes before launching. Legacy context snapshots require regeneration. This is freshness admission only, not a new permission authority.
+
+## Producer integration follow-up
+
+`record-journal.mjs` persists immutable transport envelopes around existing canonical v1 records, separately from trace events. `runObserved` writes its canonical running Attempt **before child launch** and terminal Attempt/Telemetry after observed completion. Reusing a supplied Attempt ID retains its original start; individual tool success does not close the enclosing Attempt.
+
+`reconstructAttempts(directory)` rebuilds latest canonical Attempt snapshots and returns separate per-Attempt coverage. A running or unmatched start remains **partial, execution liveness unknown, reconcile with execution owner before retry**. It never invents a crash, failure, cancellation, owner acceptance or permission to repeat effects. Interrupted records survive observer SIGKILL; proof is an actual subprocess termination regression test. A corrupt/interrupted writer lock remains fail-closed until existing recovery checks succeed.
+
+`observeAttempt({directory,task,context,attemptId,run})` observes an explicitly invoked, source-verified callback. Its supplied `observe(phase, callback)` captures real tool/operation phases within that Attempt. Callback success marks the bounded Attempt succeeded, not the Task accepted. The API is new-attempt only; it deliberately refuses to replay existing lifecycle observations. Canonical Task state is unchanged. There is no autonomous scheduler or hosted task execution.
+
+The record journal has its own existing 10,000-event/32 MiB bound; together with the trace journal the default budget is up to twice either bound. `record-journal-v1.schema.json` versions transport, not a new canonical type. Export remains explicit through the same sanitized envelope, with reconstructed Attempts supplied in `records`; raw journal envelopes never go to public Git or the Site.
