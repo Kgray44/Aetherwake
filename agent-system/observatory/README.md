@@ -29,3 +29,4 @@ Open \`http://127.0.0.1:4178\`. Optional: \`PORT=4179\` and \`AETHERWAKE_OBSERVA
 ## Phase E boundary
 
 This PR owns \`agent-system/observatory/\` only. Phases B/C/D can integrate via the shared records. Future work can add authenticated remote access, a server-side task event store, reconciliation and streaming as separate reviewed changes. This prototype is intended for single-user local development, not a hardened multi-user control plane.
+\n## Verification\n\nRun \`node --test agent-system/observatory/test.mjs\` with Node.js 20+ after cloning. Tests cover task intake constraints, bounded demo fixtures, read-only overview, content-type rejection, and foreign-origin denial. The server remains a local-only prototype and does not provide authenticated multi-user access.\n
