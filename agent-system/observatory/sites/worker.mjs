@@ -1,0 +1,136 @@
+import { proposedTask } from '../intake.mjs';
+import { githubSnapshot, isRevision, readBounded } from './github.mjs';
+
+const MAX_PROPOSALS = 500;
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const JSON_HEADERS = {
+  'content-type': 'application/json; charset=utf-8',
+  'cache-control': 'private, no-store',
+  'x-content-type-options': 'nosniff',
+};
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
+const error = (message, status) => json({ error: message }, status);
+
+export function createWorker({ assets, validate, sourceRevision, fetcher = fetch }) {
+  let upstream;
+  let refreshAt = 0;
+  let cooldown = 0;
+  function getGitHub() {
+    const now = Date.now();
+    if (now >= refreshAt) {
+      refreshAt = now + 180_000;
+      upstream = githubSnapshot(fetcher, validate).then(snapshot => {
+        if (Object.values(snapshot).some(value => value?.reason === 'GitHub rate limit reached')) {
+          cooldown = Date.now() + 3_600_000;
+        }
+        return snapshot;
+      });
+    }
+    if (cooldown > now) refreshAt = Math.max(refreshAt, cooldown);
+    return upstream;
+  }
+
+  async function api(request, env, url) {
+    // Sites dispatch sets this header after authenticating the visitor and applying
+    // the owner-only access policy. Service credentials lack visitor identity.
+    const owner = request.headers.get('oai-authenticated-user-id');
+    if (!owner) return error('ChatGPT sign-in required', 401);
+
+    const verification = request.headers.get('x-observatory-verification');
+    if (verification !== null && !UUID.test(verification)) return error('Invalid verification namespace', 400);
+    const namespace = verification === null ? 'live' : 'verification:' + verification;
+    const overview = url.pathname === '/api/overview';
+    const intake = url.pathname === '/api/tasks';
+    if (!overview && !intake) return error('Not found', 404);
+    if (overview ? request.method !== 'GET' : request.method !== 'POST') {
+      return error('Method not allowed', 405);
+    }
+    if (intake && (request.headers.get('origin') !== url.origin ||
+        ![null, 'same-origin'].includes(request.headers.get('sec-fetch-site')))) {
+      return error('Same-origin request required', 403);
+    }
+    if (intake && request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+      return error('Expected application/json', 415);
+    }
+    if (!env.DB) return error('Proposal storage unavailable', 503);
+
+    if (overview) {
+      const [snapshot, rows] = await Promise.all([
+        getGitHub(),
+        env.DB.prepare('SELECT record FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
+          .bind(owner, namespace, MAX_PROPOSALS).all(),
+      ]);
+      const { items, ...recordCoverage } = snapshot.records;
+      return json({
+        schema_version: 1,
+        revision: snapshot.main.revision ?? null,
+        deployed_revision: sourceRevision,
+        generated_at: new Date().toISOString(),
+        source: 'GitHub main + private Sites records',
+        records: [...items.map(item => item.record), ...rows.results.map(row => JSON.parse(row.record))],
+        github: {
+          ...snapshot,
+          records: {
+            ...recordCoverage,
+            total: items.length,
+            provenance: items.map(({ record, path, sha }) => ({ id: record.id, type: record.record_type, path, blob: sha })),
+          },
+        },
+        proposals: { total: rows.results.length, limit: MAX_PROPOSALS, verification: verification !== null },
+        telemetry_note: 'Unavailable measurements are not zero; PR merge does not imply task acceptance.',
+      });
+    }
+
+    let body;
+    try {
+      body = JSON.parse(await readBounded(request.body, 64 * 1024));
+    } catch (cause) {
+      return cause instanceof RangeError ? error('Payload too large', 413) : error('Invalid JSON', 400);
+    }
+    const { main } = await getGitHub();
+    if (!isRevision(main.revision)) return error('GitHub main revision unavailable. Reload before submitting.', 503);
+
+    let task;
+    try {
+      task = proposedTask(body, main.revision);
+    } catch (cause) {
+      return error(cause.message, 400);
+    }
+    if (!validate(task)) return error('Task did not match the engineering contract', 400);
+
+    const result = await env.DB.prepare(`
+      INSERT INTO proposals (owner_id, namespace, task_id, created_at, record)
+      SELECT ?, ?, ?, ?, ? WHERE
+      (SELECT COUNT(*) FROM proposals WHERE owner_id = ? AND namespace = ?) < ?
+    `).bind(owner, namespace, task.id, task.created_at, JSON.stringify(task), owner, namespace, MAX_PROPOSALS).run();
+    if (result.meta.changes !== 1) return error('Proposal limit reached', 409);
+    return json({
+      task,
+      storage: verification === null ? 'private-sites-d1' : 'isolated-verification-d1',
+      note: 'Task is proposed. No execution or owner approval has been initiated.',
+    }, 201);
+  }
+
+  return {
+    async fetch(request, env) {
+      const url = new URL(request.url);
+      if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
+        try { return await api(request, env, url); }
+        catch { return error('Observatory data temporarily unavailable', 503); }
+      }
+      if (!['GET', 'HEAD'].includes(request.method)) return error('Method not allowed', 405);
+      const asset = Object.hasOwn(assets, url.pathname) && assets[url.pathname];
+      if (!asset) return error('Not found', 404);
+      return new Response(request.method === 'HEAD' ? null : asset.content, {
+        headers: {
+          'content-type': asset.type,
+          'content-security-policy': CSP,
+          'cache-control': 'private, no-store',
+          'x-content-type-options': 'nosniff',
+          'referrer-policy': 'no-referrer',
+        },
+      });
+    },
+  };
+}

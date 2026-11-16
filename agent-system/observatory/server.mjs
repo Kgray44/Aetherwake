@@ -8,6 +8,7 @@ import { join, dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { proposedTask, validateNewTask } from './intake.mjs';
 import { execFileSync } from 'node:child_process';
 
 const here=dirname(fileURLToPath(import.meta.url));
@@ -18,8 +19,6 @@ const distDir=join(here,'dist');
 const HOST='127.0.0.1';
 const MAX_BODY=64*1024;
 const allowedTypes=new Set(['task','attempt','evidence','telemetry','context_snapshot','verification_profile']);
-const validClasses=new Set(['visual','bug','backend','performance','security','research','documentation','feature','maintenance','integration']);
-const validStates=new Set(['proposed','ready','running','verifying','blocked','failed','accepted','cancelled','superseded']);
 const mime={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml'};
 let schema=null;
 
@@ -47,28 +46,8 @@ async function allRecords(){
   for(const r of out)seen.set(r.record_type+':'+r.id,r);
   return [...seen.values()];
 }
-function cleanString(v,max=1000){return typeof v==='string'?v.trim().slice(0,max):''}
-function validateNewTask(b){
-  if(!b||typeof b!=='object'||Array.isArray(b))throw Error('Task body must be an object');
-  const title=cleanString(b.title,160), objective=cleanString(b.objective,6000);
-  const primary=cleanString(b.primary,32),profile=cleanString(b.profile_id,100);
-  if(title.length<4||objective.length<12)throw Error('Title (4+) and objective (12+) are required');
-  if(!validClasses.has(primary))throw Error('Unsupported task classification');
-  if(!profile)throw Error('Verification profile is required');
-  const deps=Array.isArray(b.dependencies)?b.dependencies:[];
-  const criteria=Array.isArray(b.criteria)?b.criteria:[];
-  const capabilities=Array.isArray(b.capabilities)?b.capabilities:[];
-  if(deps.length>100||criteria.length>50||capabilities.length>100)throw Error('Too many dependencies or criteria');
-  const ids=deps.map(x=>cleanString(x,128)).filter(Boolean);
-  const accept=criteria.map((x,i)=>({id:'criterion-'+(i+1),description:cleanString(x,1000)})).filter(x=>x.description);
-  if(!accept.length)throw Error('At least one acceptance criterion is required');
-  return {title,objective,primary,profile,ids,accept,capabilities:capabilities.map(x=>cleanString(x,128)).filter(Boolean)};
-}
 async function createTask(body){
-  const v=validateNewTask(body),rev=revision();
-  if(!rev||!/^[0-9a-f]{40}$/.test(rev))throw Error('A checked-out Git revision is required to create a task');
-  const now=new Date().toISOString(),id='task_'+randomUUID();
-  const task={schema_version:1,record_type:'task',id,created_at:now,repository:'Kgray44/Aetherwake',revision:rev,title:v.title,objective:v.objective,classification:{primary:v.primary,secondary:[]},prerequisites:{task_ids:v.ids,capabilities:v.capabilities},acceptance:{profile_id:v.profile,criteria:v.accept},state:'proposed',owner_acceptance:'not_reviewed',artifacts:[]};
+  const task=proposedTask(body,revision(),randomUUID),id=task.id;
   // Validate required fields from the checked-in contract; do not invent extra business state.
   if(schema){
     const d=schema.$defs?.Task;
