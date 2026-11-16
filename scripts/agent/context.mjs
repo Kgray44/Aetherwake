@@ -7,6 +7,8 @@ import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { dirname, resolve, relative, isAbsolute, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { realpath } from "node:fs/promises";
 
 function options(argv) {
   const out = { owners: [] };
@@ -36,6 +38,9 @@ function sha(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 async function existingTracked(root, path) {
   const p = safePath(root, path);
   try {
+    const actual = await realpath(p.full);
+    const relativeActual = relative(root, actual);
+    if (relativeActual === ".." || relativeActual.startsWith(".." + sep) || isAbsolute(relativeActual)) throw new Error("Symlink escapes repository");
     const info = await stat(p.full);
     if (!info.isFile()) return null;
     git(root, "ls-files", "--error-unmatch", "--", p.rel);
@@ -101,6 +106,6 @@ async function main() {
     await writeFile(opts.out, payload, { flag: "wx", mode: 0o600 });
   } else process.stdout.write(payload);
 }
-if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(e => { process.stderr.write("Context: " + e.message + "\n"); process.exitCode = 1; });
 }
