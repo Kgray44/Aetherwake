@@ -29,21 +29,22 @@ async function fixture(t) {
     state: "ready",
     requirements: [{ kind: "document", uri: "docs/authority.md" }]
   };
-  return { dir, git, revision, task };
+  const snapshot=await createSnapshot({root:dir,task,repository:task.repository,owners:['docs=docs/authority.md']});
+  return { dir, git, revision, task, snapshot };
 }
 test("context pins Git revision and hashed tracked sources, without inventing owners", async t => {
   const f = await fixture(t);
-  const snapshot = await createSnapshot({ root: f.dir, task: f.task, repository: f.task.repository, owners: ["docs=docs/authority.md"] });
+  const snapshot = await createSnapshot({ root: f.dir, task: f.task, context:f.snapshot, repository: f.task.repository, owners: ["docs=docs/authority.md"] });
   assert.equal(snapshot.record_type, "context_snapshot");
   assert.equal(snapshot.revision, f.revision);
   assert.equal(snapshot.freshness, "current");
   assert.match(snapshot.requirements[0].revision, /^[a-f0-9]{64}$/);
   assert.equal(snapshot.components[0].name, "docs");
-  assert.equal(checkFreshness(snapshot, f.task, f.revision), true);
-  assert.equal(checkFreshness(snapshot, f.task, "0".repeat(40)), false);
-  const missing = await createSnapshot({ root: f.dir, task: f.task, repository: f.task.repository, owners: [] });
+  assert.equal(await checkFreshness(snapshot, f.task, f.revision, f.dir), true);
+  assert.equal(await checkFreshness(snapshot, f.task, "0".repeat(40), f.dir), false);
+  const missing = await createSnapshot({ root: f.dir, task: f.task, context:f.snapshot, repository: f.task.repository, owners: [] });
   assert.equal(missing.freshness, "unverified");
-  await assert.rejects(() => createSnapshot({ root: f.dir, task: f.task, repository: f.task.repository, owners: ["bad=../outside"] }), /outside/);
+  await assert.rejects(() => createSnapshot({ root: f.dir, task: f.task, context:f.snapshot, repository: f.task.repository, owners: ["bad=../outside"] }), /outside/);
 });
 test("context refuses obsolete task revisions", async t => {
   const f = await fixture(t);
@@ -58,7 +59,7 @@ test("telemetry writes observed process events and explicitly unavailable provid
   t.after(() => process.chdir(previous));
   const out = join(f.dir, "events.jsonl");
   const r = await runObserved({
-    task: f.task, repository: f.task.repository, phase: "verification", out,
+    task: f.task, context:f.snapshot, repository: f.task.repository, phase: "verification", out,
     command: [process.execPath, "-e", "process.exit(0)"]
   });
   assert.equal(r.exitCode, 0);
@@ -69,4 +70,37 @@ test("telemetry writes observed process events and explicitly unavailable provid
   assert.equal(lines[1].record_type, "telemetry");
   assert.equal(lines[1].measurements.find(x => x.name === "elapsed_wall_ms").availability, "observed");
   assert.equal(lines[1].measurements.find(x => x.name === "provider_quota_consumption").availability, "unavailable");
+});
+
+
+test('context rejects changed source bytes and task semantics at use time', async t => {
+ const f = await fixture(t);
+ const s = await createSnapshot({root:f.dir,task:f.task,context:f.snapshot,repository:f.task.repository,owners:['docs=docs/authority.md']});
+ assert.equal(await checkFreshness(s,{...f.task,title:'Changed scope'},f.revision,f.dir),false);
+ await writeFile(join(f.dir,'docs/authority.md'),'changed');
+ assert.equal(await checkFreshness(s,f.task,f.revision,f.dir),false);
+});
+
+test('multiple commands retain one Attempt and do not finish it', async t=>{
+ const f=await fixture(t);const previous=process.cwd();process.chdir(f.dir);t.after(()=>process.chdir(previous));const out=join(f.dir,'events.jsonl');
+ for(let i=0;i<2;i++){
+  const r=await runObserved({task:f.task,context:f.snapshot,repository:f.task.repository,attemptId:'attempt_shared',out,command:[process.execPath,'-e','process.exit(0)']});
+  assert.equal(r.attempt.state,'running');assert.equal(r.attempt.finished_at,undefined);
+ }
+ const records=(await readFile(out,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(records.length,2);assert.ok(records.every(r=>r.record_type==='telemetry'&&r.attempt_id==='attempt_shared'));
+});
+test('wrapper rejects stale Task before launching child', async t=>{
+ const f=await fixture(t);const previous=process.cwd();process.chdir(f.dir);t.after(()=>process.chdir(previous));
+ await assert.rejects(runObserved({task:{...f.task,revision:'0'.repeat(40)},repository:f.task.repository,command:[process.execPath,'-e','process.exit(0)']}),/Stale Task/);
+});
+
+test('context cannot omit authoritative requirements',async t=>{
+ const f=await fixture(t);
+ assert.equal(await checkFreshness({...f.snapshot,requirements:[]},f.task,f.revision,f.dir),false);
+});
+test('wrapper refuses missing or stale context before execution',async t=>{
+ const f=await fixture(t);const previous=process.cwd();process.chdir(f.dir);t.after(()=>process.chdir(previous));
+ await assert.rejects(runObserved({task:f.task,repository:f.task.repository,command:[process.execPath,'-e','process.exit(0)']}),/context/);
+ await writeFile(join(f.dir,'docs/authority.md'),'changed');
+ await assert.rejects(runObserved({task:f.task,context:f.snapshot,repository:f.task.repository,command:[process.execPath,'-e','process.exit(0)']}),/context/);
 });

@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Engineering trace envelope v1 (separate from canonical record union)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "trace_version",
+    "event_id",
+    "task_id",
+    "trace_id",
+    "span_id",
+    "repository",
+    "revision",
+    "occurred_at",
+    "kind",
+    "phase",
+    "measurements"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "span_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_span_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trace_version": {
+      "const": 1
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{40}$"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "kind": {
+      "enum": [
+        "lifecycle",
+        "span_start",
+        "span_end",
+        "measurement"
+      ]
+    },
+    "phase": {
+      "enum": [
+        "queue",
+        "waiting",
+        "context",
+        "investigation",
+        "implementation",
+        "verification",
+        "integration",
+        "review",
+        "recovery",
+        "other"
+      ]
+    },
+    "measurements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "availability"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "availability": {
+            "enum": [
+              "observed",
+              "estimated",
+              "unavailable"
+            ]
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "coverage": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    }
+  }
+}

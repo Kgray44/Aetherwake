@@ -47,6 +47,10 @@ async function existingTracked(root, path) {
     return { ...p, bytes: await readFile(p.full), dirty: Boolean(git(root, "status", "--porcelain", "--", p.rel)) };
   } catch { return null; }
 }
+export function taskDigest(task) {
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  return sha(JSON.stringify(canonical(task)));
+}
 export async function createSnapshot({ root = process.cwd(), task, repository, owners = [], revisionOverride } = {}) {
   if (!task || task.record_type !== "task" || task.schema_version !== 1 || !task.id) throw new Error("Expected a v1 engineering Task");
   if (!repository || task.repository !== repository) throw new Error("Task repository mismatch");
@@ -90,15 +94,27 @@ export async function createSnapshot({ root = process.cwd(), task, repository, o
   return {
     schema_version: 1, record_type: "context_snapshot", id: "ctx_" + randomUUID(),
     created_at: now, repository, revision, task_id: task.id, generated_at: now,
-    requirements, components,
+    requirements, components, task_digest: taskDigest(task),
     freshness: !current ? "stale" : warnings.length ? "unverified" : "current",
     warnings
   };
 }
-export function checkFreshness(snapshot, task, revision) {
-  if (!snapshot || snapshot.record_type !== "context_snapshot") return false;
-  return snapshot.revision === revision && task.revision === revision && snapshot.task_id === task.id &&
-    snapshot.freshness === "current";
+export async function checkFreshness(snapshot, task, revision, root = process.cwd()) {
+  if (!snapshot || snapshot.record_type !== "context_snapshot" || !task) return false;
+  if (snapshot.revision !== revision || task.revision !== revision || snapshot.task_id !== task.id ||
+      snapshot.repository !== task.repository || snapshot.freshness !== "current" ||
+      snapshot.task_digest !== taskDigest(task) || git(root, "rev-parse", "HEAD") !== revision) return false;
+  if (!Array.isArray(snapshot.requirements) || snapshot.requirements.length !== (task.requirements || []).length) return false;
+  const referenceKey = ref => JSON.stringify([ref.kind,ref.uri]);
+  if (new Set(snapshot.requirements.map(referenceKey)).size !== snapshot.requirements.length ||
+      (task.requirements||[]).some(ref=>!snapshot.requirements.some(actual=>referenceKey(actual)===referenceKey(ref)))) return false;
+  const refs = [...snapshot.requirements, ...snapshot.components.map(c => c.owner_ref)];
+  for (const ref of refs) {
+    if (!["document", "git"].includes(ref.kind) || ref.uri.includes("://")) return false;
+    const file = await existingTracked(root, ref.uri);
+    if (!file || file.dirty || sha(file.bytes) !== ref.revision) return false;
+  }
+  return snapshot.components.length > 0;
 }
 async function main() {
   const opts = options(process.argv.slice(2));
@@ -113,3 +129,4 @@ async function main() {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(e => { process.stderr.write("Context: " + e.message + "\n"); process.exitCode = 1; });
 }
+
