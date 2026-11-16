@@ -1,0 +1,14 @@
+{
+ "$schema":"https://json-schema.org/draft/2020-12/schema",
+ "title":"Private journal transport envelope for canonical v1 records",
+ "description":"Not a seventh canonical engineering record. Explicit Task correlation wraps immutable snapshots of existing records.",
+ "type":"object","additionalProperties":false,
+ "required":["journal_version","event_id","task_id","occurred_at","record"],
+ "properties":{
+  "journal_version":{"const":1},
+  "event_id":{"type":"string","pattern":"^record_[a-f0-9]{64}$"},
+  "task_id":{"type":"string","minLength":1},
+  "occurred_at":{"type":"string","format":"date-time"},
+  "record":{"$ref":"./v1.schema.json"}
+ }
+}

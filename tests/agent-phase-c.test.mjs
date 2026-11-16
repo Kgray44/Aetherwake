@@ -104,3 +104,46 @@ test('wrapper refuses missing or stale context before execution',async t=>{
  await writeFile(join(f.dir,'docs/authority.md'),'changed');
  await assert.rejects(runObserved({task:f.task,context:f.snapshot,repository:f.task.repository,command:[process.execPath,'-e','process.exit(0)']}),/context/);
 });
+
+test('durable Attempt start reconstructs after actual observer process termination',async t=>{
+ const {spawn}=await import('node:child_process');
+ const {reconstructAttempts}=await import('../scripts/agent/record-journal.mjs');
+ const {readdir}=await import('node:fs/promises');
+ const f=await fixture(t);const out=join(f.dir,'interrupted.jsonl');
+ const script=`import {runObserved} from ${JSON.stringify(new URL('../scripts/agent/telemetry.mjs',import.meta.url).href)};process.chdir(${JSON.stringify(f.dir)});await runObserved({task:${JSON.stringify(f.task)},context:${JSON.stringify(f.snapshot)},repository:'example/repo',out:${JSON.stringify(out)},command:[process.execPath,'-e','setTimeout(()=>{},300)']});`;
+ const child=spawn(process.execPath,['--input-type=module','-e',script],{stdio:'ignore'});
+ let found=false;
+ for(let i=0;i<100;i++){try{found=(await readdir(out+'.journal/records')).some(n=>n.endsWith('.json'));}catch{}if(found)break;await new Promise(r=>setTimeout(r,10));}
+ assert.ok(found,'running canonical Attempt persisted before execution');
+ const closed=new Promise(r=>child.once('close',r));child.kill('SIGKILL');await closed;
+ const result=await reconstructAttempts(out+'.journal');
+ assert.equal(result.attempts.length,1);assert.equal(result.attempts[0].state,'running');
+ assert.equal(result.coverage[0].execution_liveness,'unknown');assert.equal(result.coverage[0].coverage,'partial');
+});
+test('observed Attempt captures actual tool callback phases without accepting Task',async t=>{
+ const {observeAttempt,reconstructAttempts}=await import('../scripts/agent/record-journal.mjs');
+ const f=await fixture(t);const previous=process.cwd();process.chdir(f.dir);t.after(()=>process.chdir(previous));const directory=join(f.dir,'observed');
+ const result=await observeAttempt({directory,task:f.task,context:f.snapshot,attemptId:'attempt_actual',run:async({observe})=>{
+  return observe('verification',async()=>execFileSync(process.execPath,['-e','process.stdout.write("verified tool ran")'],{encoding:'utf8'}));
+ }});
+ assert.equal(result.value,'verified tool ran');assert.equal(result.attempt.state,'succeeded');
+ const rebuilt=await reconstructAttempts(directory);assert.equal(rebuilt.attempts[0].state,'succeeded');assert.equal(rebuilt.coverage[0].unfinished_span_count,0);
+ assert.equal(f.task.state,'ready');
+});
+
+test('observed Attempt preserves falsy thrown failures and refuses replay',async t=>{
+ const {observeAttempt,reconstructAttempts}=await import('../scripts/agent/record-journal.mjs');
+ const f=await fixture(t);const previous=process.cwd();process.chdir(f.dir);t.after(()=>process.chdir(previous));const directory=join(f.dir,'failed-attempt');
+ let invoked=0,caught=false;
+ try{await observeAttempt({directory,task:f.task,context:f.snapshot,attemptId:'attempt_failed',run:async()=>{invoked++;throw null;}});}catch(e){caught=true;assert.equal(e,null);}
+ assert.equal(caught,true);assert.equal((await reconstructAttempts(directory)).attempts[0].state,'failed');
+ await assert.rejects(observeAttempt({directory,task:f.task,context:f.snapshot,attemptId:'attempt_failed',run:async()=>{invoked++;}}),/already exists/);
+ assert.equal(invoked,1);
+});
+
+test('new observed Attempt refuses crash-before-lifecycle gap without repeating callback',async t=>{
+ const {beginAttempt,observeAttempt}=await import('../scripts/agent/record-journal.mjs');
+ const f=await fixture(t);const previous=process.cwd();process.chdir(f.dir);t.after(()=>process.chdir(previous));const directory=join(f.dir,'crash-gap');
+ const now=new Date().toISOString();await beginAttempt(directory,{schema_version:1,record_type:'attempt',id:'attempt_gap',created_at:now,repository:f.task.repository,revision:f.revision,task_id:f.task.id,attempt_number:1,state:'running',started_at:now});
+ let calls=0;await assert.rejects(observeAttempt({directory,task:f.task,context:f.snapshot,attemptId:'attempt_gap',run:async()=>{calls++;}}),/already exists/);assert.equal(calls,0);
+});

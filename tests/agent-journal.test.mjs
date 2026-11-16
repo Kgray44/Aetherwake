@@ -72,3 +72,14 @@ test('export rejects private optional trace IDs and record enums',()=>{
  for(const key of ['attempt_id','parent_span_id'])assert.throws(()=>sanitizeExport({repository:task.repository,events:[{...e,[key]:'/home/private/SECRET'}]}),/identifier/);
  assert.throws(()=>sanitizeExport({repository:task.repository,records:[{schema_version:1,record_type:'attempt',id:'attempt_1',repository:task.repository,revision:task.revision,failure_category:'/home/private/SECRET'}]}),/enum/);
 });
+
+test('record journal deduplicates reordered fields and refuses terminal resurrection',async t=>{
+ const {persistRecord,beginAttempt,reduceAttempts}=await import('../scripts/agent/record-journal.mjs');
+ const root=await mkdtemp(join(tmpdir(),'record-journal-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const now=new Date().toISOString();const running={schema_version:1,record_type:'attempt',id:'attempt_tie',created_at:now,repository:task.repository,revision:task.revision,task_id:task.id,attempt_number:1,state:'running',started_at:now};
+ const done={...running,state:'succeeded',finished_at:now};
+ await persistRecord(root,running);assert.equal(await persistRecord(root,Object.fromEntries(Object.entries(running).reverse())),false);
+ await persistRecord(root,done);await assert.rejects(beginAttempt(root,running),/terminal/);
+ for(const records of [[running,done],[done,running]])assert.equal(reduceAttempts(records)[0].state,'succeeded');
+ assert.throws(()=>reduceAttempts([done,{...done,state:'failed'}]),/Conflicting terminal/);
+});

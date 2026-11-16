@@ -9,6 +9,7 @@ import { appendFile, mkdir, readFile, lstat } from "node:fs/promises";
 import { join, resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import {beginAttempt,persistRecord} from './record-journal.mjs';
 import { checkFreshness } from './context.mjs';
 import { observeResources } from './resources.mjs';
 import { appendEvent, traceEvent } from './journal.mjs';
@@ -53,6 +54,7 @@ export async function runObserved({ task, context, repository, phase = "implemen
   await mkdir(dirname(resolve(path)), {recursive:true,mode:0o700});
   await assertPrivateFile(path);
   const journalPath = path + ".journal";
+  const runningAttempt=await beginAttempt(journalPath,{schema_version:1,record_type:'attempt',id,created_at:startedAt,repository,revision,task_id:task.id,attempt_number:attemptNumber,state:'running',started_at:startedAt,branch,...provider?{provider}:{},...model?{model}:{},failure_category:'none'});
   const spanId = "span_" + randomUUID();
   await appendEvent(journalPath, traceEvent({task,attemptId:id,spanId,kind:"span_start",phase,state:"started"}));
   const cpuStart = process.cpuUsage();
@@ -74,8 +76,8 @@ export async function runObserved({ task, context, repository, phase = "implemen
   const success = exitCode === 0 && !signal && !launchFailure;
   const base = { schema_version: 1, created_at: startedAt, repository, revision, task_id: task.id };
   const attempt = {
-    ...base, record_type: "attempt", id, attempt_number: attemptNumber,
-    state: attemptId ? "running" : success ? "succeeded" : "failed", started_at: startedAt, ...(!attemptId ? {finished_at: finishedAt} : {}), branch,
+    ...runningAttempt,
+    state: attemptId ? "running" : success ? "succeeded" : "failed", started_at: runningAttempt.started_at, ...(!attemptId ? {finished_at: finishedAt} : {}), branch,
     ...provider ? { provider } : {}, ...model ? { model } : {},
     failure_category: success ? "none" : launchFailure ? "environment" : "unknown",
     ...launchFailure ? { failure_diagnosis: "Command could not be launched; inspect local stderr" } : {}
@@ -103,6 +105,8 @@ export async function runObserved({ task, context, repository, phase = "implemen
     ]
   };
   await appendEvent(journalPath, traceEvent({task,attemptId:id,spanId,kind:"span_end",phase,state:success?"completed":"failed",measurements:telemetry.measurements}));
+  if(!attemptId)await persistRecord(journalPath,attempt);
+  await persistRecord(journalPath,telemetry);
   await assertPrivateFile(path);
   await appendFile(path, (attemptId ? "" : JSON.stringify(attempt) + "\n") + JSON.stringify(telemetry) + "\n", { encoding: "utf8", mode: 0o600 });
   return { journalPath, exitCode, signal, attempt, telemetry, eventPath: path };
