@@ -63,7 +63,7 @@ test('acceptance runner executes the serial phase without a peer and retains all
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const backend = join(root, 'prototypes', 'integrated-backend');
   mkdirSync(join(backend, 'tests'), { recursive: true });
-  const serial = ['tests/mission-api-planning.test.mts', 'tests/mission-conversation.test.mts', 'tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts'];
+  const serial = ['tests/mission-api-planning.test.mts', 'tests/mission-conversation.test.mts', 'tests/mission-file-edits.test.mts', 'tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts'];
   for (const [index, file] of serial.entries()) writeFileSync(join(backend, file), `
     import test from 'node:test';
     import assert from 'node:assert/strict';
@@ -152,3 +152,19 @@ test('Windows reports bind every lane and native receipt to the current run, att
   }
 });
 
+
+
+test('real Git fixture suite is isolated without dropping or duplicating coverage', t => {
+  const root = mkdtempSync(join(tmpdir(), 'aerynth-shard-git-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'tests'));
+  const target = 'tests/mission-file-edits.test.mts';
+  const files = ['tests/a.test.mts', 'tests/b.test.mts', 'tests/c.test.mts', 'tests/d.test.mts', target];
+  for (const file of files) writeFileSync(join(root, file), '');
+  for (const duration of [1, 500_000]) {
+    const plan = planBackendShards(root, { [target]: duration });
+    assert.deepEqual(plan.flat(2).sort(), [...files].sort());
+    assert.deepEqual(plan[1][2], [target]);
+    assert.ok(!plan.flatMap(lanes => lanes.slice(0, 2).flat()).includes(target));
+  }
+});

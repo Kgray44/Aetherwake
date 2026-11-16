@@ -17,6 +17,8 @@ const windowsWeights = JSON.parse(readFileSync(new URL('./aerynth-windows-backen
 const planningFile = 'tests/mission-api-planning.test.mts';
 const serialBackendFiles = new Set([
   planningFile,
+  // Real Git fixtures retain a five-second per-command setup deadline.
+  'tests/mission-file-edits.test.mts',
   // Retain real CPU/RAM measurements without a competing SQLite-heavy lane.
   'tests/mission-conversation.test.mts',
   'tests/mission-stream.test.mts',
@@ -88,4 +90,5 @@ export function verifyWindowsReports(reports, plan, identity) {
   }
   if (!plan.flat(2).includes(workerLossCase.file)) throw new Error('Windows worker-loss file is missing');
 }
+
 
