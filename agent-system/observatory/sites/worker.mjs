@@ -1,3 +1,5 @@
+import { mcp } from './mcp.mjs';
+import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
 import { proposedTask } from '../intake.mjs';
 import { isRevision, readBounded } from './github.mjs';
 import { cachedGitHub } from './github-cache.mjs';
@@ -13,7 +15,7 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; style-src-
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
 const error = (message, status) => json({ error: message }, status);
 
-export function createWorker({ assets, validate, sourceRevision, fetcher = fetch }) {
+export function createWorker({ assets, validate, sourceRevision, validateEvent, fetcher = fetch }) {
   async function api(request, env, url) {
     // Sites dispatch sets this header after authenticating the visitor and applying
     // the owner-only access policy. Service credentials lack visitor identity.
@@ -25,25 +27,36 @@ export function createWorker({ assets, validate, sourceRevision, fetcher = fetch
     const namespace = verification === null ? 'live' : 'verification:' + verification;
     const overview = url.pathname === '/api/overview';
     const intake = url.pathname === '/api/tasks';
-    if (!overview && !intake) return error('Not found', 404);
+    const sync = url.pathname === '/api/sync';
+    if (!overview && !intake && !sync) return error('Not found', 404);
     if (overview ? request.method !== 'GET' : request.method !== 'POST') {
       return error('Method not allowed', 405);
     }
-    if (intake && (request.headers.get('origin') !== url.origin ||
+    if ((intake || sync) && (request.headers.get('origin') !== url.origin ||
         ![null, 'same-origin'].includes(request.headers.get('sec-fetch-site')))) {
       return error('Same-origin request required', 403);
     }
-    if (intake && request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    if ((intake || sync) && request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
       return error('Expected application/json', 415);
     }
     if (!env.DB) return error('Proposal storage unavailable', 503);
 
+    if (sync) {
+      let projection;
+      try { projection = validateProjection(JSON.parse(await readBounded(request.body, MAX_SYNC_BYTES)), validate, validateEvent); }
+      catch (cause) { return error(cause instanceof RangeError ? 'Payload too large' : 'Invalid private projection', cause instanceof RangeError ? 413 : 400); }
+      const saved = await storeProjection(env.DB, owner, namespace, projection);
+      return saved ? json({ stored: true, authority: 'local-task-records', approval: 'not-granted' }) : error('Older/conflicting projection or verification namespace limit reached', 409);
+    }
     if (overview) {
-      const [snapshot, rows] = await Promise.all([
+      const [snapshot, rows, projectionRow] = await Promise.all([
         cachedGitHub(env.DB, fetcher, validate, env.GITHUB_READ_TOKEN),
         env.DB.prepare('SELECT record FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
           .bind(owner, namespace, MAX_PROPOSALS).all(),
+        env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner, namespace).first(),
       ]);
+      const projection = projectionRow ? JSON.parse(projectionRow.payload) : null;
+      const projectedIds = new Set((projection?.records ?? []).map(r => r.record_type + ':' + r.id));
       const { items, ...recordCoverage } = snapshot.records;
       return json({
         schema_version: 1,
@@ -51,7 +64,8 @@ export function createWorker({ assets, validate, sourceRevision, fetcher = fetch
         deployed_revision: sourceRevision,
         generated_at: new Date().toISOString(),
         source: 'GitHub main + private Sites records',
-        records: [...items.map(item => item.record), ...rows.results.map(row => JSON.parse(row.record))],
+        records: [...items.map(item => item.record), ...rows.results.map(row => JSON.parse(row.record))].filter(r => !projectedIds.has(r.record_type + ':' + r.id)).concat(projection?.records ?? []),
+        execution: projection ? { authority: projection.authority, generated_at: projection.generated_at, events: projection.events, coverage: projection.coverage, acceptance: 'imported records are not approval receipts' } : null,
         github: {
           ...snapshot,
           records: {
@@ -100,6 +114,7 @@ export function createWorker({ assets, validate, sourceRevision, fetcher = fetch
   return {
     async fetch(request, env) {
       const url = new URL(request.url);
+      if(url.pathname === '/mcp') return mcp(request, env, {validate, validateEvent});
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
         try { return await api(request, env, url); }
         catch { return error('Observatory data temporarily unavailable', 503); }
@@ -119,3 +134,4 @@ export function createWorker({ assets, validate, sourceRevision, fetcher = fetch
     },
   };
 }
+
