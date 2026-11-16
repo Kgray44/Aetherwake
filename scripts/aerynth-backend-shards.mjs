@@ -21,6 +21,8 @@ const serialBackendFiles = new Set([
   'tests/mission-conversation.test.mts',
   'tests/mission-stream.test.mts',
   'tests/native-worker-services.test.mts',
+  // This real stdio/worker test retains its eight-second cold-start watchdog.
+  'tests/product-desktop-host.test.mts',
 ]);
 
 export function planBackendShards(backendRoot, weights = windowsWeights) {
@@ -88,4 +90,5 @@ export function verifyWindowsReports(reports, plan, identity) {
   }
   if (!plan.flat(2).includes(workerLossCase.file)) throw new Error('Windows worker-loss file is missing');
 }
+
 
