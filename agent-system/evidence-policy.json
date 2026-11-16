@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "review_checks": ["governance-coverage", "source-owner-review", "affected-scope-review", "visual-review", "security-review", "native-test-admission"],
+  "evidence_kinds": {
+    "rendered-frames": ["visual"],
+    "motion-scenario": ["motion"],
+    "visual-review": ["review"],
+    "security-review": ["review", "security"],
+    "source-owner-review": ["review"],
+    "governance-coverage": ["review"],
+    "affected-scope-review": ["review"]
+  },
+  "native_checks": ["native-evidence-if-authorized"]
+}

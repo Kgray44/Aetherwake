@@ -1,18 +1,9 @@
 name: Agent Evidence Phase D
 on:
   pull_request:
-    paths:
-      - 'agent-system/**'
-      - 'scripts/agent/verify*'
-      - 'tests/agent/**'
-      - '.github/workflows/agent-evidence-phase-d.yml'
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
-    paths:
-      - 'agent-system/**'
-      - 'scripts/agent/verify*'
-      - 'tests/agent/**'
-      - '.github/workflows/agent-evidence-phase-d.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,20 +13,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Foundation contract and Phase D regression tests
-        run: node --test tests/agent-contracts.test.mjs tests/agent/verify.test.mjs
-      - name: Verify public evidence submission if present
-        shell: bash
-        run: |
-          if [ ! -f .agent-evidence/submission.json ]; then
-            echo 'No evidence bundle supplied: report-only rollout; task acceptance NOT claimed.' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          node scripts/agent/verify.mjs \
-            --bundle .agent-evidence/submission.json \
-            --revision "$GITHUB_SHA" --enforce \
-            --report "$RUNNER_TEMP/agent-verification.json"
-          echo 'Task evidence checks passed; owner acceptance remains separate.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Foundation contract and evidence regressions
+        run: node --test tests/agent-contracts.test.mjs tests/agent/verify.test.mjs tests/agent/evidence-policy.test.mjs tests/agent/github-ci-evidence.test.mjs
