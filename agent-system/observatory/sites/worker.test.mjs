@@ -25,13 +25,15 @@ const namespace = 'c0cf1399-8a73-4f08-9b10-997063853638';
 const published = proposedTask({ ...input, title: 'Published contract record' }, rev);
 const ownerHeader = { 'oai-authenticated-user-id': 'owner-1' };
 
-function fixture(t, { missingMain = false } = {}) {
+function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   sql.exec(migration);
   sql.exec(cacheMigration);
   sql.exec(readFileSync(new URL('./drizzle/0002_private_projection.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0003_proposal_publication.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
+  const writes = [];
   const DB = {
     prepare(statement) {
       const stmt = sql.prepare(statement);
@@ -48,6 +50,12 @@ function fixture(t, { missingMain = false } = {}) {
     assert.equal(options.redirect, 'manual');
     const { pathname, searchParams } = new URL(path);
     requests.push(path);
+    if (token) assert.equal(options.headers.Authorization, 'Bearer ' + token);
+    if (options.method === 'PUT') {
+      assert.match(pathname, /\/contents\/Proposed%20Tasks\/task_[a-f0-9-]+\.json$/);
+      writes.push(JSON.parse(options.body));
+      return new Response(null, { status: writeStatus });
+    }
     if (rateLimited) {
       return new Response(null, { status: 429, headers: { 'retry-after': '120' } });
     }
@@ -74,7 +82,7 @@ function fixture(t, { missingMain = false } = {}) {
   };
   // A new Worker instance for each request exercises shared D1 rather than isolate memory.
   const call = (path, options) => createWorker({ validate, validateEvent, assets: {}, sourceRevision: blob, fetcher })
-    .fetch(new Request(origin + path, options), { DB });
+    .fetch(new Request(origin + path, options), { DB, GITHUB_PROPOSAL_TOKEN: token });
   const post = (headers = {}) => call('/api/tasks', {
     method: 'POST', body: JSON.stringify(input),
     headers: { ...ownerHeader, origin, 'content-type': 'application/json', ...headers },
@@ -83,7 +91,7 @@ function fixture(t, { missingMain = false } = {}) {
     sql.exec('UPDATE github_snapshot SET retry_at = 0');
     rateLimited = true;
   };
-  return { call, post, requests, hitLimit };
+  return { call, post, requests, hitLimit, writes };
 }
 
 test('hosted API checks identity and same-origin JSON before touching upstream', async t => {
@@ -222,4 +230,42 @@ test('fabricated passing evidence without an attempt never becomes accepted in t
  assert.equal(projectedTask.state,'proposed');
  assert.equal(projectedTask.owner_acceptance,'not_reviewed');
  assert.equal(data.execution.acceptance,'imported records are not approval receipts');
+});
+
+
+test('explicit public intake writes only proposed JSON to the intake branch and safely replays', async t => {
+  const { call, post, writes } = fixture(t, { token: 'test-repository-token' });
+  const request = { 'x-observatory-publish': 'github', 'x-observatory-request-id': namespace };
+  const created = await post(request);
+  assert.equal(created.status, 201);
+  const { task, github } = await created.json();
+  assert.equal(github.state, 'published');
+  assert.match(github.url, /observatory-proposed-tasks\/Proposed%20Tasks\//);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].branch, 'observatory-proposed-tasks');
+  assert.deepEqual(JSON.parse(Buffer.from(writes[0].content, 'base64').toString('utf8')), task);
+  assert.equal(task.state, 'proposed');
+  assert.equal(task.owner_acceptance, 'not_reviewed');
+  const replay = await post(request);
+  assert.equal((await replay.json()).task.id, task.id);
+  assert.equal(writes.length, 1);
+  const testOnly = await post({ ...request, 'x-observatory-verification': namespace });
+  assert.equal(testOnly.status, 201);
+  assert.equal((await testOnly.json()).github, null);
+  assert.equal(writes.length, 1);
+  const other = await call('/api/tasks/' + task.id + '/publish', {
+    method: 'POST', headers: { origin, 'content-type': 'application/json', 'oai-authenticated-user-id': 'other' },
+  });
+  assert.equal(other.status, 404);
+});
+
+test('a blocked GitHub write leaves a durable, retryable proposal', async t => {
+  const { call, post, writes } = fixture(t, { token: 'test-repository-token', writeStatus: 403 });
+  const created = await post({ 'x-observatory-publish': 'github' });
+  assert.equal(created.status, 201);
+  const { task, github } = await created.json();
+  assert.equal(github.state, 'pending');
+  const overview = await call('/api/overview', { headers: ownerHeader });
+  assert.equal((await overview.json()).proposals.publication[task.id], 'pending');
+  assert.equal(writes.length, 1);
 });

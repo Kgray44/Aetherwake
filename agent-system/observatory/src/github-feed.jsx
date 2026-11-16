@@ -6,9 +6,9 @@ const short = value => value ? value.slice(0, 10) : 'Unavailable';
 export function GitHubFeed({ data }) {
   const { repository, main, records, issues, pulls, ci, page_size, checked_at, retry_at } = data;
   const groups = [
-    ['Issues', issues, 'Most recently updated issue entries, with pull requests filtered out.'],
-    ['Pull requests', pulls, 'Most recently updated across branches.'],
-    ['CI runs', ci, 'Recent runs on main, with each run’s head commit.'],
+    ['Issues', 'issues', issues, 'Most recently updated issue entries, with pull requests filtered out.'],
+    ['Pull requests', 'pulls', pulls, 'Most recently updated across branches.'],
+    ['CI runs', 'actions', ci, 'Recent runs on main, with each run’s head commit.'],
   ];
   const stale = [main, records, issues, pulls, ci].some(group => group.status === 'stale');
   const staleNote = group => group.status === 'stale'
@@ -37,9 +37,9 @@ export function GitHubFeed({ data }) {
         </li>)}</ul>
       </details>}
     </div>
-    <div className="github-groups">{groups.map(([name, group, coverage]) =>
+    <div className="github-groups">{groups.map(([name, path, group, coverage]) =>
       <section key={name}>
-        <h3>{name}</h3>
+        <h3><a href={'https://github.com/Kgray44/Aetherwake/'+path}>{name}</a></h3>
         <small>{coverage} First {page_size} results only.</small>
         {staleNote(group)}
         {group.status === 'unavailable' ? <p>{group.reason}</p> : !group.items.length

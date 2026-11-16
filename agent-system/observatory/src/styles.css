@@ -7,3 +7,7 @@
 .github-feed ul{padding-left:20px}
 .github-feed li{margin-block:8px}
 .github-groups li small{display:block}
+
+.step strong small{display:block;color:var(--muted);font-weight:400;margin-top:4px}
+.step svg.admission-missing{color:#ff8c95}
+.hint a,.proposal-link{color:#a8e7ef}
