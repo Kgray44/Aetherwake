@@ -236,3 +236,12 @@ Open, not assumed: exact pressure thresholds/dwell periods, platform-specific WM
 - Independent acceptance: PLT-ARIE-01–08 and Charter 15 FI-QA gates.
 
 **Publishing this document does not demonstrate functioning ARIE, native resource protection or verified improvement.**
+
+
+## November 15, 2026: unified visual-engine budget integration
+
+**Status:** proposed integration detail extending the existing ARIE authority. The Optical Glass Engine, Motion Coordinator and Shared Scene Renderer are visual clients of ARIE's hardware/resource policy, not independent adaptive schedulers. The Glass Laboratory can request explicitly scoped benchmark leases but cannot bypass foreground-priority, user preferences, privacy boundaries or resource safeguards.
+
+ARIE should expose versioned visual quality grants with applicable CPU/GPU/frame-time budgets, memory pressure, battery/foreground priority, device capability, and lease expiry/revocation. The renderer reports observed consumption; AEP analyzes results; ARIE remains the sole budget enforcement owner. Prefer reducing optional particles, sampling density, offscreen resolution, speculative compilation and ambient update frequency before degrading direct interaction, readability, focus, authorization UI or the required Vela semantics.
+
+Tier changes require hysteresis, monotonic measurement windows, stable preset identity, and graceful fallback when telemetry is absent or GPU contexts reset. Reduced-motion/transparency preferences are accessibility constraints, not recommendations to optimize away. A lab benchmark must identify whether it ran under controlled or contested conditions, and must not be generalized to all host hardware without independent measurements.

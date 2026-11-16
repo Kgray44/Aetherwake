@@ -320,3 +320,14 @@ Public Apple references:
 - [Get to know the new design system, WWDC25](https://developer.apple.com/videos/play/wwdc2025/356/)
 
 **Next design decision:** visually evaluate the candidate response profiles, user-reference Nebula fidelity and reduced-motion equivalents before freezing production tokens. Engineering architecture and implementation verification belong to the companion [Design Engineering Specification](../specifications/AERYNTH-DESIGN-ENGINEERING-SPECIFICATION.md).
+
+
+## November 15, 2026: Unified Motion Engine clarification
+
+**Status:** owner-confirmed direction, proposed integration contract; not implementation acceptance. The **Unified Motion Engine** is the shared implementation of the existing *single* six-discipline Motion Coordinator. It is not another coordinator, a seventh discipline, or a mandate to replace the existing application.
+
+One motion grammar must cover transitions, spring dynamics, momentum, settling, interruption/reversal, anchored spatial continuity, timelines, visible attention, and sensory/accessibility alternatives. Libraries such as GSAP and Motion are candidate adapters or reference implementations, never competing owners of transforms, timebase, priorities, event truth or cancellation. Import only justified pieces of external code following provenance/license review.
+
+A transition is identified once by the coordinator; it owns its property lanes, monotonic clock, priorities and terminal/cancelled state. No glass, particle, dock or React component starts a rival perpetual animation loop. The **Shared Scene Renderer** consumes motion outputs and schedules visual work; domain state, approvals and event truth continue to live outside the renderer. Reduced motion is a user/accessibility policy and cannot be overridden by ARIE's performance choices.
+
+Validation must include overlapping animations, rapid input changes, drag-cancel-resume, tab/window occlusion, variable-refresh displays, slow devices, renderer restart, reduced-motion equivalence, and focus/hit-target stability. Record transition correctness separately from observed frame smoothness.

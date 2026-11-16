@@ -91,3 +91,12 @@ Schema migrations must preserve original history and support interrupted-upgrade
 | Events ↔ UI/profiler/replay | `AppEvent` provenance and gap markers | duplicate, missing or delayed provider telemetry |
 
 The [provisional contracts](../specifications/PROVISIONAL-INTERFACE-CONTRACTS-v0.1.md) define these seams. The [ADR queue](../decisions/ADR-QUEUE-FOUNDATIONS.md) records the experiments and owner decisions needed before a production stack is selected.
+
+
+## November 15, 2026 visual-system architecture extension
+
+**Status:** owner-confirmed direction, design integration proposed for review; this reference does not certify shipped functionality. The UI shell continues to consume authoritative domain state through typed service boundaries. One **Optical Glass Engine** owns validated material recipes; the existing **six-discipline Motion Coordinator** is implemented through one **Unified Motion Engine**; a **Shared Scene Renderer** coordinates GPU scene resources and compositing when supported by the platform. Vela's genuinely volumetric GPU Presence remains subject to its existing rendering contract. An internal **Glass Laboratory** is a developer research workspace with reproducible experiments and benchmark data; it is not an independent production configuration authority.
+
+The canonical responsibilities, accessibility and authorization boundaries remain unchanged. ARIE owns visual resource policy and AEP owns sourced measurement and experiment evidence. External components are inspiration or reviewed code inputs, never independent owners of application materials, motion, state or budgets. Gesture/hand tracking is explicitly deferred and must not block core input paths.
+
+See [documentation ownership](../DOCUMENTATION-OWNERSHIP-2026-11-15.md), [Glass Laboratory](../specifications/AERYNTH-GLASS-LABORATORY.md), [Materials](../design/AERYNTH-MATERIALS-AND-LIGHTING-SPECIFICATION.md), [Motion](../design/AERYNTH-MOTION-AND-INTERACTION-SPECIFICATION.md) and [Design Engineering](../specifications/AERYNTH-DESIGN-ENGINEERING-SPECIFICATION.md). Separate virtual-machine/agent execution specifications are managed in an independent workstream and are intentionally not modified by this change.
