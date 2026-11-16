@@ -44,7 +44,8 @@ function githubReader(fetcher, signal, token) {
     if (!response.ok) {
       await response.body?.cancel();
       const exhausted = response.headers.get('x-ratelimit-remaining') === '0';
-      const retryAfter = Number(response.headers.get('retry-after')) * 1000;
+      const retryHeader = response.headers.get('retry-after');
+      const retryAfter = retryHeader === null ? 0 : (/^\d+$/.test(retryHeader) ? Number(retryHeader) * 1000 : Math.max(0, Date.parse(retryHeader) - Date.now()));
       const throttled = response.status === 429 || (response.status === 403 && (exhausted || retryAfter > 0));
       if (throttled) {
         const now = Date.now();
@@ -172,3 +173,4 @@ export async function githubSnapshot(fetcher, validate, token) {
     : { status: 'unavailable', reason: main.reason, items: [] };
   return { repository: REPO, retry_at: retryAt() || null, checked_at: new Date().toISOString(), main, records, issues, pulls, ci, page_size: PAGE_SIZE };
 }
+

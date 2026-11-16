@@ -20,6 +20,8 @@ const serialBackendFiles = new Set([
   planningFile,
   // Real CPU sampling must not compete with SQLite-heavy fixture suites.
   'tests/mission-api-specialists.test.mts',
+  // Preserve real CPU/RAM deadlines and worker-loss checks without a backend peer.
+  workerLossCase.file,
   // Real Git fixtures retain a five-second per-command setup deadline.
   'tests/mission-file-edits.test.mts',
   // Retain real CPU/RAM measurements without a competing SQLite-heavy lane.

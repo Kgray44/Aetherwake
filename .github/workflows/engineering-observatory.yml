@@ -3,13 +3,15 @@ on:
   pull_request:
     paths:
       - 'agent-system/observatory/**'
-      - 'agent-system/contracts/v1.schema.json'
+      - 'agent-system/contracts/*.schema.json'
+      - 'scripts/agent/telemetry-export.mjs'
       - '.github/workflows/engineering-observatory.yml'
   push:
     branches: [main]
     paths:
       - 'agent-system/observatory/**'
-      - 'agent-system/contracts/v1.schema.json'
+      - 'agent-system/contracts/*.schema.json'
+      - 'scripts/agent/telemetry-export.mjs'
   workflow_dispatch:
 permissions:
   contents: read

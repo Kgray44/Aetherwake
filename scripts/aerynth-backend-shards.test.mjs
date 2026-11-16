@@ -80,14 +80,14 @@ test('acceptance runner executes the serial phase without a peer and retains all
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const backend = join(root, 'prototypes', 'integrated-backend');
   mkdirSync(join(backend, 'tests'), { recursive: true });
-  const serial = ['tests/mission-api-planning.test.mts', 'tests/mission-api-specialists.test.mts', 'tests/mission-conversation.test.mts', 'tests/mission-file-edits.test.mts', 'tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts', 'tests/product-desktop-host.test.mts'];
+  const serial = ['tests/mission-api-planning.test.mts', 'tests/mission-api-specialists.test.mts', 'tests/mission-conversation.test.mts', 'tests/mission-file-edits.test.mts', workerLossCase.file, 'tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts', 'tests/product-desktop-host.test.mts'];
   for (const [index, file] of serial.entries()) writeFileSync(join(backend, file), `
     import test from 'node:test';
     import assert from 'node:assert/strict';
     import { existsSync, writeFileSync } from 'node:fs';
     import { basename } from 'node:path';
     import { setTimeout } from 'node:timers/promises';
-    test('serial phase finishes before the parallel lanes start', async () => {
+    test(${JSON.stringify(file === workerLossCase.file ? workerLossCase.name : 'serial phase finishes before the parallel lanes start')}, async () => {
       await setTimeout(150);
       assert(!existsSync('parallel-started'));
       ${index ? `assert(existsSync(${JSON.stringify(serial[index - 1].split('/').at(-1) + '.done')}));` : ''}
@@ -204,3 +204,17 @@ test('real-counter specialist and Responses suites have peer-free phases on sepa
   }
 });
 
+
+test('real-counter integration and its mandatory worker-loss receipt stay in a peer-free phase', t => {
+  const root = mkdtempSync(join(tmpdir(), 'aerynth-integration-isolation-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'tests'));
+  const files = ['tests/a.test.mts', 'tests/b.test.mts', 'tests/c.test.mts', 'tests/d.test.mts', workerLossCase.file];
+  for (const file of files) writeFileSync(join(root, file), '');
+  for (const duration of [1, 500_000]) {
+    const plan = planBackendShards(root, { [workerLossCase.file]: duration });
+    assert.deepEqual(plan.flat(2).sort(), [...files].sort());
+    assert.deepEqual(plan[1][2], [workerLossCase.file]);
+    assert.ok(!plan.flatMap(lanes => lanes.slice(0, 2).flat()).includes(workerLossCase.file));
+  }
+});
