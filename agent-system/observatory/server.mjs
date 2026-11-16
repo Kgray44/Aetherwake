@@ -81,6 +81,8 @@ async function handler(req,res){
   const url=new URL(req.url,'http://localhost');
   const host=String(req.headers.host||'').split(':')[0];
   if(!['127.0.0.1','localhost'].includes(host)){return reply(res,403,{error:'Local requests only'})}
+  const origin=req.headers.origin;
+  if(req.method==='POST'&&origin){try{const target=new URL(origin);if(!['127.0.0.1','localhost'].includes(target.hostname)||target.port!==String(port)||target.protocol!=='http:')return reply(res,403,{error:'Origin not allowed'})}catch{return reply(res,403,{error:'Invalid origin'})}}
   if(req.method==='GET'&&url.pathname==='/api/overview'){
     const records=await allRecords();
     return reply(res,200,{schema_version:1,revision:revision(),generated_at:new Date().toISOString(),records,source:'repository + private local records',telemetry_note:'Unavailable measurements are not zero; PR merge does not imply task acceptance.'});
