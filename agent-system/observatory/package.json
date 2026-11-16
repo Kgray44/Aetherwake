@@ -7,7 +7,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "start": "node server.mjs",
-    "test": "node --test test.mjs",
+    "test": "node --test test.mjs acceptance.test.mjs",
     "build:sites": "npm run build && node sites/build.mjs",
     "test:sites": "node --test sites/worker.test.mjs sites/sync.test.mjs"
   },

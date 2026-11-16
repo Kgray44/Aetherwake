@@ -203,3 +203,23 @@ test('MCP uses authenticated caller identity, narrow tools, private projection r
  params.arguments.owner_id='foreign';assert.equal((await(await rpc('tools/call',params)).json()).error.code,-32602);delete params.arguments.owner_id;
  envelope.records[0].owner_acceptance='accepted';assert.equal((await(await rpc('tools/call',params)).json()).result.isError,true);
 });
+
+
+test('fabricated passing evidence without an attempt never becomes accepted in the projected UI',async t=>{
+ const {call}=fixture(t);
+ const task=proposedTask(input,rev);
+ const evidence={schema_version:1,record_type:'evidence',id:'fabricated_pass',created_at:'2026-11-16T06:00:00.000Z',repository:task.repository,revision:rev,task_id:task.id,attempt_id:'nonexistent_attempt',criterion_id:task.acceptance.criteria[0].id,kind:'test',result:'passed',synthetic:false,observed_at:'2026-11-16T06:00:00.000Z',artifact:{kind:'artifact',uri:'claimed:test'}};
+ const projection={export_version:1,authority:'local-task-records',repository:task.repository,generated_at:'2026-11-16T06:00:00.000Z',records:[task,evidence],events:[],coverage:{}};
+ const headers={...ownerHeader,'content-type':'application/json',origin,'x-observatory-verification':namespace};
+ assert.equal((await call('/api/sync',{method:'POST',headers,body:JSON.stringify(projection)})).status,200);
+ const data=await(await call('/api/overview',{headers})).json();
+ const projectedTask=data.records.find(r=>r.id===task.id);
+ const claims=data.records.filter(r=>r.record_type==='evidence'&&r.task_id===task.id);
+ assert.equal(data.records.some(r=>r.record_type==='attempt'&&r.id===evidence.attempt_id),false);
+ const {criterionEvidenceStatus,evidenceClaimStatus}=await import('../src/evidence-status.mjs');
+ assert.equal(criterionEvidenceStatus(claims,projectedTask.revision),'unverified_missing_attempt');
+ assert.equal(evidenceClaimStatus(claims[0]),'unverified_missing_attempt');
+ assert.equal(projectedTask.state,'proposed');
+ assert.equal(projectedTask.owner_acceptance,'not_reviewed');
+ assert.equal(data.execution.acceptance,'imported records are not approval receipts');
+});
