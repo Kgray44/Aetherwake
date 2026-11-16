@@ -67,11 +67,13 @@ async function verified(core: BackendCore, id: string) {
   do {
     mission = await core.command('missions', { name: 'read', input: { id } }) as MissionProjection;
     if (mission.outcome === 'verified') return mission;
-    assert.ok(['queued', 'running'].includes(mission.outcome), JSON.stringify(mission.tasks.map(task => [task.id, task.state, task.detail])));
+    assert.ok(['queued', 'running'].includes(mission.outcome), JSON.stringify(mission.tasks.map(task => [task.id, task.state, task.detail,
+      task.attempts.map(attempt => ({ id: attempt.id, timing: attempt.timing }))])));
     await delay(15);
   } while (performance.now() < deadline);
   assert.fail('Native mission did not verify within its bounded test window: ' +
-    JSON.stringify(mission.tasks.map(task => [task.id, task.state, task.detail, task.attempts.at(-1)?.timing])));
+    JSON.stringify(mission.tasks.map(task => [task.id, task.state, task.detail,
+      task.attempts.map(attempt => ({ id: attempt.id, timing: attempt.timing }))])));
 }
 async function workroom(core: BackendCore, id: string) {
   const preview = await core.command('missions', { name: 'workroom-preview', input: { id } }) as MissionWorkroomPreview;
@@ -331,3 +333,4 @@ test('failed conversation acknowledgement rolls back its message and live event 
     assert.equal((await f.core.command('providerActivity', {})).providerRequests, 0);
   } finally { await f.close(); }
 });
+
