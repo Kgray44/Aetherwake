@@ -23,6 +23,8 @@ const serialBackendFiles = new Set([
   'tests/mission-conversation.test.mts',
   'tests/mission-stream.test.mts',
   'tests/native-worker-services.test.mts',
+  // This real stdio/worker test retains its eight-second cold-start watchdog.
+  'tests/product-desktop-host.test.mts',
 ]);
 
 export function planBackendShards(backendRoot, weights = windowsWeights) {

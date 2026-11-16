@@ -751,6 +751,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "task_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
         }
       }
     },
