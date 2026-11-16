@@ -150,8 +150,11 @@ test('trusted native reserve observations defer mission dispatch and persist the
   }
 });
 
-for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
-  test(`mission ${fault} publication recovers after worker termination without duplicate receipts`, { timeout: 15_000 }, async t => {
+// Keep independent-mission publication and post-restart live retry as distinct
+// scenarios. Each retains the 15-second bound and real native measurements.
+for (const scenario of ['lifecycle', 'acknowledgement', 'report', 'report-live-retry'] as const) {
+  const fault = scenario === 'report-live-retry' ? 'report' : scenario;
+  test(`mission ${scenario} publication recovers after worker termination without duplicate receipts`, { timeout: 15_000 }, async t => {
     let stage = 'worker and SQLite setup';
     let rpc = 'idle';
     let lastMission: MissionProjection | undefined;
@@ -191,7 +194,7 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
     let backend = new Backend(options);
     const live: StreamEvent[] = [];
     backend.subscribe(event => live.push(event));
-    const firstRequestId = `publication-${fault}`;
+    const firstRequestId = `publication-${scenario}`;
     const navigate = (workspaceId: string) => backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
     const stream = async (id: string) => (await backend.call('replay', { limit: 1000 })).events.filter(event => event.mission?.id === id);
     const reports = async (id: string) => {
@@ -277,11 +280,13 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
       } else {
         assert.equal(beforeLoss.lifecycle, 0);
         assert.deepEqual(retained.map(event => event.mission?.seq), first.events.map(event => event.seq));
-        stage = 'independent native mission verification';
-        independent = await verified((await start('publication-independent')).id);
-        assert.equal((await reports(independent.id)).length, 1, 'A failed report must not block another mission');
-        assert.deepEqual(pending(independent.id), { lifecycle: 0, report: 0 });
-        assert.deepEqual(pending(first.id), beforeLoss);
+        if (scenario === 'report') {
+          stage = 'independent native mission verification';
+          independent = await verified((await start('publication-independent')).id);
+          assert.equal((await reports(independent.id)).length, 1, 'A failed report must not block another mission');
+          assert.deepEqual(pending(independent.id), { lifecycle: 0, report: 0 });
+          assert.deepEqual(pending(first.id), beforeLoss);
+        }
       }
 
       stage = 'worker termination and restart';
@@ -311,7 +316,7 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
       });
       assert.deepEqual(await reports(first.id), final);
       if (independent) assert.equal((await reports(independent.id)).length, 1);
-      if (fault === 'report') {
+      if (scenario === 'report-live-retry') {
         const retryRequest = 'publication-retry-live';
         const connection = new DatabaseSync(options.path);
         try {
@@ -327,7 +332,16 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
           const retryDeadline = performance.now() + 5500;
           while (pending(delayed.id).report && performance.now() < retryDeadline) await delay(25);
           assert.deepEqual(pending(delayed.id), { lifecycle: 0, report: 0 });
-          assert.equal((await reports(delayed.id)).length, 1);
+          const delayedReports = await reports(delayed.id);
+          assert.equal(delayedReports.length, 1);
+          assert.equal(delayedReports[0].content, delayed.answer!.join('\n'));
+          assert.deepEqual(await reports(first.id), final, 'Live retry must not duplicate the repaired mission report');
+          assert.deepEqual(await stream(first.id), repaired, 'Live retry must preserve repaired lifecycle identities');
+          await navigate(sibling);
+          assert.deepEqual(await stream(delayed.id), []);
+          assert.deepEqual(await reports(delayed.id), []);
+          await navigate(origin);
+          assert.deepEqual(await reports(delayed.id), delayedReports);
         } finally { connection.close(); }
       }
       stage = 'sibling isolation assertions';
@@ -345,3 +359,4 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
     }
   });
 }
+

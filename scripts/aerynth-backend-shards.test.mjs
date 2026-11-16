@@ -27,9 +27,9 @@ test('schedules planning and ordinary Responses on opposite Windows runners', t 
   mkdirSync(join(root, 'tests'));
   const planning = 'tests/mission-api-planning.test.mts';
   const responses = 'tests/ordinary-responses.test.mts';
-  const files = ['tests/heavy-a.test.mts', 'tests/heavy-b.test.mts', planning, responses, 'tests/new.test.mts'];
+  const files = ['tests/heavy-a.test.mts', 'tests/heavy-b.test.mts', planning, responses, 'tests/new.test.mts', 'tests/other.test.mts'];
   for (const file of files) writeFileSync(join(root, file), '');
-  for (const order of [files, [files[0], files[1], responses, planning, files[4]]]) {
+  for (const order of [files, [files[0], files[1], responses, planning, files[4], files[5]]]) {
     const weights = Object.fromEntries(order.map((file, index) => [file, 50_000 - index * 10_000]));
     const plan = planBackendShards(root, weights);
     assert.deepEqual(plan.flat(2).sort(), [...files].sort());
@@ -80,7 +80,7 @@ test('acceptance runner executes the serial phase without a peer and retains all
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const backend = join(root, 'prototypes', 'integrated-backend');
   mkdirSync(join(backend, 'tests'), { recursive: true });
-  const serial = ['tests/mission-api-planning.test.mts', 'tests/mission-conversation.test.mts', 'tests/mission-file-edits.test.mts', 'tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts', 'tests/product-desktop-host.test.mts'];
+  const serial = ['tests/mission-api-planning.test.mts', 'tests/mission-api-specialists.test.mts', 'tests/mission-conversation.test.mts', 'tests/mission-file-edits.test.mts', 'tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts', 'tests/product-desktop-host.test.mts'];
   for (const [index, file] of serial.entries()) writeFileSync(join(backend, file), `
     import test from 'node:test';
     import assert from 'node:assert/strict';
@@ -185,3 +185,22 @@ test('real Git fixture suite is isolated without dropping or duplicating coverag
     assert.ok(!plan.flatMap(lanes => lanes.slice(0, 2).flat()).includes(target));
   }
 });
+
+test('real-counter specialist and Responses suites have peer-free phases on separate runners', t => {
+  const root = mkdtempSync(join(tmpdir(), 'aerynth-real-counter-isolation-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'tests'));
+  const specialists = 'tests/mission-api-specialists.test.mts';
+  const responses = 'tests/ordinary-responses.test.mts';
+  const files = ['tests/a.test.mts', 'tests/b.test.mts', 'tests/c.test.mts', 'tests/d.test.mts', specialists, responses];
+  for (const file of files) writeFileSync(join(root, file), '');
+  for (const duration of [1, 500_000]) {
+    const plan = planBackendShards(root, { [specialists]: duration, [responses]: duration });
+    assert.deepEqual(plan.flat(2).sort(), [...files].sort());
+    assert.deepEqual(plan[0][2], [responses]);
+    assert.deepEqual(plan[1][2], [specialists]);
+    assert.ok(!plan.flatMap(lanes => lanes.slice(0, 2).flat()).includes(specialists));
+    assert.ok(!plan.flatMap(lanes => lanes.slice(0, 2).flat()).includes(responses));
+  }
+});
+

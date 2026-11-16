@@ -15,8 +15,11 @@ export const backendTestGlob = 'tests/*.test.mts';
 // Summed case times in milliseconds from Windows artifact 14016804955.
 const windowsWeights = JSON.parse(readFileSync(new URL('./aerynth-windows-backend-weights.json', import.meta.url), 'utf8'));
 const planningFile = 'tests/mission-api-planning.test.mts';
+const responsesFile = 'tests/ordinary-responses.test.mts';
 const serialBackendFiles = new Set([
   planningFile,
+  // Real CPU sampling must not compete with SQLite-heavy fixture suites.
+  'tests/mission-api-specialists.test.mts',
   // Real Git fixtures retain a five-second per-command setup deadline.
   'tests/mission-file-edits.test.mts',
   // Retain real CPU/RAM measurements without a competing SQLite-heavy lane.
@@ -33,22 +36,20 @@ export function planBackendShards(backendRoot, weights = windowsWeights) {
     .filter(entry => entry.isFile() || entry.isSymbolicLink())
     .map(entry => `tests/${entry.name}`).sort();
   const serial = files.filter(file => serialBackendFiles.has(file));
-  const parallel = files.filter(file => !serialBackendFiles.has(file));
-  const isolatePlanning = serial.includes(planningFile);
+  const responses = files.filter(file => file === responsesFile);
+  const parallel = files.filter(file => !serialBackendFiles.has(file) && file !== responsesFile);
   const defaultWeight = 10_000;
   const weight = file => Math.max(1, weights[file] ?? defaultWeight);
   const lanes = Array.from({ length: 4 }, () => ({ files: [], duration: 0 }));
   if (parallel.length < lanes.length) throw new Error('Expected at least four parallel backend test files');
   for (const file of parallel.sort((a, b) => weight(b) - weight(a))) {
-    // Keep the two timing-sensitive files on opposite runners.
-    const eligible = isolatePlanning && file === 'tests/ordinary-responses.test.mts'
-      ? lanes.slice(0, 2) : lanes;
-    const lane = eligible.reduce((lightest, next) => next.duration < lightest.duration ? next : lightest);
+    const lane = lanes.reduce((lightest, next) => next.duration < lightest.duration ? next : lightest);
     lane.files.push(file);
     lane.duration += weight(file);
   }
-  // Shard 1 runs only backend tests. The optional third lane runs without a peer.
-  return [[lanes[0].files, lanes[1].files], [lanes[2].files, lanes[3].files, ...(serial.length ? [serial] : [])]];
+  // Each runner executes its optional third lane before either parallel lane.
+  // Responses stays opposite planning, with genuine internal concurrency preserved.
+  return [[lanes[0].files, lanes[1].files, ...(responses.length ? [responses] : [])], [lanes[2].files, lanes[3].files, ...(serial.length ? [serial] : [])]];
 }
 
 export function hasPassingCase(tests, required) {
@@ -92,5 +93,6 @@ export function verifyWindowsReports(reports, plan, identity) {
   }
   if (!plan.flat(2).includes(workerLossCase.file)) throw new Error('Windows worker-loss file is missing');
 }
+
 
 
