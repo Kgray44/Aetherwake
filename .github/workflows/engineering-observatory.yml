@@ -26,8 +26,8 @@ jobs:
         with:
           node-version: '22'
       - name: Install UI dependencies
-        run: npm install --no-audit --no-fund
-      - name: Build React UI
-        run: npm run build
+        run: npm ci --no-audit --no-fund
+      - name: Build React UI and Sites Worker
+        run: npm run build:sites
       - name: API and contract tests
-        run: npm test
+        run: npm test && npm run test:sites

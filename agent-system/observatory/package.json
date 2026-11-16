@@ -7,16 +7,21 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "start": "node server.mjs",
-    "test": "node --test test.mjs"
+    "test": "node --test test.mjs",
+    "build:sites": "npm run build && node sites/build.mjs",
+    "test:sites": "node --test sites/worker.test.mjs"
   },
   "dependencies": {
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
+    "lucide-react": "^0.468.0",
     "motion": "^12.23.0",
-    "lucide-react": "^0.468.0"
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
-    "vite": "^7.1.0",
-    "@vitejs/plugin-react": "^5.0.0"
+    "@vitejs/plugin-react": "^5.0.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "esbuild": "^0.27.7",
+    "vite": "^7.1.0"
   }
 }
