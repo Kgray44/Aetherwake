@@ -52,3 +52,12 @@ The Worker build uses the same Vite UI and shared intake code. It produces `dist
 ## Motion system
 
 The React interface uses Motion for deliberate page enter/exit, navigation selection, detail inspections, card reveal, chart drawing, status progress, list rearrangement and button feedback. Ambient machinery atmosphere is composed of low-opacity CSS haze and grid motion plus a throttled 30 FPS Canvas particle/spark layer, with capped device pixel ratio, visibility-aware drawing, and `prefers-reduced-motion` support. Avoid unnecessary continuously animated React component state. The production bundle is self-hosted.
+
+
+## Private execution projection (AADS integration)
+
+The canonical execution Task remains the explicitly authorized local contract record. The hosted D1 proposals are intake only; importing a matching local record projects its state without authorizing execution. `/api/sync` is a signed-in, same-origin JSON POST, limited to 1 MiB, 750 records and 2,000 trace events. The server validates v1 records and the separately versioned trace contract, re-sanitizes through `scripts/agent/telemetry-export.mjs`, and atomically stores one bounded snapshot per owner/verification namespace. Repeating the same snapshot is idempotent; older or equal-time conflicting snapshots are rejected. Human acceptance claims are rejected. Evidence display is a claim, not an authenticated acceptance receipt.
+
+Use Phase C's explicit sanitized export and the **Import sanitized export** control in the existing Site. Do not upload raw journals. Source text, prompts, command arguments, outputs and artifact paths stay local. The UI shows the last imported time, trace events and measurement availability, source, method and coverage. A missing metric is not zero. This is an explicit snapshot synchronization path, not continuous unattended synchronization. A supported machine identity/delegation path has not yet been verified; no sign-in bypass token or new credential is introduced to imply otherwise. Local append-only history remains authoritative; replacing the bounded projection does not erase that history.
+
+Validation of a hosted deployment, owner login, non-owner denial, and real upload/reload must be recorded independently from Worker unit tests. The existing Site must be updated only by its current deployment owner. No second Site is necessary.

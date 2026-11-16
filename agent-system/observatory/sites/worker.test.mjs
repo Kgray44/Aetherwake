@@ -8,6 +8,7 @@ import { createWorker } from './worker.mjs';
 import { proposedTask } from '../intake.mjs';
 
 const schema = JSON.parse(readFileSync(new URL('../../contracts/v1.schema.json', import.meta.url)));
+const validateEvent = addFormats(new Ajv2020({ strict: false })).compile(JSON.parse(readFileSync(new URL('../../contracts/trace-v1.schema.json',import.meta.url))));
 const validate = addFormats(new Ajv2020({ strict: false })).compile(schema);
 const migration = readFileSync(new URL('./drizzle/0000_proposals.sql', import.meta.url), 'utf8');
 const rev = 'a'.repeat(40);
@@ -29,6 +30,7 @@ function fixture(t, { missingMain = false } = {}) {
   t.after(() => sql.close());
   sql.exec(migration);
   sql.exec(cacheMigration);
+  sql.exec(readFileSync(new URL('./drizzle/0002_private_projection.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
   const DB = {
     prepare(statement) {
@@ -71,7 +73,7 @@ function fixture(t, { missingMain = false } = {}) {
     assert.fail('Unexpected fetch: ' + pathname);
   };
   // A new Worker instance for each request exercises shared D1 rather than isolate memory.
-  const call = (path, options) => createWorker({ validate, assets: {}, sourceRevision: blob, fetcher })
+  const call = (path, options) => createWorker({ validate, validateEvent, assets: {}, sourceRevision: blob, fetcher })
     .fetch(new Request(origin + path, options), { DB });
   const post = (headers = {}) => call('/api/tasks', {
     method: 'POST', body: JSON.stringify(input),
@@ -162,4 +164,24 @@ test('Worker instances share GitHub results and keep last good data through a ra
   assert.deepEqual((await read()).github, limited.github);
   assert.equal((await post()).status, 503);
   assert.equal(requests.length, limitedCount);
+});
+
+test('private export sync is authenticated, origin-bound, persistent and isolated',async t=>{
+ const {call}=fixture(t);
+ const envelope={export_version:1,authority:'local-task-records',repository:'Kgray44/Aetherwake',generated_at:'2026-11-16T06:00:00.000Z',records:[proposedTask(input,rev)],events:[],coverage:{}};
+ envelope.events.push({trace_version:1,event_id:'event_test',task_id:envelope.records[0].id,trace_id:'trace_test',span_id:'span_test',repository:envelope.repository,revision:rev,occurred_at:envelope.generated_at,kind:'measurement',phase:'verification',measurements:[{name:'elapsed_ms',availability:'observed',value:12,unit:'ms',source:'process',method:'monotonic_clock'}]});
+ const send=headers=>call('/api/sync',{method:'POST',headers,body:JSON.stringify(envelope)});
+ assert.equal((await send({'content-type':'application/json',origin})).status,401);
+ assert.equal((await send({...ownerHeader,'content-type':'application/json',origin:'https://foreign.example'})).status,403);
+ const headers={...ownerHeader,'content-type':'application/json',origin,'x-observatory-verification':namespace};
+ assert.equal((await send(headers)).status,200);
+ assert.equal((await send(headers)).status,200);
+ const observed=await (await call('/api/overview',{headers})).json();
+ assert.equal(observed.execution.authority,'local-task-records');
+ assert.equal(observed.records.find(r=>r.id===envelope.records[0].id).objective,'Private task details withheld');
+ assert.equal((await (await call('/api/overview',{headers:ownerHeader})).json()).execution,null);
+ assert.equal((await (await call('/api/overview',{headers:{...headers,'oai-authenticated-user-id':'other'}})).json()).execution,null);
+ assert.equal(observed.execution.events[0].measurements[0].value,12);
+ envelope.events[0].prompt='must not leak';assert.equal((await send(headers)).status,400);delete envelope.events[0].prompt;
+ envelope.records[0].owner_acceptance='accepted';assert.equal((await send(headers)).status,400);
 });

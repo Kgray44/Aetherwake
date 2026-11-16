@@ -18,6 +18,8 @@ const schema = JSON.parse(await readFile(join(project, '../contracts/v1.schema.j
 const ajv = new Ajv2020({ code: { source: true, esm: true }, strict: false });
 addFormats(ajv);
 const validator = standalone(ajv, ajv.compile(schema));
+const traceSchema = JSON.parse(await readFile(join(project, '../contracts/trace-v1.schema.json'), 'utf8'));
+const eventValidator = standalone(ajv, ajv.compile(traceSchema));
 
 const ui = join(project, 'dist');
 const assets = {
@@ -34,11 +36,13 @@ for (const file of await readdir(join(ui, 'assets'))) {
 const temporary = await mkdtemp(join(project, 'dist/.sites-build-'));
 try {
   await writeFile(join(temporary, 'validator.mjs'), validator);
+  await writeFile(join(temporary, 'event-validator.mjs'), eventValidator);
   await build({
     stdin: {
       contents: `import { createWorker } from './sites/worker.mjs';
         import validate from ${JSON.stringify(join(temporary, 'validator.mjs'))};
-        export default createWorker({ validate, assets: ${JSON.stringify(assets)}, sourceRevision: ${JSON.stringify(sourceRevision)} });`,
+        import validateEvent from ${JSON.stringify(join(temporary, 'event-validator.mjs'))};
+        export default createWorker({ validate, validateEvent, assets: ${JSON.stringify(assets)}, sourceRevision: ${JSON.stringify(sourceRevision)} });`,
       resolveDir: project,
     },
     bundle: true,
@@ -51,3 +55,4 @@ try {
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }
+

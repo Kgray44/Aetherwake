@@ -9,7 +9,7 @@
     "start": "node server.mjs",
     "test": "node --test test.mjs",
     "build:sites": "npm run build && node sites/build.mjs",
-    "test:sites": "node --test sites/worker.test.mjs"
+    "test:sites": "node --test sites/worker.test.mjs sites/sync.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -25,3 +25,4 @@
     "vite": "^7.1.0"
   }
 }
+
