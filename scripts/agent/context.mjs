@@ -44,7 +44,7 @@ async function existingTracked(root, path) {
     const info = await stat(p.full);
     if (!info.isFile()) return null;
     git(root, "ls-files", "--error-unmatch", "--", p.rel);
-    return { ...p, bytes: await readFile(p.full) };
+    return { ...p, bytes: await readFile(p.full), dirty: Boolean(git(root, "status", "--porcelain", "--", p.rel)) };
   } catch { return null; }
 }
 export async function createSnapshot({ root = process.cwd(), task, repository, owners = [], revisionOverride } = {}) {
@@ -59,7 +59,10 @@ export async function createSnapshot({ root = process.cwd(), task, repository, o
     const result = { kind: ref.kind, uri: ref.uri };
     if (["document", "git"].includes(ref.kind) && !ref.uri.includes("://")) {
       const file = await existingTracked(root, ref.uri);
-      if (file) result.revision = sha(file.bytes);
+      if (file) {
+        result.revision = sha(file.bytes);
+        if (file.dirty) warnings.push("Requirement has uncommitted changes: " + file.rel);
+      }
       else {
         if (ref.revision) result.revision = ref.revision;
         warnings.push("Unverified tracked requirement: " + ref.uri);
@@ -77,6 +80,7 @@ export async function createSnapshot({ root = process.cwd(), task, repository, o
       warnings.push("Owner source unverified: " + name);
       continue;
     }
+    if (file.dirty) warnings.push("Owner source has uncommitted changes: " + file.rel);
     components.push({ name, owner_ref: { kind: "git", uri: file.rel, revision: sha(file.bytes) } });
   }
   if (!components.length) warnings.push("No verified component-owner sources supplied; ownership must not be inferred");
