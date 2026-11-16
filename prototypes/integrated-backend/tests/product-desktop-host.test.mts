@@ -10,11 +10,13 @@ import { fileURLToPath } from 'node:url';
 test('actual desktop stdio host and worker route Agent/Checklist reads and writes without connecting a provider',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'aerynth-domain-host-'));
   const child=spawn(process.execPath,[fileURLToPath(new URL('../src/desktop-host.mts',import.meta.url)),join(dir,'canonical.sqlite'),dir,process.cwd()],{stdio:['pipe','pipe','pipe'],windowsHide:true});
+  const hostStarted=performance.now();
+  let replyCount=0,lastReplyId:number|null=null,stderrBytes=0;
   let sequence=0;const pending=new Map<number,{resolve:(v:any)=>void;reject:(e:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
-  const lines=createInterface({input:child.stdout});let diagnostics='';child.stderr.on('data',b=>{diagnostics=(diagnostics+String(b)).slice(-4096);});
+  const lines=createInterface({input:child.stdout});child.stderr.on('data',b=>{stderrBytes+=Buffer.byteLength(b);});
   const ended=new Promise<number|null>(resolve=>child.on('exit',resolve));
-  lines.on('line',line=>{const reply=JSON.parse(line);if(!reply.id)return;const entry=pending.get(reply.id);if(!entry)return;pending.delete(reply.id);clearTimeout(entry.timer);if(reply.error)entry.reject(Error(reply.error));else entry.resolve(reply.result);});
-  const call=(command:string,input:unknown)=>new Promise<any>((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject,timer:setTimeout(()=>{pending.delete(id);reject(Error('synthetic host deadline '+diagnostics));},8000)});child.stdin.write(JSON.stringify({id,command,input})+'\n');});
+  lines.on('line',line=>{const reply=JSON.parse(line);if(!reply.id)return;const entry=pending.get(reply.id);if(!entry)return;pending.delete(reply.id);replyCount++;lastReplyId=reply.id;clearTimeout(entry.timer);if(reply.error)entry.reject(Error(reply.error));else entry.resolve(reply.result);});
+  const call=(command:string,input:unknown)=>new Promise<any>((resolve,reject)=>{const id=++sequence,started=performance.now();pending.set(id,{resolve,reject,timer:setTimeout(()=>{pending.delete(id);reject(Error('synthetic host deadline '+JSON.stringify({command,id,elapsedMs:Math.round(performance.now()-started),hostElapsedMs:Math.round(performance.now()-hostStarted),replyCount,lastReplyId,stderrBytes,exitCode:child.exitCode,signalCode:child.signalCode,phase:'awaiting-stdio-reply',workerReadiness:'unobserved'})));},8000)});child.stdin.write(JSON.stringify({id,command,input})+'\n');});
   try{
     await assert.rejects(call('resourcePolicyNative',{name:'inspect'}),/native_resource_policy_required/);
     await assert.rejects(call('aepExperimentNative',{name:'inspect-policy'}),/native_aep_experiment_required/);
@@ -48,3 +50,4 @@ test('actual desktop stdio host and worker route Agent/Checklist reads and write
     const target=resolve(dir),part=relative(resolve(tmpdir()),target);assert(part.startsWith('aerynth-domain-host-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(target,{recursive:true,force:true});
   }
 });
+

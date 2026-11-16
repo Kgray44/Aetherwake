@@ -1,0 +1,13 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {observeGitHubRun} from '../../scripts/agent/github-ci-evidence.mjs';
+const sourceHead='a'.repeat(40),repository='Kgray44/Aetherwake';
+const run={id:123,repository:{full_name:repository},head_sha:sourceHead,path:'.github/workflows/test.yml',status:'completed',conclusion:'success',run_attempt:1};
+const options={repository,sourceHead,runId:123,expectedWorkflowPath:run.path};
+const response=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
+test('actual metadata is observed without inferring tested tree or acceptance',async()=>{const calls=[];const r=await observeGitHubRun({...options,fetchImpl:async(url,opts)=>{calls.push({url,opts});return response(url.includes('/jobs?')?{total_count:1,jobs:[{id:1,name:'test',status:'completed',conclusion:'success'}]}:run)}});assert.equal(r.coverage.jobs.covered,1);assert.equal(r.task_verified,false);assert.equal(r.coverage.tested_revision.availability,'unavailable');assert.equal(calls.length,2);assert.ok(calls[1].url.includes('/attempts/1/jobs?'));assert.ok(calls.every(c=>c.opts.method==='GET'&&c.opts.redirect==='error'))});
+test('cross-repository or source-head runs cannot be reused',async()=>{for(const changes of [{head_sha:'b'.repeat(40)},{repository:{full_name:'other/repo'}}])await assert.rejects(()=>observeGitHubRun({...options,fetchImpl:async()=>response({...run,...changes})}),/mismatch/)});
+test('wrong workflow cannot be substituted',async()=>{await assert.rejects(()=>observeGitHubRun({...options,fetchImpl:async()=>response({...run,path:'.github/workflows/other.yml'})}),/identity mismatch/)});
+test('rate limits are surfaced without retry hammering',async()=>{let calls=0;await assert.rejects(()=>observeGitHubRun({...options,fetchImpl:async()=>{calls++;return response({},429)}}),/429/);assert.equal(calls,1)});
+test('empty incomplete job pages fail closed',async()=>{await assert.rejects(()=>observeGitHubRun({...options,fetchImpl:async url=>response(url.includes('/jobs?')?{total_count:1,jobs:[]}:run)}),/incomplete/)});
+test('arbitrary API hosts and path traversal cannot be requested',async()=>{await assert.rejects(()=>observeGitHubRun({...options,repository:'../secrets'}),/Invalid repository/)});

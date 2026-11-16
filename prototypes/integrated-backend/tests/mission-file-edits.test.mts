@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { initializeTrackedFixture } from './fixture-tracked-git.mts';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -26,9 +26,7 @@ function fixture() {
   const path = join(dir, 'source.mjs'), testPath = join(dir, 'source.test.mjs');
   writeFileSync(path, before);
   writeFileSync(testPath, "import test from 'node:test'; import assert from 'node:assert/strict'; import {add} from './source.mjs'; test('addition',()=>assert.equal(add(2,3),5));\n");
-  const git = (args: string[]) => execFileSync(process.platform==='win32'?'git.exe':'git', ['-C', dir, ...args], { windowsHide: true, timeout: 5000, maxBuffer: 32768, stdio: 'pipe' });
-  git(['init', '-q']); git(['add', '--', 'source.mjs', 'source.test.mjs']);
-  git(['-c', 'user.name=Synthetic Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Synthetic selected-file fixture']);
+  initializeTrackedFixture(dir);
   const db = new DatabaseSync(':memory:');
   let clock = Date.now(), readActive = true, ownerActive = true, busy = false, calls = 0, rebind: 'normal' | 'throw' | 'fake' = 'normal';
   let runnerReady = true, failWriteJournal = false;
@@ -387,3 +385,4 @@ test('mission cancellation settles locally while the real runner lease stays hel
   } finally { releaseRunner(); await f.close(); }
 });
 }
+

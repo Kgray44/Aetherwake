@@ -1,0 +1,10 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {evidencePolicy} from '../../scripts/agent/evidence-policy.mjs';
+test('unrelated changes are not represented as verified',()=>assert.equal(evidencePolicy(['README.md']).status,'not-verified'));
+test('evidence-only additions and deletions require proof',()=>assert.equal(evidencePolicy(['.agent-evidence/submission.json']).required,true));
+test('declared tasks require proof absent a bundle',()=>assert.equal(evidencePolicy(['agent-system/tasks/task.json']).required,true));
+test('maintainer task label requires proof',()=>assert.equal(evidencePolicy(['README.md'],{declared:true}).required,true));
+test('all-applicable covers product and router policy edits',()=>{for(const p of ['AGENTS.md','.agents/skills/visual/SKILL.md','governance/README.md','agent-system/task-classes.json','scripts/agent/task-router.mjs','prototypes/integrated-backend/a.mts','prototypes/visual-experience/cinematic-v3/src/App.tsx','.github/workflows/agent-evidence-phase-d.yml']) assert.equal(evidencePolicy([p],{stage:'all-applicable'}).required,true)});
+test('existing submitted bundle is always enforced',()=>assert.equal(evidencePolicy(['README.md'],{hasBundle:true,stage:'submitted'}).required,true));
+test('invalid stage fails closed',()=>assert.throws(()=>evidencePolicy([],{stage:'off'})));

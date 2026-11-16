@@ -1,0 +1,39 @@
+name: Agent Task Routing (Phase B)
+on:
+  pull_request:
+    paths:
+      - 'AGENTS.md'
+      - '.agents/skills/**'
+      - 'agent-system/task-classes.json'
+      - 'agent-system/contracts/**'
+      - 'scripts/agent/task-router.mjs'
+      - 'tests/agent-task-router.test.mjs'
+      - 'tests/agent-contracts.test.mjs'
+      - '.github/workflows/agent-task-routing.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'AGENTS.md'
+      - '.agents/skills/**'
+      - 'agent-system/task-classes.json'
+      - 'agent-system/contracts/**'
+      - 'scripts/agent/task-router.mjs'
+      - 'tests/agent-task-router.test.mjs'
+      - 'tests/agent-contracts.test.mjs'
+      - '.github/workflows/agent-task-routing.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  task-routing:
+    name: Verify v1 task routing and skills
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Test task contract and deterministic routing
+        run: node --test tests/agent-contracts.test.mjs tests/agent-task-router.test.mjs

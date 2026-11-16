@@ -1,0 +1,102 @@
+name: Agent Evidence Trusted Gate
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      evidence_run_id:
+        description: Same-repository run containing detached signed evidence
+        required: false
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read candidate data only (never execute candidate code)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve detached evidence for this exact head
+        id: receipts
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          REQUESTED_RUN: ${{ inputs.evidence_run_id }}
+          EVIDENCE_RUNS: ${{ vars.AADS_EVIDENCE_RUNS }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {appendFileSync} from 'node:fs';
+          const configured=JSON.parse(process.env.EVIDENCE_RUNS||'{}');
+          const id=process.env.REQUESTED_RUN||configured[process.env.SOURCE_HEAD]||'';
+          if(id!==''&&!/^[1-9][0-9]*$/.test(String(id))) throw Error('Invalid artifact run ID');
+          appendFileSync(process.env.GITHUB_OUTPUT,'run_id='+id+'\n');
+          NODE
+      - name: Download detached signed evidence when configured
+        if: steps.receipts.outputs.run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.receipts.outputs.run_id }}
+          name: aads-evidence
+          path: ${{ runner.temp }}/aads-detached
+      - name: Derive actual changed paths and staged enforcement
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVIDENCE_STAGE: ${{ vars.AADS_EVIDENCE_STAGE || 'tasks' }}
+          DECLARED_TASK: ${{ contains(github.event.pull_request.labels.*.name, 'aads-task') }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {execFileSync} from 'node:child_process';
+          import {writeFileSync,appendFileSync,existsSync} from 'node:fs';
+          import {evidencePolicy} from './scripts/agent/evidence-policy.mjs';
+          const base=process.env.BASE_SHA, head=process.env.SOURCE_HEAD;
+          if(!/^[a-f0-9]{40}$/.test(head)) throw Error('Invalid source head');
+          const paths=base&&/^[a-f0-9]{40}$/.test(base)&&!/^0+$/.test(base)
+            ? execFileSync('git',['-C','candidate','diff','--name-only','-z',base,head],{encoding:'utf8'}).split('\0').filter(Boolean)
+            : execFileSync('git',['-C','candidate','ls-files','-z'],{encoding:'utf8'}).split('\0').filter(Boolean);
+          writeFileSync(process.env.RUNNER_TEMP+'/aads-paths.json',JSON.stringify(paths));
+          const root=existsSync(process.env.RUNNER_TEMP+'/aads-detached/submission.json')?process.env.RUNNER_TEMP+'/aads-detached':'candidate/.agent-evidence';
+          const policy=evidencePolicy(paths,{stage:process.env.EVIDENCE_STAGE,hasBundle:existsSync(root+'/submission.json'),declared:process.env.DECLARED_TASK==='true'});
+          appendFileSync(process.env.GITHUB_ENV,'AADS_EVIDENCE_ROOT='+root+'\n');
+          appendFileSync(process.env.GITHUB_OUTPUT,'required='+policy.required+'\n');
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,JSON.stringify(policy)+'\nNo Task or owner acceptance is inferred from workflow success.\n');
+          if(policy.required&&!existsSync(root+'/submission.json')) throw Error('Required evidence submission missing');
+          NODE
+      - name: Enforce submitted evidence against source and tested revisions
+        if: steps.scope.outputs.required == 'true'
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          TESTED_REVISION: ${{ github.event.pull_request.merge_commit_sha }}
+          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request_target' }}
+          REPOSITORY: ${{ github.repository }}
+          TRUST_STORE: ${{ vars.AADS_EVIDENCE_TRUST }}
+        run: |
+          if [ "$IS_PULL_REQUEST" = "true" ] && [ -z "$TESTED_REVISION" ]; then echo "PR merge/tested revision unavailable"; exit 1; fi
+          if [ "$IS_PULL_REQUEST" != "true" ]; then TESTED_REVISION="$SOURCE_HEAD"; fi
+          node -e 'const fs=require("fs");const keys=JSON.parse(process.env.TRUST_STORE||"{}");if(!Object.keys(keys).length)throw Error("Independent evidence trust configuration missing");fs.writeFileSync(process.env.RUNNER_TEMP+"/aads-trust.json",JSON.stringify(keys));'
+          node scripts/agent/verify.mjs \
+            --bundle "$AADS_EVIDENCE_ROOT/submission.json" \
+            --repository "$REPOSITORY" --revision "$SOURCE_HEAD" --tested-revision "$TESTED_REVISION" \
+            --paths-file "$RUNNER_TEMP/aads-paths.json" \
+            --receipts "$AADS_EVIDENCE_ROOT/receipts.json" \
+            --trust-store "$RUNNER_TEMP/aads-trust.json" \
+            --artifact-root "$AADS_EVIDENCE_ROOT/artifacts" --enforce \
+            --report "$RUNNER_TEMP/agent-verification.json"
