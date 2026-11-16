@@ -15,7 +15,8 @@ function fixture(initial: Partial<ConversationDraftRecord> = {}) {
     active++; maximumActive = Math.max(maximumActive, active); writes.push({ ...input });
     try {
       if (record.version !== input.expectedVersion) throw new Error('stale_draft_version');
-      record = { resourceId: input.resourceId, version: record.version + 1, content: input.content, updatedAt: '2026-11-02T00:00:00Z' };
+      record = { ...record, version: record.version + 1, content: input.content, updatedAt: '2026-11-02T00:00:00Z',
+        ...(input.documents === undefined ? {} : { documents: input.documents }) };
       const result = { ...record }; await responseGate; if (lostResponse) { lostResponse = false; throw new Error('synthetic_response_lost'); } return result;
     } finally { active--; }
   } };
@@ -29,6 +30,27 @@ test('canonical recovery loads on the same ID and reopening reads durable text w
   const f = fixture({ version: 7, content: 'Synthetic durable unsent text' }), session = f.create(); await session.ready;
   assert.equal(session.snapshot().content, f.record.content); assert.equal(session.snapshot().version, 7); assert.equal(session.snapshot().phase, 'clean'); assert.deepEqual(f.writes, []); await session.dispose();
   const reopened = f.create(); await reopened.ready; assert.equal(reopened.snapshot().content, 'Synthetic durable unsent text'); await reopened.dispose();
+});
+
+test('attachment-only conflicts preserve both selections and an accepted checkpoint clears the selected draft', async () => {
+  const f = fixture({ content: 'Same text in both editors' });
+  const first = f.create(), second = f.create();
+  await Promise.all([first.ready, second.ready]);
+  const saved = { id: 'file:first', version: 2, title: 'First document' };
+  const competing = { id: 'file:second', version: 1, title: 'Second document' };
+  first.updateDocuments([saved]);
+  await first.flush();
+  second.updateDocuments([competing]);
+  await assert.rejects(second.flush(), /stale_draft_version/);
+  assert.deepEqual(second.snapshot().documents, [competing]);
+  assert.deepEqual(second.snapshot().remote?.documents, [saved]);
+  await second.resolve('use-stored', f.record.version);
+  const checkpoint = await second.checkpoint();
+  assert.deepEqual(checkpoint.record.documents, [saved]);
+  assert.equal(await second.acknowledgeSent(checkpoint), true);
+  assert.deepEqual(f.record.documents, []);
+  assert.equal(f.record.content, '');
+  await Promise.all([first.dispose(), second.dispose()]);
 });
 
 test('writes serialize and coalesce later edits while an exact submission checkpoint retains its own version', async () => {
@@ -106,4 +128,19 @@ test('manager-wide draining rechecks an earlier composer after awaiting another 
   const a = fixture({ resourceId: 'chat:a' }), b = fixture({ resourceId: 'chat:b' }), first = a.create(), second = b.create(); await Promise.all([first.ready, second.ready]); const gate = deferred(); b.setResponseGate(gate.promise); second.update('Slow second composer write');
   const flush = flushConversationDraftSessions(() => [first, second]); await until(() => b.writes.length === 1); first.update('Input arriving while another composer is saving'); b.setResponseGate(null); gate.resolve(); await flush;
   assert.equal(a.record.content, 'Input arriving while another composer is saving'); assert.equal(first.snapshot().phase, 'clean'); assert.equal(second.snapshot().phase, 'clean'); await Promise.all([first.dispose(), second.dispose()]);
+});
+
+
+test('attachment metadata reload keeps dirty text and refreshes only matching document identities',async()=>{
+ let record:ConversationDraftRecord={resourceId:'chat:metadata',version:1,content:'saved',updatedAt:null,documents:[{id:'doc:a',version:2,title:'Old title'}]};
+ const writes:any[]=[];
+ const port:ConversationDraftPort={async command(name:string,input:any){if(name==='readDraft')return structuredClone(record);writes.push(input);record={...record,version:record.version+1,content:input.content,documents:input.documents};return structuredClone(record);}};
+ const session=new ConversationDraftSession({resourceId:record.resourceId,port,debounceMs:10000});
+ try{
+  await session.ready;session.update('unsaved local text');
+  record={...record,documents:[{id:'doc:a',version:2,title:'Unavailable attachment',unavailable:'changed'}]};
+  await session.reload();assert.equal(session.snapshot().content,'unsaved local text');assert.equal(session.snapshot().documents[0].unavailable,'changed');assert.equal(writes.length,0);
+  session.updateDocuments([{id:'doc:b',version:1,title:'New local selection'}]);
+  await session.reload();assert.equal(session.snapshot().documents[0].id,'doc:b');assert.equal(session.snapshot().content,'unsaved local text');
+ }finally{await session.dispose();}
 });

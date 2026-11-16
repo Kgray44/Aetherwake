@@ -18,7 +18,7 @@ function fixture(providerId='local') {
   let pending: {input:any;resolve:(value:unknown)=>void;reject:(error:Error)=>void}|null=null;
   const collections:Collection[]=[],projects:{id:string;title:string;version:number}[]=[],history={items:[] as SearchHit[],total:0};
   const port={async command(name:string,input:any):Promise<any>{calls.push({name,input});if(denied)throw new Error('source_unavailable');
-    if(name==='readDraft')return {...draft};if(name==='saveDraft'){if(input.expectedVersion!==draft.version)throw new Error('stale_draft_version');draft={...draft,version:draft.version+1,content:input.content};return {...draft};}
+    if(name==='readDraft')return {...draft};if(name==='saveDraft'){if(input.expectedVersion!==draft.version)throw new Error('stale_draft_version');draft={...draft,version:draft.version+1,content:input.content,...(input.documents?{documents:input.documents}:{})};return {...draft};}
     if(name==='detail'){const captured=structuredClone(detail);await detailGate;return captured;}if(name==='send')return new Promise((resolve,reject)=>{pending={input,resolve,reject};}).finally(()=>{pending=null;});
     if(name==='providers')return detail.providers;if(name==='collections')return structuredClone(collections);if(name==='projects')return structuredClone(projects);if(name==='list'){if(searchError)throw new Error(searchError);return {items:history.items.filter(hit=>hit.kind==='conversation').map(hit=>hit.summary??{...detail.conversation,resourceId:hit.resourceId,title:hit.title}).slice(input.offset??0,(input.offset??0)+(input.limit??50)),total:history.total,offset:input.offset??0,limit:input.limit??50,hasMore:(input.offset??0)+(input.limit??50)<history.total};}if(name==='search'){if(searchError)throw new Error(searchError);const items=input.searchMode&&input.searchMode!=='all'?history.items.filter(hit=>hit.kind===input.searchMode.replace(/s$/,'')):history.items;return {...history,items,offset:input.offset??0,limit:50,hasMore:(input.offset??0)+50<history.total};}if(name==='favorite'){detail.conversation.favorite=input.favorite;return input.favorite;}throw new Error('Unexpected command '+name);
   }} as ConversationProductPort;
@@ -923,6 +923,38 @@ test('externally owned draft session survives unmount; explicit conflict resolut
   }finally{await chat?.dispose();await session.dispose();f.restore();}
 });
 
+test('a missing execution after reconnect retires Stop but keeps the draft for outcome review',async()=>{
+  const f=fixture('chatgpt-plan-responses');
+  let chat,observe:((value:ConversationExecutionObservation)=>void)|undefined;
+  const execution={id:'execution:missing',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:'command:missing',state:'running' as const,startedAt:'2026-11-02T00:00:00Z',endedAt:null,taskVerified:false as const};
+  try{
+    chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{
+      observe(_id,listener){observe=listener;return()=>{};},async cancel(){assert.fail('No automatic Stop');}
+    }});
+    await chat.ready;
+    observe!({execution,preview:{executionId:execution.id,cursor:1,text:'Partial reply'}});
+    assert.equal(named(f.view.root,'Stop').hidden,false);
+    observe!({connection:'unavailable'});
+    observe!({connection:'unavailable',resourceAvailable:true,execution:null,preview:null});
+    assert.equal(named(f.view.root,'Stop').hidden,false);
+    observe!({resourceAvailable:true,connection:'available',execution:null,preview:null});
+    assert.equal(named(f.view.root,'Stop').hidden,true);
+    assert.equal(f.view.root.querySelector('.cp-stream').hidden,true);
+    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/outcome.*unconfirmed/i);
+    assert.ok(named(f.view.root,'I reviewed the send outcome'));
+    const stopped={...execution,state:'interrupted' as const,endedAt:'2026-11-02T00:00:01Z'};
+    observe!({execution:{...stopped,id:'execution:other',commandId:'command:other'}});
+    assert.ok(named(f.view.root,'I reviewed the send outcome'));
+    observe!({execution:{...stopped,providerId:'other-provider'}});
+    assert.ok(named(f.view.root,'I reviewed the send outcome'));
+    observe!({execution:stopped});
+    assert.equal(named(f.view.root,'I reviewed the send outcome'),undefined);
+    assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/stopped/i);
+    assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
+    assert.equal(f.calls.some(call=>call.name==='send'),false);
+  }finally{await chat?.dispose();f.restore();}
+});
+
 test('reopening an ongoing execution restores only its scoped complete preview then appends strictly later deltas without a duplicate prefix',async()=>{
   const f=fixture('codex:native');let chat,observe:((value:ConversationExecutionObservation)=>void)|undefined;
   const execution={id:'execution:ongoing',resourceId:f.draft.resourceId,providerId:'codex:native',commandId:'command:ongoing',state:'running' as const,startedAt:'2026-11-02T00:00:00Z',endedAt:null,taskVerified:false as const};
@@ -1288,6 +1320,27 @@ test('Save reply as note sends exact IDs, recovers the same command and preserve
  }finally{await chat?.dispose();f.restore();}
 });
 
+
+for(const scenario of ['cancel','changed','local'] as const)test('restored document draft boundary: '+scenario,async()=>{
+ const f=fixture(scenario==='local'?'local':'chatgpt-plan-responses');let chat;
+ const docs=[{id:'doc:synthetic',version:2,title:'Synthetic attachment',...(scenario==='changed'?{unavailable:'changed'}:{})}];
+ try{
+  const command=f.port.command.bind(f.port);f.port.command=async(name,input)=>{const value:any=await command(name,input);return name==='readDraft'||name==='saveDraft'?{...value,documents:docs}:value;};
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;
+  assert.match(f.view.root.querySelector('.cp-draft-status').textContent,/Synthetic attachment/);
+  assert.equal((Array.from(f.view.root.querySelectorAll('button')).find((button:any)=>button.dataset.state==='unavailable'||button.dataset.state==='ready') as any)?.disabled,true === (scenario!=='cancel'));
+  f.view.root.querySelector('form').fire('submit');
+  if(scenario==='cancel'){
+   await until(()=>!!f.pending);
+   assert.deepEqual(f.pending!.input.documents,[{id:'doc:synthetic',version:2}]);
+   assert.equal(f.pending!.input.draftVersion,f.draft.version);
+   f.pending!.reject(new Error('authorization_cancelled'));
+   await until(()=>!f.pending);
+  }else{await new Promise(resolve=>setImmediate(resolve));assert.equal(f.calls.some(call=>call.name==='send'),false);}
+  assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
+ }finally{await chat?.dispose();f.restore();}
+});
+
 test('incomplete explicit memory search retains draft and never falls back to ordinary send',async()=>{
  const f=fixture('chatgpt-plan-responses');let chat;try{
   const port={command:async(name:string,input:any)=>{if(name==='send'){f.calls.push({name,input});assert.equal(input.useMemory,true);throw Error('personal_memory_search_incomplete');}return (f.port.command as any)(name,input);}} as ConversationProductPort;
@@ -1370,4 +1423,310 @@ test('Remember editor is replaced on project reassignment/removal and source edi
     assert.equal(requests[1].expectedProjectId, null); assert.equal(requests[1].expectedSourceText, original.content);
     assert.equal(requests[1].conversationId, f.draft.resourceId); assert.equal(requests[1].messageId, original.id);
   } finally { await chat?.dispose(); f.restore(); }
+});
+
+for(const result of ['opened','unavailable','superseded','error'] as const)test('restored attachment opening preserves exact selection and draft: '+result,async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;let finish:(value:any)=>void=()=>{},fail:(error:Error)=>void=()=>{};const opened:any[]=[];
+ const docs=[{id:'doc:synthetic',version:2,title:'Synthetic restored note'}];
+ try {
+  const command=f.port.command.bind(f.port);f.port.command=async(name,input)=>{const value:any=await command(name,input);return name==='readDraft'||name==='saveDraft'?{...value,documents:docs}:value;};
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,openDocument:async ref=>{opened.push(ref);return new Promise((resolve,reject)=>{finish=resolve;fail=reject;});}});await chat.ready;
+  const before=structuredClone(f.draft);const button=named(f.view.root,'Synthetic restored note');assert.equal(button.getAttribute('aria-label'),'Open attachment Synthetic restored note');
+  button.fire('click');button.fire('click');assert.deepEqual(opened,[{id:'doc:synthetic',version:2}]);
+  if(result==='error')fail(Error('synthetic opening failure'));else finish(result);
+  await until(()=>result==='unavailable'||result==='error'?f.view.root.querySelector('.cp-draft-attachments').textContent.includes('(unavailable)'):!named(f.view.root,'Synthetic restored note').disabled);
+  assert.deepEqual(f.draft,before);assert.equal(f.calls.some(call=>call.name==='send'||call.name==='saveDraft'),false);
+  assert.equal(f.view.root.querySelector('textarea').value,before.content);
+  if(result==='unavailable'||result==='error'){
+   f.view.root.querySelector('form').fire('submit');await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(f.calls.some(call=>call.name==='send'),false);
+  }
+ }finally{await chat?.dispose();f.restore();}
+});
+
+test('unavailable restored attachments have no opening action',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;try{
+  const command=f.port.command.bind(f.port);f.port.command=async(name,input)=>{const value:any=await command(name,input);return name==='readDraft'||name==='saveDraft'?{...value,documents:[{id:'doc:synthetic',version:2,title:'Unavailable attachment',unavailable:'changed'}]}:value;};
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,openDocument:async()=>{throw Error('must not open');}});await chat.ready;
+  assert.equal(f.view.root.querySelector('.cp-draft-attachments').querySelectorAll('button').some((button:any)=>(button.getAttribute('aria-label')??'').startsWith('Open attachment')),false);
+  assert.match(f.view.root.querySelector('.cp-draft-attachments').textContent,/unavailable/);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+test('late attachment opening outcome cannot reload or reopen after conversation access is revoked',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat,observe:((value:ConversationExecutionObservation)=>void)|undefined;let resolve:(value:'unavailable')=>void=()=>{};let opens=0;
+ try{
+  const command=f.port.command.bind(f.port);f.port.command=async(name,input)=>{const value:any=await command(name,input);return name==='readDraft'||name==='saveDraft'?{...value,documents:[{id:'doc:synthetic',version:2,title:'Synthetic selected attachment'}]}:value;};
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{observe(_id,listener){observe=listener;return()=>{};},async cancel(){throw Error('not allowed');}},openDocument:async()=>{opens++;return new Promise(done=>{resolve=done;});}});await chat.ready;
+  const button=named(f.view.root,'Synthetic selected attachment');button.fire('click');assert.equal(opens,1);
+  observe!({resourceAvailable:false});const reads=f.calls.filter(call=>call.name==='readDraft').length;
+  resolve('unavailable');await new Promise(done=>setImmediate(done));button.fire('click');
+  assert.equal(opens,1);assert.equal(f.calls.filter(call=>call.name==='readDraft').length,reads);
+  assert.equal(f.calls.some(call=>call.name==='send'),false);assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/no longer available/);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+function attachmentFixture(initial:any[]=[]) {
+ const f=fixture('chatgpt-plan-responses');let documents=initial;const command=f.port.command.bind(f.port);
+ f.port.command=async(name,input)=>{const value:any=await command(name,input);if(name==='saveDraft')documents=(input as any).documents??[];return name==='readDraft'||name==='saveDraft'?{...value,documents:structuredClone(documents)}:value;};
+ return {f,get documents(){return documents;}};
+}
+
+test('explicit attachment picker cancellation, addition and removal preserve text without sending',async()=>{
+ const a=attachmentFixture(),f=a.f;let chat;let next:any=null;let calls=0;
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,chooseDocument:async()=>{calls++;return next;}});await chat.ready;
+  named(f.view.root,'Attach document').fire('click');await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,1);assert.deepEqual(a.documents,[]);
+  next={id:'file:selected',version:3,title:'Synthetic selected.txt'};
+  named(f.view.root,'Attach document').fire('click');await until(()=>!!f.view.root.querySelector('.cp-draft-attachments').querySelector('button'));await chat.flush();
+  assert.deepEqual(a.documents,[next]);assert.equal(f.draft.content,'Saved unsent text');
+  const remove=f.view.root.querySelector('.cp-draft-attachments').querySelector('button');assert.match(remove.getAttribute('aria-label'),/^Remove attachment/);remove.fire('click');await chat.flush();
+  assert.deepEqual(a.documents,[]);assert.equal(f.draft.content,'Saved unsent text');assert.equal(f.calls.some(call=>call.name==='send'),false);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+test('replacement is exact-version bound and duplicate chooser starts are suppressed',async()=>{
+ const a=attachmentFixture([{id:'file:old',version:1,title:'Old unavailable',unavailable:'changed'}]),f=a.f;let chat,done:(x:any)=>void=()=>{};let calls=0;
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,chooseDocument:async()=>{calls++;return new Promise(resolve=>{done=resolve;});}});await chat.ready;
+  const replace=named(f.view.root,'Replace');replace.fire('click');replace.fire('click');assert.equal(calls,1);
+  f.view.root.querySelector('form').fire('submit');assert.equal(f.calls.some(call=>call.name==='send'),false);
+  done({id:'file:new',version:2,title:'Synthetic replacement'});await until(()=>f.view.root.querySelector('.cp-draft-attachments').textContent.includes('Synthetic replacement'));await chat.flush();
+  assert.deepEqual(a.documents,[{id:'file:new',version:2,title:'Synthetic replacement'}]);assert.equal(f.draft.content,'Saved unsent text');assert.equal(f.calls.some(call=>call.name==='send'),false);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+test('saved document picker rereads exact current versions and refuses stale menu choices',async()=>{
+ const a=attachmentFixture(),f=a.f,motion=pickerMotion();let chat;let available=[{id:'note:one',version:1,title:'Synthetic saved note'}];
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,motion:motion.motion,viewId:'chat:attachments',listDocuments:()=>available});await chat.ready;
+  const picker=f.view.root.querySelector('[data-cp-picker-for="Attach saved note or document"]');picker.fire('click');
+  const option=f.view.root.querySelectorAll('[data-cp-option-value]').find((node:any)=>node.dataset.cpOptionValue===JSON.stringify(['note:one',1]));assert.ok(option);
+  available=[{...available[0],version:2}];option.fire('click');assert.deepEqual(a.documents,[]);assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/no longer available/);
+  picker.fire('click');const current=f.view.root.querySelectorAll('[data-cp-option-value]').find((node:any)=>node.dataset.cpOptionValue===JSON.stringify(['note:one',2]));assert.ok(current);current.fire('click');await chat.flush();
+  assert.deepEqual(a.documents,available);assert.equal(f.calls.some(call=>call.name==='send'),false);assert.equal(f.draft.content,'Saved unsent text');
+ }finally{await chat?.dispose();assert.equal(motion.poses.size,0);f.restore();}
+});
+
+for(const scenario of ['invalid','project-changed','full'] as const)test('attachment chooser refuses unsafe completion: '+scenario,async()=>{
+ const initial=scenario==='full'?Array.from({length:4},(_,i)=>({id:'doc:'+i,version:1,title:'Synthetic '+i})):[];
+ const a=attachmentFixture(initial),f=a.f;let chat;let done:(value:any)=>void=()=>{};let calls=0;
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,chooseDocument:async()=>{calls++;return new Promise(resolve=>{done=resolve;});}});await chat.ready;
+  const button=named(f.view.root,'Attach document');button.fire('click');
+  if(scenario==='full'){assert.equal(button.disabled,true);assert.equal(calls,0);}
+  else{
+   if(scenario==='project-changed'){f.detail.conversation.projectId='project:new';f.detail.conversation.projectIds=['project:new'];await chat.refresh();}
+   done({id:'doc:new',version:scenario==='invalid'?0:2,title:'Synthetic rejected choice'});await new Promise(resolve=>setImmediate(resolve));
+  }
+  await chat.flush();assert.deepEqual(a.documents,initial);assert.equal(f.draft.content,'Saved unsent text');assert.equal(f.calls.some(call=>call.name==='send'),false);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+for (const matchingAnchor of [true, false]) test('lost send response checks the exact authored message (matching anchor: '+matchingAnchor+')', async () => {
+ const f = fixture('chatgpt-plan-responses');
+ let chat, observe!: (observation: ConversationExecutionObservation) => void;
+ try {
+  const resourceId = f.draft.resourceId;
+  let commandId = '';
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId, execution: {
+   observe(_id, listener) { observe = listener; return () => {}; },
+   async cancel() {},
+   async refresh() { observe({ execution: {
+    id: 'execution:confirmed', resourceId, commandId, providerId: 'chatgpt-plan-responses',
+    state: 'provider_completed', startedAt: '2026-11-02T00:00:00Z', endedAt: '2026-11-02T00:00:01Z',
+    inputMessageId: matchingAnchor ? 'message:confirmed' : 'message:other', taskVerified: false,
+   } }); },
+  } });
+  await chat.ready;
+  f.view.root.querySelector('form').fire('submit');
+  await until(() => !!f.pending);
+  commandId = f.pending!.input.commandId;
+  f.detail.messages.items.push({ ...f.detail.messages.items[0], id: 'message:confirmed', content: f.draft.content });
+  f.detail.conversation.revision++;
+  f.pending!.reject(Error('synthetic response lost'));
+  await chat.whenSubmissionSettled();
+  assert.equal(f.draft.content, matchingAnchor ? '' : 'Saved unsent text');
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, matchingAnchor ? /Message accepted/ : /could not be confirmed/);
+  assert.equal(f.calls.filter(call => call.name === 'send').length, 1);
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+
+
+for(const scenario of ['wrong command','wrong provider','denied detail','later edits'] as const)test('lost-send recovery fails closed or retains later edits: '+scenario,async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat,observe!:(value:ConversationExecutionObservation)=>void;let commandId='',refreshes=0;
+ try{
+  const command=f.port.command.bind(f.port);f.port.command=async(name,input)=>{if(name==='detail'&&(input as any).aroundMessageId&&scenario==='denied detail')throw Error('source_unavailable');return command(name,input);};
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{observe(_id,listener){observe=listener;return()=>{};},async cancel(){},async refresh(){refreshes++;observe({execution:{id:'execution:confirmed',resourceId:f.draft.resourceId,commandId:scenario==='wrong command'?'other':commandId,providerId:scenario==='wrong provider'?'local':'chatgpt-plan-responses',state:'provider_completed',startedAt:'2026-11-02T00:00:00Z',endedAt:'2026-11-02T00:00:01Z',taskVerified:false,inputMessageId:'message:confirmed'}});}}});await chat.ready;
+  f.view.root.querySelector('form').fire('submit');await until(()=>!!f.pending);commandId=f.pending!.input.commandId;
+  f.detail.messages.items.push({...f.detail.messages.items[0],id:'message:confirmed',content:'Saved unsent text'});f.detail.conversation.revision++;
+  if(scenario==='later edits'){const editor=f.view.root.querySelector('textarea');editor.value='Later local question';editor.fire('input');await chat.flush();}
+  f.pending!.reject(Error('synthetic response lost'));await chat.whenSubmissionSettled();
+  assert.equal(refreshes,1);assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+  assert.equal(f.draft.content,scenario==='later edits'?'Later local question':'Saved unsent text');
+  if(scenario==='later edits')assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Later draft edits were retained/);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+for(const scenario of ['confirmed','later edits','wrong anchor','storage failed'] as const)test('late completed receipt recovery: '+scenario,async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat,observe!:(value:ConversationExecutionObservation)=>void;
+ try{
+  const command=f.port.command.bind(f.port);let failStorage=false;
+  f.port.command=async(name,input)=>{if(name==='saveDraft'&&failStorage)throw Error('synthetic storage failure');return command(name,input);};
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{observe(_id,listener){observe=listener;return()=>{};},async cancel(){},async refresh(){}}});await chat.ready;
+  f.view.root.querySelector('form').fire('submit');await until(()=>!!f.pending);const commandId=f.pending!.input.commandId;
+  f.pending!.reject(Error('response lost'));await chat.whenSubmissionSettled();
+  if(scenario==='later edits'){const editor=f.view.root.querySelector('textarea');editor.value='Keep newer draft';editor.fire('input');await chat.flush();}
+  f.detail.messages.items.push({...f.detail.messages.items[0],id:'message:late',content:'Saved unsent text'});f.detail.conversation.revision++;
+  failStorage=scenario==='storage failed';
+  observe({execution:{id:'execution:late',resourceId:f.draft.resourceId,commandId,providerId:'chatgpt-plan-responses',state:'provider_completed',startedAt:'2026-11-02T00:00:00Z',endedAt:'2026-11-02T00:00:01Z',taskVerified:false,inputMessageId:scenario==='wrong anchor'?'message:wrong':'message:late'}});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+  assert.equal(f.draft.content,scenario==='confirmed'?'':scenario==='later edits'?'Keep newer draft':'Saved unsent text');
+  if(scenario!=='wrong anchor')assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Message accepted/);
+  failStorage=false;
+ }finally{await chat?.dispose().catch(()=>{});f.restore();}
+});
+
+for(const failure of ['history','storage','changed callback'] as const)test('accepted delivery survives subsequent '+failure+' failure',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;let fail=false;
+ try{
+ const command=f.port.command.bind(f.port);f.port.command=async(name,input)=>{if(fail&&((failure==='history'&&name==='detail')||(failure==='storage'&&name==='saveDraft')))throw Error('synthetic follow-up failure');return command(name,input);};
+ chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,onChanged:async()=>{if(failure==='changed callback')throw Error('synthetic callback failure');}});await chat.ready;
+ f.view.root.querySelector('form').fire('submit');await until(()=>!!f.pending);fail=true;f.accept();await chat.whenSubmissionSettled();
+ assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Message accepted.*Do not resend/);
+ assert.equal(f.view.root.querySelector('.cp-chat-status').dataset.statusKind,'send-accepted');assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+ fail=false;
+ }finally{await chat?.dispose().catch(()=>{});f.restore();}
+});
+
+test('confirmed delivery preserves a competing durable draft and explicit recovery',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;
+ try{
+ chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;
+ f.view.root.querySelector('form').fire('submit');await until(()=>!!f.pending);f.external('Another view draft');f.accept(true);await chat.whenSubmissionSettled();
+ assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Message accepted/);
+ assert.equal(f.draft.content,'Another view draft');assert.equal(f.view.root.querySelector('.cp-draft-status').dataset.phase,'conflict');
+ named(f.view.root,'Use the stored draft').fire('click');await until(()=>f.view.root.querySelector('.cp-draft-status').dataset.phase==='clean');
+ assert.equal(f.view.root.querySelector('textarea').value,'Another view draft');assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+for(const scenario of ['hydrate','verification revoked','hydration revoked','hydration failure'] as const)test('late recovery canonical hydration and revocation: '+scenario,async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat,observe!:(value:ConversationExecutionObservation)=>void,release=()=>{};let count=0,hold=false;
+ try{
+  const command=f.port.command.bind(f.port);f.port.command=async(name,input)=>{
+   if(hold&&name==='detail'){
+    count++;const value=await command(name,input);
+    if((scenario==='verification revoked'&&count===1)||(scenario==='hydration revoked'&&count===2))await new Promise<void>(resolve=>{release=resolve;});
+    if(scenario==='hydration failure'&&count===2)throw Error('synthetic hydration failure');return value;
+   }return command(name,input);
+  };
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{observe(_id,listener){observe=listener;return()=>{};},async cancel(){},async refresh(){}}});await chat.ready;
+  f.view.root.querySelector('form').fire('submit');await until(()=>!!f.pending);const commandId=f.pending!.input.commandId;
+  f.pending!.reject(Error('lost response'));await chat.whenSubmissionSettled();
+  f.detail.messages.items.push({...f.detail.messages.items[0],id:'message:hydrated',content:'Saved unsent text'});f.detail.conversation.revision++;hold=true;
+  observe({execution:{id:'execution:hydrate',resourceId:f.draft.resourceId,commandId,providerId:'chatgpt-plan-responses',state:'provider_completed',startedAt:'2026-11-02T00:00:00Z',endedAt:'2026-11-02T00:00:01Z',taskVerified:false,inputMessageId:'message:hydrated'}});
+  if(scenario.includes('revoked')){await until(()=>count===(scenario==='verification revoked'?1:2));observe({execution:null,resourceAvailable:false});release();}
+  await new Promise(resolve=>setTimeout(resolve,25));
+  assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+  assert.equal(f.draft.content,scenario==='verification revoked'?'Saved unsent text':'');
+  if(scenario.includes('revoked')){assert.equal(f.view.root.querySelector('.cp-chat').dataset.resourceAvailable,'false');assert.equal(f.view.root.querySelectorAll('.cp-message').length,0);assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/no longer available/);}
+  else if(scenario==='hydrate')assert.ok(f.view.root.querySelectorAll('.cp-message').some((m:any)=>m.textContent.includes('Saved unsent text')));
+  else assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Message accepted.*History could not refresh/);
+ }finally{release();await chat?.dispose().catch(()=>{});f.restore();}
+});
+
+for (const scenario of ['copied','declined','copy failed','newer navigation','documents only','document changed during review','document version changed','document revoked','reject context','shortcut documents'] as const) test('provider continuation draft: '+scenario,async()=>{
+ const f=fixture(),m=pickerMotion(),actions:any[]=[],opened:string[]=[],childReads:string[]=[];let manager, navigation:Promise<void>|undefined;const target='chatgpt-plan-responses',childId='chat:child-reviewed',withDocuments=(scenario==='documents only'||scenario==='shortcut documents')||scenario==='document changed during review'||scenario==='document version changed'||scenario==='reject context'||scenario==='document revoked';f.detail.providers.push({id:target,label:'ChatGPT plan',available:true,record:true,execute:true,nativeFork:false,history:'local',simulated:false,models:[]});const native=f.port.command.bind(f.port),port={async command(name:any,input:any){if(name==='branch'){actions.push({name,input});return {resourceId:childId,handoffId:'handoff:reviewed',fingerprint:'fingerprint:reviewed'};}if(name==='reviewBranch'){actions.push({name,input});return {};}if(name==='saveDraft'&&input.resourceId===childId){actions.push({name,input});if(scenario==='copy failed')throw Error('synthetic draft write failure');if(scenario==='newer navigation')navigation=manager!.open(f.draft.resourceId);return {resourceId:childId,version:1,content:input.content,updatedAt:null};}if(name==='readDraft'&&input.resourceId===childId&&scenario!=='copy failed'&&actions.some(a=>a.name==='saveDraft'))return {resourceId:childId,version:1,content:(scenario==='documents only'||scenario==='shortcut documents')?'':'Saved unsent text',updatedAt:null,...((scenario==='documents only'||scenario==='shortcut documents')?{documents:[{id:'file:brief',version:3,title:'Brief.pdf'}]}:{})};if(name==='readDraft'&&input.resourceId===childId)return {resourceId:childId,version:0,content:'',updatedAt:null};if(name==='detail'&&input.resourceId===childId){childReads.push(input.resourceId);const detail=structuredClone(f.detail);detail.conversation={...detail.conversation,resourceId:childId,conversationId:'graph:child-reviewed',title:'Reviewed child',providerId:target,revision:1,messageCount:0};detail.messages={items:[],offset:0,total:0,limit:50,hasMore:false};detail.policy.resourceId=childId;return detail;}return (native as any)(name,input);}} as ConversationProductPort;
+ try{if(withDocuments)await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:'',documents:[{id:'file:brief',version:3,title:'Brief.pdf'}]});manager=mountConversationManager(f.view.root,port,{resourceId:f.draft.resourceId,motion:m.motion,viewId:'manager:review',onResource:id=>opened.push(id)});await manager.ready;const editor=f.view.root.querySelector('textarea'),draft=f.draft;if(scenario==='shortcut documents'){named(f.view.root,'Continue with ChatGPT').fire('click');await until(()=>!!f.view.root.querySelector('.cp-secondary').querySelector('select[aria-label="Branch provider"]'));}else await manager.beginProviderContinuation(target);assert.equal(actions.length,0);assert.equal(manager.state.selectedResourceId,f.draft.resourceId);assert.equal(f.detail.conversation.providerId,'local');assert.ok(f.view.root.querySelector('textarea')===editor);assert.deepEqual(f.draft,draft);const sourceForm=f.view.root.querySelector('.cp-secondary').querySelector('form'),provider=sourceForm.querySelector('select[aria-label="Branch provider"]');assert.equal(provider.value,target);assert.equal(provider.hidden,true);const boxes=sourceForm.querySelector('fieldset').querySelectorAll('input');boxes[0].checked=true;boxes[0].fire('change');boxes[1].checked=false;boxes[1].fire('change');const carry=sourceForm.querySelector('input[aria-label="Copy unsent draft to the new branch"]');if(withDocuments){assert.equal(carry,null);const documents=sourceForm.querySelector('input[aria-label="Copy selected documents to the new branch draft"]');assert.equal(documents.checked,false);assert.match(sourceForm.textContent,/Brief.pdf/);documents.checked=true;}else{assert.ok(carry);assert.equal(carry.checked,false);carry.checked=scenario!=='declined';}sourceForm.fire('submit');await until(()=>actions.length===1&&!!named(f.view.root,'Approve selected context'));assert.deepEqual(actions[0].input.includeMessageIds,['message:user']);assert.equal(actions[0].input.messageId,'message:assistant');assert.equal(actions[0].input.providerId,target);assert.equal(actions[0].input.expectedRevision,2);assert.equal(manager.state.selectedResourceId,f.draft.resourceId);if(scenario==='document changed during review')await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:'',documents:[]});if(scenario==='document version changed')await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:'',documents:[{id:'file:brief',version:4,title:'Brief.pdf'}]});if(scenario==='document revoked')await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:'',documents:[{id:'file:brief',version:3,title:'Brief.pdf',unavailable:'revoked'}]});named(f.view.root,scenario==='reject context'?'Reject context':'Approve selected context').fire('click');if(scenario==='newer navigation'){await until(()=>!!navigation);await navigation;}else await until(()=>manager!.state.selectedResourceId===childId&&!!f.view.root.querySelector('.cp-chat[data-resource-id="chat:child-reviewed"]'));await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);const copyAttempted=scenario!=='declined'&&scenario!=='document changed during review'&&scenario!=='document version changed'&&scenario!=='reject context'&&scenario!=='document revoked';assert.deepEqual(actions.map(a=>a.name),copyAttempted?['branch','reviewBranch','saveDraft']:['branch','reviewBranch']);if(copyAttempted)assert.deepEqual(actions[2].input,{resourceId:childId,expectedVersion:0,content:draft.content,documents:(scenario==='documents only'||scenario==='shortcut documents')?[{id:'file:brief',version:3}]:[],sourceCopy:{resourceId:draft.resourceId,draftVersion:draft.version,copyText:!withDocuments}});if((scenario==='documents only'||scenario==='shortcut documents'))assert.match(f.view.root.textContent,/Brief.pdf/);if(scenario==='copy failed'||scenario==='document changed during review'||scenario==='document version changed'||scenario==='document revoked')assert.match(f.view.root.textContent,/Draft copy could not be confirmed/);if(scenario==='newer navigation'){assert.equal(manager.state.selectedResourceId,f.draft.resourceId);assert.ok(!opened.includes(childId));assert.deepEqual(childReads,[]);assert.equal(actions.filter(a=>a.name==='saveDraft').length,1);}assert.equal(actions[1].input.approve,scenario!=='reject context');assert.equal(f.detail.conversation.providerId,'local');if(scenario!=='document changed during review'&&scenario!=='document version changed'&&scenario!=='document revoked')assert.deepEqual(f.draft,draft);assert.equal(f.calls.some(c=>['send','selectProvider'].includes(c.name)),false);manager.frame();}
+  finally{await manager?.dispose();assert.equal(m.poses.size,0);f.restore();}
+ });
+
+for(const provider of ['local','chatgpt-plan-responses'])test('offline attachment staging preserves saved text and does not send: '+provider,async()=>{
+ const f=fixture(provider);let chat;
+ try{
+  if(provider==='chatgpt-plan-responses')f.detail.providers[0].available=false;
+  const document={id:'file:offline',version:2,title:'Synthetic offline.txt'};
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,chooseDocument:async()=>document});await chat.ready;
+  const attach=named(f.view.root,'Attach document');assert.equal(attach.hidden,false);assert.equal(attach.disabled,false);attach.fire('click');
+  await until(()=>f.view.root.querySelector('.cp-draft-attachments').textContent.includes(document.title));await chat.flush();
+  assert.deepEqual((f.draft as any).documents,[document]);assert.equal(f.draft.content,'Saved unsent text');
+  assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,true);f.view.root.querySelector('form').fire('submit');assert.equal(f.calls.some(c=>['send','selectProvider','branch'].includes(c.name)),false);
+  const remove=f.view.root.querySelector('.cp-draft-attachments').querySelector('button');remove.fire('click');await chat.flush();
+  assert.equal(f.view.root.querySelector('[data-cp-control="send"]').disabled,provider!=='local');
+ }finally{await chat?.dispose();f.restore();}
+});
+
+test('offline chooser result is discarded if the provider becomes unsupported',async()=>{
+ const f=fixture('local');let chat,release!:(x:any)=>void;
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,chooseDocument:()=>new Promise(resolve=>{release=resolve;})});await chat.ready;
+  named(f.view.root,'Attach document').fire('click');f.detail.conversation.providerId='unsupported-synthetic';await chat.refresh();release({id:'file:old',version:1,title:'Do not stage'});await new Promise(resolve=>setImmediate(resolve));await chat.flush();
+  assert.equal(f.view.root.querySelector('.cp-draft-attachments').textContent.includes('Do not stage'),false);assert.equal(f.calls.some(c=>c.name==='send'),false);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+for (const empty of [true,false]) test('attachment continuation uses the existing provider action (empty: '+empty+')', async () => {
+ const f=fixture('local');
+ let chat,release!:()=>void;
+ const gate=new Promise<void>(resolve=>{release=resolve;});
+ const requested:unknown[]=[];
+ try {
+  if(empty){f.detail.messages.items=[];f.detail.messages.total=f.detail.conversation.messageCount=0;}
+  const target={...f.detail.providers[0],id:'chatgpt-plan-responses',label:'ChatGPT',available:false};
+  f.detail.providers.push(target);
+  const documents=[{id:'file:offline',version:2,title:'Offline brief.txt'}];
+  await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,
+   content:f.draft.content,documents});
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,
+   onProviderChange:async change=>{requested.push(change);await gate;}});
+  await chat.ready;
+  const button=named(f.view.root,'Continue with ChatGPT');
+  assert.equal(button.hidden,true);
+  target.available=true;
+  await chat.refresh();
+  assert.equal(button.hidden,false);
+  const draft=f.draft;
+  button.fire('click');button.fire('click');
+  assert.equal(button.disabled,true);
+  assert.deepEqual(requested,[{resourceId:draft.resourceId,targetProviderId:target.id,
+   expectedRevision:f.detail.conversation.revision,mode:empty?'empty':'continuation'}]);
+  assert.deepEqual(f.draft,draft);
+  assert.equal(f.calls.some(call=>call.name==='send'),false);
+  release();
+  await until(()=>!button.disabled);
+ } finally {release();await chat?.dispose();f.restore();}
+});
+
+for (const scenario of ['source denied','draft changed'] as const) test('continuation refuses changed source: '+scenario,async()=>{
+ const f=fixture(),m=pickerMotion(),actions:any[]=[],opened:string[]=[],childReads:string[]=[];let manager, navigation:Promise<void>|undefined;const target='chatgpt-plan-responses',childId='chat:child-reviewed',withDocuments=(scenario==='documents only'||scenario==='shortcut documents')||scenario==='document changed during review'||scenario==='document version changed'||scenario==='reject context'||scenario==='document revoked';f.detail.providers.push({id:target,label:'ChatGPT plan',available:true,record:true,execute:true,nativeFork:false,history:'local',simulated:false,models:[]});const native=f.port.command.bind(f.port),port={async command(name:any,input:any){if(name==='readDraft'&&input.resourceId===f.draft.resourceId&&actions.some(a=>a.name==='reviewBranch')&&scenario==='source denied')throw Error('source_unavailable');if(name==='branch'){actions.push({name,input});return {resourceId:childId,handoffId:'handoff:reviewed',fingerprint:'fingerprint:reviewed'};}if(name==='reviewBranch'){actions.push({name,input});return {};}if(name==='saveDraft'&&input.resourceId===childId){actions.push({name,input});if(scenario==='copy failed')throw Error('synthetic draft write failure');if(scenario==='newer navigation')navigation=manager!.open(f.draft.resourceId);return {resourceId:childId,version:1,content:input.content,updatedAt:null};}if(name==='readDraft'&&input.resourceId===childId&&scenario!=='copy failed'&&actions.some(a=>a.name==='saveDraft'))return {resourceId:childId,version:1,content:(scenario==='documents only'||scenario==='shortcut documents')?'':'Saved unsent text',updatedAt:null,...((scenario==='documents only'||scenario==='shortcut documents')?{documents:[{id:'file:brief',version:3,title:'Brief.pdf'}]}:{})};if(name==='readDraft'&&input.resourceId===childId)return {resourceId:childId,version:0,content:'',updatedAt:null};if(name==='detail'&&input.resourceId===childId){childReads.push(input.resourceId);const detail=structuredClone(f.detail);detail.conversation={...detail.conversation,resourceId:childId,conversationId:'graph:child-reviewed',title:'Reviewed child',providerId:target,revision:1,messageCount:0};detail.messages={items:[],offset:0,total:0,limit:50,hasMore:false};detail.policy.resourceId=childId;return detail;}return (native as any)(name,input);}} as ConversationProductPort;
+ try{if(withDocuments)await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:'',documents:[{id:'file:brief',version:3,title:'Brief.pdf'}]});manager=mountConversationManager(f.view.root,port,{resourceId:f.draft.resourceId,motion:m.motion,viewId:'manager:review',onResource:id=>opened.push(id)});await manager.ready;const editor=f.view.root.querySelector('textarea'),draft=f.draft;if(scenario==='shortcut documents'){named(f.view.root,'Continue with ChatGPT').fire('click');await until(()=>!!f.view.root.querySelector('.cp-secondary').querySelector('select[aria-label="Branch provider"]'));}else await manager.beginProviderContinuation(target);assert.equal(actions.length,0);assert.equal(manager.state.selectedResourceId,f.draft.resourceId);assert.equal(f.detail.conversation.providerId,'local');assert.ok(f.view.root.querySelector('textarea')===editor);assert.deepEqual(f.draft,draft);const sourceForm=f.view.root.querySelector('.cp-secondary').querySelector('form'),provider=sourceForm.querySelector('select[aria-label="Branch provider"]');assert.equal(provider.value,target);assert.equal(provider.hidden,true);const boxes=sourceForm.querySelector('fieldset').querySelectorAll('input');boxes[0].checked=true;boxes[0].fire('change');boxes[1].checked=false;boxes[1].fire('change');const carry=sourceForm.querySelector('input[aria-label="Copy unsent draft to the new branch"]');if(withDocuments){assert.equal(carry,null);const documents=sourceForm.querySelector('input[aria-label="Copy selected documents to the new branch draft"]');assert.equal(documents.checked,false);assert.match(sourceForm.textContent,/Brief.pdf/);documents.checked=true;}else{assert.ok(carry);assert.equal(carry.checked,false);carry.checked=scenario!=='declined';}sourceForm.fire('submit');await until(()=>actions.length===1&&!!named(f.view.root,'Approve selected context'));assert.deepEqual(actions[0].input.includeMessageIds,['message:user']);assert.equal(actions[0].input.messageId,'message:assistant');assert.equal(actions[0].input.providerId,target);assert.equal(actions[0].input.expectedRevision,2);assert.equal(manager.state.selectedResourceId,f.draft.resourceId);if(scenario==='document changed during review')await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:'',documents:[]});if(scenario==='document version changed')await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:'',documents:[{id:'file:brief',version:4,title:'Brief.pdf'}]});if(scenario==='document revoked')await f.port.command('saveDraft',{resourceId:f.draft.resourceId,expectedVersion:f.draft.version,content:'',documents:[{id:'file:brief',version:3,title:'Brief.pdf',unavailable:'revoked'}]});if(scenario==='draft changed')f.external('New competing draft after consent');named(f.view.root,scenario==='reject context'?'Reject context':'Approve selected context').fire('click');if(scenario==='newer navigation'){await until(()=>!!navigation);await navigation;}else await until(()=>manager!.state.selectedResourceId===childId&&!!f.view.root.querySelector('.cp-chat[data-resource-id="chat:child-reviewed"]'));await until(()=>f.view.root.querySelector('.cp-manager').getAttribute('aria-busy')===null);const copyAttempted=scenario!=='source denied'&&scenario!=='draft changed'&&scenario!=='declined'&&scenario!=='document changed during review'&&scenario!=='document version changed'&&scenario!=='reject context'&&scenario!=='document revoked';assert.deepEqual(actions.map(a=>a.name),copyAttempted?['branch','reviewBranch','saveDraft']:['branch','reviewBranch']);if(copyAttempted)assert.deepEqual(actions[2].input,{resourceId:childId,expectedVersion:0,content:draft.content,documents:(scenario==='documents only'||scenario==='shortcut documents')?[{id:'file:brief',version:3}]:[],sourceCopy:{resourceId:draft.resourceId,draftVersion:draft.version,copyText:!withDocuments}});if((scenario==='documents only'||scenario==='shortcut documents'))assert.match(f.view.root.textContent,/Brief.pdf/);if(scenario==='source denied'||scenario==='draft changed'||scenario==='copy failed'||scenario==='document changed during review'||scenario==='document version changed'||scenario==='document revoked')assert.match(f.view.root.textContent,/Draft copy could not be confirmed/);if(scenario==='newer navigation'){assert.equal(manager.state.selectedResourceId,f.draft.resourceId);assert.ok(!opened.includes(childId));assert.deepEqual(childReads,[]);assert.equal(actions.filter(a=>a.name==='saveDraft').length,1);}assert.equal(actions[1].input.approve,scenario!=='reject context');assert.equal(f.detail.conversation.providerId,'local');if(scenario!=='draft changed'&&scenario!=='document changed during review'&&scenario!=='document version changed'&&scenario!=='document revoked')assert.deepEqual(f.draft,draft);assert.equal(f.calls.some(c=>['send','selectProvider'].includes(c.name)),false);manager.frame();}
+  finally{await manager?.dispose();assert.equal(m.poses.size,0);f.restore();}
+ });
+
+
+for(const stale of [false,true])test('Ask Vela attachment staging retains draft and gates duplicate sends; stale='+stale,async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;let finish:()=>void=()=>{},check:()=>boolean=()=>false;let starts=0,staged=0;
+ try{
+  const command=f.port.command.bind(f.port);const docs=[{id:'file:synthetic',version:2,title:'Synthetic attachment'}];
+  f.port.command=async(name,input)=>{const value:any=await command(name,input);return name==='readDraft'||name==='saveDraft'?{...value,documents:docs}:value;};
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,openDocument:async()=> 'opened',askVelaAboutDocument:async(ref,isCurrent)=>{starts++;assert.deepEqual(ref,docs[0]);check=isCurrent;await new Promise<void>(done=>finish=done);if(isCurrent())staged++;}});
+  await chat.ready;const before=structuredClone(f.draft);const ask=named(f.view.root,'Ask Vela');ask.fire('click');ask.fire('click');await until(()=>starts===1);
+  f.view.root.querySelector('form').fire('submit');assert.equal(f.calls.some(call=>call.name==='send'),false);
+  if(stale)await chat.dispose();assert.equal(check(),!stale);finish();await new Promise(done=>setImmediate(done));
+  assert.equal(staged,stale?0:1);assert.deepEqual(f.draft,before);assert.equal(f.calls.some(call=>call.name==='send'),false);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+test('late Ask Vela staging is cancelled by canonical chat revocation and retains unsent draft',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat,observe:((value:ConversationExecutionObservation)=>void)|undefined;let finish:()=>void=()=>{},check:()=>boolean=()=>false;let starts=0,staged=0;
+ try{
+  const command=f.port.command.bind(f.port);const docs=[{id:'file:synthetic',version:2,title:'Synthetic source'}];
+  f.port.command=async(name,input)=>{const value:any=await command(name,input);return name==='readDraft'||name==='saveDraft'?{...value,documents:docs}:value;};
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,execution:{observe(_id,listener){observe=listener;return()=>{};},async cancel(){throw Error('unexpected');}},openDocument:async()=> 'opened',askVelaAboutDocument:async(ref,isCurrent)=>{starts++;check=isCurrent;await new Promise<void>(done=>finish=done);if(isCurrent())staged++;}});
+  await chat.ready;const before=structuredClone(f.draft);named(f.view.root,'Ask Vela').fire('click');await until(()=>starts===1);observe!({resourceAvailable:false});assert.equal(check(),false);finish();await new Promise(done=>setImmediate(done));
+  assert.equal(staged,0);assert.deepEqual(f.draft,before);assert.equal(f.calls.some(call=>call.name==='send'),false);assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/no longer available/);
+ }finally{await chat?.dispose();f.restore();}
 });

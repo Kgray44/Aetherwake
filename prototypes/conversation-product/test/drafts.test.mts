@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -10,8 +10,8 @@ import { ConversationProduct, type CanonicalConversationHost } from '../src/serv
 import { CONVERSATION_DRAFT_LIMITS as limits } from '../src/contracts.ts';
 
 function cleanup(dir:string){const absolute=resolve(dir),rel=relative(resolve(tmpdir()),absolute);assert(rel&&!rel.startsWith('..')&&!isAbsolute(rel)&&rel.startsWith('aerynth-drafts-'));rmSync(absolute,{recursive:true,force:true});}
-function fixture(){
- const dir=mkdtempSync(join(tmpdir(),'aerynth-drafts-')),path=join(dir,'canonical.sqlite'),core=new BackendCore({path,contentPolicy:'synthetic-only',provider:'fixture'});
+function fixture(nativeMedia=false){
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-drafts-')),path=join(dir,'canonical.sqlite'),core=new BackendCore({path,contentPolicy:'synthetic-only',provider:'fixture',nativeMedia});
  const owning=core as unknown as {db:DatabaseSync;kernel:WorkspaceKernel},denied=new Set<string>();
  const host:CanonicalConversationHost={snapshot:()=>core.command('snapshot',{}),desktop:()=>core.command('desktop',{type:'snapshot'}),command:(name,input)=>core.command(name,input),access:id=>!denied.has(id),organize:async()=>{throw Error('not_needed');}};
  const product=new ConversationProduct(owning.db,host);
@@ -25,11 +25,11 @@ test('v1 migration preserves canonical IDs and metadata; unknown versions never 
   const share=await f.product.command('publish',{sourceResourceId:c.resourceId,sourceMessageId:m.id,evidence:'excerpt'}),before=await f.core.command('snapshot',{});
   // Exact v1 table layout: later draft/view tables are absent, all v1 records survive.
   f.db.exec('DROP TABLE cp_view_selection; DROP TABLE cp_views; DROP TABLE cp_drafts; UPDATE cp_schema SET version=1 WHERE id=1');
-  const upgraded=new ConversationProduct(f.db,f.host);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,3);
+  const upgraded=new ConversationProduct(f.db,f.host);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,4);
   assert.deepEqual(await upgraded.command('readDraft',{resourceId:c.resourceId}),{resourceId:c.resourceId,version:0,content:'',updatedAt:null});
   assert.equal((await upgraded.command('detail',{resourceId:c.resourceId})).conversation.favorite,true);assert.equal((await upgraded.command('detail',{resourceId:c.resourceId})).shares[0].id,share.id);assert.deepEqual((await f.core.command('snapshot',{})).graph,before.graph);
   const draft=await upgraded.command('saveDraft',{resourceId:c.resourceId,expectedVersion:0,content:'Synthetic retained draft'});
-  f.db.prepare('UPDATE cp_schema SET version=99').run();assert.throws(()=>new ConversationProduct(f.db,f.host),/unsupported_conversation_product_schema/);assert.equal(f.db.prepare('SELECT content FROM cp_drafts WHERE resource_id=?').get(c.resourceId)!.content,draft.content);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,99);f.db.prepare('UPDATE cp_schema SET version=3').run();
+  f.db.prepare('UPDATE cp_schema SET version=99').run();assert.throws(()=>new ConversationProduct(f.db,f.host),/unsupported_conversation_product_schema/);assert.equal(f.db.prepare('SELECT content FROM cp_drafts WHERE resource_id=?').get(c.resourceId)!.content,draft.content);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,99);f.db.prepare('UPDATE cp_schema SET version=4').run();
   assert.deepEqual(await new ConversationProduct(f.db,f.host).command('readDraft',{resourceId:c.resourceId}),draft);
  }finally{await f.close();cleanup(f.dir);}
 });
@@ -79,7 +79,7 @@ test('draft row retention is bounded without tombstone eviction',async()=>{
  const f=fixture();try{
   const candidate=await f.create();
   // Canonical resource references plus empty metadata model a full retained store.
-  f.kernel.withTransaction(db=>{const insert=db.prepare('INSERT INTO cp_drafts VALUES(?,1,\'\',0,?)');for(let i=0;i<limits.records;i++){const resource=f.kernel.createConversationRef('Synthetic retained empty draft '+i,null);insert.run(resource.id,new Date().toISOString());}});
+  f.kernel.withTransaction(db=>{const insert=db.prepare('INSERT INTO cp_drafts(resource_id,version,content,content_bytes,updated_at) VALUES(?,1,\'\',0,?)');for(let i=0;i<limits.records;i++){const resource=f.kernel.createConversationRef('Synthetic retained empty draft '+i,null);insert.run(resource.id,new Date().toISOString());}});
   await assert.rejects(f.product.command('saveDraft',{resourceId:candidate.resourceId,expectedVersion:0,content:''}),/draft_capacity_exceeded/);assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM cp_drafts').get()!.n,limits.records);assert.equal((await f.product.command('readDraft',{resourceId:candidate.resourceId})).version,0);
  }finally{await f.close();cleanup(f.dir);}
 });
@@ -95,5 +95,67 @@ test('unsent text never becomes search/export/context/transcript and send failur
   let rejectSend!:(error:Error)=>void,started!:()=>void;const pending=new Promise<unknown>((_resolve,reject)=>{rejectSend=reject;}),entered=new Promise<void>(resolve=>{started=resolve;});f.host.sendWithContext=async()=>{started();return pending;};
   const sending=f.product.command('send',{resourceId:codex.resourceId,content:sent.content,expectedRevision:1,commandId:crypto.randomUUID()});await entered;const later=await f.product.command('saveDraft',{resourceId:codex.resourceId,expectedVersion:sent.version,content:'Synthetic later in-flight typing'});rejectSend(Error('synthetic_provider_failure'));await assert.rejects(sending,/synthetic_provider_failure/);assert.deepEqual(await f.product.command('readDraft',{resourceId:codex.resourceId}),later);
   await assert.rejects(f.product.command('saveDraft',{resourceId:codex.resourceId,expectedVersion:sent.version,content:''}),/stale_draft_version/);assert.deepEqual(await f.product.command('readDraft',{resourceId:codex.resourceId}),later);
+ }finally{await f.close();cleanup(f.dir);}
+});
+
+
+test('document draft stores refs only, rechecks access/version and survives Core reopen',async()=>{
+ const f=fixture(true);let reopened:BackendCore|undefined;try{
+  const c=await f.create();const path=join(f.dir,'Synthetic.txt');writeFileSync(path,'Synthetic document body never copied into a draft');
+  const {resource}=await f.core.command('mediaImportTrusted',{kind:'file',variant:'document',commandId:crypto.randomUUID(),selection:{kind:'file',path}});
+  const docs=[{id:resource.id,version:resource.version}];
+  const saved=await f.product.command('saveDraft',{resourceId:c.resourceId,expectedVersion:0,content:'Unsent question',documents:docs});
+  assert.equal(saved.documents?.[0].id,resource.id);
+  const raw=String(f.db.prepare('SELECT documents_json FROM cp_drafts WHERE resource_id=?').get(c.resourceId)!.documents_json);
+  assert.equal(raw,JSON.stringify(docs));assert(!raw.includes(path));assert(!raw.includes('Synthetic document body'));
+  await assert.rejects(f.product.command('saveDraft',{resourceId:c.resourceId,expectedVersion:0,content:'conflict',documents:[]}),/stale_draft_version/);
+  f.denied.add(resource.id);const hidden=await f.product.command('readDraft',{resourceId:c.resourceId});
+  assert.equal(hidden.documents?.[0].title,'Unavailable document');assert.equal(hidden.documents?.[0].unavailable,'inaccessible');
+  f.denied.delete(resource.id);f.db.prepare('UPDATE resources SET version=version+1 WHERE id=?').run(resource.id);
+  assert.equal((await f.product.command('readDraft',{resourceId:c.resourceId})).documents?.[0].unavailable,'changed');
+  await f.close();reopened=new BackendCore({path:f.path,contentPolicy:'synthetic-only',provider:'fixture'});
+  const restored=await reopened.command('conversation',{name:'readDraft',input:{resourceId:c.resourceId}}) as typeof saved;
+  assert.equal(restored.content,'Unsent question');assert.equal(restored.documents?.[0].version,resource.version);
+  assert.equal(restored.documents?.[0].unavailable,'changed');
+ }finally{await (reopened?reopened.command('close',{}):f.close());cleanup(f.dir);}
+});
+
+for(const scenario of ['copy','source changed','source revoked','destination changed','content forged','documents only'] as const)test('source-bound draft copy is checked at destination transaction: '+scenario,async()=>{
+ const f=fixture();try{
+  const source=await f.create('Synthetic source'),target=await f.create('Synthetic target');
+  const initial=await f.product.command('saveDraft',{resourceId:source.resourceId,expectedVersion:0,content:'Explicitly selected source draft'});
+  // Simulate the renderer's earlier read, then an intervening change before the single copy command.
+  if(scenario==='source changed')await f.product.command('saveDraft',{resourceId:source.resourceId,expectedVersion:1,content:'New source draft'});
+  if(scenario==='source revoked')f.denied.add(source.resourceId);
+  if(scenario==='destination changed')await f.product.command('saveDraft',{resourceId:target.resourceId,expectedVersion:0,content:'Other destination draft'});
+  const input={resourceId:target.resourceId,expectedVersion:0,content:scenario==='documents only'?'':scenario==='content forged'?'Forged text':initial.content,documents:[],sourceCopy:{resourceId:source.resourceId,draftVersion:initial.version,copyText:scenario!=='documents only'}};
+  if(scenario==='copy'||scenario==='documents only')assert.equal((await f.product.command('saveDraft',input)).content,input.content);
+  else{await assert.rejects(f.product.command('saveDraft',input),/source_unavailable|stale_source_draft|stale_draft_version/);assert.equal((await f.product.command('readDraft',{resourceId:target.resourceId})).content,scenario==='destination changed'?'Other destination draft':'');}
+  assert.equal(f.db.prepare('SELECT content FROM cp_drafts WHERE resource_id=?').get(source.resourceId)!.content,scenario==='source changed'?'New source draft':initial.content);
+ }finally{await f.close();cleanup(f.dir);}
+});
+
+for(const scenario of ['copy','changed','revoked','foreign','unselected'] as const)test('atomic draft document copy rechecks exact selection and authority: '+scenario,async()=>{
+ const f=fixture();try{
+  const source=await f.create(),target=await f.create();const note=f.kernel.createNote('Synthetic bound note','Synthetic content');
+  const documents=[{id:note.id,version:note.version}];
+  const saved=await f.product.command('saveDraft',{resourceId:source.resourceId,expectedVersion:0,content:'',documents});
+  if(scenario==='changed')f.db.prepare('UPDATE resources SET version=version+1 WHERE id=?').run(note.id);
+  if(scenario==='revoked')f.denied.add(note.id);
+  if(scenario==='foreign')f.db.prepare('UPDATE resources SET project_id=? WHERE id=?').run(f.kernel.createProject('Synthetic other project').id,target.resourceId);
+  const selected=scenario==='unselected'?[{id:f.kernel.createNote('Unselected note','Never selected').id,version:1}]:documents;
+  const input={resourceId:target.resourceId,expectedVersion:0,content:'',documents:selected,sourceCopy:{resourceId:source.resourceId,draftVersion:saved.version,copyText:false}};
+  if(scenario==='copy')assert.deepEqual((await f.product.command('saveDraft',input)).documents?.map(({id,version})=>({id,version})),documents);
+  else{await assert.rejects(f.product.command('saveDraft',input),/source_unavailable|stale_source_draft_documents/);assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM cp_drafts WHERE resource_id=?').get(target.resourceId)!.n,0);}
+ }finally{await f.close();cleanup(f.dir);}
+});
+
+test('source-bound copy cannot preserve unvalidated destination refs when documents are omitted',async()=>{
+ const f=fixture();try{
+  const source=await f.create(),target=await f.create();const note=f.kernel.createNote('Destination-only synthetic note','Not selected from source');
+  const selected=await f.product.command('saveDraft',{resourceId:source.resourceId,expectedVersion:0,content:'Source text'});
+  const prior=await f.product.command('saveDraft',{resourceId:target.resourceId,expectedVersion:0,content:'Prior destination',documents:[{id:note.id,version:note.version}]});
+  await assert.rejects(f.product.command('saveDraft',{resourceId:target.resourceId,expectedVersion:prior.version,content:selected.content,sourceCopy:{resourceId:source.resourceId,draftVersion:selected.version,copyText:true}}),/invalid_draft_documents/);
+  assert.deepEqual(await f.product.command('readDraft',{resourceId:target.resourceId}),prior);
  }finally{await f.close();cleanup(f.dir);}
 });

@@ -95,3 +95,29 @@ test('opening remains a read during a deterministic pending execution and makes 
   await f.core.command('interrupt',{executionId});await running;running=undefined;
  }finally{if(running&&executionId){await f.core.command('interrupt',{executionId});await running;}await f.close();}
 });
+
+test('exact resource version opening rejects stale selections without content, writes, or provider activity', async () => {
+ const f=fixture(); try {
+  const n=await note(f); const before=state(f);
+  const ready=await f.core.command('openResource',{resourceId:n.id,expectedVersion:n.version});
+  assert.equal(ready.status,'ready'); assert.deepEqual(state(f),before);
+  await f.core.command('notes',{name:'commitNote',input:{resourceId:n.id,expectedResourceVersion:n.version,expectedDraftVersion:0,content:'Synthetic revised content'}});
+  const changed=state(f);
+  const unavailable={contract:RESOURCE_OPENING_CONTRACT,status:'unavailable',resourceId:n.id,reason:'resource-unavailable'};
+  assert.deepEqual(await f.core.command('openResource',{resourceId:n.id,expectedVersion:n.version}),unavailable);
+  assert.deepEqual(await f.core.command('openResource',{resourceId:n.id,expectedVersion:n.version+2}),unavailable);
+  const current=await f.core.command('openResource',{resourceId:n.id,expectedVersion:n.version+1});
+  assert.equal(current.status,'ready'); if(current.status==='ready')assert.equal(current.resource.content,'Synthetic revised content');
+  assert.deepEqual(state(f),changed); assert.equal(f.calls,0);
+ } finally {await f.close();}
+});
+
+test('expectedVersion is a copied positive safe integer and never an accessor or grant',()=>{
+ const source={resourceId:'synthetic',expectedVersion:2};const parsed=parseResourceOpeningInput(source);
+ source.expectedVersion=3;assert.equal(parsed.expectedVersion,2);
+ for(const expectedVersion of [0,-1,1.5,Number.MAX_SAFE_INTEGER+1,NaN,Infinity,null,undefined,'2'])
+  assert.throws(()=>parseResourceOpeningInput({resourceId:'synthetic',expectedVersion}),/invalid_resource_opening_request/);
+ let accessed=false;
+ assert.throws(()=>parseResourceOpeningInput({resourceId:'synthetic',get expectedVersion(){accessed=true;return 2;}}),/invalid_resource_opening_request/);
+ assert.equal(accessed,false);
+});
