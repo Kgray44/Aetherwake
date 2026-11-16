@@ -1,3 +1,4 @@
+import { stageChatDocumentForVela } from '../../visual-experience/cinematic-v3/src/document-vela-staging.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -58,6 +59,32 @@ class Document { activeElement: Node | null = null; createElement(tag: string) {
 async function settles(check: () => boolean) { for (let i = 0; i < 50 && !check(); i++) await new Promise(resolve => setImmediate(resolve)); assert.ok(check(), 'component settled at its canonical state'); }
 const named = (root: Node, text: string) => root.find(node => node.tagName === 'button' && (node.getAttribute('aria-label') === text || node.textContent === text))!;
 function displayed(node: Node) { for (let parent: Node | null = node; parent; parent = parent.parent) { if (parent.hidden) return false; if (parent.tagName === 'details' && !parent.open && !parent.children[0]?.contains(node)) return false; } return true; }
+
+test('a document opened from the viewer enters Vela’s existing draft and waits for Send', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => { turns.push(input); return request(); },
+  }));
+  try {
+    await panel.open();
+    const form = root.find(node => node.className === 'vela-core-compose')!;
+    const editor = form.querySelector('textarea')!;
+    editor.value = 'Explain the findings in this document.';
+    editor.fire('input');
+    const ref = { id: 'file:brief', kind: 'resource' as const, resourceKind: 'file', title: 'Brief.pdf', version: 3 };
+    panel.addDocumentSource(ref);
+    panel.addDocumentSource(ref);
+    assert.equal(doc.activeElement, editor);
+    assert.equal(editor.value, 'Explain the findings in this document.');
+    assert.equal(root.querySelectorAll('button').filter(node => node.getAttribute('aria-label') === 'Remove source Brief.pdf').length, 1);
+    assert.equal(turns.length, 0);
+    form.fire('submit');
+    await settles(() => turns.length === 1);
+    assert.deepEqual(turns[0].resourceIds, [ref.id]);
+    assert.deepEqual(turns[0].resourceRefs, [ref]);
+  } finally { panel.dispose(); }
+});
 
 test('a verified result is concise, counts only this request and opens its canonical plan and workspace', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(), opened: unknown[] = [];
@@ -961,4 +988,28 @@ test('saved memory is a one-turn choice for Vela API with no attached sources', 
     include.fire('change');
     assert.equal(memory.disabled, true);
   } finally { panel.dispose(); }
+});
+
+
+
+test('viewer document staging rejects invalid references and disposed composer without a send', async () => {
+ const doc=new Document(), root=doc.createElement('main');let calls=0;
+ const panel=mountVelaPanel(root as unknown as HTMLElement,clientFor(async()=>state(),{request:async()=>{calls++;return request();}}));
+ await panel.open();const valid={id:'file:synthetic',kind:'resource' as const,resourceKind:'file',title:'Synthetic.txt',version:2};
+ for(const ref of [{...valid,version:0},{...valid,version:NaN},{...valid,version:1.5},{...valid,id:''},{...valid,resourceKind:'conversation'}])assert.throws(()=>panel.addDocumentSource(ref),/invalid_document_source/);
+ assert.equal(calls,0);panel.dispose();assert.throws(()=>panel.addDocumentSource(valid),/vela_composer_unavailable/);assert.equal(calls,0);
+});
+
+for(const kind of ['file','note'] as const)test('canonical staging through panel clears incompatible memory choice and awaits explicit Send: '+kind,async()=>{
+ const doc=new Document(),root=doc.createElement('main'),canonical=state();canonical.reviewedMemoryAvailable=true;canonical.planningProviders=[{providerId:'openai-api-vela',available:true}];
+ const turns:Parameters<VelaClient['request']>[0][]=[];
+ const panel=mountVelaPanel(root as unknown as HTMLElement,clientFor(async()=>canonical,{request:async input=>{turns.push(input);return request();}}));
+ try{
+  await panel.open();const form=root.find(node=>node.className==='vela-core-compose')!,editor=form.querySelector('textarea')!;
+  editor.value='Keep this unsent question';editor.fire('input');const memory=root.find(node=>node.tagName==='label'&&node.textContent==='Review saved memory for this send')!.querySelector('input')!;memory.checked=true;
+  const resource={id:kind+':synthetic',kind,title:'Synthetic selected source',version:3,available:true,visible:true,state:'active',project_id:null,media:{source:'file',format:'text'}};
+  await stageChatDocumentForVela(resource,{isCurrent:()=>true,open:async()=>({status:'ready',resource:resource as any}),stage:r=>panel.addDocumentSource({id:r.id,kind:'resource',resourceKind:r.kind,title:r.title,version:r.version,projectId:r.project_id})});
+  assert.equal(editor.value,'Keep this unsent question');assert.equal(memory.checked,false);assert.equal(memory.disabled,true);assert.equal(turns.length,0);
+  form.fire('submit');await settles(()=>turns.length===1);assert.equal(turns[0].useMemory,undefined);assert.deepEqual(turns[0].resourceIds,[resource.id]);assert.equal(turns[0].resourceRefs![0].version,3);
+ }finally{panel.dispose();}
 });

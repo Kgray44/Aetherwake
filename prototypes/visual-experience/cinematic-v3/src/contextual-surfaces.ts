@@ -207,7 +207,7 @@ type Entry = {
 const focusableSelector =
   'button,input,select,textarea,a[href],summary,[tabindex],[contenteditable="true"],audio[controls],video[controls]';
 function focusables(node: HTMLElement): HTMLElement[] {
-  return [...node.querySelectorAll<HTMLElement>(focusableSelector)].filter(
+  return Array.from(node.querySelectorAll<HTMLElement>(focusableSelector)).filter(
     (e) =>
       !e.closest('[inert],[aria-hidden="true"]') &&
       !e.matches(":disabled") &&

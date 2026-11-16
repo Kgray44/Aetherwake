@@ -6,6 +6,7 @@ export const RESOURCE_OPENING_ORIGIN_SOURCES=Object.freeze(['application','const
 export type ResourceOpeningOriginSource=typeof RESOURCE_OPENING_ORIGIN_SOURCES[number];
 export type ResourceOpeningInput={
  resourceId:string;
+ expectedVersion?:number;
  preferredPresentation?:'direct'|'existing-placement';
  preferredPlacement?:{workspaceId:string;blockId:string};
  /** Bounded animation/navigation hint only, never authorization or identity. */
@@ -36,8 +37,12 @@ function object(value:unknown,keys:readonly string[]):Record<string,unknown>{
 const identifier=(value:unknown):string=>typeof value==='string'&&value.length>=1&&value.length<=256&&value.trim().length>0?value:reject();
 /** Exact schema, copied scalar hints; never invokes caller getters or trims IDs. */
 export function parseResourceOpeningInput(value:unknown):ResourceOpeningInput {
- const input=object(value,['resourceId','preferredPresentation','preferredPlacement','origin','selection']);
+ const input=object(value,['resourceId','expectedVersion','preferredPresentation','preferredPlacement','origin','selection']);
  const result:ResourceOpeningInput={resourceId:identifier(input.resourceId)};
+ if(Object.hasOwn(input,'expectedVersion')){
+  if(typeof input.expectedVersion!=='number'||!Number.isSafeInteger(input.expectedVersion)||input.expectedVersion<1)return reject();
+  result.expectedVersion=input.expectedVersion;
+ }
  if(Object.hasOwn(input,'preferredPresentation')){if(input.preferredPresentation!=='direct'&&input.preferredPresentation!=='existing-placement')return reject();result.preferredPresentation=input.preferredPresentation;}
  if(Object.hasOwn(input,'preferredPlacement')){const hint=object(input.preferredPlacement,['workspaceId','blockId']);result.preferredPlacement={workspaceId:identifier(hint.workspaceId),blockId:identifier(hint.blockId)};}
  if(Object.hasOwn(input,'origin')){const origin=object(input.origin,['source','nodeKey']);if(!RESOURCE_OPENING_ORIGIN_SOURCES.includes(origin.source as ResourceOpeningOriginSource))return reject();result.origin={source:origin.source as ResourceOpeningOriginSource};if(Object.hasOwn(origin,'nodeKey'))result.origin.nodeKey=identifier(origin.nodeKey);}

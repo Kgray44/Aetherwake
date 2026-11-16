@@ -17,7 +17,7 @@ const make=<K extends keyof HTMLElementTagNameMap>(tag:K,text='',className='')=>
 
 /** Presentation only. The host supplies current authorized labels and owns the
  * selected value/dispatch. No provider, resource, draft or permission store. */
-export function mountConversationPicker(container:HTMLElement,options:{motion:ExperienceMotionPort;viewId:string;label:string;identity?:string;onSelect(value:string):void|Promise<void>;onError?(error:unknown):void}):ConversationPicker{
+export function mountConversationPicker(container:HTMLElement,options:{motion:ExperienceMotionPort;viewId:string;label:string;identity?:string;itemsOnOpen?():readonly ConversationPickerOption[];onSelect(value:string):void|Promise<void>;onError?(error:unknown):void}):ConversationPicker{
   if(!options.motion||!options.viewId?.trim())throw new Error('conversation_picker_motion_required');
   const motion=options.motion,key='conversation-picker:'+options.viewId,ariaId='cp-picker-'+ ++serial;
   const root=make('span','','cp-picker'),trigger=make('button','','cp-picker-trigger'),caption=make('span','','cp-picker-label'),chevron=make('span','⌄','cp-picker-chevron');
@@ -47,7 +47,7 @@ export function mountConversationPicker(container:HTMLElement,options:{motion:Ex
     count.textContent=matches.length>64?`${start+1}–${Math.min(matches.length,start+64)} of ${matches.length} · type to find` :matches.length?'':'No matching options';count.hidden=!!matches.length&&matches.length<=64;
     search.hidden=items.length<=12&&!search.value;
   }
-  const open=()=>{if(disposed||disabled||opened)return;opened=true;root.dataset.open='true';trigger.setAttribute('aria-expanded','true');panel.hidden=false;panel.inert=false;renderRows();menuHeight=0;fit();motion.wake();if(!search.hidden)search.focus({preventScroll:true});else focusOption(items.find(item=>item.value===selected&&!item.disabled)?.value??items.find(item=>!item.disabled)?.value);};
+  const open=()=>{if(disposed||disabled||opened)return;if(options.itemsOnOpen){try{items=options.itemsOnOpen();signature='';}catch(error){options.onError?.(error);return;}}opened=true;root.dataset.open='true';trigger.setAttribute('aria-expanded','true');panel.hidden=false;panel.inert=false;renderRows();menuHeight=0;fit();motion.wake();if(!search.hidden)search.focus({preventScroll:true});else focusOption(items.find(item=>item.value===selected&&!item.disabled)?.value??items.find(item=>!item.disabled)?.value);};
   trigger.addEventListener('click',()=>opened?close(true):open());trigger.addEventListener('keydown',event=>{if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();open();move(selected,event.key==='ArrowUp'?-1:1);}else if(event.key==='Escape'&&opened){event.preventDefault();event.stopPropagation();close(true);}});
   search.addEventListener('input',()=>{focusedValue=undefined;renderRows();motion.wake();});search.addEventListener('keydown',event=>{if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();move(undefined,event.key==='ArrowUp'?-1:1);}else if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close(true);}});
   const outside=(event:Event)=>{if(opened&&!root.contains(event.target as Node))close();};root.ownerDocument.addEventListener?.('pointerdown',outside);

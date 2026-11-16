@@ -1,3 +1,4 @@
+import { stageChatDocumentForVela } from './document-vela-staging.ts';
 import { createPersonalMemoryView } from './personal-memory-view.ts';
 import type {
   GraphActions,
@@ -109,7 +110,7 @@ import "../../../block-library/resource-links-view.css";
 import { createRelatedResourcesPort } from "./related-resources";
 import { createResourceOpener } from "./resource-opening.ts";
 import { createResourcePresenter } from "./resource-presentation.ts";
-import { createResourceSurface } from "./resource-surface.ts";
+import { createResourceSurface, supportsDocumentQuestion } from "./resource-surface.ts";
 import { mountProviderConnections } from "./provider-connections.ts";
 import { mountEnvironmentNavigator } from "./environment-navigator.ts";
 import "./environment-navigator.css";
@@ -834,6 +835,35 @@ export function installApplication(hooks: Hooks) {
       })) as ProductCommandMap[K]["output"];
     },
   };
+  async function chooseChatDocument() {
+    const picked=await mediaClient.chooseMediaForAdd({kind:'file',variant:'document'});
+    if(!picked)return null;
+    const {id,version,title}=picked.resource;return {id,version,title};
+  }
+  function listChatDocuments(conversationId:string) {
+    const chat=state?.resources.find(resource=>resource.id===conversationId);
+    if(!chat||chat.visible===false||chat.available===false||chat.state==='archived')return [];
+    return (state?.resources??[]).filter(resource=>resource.visible!==false&&resource.available!==false&&resource.state!=='archived'&&
+      (resource.project_id==null||resource.project_id===chat.project_id)&&
+      (resource.kind==='note'||resource.kind==='file'&&resource.media?.source==='file'&&['pdf','docx','text'].includes(resource.media.format)))
+      .map(({id,version,title})=>({id,version,title})).sort((a,b)=>a.title.localeCompare(b.title));
+  }
+  async function askVelaAboutChatDocument(document: {id:string;version:number},isCurrent:()=>boolean) {
+    await stageChatDocumentForVela(document,{
+      open:input=>host.command!("openResource",input) as Promise<ResourceOpeningResult>,isCurrent,
+      stage:resource=>{
+        const latest=state?.resources.find(item=>item.id===resource.id);
+        if(!latest||latest.version!==resource.version||latest.available===false||latest.visible===false||latest.state==='archived')throw Error('resource_unavailable');
+        if(!velaOpen)openVela();if(!velaPanel)throw Error('vela_composer_unavailable');
+        velaPanel.addDocumentSource({id:resource.id,kind:'resource',resourceKind:resource.kind,version:resource.version,title:resource.title,projectId:resource.project_id});
+      },
+    });
+  }
+  async function openChatDocument(document: {id:string;version:number}) {
+    const result=await resourceOpener.open({resourceId:document.id,expectedVersion:document.version,
+      preferredPresentation:'direct',origin:{source:'application'}});
+    return result.status==='ready'?'opened' as const:result.status==='superseded'?'superseded' as const:'unavailable' as const;
+  }
   const replyNoteActions = {
     async saveReplyNote(input: ProductCommandMap["captureReplyNote"]["input"]) {
       const receipt = await composerPort.command("captureReplyNote", input);
@@ -885,6 +915,7 @@ export function installApplication(hooks: Hooks) {
       height: 16,
     }),
     failed: report,
+    askAboutDocument: (resource, isCurrent) => askVelaAboutChatDocument(resource, isCurrent),
     placeNote: (resource) => {
       const workspaceId = state?.activeWorkspaceId;
       if (!workspaceId || !notePlacementAllowed(resource, workspaceId)) return;
@@ -2593,6 +2624,8 @@ export function installApplication(hooks: Hooks) {
         return result.status === "saved";
       },
       ...replyNoteActions,
+          openDocument: openChatDocument, askVelaAboutDocument: askVelaAboutChatDocument,
+          chooseDocument: chooseChatDocument, listDocuments: listChatDocuments,
       onOpenChatGPT: async (reference) => {
         const receipt = (await host.command!(
           "firstPartyChat",
@@ -4435,6 +4468,8 @@ export function installApplication(hooks: Hooks) {
         const session = composerSession(r.id);
         view = mountBlockChat(surface, {
           ...replyNoteActions,
+          openDocument: openChatDocument, askVelaAboutDocument: askVelaAboutChatDocument,
+          chooseDocument: chooseChatDocument, listDocuments: listChatDocuments,
           copy: copyText,
           motion: experienceMotion,
           viewId: "block:" + b.id + ":conversation",

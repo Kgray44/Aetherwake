@@ -41,3 +41,13 @@ test('browser option observation avoids unchanged frame rescans but still sample
  try{const select=dom.doc.createElement('select'),a=dom.doc.createElement('option'),b=dom.doc.createElement('option');a.value='a';a.textContent='First';b.value='b';b.textContent='Second';select.append(a,b);select.value='a';Object.defineProperty(select,'options',{get(){reads++;return select.children;}});dom.root.append(select);control=enhanceConversationSelect(select,{motion:m.motion,viewId:'select:observed'});assert.equal(observed,select);assert.equal(reads,1);for(let i=0;i<10;i++)control.frame();assert.equal(reads,1,'Unchanged host frames do not clone all options');select.value='b';control.frame();assert.equal(reads,1);assert.equal(control.picker.trigger.textContent,'Second⌄');b.textContent='Renamed';notify();control.frame();assert.equal(reads,2);assert.equal(control.picker.trigger.textContent,'Renamed⌄');select.disabled=true;control.frame();assert.equal(control.picker.trigger.disabled,true);control.dispose();assert.equal(disconnected,1);const wakes=m.wakes;notify();assert.equal(m.wakes,wakes,'A late callback cannot wake a disposed view');}
  finally{control?.dispose();if(old===undefined)delete (globalThis as any).MutationObserver;else globalThis.MutationObserver=old;restore();}
 });
+
+test('dynamic picker refreshes on each explicit opening and fails closed if catalog read fails',()=>{
+ const dom=componentDocument(),restore=dom.install(),m=pickerMotion();let picker:any;let reads=0,fail=false,errors=0;
+ try{
+  picker=mountConversationPicker(dom.root,{motion:m.motion,viewId:'picker:dynamic',label:'Saved documents',itemsOnOpen(){reads++;if(fail)throw Error('catalog unavailable');return [{value:String(reads),label:'Synthetic '+reads}];},onSelect(){},onError(){errors++;}});
+  picker.update({items:[],value:''});picker.open();assert.equal(reads,1);assert.ok(picker.element.querySelector('[data-cp-option-value="1"]'));picker.close();
+  picker.open();assert.equal(reads,2);assert.ok(picker.element.querySelector('[data-cp-option-value="2"]'));picker.close();
+  fail=true;picker.open();assert.equal(errors,1);assert.equal(picker.trigger.getAttribute('aria-expanded'),'false');
+ }finally{picker?.dispose();assert.equal(m.poses.size,0);restore();}
+});
