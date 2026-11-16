@@ -58,12 +58,29 @@ test('real-counter mission conversations run without a parallel peer and retain 
   }
 });
 
+test('cold desktop host startup retains its deadline and runs without a backend peer', t => {
+  const root = mkdtempSync(join(tmpdir(), 'aerynth-shard-desktop-host-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'tests'));
+  const host = 'tests/product-desktop-host.test.mts';
+  const files = ['tests/a.test.mts', 'tests/b.test.mts', 'tests/c.test.mts', 'tests/d.test.mts', host,
+    'tests/mission-api-planning.test.mts', 'tests/mission-conversation.test.mts', 'tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts'];
+  for (const file of files) writeFileSync(join(root, file), '');
+  for (const duration of [1, 500_000]) {
+    const plan = planBackendShards(root, { [host]: duration });
+    assert.deepEqual(plan.flat(2).sort(), [...files].sort());
+    assert.equal(plan.flat(2).filter(file => file === host).length, 1);
+    assert.ok(plan[1][2].includes(host));
+    assert.ok(!plan.flatMap(lanes => lanes.slice(0, 2).flat()).includes(host));
+  }
+});
+
 test('acceptance runner executes the serial phase without a peer and retains all case reports', { skip: process.platform !== 'win32' }, t => {
   const root = mkdtempSync(join(tmpdir(), 'aerynth-shard-runner-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const backend = join(root, 'prototypes', 'integrated-backend');
   mkdirSync(join(backend, 'tests'), { recursive: true });
-  const serial = ['tests/mission-api-planning.test.mts', 'tests/mission-conversation.test.mts', 'tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts'];
+  const serial = ['tests/mission-api-planning.test.mts', 'tests/mission-conversation.test.mts', 'tests/mission-stream.test.mts', 'tests/native-worker-services.test.mts', 'tests/product-desktop-host.test.mts'];
   for (const [index, file] of serial.entries()) writeFileSync(join(backend, file), `
     import test from 'node:test';
     import assert from 'node:assert/strict';
@@ -151,4 +168,5 @@ test('Windows reports bind every lane and native receipt to the current run, att
     assert.throws(() => verify(copy));
   }
 });
+
 
