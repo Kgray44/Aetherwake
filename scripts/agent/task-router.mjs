@@ -6,7 +6,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { resolve, relative, sep } from 'node:path';
+import { resolve } from 'node:path';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const config = JSON.parse(readFileSync(new URL('../../agent-system/task-classes.json', import.meta.url), 'utf8'));
@@ -16,10 +16,12 @@ const shaPattern = /^[a-f\d]{40}$/i;
 function invalid(message) { throw new Error(message); }
 function safePath(value) {
   if (typeof value !== 'string' || !value.trim()) invalid('Path must be a nonempty string');
-  const absolute = resolve(root, value);
-  const rel = relative(root, absolute);
-  if (rel === '..' || rel.startsWith('..' + sep) || rel.startsWith('/') || rel === '') invalid('Path must remain inside repository: ' + value);
-  return rel.replaceAll('\\', '/');
+  // Reject aliases before normalization so traversal and Windows paths cannot
+  // erase risk-bearing segments differently across operating systems.
+  const normalized = value.replaceAll('\\', '/');
+  if (/^[a-z]:/i.test(normalized) || normalized.startsWith('/') || /[\x00-\x1f\x7f]/.test(normalized)
+      || normalized.split('/').some(part => !part || part === '.' || part === '..')) invalid('Path must remain inside repository without ambiguous segments: ' + value);
+  return normalized;
 }
 function unique(strings) { return [...new Set(strings)]; }
 function requiredString(obj, key) {
@@ -37,12 +39,14 @@ export function routeTask(task, inputPaths = []) {
   if (!task.acceptance || typeof task.acceptance.profile_id !== 'string' || !Array.isArray(task.acceptance.criteria) || !task.acceptance.criteria.length) invalid('Task requires acceptance profile_id and nonempty criteria');
   if (typeof task.state !== 'string') invalid('Task requires state');
   const selected = unique([task.classification.primary,...secondary]);
+  if (!Array.isArray(inputPaths)) invalid('Affected paths must be an array');
   const paths = unique(inputPaths.map(safePath));
   const risks = unique([
     ...selected.filter(c => Object.hasOwn(config.additive_risks,c)),
-    ...config.path_risks.filter(r => paths.some(p => r.path_prefixes.some(prefix => p.startsWith(prefix)))).map(r => r.risk)
+    ...config.path_risks.filter(r => paths.some(p => r.path_prefixes.some(prefix => p.toLowerCase().startsWith(prefix.toLowerCase())))).map(r => r.risk)
   ]);
   const checks = unique([
+    ...config.universal_checks,
     ...selected.flatMap(c => config.classes[c].checks),
     ...risks.flatMap(r => config.additive_risks[r].checks)
   ]);
@@ -53,13 +57,16 @@ export function routeTask(task, inputPaths = []) {
   ];
   return {
     schema_version: 1,
+    policy_revision: config.policy_revision,
     task_id: task.id,
     task_revision: task.revision,
     primary_class: task.classification.primary,
     selected_classes: selected,
     detected_risks: risks,
     affected_paths: paths,
-    workflow_skills: selected.map(c => config.classes[c].skill),
+    workflow_skills: unique([...selected, ...risks.filter(r => Object.hasOwn(config.classes, r))]).map(c => config.classes[c].skill),
+    scope_coverage: paths.length ? 'requires-owner-review' : 'unavailable',
+    task_acceptance_criterion_ids: task.acceptance.criteria.map(c => c.id),
     required_check_ids: checks,
     acceptance_profile_id: task.acceptance.profile_id,
     prerequisite_task_ids: task.prerequisites.task_ids,
@@ -101,3 +108,4 @@ function main(argv) {
 if(process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)){
   try { main(process.argv.slice(2)); } catch(error) { console.error('Task routing failed: ' + error.message); process.exitCode=1; }
 }
+

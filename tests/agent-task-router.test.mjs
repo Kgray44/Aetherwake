@@ -80,3 +80,57 @@ test('CLI explains missing input without claiming completion',()=>{
  assert.match(process.stderr,/--task-file/);
 });
 function processExecPath(){return process.execPath;}
+
+
+test('all ten categories preserve configured checks and universal review obligations', () => {
+ for (const cls of taskClasses) {
+  const route = routeTask(fixture(cls));
+  for (const check of [...config.classes[cls].checks, ...config.universal_checks]) assert.ok(route.required_check_ids.includes(check), `${cls}: ${check}`);
+  assert.equal(route.workflow_skills[0], config.classes[cls].skill);
+  assert.equal(route.scope_coverage, 'unavailable');
+ }
+});
+
+test('connected renderer, native brokers and backend owners add actual obligations and skills', () => {
+ const cases = [
+  ['prototypes/visual-experience/cinematic-v3/src/renderer.ts', ['rendered-frames','measured-baseline','gpu-rendered-evidence']],
+  ['prototypes/visual-experience/cinematic-v3/native/desktop-main.cjs', ['authorization-tests','native-test-admission']],
+  ['prototypes/integrated-backend/src/service.mts', ['interface-contract','security-review']],
+  ['prototypes/integrated-backend/src/windows-gpu-readback.mts', ['native-test-admission','gpu-rendered-evidence','measured-baseline']]
+ ];
+ for (const [path, checks] of cases) {
+  const r=routeTask(fixture('documentation'),[path]);
+  for(const check of checks) assert.ok(r.required_check_ids.includes(check), `${path}: ${check}`);
+  assert.ok(r.required_check_ids.includes('authority-audit'));
+ }
+ const r=routeTask(fixture('bug'),[cases[0][0]]);
+ assert.ok(r.workflow_skills.includes(config.classes.visual.skill));
+ assert.ok(r.workflow_skills.includes(config.classes.performance.skill));
+});
+
+test('empty and unknown scope never imply safe coverage', () => {
+ for (const paths of [[],['unknown/new-owner.ts']]) {
+  const r=routeTask(fixture(),paths);
+  assert.ok(r.required_check_ids.includes('affected-scope-review'));
+  assert.ok(r.required_check_ids.includes('governance-coverage'));
+  assert.notEqual(r.scope_coverage,'complete');
+ }
+});
+
+test('ambiguous and cross-platform path aliases fail closed; backslash separators retain risks', () => {
+ for(const path of ['src/security/../innocent.ts','..\\outside','C:\\private\\key','//server/share','src//security/key','./src/security/key','src/secret\u0000']) assert.throws(()=>routeTask(fixture(),[path]),/inside repository/);
+ assert.throws(()=>routeTask(fixture(),null),/array/);
+ assert.ok(routeTask(fixture(),['prototypes\\integrated-backend\\src\\service.mts']).required_check_ids.includes('security-review'));
+});
+
+test('root instructions expose targeted skills and current architecture without authority changes',()=>{
+ const instructions=readFileSync(resolve(root,'AGENTS.md'),'utf8');
+ assert.match(instructions,/scripts\/agent\/task-router.mjs/);
+ assert.match(instructions,/\.agents\/skills\//);
+ assert.match(instructions,/prototypes\/integrated-backend\//);
+ assert.match(instructions,/governance-context/);
+});
+
+test('Windows case aliases cannot suppress risk checks',()=>{
+ assert.ok(routeTask(fixture(),['PROTOTYPES/INTEGRATED-BACKEND/SRC/service.mts']).required_check_ids.includes('security-review'));
+});

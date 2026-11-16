@@ -13,7 +13,7 @@ The primary class selects the lead skill, and every secondary class adds its ski
 For a v1 Task record saved as `task.json`:
 
 ```bash
-node scripts/agent/task-router.mjs --task-file task.json --path src/rendering/particles.ts --json
+node scripts/agent/task-router.mjs --task-file task.json --path prototypes/visual-experience/cinematic-v3/src/main.ts --json
 node --test tests/agent-task-router.test.mjs tests/agent-contracts.test.mjs
 ```
 
@@ -31,3 +31,12 @@ Output includes selected class skills, union of required check IDs, prerequisite
 ## Integration boundaries
 
 **Phase A** owns audits; **Phase C** owns context snapshots and telemetry; **Phase D** owns verification profiles and CI gates; **Phase E** owns the observer website. Phase B must not write those records or infer approval. Risk mapping is not a security classifier; unrecognized areas still require architectural inspection and governance. This is intentionally a small dependency-free Node ESM module. 
+
+
+## Policy revision and source coverage
+
+`policy_revision` identifies the additive risk catalog independently of contract version. The connected renderer, native Electron brokers, backend services and GPU/resource owners are mapped in `task-classes.json`. Backend source conservatively adds security review because authorization and service ownership are intertwined. GPU-specific checks supplement, never replace, visual evidence.
+
+Every route requires governance coverage, source-owner review and affected-scope review. Empty, unknown or incomplete path sets are not safe classifications. Supply the complete changed-path inventory (including renamed/deleted paths), inspect the current-state and ownership indexes, and add any cross-domain obligations through existing governance. `scope_coverage` explicitly does not claim exhaustive coverage. Paths must be unambiguous repository-relative paths; unsafe aliases fail closed.
+
+Root `AGENTS.md` is the repository instruction entry point, and `.agents/skills/*/SKILL.md` contains discoverable, narrowly scoped skill files. Selected risk classes add skills even when not explicitly named as secondary classes. This filesystem layout is verified, not a claim that a Codex session was launched.

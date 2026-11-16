@@ -109,6 +109,20 @@
         "native-test-admission",
         "native-evidence-if-authorized"
       ]
+    },
+    "backend": {
+      "checks": [
+        "interface-contract",
+        "negative-paths",
+        "integration-tests"
+      ]
+    },
+    "gpu": {
+      "checks": [
+        "gpu-rendered-evidence",
+        "measured-baseline",
+        "quality-parity"
+      ]
     }
   },
   "path_risks": [
@@ -146,6 +160,60 @@
         "src/native/"
       ],
       "risk": "desktop"
+    },
+    {
+      "path_prefixes": [
+        "prototypes/visual-experience/cinematic-v3/src/",
+        "prototypes/visual-experience/cinematic-v3/public/"
+      ],
+      "risk": "visual"
+    },
+    {
+      "path_prefixes": [
+        "prototypes/visual-experience/cinematic-v3/src/",
+        "prototypes/integrated-backend/src/resource-",
+        "prototypes/integrated-backend/src/windows-gpu-"
+      ],
+      "risk": "performance"
+    },
+    {
+      "path_prefixes": [
+        "prototypes/integrated-backend/"
+      ],
+      "risk": "backend"
+    },
+    {
+      "path_prefixes": [
+        "prototypes/integrated-backend/src/",
+        "prototypes/visual-experience/cinematic-v3/native/",
+        "agent-system/observatory/sites/"
+      ],
+      "risk": "security"
+    },
+    {
+      "path_prefixes": [
+        "prototypes/visual-experience/cinematic-v3/native/",
+        "prototypes/integrated-backend/src/desktop-",
+        "prototypes/integrated-backend/src/windows-"
+      ],
+      "risk": "desktop"
+    },
+    {
+      "path_prefixes": [
+        "prototypes/visual-experience/cinematic-v3/src/presence",
+        "prototypes/visual-experience/cinematic-v3/src/nebula",
+        "prototypes/integrated-backend/src/mission-gpu-",
+        "prototypes/integrated-backend/src/windows-gpu-",
+        "prototypes/visual-experience/cinematic-v3/src/renderer",
+        "prototypes/visual-experience/cinematic-v3/src/main.ts"
+      ],
+      "risk": "gpu"
     }
+  ],
+  "policy_revision": "2026-11-16.1",
+  "universal_checks": [
+    "governance-coverage",
+    "source-owner-review",
+    "affected-scope-review"
   ]
 }

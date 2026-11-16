@@ -19,6 +19,7 @@ node scripts/agent/task-router.mjs --task-file <task.json> --path <affected-repo
 - Confirm real prerequisite readiness and canonical source owners. Record the exact revision and independently verify applicable requirements. Re-route if scope changes; a path heuristic cannot certify absence of security or visual obligations.
 - Choose focused evidence suited to the task class, preserve failed-attempt diagnoses, and never blindly repeat the same failed approach. No private data or fabricated token/quota metrics in this public repo.
 - A passing test, PR merge, or completed coding attempt is **not** an accepted Task. Respect all native-test admission, human review, owner artistic acceptance, and Trust Charter 14 requirements.
+- Provide the complete changed-path inventory, including renamed/deleted paths. Empty or unrecognized paths require affected-scope and source-owner review, never a presumption of safety. Class, risk, governance and Task acceptance obligations are additive.
 - Phase B emits **proposed check IDs** only. Phase C owns measurements and context, Phase D owns formal VerificationProfile checks and CI enforcement, Phase E owns the observational UI. Do not misrepresent unimplemented Phase C/D/E functions as operational.
 
 ## Deterministic governance routing
@@ -26,7 +27,7 @@ node scripts/agent/task-router.mjs --task-file <task.json> --path <affected-repo
 Before substantive work, use the repository's deterministic router instead of loading all 17 charter documents:
 
 ```bash
-node scripts/governance-router.mjs --task "Implement contextual command selection" --path src/interaction/selection.ts
+node scripts/governance-router.mjs --task "Implement contextual command selection" --path prototypes/visual-experience/cinematic-v3/src/application.ts
 ```
 
 Add further `--path` arguments as scope becomes known; use `--json` for structured output. The router always selects Constitution 00 and routes relevant domains by task phrases and paths.
@@ -34,7 +35,7 @@ Add further `--path` arguments as scope becomes known; use `--json` for structur
 For ordinary coding/engineering work, **prefer V2's section-level retrieval** after confirming the applicable charter domains:
 
 ```bash
-node scripts/governance-context.mjs --task "Optimize particle rendering" --path src/rendering/particles.ts
+node scripts/governance-context.mjs --task "Optimize particle rendering" --path prototypes/visual-experience/cinematic-v3/src/renderer.ts
 node scripts/governance-context.mjs --requirement AW-CIE-008 --json
 ```
 
@@ -91,7 +92,8 @@ For tasks involving **Vela's visual mind/Presence, GPU nebula, living tendrils, 
 - `docs/decisions/`: architecture and design decision records, including alternatives and reasons.
 - `plans/milestones/`: delivery phases and milestone outcomes.
 - `plans/tasks/`: actionable, testable engineering work.
-- `prototypes/visual-experience/`: experiments establishing Liquid Intelligence interaction and performance before production commitments.
+- `prototypes/visual-experience/cinematic-v3/`: connected Electron renderer, native brokers and visual verification. See [current state](docs/engineering/CURRENT-STATE-OF-AERYNTH.md) and [source ownership](docs/engineering/A0-A1-RUNTIME-OWNERSHIP.md); the historical prototype name does not reduce acceptance obligations.
+- `prototypes/integrated-backend/`: connected backend services, canonical source owners and integration tests.
 - `src/`: application source once implementation is authorized.
 
 ## Windows desktop verification
@@ -150,3 +152,4 @@ For any task that changes memory, context construction, task checkpoints, agent 
 **Visible intelligence and tests:** [Adaptive Intelligence Workspace](docs/design/VELA-ADAPTIVE-INTELLIGENCE-WORKSPACE.md) and [Fluid Intelligence Acceptance](docs/specifications/VELA-FLUID-INTELLIGENCE-ACCEPTANCE.md) require six connected source-backed spatial regions, inspectable real decisions, truthful telemetry, experiments, and adaptation history. No invented private reasoning or mock completion. Use independent held-out tasks, measured critical paths, resource interference, uncertainty and actual artifact readback.
 
 **Governance retrieval for unfamiliar FI tasks:** Explicitly select affected charter IDs (typically 05/06/08/09/10/13/15, plus Trust 14 and relevant experience charters). Examples: `node scripts/governance-context.mjs --requirement AW-VELA-218 --json`, `--requirement AW-ATW-164`, `--requirement AW-AEP-138`, `--requirement AW-PLT-140`. The deterministic governance router assists source retrieval only; it is not Vela's planned AI semantic router. Verify coverage of all relevant domains; use `--full` where necessary. Report implementation status separately from ratified documentation and passed fixture tests.
+
