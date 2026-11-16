@@ -130,6 +130,21 @@ test('verification helpers are excluded explicitly while new actual native host 
   const base='prototypes/visual-experience/cinematic-v3/native/',files={[base+'desktop-main.cjs']:"require('electron'); require('./backend-executable.cjs'); if(process.argv.includes('--integration-live'))require('./desktop-verify.cjs');",[base+'backend-executable.cjs']:"const fs=require('node:fs');module.exports={};"};for(const[name,text]of Object.entries(files)){await fs.mkdir(path.dirname(path.join(root,name)),{recursive:true});await fs.writeFile(path.join(root,name),text);}const result=await nodeClosure(root,new Set(Object.keys(files)),[base+'desktop-main.cjs']);assert.deepEqual(result.files,[base+'backend-executable.cjs',base+'desktop-main.cjs']);assert.deepEqual(result.excludedVerificationImports,[base+'desktop-verify.cjs']);
  });
 });
+test('portable bootstrap rejects synthetic memory verification before loading Electron', () => {
+ const script = new vm.Script(bootstrap('a'.repeat(40)));
+ const attempted = [];
+ const require = name => {
+  attempted.push(name);
+  if (name === 'node:fs') return { readFileSync: () => JSON.stringify({ contract: 'aerynth.portable-review@1', complete: true }) };
+  if (name === 'node:path') return path;
+  throw Error('unexpected_module_load');
+ };
+ assert.throws(() => script.runInNewContext({ require, __dirname: '/synthetic/app',
+  process: { argv: ['AerynthReview.exe', '--integration-native-review'] } }),
+ /verification_and_recording_modes_are_not_in_this_review_package/);
+ assert.deepEqual(attempted, ['node:fs', 'node:path']);
+});
+
 test('portable bootstrap compiles, preserves the real entry and blocks all verification/auto-grant routes',()=>{
  const text=bootstrap('a'.repeat(40));new vm.Script(text);assert(text.includes('process.env.AERYNTH_NODE_BIN=node'));assert(text.includes("require('./prototypes/visual-experience/cinematic-v3/native/desktop-main.cjs')"));assert(text.includes('manifest.complete!==true'));assert(text.includes('portable-review'));assert(text.includes('verification_and_recording_modes_are_not_in_this_review_package'));
  const help=readme('a'.repeat(40),'0.4.0');assert(help.includes('not an MSI/installer'));assert(help.includes('ReserveGuard.ps1'));assert(help.includes('No test auto-grants'));assert(help.includes('none is bundled'));assert(!/C:\\Users\\/.test(help));assert.equal(contained(path.resolve('/private'),path.resolve('/private-other')),false);
