@@ -22,6 +22,11 @@ async function fixture(t) {
   const task = {
     schema_version: 1, record_type: "task", id: "task_fixture",
     repository: "example/repo", revision,
+    created_at: new Date().toISOString(), title: "Fixture task", objective: "Verify Phase C",
+    classification: { primary: "backend", secondary: [] },
+    prerequisites: { task_ids: [], capabilities: [] },
+    acceptance: { profile_id: "backend-test", criteria: [{ id: "verify", description: "Pass fixture checks" }] },
+    state: "ready",
     requirements: [{ kind: "document", uri: "docs/authority.md" }]
   };
   return { dir, git, revision, task };
