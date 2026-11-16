@@ -227,6 +227,38 @@ test('workroom review uses bounded role keys for maximum-length task IDs and fen
   } finally { await f.close(); }
 });
 
+// Each controlled phase owns a fresh bounded wait. Deliberately held transport
+// time for workroom assertions is not response-completion time.
+async function waitForFixturePhase<T>(read: () => T | Promise<T>, ready: (value: T) => boolean,
+  budgetMs: number, clock = { now: () => performance.now(), sleep: (ms: number) => delay(ms) }) {
+  const started = clock.now(), deadline = started + budgetMs;
+  let value = await read(), reads = 1;
+  while (!ready(value) && clock.now() < deadline) {
+    await clock.sleep(Math.min(10, deadline - clock.now()));
+    value = await read();
+    reads++;
+  }
+  const elapsedMs = clock.now() - started;
+  return { value, reads, elapsedMs, budgetMs, met: ready(value) && elapsedMs <= budgetMs };
+}
+
+test('held fixture work cannot consume the fresh response-completion polling budget', async () => {
+  let now = 60_000, reads = 0;
+  const clock = { now: () => now, sleep: async (ms: number) => { now += ms; } };
+  const completed = await waitForFixturePhase(() => ++reads < 3 ? 'running' : 'verified', state => state !== 'running', 5000, clock);
+  assert.equal(completed.value, 'verified');
+  assert.equal(completed.reads, 3, 'Completion must poll after its initial read even after earlier held work');
+  assert.equal(completed.elapsedMs, 20);
+  assert.equal(completed.met, true);
+  const timedOut = await waitForFixturePhase(() => 'running', state => state !== 'running', 50, clock);
+  assert.equal(timedOut.value, 'running', 'Expiry must not turn unfinished work into success');
+  assert.equal(timedOut.elapsedMs, 50);
+  assert.equal(timedOut.reads, 6, 'The bounded loop stops at its own deadline');
+  assert.equal(timedOut.met, false);
+  const late = await waitForFixturePhase(() => { now += 60; return 'verified'; }, state => state === 'verified', 50, clock);
+  assert.equal(late.met, false, 'Even a successful read after the deadline cannot satisfy the phase');
+});
+
 test('real Responses protocol applies long Unicode assignment labels through canonical templates without cloning profiles and restores the views', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'aerynth-agent-workroom-'));
   const model = 'gpt-6.1-sol', boundary = 'b'.repeat(64), providerId = 'chatgpt-plan-responses';
@@ -274,9 +306,10 @@ test('real Responses protocol applies long Unicode assignment labels through can
     const objective = 'Assess the synthetic experiment plan';
     const preview = await core.command('missions', { name: 'preview', input: { objective, teamId: team.id } }) as MissionPreview;
     const mission = await core.command('missionStartReviewed', { objective, teamId: team.id, fingerprint: preview.fingerprint, requestId: randomUUID() }) as MissionProjection;
-    const deadline = performance.now() + 5000;
-    while (requests.length < 2 && performance.now() < deadline) await delay(10);
-    assert.equal(requests.length, 2);
+    const heldStarted = performance.now();
+    const arrival = await waitForFixturePhase(() => requests.length, count => count >= 2, 5000);
+    assert.equal(arrival.met, true, JSON.stringify({ phase: 'request-arrival', ...arrival }));
+    assert.equal(arrival.value, 2, JSON.stringify({ phase: 'request-arrival', ...arrival }));
     const review = await core.command('missions', { name: 'workroom-preview', input: { id: mission.id } }) as MissionWorkroomPreview;
     assert.equal(review.cards.filter(card => card.title.startsWith('Specialist assignment · ')).length, 2);
     const longCard = review.cards.find(card => card.title.startsWith(prefix + 'Review controls '))!;
@@ -296,10 +329,16 @@ test('real Responses protocol applies long Unicode assignment labels through can
     assert.equal(running.profile?.id, members[0].profileId);
     assert.equal(running.attempts.length, 1);
     assert.equal(running.attempts[0].passed, undefined);
+    const heldMs = performance.now() - heldStarted;
     release();
-    let finished = await dashboard('member-1');
-    while (finished.state === 'running' && performance.now() < deadline) { await delay(10); finished = await dashboard('member-1'); }
-    assert.equal(finished.state, 'verified');
+    const completion = await waitForFixturePhase(() => dashboard('member-1'), value => value.state !== 'running', 5000);
+    const finished = completion.value;
+    assert.equal(completion.met, true, JSON.stringify({ phase: 'response-completion',
+      arrivalMs: arrival.elapsedMs, heldMs, completionMs: completion.elapsedMs,
+      completionBudgetMs: completion.budgetMs, completionReads: completion.reads, state: finished.state }));
+    assert.equal(finished.state, 'verified', JSON.stringify({ phase: 'response-completion',
+      arrivalMs: arrival.elapsedMs, heldMs, completionMs: completion.elapsedMs,
+      completionBudgetMs: completion.budgetMs, completionReads: completion.reads, state: finished.state }));
     assert.equal(finished.attempts[0].source, 'chatgpt-plan-responses:reported');
     assert.deepEqual(finished.attempts[0].findings, ['Use controlled inputs.', 'Record observed variance.']);
     assert.equal(finished.attempts[0].telemetry?.usage?.totalTokens, 28);
