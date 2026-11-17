@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { recurringTraceBottlenecks, traceTimeline } from './trace-timeline.mjs';
+import { AutomaticTelemetry } from './automatic-telemetry.jsx';
 
 const emptyEvents = [];
 const limits = { spans: 80, events: 100 };
@@ -86,7 +87,7 @@ function TraceWaterfall({ events }) {
     </details>
   </div>;
 }
-export function ExecutionFeed({execution,records,headers,onRefresh}){
+export function ExecutionFeed({execution,records,headers,onRefresh,automatic}){
  const [message,setMessage]=useState(''),[busy,setBusy]=useState(false);
  async function upload(event){
   const file=event.target.files?.[0];if(!file)return;
@@ -102,10 +103,19 @@ export function ExecutionFeed({execution,records,headers,onRefresh}){
  const events=execution?.events??emptyEvents;
  const bottlenecks=useMemo(() => recurringTraceBottlenecks(records??[], events), [records, events]);
  return <section className="panel"><div className="panel-heading"><div><div className="kicker">PRIVATE EXECUTION PROJECTION</div><h2>Measured execution</h2></div></div>
- <p>Import an explicitly sanitized local export. Raw journals, prompts and command output must stay local. Local Task records remain authoritative; this Site cannot approve or execute them.</p>
+ <p>Connected AADS Task runners deliver sanitized journal updates automatically. Local Task records remain authoritative.</p>
+ <p><a href="https://github.com/Kgray44/Aetherwake/blob/main/agent-system/observatory/README.md#automatic-delivery-from-the-local-task-runner">Connect a Task runner</a></p>
+ <details><summary>Recovery imports</summary>
+ <AutomaticTelemetry connection={automatic}/>
  <label className="quiet-button">Import sanitized export <input aria-label="Import sanitized private execution export" type="file" accept="application/json" disabled={busy} onChange={upload}/></label>
  <p role="status">{message}</p>
- <p>Last synchronization: {execution?.generated_at??'Unavailable'}. {events.length} recorded trace events. Uninstrumented time is unavailable, not zero. Imported evidence is a reported claim, not independently verified approval.</p>
+ </details>
+ <p>Latest source snapshot: {execution?.generated_at??'Unavailable'}. {events.length} recorded trace events. Uninstrumented time and owner acceptance require separate evidence.</p>
+ {execution?.sources?.length > 0 && <details><summary>Automatic delivery receipts</summary>
+   <ul>{execution.sources.map(source => <li key={source.task_id}>
+     {source.task_id} · received {source.received_at} · {source.records} records · {source.events} events
+   </li>)}</ul>
+ </details>}
  <TraceWaterfall events={events}/>
  {events.length>0 && <details>
    <summary>Recurring timing patterns</summary>

@@ -8,8 +8,13 @@ import { createSnapshot, checkFreshness } from "../scripts/agent/context.mjs";
 import { runObserved } from "../scripts/agent/telemetry.mjs";
 
 async function fixture(t) {
+  const originalDirectory = process.cwd();
   const dir = await mkdtemp(join(tmpdir(), "aetherwake-agent-c-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(async () => {
+    // Windows cannot remove the current directory before later teardown hooks.
+    if (process.cwd() === dir) process.chdir(originalDirectory);
+    await rm(dir, { recursive: true, force: true });
+  });
   function git(...args) { return execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim(); }
   git("init", "-q");
   git("config", "user.name", "Agent test");

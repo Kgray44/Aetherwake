@@ -114,7 +114,7 @@ function detailFallback(old, reason) {
 }
 
 export async function cachedGitHubDetail(db, fetcher, token, kind, id, now = Date.now()) {
-  if (!['pulls', 'runs'].includes(kind) || !Number.isSafeInteger(id) || id <= 0) throw new Error('Invalid GitHub detail identity');
+  if (!['pulls', 'runs', 'histories'].includes(kind) || !Number.isSafeInteger(id) || id <= 0) throw new Error('Invalid GitHub detail identity');
   const key = await credentialKey(token);
   const cacheKey = kind + ':' + id;
   const read = () => db.prepare('SELECT credential_key, retry_at, payload, validators FROM github_details WHERE cache_key = ?')

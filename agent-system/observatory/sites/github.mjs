@@ -300,7 +300,7 @@ function pullItems(data) {
   }));
 }
 
-function runItems(data) {
+export function runItems(data) {
   if (!Array.isArray(data)) throw new Error('Invalid GitHub workflow run list');
   return newestFirst(data.filter(item => positiveInteger(item?.id)).map(item => {
     const created = date(item.created_at);
@@ -321,6 +321,8 @@ function runItems(data) {
       author: text(item.actor?.login),
       branch: text(item.head_branch),
       workflow,
+      workflow_id: positiveInteger(item.workflow_id) ? item.workflow_id : null,
+      head_repository_id: positiveInteger(item.head_repository?.id) ? item.head_repository.id : null,
       event: text(item.event),
       attempt: positiveInteger(item.run_attempt) ? item.run_attempt : null,
       status,

@@ -74,17 +74,34 @@ export async function recoverInterruptedWriter(directory,{expectedPid,expectedCr
  return {recovered:true,events_preserved:true};
  } finally {await rmdir(recovery);}
 }
-export async function readJournal(directory, { maxEvents, maxBytes, missingOk = false } = {}) {
+export async function readJournal(directory, { maxEvents, maxBytes, missingOk = false, immutableCache } = {}) {
   let entries;
   try { entries = await readdir(directory); }
-  catch (error) { if (missingOk && error.code === 'ENOENT') return []; throw error; }
+  catch (error) { if (missingOk && error.code === 'ENOENT' && !immutableCache?.size) return []; throw error; }
   const names = entries.filter(n => /^[a-f0-9]{64}\.json$/.test(n));
+  if (immutableCache?.size) {
+    const present = new Set(names);
+    for (const name of immutableCache.keys()) if (!present.has(name)) throw Error('Committed journal entry disappeared');
+  }
   if (maxEvents !== undefined && names.length > maxEvents) throw Error('Journal read exceeds event limit');
   const events = [];
   let bytes = 0;
   for (const name of names) {
     const path = join(directory, name);
-    if (maxBytes !== undefined) {
+    let fingerprint;
+    if (immutableCache) {
+      const info = await lstat(path, { bigint: true });
+      if (!info.isFile()) throw Error('Journal entries must be regular files');
+      bytes += Number(info.size);
+      if (maxBytes !== undefined && bytes > maxBytes) throw Error('Journal read exceeds byte limit');
+      fingerprint = [info.ino, info.size, info.mtimeNs, info.ctimeNs].join(':');
+      const known = immutableCache.get(name);
+      if (known) {
+        if (known.fingerprint !== fingerprint) throw Error('Committed journal entry changed');
+        events.push(known.event);
+        continue;
+      }
+    } else if (maxBytes !== undefined) {
       const info = await lstat(path);
       if (!info.isFile()) throw Error('Journal entries must be regular files');
       bytes += info.size;
@@ -92,6 +109,7 @@ export async function readJournal(directory, { maxEvents, maxBytes, missingOk = 
     }
     const event = JSON.parse(await readFile(path, 'utf8'));
     if (typeof event?.event_id !== 'string' || digest(event.event_id) + '.json' !== name) throw Error('Journal identity corruption');
+    if (immutableCache) immutableCache.set(name, { fingerprint, event });
     events.push(event);
   }
   return events.sort((a,b)=>a.occurred_at.localeCompare(b.occurred_at)||a.event_id.localeCompare(b.event_id));

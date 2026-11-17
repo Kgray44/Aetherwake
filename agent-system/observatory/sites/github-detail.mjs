@@ -1,4 +1,4 @@
-import { capture, githubReader, isRevision, REPO } from './github.mjs';
+import { capture, githubReader, isRevision, REPO, runItems } from './github.mjs';
 
 const WEB = 'https://github.com/' + REPO;
 const JOB_LIMIT = 25;
@@ -51,6 +51,13 @@ function run(data, id) {
     kind: 'run', id, name: text(data.name), title: text(data.display_title), event: text(data.event, 48),
     state: text(data.conclusion || data.status, 48), ...lifecycle(data),
     attempt: data.run_attempt, run_number: count(data.run_number), author: logins(data.actor),
+    workflow_id: positive(data.workflow_id) ? data.workflow_id : null,
+    path: text(data.path),
+    head_repository_id: positive(data.head_repository?.id) ? data.head_repository.id : null,
+    repository_owned_head: data.head_repository?.full_name === REPO,
+    pull_requests: Array.isArray(data.pull_requests)
+      ? [...new Set(data.pull_requests.filter(pr => positive(pr?.number) && positive(data.repository?.id) &&
+        pr.base?.repo?.id === data.repository.id && pr.head?.sha === data.head_sha).map(pr => pr.number))].slice(0, 20) : null,
     head: ref(data.head_branch, data.head_sha), created_at: time(data.created_at),
     started_at: time(data.run_started_at), updated_at: time(data.updated_at),
     url: WEB + '/actions/runs/' + id,
@@ -142,7 +149,32 @@ export async function fetchGitHubDetail(fetcher, token, kind, id, { now, previou
   });
   let result = { detail: core.detail ?? null, status: core.status, reason: core.reason ?? null, observed_at: null };
   if (core.detail) {
-    if (kind === 'pulls') {
+    if (kind === 'histories') {
+      const target = core.detail;
+      const filter = target.workflow_id && target.head.ref && target.created_at && target.event && target.head_repository_id
+        ? new URLSearchParams({ branch: target.head.ref, event: target.event, created: '<' + target.created_at, per_page: '12' }) : null;
+      const sameTarget = previous?.workflow_id === target.workflow_id && previous?.head?.ref === target.head.ref &&
+        previous?.created_at === target.created_at && previous?.event === target.event && previous?.head_repository_id === target.head_repository_id;
+      const earlier = await capture(async () => {
+        if (!filter) throw new Error('Workflow history requires a complete target identity');
+        const response = await reader.get('/actions/workflows/' + target.workflow_id + '/runs?' + filter, 768 * 1024,
+          sameTarget && previous.history ? validators.history : null);
+        const data = response.data;
+        if (!response.unchanged && (!Array.isArray(data?.workflow_runs) || data.workflow_runs.length > 12)) {
+          throw new Error('Invalid workflow history');
+        }
+        next.history = response.etag;
+        const items = response.unchanged ? previous.history.items : runItems(data.workflow_runs).filter(item =>
+          item.workflow_id === target.workflow_id && item.branch === target.head.ref && item.event === target.event &&
+          item.head_repository_id === target.head_repository_id && item.created_at < target.created_at && item.id !== target.id);
+        return { history: { items, status: 'available', observed_at: new Date(now()).toISOString() } };
+      });
+      if (!earlier.history && sameTarget && previous.history) next.history = validators.history;
+      const history = earlier.history ?? (sameTarget && previous.history
+        ? { ...previous.history, status: 'stale', reason: earlier.reason }
+        : { items: [], status: 'unavailable', reason: earlier.reason });
+      result = { detail: { ...target, history }, status: earlier.history ? 'available' : 'partial', reason: earlier.reason ?? null };
+    } else if (kind === 'pulls') {
       const {output, reason} = await pullSections(reader, path, core.detail, previous, validators, next, now);
       result = { detail: { ...core.detail, ...output }, status: reason ? 'partial' : 'available', reason, observed_at: null };
     } else {

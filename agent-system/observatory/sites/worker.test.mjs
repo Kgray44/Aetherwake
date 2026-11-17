@@ -7,6 +7,7 @@ import addFormats from 'ajv-formats';
 import { createWorker } from './worker.mjs';
 import { cachedGitHub } from './github-cache.mjs';
 import { proposedTask } from '../intake.mjs';
+import { createTelemetryClient, readStagedSnapshot, retryTelemetry } from '../src/telemetry-client.mjs';
 
 const schema = JSON.parse(readFileSync(new URL('../../contracts/v1.schema.json', import.meta.url)));
 const validateEvent = addFormats(new Ajv2020({ strict: false })).compile(JSON.parse(readFileSync(new URL('../../contracts/trace-v1.schema.json',import.meta.url))));
@@ -38,6 +39,9 @@ function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
   sql.exec(readFileSync(new URL('./drizzle/0004_cached_proposal_revision.sql', import.meta.url), 'utf8'));
   sql.exec(conditionalCacheMigration);
   sql.exec(detailCacheMigration);
+  sql.exec(readFileSync(new URL('./drizzle/0007_proposal_controls.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0008_ci_operations.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0009_task_telemetry.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
   const writes = [];
   const DB = {
@@ -111,6 +115,104 @@ test('hosted API checks identity and same-origin JSON before touching upstream',
   assert.equal((await post({ 'content-type': 'application/jsonx' })).status, 415);
   assert.equal((await post({ 'x-observatory-verification': 'live' })).status, 400);
   assert.equal(requests.length, 0);
+});
+
+test('private proposal control applies one versioned edit, fences concurrent writes and isolates owners', async t => {
+  const { call, post } = fixture(t);
+  const { task } = await (await post()).json();
+  const path = '/api/tasks/' + task.id + '/control';
+  const headers = { ...ownerHeader, origin, 'content-type': 'application/json' };
+  const send = (action, overrides = {}) => call(path, { method: 'POST', headers: { ...headers, ...overrides }, body: JSON.stringify(action) });
+  const edit = {
+    operation_id: crypto.randomUUID(), expected_version: 1, type: 'edit',
+    fields: { ...input, title: 'Updated proposal', priority: 'high', requirements: [{ kind: 'issue', uri: 'https://github.com/Kgray44/Aetherwake/issues/5' }] },
+  };
+  assert.equal((await send(edit, { origin: 'https://foreign.example' })).status, 403);
+  assert.equal((await send(edit, { 'oai-authenticated-user-id': 'owner-2' })).status, 404);
+  assert.equal((await send(edit, { 'x-observatory-verification': namespace })).status, 404);
+  const responses = await Promise.all([send(edit), send({ ...edit, operation_id: crypto.randomUUID() })]);
+  assert.deepEqual(responses.map(response => response.status).sort(), [200, 409]);
+  const saved = await responses.find(response => response.ok).json();
+  assert.equal(saved.version, 2);
+  assert.equal(saved.task.owner_acceptance, 'not_reviewed');
+  assert.equal(saved.task.state, 'proposed');
+  assert.equal(saved.priority, 'high');
+  assert.equal(saved.task.acceptance.criteria[0].id, task.acceptance.criteria[0].id);
+  const replay = await send({ ...edit, operation_id: saved.history[0].operation_id });
+  assert.equal((await replay.json()).history.length, 1);
+  assert.equal((await send({ ...edit, operation_id: saved.history[0].operation_id, fields: { ...edit.fields, title: 'Changed operation request' } })).status, 409);
+  const transition = { operation_id: crypto.randomUUID(), expected_version: 2, type: 'transition', reason: 'Waiting for recorded evidence' };
+  assert.equal((await send({ ...transition, state: 'accepted' })).status, 409);
+  assert.equal((await send({ ...transition, state: 'superseded', superseded_by: task.id })).status, 400);
+  const blocked = await (await send({ ...transition, state: 'blocked' })).json();
+  assert.equal(blocked.task.state, 'blocked');
+  assert.equal(blocked.version, 3);
+  assert.equal((await send({ ...edit, operation_id: crypto.randomUUID(), expected_version: 3 })).status, 409);
+  const { task: publicTask } = await (await post({ 'x-observatory-publish': 'github' })).json();
+  const publicControl = '/api/tasks/' + publicTask.id + '/control';
+  assert.equal((await call(publicControl, { headers })).status, 404);
+  assert.equal((await call(publicControl, { method: 'POST', headers, body: JSON.stringify(edit) })).status, 404);
+});
+
+test('the automatic telemetry client resumes after a lost response, uploads only deltas and shows owner-scoped data', async t => {
+  const { call, post } = fixture(t);
+  const isolation = { 'x-observatory-verification': namespace };
+  const headers = { ...ownerHeader, ...isolation };
+  const { task } = await (await post(headers)).json();
+  const firstOverview = await (await call('/api/overview', { headers })).json();
+  const scope = firstOverview.telemetry_scope;
+  const path = '/api/task-telemetry/' + task.id;
+  const posted = [];
+  let loseReply = true;
+  const client = () => createTelemetryClient({ headers: isolation, scope, fetcher: async (url, options) => {
+    const response = await call(url, { ...options, headers: { ...ownerHeader, origin, ...options.headers } });
+    if (options.method === 'POST') {
+      posted.push(JSON.parse(options.body));
+      if (loseReply) { loseReply = false; throw Error('transport closed after commit'); }
+    }
+    return response;
+  } });
+  const generated = Date.now() - 1000;
+  const event = {
+    trace_version: 1, event_id: 'telemetry-probe-event', task_id: task.id, trace_id: 'trace-probe',
+    span_id: 'span-probe', repository: task.repository, revision: task.revision,
+    occurred_at: new Date(generated).toISOString(), kind: 'measurement', phase: 'verification',
+    measurements: [{ name: 'elapsed_wall_ms', availability: 'observed', value: 45, unit: 'ms', source: 'fixture', method: 'fixture' }],
+  };
+  const file = (offset, events) => new Blob([JSON.stringify({
+    export_version: 1, authority: 'local-task-records', repository: task.repository,
+    generated_at: new Date(generated + offset).toISOString(), records: [task], events,
+  })]);
+  const { snapshot: first } = await readStagedSnapshot(file(0, [event]));
+  await assert.rejects(client().synchronize(task.id, first), error => {
+    assert.equal(retryTelemetry(error, 1, 1000), 3000);
+    assert.equal(retryTelemetry(error, 4, 1000), null);
+    return true;
+  });
+  assert.equal((await client().synchronize(task.id, first)).changed, false);
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].records[0].objective, 'Private task details withheld');
+  const event2 = { ...event, event_id: 'another-probe-event', occurred_at: new Date(generated + 1).toISOString() };
+  const { snapshot: next } = await readStagedSnapshot(file(1, [event, event2]));
+  assert.equal((await client().synchronize(task.id, next)).changed, true);
+  assert.deepEqual(posted[1].records, []);
+  assert.deepEqual(posted[1].events.map(item => item.event_id), [event2.event_id]);
+  const replay = await call(path, { method: 'POST', headers: { ...headers, origin, 'content-type': 'application/json', 'x-observatory-sync-scope': scope }, body: JSON.stringify(posted[1]) });
+  assert.equal(replay.status, 200);
+  const overview = await (await call('/api/overview', { headers })).json();
+  assert.equal(overview.execution.events.length, 2);
+  assert.equal(overview.execution.sources[0].task_id, task.id);
+  assert.equal(overview.proposals.controls[task.id], undefined);
+  assert.equal((await (await call('/api/overview', { headers: ownerHeader })).json()).execution, null);
+  assert.equal((await call(path, { headers: { ...headers, 'oai-authenticated-user-id': 'owner-2', 'x-observatory-sync-scope': scope } })).status, 403);
+  assert.equal((await call(path, { headers })).status, 403);
+  assert.equal((await call(path)).status, 401);
+  await assert.rejects(client().synchronize(task.id, { ...next, events: [event2] }), /missing previously synchronized/);
+  await assert.rejects(client().synchronize(task.id, { ...next, events: [{ ...event, phase: 'other' }, event2] }), /rewrites/);
+  const badChange = { ...posted[1], base: overview.execution.sources[0].digest, generated_at: new Date(generated + 2).toISOString(),
+    events: [{ ...event, event_id: 'outside-task', task_id: 'outside-task' }] };
+  assert.equal((await call(path, { method: 'POST', headers: { ...headers, origin, 'content-type': 'application/json', 'x-observatory-sync-scope': scope },
+    body: JSON.stringify(badChange) })).status, 400);
 });
 
 test('a contract-valid proposal persists with owner and verification boundaries', async t => {
@@ -366,6 +468,7 @@ test('pull requests and cross-branch runs expose a bounded newest-created window
         id: 2000 + index, name:'Verification', display_title:'Run ' + index,
         created_at:dateAt(index), updated_at:dateAt(200 - index), actor:{login:'contributor'}, head_sha:rev,
         head_branch:index % 2 ? 'feature' : 'main', event:'pull_request', run_attempt:2, status:'completed', conclusion:'success',
+        workflow_id:2300, head_repository:{id:2400},
       }))});
     }
     return githubReadResponse(path);
@@ -387,6 +490,7 @@ test('pull requests and cross-branch runs expose a bounded newest-created window
     url:'https://github.com/Kgray44/Aetherwake/actions/runs/2041', revision:rev,
     date:dateAt(159), created_at:dateAt(41), updated_at:dateAt(159), author:'contributor',
     branch:'feature', workflow:'Verification', event:'pull_request', attempt:2, status:'completed', conclusion:'success',
+    workflow_id:2300, head_repository_id:2400,
   });
   assert.equal(snapshot.ci.items[1].branch, 'main');
 });
@@ -483,7 +587,7 @@ test('MCP uses authenticated caller identity, narrow tools, private projection r
  const rpc=(method,params,headers={...ownerHeader,'content-type':'application/json'})=>call('/mcp',{method:'POST',headers,body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
  assert.equal((await rpc('tools/list',{}, {'content-type':'application/json'})).status,401);
  assert.equal((await rpc('tools/list',{}, {...ownerHeader,'content-type':'application/json',origin:'https://attacker.example'})).status,403);
- const listed=await(await rpc('tools/list')).json();assert.deepEqual(listed.result.tools.map(t=>t.name),['project_execution_snapshot','read_execution_projection']);
+ const listed=await(await rpc('tools/list')).json();assert.deepEqual(listed.result.tools.map(t=>t.name),['project_execution_snapshot','read_execution_projection','sync_task_telemetry']);
  const envelope={export_version:1,authority:'local-task-records',repository:'Kgray44/Aetherwake',generated_at:'2026-11-16T06:00:00.000Z',records:[proposedTask(input,rev)],events:[],coverage:{}};
  const params={name:'project_execution_snapshot',arguments:{projection:envelope,verification:namespace}};
  const saved=await(await rpc('tools/call',params)).json();assert.equal(saved.result.isError,false);
@@ -495,6 +599,17 @@ test('MCP uses authenticated caller identity, narrow tools, private projection r
  assert.equal((await(await rpc('tools/call',{name:'execute',arguments:{}})).json()).error.code,-32601);
  params.arguments.owner_id='foreign';assert.equal((await(await rpc('tools/call',params)).json()).error.code,-32602);delete params.arguments.owner_id;
  envelope.records[0].owner_acceptance='accepted';assert.equal((await(await rpc('tools/call',params)).json()).result.isError,true);
+ const record=proposedTask(input,rev);
+ const sync={name:'sync_task_telemetry',arguments:{task_id:record.id,verification:namespace,
+  change:{base:null,generated_at:new Date().toISOString(),records:[record],events:[]}}};
+ const decoded=async(params,headers)=>JSON.parse((await(await rpc('tools/call',params,headers)).json()).result.content[0].text);
+ const first=await decoded(sync);
+ assert.equal(first.status,200);
+ assert.deepEqual(await decoded(sync),first);
+ const read={name:sync.name,arguments:{task_id:record.id,verification:namespace}};
+ assert.equal((await decoded(read)).baseline.digest,first.digest);
+ assert.equal((await decoded(read,{'oai-authenticated-user-id':'foreign','content-type':'application/json'})).baseline,null);
+ assert.equal((await decoded({...read,arguments:{task_id:record.id}})).baseline,null);
 });
 
 

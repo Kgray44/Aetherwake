@@ -14,6 +14,7 @@ import { checkFreshness } from './context.mjs';
 import { observeResources } from './resources.mjs';
 import { appendEvent, traceEvent } from './journal.mjs';
 import { observeCodexStream } from './provider-events.mjs';
+import { startObservatorySync } from './observatory-sync.mjs';
 const PHASES = new Set(["context", "implementation", "verification", "integration", "review", "other"]);
 function git(...args) {
   return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -59,6 +60,11 @@ export async function runObserved({ task, context, repository, phase = "implemen
   const runningAttempt=await beginAttempt(journalPath,{schema_version:1,record_type:'attempt',id,created_at:startedAt,repository,revision,task_id:task.id,attempt_number:attemptNumber,state:'running',started_at:startedAt,branch,...provider?{provider}:{},...model?{model}:{},failure_category:'none'});
   const spanId = "span_" + randomUUID();
   await appendEvent(journalPath, traceEvent({task,attemptId:id,spanId,kind:"span_start",phase,state:"started"}));
+  const observatory = await startObservatorySync({ task, journal: journalPath }).catch(() => {
+    process.stderr.write('Observatory synchronization could not start; the private journal is still recording.\n');
+    return null;
+  });
+  try {
   const cpuStart = process.cpuUsage();
   const launched = process.hrtime.bigint();
   let exitCode = 1, actualExitCode = null, signal = null, launchFailure = null;
@@ -139,6 +145,9 @@ export async function runObserved({ task, context, repository, phase = "implemen
   await assertPrivateFile(path);
   await appendFile(path, (attemptId ? "" : JSON.stringify(attempt) + "\n") + JSON.stringify(telemetry) + "\n", { encoding: "utf8", mode: 0o600 });
   return { journalPath, exitCode, signal, attempt, telemetry, eventPath: path };
+  } finally {
+    await observatory?.finish().catch(() => {});
+  }
 }
 async function observeCodexOutput(stream, onUsage) {
   const stdout = process.stdout;

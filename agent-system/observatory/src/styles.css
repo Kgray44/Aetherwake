@@ -95,6 +95,13 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .analytics-phases li{display:grid;grid-template-columns:minmax(5rem,1fr) minmax(3rem,2fr) auto;align-items:center;gap:.65rem}
 .analytics-phase-track{height:.55rem;background:rgba(137,203,224,.11);display:block;border-radius:.3rem;overflow:hidden}
 .analytics-phase-track>span{height:100%;display:block;background:var(--accent);border-radius:.3rem}
+.failure-investigation{overflow-wrap:anywhere;line-height:1.55}
+.failure-investigation h3{font-size:.92rem;margin:1.2rem 0 .45rem}
+.failure-investigation p{margin:.45rem 0}
+.failure-investigation ul{padding-inline-start:1.25rem}
+.failure-investigation li+li{margin-top:.35rem}
+.failure-investigation a{color:var(--accent)}
+.failure-investigation select{max-width:100%;padding:.3rem .4rem;border:1px solid var(--border);border-radius:.3rem;background:var(--panel2)}
 @media(max-width:1250px){.analytics-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:760px){.analytics-grid{grid-template-columns:1fr}}
 @media(max-width:540px){.analytics-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.analytics-split{grid-template-columns:1fr}}
