@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { activityHref, githubItemHref } from './github-activity.mjs';
-import { failedAttempts, investigateAttempt, investigateRun, selectPulls, selectRunHistory } from './failure-investigation.mjs';
+import { failedAttempts, failedRun, investigateAttempt, investigateRun, selectPulls, selectRunHistory } from './failure-investigation.mjs';
 
 const milliseconds = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const elapsed = value => Number.isFinite(value) ? milliseconds.format(value / 1000) + ' s' : 'Unavailable';
@@ -53,11 +53,29 @@ function useRunComparisons({ enabled, passingId, repeatId, pullNumber, headers }
 export function RunFailureInvestigation({ run, records, events, github, headers, openTask, ui }) {
   const { Panel, Rise } = ui;
   const [compare, setCompare] = useState(false);
-  const past = selectRunHistory(run, github?.ci);
+  const [historyFeed, setHistoryFeed] = useState(null);
+  const historyEnabled = failedRun(run) && Boolean(run.workflow_id && run.head?.sha);
+  useEffect(() => {
+    if (!historyEnabled) return;
+    const controller = new AbortController();
+    fetch('/api/github/histories/' + run.id, { headers, cache: 'no-store', signal: controller.signal })
+      .then(async response => response.ok ? (await response.json()).detail : null)
+      .then(detail => {
+        if (!controller.signal.aborted) {
+          const matches = detail?.id === run.id && detail.attempt === run.attempt && detail.head?.sha === run.head.sha &&
+            detail.workflow_id === run.workflow_id;
+          setHistoryFeed(matches ? detail.history : false);
+        }
+      }).catch(() => { if (!controller.signal.aborted) setHistoryFeed(false); });
+    return () => controller.abort();
+  }, [historyEnabled, run.id, run.attempt, run.head?.sha, run.workflow_id, headers]);
+  const currentGitHub = historyFeed?.status === 'available' || historyFeed?.status === 'stale'
+    ? { ...github, ci: historyFeed } : github;
+  const past = selectRunHistory(run, currentGitHub?.ci);
   const pulls = selectPulls(run.head?.sha, github, run.pull_requests);
-  const readback = useRunComparisons({ enabled: compare, passingId: past.passing?.id,
+  const readback = useRunComparisons({ enabled: compare && (!historyEnabled || historyFeed !== null), passingId: past.passing?.id,
     repeatId: past.recentFailures[0]?.id, pullNumber: pulls[0]?.number, headers });
-  const finding = investigateRun({ run, records, events, github, ...readback });
+  const finding = investigateRun({ run, records, events, github: currentGitHub, ...readback });
   if (!finding) return null;
   const { history, jobs, changes, traces } = finding;
   const original = githubItemHref('runs', run.id) + '/attempts/' + run.attempt;
@@ -78,6 +96,9 @@ export function RunFailureInvestigation({ run, records, events, github, headers,
         {job.stepsTruncated && <span className="low">Additional steps are available in GitHub.</span>}
       </li>)}</ul>}
     <h3>Comparable run history</h3>
+    {historyEnabled && historyFeed === null && <p role="status">Reading the previous runs for this workflow…</p>}
+    {(historyFeed === false || historyFeed?.status === 'unavailable') &&
+      <p className="low">Workflow history unavailable. Showing only the repository activity window.{historyFeed?.reason && ' ' + historyFeed.reason}</p>}
     <p className="low">Runs from the same workflow ID, branch, and trigger whose last update preceded this run’s start.
       {' '}{history.status === 'stale' && 'Cached feed · '}{history.observedAt && 'Observed ' + stamp(history.observedAt)}</p>
     {!run.workflow_id && <p className="low">Workflow ID is missing. Refresh this run to enable historical matching.</p>}

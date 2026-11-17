@@ -300,7 +300,7 @@ function pullItems(data) {
   }));
 }
 
-function runItems(data) {
+export function runItems(data) {
   if (!Array.isArray(data)) throw new Error('Invalid GitHub workflow run list');
   return newestFirst(data.filter(item => positiveInteger(item?.id)).map(item => {
     const created = date(item.created_at);

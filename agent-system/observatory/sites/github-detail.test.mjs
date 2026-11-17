@@ -67,6 +67,31 @@ test('CI identity migration refreshes old run projections without dropping fallb
   assert.deepEqual(JSON.parse(details[1].validators), { jobs: 'jobs' });
 });
 
+test('reads a bounded workflow history pinned to the selected run and rejects unrelated rows', async t => {
+  const db = database(t);
+  const target = { ...workflow(123), workflow_id: 42, head_repository: { id: 88 }, event: 'push',
+    created_at: '2026-01-02T00:00:00.000Z' };
+  const older = { ...target, id: 122, created_at: '2026-01-01T01:00:00.000Z', updated_at: '2026-01-01T01:05:00.000Z' };
+  const paths = [];
+  const fetcher = async (endpoint, { headers }) => {
+    const url = new URL(endpoint);
+    paths.push([url.pathname, headers['If-None-Match']]);
+    if (headers['If-None-Match']) return new Response(null, { status: 304 });
+    if (url.pathname.endsWith('/actions/runs/123')) return Response.json(target, { headers: { etag: '"run"' } });
+    assert.ok(url.pathname.endsWith('/actions/workflows/42/runs'));
+    assert.deepEqual(Object.fromEntries(url.searchParams), { branch: 'main', event: 'push', created: '<' + target.created_at, per_page: '12' });
+    return Response.json({ workflow_runs: [older, target, { ...older, id: 121, event: 'pull_request' },
+      { ...older, id: 120, head_repository: { id: 99 } }, { ...older, id: 119, workflow_id: 43 }] }, { headers: { etag: '"history"' } });
+  };
+  const now = Date.now();
+  const first = await cachedGitHubDetail(db, fetcher, 'fixture-token', 'histories', 123, now);
+  assert.equal(first.status, 'available');
+  assert.deepEqual(first.detail.history.items.map(run => run.id), [122]);
+  const revalidated = await cachedGitHubDetail(db, fetcher, 'fixture-token', 'histories', 123, now + 16 * 60000);
+  assert.deepEqual(revalidated.detail.history.items, first.detail.history.items);
+  assert.deepEqual(paths.map(path => path[1]), [undefined, undefined, '"run"', '"history"']);
+});
+
 test('owner-only GET validates the route and shares bounded PR detail between isolates', async t => {
   const DB = database(t);
   let calls = 0;

@@ -35,7 +35,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     const control = url.pathname.match(/^\/api\/tasks\/(task_[a-f0-9-]+)\/control$/);
     const sync = url.pathname === '/api/sync';
     const automaticSync = url.pathname.startsWith('/api/task-telemetry/');
-    const detailsRoute = url.pathname.match(/^\/api\/github\/(pulls|runs)\/([1-9][0-9]*)$/);
+    const detailsRoute = url.pathname.match(/^\/api\/github\/(pulls|runs|histories)\/([1-9][0-9]*)$/);
     const detailId = detailsRoute ? Number(detailsRoute[2]) : null;
     const ciActions = url.pathname === '/api/github/actions';
     if (detailsRoute && !Number.isSafeInteger(detailId)) return error('Invalid GitHub detail ID', 400);
