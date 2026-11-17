@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { projectJournal } from '../scripts/agent/export-journal.mjs';
+import { stageSnapshot } from '../scripts/agent/stage-observatory.mjs';
 import { appendEvent, traceEvent } from '../scripts/agent/journal.mjs';
 import { persistRecord } from '../scripts/agent/record-journal.mjs';
 
@@ -33,8 +34,27 @@ async function fixture(t) {
   const taskFile = join(root, 'task.json');
   await writeFile(taskFile, JSON.stringify(task));
   const run = () => spawnSync(process.execPath, [cli, '--task', taskFile, '--journal', directory], {encoding:'utf8'});
-  return { task, attempt, directory, run };
+  return { task, attempt, directory, run, taskFile, root };
 }
+
+test('staging preserves a retryable snapshot on unchanged input and on corrupt new journal data', async t => {
+  const { task, attempt, directory, taskFile, root } = await fixture(t);
+  const stagingDirectory = join(root, 'staging');
+  const options = { taskFile, journal: directory, stagingDirectory };
+  const output = join(stagingDirectory, 'observatory-projection.json');
+  await persistRecord(directory, attempt);
+  assert.equal((await stageSnapshot(options)).changed, true);
+  const first = await readFile(output, 'utf8');
+  assert.equal((await stageSnapshot(options)).changed, false);
+  assert.equal(await readFile(output, 'utf8'), first);
+  await appendEvent(directory, traceEvent({ task, attemptId: attempt.id, kind: 'measurement' }));
+  assert.equal((await stageSnapshot(options)).events, 1);
+  const second = await readFile(output, 'utf8');
+  assert.notEqual(second, first);
+  await persistRecord(directory, { ...attempt, id: 'unrelated', task_id: 'other-task' });
+  await assert.rejects(stageSnapshot(options), /another Task/);
+  assert.equal(await readFile(output, 'utf8'), second);
+});
 
 test('CLI reconstructs latest Attempts and retains incomplete spans across Task revisions', async t => {
   const {task,attempt,directory,run} = await fixture(t);

@@ -87,7 +87,7 @@ function options(args) {
   return { [args[0]]:args[1], [args[2]]:args[3] };
 }
 
-async function readTask(path) {
+export async function readTask(path) {
   const file = await open(path, 'r');
   try {
     const info = await file.stat();

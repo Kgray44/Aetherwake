@@ -38,6 +38,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
   sql.exec(readFileSync(new URL('./drizzle/0004_cached_proposal_revision.sql', import.meta.url), 'utf8'));
   sql.exec(conditionalCacheMigration);
   sql.exec(detailCacheMigration);
+  sql.exec(readFileSync(new URL('./drizzle/0007_proposal_controls.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
   const writes = [];
   const DB = {
@@ -111,6 +112,43 @@ test('hosted API checks identity and same-origin JSON before touching upstream',
   assert.equal((await post({ 'content-type': 'application/jsonx' })).status, 415);
   assert.equal((await post({ 'x-observatory-verification': 'live' })).status, 400);
   assert.equal(requests.length, 0);
+});
+
+test('private proposal control applies one versioned edit, fences concurrent writes and isolates owners', async t => {
+  const { call, post } = fixture(t);
+  const { task } = await (await post()).json();
+  const path = '/api/tasks/' + task.id + '/control';
+  const headers = { ...ownerHeader, origin, 'content-type': 'application/json' };
+  const send = (action, overrides = {}) => call(path, { method: 'POST', headers: { ...headers, ...overrides }, body: JSON.stringify(action) });
+  const edit = {
+    operation_id: crypto.randomUUID(), expected_version: 1, type: 'edit',
+    fields: { ...input, title: 'Updated proposal', priority: 'high', requirements: [{ kind: 'issue', uri: 'https://github.com/Kgray44/Aetherwake/issues/5' }] },
+  };
+  assert.equal((await send(edit, { origin: 'https://foreign.example' })).status, 403);
+  assert.equal((await send(edit, { 'oai-authenticated-user-id': 'owner-2' })).status, 404);
+  assert.equal((await send(edit, { 'x-observatory-verification': namespace })).status, 404);
+  const responses = await Promise.all([send(edit), send({ ...edit, operation_id: crypto.randomUUID() })]);
+  assert.deepEqual(responses.map(response => response.status).sort(), [200, 409]);
+  const saved = await responses.find(response => response.ok).json();
+  assert.equal(saved.version, 2);
+  assert.equal(saved.task.owner_acceptance, 'not_reviewed');
+  assert.equal(saved.task.state, 'proposed');
+  assert.equal(saved.priority, 'high');
+  assert.equal(saved.task.acceptance.criteria[0].id, task.acceptance.criteria[0].id);
+  const replay = await send({ ...edit, operation_id: saved.history[0].operation_id });
+  assert.equal((await replay.json()).history.length, 1);
+  assert.equal((await send({ ...edit, operation_id: saved.history[0].operation_id, fields: { ...edit.fields, title: 'Changed operation request' } })).status, 409);
+  const transition = { operation_id: crypto.randomUUID(), expected_version: 2, type: 'transition', reason: 'Waiting for recorded evidence' };
+  assert.equal((await send({ ...transition, state: 'accepted' })).status, 409);
+  assert.equal((await send({ ...transition, state: 'superseded', superseded_by: task.id })).status, 400);
+  const blocked = await (await send({ ...transition, state: 'blocked' })).json();
+  assert.equal(blocked.task.state, 'blocked');
+  assert.equal(blocked.version, 3);
+  assert.equal((await send({ ...edit, operation_id: crypto.randomUUID(), expected_version: 3 })).status, 409);
+  const { task: publicTask } = await (await post({ 'x-observatory-publish': 'github' })).json();
+  const publicControl = '/api/tasks/' + publicTask.id + '/control';
+  assert.equal((await call(publicControl, { headers })).status, 404);
+  assert.equal((await call(publicControl, { method: 'POST', headers, body: JSON.stringify(edit) })).status, 404);
 });
 
 test('a contract-valid proposal persists with owner and verification boundaries', async t => {

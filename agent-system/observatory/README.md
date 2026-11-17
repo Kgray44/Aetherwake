@@ -52,6 +52,13 @@ The Worker build uses the same Vite UI and shared intake code. It produces `dist
 
 Pull requests and CI runs have dedicated routeable lists, newest-created ordering, and detail views. The home feed previews the five latest entries from each loaded window. Details are fetched on demand and link to GitHub for full source and logs.
 
+Private proposals can be edited from Task inspection while proposed. The Site stores priority,
+version, and the latest 20 operation receipts alongside the contract record. Writes require the
+same owner, namespace, and expected version. A proposal may be blocked, cancelled, or superseded
+with a reason, and a blocked proposal may return to proposed. Public proposals and Tasks with a
+local execution projection are outside this editing path. Proposal state cannot grant owner
+acceptance or authorize execution.
+
 The shared GitHub D1 cache serializes refreshes and uses authenticated ETag revalidation for main, issues, pull requests and CI. The feed shows the latest reported API budget and reset time alongside data refresh timestamps. The shared cooldown honors GitHub retry and primary-reset headers. Unauthenticated GitHub delivery cannot reach the owner-private Site, so this deployment uses conditional refreshes. An approved authenticated ingress would be needed to use signed webhook delivery.
 
 ## Motion system
@@ -74,6 +81,23 @@ Check the command succeeded, then use **Import sanitized export** in the existin
 Validation of a hosted deployment, owner login, non-owner denial, and real upload/reload must be recorded independently from Worker unit tests. The existing Site must be updated only by its current deployment owner. No second Site is necessary.
 
 ### Supported unattended transport: Site MCP
+
+On an active trusted workstation, run
+`node scripts/agent/stage-observatory.mjs <task.json> <journal> <private-staging-directory> --watch`
+to prepare a sanitized snapshot automatically. Omit `--watch` for a one-time checkpoint.
+Use a dedicated private staging directory per Task, outside the journal and source checkout.
+The watcher observes committed file changes and checks directory metadata every five seconds
+to recover missed notifications. It coalesces changes before reusing the bounded exporter.
+An unchanged snapshot keeps its original bytes for retry. An invalid journal leaves the last
+good file intact. The command reports staging status and performs no network requests.
+
+Import `observatory-projection.json` through the signed-in Site or pass its parsed contents to
+`project_execution_snapshot` in a session authorized for the private Site MCP connection.
+Reuse the same owner and verification namespace and check the `read_execution_projection` receipt.
+The foreground watcher prepares data only. An unattended workstation upload still requires a
+supported runtime that can access both the local file and the authenticated Site MCP tool.
+Each import replaces the selected namespace's bounded snapshot, so avoid concurrent producers
+for the same namespace.
 
 The Worker also implements stateless JSON-RPC `POST /mcp` (MCP 2026-07-28 discovery) with only `project_execution_snapshot` and `read_execution_projection`. Both require a real platform-injected Site-scoped caller identity. The import tool reuses the same bounded schema/sanitizer and private owner/namespace store; readback includes a SHA-256 receipt of the stored sanitized snapshot. Supplied owner IDs, execution tools, arbitrary SQL and approval actions are not supported. Browser cross-origin requests are rejected. Service-only access without visitor identity is rejected rather than translated into a fabricated owner.
 

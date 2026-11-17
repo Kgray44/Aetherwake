@@ -4,9 +4,9 @@ import { proposedTask } from '../intake.mjs';
 import { isRevision, readBounded } from './github.mjs';
 import { cachedGitHub, cachedGitHubDetail } from './github-cache.mjs';
 import { publishProposal } from './github-proposals.mjs';
+import { changeProposal, operationId as UUID, proposalControl } from './proposal-controls.mjs';
 
 const MAX_PROPOSALS = 500;
-const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
   'cache-control': 'private, no-store',
@@ -29,12 +29,13 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     const overview = url.pathname === '/api/overview';
     const intake = url.pathname === '/api/tasks';
     const publish = url.pathname.match(/^\/api\/tasks\/task_([a-f0-9-]+)\/publish$/);
+    const control = url.pathname.match(/^\/api\/tasks\/(task_[a-f0-9-]+)\/control$/);
     const sync = url.pathname === '/api/sync';
     const detailsRoute = url.pathname.match(/^\/api\/github\/(pulls|runs)\/([1-9][0-9]*)$/);
     const detailId = detailsRoute ? Number(detailsRoute[2]) : null;
     if (detailsRoute && !Number.isSafeInteger(detailId)) return error('Invalid GitHub detail ID', 400);
-    if (!overview && !intake && !sync && !publish && !detailsRoute) return error('Not found', 404);
-    const readOnly = overview || detailsRoute;
+    if (!overview && !intake && !sync && !publish && !detailsRoute && !control) return error('Not found', 404);
+    const readOnly = overview || detailsRoute || (control && request.method === 'GET');
     if (readOnly ? request.method !== 'GET' : request.method !== 'POST') {
       return error('Method not allowed', 405);
     }
@@ -46,6 +47,22 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       return error('Expected application/json', 415);
     }
     if (!env.DB) return error('Proposal storage unavailable', 503);
+
+    if (control) {
+      const id = control[1];
+      if (!UUID.test(id.slice(5))) return error('Invalid proposal ID', 400);
+      if (readOnly) {
+        const row = await env.DB.prepare(`SELECT version, priority, receipts FROM proposals
+          WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS NULL`)
+          .bind(owner, namespace, id).first();
+        return row ? json(proposalControl(row)) : error('Private proposal not found', 404);
+      }
+      let action;
+      try { action = JSON.parse(await readBounded(request.body, 128 * 1024)); }
+      catch (cause) { return error('Invalid proposal action payload', cause instanceof RangeError ? 413 : 400); }
+      const result = await changeProposal({ db: env.DB, owner, namespace, id, action, validate });
+      return json(result.body, result.status);
+    }
 
     if (publish) {
       if (verification !== null || !UUID.test(publish[1])) return error('Not found', 404);
@@ -65,7 +82,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     if (overview) {
       const [snapshot, rows, projectionRow] = await Promise.all([
         cachedGitHub(env.DB, fetcher, validate, readToken),
-        env.DB.prepare('SELECT record, task_id, github_state, stale_revision FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
+        env.DB.prepare('SELECT record, task_id, github_state, stale_revision, version, priority FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
           .bind(owner, namespace, MAX_PROPOSALS).all(),
         env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner, namespace).first(),
       ]);
@@ -93,6 +110,8 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
           publication_configured: Boolean(env.GITHUB_PROPOSAL_TOKEN),
           stale_revision_tasks: rows.results.filter(row => row.stale_revision === 1).map(row => row.task_id),
           publication: Object.fromEntries(rows.results.filter(row => row.github_state).map(row => [row.task_id, row.github_state])),
+          controls: Object.fromEntries(rows.results.filter(row => !row.github_state && !projectedIds.has('task:' + row.task_id))
+            .map(row => [row.task_id, { version: row.version, priority: row.priority }])),
         },
         telemetry_note: 'Unavailable measurements are not zero; PR merge does not imply task acceptance.',
       });
