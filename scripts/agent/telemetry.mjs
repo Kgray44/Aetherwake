@@ -13,6 +13,7 @@ import {beginAttempt,persistRecord} from './record-journal.mjs';
 import { checkFreshness } from './context.mjs';
 import { observeResources } from './resources.mjs';
 import { appendEvent, traceEvent } from './journal.mjs';
+import { observeCodexStream } from './provider-events.mjs';
 const PHASES = new Set(["context", "implementation", "verification", "integration", "review", "other"]);
 function git(...args) {
   return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -24,7 +25,7 @@ function parse(argv) {
   const opts = {};
   for (let i = 1; i < split; i += 2) {
     const name = argv[i], value = argv[i + 1];
-    if (!["--task", "--context", "--attempt", "--attempt-number", "--repo", "--phase", "--out", "--provider", "--model"].includes(name) || !value) throw new Error("Invalid option: " + name);
+    if (!["--task", "--context", "--attempt", "--attempt-number", "--repo", "--phase", "--out", "--provider", "--model", "--event-stream"].includes(name) || !value) throw new Error("Invalid option: " + name);
     opts[name.slice(2)] = value;
   }
   if (!opts.task || !opts.repo) throw new Error("Required --task and --repo owner/name");
@@ -39,10 +40,11 @@ function measure(name, availability, value, unit, source, method) {
   if (method) result.method = method;
   return result;
 }
-export async function runObserved({ task, context, repository, phase = "implementation", command, attemptId, attemptNumber = 1, out, provider, model }) {
+export async function runObserved({ task, context, repository, phase = "implementation", command, attemptId, attemptNumber = 1, out, provider, model, eventStream }) {
   if (!task || task.record_type !== "task" || task.schema_version !== 1 || task.repository !== repository) throw new Error("Expected matching v1 Task");
   if (!PHASES.has(phase) || !Array.isArray(command) || !command.length) throw new Error("Invalid phase or command");
   if (!Number.isInteger(attemptNumber) || attemptNumber < 1) throw new Error("Attempt number must be positive integer");
+  if (eventStream !== undefined && eventStream !== "codex-exec-json") throw new Error("Unsupported telemetry event stream");
   const revision = git("rev-parse", "HEAD");
   if (task.revision !== revision) throw new Error("Stale Task revision; refresh authorized context before execution");
   if (!await checkFreshness(context, task, revision)) throw new Error("Fresh source-verified context is required before execution");
@@ -59,17 +61,26 @@ export async function runObserved({ task, context, repository, phase = "implemen
   await appendEvent(journalPath, traceEvent({task,attemptId:id,spanId,kind:"span_start",phase,state:"started"}));
   const cpuStart = process.cpuUsage();
   let exitCode = 1, signal = null, launchFailure = null, resourceMeasurements = [];
+  let providerMeasurements = [];
   try {
-    const child = spawn(command[0], command.slice(1), { stdio: "inherit", shell: false });
-    const resources = observeResources(child.pid);
-    const result = await new Promise(resolve => {
+    const child = spawn(command[0], command.slice(1), {
+      stdio: eventStream ? ["inherit", "pipe", "inherit"] : "inherit",
+      shell: false
+    });
+    const closed = new Promise(resolve => {
       child.once("error", error => resolve({ code: 127, signal: null, error }));
       child.once("close", (code, sig) => resolve({ code: code ?? 1, signal: sig, error: null }));
     });
-    resourceMeasurements = await resources.stop();
+    const providerStream = child.stdout && observeCodexOutput(child.stdout, usage => appendEvent(journalPath,
+      traceEvent({ task, attemptId: id, spanId, kind: "measurement", phase, measurements: usage })
+    ));
+    const resources = observeResources(child.pid);
+    const result = await closed;
     exitCode = result.code;
     signal = result.signal;
     launchFailure = result.error;
+    resourceMeasurements = await resources.stop();
+    if (providerStream) providerMeasurements = await providerStream;
   } catch (e) { launchFailure = e; }
   const elapsed = Number(process.hrtime.bigint() - started) / 1e6;
   const finishedAt = new Date().toISOString();
@@ -98,8 +109,11 @@ export async function runObserved({ task, context, repository, phase = "implemen
       measure("gpu_utilization", "unavailable"),
       measure("gpu_memory_bytes", "unavailable"),
       measure("frame_time_ms", "unavailable"),
-      measure("provider_input_tokens", "unavailable"),
-      measure("provider_output_tokens", "unavailable"),
+      ...providerMeasurements,
+      ...(providerMeasurements.some(m => m.name === "provider_usage_recorded_turn_count" && m.value > 0) ? [] : [
+        measure("provider_input_tokens", "unavailable"),
+        measure("provider_output_tokens", "unavailable")
+      ]),
       measure("provider_quota_consumption", "unavailable"),
       measure("provider_cost_usd", "unavailable")
     ]
@@ -111,6 +125,21 @@ export async function runObserved({ task, context, repository, phase = "implemen
   await appendFile(path, (attemptId ? "" : JSON.stringify(attempt) + "\n") + JSON.stringify(telemetry) + "\n", { encoding: "utf8", mode: 0o600 });
   return { journalPath, exitCode, signal, attempt, telemetry, eventPath: path };
 }
+async function observeCodexOutput(stream, onUsage) {
+  const stdout = process.stdout;
+  const onError = () => {}; // The write callback reports failure to the stream observer.
+  stdout.on("error", onError);
+  try {
+    return await observeCodexStream(stream, {
+      onUsage,
+      forward: bytes => new Promise((resolve, reject) => {
+        stdout.write(bytes, error => error ? reject(error) : resolve());
+      })
+    });
+  } finally {
+    stdout.off("error", onError);
+  }
+}
 async function assertPrivateFile(path) {
  try {const info=await lstat(path);if(!info.isFile()||info.isSymbolicLink()||(process.platform!=='win32'&&(info.mode&0o077)))throw Error('Telemetry output must be a private regular file');}
  catch(e){if(e.code!=='ENOENT')throw e;}
@@ -121,7 +150,7 @@ async function main() {
   const r = await runObserved({
     task, context: opts.context ? JSON.parse(await readFile(opts.context,"utf8")) : null, repository: opts.repo, command, phase: opts.phase || "implementation",
     attemptId: opts.attempt, attemptNumber: Number(opts["attempt-number"] || 1),
-    out: opts.out, provider: opts.provider, model: opts.model
+    out: opts.out, provider: opts.provider, model: opts.model, eventStream: opts["event-stream"]
   });
   process.stderr.write("Engineering attempt " + r.attempt.id + ": " + r.attempt.state + "; data: " + r.eventPath + "\n");
   process.exitCode = r.signal ? 128 : r.exitCode;

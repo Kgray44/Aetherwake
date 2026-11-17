@@ -5,6 +5,9 @@ on:
       - 'AGENTS.md'
       - '.agents/skills/**'
       - 'agent-system/task-classes.json'
+      - 'scripts/agent/provider-events.mjs'
+      - 'scripts/agent/telemetry.mjs'
+      - 'tests/agent-provider-telemetry.test.mjs'
       - 'agent-system/contracts/**'
       - 'scripts/agent/task-router.mjs'
       - 'scripts/agent/context.mjs'
@@ -18,6 +21,9 @@ on:
       - 'AGENTS.md'
       - '.agents/skills/**'
       - 'agent-system/task-classes.json'
+      - 'scripts/agent/provider-events.mjs'
+      - 'scripts/agent/telemetry.mjs'
+      - 'tests/agent-provider-telemetry.test.mjs'
       - 'agent-system/contracts/**'
       - 'scripts/agent/task-router.mjs'
       - 'scripts/agent/context.mjs'
@@ -39,5 +45,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
+      - name: Test Codex CLI telemetry
+        run: node --test tests/agent-provider-telemetry.test.mjs
       - name: Test task contract and deterministic routing
         run: node --test tests/agent-contracts.test.mjs tests/agent-task-router.test.mjs tests/agent-phase-c.test.mjs
