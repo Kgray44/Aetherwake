@@ -36,7 +36,7 @@ test('absent or mismatched attempt linkage is explicit and never accepted', () =
  }
 });
 
-import { traceTimeline } from './src/trace-timeline.mjs';
+import { recurringTraceBottlenecks, traceTimeline } from './src/trace-timeline.mjs';
 
 test('trace coverage counts overlapping spans once and retains partial spans and monotonic durations', () => {
   const time = n => new Date(n).toISOString();
@@ -71,4 +71,25 @@ test('a reused span ID cannot pair boundaries across attempts or revisions', () 
   assert.equal(timeline.spans.length, 3);
   assert.equal(timeline.incomplete, 3);
   assert.equal(timeline.coveredMs, null);
+});
+
+test('recurring timing patterns require matched spans across distinct comparable Tasks', () => {
+  const tasks = [1, 2, 3, 4].map(i => ({
+    record_type: 'task', id: 'task_' + i, classification: { primary: 'maintenance' }
+  }));
+  const span = (i, phase, end) => ['span_start', 'span_end'].map((kind, j) => ({
+    task_id: 'task_' + i, attempt_id: 'attempt_' + i, trace_id: 'trace_' + i, span_id: phase,
+    revision: '7'.repeat(40), phase, kind, occurred_at: new Date(j ? end : 0).toISOString(), measurements: []
+  }));
+  const events = [100, 80, 120].flatMap((duration, index) => [
+    ...span(index + 1, 'verification', duration), ...span(index + 1, 'context', 20)
+  ]);
+  assert.deepEqual(recurringTraceBottlenecks(tasks, events), [
+    { taskClass: 'maintenance', phase: 'verification', comparableTasks: 3, dominantTasks: 3, medianMs: 100 }
+  ]);
+  const noisyTask = [...events, span(2, 'review', 80)[0]];
+  assert.deepEqual(recurringTraceBottlenecks(tasks, noisyTask), []);
+  // Repeated attempts from one Task supply one sample to the class comparison.
+  const duplicate = [...events.slice(0, 4), ...events.slice(0, 4).map(event => ({ ...event, attempt_id: 'second_attempt' }))];
+  assert.deepEqual(recurringTraceBottlenecks(tasks, duplicate), []);
 });

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { traceTimeline } from './trace-timeline.mjs';
+import { recurringTraceBottlenecks, traceTimeline } from './trace-timeline.mjs';
 
 const emptyEvents = [];
 const limits = { spans: 80, events: 100 };
@@ -100,11 +100,23 @@ export function ExecutionFeed({execution,headers,onRefresh}){
   }catch(error){setMessage(error.message)}finally{setBusy(false);event.target.value=''}
  }
  const events=execution?.events??emptyEvents;
+ const bottlenecks=useMemo(() => recurringTraceBottlenecks(execution?.records??[], events), [execution, events]);
  return <section className="panel"><div className="panel-heading"><div><div className="kicker">PRIVATE EXECUTION PROJECTION</div><h2>Measured execution</h2></div></div>
  <p>Import an explicitly sanitized local export. Raw journals, prompts and command output must stay local. Local Task records remain authoritative; this Site cannot approve or execute them.</p>
  <label className="quiet-button">Import sanitized export <input aria-label="Import sanitized private execution export" type="file" accept="application/json" disabled={busy} onChange={upload}/></label>
  <p role="status">{message}</p>
  <p>Last synchronization: {execution?.generated_at??'Unavailable'}. {events.length} recorded trace events. Uninstrumented time is unavailable, not zero. Imported evidence is a reported claim, not independently verified approval.</p>
  <TraceWaterfall events={events}/>
+ {events.length>0 && <details>
+   <summary>Recurring timing patterns</summary>
+   {bottlenecks.length ? <ul>{bottlenecks.map(signal => <li key={signal.taskClass}>
+     {signal.phase} covered the most recorded time on {signal.dominantTasks} of {signal.comparableTasks} comparable {signal.taskClass} Tasks
+     {' · '}median {timeLabel(signal.medianMs)} among those Tasks.
+     {' '}{signal.phase === 'verification'
+       ? 'Compare a focused check against the same required coverage.'
+       : 'Inspect this phase for a repeated operation or wait.'}
+   </li>)}</ul> : <p>At least three comparable Tasks need the same longest recorded phase to show a recurring pattern.</p>}
+   <small>Only matched intervals contribute. Coverage can vary by Task and timing alone does not identify a cause.</small>
+ </details>}
  </section>
 }
