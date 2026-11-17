@@ -58,3 +58,18 @@ export function searchActivity(kind, items, { query = '', state = '', group = ''
   const ordered = newestActivity(kind, selected);
   return oldest ? ordered.reverse() : ordered;
 }
+
+export function pullRepositoryTotals(group) {
+  const totals = group?.totals;
+  if (!['available', 'stale'].includes(totals?.status)) return null;
+  const { total, open, merged, closed } = totals;
+  if (![total, open, merged, closed].every(value => Number.isSafeInteger(value) && value >= 0) ||
+      open + merged + closed !== total) return null;
+  return { total, open, merged, closed, observedAt: totals.observed_at,
+    stale: group.status === 'stale' || totals.status === 'stale' };
+}
+
+export function runRepositoryTotal(group) {
+  const total = group?.repository_total;
+  return Number.isSafeInteger(total) && total >= 0 ? total : null;
+}

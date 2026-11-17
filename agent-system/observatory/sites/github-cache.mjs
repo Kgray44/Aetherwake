@@ -1,4 +1,4 @@
-import { AUTH_REASON, githubSnapshot, RATE_REASON } from './github.mjs';
+import { AUTH_REASON, githubSnapshot, RATE_REASON, unavailablePullTotals } from './github.mjs';
 import { fetchGitHubDetail } from './github-detail.mjs';
 
 const GROUPS = ['main', 'records', 'issues', 'pulls', 'ci'];
@@ -29,7 +29,12 @@ function pending(row, key, now) {
   const rejected = key !== null && row.read_reject_key === key && row.read_reject_until > now;
   const rateLimited = row.rate_until > now;
   if (old && !lost && !changed && !rejected && !rateLimited) {
-    return { ...old, api: old.api ?? apiStatus(key === null ? 'anonymous' : 'unverified') };
+    return {
+      ...old,
+      pulls:{...old.pulls, totals:old.pulls?.totals ?? unavailablePullTotals('GitHub PR totals awaiting refresh')},
+      ci:{...old.ci, repository_total:old.ci?.repository_total ?? null},
+      api:old.api ?? apiStatus(key === null ? 'anonymous' : 'unverified'),
+    };
   }
   const reason = lost ? MISSING : rejected ? AUTH_REASON : rateLimited ? RATE_REASON : changed ? UNCERTAIN : 'GitHub refresh in progress';
   const result = {
@@ -37,6 +42,12 @@ function pending(row, key, now) {
     retry_at: row.rate_until > now ? row.rate_until : null, api: rejected ? apiStatus('rejected') : old?.api && !changed && !lost ? old.api : apiStatus(lost ? 'missing' : key === null ? 'anonymous' : 'unverified'),
   };
   for (const group of GROUPS) result[group] = retain(old, group, reason);
+  const priorTotals = old?.pulls?.totals;
+  // Preserve the own status of a total already served by this credential.
+  // A repository-wide cooldown can also apply when that subquery was absent.
+  result.pulls.totals = !lost && !changed && !rejected && priorTotals && priorTotals.status !== 'available'
+    ? priorTotals : unavailablePullTotals(reason, priorTotals);
+  result.ci.repository_total ??= null;
   return result;
 }
 
@@ -54,7 +65,8 @@ export async function cachedGitHub(db, fetcher, validate, token, now = Date.now(
     ON CONFLICT(id) DO UPDATE SET auth_mode = excluded.auth_mode, lease_until = excluded.lease_until
     WHERE github_snapshot.lease_until <= ? AND github_snapshot.rate_until <= ?
       AND (github_snapshot.read_reject_until <= ? OR github_snapshot.read_reject_key IS NOT ?)
-      AND (github_snapshot.retry_at <= ? OR github_snapshot.credential_key IS NOT ?)
+      AND (github_snapshot.retry_at <= ? OR github_snapshot.credential_key IS NOT ?
+        OR json_type(github_snapshot.snapshot, '$.pulls.totals') IS NULL)
       AND NOT (github_snapshot.auth_mode = 'authenticated' AND excluded.auth_mode = 'anonymous')
     RETURNING snapshot, credential_key, validators, rate_failures
   `).bind(mode, lease, now, now, now, key, now, key).first();
@@ -72,6 +84,7 @@ export async function cachedGitHub(db, fetcher, validate, token, now = Date.now(
     previousApi: sameCredential ? old?.api : null,
     previousFailures: claim.rate_failures,
   });
+  const incomingTotals = snapshot.pulls.totals;
   let hasFailure = false;
   for (const group of GROUPS) {
     const incoming = snapshot[group];
@@ -81,6 +94,9 @@ export async function cachedGitHub(db, fetcher, validate, token, now = Date.now(
       snapshot[group] = retain(old, group, incoming.reason || 'GitHub records refresh incomplete');
     }
   }
+  snapshot.pulls.totals = incomingTotals.status === 'available'
+    ? incomingTotals : unavailablePullTotals(incomingTotals.reason, old?.pulls?.totals);
+  snapshot.ci.repository_total ??= null;
   const retryDelay = snapshot.api.authentication !== 'rejected' && hasFailure ? FAILURE_RETRY_MS : REFRESH_MS;
   const next = snapshot.retry_at || (Date.parse(snapshot.checked_at) + retryDelay);
   await db.prepare(`

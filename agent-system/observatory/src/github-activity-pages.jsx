@@ -3,7 +3,7 @@ import {
   Activity, ArrowLeft, ArrowUpRight, CheckCircle2, CircleX, Clock3, GitMerge, GitPullRequest, Search, Workflow
 } from 'lucide-react';
 import {
-  activityGroup, activityHref, activityId, activityState, githubItemHref, searchActivity
+  activityGroup, activityHref, activityId, activityState, githubItemHref, pullRepositoryTotals, runRepositoryTotal, searchActivity
 } from './github-activity.mjs';
 
 const EMPTY = [];
@@ -31,19 +31,32 @@ export function GitHubActivityList({ kind, group, filters, setFilters, ui }) {
   const states = useMemo(() => [...new Set(items.map(item => activityState(kind, item)).filter(Boolean))].sort(), [items, kind]);
   const groups = useMemo(() => [...new Set(items.map(item => activityGroup(kind, item)).filter(Boolean))].sort(), [items, kind]);
   const rows = useMemo(() => searchActivity(kind, items, filters), [items, kind, filters]);
-  const count = check => group && group.status !== 'unavailable'
-    ? items.filter(item => check(activityState(kind, item))).length : '—';
+  const recentKnown = group && group.status !== 'unavailable';
+  const countRecent = check => recentKnown
+    ? items.filter(item => check(activityState(kind, item))).length.toLocaleString() : '—';
+  const showTotal = value => Number.isSafeInteger(value) ? value.toLocaleString() : '—';
+  const pullTotals = pullRepositoryTotals(group);
+  const runTotal = runRepositoryTotal(group);
+  const repoMeta = pr && pullTotals?.stale || group?.status === 'stale'
+    ? 'Cached repository count' : 'Repository-wide GitHub count';
+  const recentMeta = recentKnown ? 'Among the latest ' + items.length + ' runs' : 'Recent results unavailable';
   const stats = pr
-    ? [['Pull requests', count(() => true), GitPullRequest], ['Open', count(x => x === 'open'), Activity],
-      ['Merged', count(x => x === 'merged'), GitMerge], ['Closed', count(x => x === 'closed'), CircleX]]
-    : [['CI runs', count(() => true), Workflow], ['Active', count(activeRun), Clock3],
-      ['Passed', count(x => x === 'success'), CheckCircle2], ['Failed', count(failedRun), CircleX]];
+    ? [['All pull requests', showTotal(pullTotals?.total), GitPullRequest, repoMeta],
+      ['Open pull requests', showTotal(pullTotals?.open), Activity, repoMeta],
+      ['Merged pull requests', showTotal(pullTotals?.merged), GitMerge, repoMeta],
+      ['Closed without merge', showTotal(pullTotals?.closed), CircleX, repoMeta]]
+    : [['All workflow runs', showTotal(runTotal), Workflow, repoMeta], ['Recent active runs', countRecent(activeRun), Clock3, recentMeta],
+      ['Recent passed runs', countRecent(x => x === 'success'), CheckCircle2, recentMeta],
+      ['Recent failed runs', countRecent(failedRun), CircleX, recentMeta]];
   const update = (key, value) => setFilters({ ...filters, [key]: value });
 
   return <>
-    <div className="metrics github-activity-metrics">{stats.map(([name, value, Icon], index) =>
-      <Metric key={name} name={name} value={value} Icon={Icon} index={index} meta="Loaded results"/>)}</div>
-    <Rise><Panel title={entityName(kind)} right={<span className="panel-meta">{rows.length} of {items.length} shown</span>}>
+    <div className="metrics github-activity-metrics">{stats.map(([name, value, Icon, meta], index) =>
+      <Metric key={name} name={name} value={value} Icon={Icon} index={index} meta={meta}/>)}</div>
+    <Rise><Panel title={entityName(kind)} right={<span className="panel-meta">{rows.length} of {items.length} recent results</span>}>
+      {pr && !pullTotals && <p className="low">Repository totals are unavailable{group?.totals?.reason ? ' · ' + group.totals.reason : ''}.</p>}
+      {pr && pullTotals && <p className="low">{pullTotals.stale ? 'Cached repository totals' : 'Repository totals'} · {stamp(pullTotals.observedAt)}</p>}
+      {recentKnown && <p className="low">Search and filters apply to the latest {items.length} results.</p>}
       {group?.status === 'stale' && <p className="notice">Cached · Last successful refresh {stamp(group.observed_at)} · {group.reason}</p>}
       <div className="form github-activity-filters">
         <label>Search

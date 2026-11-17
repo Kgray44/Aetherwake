@@ -1,5 +1,15 @@
 export const REPO = 'Kgray44/Aetherwake';
-const API = 'https://api.github.com/repos/' + REPO;
+const API_ORIGIN = 'https://api.github.com';
+const API = API_ORIGIN + '/repos/' + REPO;
+const COUNT_QUERY = `query ObservatoryPullRequestTotals {
+  repository(owner: "Kgray44", name: "Aetherwake") {
+    nameWithOwner
+    all: pullRequests(first: 1) { totalCount }
+    open: pullRequests(first: 1, states: [OPEN]) { totalCount }
+    merged: pullRequests(first: 1, states: [MERGED]) { totalCount }
+    closed: pullRequests(first: 1, states: [CLOSED]) { totalCount }
+  }
+}`;
 const MAX_RECORD_FILES = 12;
 const MAX_DIRECTORY_READS = 6;
 const MAX_RECORDS = 750;
@@ -66,6 +76,12 @@ function rateHeaders(headers, now) {
   };
 }
 
+export function unavailablePullTotals(reason, retained) {
+  return retained?.observed_at
+    ? { ...retained, status: 'stale', reason }
+    : { status:'unavailable', observed_at:null, total:null, open:null, merged:null, closed:null, reason };
+}
+
 function unavailable(reason) {
   return { status: 'unavailable', reason, items: [] };
 }
@@ -80,17 +96,31 @@ export function githubReader(fetcher, signal, token, now, previousApi, previousF
   let rateFailures = previousFailures;
   let checkedResponse = false;
 
-  async function get(path, maxBytes = 512 * 1024, etag = null) {
+  function throttle(seenAt, reset = 0, retry = null, exhausted = false) {
+    rateFailures = Math.min(previousFailures + 1, 5);
+    const fallback = seenAt + Math.min(MAX_BACKOFF_MS, MIN_BACKOFF_MS * 2 ** (rateFailures - 1));
+    retryAt = Math.max(retry ?? 0, reset > seenAt ? reset : 0,
+      (retry === null && !(reset > seenAt)) || (exhausted && !(reset > seenAt)) ? fallback : 0) + 1000;
+    haltReason = RATE_REASON;
+  }
+
+  async function request(path, maxBytes, etag, graphql = false) {
     if (haltReason) throw new Error(haltReason);
+    if (graphql && !token) throw new Error(AUTH_REASON);
     const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'Aetherwake-Engineering-Observatory' };
     if (token) {
       headers.Authorization = 'Bearer ' + token;
       if (ETAG.test(etag ?? '')) headers['If-None-Match'] = etag;
     }
-    const response = await fetcher(API + path, { headers, signal, redirect: 'manual' });
+    const init = { headers, signal, redirect:'manual' };
+    if (graphql) {
+      headers['Content-Type'] = 'application/json';
+      Object.assign(init, {method:'POST', body:JSON.stringify({query:COUNT_QUERY})});
+    }
+    const response = await fetcher(graphql ? API_ORIGIN + '/graphql' : API + path, init);
     const seenAt = now();
     const observed = rateHeaders(response.headers, seenAt);
-    if (observed.observed_at) rate = observed;
+    if (!graphql && observed.observed_at) rate = observed;
     const retry = retryAfterAt(response.headers, seenAt);
     const exhausted = observed.remaining === 0;
     let secondary = false;
@@ -102,15 +132,9 @@ export function githubReader(fetcher, signal, token, now, previousApi, previousF
       } catch { /* Unrecognized 403 is a permission failure for a configured credential. */ }
     }
     const throttled = exhausted || retry !== null || secondary || response.status === 429;
-    if (throttled) {
-      rateFailures = Math.min(previousFailures + 1, 5);
-      const reset = exhausted ? Date.parse(observed.reset_at) : 0;
-      const fallback = seenAt + Math.min(MAX_BACKOFF_MS, MIN_BACKOFF_MS * 2 ** (rateFailures - 1));
-      retryAt = Math.max(retry ?? 0, reset > seenAt ? reset : 0,
-        (retry === null && !(reset > seenAt)) || (exhausted && !(reset > seenAt)) ? fallback : 0) + 1000;
-      haltReason = RATE_REASON;
-    }
-    if (token && (response.status === 401 || (response.status === 403 && !throttled))) {
+    if (throttled) throttle(seenAt, exhausted ? Date.parse(observed.reset_at) : 0, retry, exhausted);
+    const rejected = token && (response.status === 401 || (response.status === 403 && !throttled));
+    if (rejected && !graphql) {
       authentication = 'rejected';
       rate = { remaining: null, limit: null, reset_at: null, observed_at: null };
       haltReason = AUTH_REASON;
@@ -122,19 +146,28 @@ export function githubReader(fetcher, signal, token, now, previousApi, previousF
     }
     if (!response.ok) {
       if (!response.bodyUsed) await response.body?.cancel();
-      const error = new Error(haltReason || 'GitHub HTTP ' + response.status);
+      const error = new Error(haltReason || (rejected ? AUTH_REASON : 'GitHub HTTP ' + response.status));
       error.status = response.status;
       throw error;
     }
-    checkedResponse = true;
-    if (token) authentication = 'authenticated';
+    if (!graphql) {
+      checkedResponse = true;
+      if (token) authentication = 'authenticated';
+    }
     const validator = response.headers.get('etag');
-    return { data: JSON.parse(await readBounded(response.body, maxBytes)), etag: token && ETAG.test(validator ?? '') ? validator : null,
+    const data = JSON.parse(await readBounded(response.body, maxBytes));
+    if (graphql && Array.isArray(data?.errors) && data.errors.some(error =>
+      error?.type === 'RATE_LIMITED' || /secondary rate limit|rate limit exceeded|abuse detection/i.test(error?.message ?? ''))) {
+      if (!haltReason) throttle(seenAt);
+      throw new Error(RATE_REASON);
+    }
+    return { data, etag: token && ETAG.test(validator ?? '') ? validator : null,
       hasNext: /;\s*rel="next"/.test(response.headers.get('link') ?? '') };
   }
 
   return {
-    get,
+    get: (path, maxBytes = 512 * 1024, etag = null) => request(path, maxBytes, etag),
+    pullTotals: () => request(null, 16 * 1024, null, true),
     halted: () => haltReason,
     status() {
       const { remaining, limit, reset_at, observed_at } = rate;
@@ -309,13 +342,17 @@ export async function githubSnapshot(fetcher, validate, token, {
   const updated = {};
   async function resource(key, path, convert, maxBytes) {
     const prior = previous?.[key];
-    const usable = prior?.observed_at && (key === 'main' ? isRevision(prior.revision) : Array.isArray(prior.items));
+    const usable = prior?.observed_at && (key === 'main' ? isRevision(prior.revision) : Array.isArray(prior.items)) &&
+      (key !== 'ci' || Number.isSafeInteger(prior.repository_total));
     const etag = usable ? oldValidators[path] : null;
     if (token && ETAG.test(etag ?? '')) validators[path] = etag;
     const result = await capture(async () => {
       const response = await reader.get(path, maxBytes, etag);
       const converted = response.unchanged
-        ? (key === 'main' ? { revision: prior.revision } : { items: prior.items })
+        ? (key === 'main' ? { revision: prior.revision } : {
+          items: prior.items,
+          ...(key === 'ci' ? { repository_total: prior.repository_total } : {}),
+        })
         : convert(response.data);
       if (response.etag) validators[path] = response.etag;
       else delete validators[path];
@@ -334,7 +371,10 @@ export async function githubSnapshot(fetcher, validate, token, {
   const pulls = await resource('pulls', '/pulls?state=all&sort=created&direction=desc&per_page=' + ACTIVITY_PAGE_SIZE,
     data => ({ items: pullItems(data) }), MAX_PULL_RESPONSE_BYTES);
   const ci = await resource('ci', '/actions/runs?per_page=' + ACTIVITY_PAGE_SIZE,
-    data => ({ items: runItems(data.workflow_runs) }));
+    data => {
+      const items = runItems(data.workflow_runs);
+      return { items, repository_total:Number.isSafeInteger(data.total_count) && data.total_count >= items.length ? data.total_count : null };
+    });
 
   let records;
   if (main.revision && completeRecords(previous?.records, main.revision)) {
@@ -349,6 +389,8 @@ export async function githubSnapshot(fetcher, validate, token, {
     else updated.records = new Date(now()).toISOString();
   }
 
+  pulls.totals = await readPullTotals(reader, token, now);
+  ci.repository_total ??= null;
   const { api, retryAt, rateFailures } = reader.status();
   const snapshot = {
     repository: REPO, retry_at: retryAt || null, checked_at: new Date(now()).toISOString(),
@@ -356,4 +398,26 @@ export async function githubSnapshot(fetcher, validate, token, {
   };
   for (const [group, value] of Object.entries(updated)) snapshot[group].observed_at = value;
   return { snapshot, validators, rateFailures };
+}
+
+async function readPullTotals(reader, token, now) {
+  if (!token) return unavailablePullTotals('GitHub read credential unavailable');
+  const result = await capture(async () => {
+    const { data } = await reader.pullTotals();
+    const repo = data?.data?.repository;
+    if (Array.isArray(data?.errors) && data.errors.some(error => ['FORBIDDEN', 'UNAUTHORIZED'].includes(error?.type))) {
+      throw new Error(AUTH_REASON);
+    }
+    if (repo?.nameWithOwner !== REPO || (data.errors !== undefined && (!Array.isArray(data.errors) || data.errors.length))) {
+      throw new Error(INVALID_REASON);
+    }
+    const total = repo.all?.totalCount;
+    const open = repo.open?.totalCount;
+    const merged = repo.merged?.totalCount;
+    const closed = repo.closed?.totalCount;
+    if (![total, open, merged, closed].every(value => Number.isSafeInteger(value) && value >= 0) ||
+        total !== open + merged + closed) throw new Error(INVALID_REASON);
+    return { observed_at:new Date(now()).toISOString(), total, open, merged, closed, reason:null };
+  });
+  return result.status === 'available' ? result : unavailablePullTotals(result.reason);
 }
