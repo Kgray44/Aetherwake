@@ -5,6 +5,7 @@ import test from 'node:test';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { createWorker } from './worker.mjs';
+import { cachedGitHub } from './github-cache.mjs';
 import { proposedTask } from '../intake.mjs';
 
 const schema = JSON.parse(readFileSync(new URL('../../contracts/v1.schema.json', import.meta.url)));
@@ -21,6 +22,8 @@ const input = {
   state: 'accepted', owner_acceptance: 'accepted',
 };
 const cacheMigration = readFileSync(new URL('./drizzle/0001_github_snapshot.sql', import.meta.url), 'utf8');
+const conditionalCacheMigration = readFileSync(new URL('./drizzle/0005_github_conditional_cache.sql', import.meta.url), 'utf8');
+const detailCacheMigration = readFileSync(new URL('./drizzle/0006_github_details.sql', import.meta.url), 'utf8');
 const namespace = 'c0cf1399-8a73-4f08-9b10-997063853638';
 const published = proposedTask({ ...input, title: 'Published contract record' }, rev);
 const ownerHeader = { 'oai-authenticated-user-id': 'owner-1' };
@@ -33,6 +36,8 @@ function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
   sql.exec(readFileSync(new URL('./drizzle/0002_private_projection.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0003_proposal_publication.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0004_cached_proposal_revision.sql', import.meta.url), 'utf8'));
+  sql.exec(conditionalCacheMigration);
+  sql.exec(detailCacheMigration);
   let rateLimited = false;
   const writes = [];
   const DB = {
@@ -139,13 +144,14 @@ test('a contract-valid proposal persists with owner and verification boundaries'
 });
 
 test('GitHub failure remains visible and intake requires a resolved main SHA', async t => {
-  const { call, post } = fixture(t, { missingMain: true });
+  const { call, post, requests } = fixture(t, { missingMain: true });
   const response = await call('/api/overview', { headers: ownerHeader });
   const data = await response.json();
   assert.equal(data.revision, null);
   assert.equal(data.github.records.status, 'unavailable');
-  assert.equal(data.github.issues.status, 'available');
+  assert.equal(data.github.issues.status, 'unavailable');
   assert.equal((await post()).status, 503);
+  assert.equal(requests.length, 1);
 });
 
 
@@ -174,6 +180,222 @@ test('Worker instances share GitHub results and keep last good data through a ra
   assert.equal((await post({ 'x-observatory-publish': 'github' })).status, 503);
   assert.equal(requests.length, limitedCount);
 });
+
+function cacheFixture(t) {
+  const sql = new DatabaseSync(':memory:');
+  t.after(() => sql.close());
+  sql.exec(cacheMigration);
+  sql.exec(conditionalCacheMigration);
+  sql.exec(detailCacheMigration);
+  return {
+    prepare(statement) {
+      const stmt = sql.prepare(statement);
+      return { bind: (...args) => ({
+        first: async () => stmt.get(...args) ?? null,
+        run: async () => ({ meta: stmt.run(...args) }),
+      }) };
+    },
+  };
+}
+
+function githubReadResponse(path, headers = {}) {
+  if (path.startsWith('/git/ref/')) return Response.json({ ref: 'refs/heads/main', object: { sha: rev } }, { headers });
+  if (path.startsWith('/actions/runs')) return Response.json({ workflow_runs: [{ id: 11, name:'CI', head_sha: rev }] }, { headers });
+  if (path.startsWith('/issues')) return Response.json([{ number: 9, title:'Recent issue' }], { headers });
+  if (path.startsWith('/pulls')) return Response.json([{ number: 10, title:'Recent pull request' }], { headers });
+  if (path.startsWith('/contents/')) return new Response(null, { status: 404 });
+  assert.fail('Unexpected route: ' + path);
+}
+
+function requestPath(url) {
+  return url.replace('https://api.github.com/repos/Kgray44/Aetherwake', '');
+}
+
+test('authenticated 304s reuse each validated snapshot and skip complete immutable records', async t => {
+  const db = cacheFixture(t);
+  const now = Date.now();
+  const requests = [];
+  let active = false;
+  let revalidate = false;
+  const respond = async (url, { headers }) => {
+    assert.equal(active, false, 'upstream requests run serially');
+    active = true;
+    await new Promise(resolve => setTimeout(resolve, 1));
+    active = false;
+    const path = requestPath(url);
+    requests.push(path);
+    assert.equal(headers.Authorization, 'Bearer fixture-token');
+    if (/^(\/issues|\/pulls)\?/.test(path)) assert.equal(new URL(url).searchParams.get('direction'), 'desc');
+    if (path.startsWith('/contents/')) return githubReadResponse(path);
+    const etag = '"validator-' + path.split(/[/?]/)[1] + '"';
+    if (revalidate) {
+      assert.equal(headers['If-None-Match'], etag);
+      return new Response(null, { status: 304 });
+    }
+    assert.equal(headers['If-None-Match'], undefined);
+    return githubReadResponse(path, {
+      etag, 'x-ratelimit-limit': '5000', 'x-ratelimit-remaining': '4995',
+      'x-ratelimit-reset': String(Math.round((now + 3_600_000) / 1000)),
+    });
+  };
+  const first = await cachedGitHub(db, respond, validate, 'fixture-token', now);
+  assert.equal(requests.length, 6);
+  assert.equal(first.api.authentication, 'authenticated');
+  assert.equal(first.api.limit, 5000);
+  assert.equal(first.api.remaining, 4995);
+  assert.deepEqual(Object.keys(first.api).sort(), ['authentication','limit','observed_at','remaining','reset_at']);
+  assert.equal(first.records.status, 'available');
+  revalidate = true;
+  const second = await cachedGitHub(db, respond, validate, 'fixture-token', now + 16 * 60_000);
+  assert.equal(requests.length, 10, 'only four mutable groups revalidated');
+  for (const key of ['issues','pulls','ci']) assert.equal(JSON.stringify(second[key].items), JSON.stringify(first[key].items));
+  assert.equal(second.main.revision, first.main.revision);
+  assert.ok(second.main.observed_at > first.main.observed_at);
+  assert.equal(second.records.observed_at, first.records.observed_at);
+  assert.deepEqual(second.api, first.api, '304 without budget headers keeps the last observed budget');
+  assert.doesNotMatch(JSON.stringify(second), /fixture-token|validator-/);
+});
+
+test('a rejected or missing credential serves stale data and rotation clears validators', async t => {
+  const db = cacheFixture(t);
+  const now = Date.now();
+  const requests = [];
+  let reject = false;
+  const respond = async (url, {headers}) => {
+    const path = requestPath(url);
+    requests.push(path);
+    assert.ok(headers.Authorization, 'anonymous fallback attempted');
+    if (reject) return Response.json({message:'Bad credentials'}, {status:401});
+    if (headers.Authorization === 'Bearer fixture-rotated') assert.equal(headers['If-None-Match'], undefined);
+    return githubReadResponse(path, {etag:'"first"'});
+  };
+  const first = await cachedGitHub(db, respond, validate, 'fixture-original', now);
+  assert.equal(first.api.authentication, 'authenticated');
+  assert.equal(requests.length, 6);
+  reject = true;
+  const later = now + 16 * 60_000;
+  const refused = await cachedGitHub(db, respond, validate, 'fixture-original', later);
+  assert.equal(requests.length, 7, 'credential rejection stops the whole batch');
+  assert.equal(refused.api.authentication, 'rejected');
+  assert.equal(refused.main.status, 'stale');
+  assert.equal(JSON.stringify(refused.pulls.items), JSON.stringify(first.pulls.items));
+  const missing = await cachedGitHub(db, respond, validate, undefined, later + 1000);
+  assert.equal(missing.api.authentication, 'missing');
+  assert.equal(missing.ci.status, 'stale');
+  assert.equal(requests.length, 7, 'a lost configured binding never sends an anonymous request');
+  reject = false;
+  const rotated = await cachedGitHub(db, respond, validate, 'fixture-rotated', later + 2000);
+  assert.equal(rotated.api.authentication, 'authenticated');
+  assert.equal(rotated.main.status, 'available');
+  assert.equal(requests.length, 11, 'a new binding is verified immediately even during prior auth cooldown');
+});
+
+test('success at zero budget honors both Retry-After and reset across visitors and rotation', async t => {
+  const db = cacheFixture(t);
+  const now = Date.now();
+  const reset = Math.floor(now / 1000) * 1000 + 180_000;
+  const requests = [];
+  const respond = async url => {
+    const path = requestPath(url);
+    requests.push(path);
+    return githubReadResponse(path, {
+      'retry-after':'120', 'x-ratelimit-remaining':'0', 'x-ratelimit-limit':'5000',
+      'x-ratelimit-reset':String(reset / 1000),
+    });
+  };
+  const first = await cachedGitHub(db, respond, validate, 'some-token', now);
+  assert.equal(first.main.status, 'available');
+  assert.equal(first.issues.status, 'unavailable');
+  assert.equal(first.api.remaining, 0);
+  assert.equal(first.api.reset_at, new Date(reset).toISOString());
+  assert.equal(first.retry_at, reset + 1000);
+  assert.equal(requests.length, 1);
+  const second = await cachedGitHub(db, respond, validate, 'another-token', now + 130_000);
+  assert.equal(second.api.authentication, 'unverified');
+  assert.equal(second.api.remaining, null);
+  assert.equal(second.main.status, 'stale');
+  assert.equal(second.retry_at, first.retry_at);
+  assert.equal(requests.length, 1);
+});
+
+test('pull requests and cross-branch runs expose a bounded newest-created window', async t => {
+  const db = cacheFixture(t);
+  const paths = [];
+  const dateAt = value => new Date(Date.parse('2026-01-01T00:00:00Z') + 1000 * value).toISOString();
+  const respond = async url => {
+    const path = requestPath(url);
+    const query = new URL(url).searchParams;
+    paths.push(path);
+    if (path.startsWith('/pulls')) {
+      assert.equal(query.get('sort'), 'created');
+      assert.equal(query.get('direction'), 'desc');
+      assert.equal(query.get('per_page'), '40');
+      return Response.json(Array.from({length:42}, (_, index) => ({
+        id: 1000 + index, number: 100 + index, title: 'Pull ' + index,
+        state: 'closed', created_at: dateAt(index), updated_at: dateAt(200 - index),
+        user: {login:'contributor'}, head: {ref:'feature',sha:rev}, base:{ref:'main'},
+        draft: false, merged_at: index === 41 ? dateAt(46) : null,
+      })));
+    }
+    if (path.startsWith('/actions/runs')) {
+      assert.equal(query.get('branch'), null);
+      assert.equal(query.get('per_page'), '40');
+      return Response.json({workflow_runs:Array.from({length:42}, (_,index) => ({
+        id: 2000 + index, name:'Verification', display_title:'Run ' + index,
+        created_at:dateAt(index), updated_at:dateAt(200 - index), actor:{login:'contributor'}, head_sha:rev,
+        head_branch:index % 2 ? 'feature' : 'main', event:'pull_request', run_attempt:2, status:'completed', conclusion:'success',
+      }))});
+    }
+    return githubReadResponse(path);
+  };
+  const snapshot = await cachedGitHub(db, respond, validate, 'fixture-token');
+  assert.equal(paths.filter(path => path.startsWith('/pulls')).length, 1);
+  assert.equal(paths.filter(path => path.startsWith('/actions/runs')).length, 1);
+  assert.equal(snapshot.pulls.items.length, 40);
+  assert.equal(snapshot.ci.items.length, 40);
+  assert.deepEqual(snapshot.pulls.items[0], {
+    id:1041, number:141, label:'#141', title:'Pull 41', state:'closed',
+    url:'https://github.com/Kgray44/Aetherwake/pull/141', revision:rev,
+    date:dateAt(159), created_at:dateAt(41), updated_at:dateAt(159), author:'contributor',
+    head_ref:'feature', base_ref:'main', draft:false, merged:true, merged_at:dateAt(46),
+  });
+  assert.equal(snapshot.pulls.items[1].merged, false);
+  assert.deepEqual(snapshot.ci.items[0], {
+    id:2041, label:'Verification', title:'Run 41', state:'success',
+    url:'https://github.com/Kgray44/Aetherwake/actions/runs/2041', revision:rev,
+    date:dateAt(159), created_at:dateAt(41), updated_at:dateAt(159), author:'contributor',
+    branch:'feature', workflow:'Verification', event:'pull_request', attempt:2, status:'completed', conclusion:'success',
+  });
+  assert.equal(snapshot.ci.items[1].branch, 'main');
+});
+
+test('unhinted secondary rate limit backs off exponentially and keeps one lease', async t => {
+  const db = cacheFixture(t);
+  const now = Date.now();
+  let requests = 0;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let started;
+  const start = new Promise(resolve => { started = resolve; });
+  const respond = async () => {
+    requests++;
+    started();
+    await gate;
+    return Response.json({ message:'You have exceeded a secondary rate limit.' }, { status:403 });
+  };
+  const refresh = cachedGitHub(db, respond, validate, 'fixture-token', now);
+  await start;
+  const waiting = await cachedGitHub(db, respond, validate, 'rotated-token', now + 1);
+  assert.equal(waiting.api.authentication, 'unverified');
+  assert.equal(requests, 1, 'token changes cannot start a simultaneous upstream refresh');
+  release();
+  const first = await refresh;
+  assert.ok(first.retry_at >= now + 61_000 && first.retry_at < now + 62_000);
+  const second = await cachedGitHub(db, respond, validate, 'fixture-token', first.retry_at + 1);
+  assert.ok(second.retry_at >= first.retry_at + 121_000 && second.retry_at < first.retry_at + 122_000);
+  assert.equal(requests, 2);
+});
+
 
 test('private export sync is authenticated, origin-bound, persistent and isolated',async t=>{
  const {call}=fixture(t);

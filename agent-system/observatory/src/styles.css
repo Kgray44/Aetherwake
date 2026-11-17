@@ -18,3 +18,47 @@
 .step strong small{display:block;color:var(--muted);font-weight:400;margin-top:4px}
 .step svg.admission-missing{color:#ff8c95}
 .hint a,.proposal-link{color:#a8e7ef}
+
+.github-api-diagnostics dl{display:flex;flex-wrap:wrap;gap:.65rem 1.4rem;margin:.65rem 0}
+.github-api-diagnostics dt{font-size:.75rem;color:var(--muted)}
+.github-api-diagnostics dd{margin:0;font-variant-numeric:tabular-nums}
+
+.github-activity-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
+.github-activity-filters{display:grid;grid-template-columns:minmax(12rem,2fr) repeat(3,minmax(7rem,1fr));gap:.65rem;margin-bottom:1rem;align-items:end}
+.github-search{display:flex;align-items:center;position:relative}
+.github-search svg{position:absolute;left:.65rem;color:var(--muted);pointer-events:none}
+.github-search input[type="search"]{padding-left:2rem;width:100%}
+.github-activity-list,.github-meta-list,.github-steps{list-style:none;padding:0;margin:0;display:grid;gap:.35rem}
+.github-activity-row{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(8rem,auto) 1rem;align-items:center;gap:.85rem;padding:.7rem .8rem;border:1px solid var(--border);border-radius:.55rem;background:var(--panel2);color:var(--ink);text-decoration:none}
+a.github-activity-row:hover,a.github-activity-row:focus-visible{border-color:var(--accent);color:var(--ink)}
+a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.github-row-copy{min-width:0;display:grid;gap:.15rem}
+.github-row-copy strong,.github-row-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.github-row-copy small,.github-activity-row time,.github-job small,.github-meta-list small{color:var(--muted);font-size:.76rem}
+.github-activity-row time{font-variant-numeric:tabular-nums}
+.github-home-more{display:inline-flex;align-items:center;gap:.35rem;margin-top:.55rem}
+.github-detail-actions{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.6rem}
+.github-detail-actions .primary-button{text-decoration:none}
+.github-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.9rem 1rem;margin:.15rem 0}
+.github-facts dt{color:var(--muted);font-size:.77rem;margin-bottom:.2rem}
+.github-facts dd{margin:0;overflow-wrap:anywhere}
+.github-facts a,.github-job a{color:var(--accent)}
+.github-description{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;line-height:1.65}
+.github-job{border:1px solid var(--border);border-radius:.5rem;margin:.45rem 0;background:var(--panel2)}
+.github-job summary{cursor:pointer;display:flex;gap:.65rem;padding:.7rem .85rem;align-items:center;flex-wrap:wrap}
+.github-job summary::before{content:"›";color:var(--accent);margin-right:.15rem}
+.github-job[open] summary::before{content:"⌄"}
+.github-job summary strong{flex:1 1 10rem}
+.github-job-content{display:grid;gap:.85rem;padding:.1rem .85rem .85rem}
+.github-steps li,.github-meta-list li{display:flex;align-items:center;justify-content:space-between;gap:.65rem;flex-wrap:wrap;border-top:1px solid var(--border);padding:.55rem 0}
+.github-steps li>div,.github-meta-list li>div{display:grid;gap:.2rem;overflow-wrap:anywhere}
+.status-success .status-light,.status-approved .status-light,.status-merged .status-light{background:#89e4b8}
+.status-failure .status-light,.status-timed_out .status-light,.status-changes_requested .status-light{background:#ff909e}
+.status-in_progress .status-light,.status-queued .status-light,.status-pending .status-light{background:#edc78f}
+@media(max-width:1050px){.github-activity-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:620px){
+  .github-activity-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .github-activity-row{grid-template-columns:minmax(0,1fr) auto;gap:.4rem}
+  .github-activity-row>svg{justify-self:end}
+  .github-row-copy strong{white-space:normal;overflow-wrap:anywhere}
+}

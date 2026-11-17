@@ -1,10 +1,13 @@
-const REPO = 'Kgray44/Aetherwake';
+export const REPO = 'Kgray44/Aetherwake';
 const API = 'https://api.github.com/repos/' + REPO;
 const MAX_RECORD_FILES = 12;
 const MAX_DIRECTORY_READS = 6;
 const MAX_RECORDS = 750;
 const RECORD_DIRS = ['agent-system/records', 'agent-system/observatory/records'];
-const PAGE_SIZE = 12;
+const ISSUE_PAGE_SIZE = 12;
+const ACTIVITY_PAGE_SIZE = 40;
+const MAX_PULL_RESPONSE_BYTES = 2 * 1024 * 1024;
+const REPO_URL = 'https://github.com/' + REPO;
 
 export const isRevision = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 
@@ -30,43 +33,125 @@ export async function readBounded(stream, maxBytes) {
   }
 }
 
-function githubReader(fetcher, signal, token) {
-  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'Aetherwake-Engineering-Observatory' };
-  if (token) headers.Authorization = 'Bearer ' + token;
+const MIN_BACKOFF_MS = 60_000;
+const MAX_BACKOFF_MS = 15 * MIN_BACKOFF_MS;
+export const RATE_REASON = 'GitHub rate limit reached';
+export const AUTH_REASON = 'GitHub read credential rejected';
+const INVALID_REASON = 'GitHub response unavailable or invalid';
+const ETAG = /^(?:W\/)?"[\x21\x23-\x7e]{0,250}"$/;
+
+const integerHeader = (headers, name) => {
+  const value = headers.get(name);
+  return /^\d{1,16}$/.test(value ?? '') && Number.isSafeInteger(Number(value)) ? Number(value) : null;
+};
+
+function retryAfterAt(headers, now) {
+  const value = headers.get('retry-after');
+  if (value === null) return null;
+  const seconds = integerHeader(headers, 'retry-after');
+  const at = seconds === null ? Date.parse(value) : now + seconds * 1000;
+  return Number.isSafeInteger(at) && at <= 8.64e15 && at >= now ? at : null;
+}
+
+function rateHeaders(headers, now) {
+  const remaining = integerHeader(headers, 'x-ratelimit-remaining');
+  const limit = integerHeader(headers, 'x-ratelimit-limit');
+  const seconds = integerHeader(headers, 'x-ratelimit-reset');
+  const resetMs = seconds !== null && seconds <= 8.64e12 ? seconds * 1000 : null;
+  return {
+    remaining,
+    limit,
+    reset_at: resetMs === null ? null : new Date(resetMs).toISOString(),
+    observed_at: remaining !== null || limit !== null || resetMs !== null ? new Date(now).toISOString() : null,
+  };
+}
+
+function unavailable(reason) {
+  return { status: 'unavailable', reason, items: [] };
+}
+
+export function githubReader(fetcher, signal, token, now, previousApi, previousFailures) {
+  let authentication = token
+    ? (['authenticated', 'rejected'].includes(previousApi?.authentication) ? previousApi.authentication : 'unverified')
+    : 'anonymous';
+  let rate = previousApi ?? { remaining: null, limit: null, reset_at: null, observed_at: null };
   let retryAt = 0;
-  async function get(path, maxBytes = 512 * 1024) {
-    if (retryAt > Date.now()) throw new Error('GitHub rate limit reached');
-    const response = await fetcher(API + path, {
-      headers,
-      // Workers supports manual redirects. Reject 3xx below without following them.
-      signal, redirect: 'manual',
-    });
+  let haltReason = null;
+  let rateFailures = previousFailures;
+  let checkedResponse = false;
+
+  async function get(path, maxBytes = 512 * 1024, etag = null) {
+    if (haltReason) throw new Error(haltReason);
+    const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'Aetherwake-Engineering-Observatory' };
+    if (token) {
+      headers.Authorization = 'Bearer ' + token;
+      if (ETAG.test(etag ?? '')) headers['If-None-Match'] = etag;
+    }
+    const response = await fetcher(API + path, { headers, signal, redirect: 'manual' });
+    const seenAt = now();
+    const observed = rateHeaders(response.headers, seenAt);
+    if (observed.observed_at) rate = observed;
+    const retry = retryAfterAt(response.headers, seenAt);
+    const exhausted = observed.remaining === 0;
+    let secondary = false;
+    if (response.status === 403 && !exhausted && retry === null) {
+      // GitHub may report secondary throttling only in the 403 message.
+      try {
+        const error = JSON.parse(await readBounded(response.body, 8192));
+        secondary = /secondary rate limit|abuse detection/i.test(error?.message ?? '');
+      } catch { /* Unrecognized 403 is a permission failure for a configured credential. */ }
+    }
+    const throttled = exhausted || retry !== null || secondary || response.status === 429;
+    if (throttled) {
+      rateFailures = Math.min(previousFailures + 1, 5);
+      const reset = exhausted ? Date.parse(observed.reset_at) : 0;
+      const fallback = seenAt + Math.min(MAX_BACKOFF_MS, MIN_BACKOFF_MS * 2 ** (rateFailures - 1));
+      retryAt = Math.max(retry ?? 0, reset > seenAt ? reset : 0,
+        (retry === null && !(reset > seenAt)) || (exhausted && !(reset > seenAt)) ? fallback : 0) + 1000;
+      haltReason = RATE_REASON;
+    }
+    if (token && (response.status === 401 || (response.status === 403 && !throttled))) {
+      authentication = 'rejected';
+      rate = { remaining: null, limit: null, reset_at: null, observed_at: null };
+      haltReason = AUTH_REASON;
+    }
+    if (response.status === 304 && token && headers['If-None-Match']) {
+      checkedResponse = true;
+      authentication = 'authenticated';
+      return { unchanged: true, etag: ETAG.test(response.headers.get('etag') ?? '') ? response.headers.get('etag') : etag };
+    }
     if (!response.ok) {
-      await response.body?.cancel();
-      const exhausted = response.headers.get('x-ratelimit-remaining') === '0';
-      const retryHeader = response.headers.get('retry-after');
-      const retryAfter = retryHeader === null ? 0 : (/^\d+$/.test(retryHeader) ? Number(retryHeader) * 1000 : Math.max(0, Date.parse(retryHeader) - Date.now()));
-      const throttled = response.status === 429 || (response.status === 403 && (exhausted || retryAfter > 0));
-      if (throttled) {
-        const now = Date.now();
-        const resetAt = exhausted ? Number(response.headers.get('x-ratelimit-reset')) * 1000 : 0;
-        retryAt = Math.max(retryAt, resetAt, now + (retryAfter || (resetAt > now ? 0 : 60_000))) + 1000;
-      }
-      const error = new Error(throttled ? 'GitHub rate limit reached' : 'GitHub HTTP ' + response.status);
+      if (!response.bodyUsed) await response.body?.cancel();
+      const error = new Error(haltReason || 'GitHub HTTP ' + response.status);
       error.status = response.status;
       throw error;
     }
-    return JSON.parse(await readBounded(response.body, maxBytes));
+    checkedResponse = true;
+    if (token) authentication = 'authenticated';
+    const validator = response.headers.get('etag');
+    return { data: JSON.parse(await readBounded(response.body, maxBytes)), etag: token && ETAG.test(validator ?? '') ? validator : null,
+      hasNext: /;\s*rel="next"/.test(response.headers.get('link') ?? '') };
   }
-  return { get, retryAt: () => retryAt };
+
+  return {
+    get,
+    halted: () => haltReason,
+    status() {
+      const { remaining, limit, reset_at, observed_at } = rate;
+      return {
+        retryAt, rateFailures: retryAt || !checkedResponse ? rateFailures : 0,
+        api: { authentication, remaining, limit, reset_at, observed_at },
+      };
+    },
+  };
 }
 
-async function capture(work) {
+export async function capture(work) {
   try { return { status: 'available', ...await work() }; }
   catch (error) {
-    const reason = /^GitHub (HTTP \d{3}|rate limit reached)$/.test(error.message)
-      ? error.message : 'GitHub response unavailable or invalid';
-    return { status: 'unavailable', reason, items: [] };
+    const reason = [RATE_REASON, AUTH_REASON].includes(error.message) || /^GitHub HTTP \d{3}$/.test(error.message)
+      ? error.message : INVALID_REASON;
+    return unavailable(reason);
   }
 }
 
@@ -96,7 +181,7 @@ async function contractRecords(get, revision, validate) {
         if (entry.type === 'file' && entry.path.endsWith('.json')) files.push(entry);
       }
     } catch (error) {
-      if (error.status === 404 && RECORD_DIRS.includes(dir)) absent.push(dir);
+      if (error.status === 404 && error.message === 'GitHub HTTP 404' && RECORD_DIRS.includes(dir)) absent.push(dir);
       else errors.push(dir);
     }
   }
@@ -132,45 +217,143 @@ async function contractRecords(get, revision, validate) {
   };
 }
 
-function linkedItems(data, kind) {
-  if (!Array.isArray(data)) throw new Error('Invalid GitHub list');
-  const number = item => kind === 'run' ? item.id : item.number;
-  const base = kind === 'run' ? '/actions/runs/' : kind === 'pr' ? '/pull/' : '/issues/';
-  return data.filter(item => Number.isSafeInteger(number(item)) && number(item) > 0)
+const positiveInteger = value => Number.isSafeInteger(value) && value > 0;
+const text = value => typeof value === 'string' && value.length ? value : null;
+const date = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+
+function issueItems(data) {
+  if (!Array.isArray(data)) throw new Error('Invalid GitHub issue list');
+  return data.filter(item => positiveInteger(item?.number) && !item.pull_request).slice(0, ISSUE_PAGE_SIZE)
     .map(item => ({
-      label: kind === 'run' ? item.name : '#' + number(item),
-      title: (kind === 'run' ? item.display_title : item.title)?.slice(0, 200),
-      state: kind === 'run' ? item.conclusion || item.status : item.state,
-      url: 'https://github.com/' + REPO + base + number(item),
-      revision: kind === 'run' ? item.head_sha : kind === 'pr' ? item.head?.sha : undefined,
+      label: '#' + item.number,
+      title: text(item.title)?.slice(0, 200),
+      state: item.state,
+      url: REPO_URL + '/issues/' + item.number,
       date: item.updated_at,
     }));
 }
 
-export async function githubSnapshot(fetcher, validate, token) {
-  const { get, retryAt } = githubReader(fetcher, AbortSignal.timeout(8000), token);
-  const [main, issues, pulls, ci] = await Promise.all([
-    capture(async () => {
-      const ref = await get('/git/ref/heads/main', 16 * 1024);
-      if (ref.ref !== 'refs/heads/main' || !isRevision(ref.object?.sha)) throw new Error('Invalid main ref');
-      return { revision: ref.object.sha };
-    }),
-    capture(async () => {
-      const items = await get('/issues?state=all&sort=updated&per_page=' + PAGE_SIZE);
-      return { items: linkedItems(items.filter(item => !item.pull_request), 'issue') };
-    }),
-    capture(async () => {
-      const items = await get('/pulls?state=all&sort=updated&per_page=' + PAGE_SIZE);
-      return { items: linkedItems(items, 'pr') };
-    }),
-    capture(async () => {
-      const { workflow_runs } = await get('/actions/runs?branch=main&per_page=' + PAGE_SIZE);
-      return { items: linkedItems(workflow_runs, 'run') };
-    }),
-  ]);
-  const records = main.revision
-    ? await contractRecords(get, main.revision, validate)
-    : { status: 'unavailable', reason: main.reason, items: [] };
-  return { repository: REPO, retry_at: retryAt() || null, checked_at: new Date().toISOString(), main, records, issues, pulls, ci, page_size: PAGE_SIZE };
+function newestFirst(rows) {
+  return rows.sort((left, right) =>
+    (Date.parse(right.created_at) || 0) - (Date.parse(left.created_at) || 0) || right.id - left.id
+  ).slice(0, ACTIVITY_PAGE_SIZE);
 }
 
+function pullItems(data) {
+  if (!Array.isArray(data)) throw new Error('Invalid GitHub pull request list');
+  return newestFirst(data.filter(item => positiveInteger(item?.number)).map(item => {
+    const created = date(item.created_at);
+    const updated = date(item.updated_at);
+    const mergedAt = date(item.merged_at);
+    const merged = mergedAt ? true : typeof item.merged === 'boolean' ? item.merged : item.merged_at === null ? false : null;
+    return {
+      id: positiveInteger(item.id) ? item.id : item.number,
+      number: item.number,
+      label: '#' + item.number,
+      title: text(item.title)?.slice(0, 200) ?? null,
+      state: text(item.state),
+      url: REPO_URL + '/pull/' + item.number,
+      revision: isRevision(item.head?.sha) ? item.head.sha : null,
+      date: updated,
+      created_at: created,
+      updated_at: updated,
+      author: text(item.user?.login),
+      head_ref: text(item.head?.ref),
+      base_ref: text(item.base?.ref),
+      draft: typeof item.draft === 'boolean' ? item.draft : null,
+      merged,
+      merged_at: mergedAt,
+    };
+  }));
+}
+
+function runItems(data) {
+  if (!Array.isArray(data)) throw new Error('Invalid GitHub workflow run list');
+  return newestFirst(data.filter(item => positiveInteger(item?.id)).map(item => {
+    const created = date(item.created_at);
+    const updated = date(item.updated_at);
+    const status = text(item.status);
+    const conclusion = text(item.conclusion);
+    const workflow = text(item.name);
+    return {
+      id: item.id,
+      label: workflow ?? String(item.id),
+      title: text(item.display_title)?.slice(0, 200) ?? null,
+      state: conclusion ?? status,
+      url: REPO_URL + '/actions/runs/' + item.id,
+      revision: isRevision(item.head_sha) ? item.head_sha : null,
+      date: updated,
+      created_at: created,
+      updated_at: updated,
+      author: text(item.actor?.login),
+      branch: text(item.head_branch),
+      workflow,
+      event: text(item.event),
+      attempt: positiveInteger(item.run_attempt) ? item.run_attempt : null,
+      status,
+      conclusion,
+    };
+  }));
+}
+
+function completeRecords(records, revision) {
+  return records?.revision === revision && !!records.observed_at && Array.isArray(records.items) &&
+    Array.isArray(records.errors) && !records.errors.length && !records.truncated && records.rejected === 0;
+}
+
+export async function githubSnapshot(fetcher, validate, token, {
+  now = Date.now, previous, oldValidators = {}, previousApi, previousFailures = 0,
+} = {}) {
+  const reader = githubReader(fetcher, AbortSignal.timeout(8000), token, now, previousApi, previousFailures);
+  const validators = {};
+  const updated = {};
+  async function resource(key, path, convert, maxBytes) {
+    const prior = previous?.[key];
+    const usable = prior?.observed_at && (key === 'main' ? isRevision(prior.revision) : Array.isArray(prior.items));
+    const etag = usable ? oldValidators[path] : null;
+    if (token && ETAG.test(etag ?? '')) validators[path] = etag;
+    const result = await capture(async () => {
+      const response = await reader.get(path, maxBytes, etag);
+      const converted = response.unchanged
+        ? (key === 'main' ? { revision: prior.revision } : { items: prior.items })
+        : convert(response.data);
+      if (response.etag) validators[path] = response.etag;
+      else delete validators[path];
+      updated[key] = new Date(now()).toISOString();
+      return converted;
+    });
+    return result;
+  }
+
+  const main = await resource('main', '/git/ref/heads/main', ref => {
+    if (ref.ref !== 'refs/heads/main' || !isRevision(ref.object?.sha)) throw new Error('Invalid main ref');
+    return { revision: ref.object.sha };
+  }, 16 * 1024);
+  const issues = await resource('issues', '/issues?state=all&sort=updated&direction=desc&per_page=' + ISSUE_PAGE_SIZE,
+    data => ({ items: issueItems(data) }));
+  const pulls = await resource('pulls', '/pulls?state=all&sort=created&direction=desc&per_page=' + ACTIVITY_PAGE_SIZE,
+    data => ({ items: pullItems(data) }), MAX_PULL_RESPONSE_BYTES);
+  const ci = await resource('ci', '/actions/runs?per_page=' + ACTIVITY_PAGE_SIZE,
+    data => ({ items: runItems(data.workflow_runs) }));
+
+  let records;
+  if (main.revision && completeRecords(previous?.records, main.revision)) {
+    const { reason, ...retained } = previous.records;
+    records = { ...retained, status: 'available' };
+  } else if (!main.revision || reader.halted()) {
+    records = unavailable(reader.halted() || main.reason);
+  } else {
+    const get = async (...args) => (await reader.get(...args)).data;
+    records = await contractRecords(get, main.revision, validate);
+    if (records.errors.length && reader.halted()) records = unavailable(reader.halted());
+    else updated.records = new Date(now()).toISOString();
+  }
+
+  const { api, retryAt, rateFailures } = reader.status();
+  const snapshot = {
+    repository: REPO, retry_at: retryAt || null, checked_at: new Date(now()).toISOString(),
+    main, records, issues, pulls, ci, page_size: ISSUE_PAGE_SIZE, api,
+  };
+  for (const [group, value] of Object.entries(updated)) snapshot[group].observed_at = value;
+  return { snapshot, validators, rateFailures };
+}
