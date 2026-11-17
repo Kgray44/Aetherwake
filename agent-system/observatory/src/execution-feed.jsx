@@ -103,10 +103,13 @@ export function ExecutionFeed({execution,records,headers,onRefresh,automatic}){
  const events=execution?.events??emptyEvents;
  const bottlenecks=useMemo(() => recurringTraceBottlenecks(records??[], events), [records, events]);
  return <section className="panel"><div className="panel-heading"><div><div className="kicker">PRIVATE EXECUTION PROJECTION</div><h2>Measured execution</h2></div></div>
- <p>Import an explicitly sanitized local export. Raw journals, prompts and command output must stay local. Local Task records remain authoritative; this Site cannot approve or execute them.</p>
+ <p>Connected AADS Task runners deliver sanitized journal updates automatically. Local Task records remain authoritative.</p>
+ <p><a href="https://github.com/Kgray44/Aetherwake/blob/main/agent-system/observatory/README.md#automatic-delivery-from-the-local-task-runner">Connect a Task runner</a></p>
+ <details><summary>Recovery imports</summary>
  <AutomaticTelemetry connection={automatic}/>
  <label className="quiet-button">Import sanitized export <input aria-label="Import sanitized private execution export" type="file" accept="application/json" disabled={busy} onChange={upload}/></label>
  <p role="status">{message}</p>
+ </details>
  <p>Latest source snapshot: {execution?.generated_at??'Unavailable'}. {events.length} recorded trace events. Uninstrumented time and owner acceptance require separate evidence.</p>
  {execution?.sources?.length > 0 && <details><summary>Automatic delivery receipts</summary>
    <ul>{execution.sources.map(source => <li key={source.task_id}>

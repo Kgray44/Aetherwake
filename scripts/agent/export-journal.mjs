@@ -20,11 +20,11 @@ function validUtcTime(value) {
     Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0,19) === value.slice(0,19);
 }
 
-export async function projectJournal({ task, directory }) {
+export async function projectJournal({ task, directory, cache, generatedAt }) {
   if (task?.record_type !== 'task' || !validRecord(task)) throw Error('Expected a valid v1 Task');
   const [events, history] = await Promise.all([
-    readJournal(directory, JOURNAL_LIMITS),
-    readRecordHistory(directory, { ...JOURNAL_LIMITS, taskId: task.id })
+    readJournal(directory, { ...JOURNAL_LIMITS, immutableCache: cache?.events }),
+    readRecordHistory(directory, { ...JOURNAL_LIMITS, taskId: task.id, immutableCache: cache?.records })
   ]);
 
   const unique = new Map([['task:' + task.id, task]]);
@@ -64,7 +64,7 @@ export async function projectJournal({ task, directory }) {
     export_version: 1,
     authority: 'local-task-records',
     repository: task.repository,
-    generated_at: new Date().toISOString(),
+    generated_at: generatedAt ?? new Date().toISOString(),
     records: [...unique.values(), ...attempts],
     events
   }, validRecord, validEvent);

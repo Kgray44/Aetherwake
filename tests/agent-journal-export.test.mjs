@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { projectJournal } from '../scripts/agent/export-journal.mjs';
 import { stageSnapshot } from '../scripts/agent/stage-observatory.mjs';
+import { journalDelivery } from '../scripts/agent/observatory-sync.mjs';
+import { applyTelemetryDelta } from '../agent-system/observatory/telemetry-delta.mjs';
 import { appendEvent, traceEvent } from '../scripts/agent/journal.mjs';
 import { persistRecord } from '../scripts/agent/record-journal.mjs';
 
@@ -54,6 +57,49 @@ test('staging preserves a retryable snapshot on unchanged input and on corrupt n
   await persistRecord(directory, { ...attempt, id: 'unrelated', task_id: 'other-task' });
   await assert.rejects(stageSnapshot(options), /another Task/);
   assert.equal(await readFile(output, 'utf8'), second);
+});
+
+test('journal delivery replays the durable outbox, sends incremental data and detects committed-file changes', async t => {
+  const { task, attempt, directory, root } = await fixture(t);
+  const statePath = join(root, 'delivery.json');
+  const exported = [];
+  let projection = null;
+  let receipt = null;
+  let lost = true;
+  const connector = { async call({ task_id, change }) {
+    assert.equal(task_id, task.id);
+    if (!change) return { baseline: receipt ? { ...receipt, projection } : null };
+    exported.push(change);
+    const current = applyTelemetryDelta(projection, change);
+    const digest = createHash('sha256').update(JSON.stringify(current)).digest('hex');
+    if (digest === receipt?.digest) return receipt;
+    assert.equal(change.base, receipt?.digest ?? null);
+    projection = current;
+    receipt = { digest, records: current.records.length, events: current.events.length,
+      generated_at: current.generated_at, received_at: new Date().toISOString() };
+    if (lost) { lost = false; throw Error('response lost after commit'); }
+    return receipt;
+  } };
+  const restart = () => journalDelivery({ task, journal: directory, statePath, connector });
+  await persistRecord(directory, attempt);
+  const event = traceEvent({ task, attemptId: attempt.id, kind: 'measurement' });
+  await appendEvent(directory, event);
+  await assert.rejects(restart()(), /response lost/);
+  assert.ok(JSON.parse(await readFile(statePath, 'utf8')).pending);
+  const sync = restart();
+  assert.equal((await sync()).events, 1);
+  assert.deepEqual(exported[0], exported[1]);
+  assert.equal(await sync(), null);
+  const next = traceEvent({ task, attemptId: attempt.id, kind: 'measurement' });
+  await appendEvent(directory, next);
+  assert.equal((await sync()).sent_events, 1);
+  assert.equal(exported[2].records.length, 0);
+  assert.deepEqual(exported[2].events.map(item => item.event_id), [next.event_id]);
+  const name = (await readdir(directory)).find(path => path === createHash('sha256').update(event.event_id).digest('hex') + '.json');
+  await writeFile(join(directory, name), JSON.stringify({ ...event, phase: 'context' }));
+  await assert.rejects(sync({ force: true }), /Committed journal entry changed/);
+  await assert.rejects(restart()(), /rewrites a synchronized trace event/);
+  assert.equal(exported.length, 3);
 });
 
 test('CLI reconstructs latest Attempts and retains incomplete spans across Task revisions', async t => {

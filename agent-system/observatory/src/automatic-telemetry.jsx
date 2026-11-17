@@ -137,7 +137,7 @@ export function AutomaticTelemetry({ connection }) {
   if (!connection) return null;
   const { supported, taskId, status, configuring, choose, resume, disconnect, running } = connection;
   return <div className="record">
-    <h3>Automatic journal delivery</h3>
+    <h3>Browser recovery delivery</h3>
     <p>Run the AADS staging command on this workstation and connect its private output directory.
       Delivery runs while this signed-in Observatory tab is open. Browser read permission may need renewal after restart.</p>
     {supported && <div className="form-actions">

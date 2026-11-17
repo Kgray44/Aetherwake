@@ -116,7 +116,35 @@ Check the command succeeded, then use **Import sanitized export** in the existin
 
 Validation of a hosted deployment, owner login, non-owner denial, and real upload/reload must be recorded independently from Worker unit tests. The existing Site must be updated only by its current deployment owner. No second Site is necessary.
 
-### Supported unattended transport: Site MCP
+### Automatic delivery from the local Task runner
+
+Install and connect the existing private **Aetherwake Engineering Observatory** plugin in
+Codex. With the signed-in Codex CLI available on PATH, run this from your Aetherwake
+checkout once:
+
+```sh
+node scripts/agent/observatory-sync.mjs connect
+```
+
+The command verifies the connection through Codex and opts this Git checkout into local
+delivery. It stores no credential. The normal `scripts/agent/telemetry.mjs run` command
+now starts a bounded delivery worker alongside the observed command, batches committed
+journal changes, and attempts a final flush. No model turn or browser tab is involved.
+The next observed run revisits earlier queued journals if delivery was interrupted. A
+quiet workstation with no observed Tasks running does not poll. An operator can run
+`node scripts/agent/observatory-sync.mjs sync <task.json> <journal>` to reconcile a
+specific journal without running a new Task. Use a separate checkout configured with
+`connect --verification <UUID>` for isolated verification.
+
+Private checkpoints and status live under the Git common directory in
+`agent-harness/observatory-sync`. A durable pending batch is replayed exactly after a
+lost response, with the same event identities and compare-and-set baseline. The worker
+reuses immutable journal entries while active and retains canonical files untouched during
+outages. Local status records telemetry coverage, last successful delivery, preparation
+and request time, and any pending error. Open **Measured execution** to see the uploaded Task
+and its receipt. Keep each Task's journal in a private directory.
+
+### Browser recovery and manual import
 
 On an active trusted workstation, run
 `node scripts/agent/stage-observatory.mjs <task.json> <journal> <private-staging-directory> --watch`

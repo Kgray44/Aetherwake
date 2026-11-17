@@ -587,7 +587,7 @@ test('MCP uses authenticated caller identity, narrow tools, private projection r
  const rpc=(method,params,headers={...ownerHeader,'content-type':'application/json'})=>call('/mcp',{method:'POST',headers,body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
  assert.equal((await rpc('tools/list',{}, {'content-type':'application/json'})).status,401);
  assert.equal((await rpc('tools/list',{}, {...ownerHeader,'content-type':'application/json',origin:'https://attacker.example'})).status,403);
- const listed=await(await rpc('tools/list')).json();assert.deepEqual(listed.result.tools.map(t=>t.name),['project_execution_snapshot','read_execution_projection']);
+ const listed=await(await rpc('tools/list')).json();assert.deepEqual(listed.result.tools.map(t=>t.name),['project_execution_snapshot','read_execution_projection','sync_task_telemetry']);
  const envelope={export_version:1,authority:'local-task-records',repository:'Kgray44/Aetherwake',generated_at:'2026-11-16T06:00:00.000Z',records:[proposedTask(input,rev)],events:[],coverage:{}};
  const params={name:'project_execution_snapshot',arguments:{projection:envelope,verification:namespace}};
  const saved=await(await rpc('tools/call',params)).json();assert.equal(saved.result.isError,false);
@@ -599,6 +599,17 @@ test('MCP uses authenticated caller identity, narrow tools, private projection r
  assert.equal((await(await rpc('tools/call',{name:'execute',arguments:{}})).json()).error.code,-32601);
  params.arguments.owner_id='foreign';assert.equal((await(await rpc('tools/call',params)).json()).error.code,-32602);delete params.arguments.owner_id;
  envelope.records[0].owner_acceptance='accepted';assert.equal((await(await rpc('tools/call',params)).json()).result.isError,true);
+ const record=proposedTask(input,rev);
+ const sync={name:'sync_task_telemetry',arguments:{task_id:record.id,verification:namespace,
+  change:{base:null,generated_at:new Date().toISOString(),records:[record],events:[]}}};
+ const decoded=async(params,headers)=>JSON.parse((await(await rpc('tools/call',params,headers)).json()).result.content[0].text);
+ const first=await decoded(sync);
+ assert.equal(first.status,200);
+ assert.deepEqual(await decoded(sync),first);
+ const read={name:sync.name,arguments:{task_id:record.id,verification:namespace}};
+ assert.equal((await decoded(read)).baseline.digest,first.digest);
+ assert.equal((await decoded(read,{'oai-authenticated-user-id':'foreign','content-type':'application/json'})).baseline,null);
+ assert.equal((await decoded({...read,arguments:{task_id:record.id}})).baseline,null);
 });
 
 
