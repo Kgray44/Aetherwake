@@ -21,9 +21,9 @@ async function fixture(t) {
   await mkdir(directory, {mode:0o700});
   const task = {
     schema_version:1, record_type:'task', id:'task_fixture', created_at:time, repository, revision,
-    title:'Private title', objective:'Private objective', classification:{primary:'backend',secondary:[]},
+    title:'source-fixture-title', objective:'source-fixture-objective', classification:{primary:'backend',secondary:[]},
     prerequisites:{task_ids:[],capabilities:['private-capability']},
-    acceptance:{profile_id:'profile',criteria:[{id:'criterion',description:'Private criterion'}]},
+    acceptance:{profile_id:'profile',criteria:[{id:'criterion',description:'source-fixture-criterion'}]},
     state:'running'
   };
   const attempt = {
@@ -50,7 +50,7 @@ test('CLI reconstructs latest Attempts and retains incomplete spans across Task 
   }));
   const result = run();
   assert.equal(result.status, 0, result.stderr);
-  assert.doesNotMatch(result.stdout, /Private title|Private objective|Private criterion|private-capability|private-branch/);
+  assert.doesNotMatch(result.stdout, /source-fixture-title|source-fixture-objective|source-fixture-criterion|private-capability|private-branch/);
   const projection = JSON.parse(result.stdout);
   assert.equal(projection.authority, 'local-task-records');
   assert.equal(projection.records.length, 3);
