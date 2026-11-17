@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Activity, ArrowUpRight, BarChart3, Boxes, CheckCircle2, Clock3, Cpu, FileCheck2, GitPullRequest, Workflow } from 'lucide-react';
 import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
-import { activityHref, activityId, activityState, newestActivity } from './github-activity.mjs';
+import { activityHref, activityId, activityState, newestActivity, pullRepositoryTotals, runRepositoryTotal } from './github-activity.mjs';
 
 const noRows = [];
 const formatCount = new Intl.NumberFormat();
@@ -135,13 +135,15 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
   const recent = useMemo(() => newestActivity('runs', ready ? github?.ci?.items ?? noRows : noRows)
     .filter(item => ['failure','timed_out','startup_failure','action_required'].includes(activityState('runs',item))).slice(0,5),
     [github, ready]);
+  const totals = ready ? pullRepositoryTotals(github?.pulls) : null;
+  const runTotal = ready ? runRepositoryTotal(github?.ci) : null;
   const stats = [
     ['Engineering Tasks', ready ? count(data.tasks.total) : '—', 'Loaded live records', Boxes],
     ['Execution attempts', ready ? count(data.attempts.total) : '—', 'Loaded live records', Activity],
     ['Attempt success', rate(data.attempts.successRate), count(data.attempts.terminal) + ' terminal attempts', CheckCircle2],
-    ['CI pass rate', rate(data.ci.successRate), count(data.ci.concluded) + ' concluded runs', Workflow],
-    ['Merged PRs', data.pulls.total === null ? '—' : count(data.pulls.merged), count(data.pulls.mergedKnown) + ' known merge states', GitPullRequest],
-    ['Median merge time', spanTime(data.pulls.medianMergeMs), count(data.pulls.mergeSamples) + ' observed merges', Clock3]
+    ['Recent CI pass rate', rate(data.ci.successRate), count(data.ci.concluded) + ' concluded in the loaded window', Workflow],
+    ['Merged pull requests', totals ? count(totals.merged) : '—', totals?.stale ? 'Cached repository count' : 'Repository-wide GitHub count', GitPullRequest],
+    ['Recent median merge time', spanTime(data.pulls.medianMergeMs), count(data.pulls.mergeSamples) + ' observed merges in the loaded window', Clock3]
   ];
   return <>
     <div className="metrics analytics-metrics">{stats.map(([name,value,meta,Icon], index) =>
@@ -152,9 +154,9 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
     <div className="analytics-grid">
       <Rise><Panel title="Delivery and reliability" right={<BarChart3 size={18} className="muted-icon"/>}>
         <MetricRows fields={[
-          ['Recent PR window', count(data.pulls.total)], ['PRs opened in period', count(data.pulls.createdInWindow)],
-          ['PRs merged in period', count(data.pulls.mergedInWindow)], ['Recent CI run window', count(data.ci.total)],
-          ['Successful runs', count(data.ci.succeeded)], ['Failed runs', count(data.ci.failed)],
+          ['All pull requests', count(totals?.total)], ['Pull requests loaded', count(data.pulls.total)], ['Loaded PRs opened in period', count(data.pulls.createdInWindow)],
+          ['Loaded PRs merged in period', count(data.pulls.mergedInWindow)], ['All workflow runs', count(runTotal)], ['Recent CI run window', count(data.ci.total)],
+          ['Recent successful runs', count(data.ci.succeeded)], ['Recent failed runs', count(data.ci.failed)],
           ['Median recorded attempt', spanTime(data.attempts.medianMs)], ['Attempts with both time boundaries', count(data.attempts.timed)]
         ]}/>
       </Panel></Rise>
@@ -186,7 +188,7 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
       <Rise><Panel title="Source coverage">
         <MetricRows fields={[
           ['PR feed', label(data.pulls.status || 'unavailable')], ['Last successful PR refresh', stamp(data.pulls.observedAt)],
-          ['CI feed', label(data.ci.status || 'unavailable')], ['Last successful CI refresh', stamp(data.ci.observedAt)],
+          ['Repository PR totals refreshed', stamp(totals?.observedAt)], ['CI feed', label(data.ci.status || 'unavailable')], ['Last successful CI refresh', stamp(data.ci.observedAt)],
           ['Private projection', stamp(execution?.generated_at)], ['Trace events', count(data.trace.events)],
           ['Conflicting observations', ready ? count(data.sources.recordConflicts + data.sources.traceConflicts) : 'Unavailable'],
           ['API budget remaining', count(github?.api?.remaining)], ['API budget resets', stamp(github?.api?.reset_at)]

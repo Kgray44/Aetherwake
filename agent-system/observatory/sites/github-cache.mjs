@@ -61,7 +61,8 @@ export async function cachedGitHub(db, fetcher, validate, token, now = Date.now(
     ON CONFLICT(id) DO UPDATE SET auth_mode = excluded.auth_mode, lease_until = excluded.lease_until
     WHERE github_snapshot.lease_until <= ? AND github_snapshot.rate_until <= ?
       AND (github_snapshot.read_reject_until <= ? OR github_snapshot.read_reject_key IS NOT ?)
-      AND (github_snapshot.retry_at <= ? OR github_snapshot.credential_key IS NOT ?)
+      AND (github_snapshot.retry_at <= ? OR github_snapshot.credential_key IS NOT ?
+        OR json_type(github_snapshot.snapshot, '$.pulls.totals') IS NULL)
       AND NOT (github_snapshot.auth_mode = 'authenticated' AND excluded.auth_mode = 'anonymous')
     RETURNING snapshot, credential_key, validators, rate_failures
   `).bind(mode, lease, now, now, now, key, now, key).first();

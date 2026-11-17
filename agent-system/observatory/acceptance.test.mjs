@@ -94,7 +94,7 @@ test('recurring timing patterns require matched spans across distinct comparable
   assert.deepEqual(recurringTraceBottlenecks(tasks, duplicate), []);
 });
 
-import { activityHref, parseActivityHref, searchActivity, newestActivity } from './src/github-activity.mjs';
+import { activityHref, parseActivityHref, searchActivity, newestActivity, pullRepositoryTotals, runRepositoryTotal } from './src/github-activity.mjs';
 
 test('pull and run views use creation time, plus stable descending identity on ties', () => {
   const first = { number: 41, id: 900, title: 'Refine task routing', state: 'open', author: 'k', base_ref: 'main',
@@ -112,4 +112,15 @@ test('GitHub activity detail links use repository PR numbers and safe run IDs', 
   assert.deepEqual(parseActivityHref(activityHref('runs', 43993349495)), { kind: 'runs', id: 43993349495 });
   assert.equal(parseActivityHref('#ci-runs/99999999999999999'), null);
   assert.equal(parseActivityHref('#pull-requests/invalid'), null);
+});
+
+test('repository headlines never convert a limited list into a total', () => {
+  const items = Array.from({ length: 40 }, (_, index) => ({ number:index+1, state:'open' }));
+  assert.equal(pullRepositoryTotals({ status:'available', items }), null);
+  assert.equal(runRepositoryTotal({ status:'available', items }), null);
+  const totals = { status:'available', total:309, open:108, merged:133, closed:68, observed_at:'2026-11-17T02:00:00Z' };
+  assert.equal(pullRepositoryTotals({ status:'available', items, totals }).total, 309);
+  assert.equal(pullRepositoryTotals({ status:'stale', items, totals }).stale, true);
+  assert.equal(pullRepositoryTotals({ status:'available', totals:{ ...totals, closed:7 } }), null);
+  assert.equal(runRepositoryTotal({ status:'available', items, repository_total:2301 }), 2301);
 });
