@@ -256,6 +256,36 @@ test('an unavailable draft model blocks the reviewed request without falling bac
   } finally { await f.close(); }
 });
 
+test('a changed image account binding after review is revalidated before provider dispatch', async () => {
+  const f = fixture(false, true, undefined, undefined, true);
+  try {
+    f.setCatalogModels([missionImageModel]);
+    await f.ready();
+    const objective = 'Run a mission to generate an illustration: A synthetic shape';
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    const connection = (f.core as any).velaApiConnection;
+    const revalidate = connection.revalidate.bind(connection);
+    let revalidated = false;
+    connection.revalidate = async (version: number, boundaryDigest: string) => {
+      revalidated = true;
+      await connection.configureNative({ configurationId: 'vela-primary', apiKey: marker,
+        organization: 'org-rotated', project: 'proj-rotated' }, version);
+      return revalidate(version, boundaryDigest);
+    };
+    const { id } = await f.core.command('missionStartReviewed', { objective, fingerprint: preview.fingerprint,
+      requestId: randomUUID(), approvedArtifactDigest: preview.artifactReview!.digest }) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
+    let mission = await read();
+    for (let i = 0; i < 100 && ['queued', 'running'].includes(mission.outcome); i++) {
+      await delay(25);
+      mission = await read();
+    }
+    assert.equal(revalidated, true);
+    assert.equal(mission.outcome, 'blocked');
+    assert.equal(f.requests.length, 0);
+  } finally { await f.close(); }
+});
+
 test('an illustration with an unconfirmed provider result never publishes or retries', async () => {
   const f = fixture(false, true, undefined, undefined, true);
   try {

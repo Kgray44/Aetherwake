@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { NativeCredential, ProviderId } from './contracts.mts';
 export class ProviderError extends Error {
     readonly code: string;
     constructor(code: string) { super(code); this.name = 'ProviderError'; this.code = code; }
@@ -9,6 +10,21 @@ export const record = (value: unknown): value is Record<string, unknown> => !!va
 export const text = (value: unknown, max = 200): value is string => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\r\n\x00]/.test(value);
 export const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 export const exact = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).every(key => keys.includes(key)) && keys.every(key => Object.hasOwn(value, key));
+export function credentialHeaders(credential: NativeCredential, providerId: ProviderId, now: number): Record<string, string> {
+    requireValue(credential.providerId === providerId && text(credential.bearer, 65536) && typeof credential.boundaryDigest === 'string' && /^[a-f0-9]{64}$/.test(credential.boundaryDigest), 'credential_boundary_mismatch');
+    requireValue(credential.expiresAt === undefined || Number.isFinite(credential.expiresAt) && credential.expiresAt > now, 'credential_expired');
+    if (providerId === 'chatgpt-plan-responses')
+        requireValue(credential.kind === 'chatgpt-plan' && credential.scopes?.includes('chatgpt.tokens.use.direct') && !credential.organization && !credential.project, 'chatgpt_plan_grant_required');
+    else
+        requireValue(credential.kind === 'openai-api-key', 'api_billing_route_required');
+    const headers: Record<string, string> = { Authorization: 'Bearer ' + credential.bearer };
+    for (const [key, value] of [['OpenAI-Organization', credential.organization], ['OpenAI-Project', credential.project]] as const)
+        if (value !== undefined) {
+            requireValue(text(value), 'invalid_native_header');
+            headers[key] = value;
+        }
+    return headers;
+}
 export async function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
     if (signal.aborted)
         throw new ProviderError('operation_aborted');

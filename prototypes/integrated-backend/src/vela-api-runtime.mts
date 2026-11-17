@@ -325,21 +325,27 @@ export class VelaApiRuntime {
       const credential = await abortable(this.options.connection.resolveNativeCredential(input.version), combined);
       fence();
       const started = performance.now();
-      this.options.transaction(() => {
-        fence();
-        check(this.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay, 'vela_api_daily_limit_reached');
-        this.options.db.prepare(`INSERT INTO vela_api_runs
-          (execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state)
-          VALUES(?,?,?,?,?,?,'dispatching')`).run(input.attemptId, input.attemptId, input.version,
-          new Date().toISOString().slice(0,10), review.digest, review.digest);
-      });
+      let admitted = false;
       try {
-        const result = await sendReviewedImageGeneration(review, input.approvedDigest, credential.bearer, combined, this.options.test?.fetch);
+        const result = await sendReviewedImageGeneration(review, input.approvedDigest, credential, async dispatchReview => {
+          await this.options.connection.revalidate(input.version, dispatchReview.credentialBoundaryDigest);
+          fence();
+          this.options.transaction(() => {
+            fence();
+            check(this.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay, 'vela_api_daily_limit_reached');
+            this.options.db.prepare(`INSERT INTO vela_api_runs
+              (execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state)
+              VALUES(?,?,?,?,?,?,'dispatching')`).run(input.attemptId, input.attemptId, input.version,
+              new Date().toISOString().slice(0,10), dispatchReview.bodyDigest, dispatchReview.bodyDigest);
+          });
+          admitted = true;
+        }, combined, this.options.test?.fetch);
         fence();
         this.options.db.prepare("UPDATE vela_api_runs SET state='completed',elapsed_ms=? WHERE execution_id=?")
           .run(Math.round(performance.now() - started), input.attemptId);
         return result;
-      } catch {
+      } catch (error) {
+        if (!admitted) throw error;
         try {
           this.options.db.prepare("UPDATE vela_api_runs SET state='unknown',error_code='image_result_unknown',elapsed_ms=? WHERE execution_id=?")
             .run(Math.round(performance.now() - started), input.attemptId);
