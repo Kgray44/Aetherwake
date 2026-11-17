@@ -18,7 +18,9 @@ For several shell calls in one Attempt, supply the same `--attempt` ID. Only spa
 
 ## Measurements and supported provider input
 
-Observed: command monotonic elapsed time/exit code, wrapper CPU user time and wrapper RSS. These wrapper metrics are **not child resource utilization**. Linux direct-child CPU ticks, RSS/high-water RSS and disk byte deltas are sampled at a bounded 250 ms interval (configurable API minimum 100 ms). Sampling elapsed overhead and successful sample count are recorded. These partial samples can miss short processes and are not total process-tree measurements; unavailable metrics stay explicit. GPU/frame, child lifetime totals and non-Linux host metrics remain unavailable. No monitoring daemon.
+Observed wrapper measurements include command elapsed time, exit code, wrapper CPU time, and wrapper RSS. Linux samples the direct child through `/proc` every 250 ms by default. CPU and disk deltas require two valid readings of each counter. A single sample can still establish RSS and the OS-reported RSS high-water mark.
+
+Windows starts one hidden Windows PowerShell helper when the command reaches 25 seconds. The helper samples `System.Diagnostics.Process` working-set bytes, peak working-set bytes, and CPU time with at least 2 seconds between samples. Short commands incur no helper startup. Direct API callers can opt in to a shorter startup delay with `observeResources(pid, {windowsStartDelayMs: 0})`; this can materially raise CPU overhead. Windows reports helper CPU observed through the last successful sample, including startup, and query elapsed separately. Linux sampling elapsed includes I/O wait. Both platforms report the successful sample count. Process-tree and full-lifetime totals, GPU and frame metrics, and Windows physical disk metrics remain unavailable.
 
 For a Codex CLI command already authorized by its caller, add `--event-stream codex-exec-json` before the separator and use `codex exec --json` after it. For example:
 
