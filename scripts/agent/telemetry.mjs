@@ -80,8 +80,11 @@ export async function runObserved({ task, context, repository, phase = "implemen
     const resources = observeResources(child.pid);
     const result = await closed;
     exitCode = result.code;
+    actualExitCode = result.actualExitCode ?? null;
     signal = result.signal;
     launchFailure = result.error;
+    elapsed = result.elapsed ?? null;
+    childFinishedAt = result.finishedAt ?? null;
     try {
       resourceMeasurements = await resources.stop();
     } catch {

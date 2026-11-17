@@ -171,7 +171,7 @@ test('Worker instances share GitHub results and keep last good data through a ra
   assert.ok(limited.github.retry_at >= Date.now() + 115_000);
   const limitedCount = requests.length;
   assert.deepEqual((await read()).github, limited.github);
-  assert.equal((await post()).status, 503);
+  assert.equal((await post({ 'x-observatory-publish': 'github' })).status, 503);
   assert.equal(requests.length, limitedCount);
 });
 
