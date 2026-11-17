@@ -189,3 +189,21 @@ test('batched context resolves literal tracked names and rejects untracked alias
   const untracked = { ...task, requirements: [{ kind: 'git', uri: 'docs/*.md' }] };
   assert.equal((await createSnapshot({ root: f.dir, task: untracked, repository: task.repository, owners: ['docs=docs/authority.md'] })).freshness, 'unverified');
 });
+
+test('launch failure preserves the wrapper status and reports unavailable child measurements', async t => {
+  const f = await fixture(t);
+  const previous = process.cwd();
+  process.chdir(f.dir);
+  t.after(() => process.chdir(previous));
+  const result = await runObserved({
+    task: f.task, context: f.snapshot, repository: f.task.repository,
+    out: join(f.dir, 'failed-launch.jsonl'), command: [join(f.dir, 'missing-executable')]
+  });
+  assert.equal(result.exitCode, 127);
+  assert.equal(result.attempt.state, 'failed');
+  const metrics=Object.fromEntries(result.telemetry.measurements.map(metric => [metric.name, metric]));
+  assert.equal(metrics.process_exit_code.availability, 'unavailable');
+  assert.equal(metrics.elapsed_wall_ms.availability, 'unavailable');
+  assert.equal(metrics.process_launch_succeeded.value, 0);
+  assert.equal(metrics.observer_cpu_system_ms.availability, 'observed');
+});

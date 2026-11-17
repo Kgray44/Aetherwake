@@ -2,7 +2,9 @@
 import { mkdir, open, readFile, readdir, link, unlink, lstat, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+import { setTimeout as delay } from 'node:timers/promises';
 const digest = v => createHash('sha256').update(v).digest('hex');
 export async function withJournalLock(directory, action) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -11,7 +13,21 @@ export async function withJournalLock(directory, action) {
   const recovery=join(directory,'.recovery-lock');
   try {await lstat(recovery);throw Error('Journal recovery in progress');}catch(e){if(e.code!=='ENOENT')throw e;}
   const lock = join(directory,'.writer-lock');
-  try { await mkdir(lock,{mode:0o700}); } catch(e) { if(e.code==='EEXIST') throw Error('Journal busy or interrupted writer; inspect lock before recovery'); throw e; }
+  // Ordinary concurrent writers can drain without invoking recovery. A
+  // stalled lock is still left in place for explicit owner/liveness checks.
+  let deadline;
+  while (true) {
+    try {
+      await mkdir(lock, { mode: 0o700 });
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const now = performance.now();
+      deadline ??= now + 2000;
+      if (now >= deadline) throw Error('Journal busy or interrupted writer; inspect lock before recovery');
+      await delay(Math.min(deadline - now, randomInt(8, 25)));
+    }
+  }
   try {await lstat(recovery);await rmdir(lock);throw Error('Journal recovery in progress');}catch(e){if(e.code!=='ENOENT')throw e;}
   const owner = await open(join(lock,'owner.json'),'wx',0o600);
   try { await owner.writeFile(JSON.stringify({pid:process.pid,host:hostname(),created_at:new Date().toISOString()}));await owner.sync(); } finally {await owner.close();}
@@ -58,10 +74,26 @@ export async function recoverInterruptedWriter(directory,{expectedPid,expectedCr
  return {recovered:true,events_preserved:true};
  } finally {await rmdir(recovery);}
 }
-export async function readJournal(directory) {
-  const names = (await readdir(directory)).filter(n => /^[a-f0-9]{64}\.json$/.test(n));
+export async function readJournal(directory, { maxEvents, maxBytes, missingOk = false } = {}) {
+  let entries;
+  try { entries = await readdir(directory); }
+  catch (error) { if (missingOk && error.code === 'ENOENT') return []; throw error; }
+  const names = entries.filter(n => /^[a-f0-9]{64}\.json$/.test(n));
+  if (maxEvents !== undefined && names.length > maxEvents) throw Error('Journal read exceeds event limit');
   const events = [];
-  for (const name of names) { const event = JSON.parse(await readFile(join(directory,name),'utf8')); if (digest(event.event_id)+'.json' !== name) throw Error('Journal identity corruption'); events.push(event); }
+  let bytes = 0;
+  for (const name of names) {
+    const path = join(directory, name);
+    if (maxBytes !== undefined) {
+      const info = await lstat(path);
+      if (!info.isFile()) throw Error('Journal entries must be regular files');
+      bytes += info.size;
+      if (bytes > maxBytes) throw Error('Journal read exceeds byte limit');
+    }
+    const event = JSON.parse(await readFile(path, 'utf8'));
+    if (typeof event?.event_id !== 'string' || digest(event.event_id) + '.json' !== name) throw Error('Journal identity corruption');
+    events.push(event);
+  }
   return events.sort((a,b)=>a.occurred_at.localeCompare(b.occurred_at)||a.event_id.localeCompare(b.event_id));
 }
 const phases = new Set(['queue','waiting','context','investigation','implementation','verification','integration','review','recovery','other']);

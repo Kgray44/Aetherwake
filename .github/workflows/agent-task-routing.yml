@@ -11,6 +11,8 @@ on:
       - 'agent-system/contracts/**'
       - 'scripts/agent/task-router.mjs'
       - 'scripts/agent/context.mjs'
+      - 'scripts/agent/journal.mjs'
+      - 'tests/agent-journal.test.mjs'
       - 'tests/agent-phase-c.test.mjs'
       - 'tests/agent-task-router.test.mjs'
       - 'tests/agent-contracts.test.mjs'
@@ -27,6 +29,8 @@ on:
       - 'agent-system/contracts/**'
       - 'scripts/agent/task-router.mjs'
       - 'scripts/agent/context.mjs'
+      - 'scripts/agent/journal.mjs'
+      - 'tests/agent-journal.test.mjs'
       - 'tests/agent-phase-c.test.mjs'
       - 'tests/agent-task-router.test.mjs'
       - 'tests/agent-contracts.test.mjs'
@@ -48,4 +52,4 @@ jobs:
       - name: Test Codex CLI telemetry
         run: node --test tests/agent-provider-telemetry.test.mjs
       - name: Test task contract and deterministic routing
-        run: node --test tests/agent-contracts.test.mjs tests/agent-task-router.test.mjs tests/agent-phase-c.test.mjs
+        run: node --test tests/agent-contracts.test.mjs tests/agent-task-router.test.mjs tests/agent-phase-c.test.mjs tests/agent-journal.test.mjs

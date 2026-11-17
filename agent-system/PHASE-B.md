@@ -29,6 +29,12 @@ node scripts/agent/task-router.mjs --task-file /private/task.json --path scripts
 
 The command returns the existing route, applicable skills, prerequisite declarations, checks and governance commands. It writes a verified snapshot that can be passed directly to `telemetry.mjs run --context`. Rerun with the same context path to reuse the snapshot after validating the Task, revision, ownership scope and source hashes. Use a new file when the snapshot becomes stale. Add `--with-governance --json` to include the V2 governance package in the same invocation. Keep Task and context files private. Preparing a Task does not authorize a command or satisfy its checks.
 
+### Focused verification
+
+The route includes `verification_plan.focused_commands` for an initial pass. Run each argv array from its indicated repository-relative working directory with the dependencies used by that package's normal tests. The initial map links the backend Task objective, Task reference, and resource admission owners to tests that import those commands or exercise them through their consumers. A changed backend test can also be selected directly. An unmapped path needs investigation of its tests and dependents.
+
+The focused commands supply early feedback. The existing acceptance profile, security and native gates, integration coverage, and recorded owner decisions remain authoritative. The plan exposes reused evidence as empty until an independent verifier can establish the identity and validity of reusable evidence.
+
 ## Required execution behavior
 
 1. Confirm a real Task with revision-qualified requirements, prerequisites and acceptance criteria.

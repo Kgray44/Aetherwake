@@ -51,7 +51,7 @@ export async function runObserved({ task, context, repository, phase = "implemen
   const branch = git("rev-parse", "--abbrev-ref", "HEAD");
   const id = attemptId || "attempt_" + randomUUID();
   const startedAt = new Date().toISOString();
-  const started = process.hrtime.bigint();
+  const observerStarted = process.hrtime.bigint();
   const path = out || join(git("rev-parse", "--absolute-git-dir"), "agent-harness", "events.jsonl");
   await mkdir(dirname(resolve(path)), {recursive:true,mode:0o700});
   await assertPrivateFile(path);
@@ -60,8 +60,10 @@ export async function runObserved({ task, context, repository, phase = "implemen
   const spanId = "span_" + randomUUID();
   await appendEvent(journalPath, traceEvent({task,attemptId:id,spanId,kind:"span_start",phase,state:"started"}));
   const cpuStart = process.cpuUsage();
-  let exitCode = 1, signal = null, launchFailure = null, resourceMeasurements = [];
-  let providerMeasurements = [];
+  const launched = process.hrtime.bigint();
+  let exitCode = 1, actualExitCode = null, signal = null, launchFailure = null;
+  let elapsed = null, childFinishedAt = null, resourceMeasurements = [];
+  let providerMeasurements = [], resourceCollectionError = false;
   try {
     const child = spawn(command[0], command.slice(1), {
       stdio: eventStream ? ["inherit", "pipe", "inherit"] : "inherit",
@@ -69,7 +71,8 @@ export async function runObserved({ task, context, repository, phase = "implemen
     });
     const closed = new Promise(resolve => {
       child.once("error", error => resolve({ code: 127, signal: null, error }));
-      child.once("close", (code, sig) => resolve({ code: code ?? 1, signal: sig, error: null }));
+      child.once("close", (code, sig) => resolve({ code: code ?? 1, actualExitCode: code, signal: sig, error: null,
+        elapsed: Number(process.hrtime.bigint() - launched) / 1e6, finishedAt: new Date().toISOString() }));
     });
     const providerStream = child.stdout && observeCodexOutput(child.stdout, usage => appendEvent(journalPath,
       traceEvent({ task, attemptId: id, spanId, kind: "measurement", phase, measurements: usage })
@@ -77,12 +80,20 @@ export async function runObserved({ task, context, repository, phase = "implemen
     const resources = observeResources(child.pid);
     const result = await closed;
     exitCode = result.code;
+    actualExitCode = result.actualExitCode ?? null;
     signal = result.signal;
     launchFailure = result.error;
-    resourceMeasurements = await resources.stop();
+    elapsed = result.elapsed ?? null;
+    childFinishedAt = result.finishedAt ?? null;
+    try {
+      resourceMeasurements = await resources.stop();
+    } catch {
+      resourceCollectionError = true;
+    }
     if (providerStream) providerMeasurements = await providerStream;
   } catch (e) { launchFailure = e; }
-  const elapsed = Number(process.hrtime.bigint() - started) / 1e6;
+  const observerElapsed = Number(process.hrtime.bigint() - observerStarted) / 1e6;
+  const observerCpu = process.cpuUsage(cpuStart);
   const finishedAt = new Date().toISOString();
   const success = exitCode === 0 && !signal && !launchFailure;
   const base = { schema_version: 1, created_at: startedAt, repository, revision, task_id: task.id };
@@ -97,10 +108,14 @@ export async function runObserved({ task, context, repository, phase = "implemen
     ...base, record_type: "telemetry", id: "telemetry_" + randomUUID(),
     attempt_id: id, phase, observed_at: finishedAt,
     measurements: [
-      measure("elapsed_wall_ms", "observed", elapsed, "ms", "local_monotonic_clock", "hrtime.bigint"),
-      measure("process_exit_code", "observed", exitCode, "code", "child_process", "spawn"),
-      measure("observer_cpu_user_ms", "observed", (process.cpuUsage(cpuStart).user)/1000, "ms", "node_process_cpuUsage", "wrapper_process_only"),
+      measure("elapsed_wall_ms", elapsed === null ? "unavailable" : "observed", elapsed ?? undefined, "ms", "local_monotonic_clock", "spawn_to_close"),
+      measure("process_exit_code", actualExitCode === null ? "unavailable" : "observed", actualExitCode ?? undefined, "code", "child_process", "close_event"),
+      measure("process_launch_succeeded", "observed", Number(elapsed !== null), "boolean", "child_process", "spawn_to_close_or_error"),
+      measure("observer_elapsed_before_terminal_ms", "observed", observerElapsed, "ms", "local_monotonic_clock", "attempt_start_to_terminal_preparation"),
+      measure("observer_cpu_user_ms", "observed", observerCpu.user/1000, "ms", "node_process_cpuUsage", "wrapper_process_only"),
+      measure("observer_cpu_system_ms", "observed", observerCpu.system/1000, "ms", "node_process_cpuUsage", "wrapper_process_only"),
       measure("observer_rss_bytes", "observed", process.memoryUsage().rss, "bytes", "node_process_memoryUsage", "wrapper_process_only"),
+      measure("resource_collection_error", "observed", Number(resourceCollectionError), "boolean", "local_observer", "collector_cleanup"),
       ...resourceMeasurements,
       measure("child_cpu_ms", "unavailable"),
       measure("child_peak_rss_bytes", "unavailable"),
@@ -118,7 +133,7 @@ export async function runObserved({ task, context, repository, phase = "implemen
       measure("provider_cost_usd", "unavailable")
     ]
   };
-  await appendEvent(journalPath, traceEvent({task,attemptId:id,spanId,kind:"span_end",phase,state:success?"completed":"failed",measurements:telemetry.measurements}));
+  await appendEvent(journalPath, traceEvent({task,attemptId:id,spanId,kind:"span_end",phase,state:success?"completed":"failed",occurredAt:childFinishedAt ?? finishedAt,measurements:telemetry.measurements}));
   if(!attemptId)await persistRecord(journalPath,attempt);
   await persistRecord(journalPath,telemetry);
   await assertPrivateFile(path);
@@ -158,4 +173,3 @@ async function main() {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(e => { process.stderr.write("Telemetry: " + e.message + "\n"); process.exitCode = 1; });
 }
-

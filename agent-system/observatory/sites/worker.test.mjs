@@ -32,6 +32,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
   sql.exec(cacheMigration);
   sql.exec(readFileSync(new URL('./drizzle/0002_private_projection.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0003_proposal_publication.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0004_cached_proposal_revision.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
   const writes = [];
   const DB = {
@@ -170,7 +171,7 @@ test('Worker instances share GitHub results and keep last good data through a ra
   assert.ok(limited.github.retry_at >= Date.now() + 115_000);
   const limitedCount = requests.length;
   assert.deepEqual((await read()).github, limited.github);
-  assert.equal((await post()).status, 503);
+  assert.equal((await post({ 'x-observatory-publish': 'github' })).status, 503);
   assert.equal(requests.length, limitedCount);
 });
 
@@ -268,4 +269,29 @@ test('a blocked GitHub write leaves a durable, retryable proposal', async t => {
   const overview = await call('/api/overview', { headers: ownerHeader });
   assert.equal((await overview.json()).proposals.publication[task.id], 'pending');
   assert.equal(writes.length, 1);
+});
+
+test('rate-limited GitHub permits private proposals bound to a known cached revision', async t => {
+  const { call, post, hitLimit, writes } = fixture(t, { token: 'test-proposal-token' });
+  assert.equal((await call('/api/overview', { headers: ownerHeader })).status, 200);
+  hitLimit();
+
+  const headers = { 'x-observatory-request-id': namespace };
+  const response = await post(headers);
+  assert.equal(response.status, 201);
+  const { task, github, revision_was_stale } = await response.json();
+  assert.equal(task.revision, rev);
+  assert.equal(task.state, 'proposed');
+  assert.equal(github, null);
+  assert.equal(revision_was_stale, true);
+
+  const replay = await post(headers);
+  assert.equal((await replay.json()).revision_was_stale, true);
+  const overview = await call('/api/overview', { headers: ownerHeader });
+  const data = await overview.json();
+  assert.equal(data.github.main.status, 'stale');
+  assert.deepEqual(data.proposals.stale_revision_tasks, [task.id]);
+  assert.deepEqual(data.proposals.publication, {});
+  assert.equal((await post({ 'x-observatory-publish': 'github' })).status, 503);
+  assert.equal(writes.length, 0);
 });

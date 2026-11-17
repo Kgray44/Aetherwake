@@ -3,7 +3,8 @@
 import {readFileSync} from 'node:fs';
 import {canonical} from './evidence-trust.mjs';
 const schema=JSON.parse(readFileSync(new URL('../../agent-system/contracts/v1.schema.json',import.meta.url),'utf8'));
-const supported=new Set(['$schema','$defs','$ref','title','description','type','const','enum','oneOf','properties','required','additionalProperties','items','minItems','uniqueItems','minLength','pattern','format','minimum']);
+const traceSchema=JSON.parse(readFileSync(new URL('../../agent-system/contracts/trace-v1.schema.json',import.meta.url),'utf8'));
+const supported=new Set(['$schema','$defs','$ref','title','description','type','const','enum','oneOf','properties','required','additionalProperties','items','minItems','uniqueItems','minLength','pattern','format','minimum','maximum']);
 function validate(value,s,path='$',depth=0) {
   if(depth>40) return [path+': depth exceeded'];
   const errors=[];
@@ -25,6 +26,7 @@ function validate(value,s,path='$',depth=0) {
     if(s.format&&s.format!=='date-time')errors.push(path+': unsupported format');
   }
   if(typeof value==='number'&&s.minimum!==undefined&&value<s.minimum)errors.push(path+': below minimum');
+  if(typeof value==='number'&&s.maximum!==undefined&&value>s.maximum)errors.push(path+': above maximum');
   if(Array.isArray(value)) {
     if(s.minItems&&value.length<s.minItems)errors.push(path+': too few items');
     if(s.uniqueItems&&new Set(value.map(canonical)).size!==value.length)errors.push(path+': duplicate items');
@@ -37,3 +39,4 @@ function validate(value,s,path='$',depth=0) {
   return errors;
 }
 export const validateRecord=record=>validate(record,schema);
+export const validateTraceEvent=event=>validate(event,traceSchema);

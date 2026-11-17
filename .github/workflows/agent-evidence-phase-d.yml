@@ -32,3 +32,4 @@ jobs:
           tests/agent/check-publication.test.mjs
           tests/agent/check-readback.test.mjs
           tests/agent/pr-context-reader.test.mjs
+          tests/agent/resources.test.mjs

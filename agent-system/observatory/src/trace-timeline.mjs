@@ -45,3 +45,43 @@ export function traceTimeline(events) {
     coveredMs: complete.length ? unionMs(complete) : null
   };
 }
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+/** Compare only phases with recorded boundaries across comparable Tasks. */
+export function recurringTraceBottlenecks(records, events) {
+  const byTask = new Map();
+  for (const event of events) {
+    const group = byTask.get(event.task_id) ?? [];
+    group.push(event);
+    byTask.set(event.task_id, group);
+  }
+  const classes = new Map();
+  const taskClasses = new Map(records.filter(record => record.record_type === 'task')
+    .map(task => [task.id, task.classification?.primary]));
+  for (const [taskId, taskClass] of taskClasses) {
+    if (!taskClass || !byTask.has(taskId)) continue;
+    const { phases, incomplete } = traceTimeline(byTask.get(taskId));
+    if (incomplete || !phases.length || phases[0].coveredMs <= 0 ||
+        phases[0].coveredMs === phases[1]?.coveredMs) continue;
+    const group = classes.get(taskClass) ?? [];
+    group.push(phases[0]);
+    classes.set(taskClass, group);
+  }
+  const findings = [];
+  for (const [taskClass, group] of classes) {
+    for (const phase of new Set(group.map(entry => entry.phase))) {
+      const times = group.filter(entry => entry.phase === phase).map(entry => entry.coveredMs);
+      // Require repetition across Tasks and a majority within the class.
+      if (times.length >= 3 && times.length * 2 > group.length) {
+        findings.push({ taskClass, phase, comparableTasks: group.length, dominantTasks: times.length,
+          medianMs: median(times) });
+      }
+    }
+  }
+  return findings.sort((a, b) => b.medianMs - a.medianMs);
+}
