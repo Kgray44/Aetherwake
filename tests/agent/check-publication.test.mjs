@@ -40,8 +40,8 @@ function scope(task, changes={}) {
 const base='b'.repeat(40);
 function input() {
  const bundle=fixture();
- const pr={number:7,state:'open',head:{sha:rev,repo:{full_name:'fork/Aetherwake'}},base:{sha:base,repo:{full_name:opts.repository}}};
- return {eventName:'pull_request_target',event:{number:7,repository:{full_name:opts.repository},pull_request:pr},currentPullRequest:structuredClone(pr),repository:opts.repository,verifierRevision:base,bundle,verification:{...opts,paths:[],testedRevision:rev}};
+ const pr={number:7,state:'open',head:{sha:rev,repo:{full_name:'fork/Aetherwake'}},base:{ref:'main',sha:base,repo:{full_name:opts.repository}}};
+ return {eventName:'pull_request_target',event:{number:7,repository:{full_name:opts.repository},pull_request:pr},currentPullRequest:structuredClone(pr),repository:opts.repository,verifierRevision:base,expectedBaseRef:'main',bundle,verification:{...opts,paths:[],testedRevision:rev}};
 }
 test('signed proof prepares exact contributor head without publishing or granting acceptance',()=>{const value=prepareExactHeadCheck(input());assert.equal(value.request.head_sha,rev);assert.equal(value.request.conclusion,'success');assert.equal(value.owner_accepted,false);assert.equal(value.task_accepted,false);assert.ok(Object.isFrozen(value.request.output));});
 test('producer ok and profile status cannot substitute for signed evidence',()=>{const x=input();x.bundle.evidence=[];x.bundle.ok=true;assert.equal(prepareExactHeadCheck(x).request.conclusion,'failure');});
@@ -53,3 +53,15 @@ test('complete path input and tested revision are required',()=>{for(const chang
 test('options cannot override independently bound source/repository',()=>{const x=input();x.verification.repository='other/repo';x.verification.revision='c'.repeat(40);assert.equal(prepareExactHeadCheck(x).request.conclusion,'success');});
 test('candidate secrets and markdown never enter external check output',()=>{const x=input();x.bundle.task.title='PRIVATE [link](https://evil.invalid)';const value=prepareExactHeadCheck(x);assert.equal(value.request.conclusion,'failure');assert.ok(!JSON.stringify(value).includes('PRIVATE'));});
 test('tested revision is not confused with contributor head and mismatched receipts fail',()=>{const x=input();x.verification.testedRevision='d'.repeat(40);const value=prepareExactHeadCheck(x);assert.equal(value.request.head_sha,rev);assert.equal(value.request.conclusion,'failure');assert.ok(value.request.output.summary.includes('Tested revision: '+'d'.repeat(40)));});
+
+test('expected target branch must match both the event and the current PR at the same commit', () => {
+  for (const change of [
+    x => { x.event.pull_request.base.ref = 'release'; },
+    x => { x.currentPullRequest.base.ref = 'release'; },
+    x => { x.expectedBaseRef = undefined; },
+  ]) {
+    const x = input();
+    change(x);
+    assert.throws(() => prepareExactHeadCheck(x), /target branch|verifier identity/i);
+  }
+});

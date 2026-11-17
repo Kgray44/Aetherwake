@@ -4,8 +4,8 @@
 const sha=value=>typeof value==='string'&&/^[a-f0-9]{40}$/.test(value);
 const repo=value=>typeof value==='string'&&/^[A-Za-z0-9][A-Za-z0-9-]*\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/.test(value);
 const validPath=value=>typeof value==='string'&&value.length>0&&!/[\\\x00-\x1f\x7f]/.test(value)&&!value.startsWith('/')&&!/^[a-z]:/i.test(value)&&!value.split('/').some(part=>!part||part==='.'||part==='..');
-export async function readExactPRContext({repository,number,expectedHead,expectedBase,token,fetchImpl=fetch}) {
-  if(!repo(repository)||!Number.isSafeInteger(number)||number<1||!sha(expectedHead)||!sha(expectedBase))throw Error('Invalid trusted PR identity');
+export async function readExactPRContext({repository,number,expectedHead,expectedBase,expectedBaseRef,token,fetchImpl=fetch}) {
+  if(!repo(repository)||!Number.isSafeInteger(number)||number<1||!sha(expectedHead)||!sha(expectedBase)||typeof expectedBaseRef!=='string'||!expectedBaseRef.trim())throw Error('Invalid trusted PR identity');
   if(typeof token!=='string'||!token.trim()||/[\r\n]/.test(token))throw Error('Authenticated reader required');
   const root='https://api.github.com/repos/'+repository;
   async function get(suffix){
@@ -18,7 +18,7 @@ export async function readExactPRContext({repository,number,expectedHead,expecte
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   }
   function admit(pr){
-    if(pr?.number!==number||pr.state!=='open'||pr.head?.sha!==expectedHead||pr.base?.sha!==expectedBase||pr.base?.repo?.full_name!==repository||!repo(pr.head?.repo?.full_name))throw Error('PR identity changed or mismatched');
+    if(pr?.number!==number||pr.state!=='open'||pr.head?.sha!==expectedHead||pr.base?.sha!==expectedBase||pr.base?.ref!==expectedBaseRef||pr.base?.repo?.full_name!==repository||!repo(pr.head?.repo?.full_name))throw Error('PR identity changed or mismatched');
     if(!Number.isSafeInteger(pr.changed_files)||pr.changed_files<0||pr.changed_files>=300)throw Error('PR changed-file coverage unavailable');
   }
   const before=await get('/pulls/'+number);admit(before);
@@ -38,5 +38,5 @@ export async function readExactPRContext({repository,number,expectedHead,expecte
     }
   const current=await get('/pulls/'+number);admit(current);
   if(current.changed_files!==before.changed_files||current.head.repo.full_name!==before.head.repo.full_name)throw Error('PR changed during collection');
-  return {currentPullRequest:{number:current.number,state:current.state,head:{sha:current.head.sha,repo:{full_name:current.head.repo.full_name}},base:{sha:current.base.sha,repo:{full_name:current.base.repo.full_name}}},paths:[...paths].sort(),coverage:{changed_files:files.length,complete:true,method:'immutable-sha-comparison',source_head:expectedHead,base_revision:expectedBase,merge_base_revision:comparison.merge_base_commit.sha},task_accepted:false,owner_accepted:false};
+  return {currentPullRequest:{number:current.number,state:current.state,head:{sha:current.head.sha,repo:{full_name:current.head.repo.full_name}},base:{ref:current.base.ref,sha:current.base.sha,repo:{full_name:current.base.repo.full_name}}},paths:[...paths].sort(),coverage:{changed_files:files.length,complete:true,method:'immutable-sha-comparison',source_head:expectedHead,base_revision:expectedBase,merge_base_revision:comparison.merge_base_commit.sha},task_accepted:false,owner_accepted:false};
 }
