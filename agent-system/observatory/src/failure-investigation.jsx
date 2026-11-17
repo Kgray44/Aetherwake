@@ -29,17 +29,22 @@ function useRunComparisons({ enabled, passingId, repeatId, pullNumber, headers }
       ['baseline', 'runs', passingId], ['repeat', 'runs', repeatId], ['pull', 'pulls', pullNumber],
     ].filter(([, , identity]) => identity);
     setResult({});
-    for (const [key, kind, identity] of targets) {
-      fetch('/api/github/' + kind + '/' + identity, { headers, cache: 'no-store', signal: abort.signal })
-        .then(async response => response.ok ? await response.json() : null)
-        .then(payload => {
-          if (!abort.signal.aborted) {
-            setResult(previous => ({ ...previous, [key]: payload?.detail ?? false }));
-          }
-        }).catch(() => {
-          if (!abort.signal.aborted) setResult(previous => ({ ...previous, [key]: false }));
-        });
+    // The backend shares one GitHub refresh lease across run and PR details.
+    // Parallel cold reads would drop all but the first comparison.
+    async function readComparisons() {
+      for (const [key, kind, identity] of targets) {
+        if (abort.signal.aborted) return;
+        let detail = false;
+        try {
+          const response = await fetch('/api/github/' + kind + '/' + identity, {
+            headers, cache: 'no-store', signal: abort.signal,
+          });
+          if (response.ok) detail = (await response.json()).detail ?? false;
+        } catch { /* A failed read is displayed as unavailable. */ }
+        if (!abort.signal.aborted) setResult(previous => ({ ...previous, [key]: detail }));
+      }
     }
+    void readComparisons();
     return () => abort.abort();
   }, [enabled, passingId, repeatId, pullNumber, headers]);
   return result;
