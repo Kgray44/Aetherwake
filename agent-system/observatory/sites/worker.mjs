@@ -3,6 +3,7 @@ import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs'
 import { proposedTask } from '../intake.mjs';
 import { isRevision, readBounded } from './github.mjs';
 import { cachedGitHub } from './github-cache.mjs';
+import { publishProposal } from './github-proposals.mjs';
 
 const MAX_PROPOSALS = 500;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -27,19 +28,27 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     const namespace = verification === null ? 'live' : 'verification:' + verification;
     const overview = url.pathname === '/api/overview';
     const intake = url.pathname === '/api/tasks';
+    const publish = url.pathname.match(/^\/api\/tasks\/task_([a-f0-9-]+)\/publish$/);
     const sync = url.pathname === '/api/sync';
-    if (!overview && !intake && !sync) return error('Not found', 404);
+    if (!overview && !intake && !sync && !publish) return error('Not found', 404);
     if (overview ? request.method !== 'GET' : request.method !== 'POST') {
       return error('Method not allowed', 405);
     }
-    if ((intake || sync) && (request.headers.get('origin') !== url.origin ||
+    if (!overview && (request.headers.get('origin') !== url.origin ||
         ![null, 'same-origin'].includes(request.headers.get('sec-fetch-site')))) {
       return error('Same-origin request required', 403);
     }
-    if ((intake || sync) && request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    if (!overview && request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
       return error('Expected application/json', 415);
     }
     if (!env.DB) return error('Proposal storage unavailable', 503);
+
+    if (publish) {
+      if (verification !== null || !UUID.test(publish[1])) return error('Not found', 404);
+      const github = await publishProposal(env.DB, fetcher, env.GITHUB_PROPOSAL_TOKEN, owner, 'task_' + publish[1], validate);
+      return github ? json({ github }) : error('Proposal not found', 404);
+    }
+    const readToken = env.GITHUB_READ_TOKEN || env.GITHUB_PROPOSAL_TOKEN;
 
     if (sync) {
       let projection;
@@ -50,8 +59,8 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     }
     if (overview) {
       const [snapshot, rows, projectionRow] = await Promise.all([
-        cachedGitHub(env.DB, fetcher, validate, env.GITHUB_READ_TOKEN),
-        env.DB.prepare('SELECT record FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
+        cachedGitHub(env.DB, fetcher, validate, readToken),
+        env.DB.prepare('SELECT record, task_id, github_state FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
           .bind(owner, namespace, MAX_PROPOSALS).all(),
         env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner, namespace).first(),
       ]);
@@ -74,7 +83,11 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
             provenance: items.map(({ record, path, sha }) => ({ id: record.id, type: record.record_type, path, blob: sha })),
           },
         },
-        proposals: { total: rows.results.length, limit: MAX_PROPOSALS, verification: verification !== null },
+        proposals: {
+          total: rows.results.length, limit: MAX_PROPOSALS, verification: verification !== null,
+          publication_configured: Boolean(env.GITHUB_PROPOSAL_TOKEN),
+          publication: Object.fromEntries(rows.results.filter(row => row.github_state).map(row => [row.task_id, row.github_state])),
+        },
         telemetry_note: 'Unavailable measurements are not zero; PR merge does not imply task acceptance.',
       });
     }
@@ -85,27 +98,41 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     } catch (cause) {
       return cause instanceof RangeError ? error('Payload too large', 413) : error('Invalid JSON', 400);
     }
-    const { main } = await cachedGitHub(env.DB, fetcher, validate, env.GITHUB_READ_TOKEN);
+    const publicProposal = verification === null && request.headers.get('x-observatory-publish') === 'github';
+    const requestId = request.headers.get('x-observatory-request-id');
+    if (requestId !== null && !UUID.test(requestId)) return error('Invalid proposal request ID', 400);
+    const existing = requestId && await env.DB.prepare(
+      'SELECT record, github_state FROM proposals WHERE owner_id = ? AND namespace = ? AND task_id = ?',
+    ).bind(owner, namespace, 'task_' + requestId).first();
+    if (existing) {
+      const task = JSON.parse(existing.record);
+      const github = existing.github_state
+        ? await publishProposal(env.DB, fetcher, env.GITHUB_PROPOSAL_TOKEN, owner, task.id, validate) : null;
+      return json({ task, github });
+    }
+    const { main } = await cachedGitHub(env.DB, fetcher, validate, readToken);
     if (main.status !== 'available' || !isRevision(main.revision)) {
       return error('A current GitHub main revision is required before submitting. Check the GitHub feed for retry details.', 503);
     }
 
     let task;
     try {
-      task = proposedTask(body, main.revision);
+      task = proposedTask(body, main.revision, requestId ? () => requestId : undefined);
     } catch (cause) {
       return error(cause.message, 400);
     }
     if (!validate(task)) return error('Task did not match the engineering contract', 400);
 
     const result = await env.DB.prepare(`
-      INSERT INTO proposals (owner_id, namespace, task_id, created_at, record)
-      SELECT ?, ?, ?, ?, ? WHERE
+      INSERT OR IGNORE INTO proposals (owner_id, namespace, task_id, created_at, record, github_state)
+      SELECT ?, ?, ?, ?, ?, ? WHERE
       (SELECT COUNT(*) FROM proposals WHERE owner_id = ? AND namespace = ?) < ?
-    `).bind(owner, namespace, task.id, task.created_at, JSON.stringify(task), owner, namespace, MAX_PROPOSALS).run();
-    if (result.meta.changes !== 1) return error('Proposal limit reached', 409);
+    `).bind(owner, namespace, task.id, task.created_at, JSON.stringify(task), publicProposal ? 'pending' : null, owner, namespace, MAX_PROPOSALS).run();
+    if (result.meta.changes !== 1) return error('Proposal already submitted or proposal limit reached. Retry the same request to check.', 409);
+    const github = publicProposal
+      ? await publishProposal(env.DB, fetcher, env.GITHUB_PROPOSAL_TOKEN, owner, task.id, validate) : null;
     return json({
-      task,
+      task, github,
       storage: verification === null ? 'private-sites-d1' : 'isolated-verification-d1',
       note: 'Task is proposed. No execution or owner approval has been initiated.',
     }, 201);
