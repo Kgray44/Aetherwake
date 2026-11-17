@@ -15,8 +15,17 @@ export async function persistRecord(directory,record,{taskId}={}){
  const target=join(directory,'records');
  return withJournalLock(target,()=>appendEventLocked(target,envelope(record,taskId)));
 }
-export async function readRecordHistory(directory){
- try{return (await readJournal(join(directory,'records'))).map(e=>e.record);}catch(e){if(e.code==='ENOENT')return [];throw e;}
+export async function readRecordHistory(directory,{taskId,...limits}={}){
+ const events=await readJournal(join(directory,'records'),{...limits,missingOk:true});
+ return events.map(event=>{
+  if(taskId!==undefined){
+   if(event.task_id!==taskId) throw Error('Journal contains a record for another Task');
+   const expected=envelope(event.record,taskId);
+   if(expected.event_id!==event.event_id||expected.occurred_at!==event.occurred_at||expected.journal_version!==event.journal_version)
+    throw Error('Record journal identity corruption');
+  }
+  return event.record;
+ });
 }
 const terminal = state => ['succeeded','failed','cancelled'].includes(state);
 export function reduceAttempts(history){
