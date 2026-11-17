@@ -1,5 +1,6 @@
 const PROVIDER = "chatgpt-plan-responses";
 const CONTRACT = "aerynth.provider-connection@1";
+const AUTHORITY_CONTRACT = "aerynth.provider-operation-authority@1";
 const STATES = new Set([
   "unavailable",
   "disconnected",
@@ -196,7 +197,19 @@ function authorizationStart(value) {
 
 /** Native main-frame broker. Only this owned instance sees an OAuth URL or
  * attempt ID. Public callers cannot provide a URL, callback, token or grant. */
-function createProviderConnectionBroker({ call, openExternal }) {
+function createProviderConnectionBroker({
+  call,
+  openExternal,
+  authorize,
+  revalidate,
+  reviewDisconnect,
+}) {
+  if (
+    [call, openExternal, authorize, revalidate, reviewDisconnect].some(
+      (value) => typeof value !== "function",
+    )
+  )
+    throw Error("invalid_provider_connection_broker");
   let attemptId = null,
     preparing = false,
     closed = false,
@@ -210,8 +223,33 @@ function createProviderConnectionBroker({ call, openExternal }) {
     );
   const privateCall = (type, input = {}) =>
     call("providerAuth", { providerId: PROVIDER, type, ...input });
+  const bindingFor = (input, current) =>
+    Object.freeze({
+      contract: AUTHORITY_CONTRACT,
+      type: input.type,
+      providerId: PROVIDER,
+      connectionVersion: current.registrationVersion,
+      expectedVersion: input.expectedVersion ?? null,
+      state: current.state,
+      pending: current.pending,
+    });
+  const connectionMatches = (binding, current, options = {}) =>
+    current.providerId === binding.providerId &&
+    current.registrationVersion === binding.connectionVersion &&
+    (options.compareState === false ||
+      (current.state === binding.state && current.pending === binding.pending)) &&
+    (options.pending === undefined || current.pending === options.pending);
+  // Fail-closed rollback for an attempt created by this broker. The private
+  // attempt ID never comes from the renderer, and cleanup remains necessary
+  // when frame loss is the reason the authorized connect cannot continue.
+  const internallyCancel = async (started) => {
+    if (started?.attemptId)
+      await privateCall("cancel", { attemptId: started.attemptId }).catch(
+        () => {},
+      );
+  };
   return {
-    async command(input) {
+    async command(input, context) {
       if (closed) throw Error("provider_connection_closed");
       const descriptors =
         input && typeof input === "object" && !Array.isArray(input)
@@ -245,9 +283,34 @@ function createProviderConnectionBroker({ call, openExternal }) {
       )
         throw Error("invalid_provider_connection_request");
       if (input.type === "status") return status();
-      if (input.type === "refreshModels")
+      const initial = await status();
+      if (
+        withVersion &&
+        initial.registrationVersion !== input.expectedVersion
+      )
+        throw Error("provider_connection_changed");
+      const binding = bindingFor(input, initial);
+      const authority = await authorize(context, binding);
+      if (!authority) throw Error("provider_user_gesture_required");
+      const assertCurrent = async (options = {}) => {
+        const phase = options.phase ?? "before-effect";
+        if ((await revalidate(authority, binding, { phase })) !== true)
+          throw Error("provider_operation_authority_expired");
+        const current = await status();
+        if (
+          (await revalidate(authority, binding, { phase })) !== true
+        )
+          throw Error("provider_operation_authority_expired");
+        if (!connectionMatches(binding, current, options))
+          throw Error("provider_connection_changed");
+        return current;
+      };
+      if (input.type === "refreshModels") {
+        await assertCurrent();
         return safeStatus(await call("providerConnection", input));
+      }
       if (input.type === "cancel") {
+        await assertCurrent();
         generation++;
         const current = attemptId;
         attemptId = null;
@@ -256,6 +319,13 @@ function createProviderConnectionBroker({ call, openExternal }) {
       }
       if (input.type === "disconnect" || input.type === "refreshSession") {
         if (preparing) throw Error("sign_in_in_progress");
+        const current = await assertCurrent();
+        if (
+          input.type === "disconnect" &&
+          (await reviewDisconnect(authority, binding, current)) !== true
+        )
+          return status();
+        await assertCurrent();
         return safeStatus(
           await privateCall(
             input.type === "disconnect" ? "disconnect" : "refresh",
@@ -264,12 +334,13 @@ function createProviderConnectionBroker({ call, openExternal }) {
         );
       }
       if (preparing) throw Error("sign_in_in_progress");
-      if (attemptId && (await status()).pending)
+      if (attemptId && initial.pending)
         throw Error("sign_in_in_progress");
       preparing = true;
       const revision = ++generation;
       let started;
       try {
+        await assertCurrent();
         const candidate = await privateCall("begin");
         if (
           typeof candidate?.attemptId === "string" &&
@@ -280,26 +351,35 @@ function createProviderConnectionBroker({ call, openExternal }) {
           started = { attemptId: candidate.attemptId };
         started = authorizationStart(candidate);
         if (closed || revision !== generation) {
-          await privateCall("cancel", { attemptId: started.attemptId });
+          await internallyCancel(started);
           return status();
         }
         attemptId = started.attemptId;
+        await assertCurrent({ compareState: false, pending: true });
         await openExternal(started.authorizationUrl);
         if (closed || revision !== generation) {
-          await privateCall("cancel", { attemptId: started.attemptId });
+          await internallyCancel(started);
           return status();
         }
+        await assertCurrent({
+          phase: "after-external",
+          compareState: false,
+          pending: true,
+        });
         // Core starts a caught, privately owned callback completion and returns
         // immediately. No five-minute OAuth listener occupies an RPC timeout.
         return safeStatus(await privateCall("finish", { attemptId }));
       } catch (error) {
-        if (started)
-          await privateCall("cancel", { attemptId: started.attemptId }).catch(
-            () => {},
-          );
+        await internallyCancel(started);
         attemptId = null;
+        const safeErrors = new Set([
+          "invalid_native_sign_in_destination",
+          "provider_connection_changed",
+          "provider_operation_authority_expired",
+          "provider_user_gesture_required",
+        ]);
         throw Error(
-          error?.message === "invalid_native_sign_in_destination"
+          safeErrors.has(error?.message)
             ? error.message
             : "provider_sign_in_unavailable",
         );

@@ -56,7 +56,7 @@ test("opening connection controls only reads local safe status; no OAuth, catalo
   }
 });
 
-test("model discovery follows an explicit successful sign-in, while pending consent stays distinct from ready", async () => {
+test("successful sign-in exposes model discovery without implicitly authorizing it", async () => {
   const dom = blockDocument(),
     restore = dom.install(),
     calls = [];
@@ -95,10 +95,18 @@ test("model discovery follows an explicit successful sign-in, while pending cons
     );
     signedIn = true;
     await view.refresh();
-    assert.deepEqual(calls, ["status", "connect", "status", "refreshModels"]);
+    assert.deepEqual(calls, ["status", "connect", "status"]);
     assert.equal(changed, 1);
     assert.equal(
       dom.root.querySelector('[data-connection-action="chat"]').hidden,
+      false,
+    );
+    assert.equal(
+      dom.root.querySelector('[data-connection-action="chat"]').disabled,
+      true,
+    );
+    assert.equal(
+      dom.root.querySelector('[data-connection-action="refreshModels"]').disabled,
       false,
     );
   } finally {

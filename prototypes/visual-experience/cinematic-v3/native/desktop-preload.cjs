@@ -1,5 +1,19 @@
 const { contextBridge, ipcRenderer } = require("electron");
 let lastResourceTimingAt = -Infinity;
+let providerActivationSerial = 0;
+let availableProviderActivation = 0;
+let consumedProviderActivation = 0;
+globalThis.addEventListener?.(
+  "click",
+  (event) => {
+    if (
+      event?.isTrusted === true &&
+      providerActivationSerial < Number.MAX_SAFE_INTEGER
+    )
+      availableProviderActivation = ++providerActivationSerial;
+  },
+  true,
+);
 contextBridge.exposeInMainWorld(
   "aerynthHost",
   Object.freeze({
@@ -117,6 +131,22 @@ contextBridge.exposeInMainWorld(
       if (name === 'velaApiConnection' && !['status','usageStatus'].includes(input?.type) &&
           navigator.userActivation?.isActive !== true)
         throw new Error('api_user_gesture_required');
+      let providerActivation = null;
+      if (name === "providerConnection" && input?.type !== "status") {
+        if (
+          navigator.userActivation?.isActive !== true ||
+          availableProviderActivation <= consumedProviderActivation
+        )
+          throw new Error("provider_user_gesture_required");
+        consumedProviderActivation = availableProviderActivation;
+        providerActivation = Object.freeze({
+          contract: "aerynth.provider-activation@1",
+          serial: consumedProviderActivation,
+          type: input?.type,
+          providerId: input?.providerId,
+          expectedVersion: input?.expectedVersion ?? null,
+        });
+      }
       if (name === 'velaVoice' && (['start','reconnect','audition','speak','createVoice','saveVoice'].includes(input?.name)||input?.name==='setSpeakReplies'&&input?.input?.enabled===true) &&
           navigator.userActivation?.isActive !== true)
         throw new Error('voice_user_gesture_required');
@@ -147,7 +177,13 @@ contextBridge.exposeInMainWorld(
       const reply = await ipcRenderer.invoke(
         "application-command",
         name,
-        input,
+        name === "providerConnection"
+          ? {
+              contract: "aerynth.provider-command-envelope@1",
+              request: input,
+              activation: providerActivation,
+            }
+          : input,
       );
       if (!reply.ok) throw new Error(reply.error);
       return reply.result;

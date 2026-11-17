@@ -442,10 +442,6 @@ app.whenReady().then(async () => {
     htmlPath: path.join(__dirname, 'voice-media.html'),
     syntheticInput: process.argv.includes('--missions-voice-live-only') && process.argv.includes('--voice-synthetic-input'),
   });
-  providerConnections = createProviderConnectionBroker({
-    call,
-    openExternal: (url) => shell.openExternal(url),
-  });
   velaApiSetup = createVelaApiSetup({ BrowserWindow, ipcMain,
     storageAllowed: () => storage.allowWrite(),
     status: async () => safeApiStatus(await call('velaApiConnection', { type: 'status' })),
@@ -551,6 +547,16 @@ app.whenReady().then(async () => {
     ipcMain.off("application-resource-timing", observeResourceTiming);
   });
   let lastMissionActivity = -Infinity;
+  let providerNativeActivationSerial = 0;
+  let providerNativeActivation = { serial: 0, observedAt: -Infinity };
+  let consumedProviderNativeActivation = 0;
+  const observeProviderNativeActivation = () => {
+    if (providerNativeActivationSerial >= Number.MAX_SAFE_INTEGER) return;
+    providerNativeActivation = {
+      serial: ++providerNativeActivationSerial,
+      observedAt: performance.now(),
+    };
+  };
   const observeMissionActivity = () => {
     const at = performance.now();
     if (!win.isFocused() || owner.getURL() !== localURL || at - lastMissionActivity < 1000) return;
@@ -558,10 +564,16 @@ app.whenReady().then(async () => {
     sendMissionHostSignal({ foregroundInput: true });
   };
   owner.on("before-input-event", (_event, input) => {
-    if (input.type === "keyDown") observeMissionActivity();
+    if (input.type === "keyDown") {
+      observeMissionActivity();
+      if (input.isAutoRepeat !== true) observeProviderNativeActivation();
+    }
   });
   owner.on("before-mouse-event", (_event, input) => {
-    if (input.type === "mouseDown") observeMissionActivity();
+    if (input.type === "mouseDown") {
+      observeMissionActivity();
+      observeProviderNativeActivation();
+    }
   });
   const mediaOwnerAlive = () => !owner.isDestroyed() && owner.getURL() === localURL;
   const playback = createMediaPlayback({ call, ownerAlive: mediaOwnerAlive });
@@ -623,10 +635,63 @@ app.whenReady().then(async () => {
     win.isVisible() &&
     !win.isMinimized() &&
     win.isFocused();
+  const providerActivationSerials = new WeakMap();
   let nativeReviewBusy=false;
   const nativeReviewGate=async work=>{checkDesktopTest();if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
   const reviewProvider=args=>nativeReviewGate(()=>showVelaReview({ ...args, runtime: args.runtime ?? { BrowserWindow, ipcMain, session } }));
   const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
+  providerConnections = createProviderConnectionBroker({
+    call,
+    openExternal: (url) => shell.openExternal(url),
+    authorize: (context, binding) => {
+      const age = performance.now() - context?.activationObservedAt;
+      if (
+        context?.observedGesture !== true ||
+        !Number.isSafeInteger(context.activationSerial) ||
+        !Number.isFinite(age) ||
+        age < 0 ||
+        age > 5000 ||
+        !trustedActiveFrame(context.event)
+      )
+        return null;
+      return Object.freeze({
+        event: context.event,
+        activationSerial: context.activationSerial,
+        binding,
+      });
+    },
+    revalidate: (authority, binding, options = {}) =>
+      !closing &&
+      !backendFailed &&
+      authority?.binding === binding &&
+      Number.isSafeInteger(authority.activationSerial) &&
+      (options.phase === "after-external"
+        ? trustedApplicationFrame(authority.event)
+        : trustedActiveFrame(authority.event)),
+    reviewDisconnect: async (_authority, binding, current) => {
+      if (
+        binding?.type !== "disconnect" ||
+        binding.providerId !== "chatgpt-plan-responses" ||
+        binding.expectedVersion !== current?.registrationVersion ||
+        current.providerId !== binding.providerId
+      )
+        throw Error("provider_connection_changed");
+      const choice = await reviewDialogs.showMessageBox(win, {
+        type: "warning",
+        message: "Disconnect ChatGPT plan from Aerynth?",
+        detail:
+          `Account boundary: the signed-in ChatGPT plan account authorized for Aerynth.\n` +
+          `Provider: OpenAI (${binding.providerId})\n` +
+          `Connection version: ${binding.expectedVersion}\n\n` +
+          "Disconnecting removes Aerynth's current provider authorization. It does not sign out of ChatGPT or delete local Aerynth conversations.",
+        buttons: ["Keep connected", "Disconnect"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      return choice.response === 1;
+    },
+  });
   const policyReady = () => !closing && backendWritable() && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
   const { reviewMode, reviewRollback, ...performanceMenu } = require("./resource-policy-menu.cjs").resourcePolicyMenu({
     call, show: options => reviewDialogs.showMessageBox(win, options),
@@ -714,9 +779,75 @@ app.whenReady().then(async () => {
             : 200000)
       )
         throw new Error("command_too_large");
+      let providerActivation = null;
+      if (command === "providerConnection") {
+        if (
+          !input ||
+          typeof input !== "object" ||
+          Array.isArray(input) ||
+          Reflect.ownKeys(input).length !== 3 ||
+          input.contract !== "aerynth.provider-command-envelope@1" ||
+          !Object.hasOwn(input, "request") ||
+          !Object.hasOwn(input, "activation")
+        )
+          throw Error("invalid_provider_connection_transport");
+        providerActivation = input.activation;
+        input = input.request;
+      }
       let apiGesture = false;
       let voiceGesture = false;
       let wakeGesture = false;
+      let providerGesture = false;
+      let providerActivationObservedAt = null;
+      if (command === "providerConnection" && input?.type !== "status") {
+        const expectedVersion = input?.expectedVersion ?? null;
+        const nativeActivationAge =
+          performance.now() - providerNativeActivation.observedAt;
+        if (
+          !providerActivation ||
+          typeof providerActivation !== "object" ||
+          Array.isArray(providerActivation) ||
+          Reflect.ownKeys(providerActivation).length !== 5 ||
+          providerActivation.contract !== "aerynth.provider-activation@1" ||
+          !Number.isSafeInteger(providerActivation.serial) ||
+          providerActivation.serial < 1 ||
+          providerActivation.type !== input?.type ||
+          providerActivation.providerId !== input?.providerId ||
+          providerActivation.expectedVersion !== expectedVersion ||
+          !Number.isSafeInteger(providerNativeActivation.serial) ||
+          providerNativeActivation.serial < 1 ||
+          providerNativeActivation.serial <=
+            consumedProviderNativeActivation ||
+          !Number.isFinite(nativeActivationAge) ||
+          nativeActivationAge < 0 ||
+          nativeActivationAge > 5000 ||
+          !trustedActiveFrame(event) ||
+          providerActivation.serial <=
+            (providerActivationSerials.get(event.senderFrame) ?? 0)
+        )
+          throw Error("provider_user_gesture_required");
+        // Claim before observing Blink activation so concurrent IPC cannot
+        // replay one trusted click while this handler is awaiting the frame.
+        providerActivationSerials.set(
+          event.senderFrame,
+          providerActivation.serial,
+        );
+        consumedProviderNativeActivation = providerNativeActivation.serial;
+        if (
+          (await event.senderFrame
+            .executeJavaScript(
+              "navigator.userActivation.isActive && document.hasFocus()",
+              false,
+            )
+            .catch(() => false)) !== true ||
+          !trustedActiveFrame(event)
+        )
+          throw Error("provider_user_gesture_required");
+        providerGesture = true;
+        providerActivationObservedAt = providerNativeActivation.observedAt;
+      } else if (command === "providerConnection" && providerActivation !== null) {
+        throw Error("invalid_provider_connection_transport");
+      }
       if(command==='folders'&&input?.type==='openExternal'){
         if(!trustedActiveFrame(event)||await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()',false).catch(()=>false)!==true||!trustedActiveFrame(event))throw Error('folder_user_gesture_required');
       }
@@ -838,7 +969,13 @@ app.whenReady().then(async () => {
       else if (command === "openResource")
         result = await call("openResource", input);
       else if (command === "providerConnection")
-        result = await providerConnections.command(input);
+        result = await providerConnections.command(input, {
+          event,
+          observedGesture: providerGesture,
+          activationSerial:
+            providerGesture ? consumedProviderNativeActivation : undefined,
+          activationObservedAt: providerActivationObservedAt,
+        });
       else if (command === 'velaApiConnection') {
         result = await velaApiConnections.command(input, { event, observedGesture: apiGesture });
       }
