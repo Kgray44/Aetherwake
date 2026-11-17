@@ -114,7 +114,7 @@ async function pullSections(reader, path, detail, previous, validators, next, no
       next[kind] = response.etag;
       return { items, truncated };
     });
-    output[kind] = outcome.items ?? retained?.[kind] ?? [];
+    output[kind] = outcome.status === 'available' ? outcome.items : retained?.[kind] ?? [];
     output[kind + '_status'] = outcome.status === 'available'
       ? (outcome.truncated ? 'partial' : 'available') : retained ? 'stale' : 'unavailable';
     output[kind + '_truncated'] = outcome.truncated ?? retained?.[kind + '_truncated'] ?? false;
