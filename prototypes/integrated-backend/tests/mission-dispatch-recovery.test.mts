@@ -10,6 +10,7 @@ const plan: MissionPlan = { scope, objective: 'Synthetic dispatch recovery', cri
   id: 'effect', executor: 'effect', objective: 'Synthetic local effect', criterion: 'done', dependencies: [],
   claims: [{ resource: 'shared-target', mode: 'exclusive' }], timeoutMs: 2000, maxAttempts: 1,
 }] };
+const planFor = (executor: string): MissionPlan => ({ ...plan, tasks: [{ ...plan.tasks[0]!, executor }] });
 function fixture() {
   const db = new DatabaseSync(':memory:');
   let entries = 0, release: (() => void) | undefined, access = true, failPublication = false;
@@ -19,7 +20,13 @@ function fixture() {
     stagePublication() { if (failPublication) throw Error('synthetic-publication-failure'); },
     executors: { effect: { lane: 'synthetic', replaySafe: false, available: () => true,
       async run() { entries++; await new Promise<void>(resolve => { release = resolve; }); return { source: 'synthetic', value: true }; },
-      verify: () => ({ passed: true, detail: 'Synthetic postcondition' }) } },
+      verify: () => ({ passed: true, detail: 'Synthetic postcondition' }) },
+      read: { lane: 'synthetic', replaySafe: true, available: () => true,
+        async run() { return { source: 'synthetic', value: true }; },
+        verify: () => ({ passed: true, detail: 'Synthetic readback' }) },
+      'codex.project-check': { lane: 'synthetic', replaySafe: true, available: () => true,
+        async run() { entries++; await new Promise<void>(resolve => { release = resolve; }); return { source: 'synthetic', value: true }; },
+        verify: () => ({ passed: true, detail: 'Synthetic reviewed check' }) } },
   };
   const raw = (id: string): Mission => JSON.parse(String(db.prepare('SELECT json FROM vela_missions WHERE id=?').get(id)!.json));
   return { db, host, raw, entries: () => entries, release: () => release?.(), revoke: () => { access = false; },
@@ -112,5 +119,57 @@ test('scope revocation blocks run and public projection; internal no-dispatch re
     assert.equal(f.raw(created.id).tasks[0].attempts[0].reconciliation?.outcome, 'not-dispatched');
     assert.throws(() => service.read(created.id, scope), /mission_not_found/);
     assert.throws(() => service.read(created.id, { ...scope, workspaceId: 'wrong-workspace' }), /mission_not_found/);
+  } finally { f.release(); await service.close(); f.db.close(); }
+});
+
+test('inconsistent restored projections are quarantined without disabling legitimate scheduling', async () => {
+  const f = fixture(); let service = new MissionService(f.host);
+  try {
+    const crafted = service.create('inconsistent-restored-row', plan);
+    await service.close();
+    f.db.prepare('UPDATE vela_missions SET active=0,pending=1 WHERE id=?').run(crafted.id);
+    service = new MissionService(f.host);
+    const quarantined = f.db.prepare('SELECT pending,active FROM vela_missions WHERE id=?').get(crafted.id)!;
+    assert.equal(quarantined.pending, 0); assert.equal(quarantined.active, 0);
+    assert.throws(() => service.read(crafted.id, scope), /invalid_mission_id/);
+    service.capacityChanged(); await flush();
+    assert.equal(f.entries(), 0);
+    const control = service.create('legitimate-after-quarantine', planFor('read')); await flush();
+    assert.equal(service.read(control.id, scope).tasks[0].state, 'verified');
+  } finally { f.release(); await service.close(); f.db.close(); }
+});
+
+test('malformed restored graphs are quarantined without poisoning the scheduler', async () => {
+  const f = fixture(); let service = new MissionService(f.host);
+  try {
+    const crafted = service.create('malformed-restored-row', plan);
+    await service.close();
+    const row = f.raw(crafted.id);
+    row.tasks[0].dependencies = [row.tasks[0].id];
+    f.db.prepare('UPDATE vela_missions SET json=? WHERE id=?').run(JSON.stringify(row), crafted.id);
+    service = new MissionService(f.host);
+    const quarantined = f.db.prepare('SELECT pending,active FROM vela_missions WHERE id=?').get(crafted.id)!;
+    assert.equal(quarantined.pending, 0); assert.equal(quarantined.active, 0);
+    assert.throws(() => service.read(crafted.id, scope), /invalid_mission_id/);
+    const control = service.create('legitimate-after-malformed-row', planFor('read')); await flush();
+    assert.equal(service.read(control.id, scope).tasks[0].state, 'verified');
+  } finally { f.release(); await service.close(); f.db.close(); }
+});
+
+test('restored consequential work requires a freshly submitted mission', async () => {
+  const f = fixture(); let service = new MissionService(f.host);
+  try {
+    const restored = service.create('restored-reviewed-check', planFor('codex.project-check'));
+    await service.close();
+    service = new MissionService(f.host);
+    const paused = service.read(restored.id, scope);
+    assert.equal(paused.disposition, 'paused');
+    assert.equal(paused.restartReviewRequired, true);
+    assert.throws(() => service.control(restored.id, scope, paused.revision, { type: 'resume' }), /mission_restart_review_required/);
+    service.capacityChanged(); await flush();
+    assert.equal(f.entries(), 0);
+    const fresh = service.create('fresh-process-check', planFor('codex.project-check')); await flush();
+    assert.equal(f.entries(), 1);
+    assert.equal(service.read(fresh.id, scope).tasks[0].state, 'running');
   } finally { f.release(); await service.close(); f.db.close(); }
 });

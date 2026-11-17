@@ -87,7 +87,29 @@ const busy = (m: Mission) => m.tasks.some(task => task.state === 'running' || ta
 const recordLimitBytes = 160 * 1024;
 const admissionLimitBytes = 1024;
 const priorityAgingMs = 30_000;
+const consequentialExecutors = new Set(['artifact.illustration', 'chatgpt.specialist', 'api.specialist', 'codex.project-check']);
+const taskStates = new Set(['queued', 'running', 'cancelling', 'verified', 'failed', 'blocked', 'cancelled', 'uncertain']);
+const eventKinds = new Set(['created', 'revised', 'control', 'started', 'settled', 'recovered', 'workroom', 'objective-assessed']);
 type ReadyObservation = { planRevision: number; queuedAt: string; attemptCount: number; evidence: MissionReadyQueueEvidence };
+type PersistedMissionRow = Record<string, unknown>;
+
+function boundedJsonTree(root: unknown): boolean {
+  const pending = [{ value: root, depth: 0 }];
+  let nodes = 0;
+  while (pending.length) {
+    const { value, depth } = pending.pop()!;
+    if (++nodes > 12_000 || depth > 32) return false;
+    if (!value || typeof value !== 'object') continue;
+    const values = Array.isArray(value) ? value : Object.values(value);
+    if (values.length > 4096) return false;
+    for (const child of values) pending.push({ value: child, depth: depth + 1 });
+  }
+  return true;
+}
+
+function validTime(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
 
 function readyTasks(mission: Mission): MissionTask[] {
   const tasks = new Map(mission.tasks.map(task => [task.id, task]));
@@ -189,6 +211,8 @@ interface Running {
 export class MissionService {
   private running = new Map<string, Running>();
   private readonly contextCache = createMissionContextCache();
+  private readonly quarantined = new Set<string>();
+  private readonly restartReviewRequired = new Set<string>();
   private closed = false;
   private healthy = true;
   private scheduled = false;
@@ -212,35 +236,98 @@ export class MissionService {
       ) STRICT;
       CREATE INDEX IF NOT EXISTS vela_missions_pending ON vela_missions(pending);
       CREATE INDEX IF NOT EXISTS vela_missions_scope ON vela_missions(scope_key);
-      CREATE INDEX IF NOT EXISTS vela_missions_workroom ON vela_missions(json_extract(json,'$.workroom.workspaceId'));`);
-      for (const row of host.db.prepare('SELECT json FROM vela_missions WHERE active=1').all()) {
-        const m = this.decode(row.json);
+      CREATE INDEX IF NOT EXISTS vela_missions_workroom ON vela_missions(
+        CASE WHEN json_valid(json) THEN json_extract(json,'$.workroom.workspaceId') END);`);
+      for (const row of host.db.prepare('SELECT id,request_id,request_digest,scope_key,pending,active,json FROM vela_missions').all()) {
+        let m: Mission;
+        try { m = this.decodeRow(row); }
+        catch (error) {
+          if (!(error instanceof ServiceError)) throw error;
+          this.quarantine(row);
+          continue;
+        }
         const before = m.events.length;
-        for (const task of m.tasks) if (task.state === 'running' || task.state === 'cancelling') {
-          const executor = own(host.executors, task.executor) ? host.executors[task.executor] : undefined;
-          const attempt = task.attempts.at(-1)!;
-          const notDispatched = reservedDispatch(m, task, attempt);
-          task.state = notDispatched && (task.state === 'cancelling' || m.disposition === 'cancelled') ? 'cancelled' :
-            notDispatched || executor?.replaySafe ? 'failed' : 'uncertain';
-          task.detail = notDispatched ? 'interrupted_before_dispatch' : 'interrupted_by_restart';
-          if (notDispatched) attempt.reconciliation = noDispatchReceipt(m, attempt);
-          attempt.finishedAt = stamp(); attempt.outcome = task.state;
-          this.event(m, { kind: 'recovered', taskId: task.id, attemptId: attempt.id, detail: task.state });
+        try {
+          for (const task of m.tasks) if (task.state === 'running' || task.state === 'cancelling') {
+            const executor = own(host.executors, task.executor) ? host.executors[task.executor] : undefined;
+            const attempt = task.attempts.at(-1)!;
+            const notDispatched = reservedDispatch(m, task, attempt);
+            task.state = notDispatched && (task.state === 'cancelling' || m.disposition === 'cancelled') ? 'cancelled' :
+              notDispatched || executor?.replaySafe ? 'failed' : 'uncertain';
+            task.detail = notDispatched ? 'interrupted_before_dispatch' : 'interrupted_by_restart';
+            if (notDispatched) attempt.reconciliation = noDispatchReceipt(m, attempt);
+            attempt.finishedAt = stamp(); attempt.outcome = task.state;
+            this.event(m, { kind: 'recovered', taskId: task.id, attemptId: attempt.id, detail: task.state });
+          }
+          // Startup never starts work with a previous process's authority, including
+          // dependency-blocked rows whose SQL active projection was already false.
+          if (m.disposition === 'active' && m.tasks.some(t => t.state === 'queued')) {
+            m.disposition = 'paused'; this.event(m, { kind: 'recovered', detail: 'paused_on_restart' });
+          }
+          if (m.disposition !== 'cancelled' && m.tasks.some(task => consequentialExecutors.has(task.executor) &&
+            task.state !== 'verified' && task.state !== 'cancelled')) this.restartReviewRequired.add(m.id);
+        } catch (error) {
+          if (!(error instanceof ServiceError)) throw error;
+          this.quarantine(row);
+          continue;
         }
-        // Startup never starts work with a previous process's authority.
-        if (m.disposition === 'active' && m.tasks.some(t => t.state === 'queued')) {
-          m.disposition = 'paused'; this.event(m, { kind: 'recovered', detail: 'paused_on_restart' });
-        }
-        this.store(m, before);
+        if (before !== m.events.length) this.store(m, before);
       }
     });
   }
 
   private decode(json: unknown): Mission {
     check(typeof json === 'string' && Buffer.byteLength(json) <= recordLimitBytes, 'invalid_mission_record');
-    const m = JSON.parse(json) as Mission;
+    let m: Mission;
+    try { m = JSON.parse(json) as Mission; }
+    catch { throw new ServiceError('invalid_mission_record'); }
+    check(m && typeof m === 'object' && !Array.isArray(m) && boundedJsonTree(m), 'invalid_mission_record');
     check(m.contract === MISSION_CONTRACT, 'unsupported_mission_contract');
+    check(identifier(m.id) && identifier(m.requestId) && bounded(m.objective, 4096) && validTime(m.createdAt) &&
+      Number.isSafeInteger(m.revision) && m.revision >= 1 && Number.isSafeInteger(m.planRevision) &&
+      m.planRevision >= 1 && m.planRevision <= L.revisions + 1 && Number.isInteger(m.concurrency) &&
+      m.concurrency >= 1 && m.concurrency <= L.workers &&
+      (m.disposition === 'active' || m.disposition === 'paused' || m.disposition === 'cancelled'), 'invalid_mission_record');
+    validateMissionPlan(m, this.host.executors);
+    const retained = [...m.tasks, ...(m.retiredTasks ?? [])];
+    check(!m.retiredTasks || Array.isArray(m.retiredTasks) && m.retiredTasks.length <= L.revisions, 'invalid_mission_record');
+    const attemptIds = new Set<string>();
+    for (const task of retained) {
+      check(task && taskStates.has(task.state) && validTime(task.queuedAt) && Number.isInteger(task.priority) &&
+        task.priority >= -2 && task.priority <= 2 && Array.isArray(task.attempts) && task.attempts.length <= task.maxAttempts,
+      'invalid_mission_record');
+      for (const attempt of task.attempts) {
+        check(attempt && identifier(attempt.id) && !attemptIds.has(attempt.id) && attempt.executor === task.executor &&
+          validTime(attempt.admittedAt) && (attempt.finishedAt === undefined || validTime(attempt.finishedAt)) &&
+          (attempt.outcome === undefined || ['verified', 'failed', 'blocked', 'cancelled', 'uncertain'].includes(attempt.outcome)),
+        'invalid_mission_record');
+        attemptIds.add(attempt.id);
+      }
+      if (task.state === 'running' || task.state === 'cancelling')
+        check(task.attempts.length > 0 && task.attempts.at(-1)?.outcome === undefined, 'invalid_mission_record');
+    }
+    check(Array.isArray(m.events) && m.events.length === m.revision && m.events.length <= L.events &&
+      m.events.every((event, index) => event && event.seq === index + 1 && validTime(event.time) && eventKinds.has(event.kind)),
+    'invalid_mission_record');
+    const started = new Set(m.events.filter(event => event.kind === 'started' && event.attemptId).map(event => event.attemptId!));
+    check([...attemptIds].every(id => started.has(id)), 'invalid_mission_record');
     return m;
+  }
+  private decodeRow(row: PersistedMissionRow): Mission {
+    check(row && typeof row === 'object' && identifier(row.id) && identifier(row.request_id) &&
+      typeof row.request_digest === 'string' && /^[a-f0-9]{64}$/u.test(row.request_digest) &&
+      typeof row.scope_key === 'string' && /^[a-f0-9]{64}$/u.test(row.scope_key) &&
+      (row.pending === 0 || row.pending === 1) && (row.active === 0 || row.active === 1), 'invalid_mission_record');
+    const mission = this.decode(row.json);
+    check(row.id === mission.id && row.request_id === mission.requestId && row.scope_key === digest(mission.scope) &&
+      row.pending === Number(scheduled(mission)) && row.active === Number(active(mission)), 'invalid_mission_projection');
+    return mission;
+  }
+  private quarantine(row: PersistedMissionRow) {
+    if (typeof row.id !== 'string') return;
+    this.quarantined.add(row.id);
+    this.restartReviewRequired.delete(row.id);
+    this.host.db.prepare('UPDATE vela_missions SET pending=0,active=0 WHERE id=?').run(row.id);
   }
   private event(m: Mission, event: Omit<MissionEvent, 'seq' | 'time' | 'timing'>, intakeMonotonicMs?: number) {
     check(m.events.length < L.events, 'mission_journal_full');
@@ -284,10 +371,10 @@ export class MissionService {
     if (from < m.events.length) this.host.stagePublication?.(m, from);
   }
   private lookup(id: string) {
-    check(identifier(id), 'invalid_mission_id');
-    const row = this.host.db.prepare('SELECT json FROM vela_missions WHERE id=?').get(id);
+    check(identifier(id) && !this.quarantined.has(id), 'invalid_mission_id');
+    const row = this.host.db.prepare('SELECT id,request_id,request_digest,scope_key,pending,active,json FROM vela_missions WHERE id=?').get(id);
     check(row, 'mission_not_found');
-    return this.decode(row.json);
+    return this.decodeRow(row);
   }
   private notify(m: Mission, from: number) {
     for (const event of m.events.slice(from)) {
@@ -333,9 +420,10 @@ export class MissionService {
     const fingerprint = digest(initialConcurrency === 2 ? reviewedPlan : { ...reviewedPlan, initialConcurrency });
     let created = false;
     const m = this.host.atomic(() => {
-      const existing = this.host.db.prepare('SELECT request_digest,json FROM vela_missions WHERE request_id=?').get(requestId);
+      const existing = this.host.db.prepare('SELECT id,request_id,request_digest,scope_key,pending,active,json FROM vela_missions WHERE request_id=?').get(requestId);
       if (existing) {
-        const value = this.decode(existing.json);
+        check(!this.quarantined.has(String(existing.id)), 'mission_request_conflict');
+        const value = this.decodeRow(existing);
         this.requireAccess(value, plan.scope);
         const { originConversationId: _origin, ...legacyPlan } = plan;
         check(existing.request_digest === fingerprint ||
@@ -417,11 +505,14 @@ export class MissionService {
   }
   list(scope: MissionScope): Pick<MissionProjection, 'id' | 'objective' | 'outcome' | 'createdAt' | 'revision'>[] {
     check(this.host.authorized(scope), 'mission_scope_denied');
-    return this.host.db.prepare(`SELECT json FROM vela_missions WHERE scope_key=?
-      OR (json_extract(json,'$.workroom.workspaceId')=? AND json_extract(json,'$.scope.projectId') IS ?)
+    return this.host.db.prepare(`SELECT id,request_id,request_digest,scope_key,pending,active,json FROM vela_missions WHERE scope_key=?
+      OR (CASE WHEN json_valid(json) THEN json_extract(json,'$.workroom.workspaceId') END=?
+        AND CASE WHEN json_valid(json) THEN json_extract(json,'$.scope.projectId') END IS ?)
       ORDER BY rowid DESC LIMIT ?`)
       .all(digest(scope), scope.workspaceId, scope.projectId, L.missions).flatMap(row => {
-        const mission = this.decode(row.json);
+        if (this.quarantined.has(String(row.id))) return [];
+        let mission: Mission;
+        try { mission = this.decodeRow(row); } catch { return []; }
         if (!this.host.authorized(mission.scope)) return [];
         const { id, objective, outcome, createdAt, revision } = this.project(mission);
         return [{ id, objective, outcome, createdAt, revision }];
@@ -439,11 +530,13 @@ export class MissionService {
 
   private boundWorkroom(scope: MissionScope) {
     if (!this.host.authorized(scope)) return;
-    const row = this.host.db.prepare(`SELECT json FROM vela_missions
-      WHERE json_extract(json,'$.workroom.workspaceId')=?
-        AND json_extract(json,'$.scope.projectId') IS ? LIMIT 1`).get(scope.workspaceId, scope.projectId);
+    const row = this.host.db.prepare(`SELECT id,request_id,request_digest,scope_key,pending,active,json FROM vela_missions
+      WHERE CASE WHEN json_valid(json) THEN json_extract(json,'$.workroom.workspaceId') END=?
+        AND CASE WHEN json_valid(json) THEN json_extract(json,'$.scope.projectId') END IS ? LIMIT 1`).get(scope.workspaceId, scope.projectId);
     if (!row) return;
-    const mission = this.decode(row.json);
+    if (this.quarantined.has(String(row.id))) return;
+    let mission: Mission;
+    try { mission = this.decodeRow(row); } catch { return; }
     if (mission.workroom && this.host.authorized(mission.scope)) return { mission, workroom: mission.workroom };
   }
 
@@ -550,6 +643,7 @@ export class MissionService {
         case 'pause': check(value.disposition === 'active', 'mission_not_active'); value.disposition = 'paused'; break;
         case 'resume': {
           check(value.disposition === 'paused', 'mission_not_paused');
+          check(!this.restartReviewRequired.has(value.id), 'mission_restart_review_required');
           this.recoverPendingReplans(value);
           value.disposition = 'active';
           break;
@@ -566,6 +660,7 @@ export class MissionService {
         }
         case 'retry': {
           check(task && (task.state === 'failed' || task.state === 'blocked' || stale) && task.attempts.length < task.maxAttempts &&
+            !(this.restartReviewRequired.has(value.id) && consequentialExecutors.has(task.executor)) &&
             own(this.host.executors, task.executor) && this.host.executors[task.executor].replaySafe, 'mission_retry_denied');
           task.state = 'queued'; task.queuedAt = stamp(); delete task.detail;
           break;
@@ -746,13 +841,20 @@ export class MissionService {
     if ([...this.running.values()].some(other => conflicts(other.task))) return true;
     // Restored from the earlier FI-4 increment: worker/lease release is not effect quiescence.
     const unresolved = this.host.db.prepare(`
-      SELECT task.value AS json FROM vela_missions, json_each(vela_missions.json, '$.tasks') AS task
+      SELECT task.value AS json FROM (SELECT json FROM vela_missions WHERE json_valid(json)) AS missions,
+        json_each(missions.json, '$.tasks') AS task
         WHERE json_extract(task.value, '$.state') = 'uncertain'
       UNION ALL
-      SELECT task.value AS json FROM vela_missions, json_each(vela_missions.json, '$.retiredTasks') AS task
+      SELECT task.value AS json FROM (SELECT json FROM vela_missions WHERE json_valid(json)) AS missions,
+        json_each(missions.json, '$.retiredTasks') AS task
         WHERE json_extract(task.value, '$.state') = 'uncertain'
     `).all();
-    return unresolved.some(row => conflicts(JSON.parse(row.json as string) as MissionTaskPlan));
+    return unresolved.some(row => {
+      try {
+        const task = JSON.parse(row.json as string) as MissionTaskPlan;
+        return Array.isArray(task?.claims) && conflicts(task);
+      } catch { return false; }
+    });
   }
   private capacityFor(m: Mission, lane: string) {
     const running = [...this.running.values()];
@@ -858,6 +960,7 @@ export class MissionService {
     const readyQueueObservation = includeReadyQueue ? this.projectReadyQueue(m, waits) : undefined;
     return { ...m, tasks: m.tasks.map(publicMissionTask),
       ...(m.retiredTasks ? { retiredTasks: m.retiredTasks.map(publicMissionTask) } : {}),
+      ...(this.restartReviewRequired.has(m.id) ? { restartReviewRequired: true as const } : {}),
       outcome, ...(answer.length ? { answer } : {}), waits,
       ...(readyQueueObservation ? { readyQueueObservation } : {}),
       ...(admission ? { admission: structuredClone(admission) } : {}), profile: {
@@ -895,9 +998,20 @@ export class MissionService {
     });
   }
   private drain() {
-    const rows = this.host.db.prepare('SELECT json FROM vela_missions WHERE pending=1 ORDER BY rowid LIMIT ?').all(L.active);
-    const ready = rows.map(row => this.decode(row.json)).map(mission => ({ mission, tasks: readyTasks(mission) }))
-      .filter(entry => entry.tasks.length);
+    const rows = this.host.db.prepare(`SELECT id,request_id,request_digest,scope_key,pending,active,json
+      FROM vela_missions WHERE pending=1 ORDER BY rowid LIMIT ?`).all(L.active);
+    const ready = rows.flatMap(row => {
+      if (this.quarantined.has(String(row.id)) || this.restartReviewRequired.has(String(row.id))) return [];
+      try {
+        const mission = this.decodeRow(row);
+        const tasks = readyTasks(mission);
+        return tasks.length ? [{ mission, tasks }] : [];
+      } catch (error) {
+        if (!(error instanceof ServiceError)) throw error;
+        this.host.atomic(() => this.quarantine(row));
+        return [];
+      }
+    });
     this.observeReadyQueue(ready);
     const monitorRunning = !!this.host.resources && this.running.size > 0;
     if (!ready.length && !monitorRunning) { this.clearAdmissionDemand(); return; }
