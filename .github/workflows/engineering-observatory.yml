@@ -1,4 +1,5 @@
 name: Engineering Observatory (Phase E)
+run-name: ${{ inputs.observatory_operation && format('Observatory diagnostic {0}', inputs.observatory_operation) || github.event.pull_request.title || github.event.head_commit.message || github.workflow }}
 on:
   pull_request:
     paths:
@@ -23,6 +24,15 @@ on:
       - 'scripts/agent/validate-record.mjs'
       - 'tests/agent-journal-export.test.mjs'
   workflow_dispatch:
+    inputs:
+      expected_revision:
+        description: 'Confirmed main revision for an Observatory diagnostic'
+        type: string
+        required: false
+      observatory_operation:
+        description: 'Observatory operation ID'
+        type: string
+        required: false
 permissions:
   contents: read
 jobs:
@@ -33,6 +43,16 @@ jobs:
       run:
         working-directory: agent-system/observatory
     steps:
+      - name: Verify confirmed Observatory diagnostic revision
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.expected_revision != '' || inputs.observatory_operation != '') }}
+        working-directory: .
+        env:
+          EXPECTED_REVISION: ${{ inputs.expected_revision }}
+          OBSERVATORY_OPERATION: ${{ inputs.observatory_operation }}
+        shell: bash
+        run: |
+          [[ "$OBSERVATORY_OPERATION" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]
+          [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_SHA" == "$EXPECTED_REVISION" ]]
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
