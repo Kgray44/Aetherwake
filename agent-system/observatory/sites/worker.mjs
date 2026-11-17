@@ -60,7 +60,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     if (overview) {
       const [snapshot, rows, projectionRow] = await Promise.all([
         cachedGitHub(env.DB, fetcher, validate, readToken),
-        env.DB.prepare('SELECT record, task_id, github_state FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
+        env.DB.prepare('SELECT record, task_id, github_state, stale_revision FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
           .bind(owner, namespace, MAX_PROPOSALS).all(),
         env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner, namespace).first(),
       ]);
@@ -86,6 +86,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
         proposals: {
           total: rows.results.length, limit: MAX_PROPOSALS, verification: verification !== null,
           publication_configured: Boolean(env.GITHUB_PROPOSAL_TOKEN),
+          stale_revision_tasks: rows.results.filter(row => row.stale_revision === 1).map(row => row.task_id),
           publication: Object.fromEntries(rows.results.filter(row => row.github_state).map(row => [row.task_id, row.github_state])),
         },
         telemetry_note: 'Unavailable measurements are not zero; PR merge does not imply task acceptance.',
@@ -102,17 +103,19 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     const requestId = request.headers.get('x-observatory-request-id');
     if (requestId !== null && !UUID.test(requestId)) return error('Invalid proposal request ID', 400);
     const existing = requestId && await env.DB.prepare(
-      'SELECT record, github_state FROM proposals WHERE owner_id = ? AND namespace = ? AND task_id = ?',
+      'SELECT record, github_state, stale_revision FROM proposals WHERE owner_id = ? AND namespace = ? AND task_id = ?',
     ).bind(owner, namespace, 'task_' + requestId).first();
     if (existing) {
       const task = JSON.parse(existing.record);
       const github = existing.github_state
         ? await publishProposal(env.DB, fetcher, env.GITHUB_PROPOSAL_TOKEN, owner, task.id, validate) : null;
-      return json({ task, github });
+      return json({ task, github, revision_was_stale: existing.stale_revision === 1 });
     }
     const { main } = await cachedGitHub(env.DB, fetcher, validate, readToken);
-    if (main.status !== 'available' || !isRevision(main.revision)) {
-      return error('A current GitHub main revision is required before submitting. Check the GitHub feed for retry details.', 503);
+    const staleRevision = main.status === 'stale';
+    const privateCachedRevision = staleRevision && !publicProposal && Boolean(main.observed_at);
+    if (!isRevision(main.revision) || (main.status !== 'available' && !privateCachedRevision)) {
+      return error('A known GitHub main revision is required. Public proposals need a current snapshot. Check the GitHub feed for retry details.', 503);
     }
 
     let task;
@@ -124,15 +127,15 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     if (!validate(task)) return error('Task did not match the engineering contract', 400);
 
     const result = await env.DB.prepare(`
-      INSERT OR IGNORE INTO proposals (owner_id, namespace, task_id, created_at, record, github_state)
-      SELECT ?, ?, ?, ?, ?, ? WHERE
+      INSERT OR IGNORE INTO proposals (owner_id, namespace, task_id, created_at, record, github_state, stale_revision)
+      SELECT ?, ?, ?, ?, ?, ?, ? WHERE
       (SELECT COUNT(*) FROM proposals WHERE owner_id = ? AND namespace = ?) < ?
-    `).bind(owner, namespace, task.id, task.created_at, JSON.stringify(task), publicProposal ? 'pending' : null, owner, namespace, MAX_PROPOSALS).run();
+    `).bind(owner, namespace, task.id, task.created_at, JSON.stringify(task), publicProposal ? 'pending' : null, Number(staleRevision), owner, namespace, MAX_PROPOSALS).run();
     if (result.meta.changes !== 1) return error('Proposal already submitted or proposal limit reached. Retry the same request to check.', 409);
     const github = publicProposal
       ? await publishProposal(env.DB, fetcher, env.GITHUB_PROPOSAL_TOKEN, owner, task.id, validate) : null;
     return json({
-      task, github,
+      task, github, revision_was_stale: staleRevision,
       storage: verification === null ? 'private-sites-d1' : 'isolated-verification-d1',
       note: 'Task is proposed. No execution or owner approval has been initiated.',
     }, 201);
@@ -161,4 +164,3 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     },
   };
 }
-

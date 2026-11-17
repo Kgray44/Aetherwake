@@ -86,7 +86,7 @@ function TraceWaterfall({ events }) {
     </details>
   </div>;
 }
-export function ExecutionFeed({execution,headers,onRefresh}){
+export function ExecutionFeed({execution,records,headers,onRefresh}){
  const [message,setMessage]=useState(''),[busy,setBusy]=useState(false);
  async function upload(event){
   const file=event.target.files?.[0];if(!file)return;
@@ -100,7 +100,7 @@ export function ExecutionFeed({execution,headers,onRefresh}){
   }catch(error){setMessage(error.message)}finally{setBusy(false);event.target.value=''}
  }
  const events=execution?.events??emptyEvents;
- const bottlenecks=useMemo(() => recurringTraceBottlenecks(execution?.records??[], events), [execution, events]);
+ const bottlenecks=useMemo(() => recurringTraceBottlenecks(records??[], events), [records, events]);
  return <section className="panel"><div className="panel-heading"><div><div className="kicker">PRIVATE EXECUTION PROJECTION</div><h2>Measured execution</h2></div></div>
  <p>Import an explicitly sanitized local export. Raw journals, prompts and command output must stay local. Local Task records remain authoritative; this Site cannot approve or execute them.</p>
  <label className="quiet-button">Import sanitized export <input aria-label="Import sanitized private execution export" type="file" accept="application/json" disabled={busy} onChange={upload}/></label>

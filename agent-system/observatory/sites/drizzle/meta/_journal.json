@@ -29,6 +29,13 @@
       "when": 1794844800000,
       "tag": "0003_proposal_publication",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1794877500000,
+      "tag": "0004_cached_proposal_revision",
+      "breakpoints": true
     }
   ]
 }
