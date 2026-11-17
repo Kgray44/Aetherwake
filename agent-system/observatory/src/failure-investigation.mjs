@@ -48,9 +48,10 @@ export function selectRunHistory(run, feed) {
   if (!failedRun(run) || !id(run.workflow_id) || !FEED_STATES.has(feed?.status)) {
     return { passing: null, recentFailures: [], observedAt: feed?.observed_at ?? null, status: feed?.status ?? 'unavailable' };
   }
+  const targetStart = time(run.started_at ?? run.created_at);
   const candidates = (feed.items ?? []).filter(row => id(row.id) && row.id !== run.id &&
     row.workflow_id === run.workflow_id && sharedBranch(run, row) && REVISION.test(revisionOf(row)) &&
-    time(row.created_at) < time(run.created_at));
+    time(row.created_at) < time(run.created_at) && time(row.updated_at) <= targetStart);
   const counts = new Map();
   for (const row of candidates) counts.set(row.id, (counts.get(row.id) ?? 0) + 1);
   const ordered = candidates.filter(row => counts.get(row.id) === 1)
@@ -112,8 +113,8 @@ function sourceForAttempt(attempt, records, events) {
   const applies = item => item.repository === attempt.repository && item.task_id === attempt.task_id &&
     item.attempt_id === attempt.id && item.revision === attempt.revision;
   const trace = events.filter(applies);
-  const { spans, incomplete, coveredMs } = traceTimeline(trace);
-  const phases = new Set(spans.filter(span => span.outcome === 'failed').map(span => span.phase));
+  const { spans, phases, incomplete, coveredMs } = traceTimeline(trace);
+  const failedPhases = new Set(spans.filter(span => span.outcome === 'failed').map(span => span.phase));
   // Lifecycle phase is sometimes "other"; preserve the observation but do
   // not use it to infer a repeated operation.
   const failures = spans.filter(span => span.complete && span.outcome === 'failed');
@@ -132,7 +133,7 @@ function sourceForAttempt(attempt, records, events) {
       if (!previous || time(observation.observedAt) > time(previous.observedAt)) resources.set(key, observation);
     }
   }
-  return { phases, failures, evidence, resources, incomplete, coveredMs };
+  return { phases, failedPhases, failures, evidence, resources, incomplete, coveredMs };
 }
 
 export function investigateAttempt({ task, attempt, records, events, github }) {
@@ -155,6 +156,9 @@ export function investigateAttempt({ task, attempt, records, events, github }) {
   return {
     attempt, passing, repeats, failedCriteria, comparativeEvidence, resources, testedRuns,
     failedSpans: source.failures, incomplete: source.incomplete, traceMs: source.coveredMs,
+    phaseTiming: source.phases.filter(phase => source.failedPhases.has(phase.phase)).map(phase => ({
+      ...phase, passingCoveredMs: passingSource?.phases.find(prior => prior.phase === phase.phase)?.coveredMs ?? null,
+    })),
     elapsedMs: elapsed(attempt.started_at, attempt.finished_at),
     passingElapsedMs: passing ? elapsed(passing.started_at, passing.finished_at) : null,
     pulls: selectPulls(attempt.revision, github),
@@ -206,7 +210,7 @@ export function investigateRun({ run, github, records, events, baseline, repeat,
     .map(attempt => {
       const source = sourceForAttempt(attempt, records, events);
       return { id: attempt.id, task: attempt.task_id, state: attempt.state, failureCategory: attempt.failure_category,
-        observations: source.resources.size, failedPhases: [...source.phases] };
+        observations: source.resources.size, failedPhases: [...source.failedPhases] };
     });
   return {
     run, history, jobs, exactPulls, changes, traces, references: runReferences(records, run, revision),

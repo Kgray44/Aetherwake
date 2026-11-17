@@ -57,6 +57,7 @@ export function RunFailureInvestigation({ run, records, events, github, headers,
   const { history, jobs, changes, traces } = finding;
   const original = githubItemHref('runs', run.id) + '/attempts/' + run.attempt;
   return <Rise><Panel title="Failure investigation" kicker="GITHUB ACTIONS">
+    <div className="failure-investigation">
     <p>GitHub reported {run.conclusion.replaceAll('_', ' ')} for attempt {run.attempt} at run head <Revision sha={run.head?.sha}/>.</p>
     {finding.elapsedMs !== null && <p>Start to last run update · {elapsed(finding.elapsedMs)}</p>}
     <h3>Failed jobs</h3>
@@ -72,7 +73,7 @@ export function RunFailureInvestigation({ run, records, events, github, headers,
         {job.stepsTruncated && <span className="low">Additional steps are available in GitHub.</span>}
       </li>)}</ul>}
     <h3>Comparable run history</h3>
-    <p className="low">Runs from the same workflow ID, branch, and trigger in the loaded GitHub window.
+    <p className="low">Runs from the same workflow ID, branch, and trigger whose last update preceded this run’s start.
       {' '}{history.status === 'stale' && 'Cached feed · '}{history.observedAt && 'Observed ' + stamp(history.observedAt)}</p>
     {!run.workflow_id && <p className="low">Workflow ID is missing. Refresh this run to enable historical matching.</p>}
     {history.passing
@@ -87,8 +88,9 @@ export function RunFailureInvestigation({ run, records, events, github, headers,
     <PullLinks rows={finding.exactPulls}/>
     {finding.passingRevision && run.head?.sha && finding.passingRevision !== run.head.sha &&
       <p><a href={'https://github.com/Kgray44/Aetherwake/compare/' + finding.passingRevision + '...' + run.head.sha} target="_blank" rel="noreferrer">Compare run head revisions on GitHub</a></p>}
-    <details onToggle={event => { if (event.currentTarget.open) setCompare(true); }}>
+    <details className="github-job" onToggle={event => { if (event.currentTarget.open) setCompare(true); }}>
       <summary>Read comparable jobs and changed files</summary>
+      <div className="github-job-content">
       {compare && ((past.passing && readback.baseline === undefined) ||
         (past.recentFailures.length > 0 && readback.repeat === undefined) ||
         (pulls.length > 0 && readback.pull === undefined)) && <p role="status">Loading GitHub comparison evidence…</p>}
@@ -103,6 +105,7 @@ export function RunFailureInvestigation({ run, records, events, github, headers,
         <ul>{(changes.files ?? []).slice(0, 12).map(file => <li key={file.path}><code>{file.path}</code> · {file.status}</li>)}</ul>
         {(changes.files?.length ?? 0) > 12 && <p><a href={activityHref('pulls', changes.number)}>View more files in PR #{changes.number}</a></p>}
       </> : <p className="low">An exact-revision changed-file list is unavailable.</p>}
+      </div>
     </details>
     {finding.references.length > 0 && <><p>Engineering evidence records that reference this GitHub run.</p>
       <ul>{finding.references.map(reference => <li key={reference.attempt}>
@@ -119,6 +122,7 @@ export function RunFailureInvestigation({ run, records, events, github, headers,
     <h3>Next diagnostic</h3>
     <p>{finding.suggestedNext} <a href={original} target="_blank" rel="noreferrer">Open this run attempt</a>.</p>
     <p className="low">The run head comes from GitHub metadata. The logs or build artifacts can show what the workflow actually checked out.</p>
+    </div>
   </Panel></Rise>;
 }
 
@@ -130,6 +134,7 @@ export function TaskFailureInvestigation({ task, records, events, github, ui }) 
   const finding = investigateAttempt({ task, attempt, records, events, github });
   if (!finding && task.state !== 'failed') return null;
   return <Rise><Panel title="Failure investigation" kicker="TASK ATTEMPTS">
+    <div className="failure-investigation">
     {!finding ? <p className="low">This Task reports failure. Import the matching Attempt, Trace, and Evidence to investigate it.</p> : <>
       <label>Failed attempt <select value={attempt.id} onChange={event => setSelected(event.target.value)}>
         {attempts.map(row => <option key={row.id} value={row.id}>#{row.attempt_number} · {row.id}</option>)}
@@ -154,6 +159,9 @@ export function TaskFailureInvestigation({ task, records, events, github, ui }) 
       </li>)}</ul>}
       <p className="low">Time covered by complete trace spans · {elapsed(finding.traceMs)}
         {finding.incomplete > 0 && ' · ' + finding.incomplete + ' incomplete spans'}</p>
+      {finding.phaseTiming.length > 0 && <ul>{finding.phaseTiming.map(phase => <li key={phase.phase}>
+        {phase.phase} span coverage · {elapsed(phase.coveredMs)} · Prior pass coverage {elapsed(phase.passingCoveredMs)}
+      </li>)}</ul>}
       {finding.resources.length > 0 && <><h3>Latest comparable resource observations</h3><ul>{finding.resources.map(metric => <li key={JSON.stringify([metric.phase, metric.name, metric.method, metric.source, metric.unit])}>
         {metric.phase} · {metric.name} {milliseconds.format(metric.value)} {metric.unit} · {metric.origin} {metric.observation}
         {' · '}{metric.source} / {metric.method} · {stamp(metric.observedAt)}
@@ -168,6 +176,7 @@ export function TaskFailureInvestigation({ task, records, events, github, ui }) 
       <p>{finding.suggestedNext}</p>
       <p className="low">Attempt results are reported observations. Use the linked sources to verify what happened.</p>
     </>}
+    </div>
   </Panel></Rise>;
 }
 

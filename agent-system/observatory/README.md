@@ -52,6 +52,16 @@ The Worker build uses the same Vite UI and shared intake code. It produces `dist
 
 Pull requests and CI runs have dedicated routeable lists, newest-created ordering, and detail views. The home feed previews the five latest entries from each loaded window. Details are fetched on demand and link to GitHub for full source and logs.
 
+Open a failed CI run or a Task with failed attempts to investigate. CI history compares
+completed runs with the same workflow ID, trigger, and branch from the loaded GitHub
+window. The investigation fetches exact run-attempt job details and exact-head PR
+changed paths on demand. Job names must be unique and the job lists complete enough
+to compare. GitHub head metadata is distinct from the commit checked out by test steps.
+Task investigations bind trace, evidence, and measurements to the Task, Attempt, and
+revision. Prior passing measurements are shown only when unit, source, method, and
+phase agree. Shared revisions are displayed separately from explicit evidence links.
+The investigation suggests a diagnostic check and shows missing or cached evidence.
+
 ### CI controls
 
 Set `OBSERVATORY_CI_OWNER_ID` to the authorized Sites user ID and configure a dedicated

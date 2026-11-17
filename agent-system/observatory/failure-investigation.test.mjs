@@ -11,7 +11,7 @@ const current = { kind: 'run', id: 10, attempt: 2, workflow_id: 100, head_reposi
   head: { ref: 'fix', sha: revision }, pull_requests: [12] };
 const past = (overrides = {}) => ({
   id: 9, attempt: 1, workflow_id: 100, head_repository_id: 123, event: 'pull_request',
-  status: 'completed', conclusion: 'success', branch: 'fix', revision: previousRevision, created_at: day(3),
+  status: 'completed', conclusion: 'success', branch: 'fix', revision: previousRevision, created_at: day(3), updated_at: day(3),
   ...overrides,
 });
 const job = (conclusion, overrides = {}) => ({
@@ -55,6 +55,7 @@ test('CI diagnosis rejects wrong attempts, truncated or ambiguous comparison job
     past({ id: 11, workflow_id: 101 }),
     past({ id: 12, status: 'in_progress' }),
     past({ id: 13, created_at: day(5) }),
+    past({ id: 21, updated_at: day(5) }),
     past({ id: 14, branch: 'another-branch' }),
     past({ id: 15, event: 'push' }),
     past({ id: 16, head_repository_id: undefined }),
