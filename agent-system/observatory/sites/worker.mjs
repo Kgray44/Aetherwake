@@ -2,7 +2,7 @@ import { mcp } from './mcp.mjs';
 import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs';
 import { proposedTask } from '../intake.mjs';
 import { isRevision, readBounded } from './github.mjs';
-import { cachedGitHub } from './github-cache.mjs';
+import { cachedGitHub, cachedGitHubDetail } from './github-cache.mjs';
 import { publishProposal } from './github-proposals.mjs';
 
 const MAX_PROPOSALS = 500;
@@ -30,15 +30,19 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     const intake = url.pathname === '/api/tasks';
     const publish = url.pathname.match(/^\/api\/tasks\/task_([a-f0-9-]+)\/publish$/);
     const sync = url.pathname === '/api/sync';
-    if (!overview && !intake && !sync && !publish) return error('Not found', 404);
-    if (overview ? request.method !== 'GET' : request.method !== 'POST') {
+    const detailsRoute = url.pathname.match(/^\/api\/github\/(pulls|runs)\/([1-9][0-9]*)$/);
+    const detailId = detailsRoute ? Number(detailsRoute[2]) : null;
+    if (detailsRoute && !Number.isSafeInteger(detailId)) return error('Invalid GitHub detail ID', 400);
+    if (!overview && !intake && !sync && !publish && !detailsRoute) return error('Not found', 404);
+    const readOnly = overview || detailsRoute;
+    if (readOnly ? request.method !== 'GET' : request.method !== 'POST') {
       return error('Method not allowed', 405);
     }
-    if (!overview && (request.headers.get('origin') !== url.origin ||
+    if (!readOnly && (request.headers.get('origin') !== url.origin ||
         ![null, 'same-origin'].includes(request.headers.get('sec-fetch-site')))) {
       return error('Same-origin request required', 403);
     }
-    if (!overview && request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    if (!readOnly && request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
       return error('Expected application/json', 415);
     }
     if (!env.DB) return error('Proposal storage unavailable', 503);
@@ -49,6 +53,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       return github ? json({ github }) : error('Proposal not found', 404);
     }
     const readToken = env.GITHUB_READ_TOKEN || env.GITHUB_PROPOSAL_TOKEN;
+    if (detailsRoute) return json(await cachedGitHubDetail(env.DB, fetcher, readToken, detailsRoute[1], detailId));
 
     if (sync) {
       let projection;

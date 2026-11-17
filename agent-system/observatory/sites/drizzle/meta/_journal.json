@@ -43,6 +43,13 @@
       "when": 1794881100000,
       "tag": "0005_github_conditional_cache",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1794881700000,
+      "tag": "0006_github_details",
+      "breakpoints": true
     }
   ]
 }

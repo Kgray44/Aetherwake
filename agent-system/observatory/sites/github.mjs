@@ -1,4 +1,4 @@
-const REPO = 'Kgray44/Aetherwake';
+export const REPO = 'Kgray44/Aetherwake';
 const API = 'https://api.github.com/repos/' + REPO;
 const MAX_RECORD_FILES = 12;
 const MAX_DIRECTORY_READS = 6;
@@ -32,8 +32,8 @@ export async function readBounded(stream, maxBytes) {
 
 const MIN_BACKOFF_MS = 60_000;
 const MAX_BACKOFF_MS = 15 * MIN_BACKOFF_MS;
-const RATE_REASON = 'GitHub rate limit reached';
-const AUTH_REASON = 'GitHub read credential rejected';
+export const RATE_REASON = 'GitHub rate limit reached';
+export const AUTH_REASON = 'GitHub read credential rejected';
 const INVALID_REASON = 'GitHub response unavailable or invalid';
 const ETAG = /^(?:W\/)?"[\x21\x23-\x7e]{0,250}"$/;
 
@@ -67,7 +67,7 @@ function unavailable(reason) {
   return { status: 'unavailable', reason, items: [] };
 }
 
-function githubReader(fetcher, signal, token, now, previousApi, previousFailures) {
+export function githubReader(fetcher, signal, token, now, previousApi, previousFailures) {
   let authentication = token
     ? (['authenticated', 'rejected'].includes(previousApi?.authentication) ? previousApi.authentication : 'unverified')
     : 'anonymous';
@@ -142,7 +142,7 @@ function githubReader(fetcher, signal, token, now, previousApi, previousFailures
   };
 }
 
-async function capture(work) {
+export async function capture(work) {
   try { return { status: 'available', ...await work() }; }
   catch (error) {
     const reason = [RATE_REASON, AUTH_REASON].includes(error.message) || /^GitHub HTTP \d{3}$/.test(error.message)

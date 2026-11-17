@@ -23,6 +23,7 @@ const input = {
 };
 const cacheMigration = readFileSync(new URL('./drizzle/0001_github_snapshot.sql', import.meta.url), 'utf8');
 const conditionalCacheMigration = readFileSync(new URL('./drizzle/0005_github_conditional_cache.sql', import.meta.url), 'utf8');
+const detailCacheMigration = readFileSync(new URL('./drizzle/0006_github_details.sql', import.meta.url), 'utf8');
 const namespace = 'c0cf1399-8a73-4f08-9b10-997063853638';
 const published = proposedTask({ ...input, title: 'Published contract record' }, rev);
 const ownerHeader = { 'oai-authenticated-user-id': 'owner-1' };
@@ -36,6 +37,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
   sql.exec(readFileSync(new URL('./drizzle/0003_proposal_publication.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0004_cached_proposal_revision.sql', import.meta.url), 'utf8'));
   sql.exec(conditionalCacheMigration);
+  sql.exec(detailCacheMigration);
   let rateLimited = false;
   const writes = [];
   const DB = {
@@ -184,6 +186,7 @@ function cacheFixture(t) {
   t.after(() => sql.close());
   sql.exec(cacheMigration);
   sql.exec(conditionalCacheMigration);
+  sql.exec(detailCacheMigration);
   return {
     prepare(statement) {
       const stmt = sql.prepare(statement);
