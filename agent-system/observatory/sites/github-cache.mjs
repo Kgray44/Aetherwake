@@ -42,7 +42,11 @@ function pending(row, key, now) {
     retry_at: row.rate_until > now ? row.rate_until : null, api: rejected ? apiStatus('rejected') : old?.api && !changed && !lost ? old.api : apiStatus(lost ? 'missing' : key === null ? 'anonymous' : 'unverified'),
   };
   for (const group of GROUPS) result[group] = retain(old, group, reason);
-  result.pulls.totals = unavailablePullTotals(reason, old?.pulls?.totals);
+  const priorTotals = old?.pulls?.totals;
+  // Preserve the own status of a total already served by this credential.
+  // A repository-wide cooldown can also apply when that subquery was absent.
+  result.pulls.totals = !lost && !changed && !rejected && priorTotals && priorTotals.status !== 'available'
+    ? priorTotals : unavailablePullTotals(reason, priorTotals);
   result.ci.repository_total ??= null;
   return result;
 }
