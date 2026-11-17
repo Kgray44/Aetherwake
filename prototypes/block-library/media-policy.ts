@@ -69,18 +69,124 @@ export function assertMediaSignature(metadata: MediaMetadata, bytes: Uint8Array)
   return signature;
 }
 
+// Formats capable of animation must prove from their complete container that
+// renderer decoding is single-frame and structurally bounded.
+const IMAGE_STRUCTURE_BLOCKS = 65536;
+type ImageStructureBudget = { blocks: number };
+const countImageBlock = (budget: ImageStructureBudget) => {
+  if (++budget.blocks > IMAGE_STRUCTURE_BLOCKS) mediaFailure('too_large', 'Image contains too many structural blocks.');
+};
+const invalidImage = (format: string): never => mediaFailure('invalid_data', `Malformed ${format} image.`);
+const animatedImage = (format: string): never => mediaFailure('unsupported', `Animated ${format} images are not supported inline. Open the original externally when available.`);
+
+function pngDimensions(bytes: Uint8Array, data: DataView): { width: number; height: number } {
+  if (bytes.length < 33) return invalidImage('PNG');
+  let offset = 8, width = 0, height = 0, chunks = 0, complete = false;
+  while (offset < bytes.length) {
+    if (++chunks > IMAGE_STRUCTURE_BLOCKS || offset + 12 > bytes.length) return invalidImage('PNG');
+    const length = data.getUint32(offset), type = ascii(bytes, offset + 4, 4);
+    const end = offset + 12 + length;
+    if (end > bytes.length) return invalidImage('PNG');
+    if (offset === 8) {
+      if (type !== 'IHDR' || length !== 13) return invalidImage('PNG');
+      width = data.getUint32(offset + 8); height = data.getUint32(offset + 12);
+    } else if (type === 'IHDR') return invalidImage('PNG');
+    if (['acTL', 'fcTL', 'fdAT'].includes(type)) return animatedImage('PNG');
+    offset = end;
+    if (type === 'IEND') {
+      if (length !== 0 || offset !== bytes.length) return invalidImage('PNG');
+      complete = true; break;
+    }
+  }
+  if (!complete) return invalidImage('PNG');
+  return { width, height };
+}
+
+function skipGifSubBlocks(bytes: Uint8Array, offset: number, budget: ImageStructureBudget): number {
+  while (offset < bytes.length) {
+    countImageBlock(budget);
+    const length = bytes[offset++];
+    if (!length) return offset;
+    if (offset + length > bytes.length) return invalidImage('GIF');
+    offset += length;
+  }
+  return invalidImage('GIF');
+}
+
+function gifDimensions(bytes: Uint8Array, data: DataView): { width: number; height: number } {
+  if (bytes.length < 14) return invalidImage('GIF');
+  const width = data.getUint16(6, true), height = data.getUint16(8, true);
+  const budget = { blocks: 0 };
+  let offset = 13 + ((bytes[10] & 0x80) ? 3 * (2 ** ((bytes[10] & 7) + 1)) : 0), frames = 0, complete = false;
+  if (offset > bytes.length) return invalidImage('GIF');
+  while (offset < bytes.length) {
+    countImageBlock(budget);
+    const marker = bytes[offset++];
+    if (marker === 0x3b) {
+      if (offset !== bytes.length) return invalidImage('GIF');
+      complete = true; break;
+    }
+    if (marker === 0x21) {
+      if (offset >= bytes.length) return invalidImage('GIF');
+      offset = skipGifSubBlocks(bytes, offset + 1, budget); continue;
+    }
+    if (marker !== 0x2c || offset + 9 > bytes.length) return invalidImage('GIF');
+    const left = data.getUint16(offset, true), top = data.getUint16(offset + 2, true);
+    const frameWidth = data.getUint16(offset + 4, true), frameHeight = data.getUint16(offset + 6, true), packed = bytes[offset + 8];
+    if (!frameWidth || !frameHeight || left + frameWidth > width || top + frameHeight > height) return invalidImage('GIF');
+    if (frameWidth * frameHeight > MEDIA_LIMITS.imagePixels) mediaFailure('too_large', 'Image exceeds the inline pixel limit.');
+    if (++frames > 1) return animatedImage('GIF');
+    offset += 9 + ((packed & 0x80) ? 3 * (2 ** ((packed & 7) + 1)) : 0);
+    if (offset >= bytes.length) return invalidImage('GIF');
+    offset = skipGifSubBlocks(bytes, offset + 1, budget);
+  }
+  if (!complete || frames !== 1) return invalidImage('GIF');
+  return { width, height };
+}
+
+function webpDimensions(bytes: Uint8Array, data: DataView): { width: number; height: number } {
+  if (bytes.length < 20 || data.getUint32(4, true) + 8 !== bytes.length) return invalidImage('WebP');
+  let offset = 12, chunks = 0, canvas: { width: number; height: number } | undefined;
+  let image: { width: number; height: number } | undefined;
+  while (offset < bytes.length) {
+    if (++chunks > IMAGE_STRUCTURE_BLOCKS || offset + 8 > bytes.length) return invalidImage('WebP');
+    const type = ascii(bytes, offset, 4), length = data.getUint32(offset + 4, true), payload = offset + 8;
+    const end = payload + length, next = end + (length & 1);
+    if (end > bytes.length || next > bytes.length) return invalidImage('WebP');
+    if (type === 'VP8X') {
+      if (length !== 10 || canvas) return invalidImage('WebP');
+      if (bytes[payload] & 0x02) return animatedImage('WebP');
+      canvas = {
+        width: 1 + bytes[payload + 4] + (bytes[payload + 5] << 8) + (bytes[payload + 6] << 16),
+        height: 1 + bytes[payload + 7] + (bytes[payload + 8] << 8) + (bytes[payload + 9] << 16),
+      };
+    } else if (type === 'ANIM' || type === 'ANMF') return animatedImage('WebP');
+    else if (type === 'VP8 ') {
+      if (image || length < 10 || bytes[payload + 3] !== 0x9d || bytes[payload + 4] !== 0x01 || bytes[payload + 5] !== 0x2a) return invalidImage('WebP');
+      image = { width: data.getUint16(payload + 6, true) & 0x3fff, height: data.getUint16(payload + 8, true) & 0x3fff };
+    } else if (type === 'VP8L') {
+      if (image || length < 5 || bytes[payload] !== 0x2f) return invalidImage('WebP');
+      image = {
+        width: 1 + bytes[payload + 1] + ((bytes[payload + 2] & 63) << 8),
+        height: 1 + (bytes[payload + 2] >> 6) + (bytes[payload + 3] << 2) + ((bytes[payload + 4] & 15) << 10),
+      };
+    }
+    offset = next;
+  }
+  if (offset !== bytes.length || !image) return invalidImage('WebP');
+  const dimensions = canvas ?? image;
+  if (!image.width || !image.height || image.width > dimensions.width || image.height > dimensions.height) return invalidImage('WebP');
+  if (image.width * image.height > MEDIA_LIMITS.imagePixels) mediaFailure('too_large', 'Image exceeds the inline pixel limit.');
+  return dimensions;
+}
+
 export function imageDimensions(bytes: Uint8Array): { width: number; height: number; mime: string } {
   const signature = mediaSignature(bytes), data = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let width = 0, height = 0, mime = '';
-  if (signature === 'png' && bytes.length >= 24) { width = data.getUint32(16); height = data.getUint32(20); mime = 'image/png'; }
-  else if (signature === 'gif' && bytes.length >= 10) { width = data.getUint16(6, true); height = data.getUint16(8, true); mime = 'image/gif'; }
-  else if (signature === 'webp' && bytes.length >= 30 && ascii(bytes, 12, 4) === 'VP8X') {
-    width = 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16); height = 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16); mime = 'image/webp';
-  } else if (signature === 'webp' && bytes.length >= 30 && ascii(bytes, 12, 4) === 'VP8 ') {
-    width = data.getUint16(26, true) & 0x3fff; height = data.getUint16(28, true) & 0x3fff; mime = 'image/webp';
-  } else if (signature === 'webp' && bytes.length >= 25 && ascii(bytes, 12, 4) === 'VP8L' && bytes[20] === 0x2f) {
-    width = 1 + bytes[21] + ((bytes[22] & 63) << 8); height = 1 + (bytes[22] >> 6) + (bytes[23] << 2) + ((bytes[24] & 15) << 10); mime = 'image/webp';
-  } else if (signature === 'jpeg') {
+  if (signature === 'png') { ({ width, height } = pngDimensions(bytes, data)); mime = 'image/png'; }
+  else if (signature === 'gif') { ({ width, height } = gifDimensions(bytes, data)); mime = 'image/gif'; }
+  else if (signature === 'webp') { ({ width, height } = webpDimensions(bytes, data)); mime = 'image/webp'; }
+  else if (signature === 'jpeg') {
     mime = 'image/jpeg'; let offset = 2;
     while (offset + 4 <= bytes.length) {
       if (bytes[offset] !== 0xff) break;

@@ -5,7 +5,7 @@ import { openPdf } from '../media-pdf.ts';
 import { parseDocx, boundedDocxArchive } from '../media-docx-parser.ts';
 import { MEDIA_LIMITS } from '../../application-contract/media.ts';
 import { pdfFixture, docxFixture, docxParts } from './media-fixtures.mts';
-import { assertMediaSignature, mediaDefaultGeometry, imageDimensions, readMediaBytes, validateMediaMetadata, validatePlaybackLease } from '../media-policy.ts';
+import { assertMediaSignature, mediaDefaultGeometry, imageDimensions, MediaError, readMediaBytes, validateMediaMetadata, validatePlaybackLease } from '../media-policy.ts';
 
 const metadata = (format: 'pdf' | 'docx' | 'image' | 'text' = 'pdf') => ({ source: 'file' as const, format, name: 'Synthetic source', mime: 'application/octet-stream', byteLength: 20, sourceRevision: 'revision:actual' });
 test('actual PDF.js reads page count, real text, and paints a bounded CPU canvas from an intact synthetic PDF', async () => {
@@ -46,6 +46,39 @@ test('actual byte signatures and dimensions control viewers; every media flavor 
   new DataView(png.buffer).setUint32(16, 100000); new DataView(png.buffer).setUint32(20, 100000); assert.throws(() => imageDimensions(png), /pixel limit/);
   assert.notDeepEqual(mediaDefaultGeometry(metadata('pdf')), mediaDefaultGeometry(metadata('docx')));
   assert.equal(mediaDefaultGeometry(metadata()).shape, 'rounded');
+});
+test('static GIF and WebP remain previewable while animated variants fail before renderer decoding', () => {
+  const gif = new Uint8Array(Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64'));
+  const webp = new Uint8Array(Buffer.from('UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADMDOJaQAA3AA/v89', 'base64'));
+  assert.deepEqual(imageDimensions(gif), { width: 1, height: 1, mime: 'image/gif' });
+  assert.deepEqual(imageDimensions(webp), { width: 1, height: 1, mime: 'image/webp' });
+
+  const secondGifFrame = gif.subarray(19, gif.length - 1), animatedGif = new Uint8Array(gif.length + secondGifFrame.length);
+  animatedGif.set(gif.subarray(0, gif.length - 1)); animatedGif.set(secondGifFrame, gif.length - 1); animatedGif[animatedGif.length - 1] = 0x3b;
+  assert.throws(() => imageDimensions(animatedGif), error => error instanceof MediaError && error.code === 'unsupported' && /Animated GIF/.test(error.message));
+
+  const chunk = (type: string, payload: Uint8Array) => {
+    const value = new Uint8Array(8 + payload.length + (payload.length & 1)), view = new DataView(value.buffer);
+    value.set(new TextEncoder().encode(type), 0); view.setUint32(4, payload.length, true); value.set(payload, 8); return value;
+  };
+  const webpFile = (...chunks: Uint8Array[]) => {
+    const length = 12 + chunks.reduce((sum, value) => sum + value.length, 0), value = new Uint8Array(length), view = new DataView(value.buffer);
+    value.set(new TextEncoder().encode('RIFF'), 0); view.setUint32(4, length - 8, true); value.set(new TextEncoder().encode('WEBP'), 8);
+    let offset = 12; for (const item of chunks) { value.set(item, offset); offset += item.length; } return value;
+  };
+  const extended = new Uint8Array(10); extended[0] = 0x02;
+  assert.throws(() => imageDimensions(webpFile(chunk('VP8X', extended))), error => error instanceof MediaError && error.code === 'unsupported' && /Animated WebP/.test(error.message));
+  extended[0] = 0;
+  assert.deepEqual(imageDimensions(webpFile(chunk('VP8X', extended), webp.subarray(12))), { width: 1, height: 1, mime: 'image/webp' });
+  assert.throws(() => imageDimensions(webpFile(chunk('VP8X', extended), chunk('ANMF', new Uint8Array(16)))), error => error instanceof MediaError && error.code === 'unsupported' && /Animated WebP/.test(error.message));
+});
+test('PNG animation controls and malformed image structures fail closed', () => {
+  const png = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64'));
+  const animation = new Uint8Array(20), animationView = new DataView(animation.buffer);
+  animationView.setUint32(0, 8); animation.set(new TextEncoder().encode('acTL'), 4); animationView.setUint32(8, 2); animationView.setUint32(12, 0);
+  const apng = new Uint8Array(png.length + animation.length); apng.set(png.subarray(0, 33)); apng.set(animation, 33); apng.set(png.subarray(33), 33 + animation.length);
+  assert.throws(() => imageDimensions(apng), error => error instanceof MediaError && error.code === 'unsupported' && /Animated PNG/.test(error.message));
+  assert.throws(() => imageDimensions(png.subarray(0, png.length - 1)), error => error instanceof MediaError && error.code === 'invalid_data' && /Malformed PNG/.test(error.message));
 });
 test('chunked reads preserve current canonical/version/source fences, reject JSON maps and stop on abort', async () => {
   const request = { resourceId: 'canonical:file', expectedVersion: 9, sourceRevision: 'revision:9' }, calls: any[] = [], controller = new AbortController();
