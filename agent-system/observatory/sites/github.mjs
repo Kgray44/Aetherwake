@@ -4,7 +4,10 @@ const MAX_RECORD_FILES = 12;
 const MAX_DIRECTORY_READS = 6;
 const MAX_RECORDS = 750;
 const RECORD_DIRS = ['agent-system/records', 'agent-system/observatory/records'];
-const PAGE_SIZE = 12;
+const ISSUE_PAGE_SIZE = 12;
+const ACTIVITY_PAGE_SIZE = 40;
+const MAX_PULL_RESPONSE_BYTES = 2 * 1024 * 1024;
+const REPO_URL = 'https://github.com/' + REPO;
 
 export const isRevision = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 
@@ -213,19 +216,83 @@ async function contractRecords(get, revision, validate) {
   };
 }
 
-function linkedItems(data, kind) {
-  if (!Array.isArray(data)) throw new Error('Invalid GitHub list');
-  const number = item => kind === 'run' ? item.id : item.number;
-  const base = kind === 'run' ? '/actions/runs/' : kind === 'pr' ? '/pull/' : '/issues/';
-  return data.filter(item => Number.isSafeInteger(number(item)) && number(item) > 0)
+const positiveInteger = value => Number.isSafeInteger(value) && value > 0;
+const text = value => typeof value === 'string' && value.length ? value : null;
+const date = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+
+function issueItems(data) {
+  if (!Array.isArray(data)) throw new Error('Invalid GitHub issue list');
+  return data.filter(item => positiveInteger(item?.number) && !item.pull_request).slice(0, ISSUE_PAGE_SIZE)
     .map(item => ({
-      label: kind === 'run' ? item.name : '#' + number(item),
-      title: (kind === 'run' ? item.display_title : item.title)?.slice(0, 200),
-      state: kind === 'run' ? item.conclusion || item.status : item.state,
-      url: 'https://github.com/' + REPO + base + number(item),
-      revision: kind === 'run' ? item.head_sha : kind === 'pr' ? item.head?.sha : undefined,
+      label: '#' + item.number,
+      title: text(item.title)?.slice(0, 200),
+      state: item.state,
+      url: REPO_URL + '/issues/' + item.number,
       date: item.updated_at,
     }));
+}
+
+function newestFirst(rows) {
+  return rows.sort((left, right) =>
+    (Date.parse(right.created_at) || 0) - (Date.parse(left.created_at) || 0) || right.id - left.id
+  ).slice(0, ACTIVITY_PAGE_SIZE);
+}
+
+function pullItems(data) {
+  if (!Array.isArray(data)) throw new Error('Invalid GitHub pull request list');
+  return newestFirst(data.filter(item => positiveInteger(item?.number)).map(item => {
+    const created = date(item.created_at);
+    const updated = date(item.updated_at);
+    const mergedAt = date(item.merged_at);
+    const merged = mergedAt ? true : typeof item.merged === 'boolean' ? item.merged : item.merged_at === null ? false : null;
+    return {
+      id: positiveInteger(item.id) ? item.id : item.number,
+      number: item.number,
+      label: '#' + item.number,
+      title: text(item.title)?.slice(0, 200) ?? null,
+      state: text(item.state),
+      url: REPO_URL + '/pull/' + item.number,
+      revision: isRevision(item.head?.sha) ? item.head.sha : null,
+      date: updated,
+      created_at: created,
+      updated_at: updated,
+      author: text(item.user?.login),
+      head_ref: text(item.head?.ref),
+      base_ref: text(item.base?.ref),
+      draft: typeof item.draft === 'boolean' ? item.draft : null,
+      merged,
+      merged_at: mergedAt,
+    };
+  }));
+}
+
+function runItems(data) {
+  if (!Array.isArray(data)) throw new Error('Invalid GitHub workflow run list');
+  return newestFirst(data.filter(item => positiveInteger(item?.id)).map(item => {
+    const created = date(item.created_at);
+    const updated = date(item.updated_at);
+    const status = text(item.status);
+    const conclusion = text(item.conclusion);
+    const workflow = text(item.name);
+    return {
+      id: item.id,
+      label: workflow ?? String(item.id),
+      title: text(item.display_title)?.slice(0, 200) ?? null,
+      state: conclusion ?? status,
+      url: REPO_URL + '/actions/runs/' + item.id,
+      revision: isRevision(item.head_sha) ? item.head_sha : null,
+      date: updated,
+      created_at: created,
+      updated_at: updated,
+      author: text(item.actor?.login),
+      branch: text(item.head_branch),
+      workflow,
+      event: text(item.event),
+      attempt: positiveInteger(item.run_attempt) ? item.run_attempt : null,
+      status,
+      conclusion,
+    };
+  }));
 }
 
 function completeRecords(records, revision) {
@@ -242,15 +309,15 @@ export async function githubSnapshot(fetcher, validate, token, {
   async function resource(key, path, convert, maxBytes) {
     const prior = previous?.[key];
     const usable = prior?.observed_at && (key === 'main' ? isRevision(prior.revision) : Array.isArray(prior.items));
-    const etag = usable ? oldValidators[key] : null;
-    if (token && ETAG.test(etag ?? '')) validators[key] = etag;
+    const etag = usable ? oldValidators[path] : null;
+    if (token && ETAG.test(etag ?? '')) validators[path] = etag;
     const result = await capture(async () => {
       const response = await reader.get(path, maxBytes, etag);
       const converted = response.unchanged
         ? (key === 'main' ? { revision: prior.revision } : { items: prior.items })
         : convert(response.data);
-      if (response.etag) validators[key] = response.etag;
-      else delete validators[key];
+      if (response.etag) validators[path] = response.etag;
+      else delete validators[path];
       updated[key] = new Date(now()).toISOString();
       return converted;
     });
@@ -261,12 +328,12 @@ export async function githubSnapshot(fetcher, validate, token, {
     if (ref.ref !== 'refs/heads/main' || !isRevision(ref.object?.sha)) throw new Error('Invalid main ref');
     return { revision: ref.object.sha };
   }, 16 * 1024);
-  const issues = await resource('issues', '/issues?state=all&sort=updated&direction=desc&per_page=' + PAGE_SIZE,
-    data => ({ items: linkedItems(data.filter(item => !item.pull_request), 'issue') }));
-  const pulls = await resource('pulls', '/pulls?state=all&sort=updated&direction=desc&per_page=' + PAGE_SIZE,
-    data => ({ items: linkedItems(data, 'pr') }));
-  const ci = await resource('ci', '/actions/runs?branch=main&per_page=' + PAGE_SIZE,
-    data => ({ items: linkedItems(data.workflow_runs, 'run') }));
+  const issues = await resource('issues', '/issues?state=all&sort=updated&direction=desc&per_page=' + ISSUE_PAGE_SIZE,
+    data => ({ items: issueItems(data) }));
+  const pulls = await resource('pulls', '/pulls?state=all&sort=created&direction=desc&per_page=' + ACTIVITY_PAGE_SIZE,
+    data => ({ items: pullItems(data) }), MAX_PULL_RESPONSE_BYTES);
+  const ci = await resource('ci', '/actions/runs?per_page=' + ACTIVITY_PAGE_SIZE,
+    data => ({ items: runItems(data.workflow_runs) }));
 
   let records;
   if (main.revision && completeRecords(previous?.records, main.revision)) {
@@ -284,7 +351,7 @@ export async function githubSnapshot(fetcher, validate, token, {
   const { api, retryAt, rateFailures } = reader.status();
   const snapshot = {
     repository: REPO, retry_at: retryAt || null, checked_at: new Date(now()).toISOString(),
-    main, records, issues, pulls, ci, page_size: PAGE_SIZE, api,
+    main, records, issues, pulls, ci, page_size: ISSUE_PAGE_SIZE, api,
   };
   for (const [group, value] of Object.entries(updated)) snapshot[group].observed_at = value;
   return { snapshot, validators, rateFailures };

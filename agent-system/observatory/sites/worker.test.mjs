@@ -315,6 +315,57 @@ test('success at zero budget honors both Retry-After and reset across visitors a
   assert.equal(requests.length, 1);
 });
 
+test('pull requests and cross-branch runs expose a bounded newest-created window', async t => {
+  const db = cacheFixture(t);
+  const paths = [];
+  const dateAt = value => new Date(Date.parse('2026-01-01T00:00:00Z') + 1000 * value).toISOString();
+  const respond = async url => {
+    const path = requestPath(url);
+    const query = new URL(url).searchParams;
+    paths.push(path);
+    if (path.startsWith('/pulls')) {
+      assert.equal(query.get('sort'), 'created');
+      assert.equal(query.get('direction'), 'desc');
+      assert.equal(query.get('per_page'), '40');
+      return Response.json(Array.from({length:42}, (_, index) => ({
+        id: 1000 + index, number: 100 + index, title: 'Pull ' + index,
+        state: 'closed', created_at: dateAt(index), updated_at: dateAt(200 - index),
+        user: {login:'contributor'}, head: {ref:'feature',sha:rev}, base:{ref:'main'},
+        draft: false, merged_at: index === 41 ? dateAt(46) : null,
+      })));
+    }
+    if (path.startsWith('/actions/runs')) {
+      assert.equal(query.get('branch'), null);
+      assert.equal(query.get('per_page'), '40');
+      return Response.json({workflow_runs:Array.from({length:42}, (_,index) => ({
+        id: 2000 + index, name:'Verification', display_title:'Run ' + index,
+        created_at:dateAt(index), updated_at:dateAt(200 - index), actor:{login:'contributor'}, head_sha:rev,
+        head_branch:index % 2 ? 'feature' : 'main', event:'pull_request', run_attempt:2, status:'completed', conclusion:'success',
+      }))});
+    }
+    return githubReadResponse(path);
+  };
+  const snapshot = await cachedGitHub(db, respond, validate, 'fixture-token');
+  assert.equal(paths.filter(path => path.startsWith('/pulls')).length, 1);
+  assert.equal(paths.filter(path => path.startsWith('/actions/runs')).length, 1);
+  assert.equal(snapshot.pulls.items.length, 40);
+  assert.equal(snapshot.ci.items.length, 40);
+  assert.deepEqual(snapshot.pulls.items[0], {
+    id:1041, number:141, label:'#141', title:'Pull 41', state:'closed',
+    url:'https://github.com/Kgray44/Aetherwake/pull/141', revision:rev,
+    date:dateAt(159), created_at:dateAt(41), updated_at:dateAt(159), author:'contributor',
+    head_ref:'feature', base_ref:'main', draft:false, merged:true, merged_at:dateAt(46),
+  });
+  assert.equal(snapshot.pulls.items[1].merged, false);
+  assert.deepEqual(snapshot.ci.items[0], {
+    id:2041, label:'Verification', title:'Run 41', state:'success',
+    url:'https://github.com/Kgray44/Aetherwake/actions/runs/2041', revision:rev,
+    date:dateAt(159), created_at:dateAt(41), updated_at:dateAt(159), author:'contributor',
+    branch:'feature', workflow:'Verification', event:'pull_request', attempt:2, status:'completed', conclusion:'success',
+  });
+  assert.equal(snapshot.ci.items[1].branch, 'main');
+});
+
 test('unhinted secondary rate limit backs off exponentially and keeps one lease', async t => {
   const db = cacheFixture(t);
   const now = Date.now();
