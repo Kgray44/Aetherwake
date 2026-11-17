@@ -2,7 +2,9 @@
 import { mkdir, open, readFile, readdir, link, unlink, lstat, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+import { setTimeout as delay } from 'node:timers/promises';
 const digest = v => createHash('sha256').update(v).digest('hex');
 export async function withJournalLock(directory, action) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -11,7 +13,21 @@ export async function withJournalLock(directory, action) {
   const recovery=join(directory,'.recovery-lock');
   try {await lstat(recovery);throw Error('Journal recovery in progress');}catch(e){if(e.code!=='ENOENT')throw e;}
   const lock = join(directory,'.writer-lock');
-  try { await mkdir(lock,{mode:0o700}); } catch(e) { if(e.code==='EEXIST') throw Error('Journal busy or interrupted writer; inspect lock before recovery'); throw e; }
+  // Ordinary concurrent writers can drain without invoking recovery. A
+  // stalled lock is still left in place for explicit owner/liveness checks.
+  let deadline;
+  while (true) {
+    try {
+      await mkdir(lock, { mode: 0o700 });
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const now = performance.now();
+      deadline ??= now + 2000;
+      if (now >= deadline) throw Error('Journal busy or interrupted writer; inspect lock before recovery');
+      await delay(Math.min(deadline - now, randomInt(8, 25)));
+    }
+  }
   try {await lstat(recovery);await rmdir(lock);throw Error('Journal recovery in progress');}catch(e){if(e.code!=='ENOENT')throw e;}
   const owner = await open(join(lock,'owner.json'),'wx',0o600);
   try { await owner.writeFile(JSON.stringify({pid:process.pid,host:hostname(),created_at:new Date().toISOString()}));await owner.sync(); } finally {await owner.close();}

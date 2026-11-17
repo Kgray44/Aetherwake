@@ -83,3 +83,14 @@ test('record journal deduplicates reordered fields and refuses terminal resurrec
  for(const records of [[running,done],[done,running]])assert.equal(reduceAttempts(records)[0].state,'succeeded');
  assert.throws(()=>reduceAttempts([done,{...done,state:'failed'}]),/Conflicting terminal/);
 });
+
+test('concurrent observations wait for the current writer and preserve all distinct events', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'journal-concurrent-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const dir = join(root, 'private');
+  const events = Array.from({ length: 6 }, (_, index) => traceEvent({
+    task, attemptId: 'attempt_' + index, kind: 'span_start', state: 'started', eventId: 'observed_' + index
+  }));
+  assert.deepEqual(await Promise.all(events.map(event => appendEvent(dir, event))), events.map(() => true));
+  assert.deepEqual((await readJournal(dir)).map(event => event.event_id).sort(), events.map(event => event.event_id));
+});
