@@ -147,3 +147,45 @@ test('new observed Attempt refuses crash-before-lifecycle gap without repeating 
  const now=new Date().toISOString();await beginAttempt(directory,{schema_version:1,record_type:'attempt',id:'attempt_gap',created_at:now,repository:f.task.repository,revision:f.revision,task_id:f.task.id,attempt_number:1,state:'running',started_at:now});
  let calls=0;await assert.rejects(observeAttempt({directory,task:f.task,context:f.snapshot,attemptId:'attempt_gap',run:async()=>{calls++;}}),/already exists/);assert.equal(calls,0);
 });
+
+test('bootstraps a Task with its existing source owner and reuses a fresh snapshot', async t => {
+  const { prepareTask } = await import('../scripts/agent/task-router.mjs');
+  const f = await fixture(t);
+  const contextFile = join(f.dir, 'private', 'context.json');
+  const options = {
+    checkout: f.dir, paths: ['docs/authority.md'],
+    owners: ['docs=docs/authority.md'], contextFile
+  };
+  const first = await prepareTask(f.task, options);
+  assert.equal(first.context_reused, false);
+  assert.equal(first.primary_class, 'backend');
+  assert.equal(first.context_snapshot.freshness, 'current');
+  assert.deepEqual(JSON.parse(await readFile(contextFile, 'utf8')), first.context_snapshot);
+  const second = await prepareTask(f.task, options);
+  assert.equal(second.context_reused, true);
+  assert.equal(second.context_snapshot.id, first.context_snapshot.id);
+  await assert.rejects(() => prepareTask(f.task, { ...options, owners: ['other=docs/authority.md'] }), /scope differs/);
+  await writeFile(join(f.dir, 'docs', 'authority.md'), 'changed');
+  await assert.rejects(() => prepareTask(f.task, options), /stale/);
+  assert.deepEqual(JSON.parse(await readFile(contextFile, 'utf8')), first.context_snapshot);
+});
+
+test('batched context resolves literal tracked names and rejects untracked aliases', async t => {
+  const f = await fixture(t);
+  const literal = 'docs/[literal].md';
+  await writeFile(join(f.dir, literal), 'tracked literal');
+  f.git('add', '--', literal);
+  f.git('commit', '-qm', 'track literal');
+  const revision = f.git('rev-parse', 'HEAD');
+  const task = { ...f.task, revision, requirements: [
+    { kind: 'document', uri: literal },
+    { kind: 'git', uri: 'docs/authority.md' }
+  ] };
+  const snapshot = await createSnapshot({ root: f.dir, task, repository: task.repository, owners: ['docs=' + literal] });
+  assert.equal(snapshot.freshness, 'current');
+  assert.equal(await checkFreshness(snapshot, task, revision, f.dir), true);
+  await writeFile(join(f.dir, literal), 'modified');
+  assert.equal(await checkFreshness(snapshot, task, revision, f.dir), false);
+  const untracked = { ...task, requirements: [{ kind: 'git', uri: 'docs/*.md' }] };
+  assert.equal((await createSnapshot({ root: f.dir, task: untracked, repository: task.repository, owners: ['docs=docs/authority.md'] })).freshness, 'unverified');
+});

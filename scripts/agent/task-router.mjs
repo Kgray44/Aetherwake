@@ -4,7 +4,10 @@
  * This is NOT Vela MissionService's task router and does not replace governance.
  * No model calls, task status writes, shell execution, or fabricated acceptance.
  */
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { createSnapshot, checkFreshness, writeSnapshot } from './context.mjs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
@@ -79,25 +82,71 @@ export function routeTask(task, inputPaths = []) {
     warnings
   };
 }
-function usage() {
-  return 'Usage: node scripts/agent/task-router.mjs --task-file <v1-task.json> [--path <repo-path>]... [--json]';
+/** Prepare the existing workflow proposal and a source-verified reusable snapshot. */
+export async function prepareTask(task, {
+  paths = [], owners = [], checkout = process.cwd(), contextFile, includeGovernance = false
+} = {}) {
+  const plan = routeTask(task, paths);
+  if (!owners.length) invalid('Provide source-backed ownership with --owner component=tracked/path');
+  let snapshot;
+  if (contextFile) {
+    try {
+      snapshot = JSON.parse(await readFile(contextFile, 'utf8'));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  if (snapshot) {
+    const recordedOwners = snapshot.components?.map(({ name, owner_ref }) => name + '=' + owner_ref.uri);
+    const sameOwners = recordedOwners && owners.length === recordedOwners.length &&
+      owners.every((owner, index) => owner.replaceAll('\\', '/') === recordedOwners[index]);
+    if (!sameOwners || !await checkFreshness(snapshot, task, task.revision, checkout)) {
+      invalid('Context file is stale or its ownership scope differs. Use a new context file.');
+    }
+  }
+  const reused = Boolean(snapshot);
+  if (!snapshot) {
+    snapshot = await createSnapshot({ root: checkout, task, repository: task.repository, owners });
+    if (snapshot.freshness !== 'current') invalid('Task context is not current: ' + snapshot.warnings.join('; '));
+  }
+  const result = { ...plan, context_snapshot: snapshot, context_reused: reused };
+  if (includeGovernance) {
+    result.governance_context = JSON.parse(execFileSync(process.execPath, [
+      ...plan.governance.context_argv.slice(1), '--json'
+    ], { cwd: checkout, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
+  }
+  if (contextFile && !reused) await writeSnapshot(contextFile, snapshot);
+  return result;
 }
-function main(argv) {
-  let file; const paths=[]; let json=false;
+
+function usage() {
+  return 'Usage: node scripts/agent/task-router.mjs --task-file <v1-task.json> [--path <repo-path>]... [--json] [--prepare --owner component=tracked/path [--context-file <private.json>] [--with-governance --json]]';
+}
+async function main(argv) {
+  let file, contextFile;
+  const paths=[], owners=[];
+  let json=false, prepare=false, includeGovernance=false;
   for(let i=0;i<argv.length;i++){
     const arg=argv[i];
     if(arg==='--task-file') { file=argv[++i]; if(!file) invalid('--task-file requires path'); }
     else if(arg==='--path') { const p=argv[++i]; if(!p) invalid('--path requires value'); paths.push(p); }
+    else if(arg==='--owner') { const owner=argv[++i]; if(!owner) invalid('--owner requires value'); owners.push(owner); }
+    else if(arg==='--context-file') { contextFile=argv[++i]; if(!contextFile) invalid('--context-file requires path'); }
+    else if(arg==='--prepare') prepare=true;
+    else if(arg==='--with-governance') includeGovernance=true;
     else if(arg==='--json') json=true;
     else if(arg==='--help' || arg==='-h') { console.log(usage()); return; }
     else invalid('Unknown argument: ' + arg);
   }
   if(!file) invalid(usage());
   const task=JSON.parse(readFileSync(resolve(process.cwd(),file),'utf8'));
-  const plan=routeTask(task,paths);
+  if(!prepare && (contextFile || owners.length)) invalid('Context options require --prepare');
+  if(includeGovernance && !(prepare && json)) invalid('--with-governance requires --prepare and --json');
+  const plan=prepare ? await prepareTask(task,{paths,owners,contextFile,includeGovernance}) : routeTask(task,paths);
   if(json) console.log(JSON.stringify(plan,null,2));
   else {
     console.log('Engineering Task: ' + plan.task_id + ' (' + plan.primary_class + ')');
+    if(prepare) console.log('Context: ' + plan.context_snapshot.id + (plan.context_reused ? ' (reused)' : ' (created)'));
     console.log('Skills: ' + plan.workflow_skills.join(', '));
     console.log('Checks: ' + plan.required_check_ids.join(', '));
     console.log('Governance router args: ' + JSON.stringify(plan.governance.router_argv));
@@ -106,6 +155,5 @@ function main(argv) {
   }
 }
 if(process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)){
-  try { main(process.argv.slice(2)); } catch(error) { console.error('Task routing failed: ' + error.message); process.exitCode=1; }
+  main(process.argv.slice(2)).catch(error => { console.error('Task routing failed: ' + error.message); process.exitCode=1; });
 }
-
