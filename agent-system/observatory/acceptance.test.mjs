@@ -93,3 +93,23 @@ test('recurring timing patterns require matched spans across distinct comparable
   const duplicate = [...events.slice(0, 4), ...events.slice(0, 4).map(event => ({ ...event, attempt_id: 'second_attempt' }))];
   assert.deepEqual(recurringTraceBottlenecks(tasks, duplicate), []);
 });
+
+import { activityHref, parseActivityHref, searchActivity, newestActivity } from './src/github-activity.mjs';
+
+test('pull and run views use creation time, plus stable descending identity on ties', () => {
+  const first = { number: 41, id: 900, title: 'Refine task routing', state: 'open', author: 'k', base_ref: 'main',
+    created_at: '2026-11-15T00:00:00Z', updated_at: '2026-11-17T00:00:00Z' };
+  const newer = { ...first, number: 42, id: 901, title: 'Qualify workflow timing', merged: true,
+    created_at: '2026-11-16T00:00:00Z' };
+  assert.deepEqual(newestActivity('pulls', [first, newer]).map(item => item.number), [42, 41]);
+  assert.deepEqual(searchActivity('pulls', [first, newer], { query: 'workflow 42', state: 'merged', group: 'main' }), [newer]);
+  const runs = [{ id: 200, created_at: newer.created_at }, { id: 201, created_at: newer.created_at }];
+  assert.deepEqual(newestActivity('runs', runs).map(item => item.id), [201, 200]);
+});
+
+test('GitHub activity detail links use repository PR numbers and safe run IDs', () => {
+  assert.deepEqual(parseActivityHref(activityHref('pulls', 298)), { kind: 'pulls', id: 298 });
+  assert.deepEqual(parseActivityHref(activityHref('runs', 43993349495)), { kind: 'runs', id: 43993349495 });
+  assert.equal(parseActivityHref('#ci-runs/99999999999999999'), null);
+  assert.equal(parseActivityHref('#pull-requests/invalid'), null);
+});
