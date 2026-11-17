@@ -58,10 +58,26 @@ export async function recoverInterruptedWriter(directory,{expectedPid,expectedCr
  return {recovered:true,events_preserved:true};
  } finally {await rmdir(recovery);}
 }
-export async function readJournal(directory) {
-  const names = (await readdir(directory)).filter(n => /^[a-f0-9]{64}\.json$/.test(n));
+export async function readJournal(directory, { maxEvents, maxBytes, missingOk = false } = {}) {
+  let entries;
+  try { entries = await readdir(directory); }
+  catch (error) { if (missingOk && error.code === 'ENOENT') return []; throw error; }
+  const names = entries.filter(n => /^[a-f0-9]{64}\.json$/.test(n));
+  if (maxEvents !== undefined && names.length > maxEvents) throw Error('Journal read exceeds event limit');
   const events = [];
-  for (const name of names) { const event = JSON.parse(await readFile(join(directory,name),'utf8')); if (digest(event.event_id)+'.json' !== name) throw Error('Journal identity corruption'); events.push(event); }
+  let bytes = 0;
+  for (const name of names) {
+    const path = join(directory, name);
+    if (maxBytes !== undefined) {
+      const info = await lstat(path);
+      if (!info.isFile()) throw Error('Journal entries must be regular files');
+      bytes += info.size;
+      if (bytes > maxBytes) throw Error('Journal read exceeds byte limit');
+    }
+    const event = JSON.parse(await readFile(path, 'utf8'));
+    if (typeof event?.event_id !== 'string' || digest(event.event_id) + '.json' !== name) throw Error('Journal identity corruption');
+    events.push(event);
+  }
   return events.sort((a,b)=>a.occurred_at.localeCompare(b.occurred_at)||a.event_id.localeCompare(b.event_id));
 }
 const phases = new Set(['queue','waiting','context','investigation','implementation','verification','integration','review','recovery','other']);
