@@ -23,6 +23,7 @@ test("every published compatibility reference has an exact reviewed native desti
       await firstPartyChatCommand({
         input: { target: "chatgpt-documentation", url },
         win: live(),
+        authorizeNavigation: (value) => value === url,
         openExternal: async (value) => calls.push(value),
       }),
       { status: "requested" },
@@ -55,6 +56,7 @@ test("explicit first-party navigation opens only the fixed official home and mak
   const receipt = await firstPartyChatCommand({
     input: { target: "chatgpt-home" },
     win: live(),
+    authorizeNavigation: (value) => value === CHATGPT_HOME,
     openExternal: async (...args) => calls.push(args),
   });
   assert.equal(CHATGPT_HOME, "https://chatgpt.com/");
@@ -86,6 +88,20 @@ test("a renderer cannot supply URLs, prompts, conversation IDs, account IDs or o
   assert.equal(calls, 0);
 });
 
+test("a fixed first-party destination still requires native navigation authorization", async () => {
+  let calls = 0;
+  await assert.rejects(
+    firstPartyChatCommand({
+      input: { target: "chatgpt-home" },
+      win: live(),
+      authorizeNavigation: () => false,
+      openExternal: async () => calls++,
+    }),
+    /external_navigation_user_gesture_required/,
+  );
+  assert.equal(calls, 0);
+});
+
 test("lost parent ownership never launches; failed OS delivery stays unknown without retry", async () => {
   let calls = 0;
   for (const win of [
@@ -106,6 +122,7 @@ test("lost parent ownership never launches; failed OS delivery stays unknown wit
     await firstPartyChatCommand({
       input: { target: "chatgpt-home" },
       win: live(),
+      authorizeNavigation: () => true,
       openExternal: async () => {
         calls++;
         throw Error("OS acknowledgement lost");

@@ -2,9 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-const { conversationCommand, isConversationRead } = createRequire(
+const {
+  conversationCommand,
+  isConversationExternalNavigation,
+  isConversationRead,
+} = createRequire(
   import.meta.url,
 )("../native/conversation-broker.cjs");
+const { createCitationNavigationGrant } = createRequire(import.meta.url)(
+  "../native/external-navigation-authorization.cjs",
+);
 
 function fixture(provider, choice = 1) {
   const calls = [],
@@ -76,6 +83,96 @@ test("native conversation broker records local messages without provider approva
   assert.equal(f.calls[1].input.input.grantId, undefined);
   assert.equal(isConversationRead({ name: "detail" }), true);
   assert.equal(isConversationRead({ name: "send" }), false);
+});
+
+function citationFixture(sources) {
+  const citations = Array.isArray(sources) ? sources : [sources];
+  const calls = [];
+  const reviews = [];
+  const opened = [];
+  let lookup = 0;
+  return {
+    calls,
+    reviews,
+    opened,
+    win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+    input: {
+      name: "openCitation",
+      input: { resourceId: "conversation", messageId: "message", index: 0 },
+    },
+    call: async (name, input) => {
+      calls.push({ name, input });
+      assert.equal(name, "conversationCitation");
+      return { url: citations[Math.min(lookup++, citations.length - 1)] };
+    },
+    reviewCitation: async review => {
+      reviews.push(review);
+      return createCitationNavigationGrant({
+        resourceId: review.resourceId,
+        messageId: review.messageId,
+        index: review.index,
+        urlDigest: review.urlDigest,
+      }, { ownerIsActive: () => true });
+    },
+    openExternal: async url => opened.push(url),
+  };
+}
+
+test("citation navigation requires native review and opens the revalidated canonical URL once", async () => {
+  const f = citationFixture("https://例え.テスト/source?q=reviewed#citation");
+  assert.deepEqual(await conversationCommand(f), { requested: true });
+  assert.equal(isConversationRead(f.input), false);
+  assert.equal(isConversationExternalNavigation(f.input), true);
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.reviews.length, 1);
+  assert.equal(f.reviews[0].hostname, "xn--r8jz45g.xn--zckzah");
+  assert.equal(
+    f.reviews[0].urlDigest,
+    createHash("sha256").update(f.reviews[0].url).digest("hex"),
+  );
+  assert.deepEqual(f.opened, [f.reviews[0].url]);
+});
+
+test("citation navigation fails closed without review or when canonical state changes", async () => {
+  const missingReview = citationFixture("https://docs.example/source");
+  delete missingReview.reviewCitation;
+  await assert.rejects(
+    conversationCommand(missingReview),
+    /citation_native_review_required/,
+  );
+  assert.deepEqual(missingReview.opened, []);
+
+  const changed = citationFixture([
+    "https://docs.example/source",
+    "https://attacker.example/substituted",
+  ]);
+  await assert.rejects(conversationCommand(changed), /citation_source_changed/);
+  assert.deepEqual(changed.opened, []);
+
+  const rejectedGrant = citationFixture("https://docs.example/source");
+  rejectedGrant.reviewCitation = async () => ({ consume: () => false });
+  await assert.rejects(
+    conversationCommand(rejectedGrant),
+    /citation_authorization_expired/,
+  );
+  assert.deepEqual(rejectedGrant.opened, []);
+});
+
+test("citation destination policy still rejects non-public or ambiguous URLs before review", async () => {
+  for (const source of [
+    "http://docs.example/source",
+    "https://user@docs.example/source",
+    "https://docs.example:443/source",
+    "https://docs.example:8443/source",
+    "https://127.0.0.1/source",
+    "https://service.internal/source",
+    "https://localhost/source",
+  ]) {
+    const f = citationFixture(source);
+    await assert.rejects(conversationCommand(f), /citation_url_not_supported/);
+    assert.equal(f.reviews.length, 0);
+    assert.equal(f.opened.length, 0);
+  }
 });
 test("Codex broker approves backend-assembled egress and dispatches only its fresh private grant", async () => {
   const f = fixture("codex");

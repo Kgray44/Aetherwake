@@ -124,6 +124,10 @@ contextBridge.exposeInMainWorld(
           navigator.userActivation?.isActive !== true)
         throw new Error('weather_user_gesture_required');
       if(name==='folders'&&input?.type==='openExternal'&&navigator.userActivation?.isActive!==true)throw Error('folder_user_gesture_required');
+      if ((name === "firstPartyChat" ||
+          name === "conversation" && input?.name === "openCitation") &&
+          navigator.userActivation?.isActive !== true)
+        throw Error("external_navigation_user_gesture_required");
       if (name === 'velaWake' && ['enable','save'].includes(input?.name) &&
           navigator.userActivation?.isActive !== true)
         throw new Error('wake_user_gesture_required');

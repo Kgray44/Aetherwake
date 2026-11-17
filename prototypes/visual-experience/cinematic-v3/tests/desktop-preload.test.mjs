@@ -150,17 +150,43 @@ test("renderer cannot invoke private grant creation, raw provider execution or h
 });
 
 test("first-party navigation exposes only its public native family, never a general external-open command", async () => {
-  const { host, calls } = bridge();
+  const passive = bridge();
+  await assert.rejects(
+    passive.host.command("firstPartyChat", { target: "chatgpt-home" }),
+    /external_navigation_user_gesture_required/,
+  );
+  await assert.rejects(
+    passive.host.command("conversation", {
+      name: "openCitation",
+      input: { resourceId: "conversation", messageId: "message", index: 0 },
+    }),
+    /external_navigation_user_gesture_required/,
+  );
+  assert.equal(passive.calls.length, 0);
+
+  const { host, calls } = bridge(true);
   await host.command("firstPartyChat", { target: "chatgpt-home" });
+  await host.command("conversation", {
+    name: "openCitation",
+    input: { resourceId: "conversation", messageId: "message", index: 0 },
+  });
   assert.deepEqual(calls, [
     ["application-command", "firstPartyChat", { target: "chatgpt-home" }],
+    [
+      "application-command",
+      "conversation",
+      {
+        name: "openCitation",
+        input: { resourceId: "conversation", messageId: "message", index: 0 },
+      },
+    ],
   ]);
   for (const command of ["openExternal", "shell", "openURL"])
     await assert.rejects(
       host.command(command, "https://untrusted.invalid"),
       /unsupported_command/,
     );
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
 });
 
 test("scoped conversation activity remains a public read without exposing execution authorization", async () => {
