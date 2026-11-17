@@ -30,6 +30,37 @@ function unique(strings) { return [...new Set(strings)]; }
 function requiredString(obj, key) {
   if (typeof obj?.[key] !== 'string' || !obj[key].trim()) invalid('Task missing required ' + key);
 }
+function focusedVerification(paths) {
+  const jobs = new Map();
+  const unmapped = [];
+  const sources = [];
+  const addTests = (cwd, files) => {
+    const tests = jobs.get(cwd) ?? new Set();
+    for (const file of files) tests.add(file);
+    jobs.set(cwd, tests);
+  };
+  for (const path of paths) {
+    const direct = path.match(/^prototypes\/integrated-backend\/(tests\/[A-Za-z0-9][A-Za-z0-9_-]*\.test\.mts)$/);
+    if (direct) {
+      addTests('prototypes/integrated-backend', [direct[1]]);
+      sources.push({ path, relationship: 'changed-test', tests: [direct[1]] });
+      continue;
+    }
+    const targets = config.verification_targets.filter(target => target.paths.includes(path));
+    if (!targets.length) unmapped.push(path);
+    for (const target of targets) {
+      addTests(target.cwd, target.tests);
+      sources.push({ path, relationship: target.id, tests: target.tests });
+    }
+  }
+  return {
+    focused_commands: [...jobs].map(([cwd, tests]) => ({ cwd, argv: ['node', '--test', ...[...tests].sort()] })),
+    known_relationships: sources,
+    unmapped_paths: unmapped,
+    coverage: 'Known first-pass checks. Affected scope, integration, risk-specific obligations and acceptance still require review.',
+    reused_evidence: []
+  };
+}
 export function routeTask(task, inputPaths = []) {
   if (!task || typeof task !== 'object' || Array.isArray(task)) invalid('Task must be an object');
   if (task.schema_version !== 1 || task.record_type !== 'task') invalid('Expected foundation v1 Task record');
@@ -71,6 +102,7 @@ export function routeTask(task, inputPaths = []) {
     scope_coverage: paths.length ? 'requires-owner-review' : 'unavailable',
     task_acceptance_criterion_ids: task.acceptance.criteria.map(c => c.id),
     required_check_ids: checks,
+    verification_plan: focusedVerification(paths),
     acceptance_profile_id: task.acceptance.profile_id,
     prerequisite_task_ids: task.prerequisites.task_ids,
     prerequisite_capabilities: task.prerequisites.capabilities,
@@ -149,6 +181,12 @@ async function main(argv) {
     if(prepare) console.log('Context: ' + plan.context_snapshot.id + (plan.context_reused ? ' (reused)' : ' (created)'));
     console.log('Skills: ' + plan.workflow_skills.join(', '));
     console.log('Checks: ' + plan.required_check_ids.join(', '));
+    for (const command of plan.verification_plan.focused_commands) {
+      console.log('Focused check from ' + command.cwd + ': ' + JSON.stringify(command.argv));
+    }
+    if (plan.verification_plan.unmapped_paths.length) {
+      console.log('Focused mapping unavailable for ' + plan.verification_plan.unmapped_paths.length + ' path(s).');
+    }
     console.log('Governance router args: ' + JSON.stringify(plan.governance.router_argv));
     console.log('Governance context args: ' + JSON.stringify(plan.governance.context_argv));
     for(const w of plan.warnings) console.log('NOTICE: ' + w);

@@ -134,3 +134,28 @@ test('root instructions expose targeted skills and current architecture without 
 test('Windows case aliases cannot suppress risk checks',()=>{
  assert.ok(routeTask(fixture(),['PROTOTYPES/INTEGRATED-BACKEND/SRC/service.mts']).required_check_ids.includes('security-review'));
 });
+
+test('proposes known Aerynth test relationships and groups duplicate focused commands', () => {
+  const source = 'prototypes/integrated-backend/src/task-objectives.mts';
+  const dependency = 'prototypes/task-product/service.mts';
+  const directTest = 'prototypes/integrated-backend/tests/task-objectives.test.mts';
+  const unknown = 'some/other/dependency.ts';
+  const result = routeTask(fixture('bug'), [source, dependency, directTest, unknown]);
+  assert.deepEqual(result.verification_plan.unmapped_paths, [unknown]);
+  const [command] = result.verification_plan.focused_commands;
+  assert.deepEqual(command, {
+    cwd: 'prototypes/integrated-backend',
+    argv: ['node', '--test', 'tests/task-objective-core.test.mts', 'tests/task-objectives.test.mts', 'tests/task-reference-targets.test.mts']
+  });
+  assert.equal(result.verification_plan.focused_commands.length, 1);
+  assert.ok(result.required_check_ids.includes('negative-paths'));
+  assert.ok(result.required_check_ids.includes('integration-tests'));
+});
+
+test('unknown paths and classifications do not establish test independence', () => {
+  const result = routeTask(fixture('security', ['visual']), ['some/unknown.mjs']);
+  assert.deepEqual(result.verification_plan.focused_commands, []);
+  assert.deepEqual(result.verification_plan.unmapped_paths, ['some/unknown.mjs']);
+  assert.ok(result.required_check_ids.includes('authorization-tests'));
+  assert.ok(result.required_check_ids.includes('visual-review'));
+});

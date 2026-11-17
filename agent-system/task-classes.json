@@ -210,7 +210,70 @@
       "risk": "gpu"
     }
   ],
-  "policy_revision": "2026-11-16.1",
+  "verification_targets": [
+    {
+      "id": "task-objectives",
+      "paths": [
+        "prototypes/integrated-backend/src/task-objectives.mts",
+        "prototypes/task-product/service.mts"
+      ],
+      "cwd": "prototypes/integrated-backend",
+      "tests": [
+        "tests/task-objectives.test.mts",
+        "tests/task-reference-targets.test.mts",
+        "tests/task-objective-core.test.mts"
+      ]
+    },
+    {
+      "id": "task-reference-targets",
+      "paths": [
+        "prototypes/integrated-backend/src/task-reference-targets.mts"
+      ],
+      "cwd": "prototypes/integrated-backend",
+      "tests": [
+        "tests/task-reference-targets.test.mts"
+      ]
+    },
+    {
+      "id": "mission-resource-admission",
+      "paths": [
+        "prototypes/integrated-backend/src/mission-admission.mts",
+        "prototypes/integrated-backend/src/resource-policy.mts"
+      ],
+      "cwd": "prototypes/integrated-backend",
+      "tests": [
+        "tests/resource-policy.test.mts",
+        "tests/resource-telemetry.test.mts"
+      ]
+    },
+    {
+      "id": "engineering-context",
+      "paths": [
+        "scripts/agent/context.mjs",
+        "scripts/agent/task-router.mjs"
+      ],
+      "cwd": ".",
+      "tests": [
+        "tests/agent-task-router.test.mjs",
+        "tests/agent-phase-c.test.mjs"
+      ]
+    },
+    {
+      "id": "engineering-traces",
+      "paths": [
+        "scripts/agent/journal.mjs",
+        "scripts/agent/record-journal.mjs",
+        "scripts/agent/lifecycle.mjs",
+        "scripts/agent/telemetry-export.mjs"
+      ],
+      "cwd": ".",
+      "tests": [
+        "tests/agent-journal.test.mjs",
+        "tests/agent-phase-c.test.mjs"
+      ]
+    }
+  ],
+  "policy_revision": "2026-11-16.2",
   "universal_checks": [
     "governance-coverage",
     "source-owner-review",
