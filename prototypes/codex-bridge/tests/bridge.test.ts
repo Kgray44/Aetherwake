@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { CodexAdapter } from "../src/adapter.ts";
+import { CODEX_EVENT_RETENTION_LIMITS, CodexAdapter } from "../src/adapter.ts";
 import { BridgeError } from "../src/transport.ts";
 
 const fake = fileURLToPath(new URL("./fake-server.mjs", import.meta.url));
@@ -26,6 +26,23 @@ test("handshake, catalog labels, native lifecycle, and terminal provenance", asy
     assert.equal(event.terminalStatus, "completed");
     assert.equal(event.evidence, "observed");
     assert.equal(event.providerTimeSource, "turn.timestamp.unix-seconds");
+  } finally { adapter.close(); }
+});
+
+test("unknown near-limit notifications cannot exceed aggregate event retention", async () => {
+  const adapter = make("retention-pressure");
+  try {
+    await adapter.connect();
+    await adapter.capabilities();
+    const retained = adapter.recentEvents();
+    const retainedBytes = retained.reduce((total, event) => total + Buffer.byteLength(JSON.stringify(event)), 0);
+    assert.equal(retained.filter(event => event.method.startsWith("fixture/unknown-")).length, 2);
+    assert.ok(adapter.droppedEventCount() >= 1);
+    assert.ok(retainedBytes <= CODEX_EVENT_RETENTION_LIMITS.bytes);
+
+    const threadId = await adapter.newThread({});
+    const turnId = await adapter.beginTurn({ threadId, input });
+    assert.equal((await adapter.waitForTerminal(threadId, turnId)).terminalStatus, "completed");
   } finally { adapter.close(); }
 });
 
