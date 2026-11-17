@@ -142,7 +142,7 @@ export async function cachedGitHubDetail(db, fetcher, token, kind, id, now = Dat
   const payload = result.detail ? result : detailFallback(old, result.reason);
   const at = clock();
   const rejected = api.authentication === 'rejected';
-  const delay = payload.status === 'available' || rejected || result.reason === 'GitHub jobs or steps exceeded the display limit' ? REFRESH_MS : FAILURE_RETRY_MS;
+  const delay = payload.status === 'available' || rejected || result.reason?.includes('exceeded the display limit') ? REFRESH_MS : FAILURE_RETRY_MS;
   await db.prepare(
     'INSERT INTO github_details(cache_key, credential_key, retry_at, stored_at, payload, validators)' +
     ' SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM github_snapshot WHERE id = 1 AND lease_until = ?)' +

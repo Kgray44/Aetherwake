@@ -4,9 +4,11 @@ const WEB = 'https://github.com/' + REPO;
 const JOB_LIMIT = 25;
 const STEP_LIMIT = 40;
 const BODY_LIMIT = 8000;
+const PULL_SECTION_LIMIT = 20;
 const positive = n => Number.isSafeInteger(n) && n > 0;
 const count = n => Number.isSafeInteger(n) && n >= 0 ? n : null;
 const text = (v, limit = 240) => typeof v === 'string' ? v.slice(0, limit) : null;
+const redact = value => value?.replace(/\b(?:gh[pousr]_[a-z0-9_]{20,}|github_pat_[a-z0-9_]{20,})\b/gi, '[redacted credential]');
 const time = v => typeof v === 'string' && v.length <= 40 && Number.isFinite(Date.parse(v)) ? new Date(v).toISOString() : null;
 const ref = (name, sha) => ({ ref: text(name), sha: isRevision(sha) ? sha : null });
 const names = values => Array.isArray(values) ? values.slice(0, 25).map(user => text(user?.login, 100)).filter(Boolean) : [];
@@ -19,7 +21,7 @@ function pull(data, number) {
   }
   const labels = Array.isArray(data.labels) ? data.labels.slice(0, 40) : [];
   return {
-    kind: 'pull', number, title: text(data.title), body: text(data.body, BODY_LIMIT),
+    kind: 'pull', number, title: text(data.title), body: redact(text(data.body, BODY_LIMIT)),
     body_truncated: typeof data.body === 'string' && data.body.length > BODY_LIMIT,
     state: text(data.state, 48), draft: data.draft === true, merged: data.merged === true,
     author: logins(data.user), assignees: names(data.assignees), requested_reviewers: names(data.requested_reviewers),
@@ -77,6 +79,55 @@ function jobs(data, target) {
   return { jobs: listed, total_jobs: total, jobs_truncated: total > JOB_LIMIT };
 }
 
+
+function pullFile(file) {
+  if (typeof file?.filename !== 'string' || !file.filename || !file.status) throw new Error('Invalid pull request file');
+  return {
+    path: text(file.filename, 512), status: text(file.status, 48),
+    additions: count(file.additions), deletions: count(file.deletions),
+    previous_path: text(file.previous_filename, 512),
+  };
+}
+
+function pullReview(review) {
+  if (!positive(review?.id)) throw new Error('Invalid pull request review');
+  return { id: review.id, author: logins(review.user), state: text(review.state, 48), submitted_at: time(review.submitted_at) };
+}
+
+async function pullSections(reader, path, detail, previous, validators, next, now) {
+  const output = {};
+  const sameSource = previous?.head.sha === detail.head.sha && previous?.base.sha === detail.base.sha;
+  const reasons = [];
+  for (const [kind, convert] of [['files', pullFile], ['reviews', pullReview]]) {
+    // These are observations of GitHub's live PR subcollections. The source
+    // SHAs come from the core PR read and do not attest a submitted evidence set.
+    const retained = (kind === 'reviews' || sameSource) && previous?.[kind + '_observed_at'] ? previous : null;
+    const outcome = await capture(async () => {
+      const response = await reader.get(path + '/' + kind + '?per_page=' + PULL_SECTION_LIMIT,
+        512 * 1024, retained ? validators[kind] : null);
+      if (!response.unchanged && (!Array.isArray(response.data) || response.data.length > PULL_SECTION_LIMIT)) {
+        throw new Error('Invalid pull request section');
+      }
+      const items = response.unchanged ? retained[kind] : response.data.map(convert);
+      const truncated = response.unchanged ? retained[kind + '_truncated']
+        : response.hasNext || (kind === 'files' ? items.length < (detail.changed_files ?? 0) : items.length === PULL_SECTION_LIMIT);
+      next[kind] = response.etag;
+      return { items, truncated };
+    });
+    output[kind] = outcome.items ?? retained?.[kind] ?? [];
+    output[kind + '_status'] = outcome.status === 'available'
+      ? (outcome.truncated ? 'partial' : 'available') : retained ? 'stale' : 'unavailable';
+    output[kind + '_truncated'] = outcome.truncated ?? retained?.[kind + '_truncated'] ?? false;
+    output[kind + '_observed_at'] = outcome.status === 'available'
+      ? new Date(now()).toISOString() : retained?.[kind + '_observed_at'] ?? null;
+    output[kind + '_reason'] = outcome.reason ?? (outcome.truncated ? 'GitHub section exceeded the display limit' : null);
+    if (outcome.reason) reasons.push(outcome.reason);
+    else if (outcome.truncated) reasons.push('GitHub pull files or reviews exceeded the display limit');
+    if (outcome.status !== 'available' && retained) next[kind] = validators[kind];
+  }
+  return { output, reason: reasons.find(value => !value.includes('exceeded the display limit')) ?? reasons[0] ?? null };
+}
+
 const emptyJobs = { jobs: [], total_jobs: null, jobs_truncated: false, jobs_observed_at: null, jobs_stale: false };
 
 export async function fetchGitHubDetail(fetcher, token, kind, id, { now, previous, validators, previousFailures }) {
@@ -91,7 +142,10 @@ export async function fetchGitHubDetail(fetcher, token, kind, id, { now, previou
   });
   let result = { detail: core.detail ?? null, status: core.status, reason: core.reason ?? null, observed_at: null };
   if (core.detail) {
-    if (kind === 'runs') {
+    if (kind === 'pulls') {
+      const {output, reason} = await pullSections(reader, path, core.detail, previous, validators, next, now);
+      result = { detail: { ...core.detail, ...output }, status: reason ? 'partial' : 'available', reason, observed_at: null };
+    } else {
       const priorJobs = previous?.attempt === core.detail.attempt && Number.isSafeInteger(previous.total_jobs);
       const storedJobs = priorJobs ? { jobs: previous.jobs, total_jobs: previous.total_jobs, jobs_truncated: previous.jobs_truncated } : null;
       if (priorJobs) next.jobs = validators.jobs;

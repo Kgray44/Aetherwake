@@ -45,9 +45,16 @@ test('owner-only GET validates the route and shares bounded PR detail between is
   let calls = 0;
   const fetcher = async (url, options) => {
     calls++;
-    assert.equal(url, provider + '/pulls/12');
     assert.equal(options.headers.Authorization, 'Bearer detail-token');
     assert.equal(options.redirect, 'manual');
+    if (url === provider + '/pulls/12/files?per_page=20') return Response.json([
+      { filename: 'new.txt', previous_filename: 'old.txt', status: 'renamed', additions: 3, deletions: 1, patch: 'never-copy-private-provider-fields' },
+      { filename: 'another.txt', status: 'modified', additions: 10, deletions: 4 },
+    ]);
+    if (url === provider + '/pulls/12/reviews?per_page=20') return Response.json([
+      { id: 42, user: { login: 'reviewer' }, state: 'APPROVED', body: 'never-copy-private-provider-fields' },
+    ]);
+    assert.equal(url, provider + '/pulls/12');
     return Response.json({ ...pull(12), body: 'a'.repeat(8001) }, { headers: { etag: '"first"' } });
   };
   const request = (path, options) => createWorker({ assets: {}, validate: allow, fetcher })
@@ -66,10 +73,14 @@ test('owner-only GET validates the route and shares bounded PR detail between is
   assert.equal(first.detail.body_truncated, true);
   assert.equal(first.detail.url, 'https://github.com/Kgray44/Aetherwake/pull/12');
   assert.equal(JSON.stringify(first).includes('never-copy-private-provider-fields'), false);
-  assert.equal(calls, 1);
+  assert.deepEqual(first.detail.files[0], { path: 'new.txt', status: 'renamed', additions: 3, deletions: 1, previous_path: 'old.txt' });
+  assert.deepEqual(first.detail.reviews[0], { id: 42, author: 'reviewer', state: 'APPROVED', submitted_at: null });
+  assert.equal(first.detail.files_status, 'available');
+  assert.equal(first.detail.reviews_status, 'available');
+  assert.equal(calls, 3);
 });
 
-test('uses conditional PR and exact-attempt job reads, limits jobs and suppresses raw provider data', async t => {
+test('uses conditional exact-attempt job reads, limits jobs and suppresses raw provider data', async t => {
   const db = database(t);
   const baseTime = Date.now();
   const requests = [];
@@ -122,7 +133,9 @@ test('rejected credential never falls back anonymously and blocks subsequent cal
   const attempts = [];
   const upstream = async (url, { headers }) => {
     attempts.push(headers.Authorization);
-    return headers.Authorization === 'Bearer original' ? new Response(null, { status: 401 }) : Response.json(pull(14));
+    if (headers.Authorization === 'Bearer original') return new Response(null, { status: 401 });
+    if (url.includes('per_page')) return Response.json([]);
+    return Response.json({ ...pull(14), changed_files: 0 });
   };
   const denied = await cachedGitHubDetail(db, upstream, 'original', 'pulls', 12, now);
   assert.equal(denied.reason, 'GitHub read credential rejected');
@@ -131,5 +144,36 @@ test('rejected credential never falls back anonymously and blocks subsequent cal
   const overview = await cachedGitHub(db, upstream, allow, 'original', now + 3);
   assert.equal(overview.api.authentication, 'rejected');
   assert.equal((await cachedGitHubDetail(db, upstream, 'rotated', 'pulls', 14, now + 4)).status, 'available');
-  assert.deepEqual(attempts, ['Bearer original', 'Bearer rotated']);
+  assert.deepEqual(attempts, ['Bearer original', 'Bearer rotated', 'Bearer rotated', 'Bearer rotated']);
+});
+
+test('PR sections reuse validators and retain their own observation times on a partial refresh', async t => {
+  const db = database(t);
+  const now = Date.now();
+  let attempted = 0;
+  const upstream = async (url, { headers }) => {
+    if (url.endsWith('/pulls/12')) return headers['If-None-Match'] ? new Response(null, { status: 304 })
+      : Response.json({ ...pull(12), changed_files: 21 }, { headers: { etag: '"core"' } });
+    if (url.endsWith('/files?per_page=20')) {
+      if (headers['If-None-Match']) {
+        assert.equal(headers['If-None-Match'], '"files"');
+        return new Response(null, { status: 304 });
+      }
+      return Response.json(Array.from({ length: 20 }, (_, i) => ({ filename: i + '.txt', status: 'added' })),
+        { headers: { etag: '"files"' } });
+    }
+    assert.ok(url.endsWith('/reviews?per_page=20'));
+    if (attempted++) return new Response(null, { status: 503 });
+    return Response.json([{ id: 1, state: 'COMMENTED' }], { headers: { etag: '"reviews"' } });
+  };
+  const first = await cachedGitHubDetail(db, upstream, 'fixture-token', 'pulls', 12, now);
+  assert.equal(first.status, 'partial');
+  assert.equal(first.detail.files_truncated, true);
+  assert.equal(first.detail.files.length, 20);
+  const next = await cachedGitHubDetail(db, upstream, 'fixture-token', 'pulls', 12, now + 16 * 60_000);
+  assert.equal(next.detail.files_status, 'partial');
+  assert.notEqual(next.detail.files_observed_at, first.detail.files_observed_at);
+  assert.equal(next.detail.reviews_status, 'stale');
+  assert.deepEqual(next.detail.reviews, first.detail.reviews);
+  assert.equal(next.detail.reviews_observed_at, first.detail.reviews_observed_at);
 });

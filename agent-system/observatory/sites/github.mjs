@@ -126,7 +126,8 @@ export function githubReader(fetcher, signal, token, now, previousApi, previousF
     checkedResponse = true;
     if (token) authentication = 'authenticated';
     const validator = response.headers.get('etag');
-    return { data: JSON.parse(await readBounded(response.body, maxBytes)), etag: token && ETAG.test(validator ?? '') ? validator : null };
+    return { data: JSON.parse(await readBounded(response.body, maxBytes)), etag: token && ETAG.test(validator ?? '') ? validator : null,
+      hasNext: /;\s*rel="next"/.test(response.headers.get('link') ?? '') };
   }
 
   return {
