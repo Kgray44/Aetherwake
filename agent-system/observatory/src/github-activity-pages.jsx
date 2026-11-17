@@ -94,6 +94,12 @@ function names(list) {
   return Array.isArray(list) ? list.map(entry => entry?.name || actor(entry)).filter(Boolean).join(', ') || 'None' : 'Unavailable';
 }
 
+function SectionCoverage({ status, observedAt, reason }) {
+  if (!status || status === 'available') return null;
+  return <p className="low">{status === 'stale' ? 'Cached' : label(status)}
+    {observedAt && ' · Last successful refresh ' + stamp(observedAt)}{reason && ' · ' + reason}</p>;
+}
+
 function PullDetails({ detail, Panel, Rise, Status }) {
   return <>
     <Rise><Panel title="Pull request details" right={<Status value={detail.merged ? 'merged' : detail.state || 'unavailable'}/>}>
@@ -116,18 +122,20 @@ function PullDetails({ detail, Panel, Rise, Status }) {
     ]}/></Panel></Rise>
     {detail.body && <Rise><Panel title="Description"><p className="github-description">{detail.body}</p>
       {detail.body_truncated && <p className="low">Full description available on GitHub.</p>}</Panel></Rise>}
-    {Array.isArray(detail.files) && <Rise><Panel title="Changed files">
+    {(Array.isArray(detail.files) || detail.files_status) && <Rise><Panel title="Changed files">
+      <SectionCoverage status={detail.files_status} observedAt={detail.files_observed_at} reason={detail.files_reason}/>
       {detail.files_truncated && <p className="low">Showing a bounded file list. Open the pull request on GitHub for all files.</p>}
-      {!detail.files.length && <p className="low">No changed files were returned.</p>}
-      <ul className="github-meta-list">{detail.files.map(file => <li key={file.path}>
+      {detail.files_status === 'available' && !detail.files?.length && <p className="low">No changed files were returned.</p>}
+      <ul className="github-meta-list">{(detail.files ?? []).map(file => <li key={file.path}>
         <div><strong className="mono">{file.path}</strong>{file.previous_path && <small>From {file.previous_path}</small>}</div>
         <small>{label(file.status)} · +{text(file.additions)} / −{text(file.deletions)}</small>
       </li>)}</ul>
     </Panel></Rise>}
-    {Array.isArray(detail.reviews) && <Rise><Panel title="Submitted reviews">
+    {(Array.isArray(detail.reviews) || detail.reviews_status) && <Rise><Panel title="Submitted reviews">
+      <SectionCoverage status={detail.reviews_status} observedAt={detail.reviews_observed_at} reason={detail.reviews_reason}/>
       {detail.reviews_truncated && <p className="low">Showing a bounded review list. Open the pull request on GitHub for all reviews.</p>}
-      {!detail.reviews.length && <p className="low">No submitted reviews were returned.</p>}
-      <ul className="github-meta-list">{detail.reviews.map(review => <li key={review.id}>
+      {detail.reviews_status === 'available' && !detail.reviews?.length && <p className="low">No submitted reviews were returned.</p>}
+      <ul className="github-meta-list">{(detail.reviews ?? []).map(review => <li key={review.id}>
         <div><strong>{text(actor(review.author))}</strong><small>{stamp(review.submitted_at)}</small></div>
         <Status value={review.state?.toLowerCase() || 'unavailable'}/>
       </li>)}</ul>
