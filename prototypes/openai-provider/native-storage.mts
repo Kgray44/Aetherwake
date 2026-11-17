@@ -149,8 +149,19 @@ export class SqliteNativeVault implements NativeCredentialVault, NativeHostIdent
         requireValue(result.version === row.version && result.hostId === row.host_id && result.clientId === row.client_id, 'protected_record_binding_mismatch');
         return structuredClone(result);
     }
-    private async readRecord(id: string): Promise<PrivateRegistration | null> { requireValue(text(id), 'invalid_registration_id'); const gate = (db: DatabaseSync) => { const lease = db.prepare('SELECT owner,expires_at FROM openai_native_auth_lease WHERE registration_id=?').get(id); requireValue(!lease || lease.owner === null || Number(lease.expires_at) > this.now(), 'auth_lock_recovery_required'); }; const row = this.tx(db => { gate(db); return db.prepare('SELECT * FROM openai_native_auth_registration WHERE registration_id=?').get(id); }); if (!row)
-        return null; const value = await this.decode(row); this.tx(db => { gate(db); const current = db.prepare('SELECT version,host_id,client_id FROM openai_native_auth_registration WHERE registration_id=?').get(id); requireValue(current && current.version === row.version && current.host_id === row.host_id && current.client_id === row.client_id, 'registration_changed'); }); return value; }
+    private gateRead(db: DatabaseSync, id: string): void {
+        const lease = db.prepare('SELECT owner,fence,expires_at FROM openai_native_auth_lease WHERE registration_id=?').get(id);
+        if (!lease || lease.owner === null)
+            return;
+        const owned = this.context.getStore();
+        if (owned && owned.registrationId === id && owned.owner === lease.owner && owned.fence === Number(lease.fence)) {
+            this.fence(db, owned);
+            return;
+        }
+        throw new ProviderError(Number(lease.expires_at) <= this.now() ? 'auth_lock_recovery_required' : 'auth_lock_busy');
+    }
+    private async readRecord(id: string): Promise<PrivateRegistration | null> { requireValue(text(id), 'invalid_registration_id'); const row = this.tx(db => { this.gateRead(db, id); return db.prepare('SELECT * FROM openai_native_auth_registration WHERE registration_id=?').get(id); }); if (!row)
+        return null; const value = await this.decode(row); this.tx(db => { this.gateRead(db, id); const current = db.prepare('SELECT version,host_id,client_id FROM openai_native_auth_registration WHERE registration_id=?').get(id); requireValue(current && current.version === row.version && current.host_id === row.host_id && current.client_id === row.client_id, 'registration_changed'); }); return value; }
     async read(id: string): Promise<PrivateRegistration | null> { return this.readRecord(id); }
     lockStatus(id: string): NativeLockStatus { requireValue(text(id), 'invalid_registration_id'); return this.tx(db => { const lease = db.prepare('SELECT owner,fence,expires_at FROM openai_native_auth_lease WHERE registration_id=?').get(id), registration = db.prepare('SELECT version FROM openai_native_auth_registration WHERE registration_id=?').get(id); return { state: !lease || lease.owner === null ? 'unlocked' : Number(lease.expires_at) <= this.now() ? 'recovery-required' : 'busy', fence: Number(lease?.fence ?? 0), registrationVersion: registration ? Number(registration.version) : null }; }); }
     async compareAndSwap(id: string, expectedVersion: number | null, next: PrivateRegistration): Promise<void> {

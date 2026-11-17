@@ -2116,6 +2116,15 @@ test('credential resolution race rechecks authority before POST and preserves th
  }finally{release?.();await f.close();}
 });
 
+test('owner disconnect aborts a pre-POST plan turn and preserves the accepted user message',async()=>{
+ const f=fixture();let entered:(()=>void)|undefined,release:(()=>void)|undefined;const held=new Promise<void>(resolve=>{entered=resolve;}),resume=new Promise<void>(resolve=>{release=resolve;});try{
+  await f.core.command('ordinaryProviderCheck',{});const c=await f.core.command('createConversation',{commandId:randomUUID()}),p=await prepare(f,c.resourceId,'Synthetic owner disconnect fence'),g=await grant(f,p.preview),original=f.connection.resolveCredential;
+  f.connection.resolveCredential=async version=>{const credential=await original(version);entered?.();await resume;return credential;};
+  const running=f.core.command('conversationSend',g);await held;const status=await f.core.command('providerAuth',{providerId,type:'disconnect',expectedVersion:p.preview.responses!.connectionVersion});release?.();const result=await running;
+  assert.equal(status.state,'disconnected');assert.equal(result.responseOutcome,'cancelled-before-dispatch');assert.equal(result.cancellation.requested,true);assert.equal(result.state,'failed');assert.equal(f.requests.length,0);assert.deepEqual((await f.core.command('snapshot',{})).graph.messages.map(m=>m.content),[p.input.content]);assert.equal(f.codexCalls,0);
+ }finally{release?.();await f.close();}
+});
+
 test('last async status revalidation cannot retain a resource grant revoked before the final synchronous dispatch fence',async()=>{
  const f=fixture();let release:(()=>void)|undefined;const originalStatus=f.connection.status;let activeStatuses=0;try{
   await f.core.command('ordinaryProviderCheck',{});const c=await f.core.command('createConversation',{commandId:randomUUID()}),p=await prepare(f,c.resourceId,'Synthetic final resource fence'),g=await grant(f,p.preview);
