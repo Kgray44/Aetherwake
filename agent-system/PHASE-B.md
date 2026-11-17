@@ -19,6 +19,16 @@ node --test tests/agent-task-router.test.mjs tests/agent-contracts.test.mjs
 
 Output includes selected class skills, union of required check IDs, prerequisite IDs/capabilities, and safe **argument arrays** for the existing `scripts/governance-router.mjs` and `scripts/governance-context.mjs`. The router does *not* execute those tools automatically, fetch private data, write task state, or run commands contained in task input.
 
+### Prepare and resume a Task
+
+Run from the Task's revision with its source-backed ownership references.
+
+```sh
+node scripts/agent/task-router.mjs --task-file /private/task.json --path scripts/agent/context.mjs --prepare --owner harness=agent-system/README.md --context-file /private/context.json
+```
+
+The command returns the existing route, applicable skills, prerequisite declarations, checks and governance commands. It writes a verified snapshot that can be passed directly to `telemetry.mjs run --context`. Rerun with the same context path to reuse the snapshot after validating the Task, revision, ownership scope and source hashes. Use a new file when the snapshot becomes stale. Add `--with-governance --json` to include the V2 governance package in the same invocation. Keep Task and context files private. Preparing a Task does not authorize a command or satisfy its checks.
+
 ## Required execution behavior
 
 1. Confirm a real Task with revision-qualified requirements, prerequisites and acceptance criteria.

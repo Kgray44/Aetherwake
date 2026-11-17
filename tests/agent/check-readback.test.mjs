@@ -41,8 +41,8 @@ function scope(task, changes={}) {
 const base='b'.repeat(40);
 function input() {
  const bundle=fixture();
- const pr={number:7,state:'open',head:{sha:rev,repo:{full_name:'fork/Aetherwake'}},base:{sha:base,repo:{full_name:opts.repository}}};
- return {eventName:'pull_request_target',event:{number:7,repository:{full_name:opts.repository},pull_request:pr},currentPullRequest:structuredClone(pr),repository:opts.repository,verifierRevision:base,bundle,verification:{...opts,paths:[],testedRevision:rev}};
+ const pr={number:7,state:'open',head:{sha:rev,repo:{full_name:'fork/Aetherwake'}},base:{ref:'main',sha:base,repo:{full_name:opts.repository}}};
+ return {eventName:'pull_request_target',event:{number:7,repository:{full_name:opts.repository},pull_request:pr},currentPullRequest:structuredClone(pr),repository:opts.repository,verifierRevision:base,expectedBaseRef:'main',bundle,verification:{...opts,paths:[],testedRevision:rev}};
 }
 function readbackFixture() {
  const preparation=input(), request=prepareExactHeadCheck(preparation).request;
@@ -68,8 +68,8 @@ test('wrong App, head, ID, repository, name, conclusion or output fail closed',a
   const x=readbackFixture();x.check.output={...x.check.output};change(x.check);await assert.rejects(()=>readExactHeadCheck(x.config),/mismatch/);assert.equal(x.calls.length,2);
  }
 });
-test('moved source or base and closed PR during readback invalidate observation',async()=>{
- for(const change of [p=>p.head.sha='c'.repeat(40),p=>p.base.sha='c'.repeat(40),p=>p.state='closed']){
+test('moved source, changed base commit or target branch, and closed PR invalidate readback',async()=>{
+ for(const change of [p=>p.head.sha='c'.repeat(40),p=>p.base.sha='c'.repeat(40),p=>p.base.ref='release',p=>p.state='closed']){
   const x=readbackFixture(),fetch=x.config.fetchImpl;let n=0;
   x.config.fetchImpl=async(url,options)=>{if(++n===3){const p=structuredClone(x.config.preparation.currentPullRequest);change(p);return new Response(JSON.stringify(p));}return fetch(url,options);};
   await assert.rejects(()=>readExactHeadCheck(x.config),/mismatch|stale|Closed/);

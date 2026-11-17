@@ -35,3 +35,40 @@ test('absent or mismatched attempt linkage is explicit and never accepted', () =
   assert.equal(evidenceClaimStatus(passed,links),'unverified_missing_attempt');
  }
 });
+
+import { traceTimeline } from './src/trace-timeline.mjs';
+
+test('trace coverage counts overlapping spans once and retains partial spans and monotonic durations', () => {
+  const time = n => new Date(n).toISOString();
+  const event = (span_id, kind, n, measurements = []) => ({
+    task_id: 'task_real', attempt_id: 'attempt_real', trace_id: 'trace_real', span_id,
+    revision: '7'.repeat(40), phase: 'verification', kind, occurred_at: time(n), measurements
+  });
+  const timeline = traceTimeline([
+    event('late', 'span_end', 40),
+    event('root', 'span_start', 0),
+    event('root', 'span_end', 100, [{ name: 'elapsed_wall_ms', availability: 'observed', value: 112, unit: 'ms' }]),
+    event('overlap', 'span_start', 50),
+    event('overlap', 'span_end', 135),
+    event('pending', 'span_start', 150)
+  ]);
+  assert.equal(timeline.coveredMs, 135);
+  assert.equal(timeline.phases[0].coveredMs, 135);
+  assert.equal(timeline.incomplete, 2);
+  assert.equal(timeline.spans.find(span => span.id === 'root').monotonicMs, 112);
+  assert.equal(timeline.spans.find(span => span.id === 'overlap').monotonicMs, null);
+  assert.equal(timeline.spans.find(span => span.id === 'late').complete, false);
+  assert.equal(timeline.spans.find(span => span.id === 'pending').complete, false);
+});
+
+test('a reused span ID cannot pair boundaries across attempts or revisions', () => {
+  const base = { task_id: 'task_real', trace_id: 'trace_real', span_id: 'overlap', revision: '7'.repeat(40), phase: 'context', occurred_at: '2026-11-16T00:00:00Z' };
+  const timeline = traceTimeline([
+    { ...base, attempt_id: 'attempt_one', kind: 'span_start' },
+    { ...base, attempt_id: 'attempt_two', kind: 'span_end' },
+    { ...base, attempt_id: 'attempt_one', revision: '8'.repeat(40), kind: 'span_end' }
+  ]);
+  assert.equal(timeline.spans.length, 3);
+  assert.equal(timeline.incomplete, 3);
+  assert.equal(timeline.coveredMs, null);
+});
