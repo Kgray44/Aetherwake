@@ -5,6 +5,8 @@ import {
 import {
   activityGroup, activityHref, activityId, activityState, githubItemHref, pullRepositoryTotals, runRepositoryTotal, searchActivity
 } from './github-activity.mjs';
+import { RunFailureInvestigation } from './failure-investigation.jsx';
+import { CIControls } from './ci-controls.jsx';
 
 const EMPTY = [];
 const text = value => value === null || value === undefined || value === '' ? 'Unavailable' : String(value);
@@ -24,7 +26,7 @@ function duration(start, end) {
   return minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
 }
 
-export function GitHubActivityList({ kind, group, filters, setFilters, ui }) {
+export function GitHubActivityList({ kind, group, filters, setFilters, ui, ci }) {
   const { Metric, Panel, Rise, Status } = ui;
   const items = group?.items ?? EMPTY;
   const pr = kind === 'pulls';
@@ -51,6 +53,7 @@ export function GitHubActivityList({ kind, group, filters, setFilters, ui }) {
   const update = (key, value) => setFilters({ ...filters, [key]: value });
 
   return <>
+    {!pr && ci && <CIControls {...ci} Panel={Panel} Rise={Rise}/>}
     <div className="metrics github-activity-metrics">{stats.map(([name, value, Icon, meta], index) =>
       <Metric key={name} name={name} value={value} Icon={Icon} index={index} meta={meta}/>)}</div>
     <Rise><Panel title={entityName(kind)} right={<span className="panel-meta">{rows.length} of {items.length} recent results</span>}>
@@ -193,7 +196,7 @@ function RunDetails({ detail, Panel, Rise, Status }) {
   </>;
 }
 
-export function GitHubActivityDetails({ kind, id, group, headers, live, ui }) {
+export function GitHubActivityDetails({ kind, id, group, headers, live, ui, investigation }) {
   const { Panel, Rise, Status } = ui;
   const summary = group?.items?.find(row => activityId(kind, row) === id);
   const [response, setResponse] = useState(null);
@@ -233,5 +236,9 @@ export function GitHubActivityDetails({ kind, id, group, headers, live, ui }) {
     </Panel></Rise>
     {detail?.kind === 'pull' && <PullDetails detail={detail} Panel={Panel} Rise={Rise} Status={Status}/>}
     {detail?.kind === 'run' && <RunDetails detail={detail} Panel={Panel} Rise={Rise} Status={Status}/>}
+    {detail?.kind === 'run' && <CIControls key={detail.id + ':' + detail.attempt} run={detail}
+      headers={headers} live={live} Panel={Panel} Rise={Rise}/>}
+    {detail?.kind === 'run' && investigation && <RunFailureInvestigation key={detail.id + ':' + detail.attempt}
+      run={detail} headers={headers} ui={ui} {...investigation}/>}
   </>;
 }

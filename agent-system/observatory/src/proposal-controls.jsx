@@ -65,6 +65,18 @@ export function ProposalControls({ task, control, tasks, classes, headers, readF
     <p>Version {control.version} · {control.priority} priority</p>
     <p>{unresolved.length ? 'Unresolved task prerequisites: ' + unresolved.join(', ') : 'All declared task prerequisites are accepted.'}
       {' '}{task.prerequisites?.capabilities?.length ? 'Capability availability needs review.' : 'No capabilities declared.'}</p>
+    {task.requirements?.length > 0 && <details>
+      <summary>Requirement references</summary>
+      <ul>{task.requirements.map((reference, index) => {
+        const prefix = reference.kind === 'issue' ? 'issues' : reference.kind === 'pull_request' ? 'pull' : '';
+        const canonical = prefix && new RegExp('^https://github\\.com/Kgray44/Aetherwake/' + prefix + '/[1-9][0-9]*$').test(reference.uri);
+        return <li key={index}>
+          {canonical ? <a href={reference.uri} target="_blank" rel="noreferrer">{reference.kind} {reference.uri.split('/').at(-1)}</a>
+            : <span>{reference.kind} · {reference.uri}</span>}
+          {reference.revision && <small> · {reference.revision}</small>}
+        </li>;
+      })}</ul>
+    </details>}
     {error && <p role="alert" className="notice error">{error}</p>}
     {task.state === 'proposed' && <details>
       <summary>Edit proposed task</summary>

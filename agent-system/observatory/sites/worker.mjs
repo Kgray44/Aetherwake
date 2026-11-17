@@ -5,6 +5,9 @@ import { isRevision, readBounded } from './github.mjs';
 import { cachedGitHub, cachedGitHubDetail } from './github-cache.mjs';
 import { publishProposal } from './github-proposals.mjs';
 import { changeProposal, operationId as UUID, proposalControl } from './proposal-controls.mjs';
+import { ciAccess, ciStatus, submitCI } from './ci-controls.mjs';
+import { combinedTelemetry, ingestTaskTelemetry, sha256, telemetryBaseline } from './task-telemetry.mjs';
+import { telemetryTaskId } from '../telemetry-delta.mjs';
 
 const MAX_PROPOSALS = 500;
 const JSON_HEADERS = {
@@ -31,11 +34,13 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
     const publish = url.pathname.match(/^\/api\/tasks\/task_([a-f0-9-]+)\/publish$/);
     const control = url.pathname.match(/^\/api\/tasks\/(task_[a-f0-9-]+)\/control$/);
     const sync = url.pathname === '/api/sync';
+    const automaticSync = url.pathname.startsWith('/api/task-telemetry/');
     const detailsRoute = url.pathname.match(/^\/api\/github\/(pulls|runs)\/([1-9][0-9]*)$/);
     const detailId = detailsRoute ? Number(detailsRoute[2]) : null;
+    const ciActions = url.pathname === '/api/github/actions';
     if (detailsRoute && !Number.isSafeInteger(detailId)) return error('Invalid GitHub detail ID', 400);
-    if (!overview && !intake && !sync && !publish && !detailsRoute && !control) return error('Not found', 404);
-    const readOnly = overview || detailsRoute || (control && request.method === 'GET');
+    if (!overview && !intake && !sync && !automaticSync && !publish && !detailsRoute && !control && !ciActions) return error('Not found', 404);
+    const readOnly = overview || detailsRoute || ((control || automaticSync || ciActions) && request.method === 'GET');
     if (readOnly ? request.method !== 'GET' : request.method !== 'POST') {
       return error('Method not allowed', 405);
     }
@@ -47,6 +52,37 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       return error('Expected application/json', 415);
     }
     if (!env.DB) return error('Proposal storage unavailable', 503);
+
+    if (ciActions) {
+      const access = ciAccess(env, owner, verification);
+      if (!access.enabled) return readOnly && !url.searchParams.has('operation')
+        ? json({ access, operations: [] }) : error(access.reason, 403);
+      const options = { db: env.DB, owner, fetcher, token: env.GITHUB_ACTIONS_TOKEN };
+      if (readOnly) {
+        const result = await ciStatus({ ...options, id: url.searchParams.get('operation') });
+        return json({ access, ...result.body }, result.status);
+      }
+      let body;
+      try { body = JSON.parse(await readBounded(request.body, 4096)); }
+      catch (cause) { return error('Invalid CI operation payload', cause instanceof RangeError ? 413 : 400); }
+      const result = await submitCI({ ...options, body });
+      return json(result.body, result.status);
+    }
+
+    const syncScope = () => sha256(JSON.stringify(['observatory-telemetry-v1', owner, namespace]));
+    if (automaticSync) {
+      const id = decodeURIComponent(url.pathname.slice('/api/task-telemetry/'.length));
+      if (!telemetryTaskId.test(id)) return error('Invalid telemetry Task ID', 400);
+      if (request.headers.get('x-observatory-sync-scope') !== await syncScope()) {
+        return error('Telemetry connection changed. Reload and reconnect.', 403);
+      }
+      if (readOnly) return json({ baseline: await telemetryBaseline(env.DB, owner, namespace, id) });
+      let body;
+      try { body = JSON.parse(await readBounded(request.body, MAX_SYNC_BYTES)); }
+      catch (cause) { return error('Invalid telemetry update payload', cause instanceof RangeError ? 413 : 400); }
+      const result = await ingestTaskTelemetry({ db: env.DB, owner, namespace, id, body, validate, validateEvent });
+      return json(result.body, result.status);
+    }
 
     if (control) {
       const id = control[1];
@@ -80,13 +116,16 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       return saved ? json({ stored: true, authority: 'local-task-records', approval: 'not-granted' }) : error('Older/conflicting projection or verification namespace limit reached', 409);
     }
     if (overview) {
-      const [snapshot, rows, projectionRow] = await Promise.all([
+      const [snapshot, rows, projectionRow, taskTelemetry, telemetryScope] = await Promise.all([
         cachedGitHub(env.DB, fetcher, validate, readToken),
         env.DB.prepare('SELECT record, task_id, github_state, stale_revision, version, priority FROM proposals WHERE owner_id = ? AND namespace = ? ORDER BY created_at DESC, task_id DESC LIMIT ?')
           .bind(owner, namespace, MAX_PROPOSALS).all(),
         env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner, namespace).first(),
+        env.DB.prepare('SELECT task_id, digest, received_at, payload FROM task_telemetry WHERE owner_id = ? AND namespace = ? ORDER BY received_at DESC, task_id')
+          .bind(owner, namespace).all(),
+        syncScope(),
       ]);
-      const projection = projectionRow ? JSON.parse(projectionRow.payload) : null;
+      const projection = combinedTelemetry(projectionRow ? JSON.parse(projectionRow.payload) : null, taskTelemetry.results);
       const projectedIds = new Set((projection?.records ?? []).map(r => r.record_type + ':' + r.id));
       const { items, ...recordCoverage } = snapshot.records;
       return json({
@@ -96,7 +135,9 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
         generated_at: new Date().toISOString(),
         source: 'GitHub main + private Sites records',
         records: [...items.map(item => item.record), ...rows.results.map(row => JSON.parse(row.record))].filter(r => !projectedIds.has(r.record_type + ':' + r.id)).concat(projection?.records ?? []),
-        execution: projection ? { authority: projection.authority, generated_at: projection.generated_at, events: projection.events, coverage: projection.coverage, acceptance: 'imported records are not approval receipts' } : null,
+        telemetry_scope: telemetryScope,
+        execution: projection ? { authority: projection.authority, generated_at: projection.generated_at, events: projection.events,
+          sources: projection.sources, coverage: projection.coverage, acceptance: 'imported records are not approval receipts' } : null,
         github: {
           ...snapshot,
           records: {

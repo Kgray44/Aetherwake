@@ -48,9 +48,35 @@ The Worker build uses the same Vite UI and shared intake code. It produces `dist
 - A private proposal can use a previously observed GitHub main revision during a rate limit or refresh failure. The proposal records that provenance through reload. A new public proposal requires a current snapshot. An initial outage with no known revision blocks both forms of intake.
 - GitHub reads are server-side and limited to `Kgray44/Aetherwake`. A Site that has used a configured credential keeps its cached data and reports degraded authentication if that credential is rejected or disappears. Both documented record paths are read at the resolved `refs/heads/main` SHA. At most six directory listings, twelve JSON files and 750 valid records are projected. Results expose pinned file paths and blob SHAs, omitted or unavailable paths, and truncation. Issues, pull requests and main CI show a bounded activity window independently of the v1 records. GitHub failures can affect sources independently. Intake requires a resolved main SHA. Workers share a 15-minute D1 cache, preserve the last successful result per source during outages, and honor GitHub’s retry headers. Optionally set the server-side Sites secret `GITHUB_READ_TOKEN` to a fine-grained credential for this repository with read-only Contents, Issues, Pull requests and Actions access. The token stays in the Worker and requests never follow redirects.
 - D1 holds up to 500 proposals per owner and namespace. Use `?verification=<random-uuid-v4>` to run a hosted create-and-reload check in an isolated namespace. The private API takes this value via `x-observatory-verification`. Remove the query parameter to return to the normal registry. No local records or credentials should be copied into the Site build or its source history.
-- The hosted Worker does not run agents, invoke approval, change GitHub, or integrate with Vela MissionService. Actual usage is unavailable unless supplied by a contract-backed measurement. GitHub check conclusions and merge state carry no task acceptance.
+- The hosted Worker does not run agents, invoke approval, or integrate with Vela MissionService. The GitHub write surfaces are create-only proposal publication and the CI controls below. Actual usage is unavailable unless supplied by a contract-backed measurement. GitHub check conclusions and merge state carry no task acceptance.
 
 Pull requests and CI runs have dedicated routeable lists, newest-created ordering, and detail views. The home feed previews the five latest entries from each loaded window. Details are fetched on demand and link to GitHub for full source and logs.
+
+### CI controls
+
+Set `OBSERVATORY_CI_OWNER_ID` to the authorized Sites user ID and configure a dedicated
+`GITHUB_ACTIONS_TOKEN` secret for `Kgray44/Aetherwake` with Actions write and repository
+metadata read. Use a fine-grained token or GitHub App credential and keep it distinct
+from the proposal and activity credentials. Without both settings only the GitHub read
+views are available. CI writes are disabled in isolated verification namespaces.
+
+The CI run detail confirms the workflow, run, attempt, job if applicable, and
+head revision before a write. Eligible actions are rerunning a failed workflow, all
+failed jobs in that workflow, or one failed job, and ordinary cancellation of an
+active run. Scope is restricted to same-repository workflow heads. The CI list permits
+dispatch of the existing Engineering Observatory diagnostic on `main` only. Its
+workflow checks the confirmed revision before checkout, so a moved ref cannot run
+the diagnostic against an unconfirmed revision. The dispatch inputs and scope must
+first be merged on the default branch.
+
+One persisted operation holds a run attempt or diagnostic workflow revision. Replaying
+the operation ID returns the stored receipt. After a lost response, the Site checks
+GitHub instead of resending the write. An ambiguous rerun or cancellation remains
+unattributed even if a matching state is later visible. GitHub does not provide a
+compare-and-set on run attempt for mutations, so the adapter preflights the exact
+identity and separately reports the observed outcome. For rejected actions, refresh the
+target before submitting a new operation. The audit store is capped at 1,000 operations
+per owner. Inspect existing receipts and use GitHub directly if that limit is reached.
 
 Private proposals can be edited from Task inspection while proposed. The Site stores priority,
 version, and the latest 20 operation receipts alongside the contract record. Writes require the
@@ -89,21 +115,35 @@ Use a dedicated private staging directory per Task, outside the journal and sour
 The watcher observes committed file changes and checks directory metadata every five seconds
 to recover missed notifications. It coalesces changes before reusing the bounded exporter.
 An unchanged snapshot keeps its original bytes for retry. An invalid journal leaves the last
-good file intact. The command reports staging status and performs no network requests.
+good file intact. The watcher reports staging status and performs no network requests.
 
-Import `observatory-projection.json` through the signed-in Site or pass its parsed contents to
-`project_execution_snapshot` in a session authorized for the private Site MCP connection.
-Reuse the same owner and verification namespace and check the `read_execution_projection` receipt.
-The foreground watcher prepares data only. An unattended workstation upload still requires a
-supported runtime that can access both the local file and the authenticated Site MCP tool.
-Each import replaces the selected namespace's bounded snapshot, so avoid concurrent producers
-for the same namespace.
+Open the signed-in Observatory in a browser with the File System Access API. In **Measured execution**,
+choose **Connect staging directory** and grant read access to the dedicated directory. The page reads only
+`observatory-projection.json` for the selected Task and monitors it while the tab remains open. It uses the
+existing Site session and sends only new events and changed records to the private Task telemetry endpoint.
+Worker compare-and-set receipts fence concurrent writes and retries. The page reads back the stored data
+before refreshing the execution feed. A lost response is reconciled against the stored receipt on retry or
+restart. Directory access is saved per authenticated owner and verification namespace, and may need renewal
+after a browser restart. You can disconnect from the panel at any time.
+
+Automatic delivery is bounded to eight Task projections and 2 MiB of payload per namespace, with at most
+24 Task projections per owner. The foreground session pauses on persistent errors after three scheduled
+retries. Previously synchronized events remain immutable. The selected local Task journal remains
+authoritative. A closed tab, unsupported browser, or signed-out session pauses delivery.
+
+The manual import and Site MCP routes still replace their respective namespace's legacy snapshot.
+The execution feed combines that snapshot with automatically delivered Task projections and uses the
+automatic records for Tasks connected through the new path. Existing MCP import/readback describes
+its own legacy snapshot.
 
 The Worker also implements stateless JSON-RPC `POST /mcp` (MCP 2026-07-28 discovery) with only `project_execution_snapshot` and `read_execution_projection`. Both require a real platform-injected Site-scoped caller identity. The import tool reuses the same bounded schema/sanitizer and private owner/namespace store; readback includes a SHA-256 receipt of the stored sanitized snapshot. Supplied owner IDs, execution tools, arbitrary SQL and approval actions are not supported. Browser cross-origin requests are rejected. Service-only access without visitor identity is rejected rather than translated into a fabricated owner.
 
 To activate on the **existing** private Site, its publication owner must add `mcp` to the private checkout's `.openai/hosting.json` capabilities, retain project identity/access policy, build and publish the reviewed source once, then request `get_site(include_mcp_connection:true)`. Sites provisions a private plugin; if unavailable, the returned plugin ID can be offered through the supported Install/Connect flow. Owner action may be needed for that connection. No credentials are stored in repository instructions or exporter output, and no bypass token is created/rotated.
 
-After connection, the authorized engineering agent can reconstruct and sanitize its private producer journal at task checkpoints, invoke the import tool in an isolated verification namespace, and compare its returned digest with the readback receipt before enabling routine live updates. Verify a fresh cloud task can access both the source journal and plugin independently. Site access alone cannot read a disconnected workstation. The snapshot tool does not authorize Tasks or move canonical state to D1. Do not claim automatic synchronization operational until this real unattended write/readback succeeds. The local MCP tests demonstrate protocol and isolation only; no connection or publication is implied.
+An authorized engineering agent can reconstruct and sanitize its private producer journal at task checkpoints,
+invoke the import tool in an isolated verification namespace, and compare its returned digest with the
+readback receipt. A cloud task needs independent access to both the producer journal and the Site connection.
+The tool does not authorize Tasks or move canonical state to D1.
 
 Projection admission rejects generation timestamps more than five minutes ahead of the Worker clock. A caller can keep at most eight verification namespaces plus its live projection; quota enforcement occurs inside the atomic SQLite insert, so concurrent first imports cannot exceed it. Existing namespaces remain updateable at quota. Reuse a verification namespace rather than generating one for every refresh. Each projection is bounded to 1 MiB at ingress; no raw-history accumulation occurs in D1. No automatic deletion of owner records is introduced.
 

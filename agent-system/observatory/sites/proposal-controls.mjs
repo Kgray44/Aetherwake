@@ -97,6 +97,10 @@ export async function changeProposal({ db, owner, namespace, id, action, validat
     UPDATE proposals SET record = ?, version = ?, priority = ?, receipts = ?
     WHERE owner_id = ? AND namespace = ? AND task_id = ? AND version = ? AND github_state IS NULL
       AND NOT EXISTS (
+        SELECT 1 FROM task_telemetry t
+        WHERE t.owner_id = proposals.owner_id AND t.namespace = proposals.namespace AND t.task_id = proposals.task_id
+      )
+      AND NOT EXISTS (
         SELECT 1 FROM private_projection p, json_each(p.payload, '$.records') r
         WHERE p.owner_id = proposals.owner_id AND p.namespace = proposals.namespace
           AND json_extract(r.value, '$.record_type') = 'task' AND json_extract(r.value, '$.id') = proposals.task_id

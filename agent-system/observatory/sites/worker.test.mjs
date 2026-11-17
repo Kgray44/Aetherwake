@@ -7,6 +7,7 @@ import addFormats from 'ajv-formats';
 import { createWorker } from './worker.mjs';
 import { cachedGitHub } from './github-cache.mjs';
 import { proposedTask } from '../intake.mjs';
+import { createTelemetryClient, readStagedSnapshot, retryTelemetry } from '../src/telemetry-client.mjs';
 
 const schema = JSON.parse(readFileSync(new URL('../../contracts/v1.schema.json', import.meta.url)));
 const validateEvent = addFormats(new Ajv2020({ strict: false })).compile(JSON.parse(readFileSync(new URL('../../contracts/trace-v1.schema.json',import.meta.url))));
@@ -39,6 +40,8 @@ function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
   sql.exec(conditionalCacheMigration);
   sql.exec(detailCacheMigration);
   sql.exec(readFileSync(new URL('./drizzle/0007_proposal_controls.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0008_ci_operations.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0009_task_telemetry.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
   const writes = [];
   const DB = {
@@ -149,6 +152,67 @@ test('private proposal control applies one versioned edit, fences concurrent wri
   const publicControl = '/api/tasks/' + publicTask.id + '/control';
   assert.equal((await call(publicControl, { headers })).status, 404);
   assert.equal((await call(publicControl, { method: 'POST', headers, body: JSON.stringify(edit) })).status, 404);
+});
+
+test('the automatic telemetry client resumes after a lost response, uploads only deltas and shows owner-scoped data', async t => {
+  const { call, post } = fixture(t);
+  const isolation = { 'x-observatory-verification': namespace };
+  const headers = { ...ownerHeader, ...isolation };
+  const { task } = await (await post(headers)).json();
+  const firstOverview = await (await call('/api/overview', { headers })).json();
+  const scope = firstOverview.telemetry_scope;
+  const path = '/api/task-telemetry/' + task.id;
+  const posted = [];
+  let loseReply = true;
+  const client = () => createTelemetryClient({ headers: isolation, scope, fetcher: async (url, options) => {
+    const response = await call(url, { ...options, headers: { ...ownerHeader, origin, ...options.headers } });
+    if (options.method === 'POST') {
+      posted.push(JSON.parse(options.body));
+      if (loseReply) { loseReply = false; throw Error('transport closed after commit'); }
+    }
+    return response;
+  } });
+  const generated = Date.now() - 1000;
+  const event = {
+    trace_version: 1, event_id: 'telemetry-probe-event', task_id: task.id, trace_id: 'trace-probe',
+    span_id: 'span-probe', repository: task.repository, revision: task.revision,
+    occurred_at: new Date(generated).toISOString(), kind: 'measurement', phase: 'verification',
+    measurements: [{ name: 'elapsed_wall_ms', availability: 'observed', value: 45, unit: 'ms', source: 'fixture', method: 'fixture' }],
+  };
+  const file = (offset, events) => new Blob([JSON.stringify({
+    export_version: 1, authority: 'local-task-records', repository: task.repository,
+    generated_at: new Date(generated + offset).toISOString(), records: [task], events,
+  })]);
+  const { snapshot: first } = await readStagedSnapshot(file(0, [event]));
+  await assert.rejects(client().synchronize(task.id, first), error => {
+    assert.equal(retryTelemetry(error, 1, 1000), 3000);
+    assert.equal(retryTelemetry(error, 4, 1000), null);
+    return true;
+  });
+  assert.equal((await client().synchronize(task.id, first)).changed, false);
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].records[0].objective, 'Private task details withheld');
+  const event2 = { ...event, event_id: 'another-probe-event', occurred_at: new Date(generated + 1).toISOString() };
+  const { snapshot: next } = await readStagedSnapshot(file(1, [event, event2]));
+  assert.equal((await client().synchronize(task.id, next)).changed, true);
+  assert.deepEqual(posted[1].records, []);
+  assert.deepEqual(posted[1].events.map(item => item.event_id), [event2.event_id]);
+  const replay = await call(path, { method: 'POST', headers: { ...headers, origin, 'content-type': 'application/json', 'x-observatory-sync-scope': scope }, body: JSON.stringify(posted[1]) });
+  assert.equal(replay.status, 200);
+  const overview = await (await call('/api/overview', { headers })).json();
+  assert.equal(overview.execution.events.length, 2);
+  assert.equal(overview.execution.sources[0].task_id, task.id);
+  assert.equal(overview.proposals.controls[task.id], undefined);
+  assert.equal((await (await call('/api/overview', { headers: ownerHeader })).json()).execution, null);
+  assert.equal((await call(path, { headers: { ...headers, 'oai-authenticated-user-id': 'owner-2', 'x-observatory-sync-scope': scope } })).status, 403);
+  assert.equal((await call(path, { headers })).status, 403);
+  assert.equal((await call(path)).status, 401);
+  await assert.rejects(client().synchronize(task.id, { ...next, events: [event2] }), /missing previously synchronized/);
+  await assert.rejects(client().synchronize(task.id, { ...next, events: [{ ...event, phase: 'other' }, event2] }), /rewrites/);
+  const badChange = { ...posted[1], base: overview.execution.sources[0].digest, generated_at: new Date(generated + 2).toISOString(),
+    events: [{ ...event, event_id: 'outside-task', task_id: 'outside-task' }] };
+  assert.equal((await call(path, { method: 'POST', headers: { ...headers, origin, 'content-type': 'application/json', 'x-observatory-sync-scope': scope },
+    body: JSON.stringify(badChange) })).status, 400);
 });
 
 test('a contract-valid proposal persists with owner and verification boundaries', async t => {
@@ -404,6 +468,7 @@ test('pull requests and cross-branch runs expose a bounded newest-created window
         id: 2000 + index, name:'Verification', display_title:'Run ' + index,
         created_at:dateAt(index), updated_at:dateAt(200 - index), actor:{login:'contributor'}, head_sha:rev,
         head_branch:index % 2 ? 'feature' : 'main', event:'pull_request', run_attempt:2, status:'completed', conclusion:'success',
+        workflow_id:2300, head_repository:{id:2400},
       }))});
     }
     return githubReadResponse(path);
@@ -425,6 +490,7 @@ test('pull requests and cross-branch runs expose a bounded newest-created window
     url:'https://github.com/Kgray44/Aetherwake/actions/runs/2041', revision:rev,
     date:dateAt(159), created_at:dateAt(41), updated_at:dateAt(159), author:'contributor',
     branch:'feature', workflow:'Verification', event:'pull_request', attempt:2, status:'completed', conclusion:'success',
+    workflow_id:2300, head_repository_id:2400,
   });
   assert.equal(snapshot.ci.items[1].branch, 'main');
 });
