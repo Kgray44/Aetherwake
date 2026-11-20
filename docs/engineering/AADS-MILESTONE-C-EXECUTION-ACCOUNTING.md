@@ -85,3 +85,27 @@ production latency target, a model token reduction, or a cost reduction.
 Representative charged or signed-in provider trials, verified model/effort outcomes,
 Task difficulty matching, live engine dispatch, retry-policy ownership and
 quality-preserving context or routing changes remain separate acceptance work.
+
+## Paired experiment query
+
+Pass reviewed pair definitions as `experimentPairs` to the existing
+`buildEngineeringAnalytics` query. Each definition names a baseline Task ID,
+a candidate Task ID, the reviewed workload-and-protocol SHA-256, and a declared
+difficulty (`simple`, `moderate`, or `complex`). A Task ID may occur in only one
+arm. The query reuses the loaded canonical Task, Attempt and execution-trace data.
+It checks repository, starting Task revision, class, verification profile and
+criterion IDs. The trial operator supplies the workload digest and difficulty and
+independently establishes matching inputs, tools and scope. The query cannot
+verify experimental design from an identifier.
+
+Both arms need accepted Tasks, contiguous terminal attempt histories, and complete
+token coverage. Retries and failed attempts are included in the token total.
+A candidate Task failure after a verified baseline is reported as a quality
+regression. Both rejected pair matches and incomplete coverage suppress the
+token-reduction percentage.
+
+The time comparison spans the first recorded attempt start through the last
+recorded attempt finish, including gaps between attempts. It excludes Task
+registration and acceptance delay. Cost is available only if every attempt has
+one attributable observed USD total. Per-pair differences are computed from exact
+input data, with no promotion, billing, or causal inference from the result.
