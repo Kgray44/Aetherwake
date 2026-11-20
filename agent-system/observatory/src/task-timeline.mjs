@@ -18,7 +18,7 @@ const workerStages = {
   checkout_fetch:'Fetch pinned revision', checkout_materialization:'Materialize checkout',
   checkout_validation:'Validate checkout', candidate_git_verification:'Verify candidate revision',
   codex_turn:'Codex work',
-  candidate_submission:'Submit candidate', checkout_lock_release:'Release checkout lock',
+  candidate_submission:'Submit candidate', terminal_reporting:'Report terminal outcome', checkout_lock_release:'Release checkout lock',
 };
 
 export function executorHeartbeat({ taskId, attempt, state, audits = [], now = Date.now() }) {
@@ -39,10 +39,17 @@ export function executorHeartbeat({ taskId, attempt, state, audits = [], now = D
 
 export function taskExecutionStatus({taskId,state,attempt,events=[],audits=[]}) {
   if (!attempt || ['admitted','queued','ready','scheduled','blocked','paused'].includes(state)) return null;
-  if (state==='failed'&&(attempt.state==='failed'||attempt.state==='blocked'||attempt.failure||attempt.failure_diagnosis)) return {
-    title:'Attempt '+attempt.attempt_number+' failed',tone:'error',at:attempt.finished_at,
-    description:attempt.failure_diagnosis??attempt.failure??'No failure reason was recorded.',
-  };
+  if (state==='failed'&&(attempt.state==='failed'||attempt.state==='blocked'||attempt.failure||attempt.failure_diagnosis)) {
+    const interrupted = events.filter(event=>event.task_id===taskId&&event.attempt_id===attempt.id&&
+      event.revision===attempt.revision&&event.kind==='span_end'&&event.span_id==='codex-'+attempt.id+'-codex_turn'&&
+      event.state==='interrupted').sort((a,b)=>Date.parse(b.occurred_at)-Date.parse(a.occurred_at))[0];
+    const diagnosis=attempt.failure_diagnosis??attempt.failure??'No failure reason was recorded.';
+    return {
+      title:interrupted?'Codex turn interrupted':'Attempt '+attempt.attempt_number+' failed',tone:'error',
+      at:interrupted?.occurred_at??attempt.finished_at,
+      description:interrupted?'The execution trace recorded the interruption. Task Engine outcome: '+diagnosis:diagnosis,
+    };
+  }
   if (!activeExecution.has(state)) {
     if (!attempt.finished_at||state==='completed'||state==='archived') return null;
     return {title:attempt.session_id?'Codex stopped working':'Execution attempt ended',tone:'neutral',

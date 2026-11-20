@@ -236,7 +236,7 @@ async function executeAppServer(connector, {cwd,task,attempt,onSession,onUsage,o
     resumeSessionId:attempt.resume_session_id,signal,onSession,onDevelopmentNote,onTurnStarted,onTurnFinished,
     onUsageSnapshot:onUsage&&((usage,scope)=>recordUsage(usage,'fresh_thread_progress',scope))});
   if (result.status==='completed') await recordUsage(result.usage,'fresh_thread_total',{sessionId:result.sessionId});
-  return {ok:result.status==='completed',stopped:signal.aborted};
+  return {ok:result.status==='completed',stopped:signal.aborted,providerStatus:result.status};
 }
 
 export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
@@ -251,37 +251,52 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let executionIdentity;
   let identity;
   let desired;
-  let leaseLost = false;
+  let stopReason;
+  let terminalConfirmed = false;
+  let leaseUntil = attempt.lease_until ?? attempt.deadline;
+  const timeUntilLeaseExpiry = () => leaseUntil - Date.now();
   let reports = Promise.resolve();
-  const report = (type, fields = {}) => {
-    const pending = reports.then(async () => {
-      const request = { op: 'report', task_id: task.id, attempt_id: attempt.id, lease,
-        operation_id: randomUUID(), report: { type, ...fields,
-          ...(sessionId ? { session_id: sessionId } : {}), ...(executionIdentity ? { execution_identity:executionIdentity } : {}),
-          ...(identity ? { branch: identity.branch } : {}) } };
-      // Replay the same operation if a report's outcome is ambiguous.
-      try { return await send(request); }
+  const report = async (type, fields = {}) => {
+    let request;
+    for (;;) {
+      const pending = reports.then(async () => {
+        if (type==='heartbeat'&&terminalConfirmed) return null;
+        request ??= { op: 'report', task_id: task.id, attempt_id: attempt.id, lease,
+          operation_id: randomUUID(), report: { type, ...fields,
+            ...(sessionId ? { session_id: sessionId } : {}), ...(executionIdentity ? { execution_identity:executionIdentity } : {}),
+            ...(identity ? { branch: identity.branch } : {}) } };
+        const result = await send(request);
+        if (type!=='heartbeat') { terminalConfirmed=true; heartbeats.abort(); }
+        return result;
+      });
+      reports = pending.catch(()=>{});
+      try { return await pending; }
       catch (error) {
-        if (error.status && error.status < 500) throw error;
-        return send(request);
+        const retryable = !error.status || error.status >= 500 || error.code === 'task_version_conflict';
+        if (!retryable || timeUntilLeaseExpiry() <= 1500) throw error;
+        // Retry the same immutable operation without blocking a renewal during backoff.
+        await sleep(750);
       }
-    });
-    reports=pending.catch(()=>{});
-    return pending;
+    }
   };
   const confirmControl = async () => {
-    const state = (await report('heartbeat')).lifecycle.state;
+    if (terminalConfirmed) return;
+    const result = await report('heartbeat');
+    if (!result) return;
+    const expiry = result.attempts?.find(item=>item.id===attempt.id)?.lease_until;
+    if (Number.isFinite(expiry)) leaseUntil = expiry;
+    const state = result.lifecycle.state;
     if (state === 'pausing' || state === 'cancelling') {
       desired = state;
       controller.abort();
     }
   };
-  const update = async () => {
-    await admitStorage();
-    if (workspace) await checkWorkspaceTelemetryScope(workspace, verificationNamespace ?? undefined);
-    await confirmControl();
+  const stop = reason => {
+    stopReason ??= reason;
+    controller.abort();
   };
   let monitoring;
+  let storageMonitoring;
   let lock;
   let outcome;
   let executionEnd;
@@ -310,21 +325,41 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     try { await callback?.({ task, attempt, verificationNamespace, providerStream, ...payload }); }
     catch { console.error('Task execution telemetry could not be recorded.'); }
   };
+  const guardStorage = async () => {
+    try { await admitStorage(); }
+    catch (error) { stop('The worker storage check failed before execution.'); throw error; }
+  };
   try {
+    monitoring = (async () => {
+      while (!heartbeats.signal.aborted) {
+        try { await confirmControl(); }
+        catch (error) {
+          stop(error.code==='lease_rejected'
+            ? 'The Task Engine rejected this worker lease.'
+            : 'The worker could not confirm lease renewal with the Task Engine.');
+          return;
+        }
+        try { await sleep(interval, undefined, {signal:heartbeats.signal}); }
+        catch { return; }
+      }
+    })();
     if (telemetryDirectory && !onTelemetryStart && !onUsage && !onTelemetryEnd) {
-      await admitStorage();
+      await guardStorage();
       ({ onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage, onTelemetryStageStart, onDevelopmentNote } =
         createClaimTelemetryHooks(telemetryDirectory, {managedConnection}, telemetryDirectory));
       telemetryStarted = liveStages = true;
     }
-    await measureStage('worker_initialization','queue',update);
-    monitoring = (async () => {
-      while (!workerSignal.aborted && !heartbeats.signal.aborted) {
-        try {
-          await sleep(interval, undefined, { signal: AbortSignal.any([heartbeats.signal, workerSignal]) });
-        } catch { return; }
-        try { await update(); }
-        catch { leaseLost = true; controller.abort(); }
+    await measureStage('worker_initialization','queue',async () => {
+      if (!liveStages) await guardStorage();
+      if (workspace) await checkWorkspaceTelemetryScope(workspace, verificationNamespace ?? undefined);
+    });
+    storageMonitoring = (async () => {
+      const checkSignal = AbortSignal.any([heartbeats.signal,workerSignal]);
+      while (!checkSignal.aborted) {
+        try { await sleep(240_000,undefined,{signal:checkSignal}); }
+        catch { return; }
+        try { await admitStorage(); }
+        catch { stop('The worker stopped because the storage check could not confirm a safe write.'); return; }
       }
     })();
     if (prepareWorkspace) {
@@ -337,7 +372,11 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     workerSignal.throwIfAborted();
     await measureStage('checkout_validation','context',async () => {
       identity = await identify(workspace, attempt.revision);
-      lock = await open(join(workspace, '.git', 'aads-task-worker.lock'), 'wx');
+      try { lock = await open(join(workspace, '.git', 'aads-task-worker.lock'), 'wx'); }
+      catch (error) {
+        if (error.code === 'EEXIST') stop('The checkout is still locked. Confirm the previous executor has stopped and reconcile its files before retrying.');
+        throw error;
+      }
       if (identity.revision !== attempt.revision || ((!attempt.resume_session_id||attempt.resume_requires_clean)&&identity.dirty)) {
         throw Error('Workspace must match the attempt revision and cleanliness policy');
       }
@@ -359,8 +398,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
         executionIdentity=observedIdentity;
         try { await confirmControl(); }
         catch (error) {
-          leaseLost=true;
-          controller.abort();
+          stop('The Task Engine could not bind the Codex session to the active attempt.');
           throw error;
         }
       },
@@ -387,18 +425,20 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     outcome = { ok: false };
   } finally {
     if (telemetryStarted) executionEnd = {at:new Date().toISOString(),monotonic:performance.now()};
-    heartbeats.abort();
-    await monitoring;
   }
+  const terminal = async (type, fields) => {
+    const submit = () => report(type,fields);
+    if (type === 'finished') await submit();
+    else await measureStage('terminal_reporting','integration',submit);
+  };
   try {
-    if (leaseLost) {
-      executionState = 'interrupted';
-      return;
+    if (!desired && outcome?.ok) {
+      try { await confirmControl(); }
+      catch { stop('The worker could not confirm Task state before candidate submission.'); }
     }
-    if (!desired && outcome?.ok) await confirmControl();
     if (desired && (outcome?.stopped || outcome?.ok || workerSignal.aborted)) {
       const checkpoint = desired === 'pausing' && identity ? await identify(workspace, attempt.revision).catch(() => null) : null;
-      await report('stopped', checkpoint && checkpoint.branch === identity?.branch ? { revision: checkpoint.revision } : {});
+      await terminal('stopped', checkpoint && checkpoint.branch === identity?.branch ? { revision: checkpoint.revision } : {});
       executionState = 'interrupted';
     } else if (outcome?.ok && !workerSignal.aborted) {
       let result;
@@ -417,21 +457,27 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       }
       const lacksDeliverable=task.deliverables?.length>0&&result?.revision===attempt.revision;
       if (result && !result.dirty && result.branch === identity.branch && !lacksDeliverable) {
-        await measureStage('candidate_submission','integration',() => report('finished', { result: 'candidate', revision: result.revision }));
+        await measureStage('candidate_submission','integration',() => terminal('finished', { result: 'candidate', revision: result.revision }));
         executionState = 'completed';
       } else {
-        await report('failed', { failure: lacksDeliverable
+        await terminal('failed', { failure: lacksDeliverable
           ? 'The executor completed without creating a revision for the declared deliverables.'
           : 'Candidate workspace did not yield a clean, pinned revision.' });
       }
     } else {
       if (workerSignal.aborted) executionState = 'interrupted';
-      await report('failed', { failure: workerSignal.aborted
-        ? 'Executor interrupted before producing a candidate.'
+      const failure = stopReason ?? (signal.aborted ? 'The worker shut down before a candidate was submitted.'
+        : workerSignal.aborted ? 'The attempt reached its execution time limit.'
         : provisioning ? 'The worker could not provision the pinned Task checkout.'
-          : 'Executor or workspace failed before producing a candidate.' });
+        : outcome?.providerStatus==='disconnected' ? 'The Codex App Server disconnected before reporting a terminal turn.'
+        : outcome?.providerStatus==='interrupted' ? 'Codex reported that the turn was interrupted.'
+        : 'Executor or workspace failed before producing a candidate.');
+      await terminal('failed', {failure});
     }
   } finally {
+    heartbeats.abort();
+    if (!terminalConfirmed && stopReason) console.error('Task interruption:',stopReason);
+    await Promise.all([monitoring,storageMonitoring]);
     try {
       if (lock) await measureStage('checkout_lock_release','other',async () => {
         await lock.close();
@@ -500,17 +546,23 @@ async function main(configPath) {
   const admitStorage = () => runFile(config.storage_check[0], config.storage_check.slice(1), {
     cwd: root, windowsHide: true, timeout: 5000, maxBuffer: 8192,
   });
-  let connector;
-  const getConnector=()=>connector??=openObservatoryConnector({cwd:root,tool,executable:config.codex_bin});
-  function call(args, toolName) {
-    const current = getConnector();
-    return current.call(args,toolName).catch(error => {
-      if (!error.status && connector === current) { current.close(); connector = undefined; }
-      throw error;
-    });
+  function connection() {
+    let connector;
+    return {
+      close: () => connector?.close(),
+      call(args, toolName) {
+        const current = connector ??= openObservatoryConnector({cwd:root,tool,executable:config.codex_bin});
+        return current.call(args,toolName).catch(error => {
+          if (!error.status && connector === current) { current.close(); connector = undefined; }
+          throw error;
+        });
+      },
+    };
   }
-  const send = request => call({ request, worker_key: credential, ...(verification ? { verification } : {}) });
-  const managedConnection = { call:args => call(args,'aetherwake_engineering_observatory.sync_task_telemetry') };
+  const control = connection();
+  const delivery = connection();
+  const send = request => control.call({ request, worker_key: credential, ...(verification ? { verification } : {}) });
+  const managedConnection = { call:args => delivery.call(args,'aetherwake_engineering_observatory.sync_task_telemetry') };
   let recoveryCursor = 0;
   let nextRecovery = 0;
   async function recoverIdleTelemetry() {
@@ -577,7 +629,8 @@ async function main(configPath) {
   } finally {
     controller.abort();
     await Promise.all(active);
-    connector?.close();
+    delivery.close();
+    control.close();
   }
 }
 

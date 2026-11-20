@@ -363,6 +363,55 @@ test('a checkout failure exposes live and terminal telemetry before any Codex th
   assert.ok(!projection.events.some(event=>event.phase==='implementation'));
 });
 
+test('lease renewals continue during pending preflight and a lost terminal acknowledgment is replayed', async t => {
+  const {call,register,command,get}=setup(t);
+  const task=await register('Lease reconciliation');
+  assert.equal((await command(task,'admit',{executor:'codex'})).status,200);
+  const {body:{claim}}=await call({op:'claim',operation_id:crypto.randomUUID()},'worker');
+  const preflight=Promise.withResolvers();
+  let beats=0;
+  const heartbeatIds=[];
+  const terminalIds=[];
+  let receipt;
+  const send=async request=>{
+    if (request.report.type==='heartbeat') {
+      heartbeatIds.push(request.operation_id);
+      if (heartbeatIds.length===1) throw Object.assign(Error('Temporary transport failure'),{status:503});
+      beats++;
+      if (beats===2) preflight.resolve();
+    }
+    const result=await call(request,'worker');
+    if (result.status!==200) throw Object.assign(Error(result.body.error),{status:result.status});
+    if (request.report.type==='failed') {
+      terminalIds.push(request.operation_id);
+      if (terminalIds.length===1) {
+        receipt=result.body.events.at(-1);
+        throw Error('Connection closed after persistence');
+      }
+    }
+    return result.body;
+  };
+  await runClaim({claim,send,interval:10,signal:AbortSignal.timeout(5000),
+    admitStorage:async()=>{await Promise.race([preflight.promise,new Promise((_,reject)=>{
+      const timeout=setTimeout(()=>reject(Error('Heartbeat did not reach the Engine during preflight')),1000);
+      timeout.unref();
+    })]);},
+    prepareWorkspace:async()=>{throw Error('Synthetic checkout unavailable');},
+    execute:async()=>assert.fail('No executor should start after failed preparation'),
+  });
+  const result=await get(task);
+  assert.equal(beats>=2,true);
+  assert.equal(heartbeatIds[0],heartbeatIds[1]);
+  assert.equal(terminalIds.length,2);
+  assert.equal(terminalIds[0],terminalIds[1]);
+  assert.equal(result.events.filter(event=>event.kind==='failed').length,1);
+  const report=result.events.find(event=>event.kind==='failed');
+  assert.equal(report.operation_id,receipt.operation_id);
+  assert.match(report.reason,/provision the pinned Task checkout/);
+  assert.equal(result.lifecycle.state,'failed');
+  assert.match(result.attempts[0].failure,/provision the pinned Task checkout/);
+});
+
 test('real subprocess demo persists two artifacts before verified A admits B', async t => {
   const { call, register, command, get, pin } = setup(t);
   const parent = await mkdtemp(join(tmpdir(), 'aads-task-engine-'));

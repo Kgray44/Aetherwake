@@ -517,6 +517,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     ...(['admit','configure_execution'].includes(action?.type) ? { max_attempt_minutes:attemptLimit(change.lifecycle),
       start_at:timestamp(change.lifecycle.start_at),cancel_with_dependency:change.lifecycle.cancel_with_dependency } : {}),
     ...(['reject','retry'].includes(action?.type) ? { reason:(action.reason??action.changed_assumption).trim() } : {}),
+    ...(body.report?.type==='failed' && latest?.failure ? {reason:latest.failure}:{}),
     ...(action?.type === 'edit' ? { fields:[
       ...['title','objective','classification','prerequisites','requirements','deliverables','acceptance'].filter(key =>
         JSON.stringify(task[key]) !== JSON.stringify(nextTask[key])),
