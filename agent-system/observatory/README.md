@@ -232,3 +232,11 @@ The worker logs the configured model, effort, client version and expiry, and
 passes the exact selection to the normal Codex subprocess. Live workers and
 verification workers without the setting retain the existing defaults. Catalog
 support and configured flags do not certify provider execution, cost or quality.
+
+### Candidate readback
+
+The Codex worker reports a candidate after reading back a clean checkout with a
+tracked Git tree that differs from the attempt's execution tree. A successful
+provider turn with no tracked output is recorded as a failed attempt. An empty
+commit alone cannot move a Task into verification. Observations from the provider
+turn remain available on the attempt.

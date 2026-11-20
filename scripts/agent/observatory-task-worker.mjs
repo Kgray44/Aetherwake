@@ -240,7 +240,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       await report('stopped', checkpoint && checkpoint.branch === identity?.branch ? { revision: checkpoint.revision } : {});
       executionState = 'interrupted';
     } else if (outcome?.ok && !workerSignal.aborted) {
-      let result;
+      let result, changedTree;
       try {
         result = await identify(workspace, attempt.revision);
         if (result.dirty && result.branch === identity.branch && result.revision === attempt.revision) {
@@ -248,14 +248,23 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
           await checkpointCandidate(workspace, result, task, attempt);
           result = await identify(workspace, attempt.revision);
         }
+        if (!result.dirty && result.branch === identity.branch) {
+          const [startingTree, candidateTree] = await Promise.all([
+            git(workspace, 'rev-parse', attempt.revision + '^{tree}'),
+            git(workspace, 'rev-parse', result.revision + '^{tree}'),
+          ]);
+          changedTree = startingTree !== candidateTree;
+        }
       } catch {
         result = undefined;
       }
-      if (result && !result.dirty && result.branch === identity.branch) {
+      if (!result || result.dirty || result.branch !== identity.branch) {
+        await report('failed', { failure: 'Candidate workspace did not yield a clean, pinned revision.' });
+      } else if (!changedTree) {
+        await report('failed', { failure: 'Candidate workspace produced no tracked changes at the execution pin.' });
+      } else {
         await report('finished', { result: 'candidate', revision: result.revision });
         executionState = 'completed';
-      } else {
-        await report('failed', { failure: 'Candidate workspace did not yield a clean, pinned revision.' });
       }
     } else {
       if (workerSignal.aborted) executionState = 'interrupted';

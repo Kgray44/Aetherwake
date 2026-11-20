@@ -358,3 +358,45 @@ test('verification route pins exact model and effort only with a matching fresh 
   assert.throws(() => qualify({config:{...config,effort:'ultra'}}),/not listed/);
   assert.throws(() => qualify({config:{...config,model:'gpt-6.2-astra'}}),/not listed/);
 });
+
+test('the worker rejects a successful provider turn whose candidate tree is unchanged', async t => {
+  const {call,register,command,get,pin} = setup(t);
+  const root = await mkdtemp(join(tmpdir(),'aads-unchanged-candidate-'));
+  t.after(() => rm(root,{force:true,recursive:true}));
+  const workspace = await realpath(root);
+  const exec = promisify(execFile);
+  const git = async (...args) => (await exec('git',args,{cwd:workspace,windowsHide:true})).stdout.trim();
+  await git('init');
+  await git('remote','add','origin','https://github.com/Kgray44/Aetherwake.git');
+  await git('switch','-c','codex/aads-task-no-artifact');
+  await git('config','user.name','Test worker');
+  await git('config','user.email','test@example.test');
+  await git('commit','--allow-empty','-m','base pin');
+  const base = await git('rev-parse','HEAD');
+  pin(base);
+  for (const produceEmptyCommit of [false,true]) {
+    const task = await register('unchanged candidate');
+    assert.equal((await command(task,'admit',{executor:'codex'})).status,200);
+    const claim = (await call({op:'claim',task_ids:[task.task.id],operation_id:crypto.randomUUID()},'worker')).body.claim;
+    let ended;
+    await runClaim({
+      claim,workspace,signal:AbortSignal.timeout(10_000),admitStorage:async () => {},
+      send:async request => {
+        const response = await call(request,'worker');
+        assert.equal(response.status,200);
+        return response.body;
+      },
+      execute:async ({onSession}) => {
+        if (produceEmptyCommit) await git('commit','--allow-empty','-m','empty candidate');
+        onSession(crypto.randomUUID());
+        return {ok:true};
+      },
+      onTelemetryEnd: payload => {ended=payload.state;},
+    });
+    const result = await get(task);
+    assert.equal(result.lifecycle.state,'failed');
+    assert.equal(result.attempts[0].candidate_revision,undefined);
+    assert.match(result.attempts[0].failure,/no tracked changes/i);
+    assert.equal(ended,'failed');
+  }
+});
