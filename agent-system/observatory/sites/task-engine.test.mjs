@@ -21,7 +21,7 @@ const fields = name => ({
   primary: 'backend', profile_id: 'backend', criteria: ['Artifact is readable'], dependencies: [],
 });
 
-function setup(t) {
+function setup(t, { countAuditWrites = false } = {}) {
   const sqlite = new DatabaseSync(':memory:');
   t.after(() => sqlite.close());
   for (const migration of ['0000_proposals', '0003_proposal_publication', '0004_cached_proposal_revision',
@@ -33,7 +33,12 @@ function setup(t) {
     return { bind: (...args) => ({
       first: async () => stmt.get(...args) ?? null,
       all: async () => ({ results: stmt.all(...args) }),
-      run: async () => ({ meta: stmt.run(...args) }),
+      run: async () => {
+        const meta = stmt.run(...args);
+        const includesAuditWrite = /(?:UPDATE proposals SET record = \?, engine = \?|INSERT OR IGNORE INTO proposals)/.test(statement);
+        if (countAuditWrites && includesAuditWrite && meta.changes === 1) meta.changes = 2;
+        return { meta };
+      },
     }) };
   } };
   let now = Date.now();
@@ -305,11 +310,51 @@ test('verification workers reject checkouts connected to a different delivery na
   await mkdir(connection, { recursive: true });
   const config = namespace => writeFile(join(connection, 'connection.json'), JSON.stringify({
     version: 1, ...(namespace ? { verification: namespace } : {}),
-  }));
+  }), { mode: 0o600 });
   await config();
   await checkWorkspaceTelemetryScope(root, undefined);
   await assert.rejects(checkWorkspaceTelemetryScope(root, verification), /telemetry namespace/);
   await config(verification);
   await assert.rejects(checkWorkspaceTelemetryScope(root, undefined), /telemetry namespace/);
   await checkWorkspaceTelemetryScope(root, verification);
+});
+
+test('trigger-backed Task writes return success independently of D1 change counts', async t => {
+  const { call, register, command, get } = setup(t, { countAuditWrites: true });
+  const task = await register('D1 trigger write counts');
+  const admission = await command(task, 'admit', { executor: 'codex' });
+  assert.equal(admission.status, 200);
+  const claim = await call({ op: 'claim', operation_id: crypto.randomUUID(), task_ids: [task.task.id] }, 'worker');
+  assert.equal(claim.status, 200);
+  const active = claim.body.claim;
+  const status = await call({ op: 'report', task_id: task.task.id, attempt_id: active.attempt.id, lease: active.lease,
+    operation_id: crypto.randomUUID(), report: { type: 'finished', result: 'candidate', revision: rev } }, 'worker');
+  assert.equal(status.status, 200);
+  const detail = await get(task);
+  assert.equal(detail.lifecycle.state, 'verifying');
+  assert.deepEqual(detail.events.map(item => item.kind), ['register', 'admit', 'claim', 'finished']);
+});
+
+test('verification route pins exact model and effort only with a matching fresh Codex catalog', async () => {
+  const {buildCodexArgs,validateVerificationRoute} = await import('../../../scripts/agent/observatory-task-worker.mjs');
+  const config = {model:'gpt-6.2-sol',effort:'medium'};
+  const catalog = {
+    client_version:'0.169.1', fetched_at:'2026-11-20T00:00:00.000Z',
+    models:[{slug:config.model,supported_reasoning_levels:[{effort:'medium'}]}],
+  };
+  const now = Date.parse('2026-11-20T01:00:00.000Z');
+  const verification = crypto.randomUUID();
+  const qualify = (changes = {}) => validateVerificationRoute({config,catalog,version:'0.169.1',verification,now,...changes});
+  const route = qualify();
+  assert.deepEqual(route,{...config,clientVersion:'0.169.1',expiresAt:Date.parse('2026-11-21T00:00:00.000Z')});
+  const args = buildCodexArgs('D:/trial',{},route);
+  assert.deepEqual(args.slice(args.indexOf('--model'),args.indexOf('--model')+4),[
+    '--model','gpt-6.2-sol','--config','model_reasoning_effort="medium"',
+  ]);
+  assert.equal(buildCodexArgs('D:/trial',{}).includes('--model'),false);
+  assert.throws(() => qualify({verification:undefined}),/verification namespace/);
+  assert.throws(() => qualify({version:'0.153.3'}),/fresh catalog for this Codex client/);
+  assert.throws(() => qualify({now:now+86400000}),/fresh catalog for this Codex client/);
+  assert.throws(() => qualify({config:{...config,effort:'ultra'}}),/not listed/);
+  assert.throws(() => qualify({config:{...config,model:'gpt-6.2-astra'}}),/not listed/);
 });
