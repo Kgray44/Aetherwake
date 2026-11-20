@@ -159,3 +159,37 @@ test('unknown paths and classifications do not establish test independence', () 
   assert.ok(result.required_check_ids.includes('authorization-tests'));
   assert.ok(result.required_check_ids.includes('visual-review'));
 });
+
+test('execution routing proposes only catalog-qualified and independently reviewed improvements in the exact Task scope', async () => {
+ const { executionEvidenceScope, suggestExecutionRoute } = await import('../scripts/agent/execution-routing.mjs');
+ const task = fixture();
+ const plan = routeTask(task,['scripts/example.mjs']);
+ const request = {difficulty:'moderate',context_profile:'compact-v1',failed_before:false};
+ const configured = {provider:'codex',model:'gpt-6.2-sol',effort:'high',client_version:'0.169.1'};
+ const candidate = {...configured,effort:'medium'};
+ const catalog = {
+  provider:'codex',client_version:'0.169.1',fetched_at:'2026-11-20T01:00:00.000Z',
+  models:[{model:configured.model,efforts:['medium','high']}],
+ };
+ const now = Date.parse('2026-11-20T02:00:00.000Z');
+ const review = {
+  id:'matched-holdout-v1',independently_reviewed:true,holdout:true,expires_at:'2026-11-21T01:00:00.000Z',
+  scope:executionEvidenceScope(task,plan,request),configured,candidate,
+  paired:{count:3,baseline_verified:3,candidate_verified:3,baseline_tokens:3000,candidate_tokens:2100,
+   baseline_cost_usd:null,candidate_cost_usd:null,guardrails_passed:true},
+ };
+ const run = (extra={}) => suggestExecutionRoute(task,plan,{schema_version:1,configured,catalog,request,reviews:[review],...extra},now);
+ assert.equal(run().status,'candidate');
+ assert.deepEqual(run().route,candidate);
+ assert.equal(run().comparison_basis,'provider_tokens');
+ assert.equal(run().authorized,false);
+ assert.equal(run({request:{...request,failed_before:true}}).status,'keep_configured');
+ assert.equal(run({catalog:{...catalog,client_version:'0.153.3'}}).status,'keep_configured');
+ assert.equal(run({reviews:[{...review,candidate:{...candidate,effort:'ultra'}}]}).status,'keep_configured');
+ const regression = {...review,id:'regressed',paired:{...review.paired,candidate_verified:2}};
+ assert.equal(run({reviews:[review,regression]}).status,'keep_configured');
+ const unknown = {...review,paired:{...review.paired,baseline_tokens:null,candidate_tokens:null}};
+ assert.equal(run({reviews:[unknown]}).status,'keep_configured');
+ const costly = {...review,paired:{...review.paired,baseline_cost_usd:1,candidate_cost_usd:2}};
+ assert.equal(run({reviews:[costly]}).status,'keep_configured');
+});

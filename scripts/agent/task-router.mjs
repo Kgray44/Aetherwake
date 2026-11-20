@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { suggestExecutionRoute } from './execution-routing.mjs';
 /**
  * Phase B: deterministic engineering-task workflow selection.
  * This is NOT Vela MissionService's task router and does not replace governance.
@@ -152,10 +153,10 @@ export async function prepareTask(task, {
 }
 
 function usage() {
-  return 'Usage: node scripts/agent/task-router.mjs --task-file <v1-task.json> [--path <repo-path>]... [--json] [--prepare --owner component=tracked/path [--context-file <private.json>] [--with-governance --json]]';
+  return 'Usage: node scripts/agent/task-router.mjs --task-file <v1-task.json> [--path <repo-path>]... [--json] [--execution-evidence <private.json> --json] [--prepare --owner component=tracked/path [--context-file <private.json>] [--with-governance --json]]';
 }
 async function main(argv) {
-  let file, contextFile;
+  let file, contextFile, executionEvidenceFile;
   const paths=[], owners=[];
   let json=false, prepare=false, includeGovernance=false;
   for(let i=0;i<argv.length;i++){
@@ -164,6 +165,7 @@ async function main(argv) {
     else if(arg==='--path') { const p=argv[++i]; if(!p) invalid('--path requires value'); paths.push(p); }
     else if(arg==='--owner') { const owner=argv[++i]; if(!owner) invalid('--owner requires value'); owners.push(owner); }
     else if(arg==='--context-file') { contextFile=argv[++i]; if(!contextFile) invalid('--context-file requires path'); }
+    else if(arg==='--execution-evidence') { executionEvidenceFile=argv[++i]; if(!executionEvidenceFile) invalid('--execution-evidence requires path'); }
     else if(arg==='--prepare') prepare=true;
     else if(arg==='--with-governance') includeGovernance=true;
     else if(arg==='--json') json=true;
@@ -175,6 +177,11 @@ async function main(argv) {
   if(!prepare && (contextFile || owners.length)) invalid('Context options require --prepare');
   if(includeGovernance && !(prepare && json)) invalid('--with-governance requires --prepare and --json');
   const plan=prepare ? await prepareTask(task,{paths,owners,contextFile,includeGovernance}) : routeTask(task,paths);
+  if (executionEvidenceFile) {
+    if (!json) invalid('--execution-evidence requires --json');
+    const evidence = JSON.parse(readFileSync(resolve(process.cwd(),executionEvidenceFile),'utf8'));
+    plan.execution_route = suggestExecutionRoute(task,plan,evidence);
+  }
   if(json) console.log(JSON.stringify(plan,null,2));
   else {
     console.log('Engineering Task: ' + plan.task_id + ' (' + plan.primary_class + ')');
