@@ -15,7 +15,7 @@ import {proposalChecks} from '../intake.mjs';
 import {PrerequisiteChecks,RawTaskRecord,TaskAcceptanceMatrix,TaskActivityLabel,TaskAttemptHistory,TaskEvidenceLedger,TaskCapabilitySummary,TaskDependencies,TaskExplorer,TaskRows,defaultTaskFilters,useTaskFilters} from './task-workspace.jsx';
 import {dependencyGraph,parseTaskHref,overviewTaskResults,taskActivity,taskHref,workspaceActivity} from './task-workspace.mjs';
 import {useTaskEngineDetail} from './use-task-engine-detail.jsx';
-import {codexThreadHref,hasLiveTaskWork,taskEngineRequest} from './task-engine-client.mjs';
+import {codexThreadHref,hasLiveTaskWork,taskEngineRequest,taskNextAction} from './task-engine-client.mjs';
 import { taskExecutionStatus } from './task-timeline.mjs';
 import { developmentNoteBytes, notesCategory, taskDevelopmentNotes } from '../development-notes.mjs';
 import {useCardMotion} from './card-motion.jsx';
@@ -276,8 +276,11 @@ const conversation = canonical?.attempts.findLast(attempt=>codexThreadHref(attem
 const taskAttempts=current?mergeTaskAttempts(current.id,related(current.id,'attempt'),canonical?.attempts??[]):[];
 const {pricing,loadingPrice}=useOpenAIPricing(taskAttempts,page==='detail'&&!demo,verificationHeaders);
 const developmentNotes=current?taskDevelopmentNotes(current.id,taskEvents,taskAttempts):[];
+const nextAction=taskNextAction(canonical,workerAccess);
 const executionStatus=canonical?taskExecutionStatus({taskId:canonical.task.id,state:detailState,
   attempt:canonical.attempts.at(-1),events:taskEvents,audits:taskAudits}):null;
+const statusBanner=executionStatus??nextAction;
+const statusSection=nextAction?.section??'task-attempts';
 const canonicalTasks=tasks.filter(task=>summaries.has(task.id)&&proposals?.publication?.[task.id]!=='pending');
 const publishedIntake=publication==='published'&&!canonical?.lifecycle.executor;
 const select=id=>{
@@ -378,7 +381,7 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
 {page==='detail'&&(current?<><div className="task-detail-toolbar"><button className="back" onClick={()=>navigate('tasks')}><ArrowLeft size={15}/> Back to Task Control Center</button>
 {conversation&&<a className="primary-button" href={codexThreadHref(conversation)}>Open in Codex</a>}
 <TaskReportExport key={current.id} disabled={!demo&&(loadingPrice||!hasLiveFeed||Boolean(engineSummary&&!canonical)||Boolean(proposalControls&&legacyHistory?.taskId!==current.id))}
-  snapshot={{task:canonical?.task??current,canonical,attempts:taskAttempts,pricing,records,events:taskEvents,audits:taskAudits,github:demo?null:github,telemetrySource:taskTelemetrySource,
+  snapshot={{task:canonical?.task??current,canonical,attempts:taskAttempts,pricing,workerAccess,records,events:taskEvents,audits:taskAudits,github:demo?null:github,telemetrySource:taskTelemetrySource,
     coverage:demo?'Simulated demonstration data. Times use UTC.':legacyHistory?.taskId===current.id&&legacyHistory?.unavailable?'Legacy proposal audit history could not be read. The report includes the remaining linked records. Times use UTC.':undefined}}/></div>
 <nav className="task-section-nav" aria-label="Jump to Task section">
   {engineSummary&&<button className="quiet-button" disabled={!hasLiveFeed} onClick={()=>jumpToTaskSection('task-controls')}>Execution controls</button>}
@@ -390,11 +393,13 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
   <button className="quiet-button" onClick={()=>jumpToTaskSection('task-telemetry')}>Telemetry</button>
 </nav>
 {detailState==='completed'&&<div className="task-completion" role="status"><CheckCircle2 size={24} aria-hidden="true"/><div><strong>Task complete</strong><small>Owner accepted the verified result.</small></div></div>}
-{executionStatus&&<div className={'task-completion task-execution-banner '+executionStatus.tone} role="status">
-  {executionStatus.tone==='error'?<CircleAlert size={24} aria-hidden="true"/>:<Activity size={24} aria-hidden="true"/>}
-  <div><strong>{executionStatus.title}</strong>{executionStatus.description&&<small>{executionStatus.description}</small>}
-    {executionStatus.at&&<small><time dateTime={executionStatus.at}>{fmt(executionStatus.at)}</time></small>}</div>
-  <button className="quiet-button" onClick={()=>jumpToTaskSection('task-attempts')}>View attempts</button>
+{statusBanner&&<div className={'task-completion task-execution-banner '+(statusBanner.tone??'neutral')} role="status">
+  {statusBanner.tone==='error'?<CircleAlert size={24} aria-hidden="true"/>:<Activity size={24} aria-hidden="true"/>}
+  <div><strong>{statusBanner.title}</strong>{statusBanner.description&&<small>{statusBanner.description}</small>}
+    {statusBanner.at&&<small><time dateTime={statusBanner.at}>{fmt(statusBanner.at)}</time></small>}
+    {executionStatus&&nextAction&&<small>{nextAction.description}</small>}</div>
+  <button className="quiet-button" onClick={()=>jumpToTaskSection(statusSection)}>{
+    ({'task-evidence':'View evidence','task-attempts':'View attempts','task-controls':'View controls'})[statusSection]}</button>
 </div>}
 {detailState==='archived'&&<p className="notice" role="status">Task archived{(canonical?.task??current).owner_acceptance==='accepted'?' · Owner accepted the final result.':''}</p>}
 {engineSummary&&hasLiveFeed&&<Rise><Panel id="task-controls" title="Execution controls">

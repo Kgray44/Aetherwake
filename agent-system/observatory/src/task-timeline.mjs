@@ -38,8 +38,8 @@ export function executorHeartbeat({ taskId, attempt, state, audits = [], now = D
 }
 
 export function taskExecutionStatus({taskId,state,attempt,events=[],audits=[]}) {
-  if (!attempt) return null;
-  if (attempt.state==='failed'||attempt.state==='blocked') return {
+  if (!attempt || ['admitted','queued','ready','scheduled','blocked','paused'].includes(state)) return null;
+  if (state==='failed'&&(attempt.state==='failed'||attempt.state==='blocked'||attempt.failure||attempt.failure_diagnosis)) return {
     title:'Attempt '+attempt.attempt_number+' failed',tone:'error',at:attempt.finished_at,
     description:attempt.failure_diagnosis??attempt.failure??'No failure reason was recorded.',
   };

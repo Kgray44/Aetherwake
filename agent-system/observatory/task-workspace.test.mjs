@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { taskEngineeringActivity } from './src/task-activity.mjs';
+import { taskNextAction } from './src/task-engine-client.mjs';
 import { buildTaskTimeline, executorHeartbeat, taskExecutionStatus } from './src/task-timeline.mjs';
 import { developmentNoteBytes, taskDevelopmentNotes } from './development-notes.mjs';
 import { taskReportDefinition } from './src/task-report.mjs';
@@ -673,4 +674,23 @@ test('Task usage and its PDF share current API estimates based on the final atte
   assert.equal(taskUsageAccounting({...input,now:Date.parse(quote.expiresAt)}).referencePrice.total,null);
   const oldReceipt={...receipt,measurements:receipt.measurements.filter(item=>item.name!=='provider_cache_write_input_tokens')};
   assert.equal(taskUsageAccounting({...input,events:[oldReceipt]}).referencePrice.total,null);
+});
+
+test('retry queue guidance follows canonical state while the previous failure remains in the PDF history', () => {
+  const task = {id:'task_retry',repository:'Kgray44/Aetherwake',title:'Retry fixture',objective:'Recover a failed checkout'};
+  const attempt = {id:'attempt_failed',task_id:task.id,revision:'a'.repeat(40),attempt_number:1,state:'failed',
+    failure:'Pinned checkout failed.',finished_at:'2026-01-04T00:00:00.000Z'};
+  const lifecycle = {state:'ready',stored_state:'queued',executor:'codex'};
+  const canonical = {task,lifecycle,attempts:[attempt]};
+  assert.equal(taskExecutionStatus({taskId:task.id,state:lifecycle.state,attempt}),null);
+  assert.equal(taskNextAction(canonical).title,'Waiting for worker claim');
+  assert.equal(taskNextAction(canonical,'not_configured').title,'Configure Codex worker access');
+  const report = JSON.stringify(taskReportDefinition({task,canonical,attempts:[attempt]}).content);
+  assert.match(report,/Waiting for worker claim/);
+  assert.match(report,/Pinned checkout failed/);
+
+  const blocked = {...canonical,lifecycle:{...lifecycle,state:'blocked',blockers:[{type:'task',id:'task_parent'}]}};
+  assert.equal(taskNextAction(blocked).description,'1 prerequisite is outstanding.');
+  const verifying = {...canonical,lifecycle:{...lifecycle,state:'verifying'}};
+  assert.equal(taskNextAction(verifying).section,'task-evidence');
 });

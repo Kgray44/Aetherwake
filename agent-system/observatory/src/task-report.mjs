@@ -1,4 +1,5 @@
 import { criterionEvidenceStatus,ownerReviewByCriterion } from './evidence-status.mjs';
+import { taskNextAction } from './task-engine-client.mjs';
 import { buildTaskTimeline, journalReceiptSummary } from './task-timeline.mjs';
 import { formatReferenceCost, openAIReferenceBasis } from './openai-pricing.mjs';
 import { taskUsageAccounting, usageFields } from './task-usage-accounting.mjs';
@@ -83,7 +84,7 @@ function allocationBar(part, total) {
   ]}];
 }
 
-export function taskReportDefinition({task, canonical, records=[], events=[], audits=[], attempts=[], github, telemetrySource, coverage, generatedAt, pricing}) {
+export function taskReportDefinition({task, canonical, records=[], events=[], audits=[], attempts=[], github, telemetrySource, coverage, generatedAt, pricing, workerAccess}) {
   const taskRecords=records.filter(record=>record.task_id===task.id);
   const taskEvents=events.filter(event=>event.task_id===task.id);
   const taskAudits=audits.filter(audit=>!audit.target_id||audit.target_id===task.id);
@@ -111,6 +112,7 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
   const {rows:tokens,desktop}=usage;
   const diagnostics=taskExecutionDiagnostics({task,canonical,attempts:taskAttempts,trace,tokens,records:taskRecords});
   const dataCoverage=taskDataCoverage({task,canonical,attempts:taskAttempts,usage,diagnostics,events:taskEvents,telemetrySource});
+  const nextAction=taskNextAction(canonical,workerAccess);
   const latestCoverage=diagnostics.coverage.at(-1);
   const latestTokens=tokens.at(-1)?.observed;
   const objectiveExcerpt=task.objective.length>450 ? task.objective.slice(0,450).replace(/\s+\S*$/,'')+'…' : task.objective;
@@ -153,6 +155,8 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       {text:'OpenAI API reference estimate '+(usage.referencePrice.total===null?'unavailable':formatReferenceCost(usage.referencePrice.total))+
         ' · '+usage.referencePrice.attempts.length+' of '+usage.coverage.attempts+' attempts · Actual billing '+usage.billing,style:'muted',margin:[0,4,0,0]},
       {toc:{title:{text:'Report contents',style:'section'}},pageBreak:'before'},
+      ...(nextAction?[section('Current Task action'),{text:nextAction.title,bold:true},
+        {text:nextAction.description},...(nextAction.at?[{text:'Scheduled start (UTC) '+nextAction.at}]:[])]:[]),
       section('Data coverage'),
       grid(['Data','Coverage','Evidence'],dataCoverage.map(row=>[row.topic,row.label,row.basis]),[105,100,'*']),
       section('Execution diagnostics',diagnostics.findings.length),

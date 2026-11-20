@@ -42,6 +42,28 @@ export function executionActions({ lifecycle, attempts = [] }, { publishedIntake
   return result;
 }
 
+export function taskNextAction(detail, workerAccess) {
+  const lifecycle = detail?.lifecycle;
+  if (!lifecycle) return null;
+  const { state, executor, blockers = [], start_at: startAt } = lifecycle;
+  const action = (title, description, section, at) => ({title,description,section,at});
+  const options = executionActions(detail);
+  if (state === 'blocked' && blockers.length) return action('Resolve prerequisites',
+    blockers.length + (blockers.length === 1 ? ' prerequisite is outstanding.' : ' prerequisites are outstanding.'), 'task-controls');
+  if (state === 'scheduled') return action('Waiting for scheduled start', 'The Task is eligible for a worker claim at its scheduled start.', 'task-controls',
+    Number.isFinite(startAt) ? new Date(startAt).toISOString() : undefined);
+  if (['admitted','ready','queued'].includes(state) && executor) return workerAccess==='not_configured'
+    ? action('Configure Codex worker access', 'A worker credential is required before a worker can claim this Task.', 'task-controls')
+    : action('Waiting for worker claim', 'The Task is in the execution queue.', 'task-controls');
+  if (state === 'verifying') return action('Review the candidate', 'Review the linked evidence and record the owner decision.', 'task-evidence');
+  if (state === 'failed') return options.includes('retry')
+    ? action('Review the failure before retrying', 'Inspect the latest attempt and record what changed before restarting execution.', 'task-attempts')
+    : action('Inspect the latest attempt', 'The failure is recorded in the attempt history.', 'task-attempts');
+  if (state === 'paused' && options.includes('resume')) return action('Resume when ready', 'The Task is paused and can be returned to the queue.', 'task-controls');
+  if (options.includes('admit')) return action('Configure and admit the Task', 'Confirm its execution settings before submitting it to the queue.', 'task-controls');
+  return null;
+}
+
 export function codexThreadHref(attempt) {
   const id = attempt?.session_id;
   return attempt?.executor==='codex'&&typeof id==='string'&&

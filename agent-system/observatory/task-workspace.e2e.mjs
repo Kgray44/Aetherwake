@@ -334,6 +334,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await page.getByRole('form', { name: 'Admit to Codex queue' }).getByRole('button', { name: 'Confirm' }).click();
   await page.getByText(/Stored state admitted/).waitFor();
   await page.getByText('Waiting for Codex worker access',{exact:true}).waitFor();
+  await page.getByRole('status').filter({hasText:'Configure Codex worker access'}).waitFor();
   const overviewRoute=url=>url.pathname==='/api/overview';
   let unblockFeed;
   const heldFeed=new Promise(resolve=>{unblockFeed=resolve;});
