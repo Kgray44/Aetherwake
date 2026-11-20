@@ -3,8 +3,9 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowDown, ArrowRight, ChevronRight, Filter, GitBranch, Plus, Search } from 'lucide-react';
 import {taskActivityHref} from './github-activity.mjs';
 import { useCardMotion } from './card-motion.jsx';
-import { evidenceClaimStatus } from './evidence-status.mjs';
-import { attemptEvents, dependencyGraph, organizeTasks, taskHref } from './task-workspace.mjs';
+import { attemptMatchesEvidence, evidenceClaimStatus } from './evidence-status.mjs';
+import { attemptJournal } from './task-attempts.mjs';
+import { dependencyGraph, organizeTasks, taskHref } from './task-workspace.mjs';
 
 const defaultFilters = { query: '', source: 'all', state: 'all', sort: 'newest', group: 'none' };
 const labels = value => value.replaceAll('_', ' ');
@@ -122,33 +123,51 @@ export function TaskActivityLabel({ activity }) {
   return <span className="task-activity-label"><strong>{activity.label}</strong>{activity.at&&<time dateTime={activity.at}>{new Date(activity.at).toLocaleString()}</time>}</span>;
 }
 
-export function TaskAttemptHistory({ attempts, events, Status }) {
-  const [expanded, setExpanded] = useState({});
+const displayTime = value => value==null||!Number.isFinite(new Date(value).getTime())
+  ? 'Unavailable' : new Date(value).toLocaleString();
+
+export function TaskAttemptHistory({ attempts, events, audits, evidence, Status }) {
+  const [expanded,setExpanded]=useState({});
+  const reduce=useReducedMotion();
   if (!attempts.length) return <p>No execution attempt has been linked to this Task yet.</p>;
-  const displayTime = value => value ? new Date(value).toLocaleString() : 'Unavailable';
-  return <ol className="task-attempt-records">{[...attempts].reverse().map(attempt => {
-    const trace = attemptEvents(attempt, events);
-    return <li className="record" key={attempt.id}>
-      <div className="record-title"><strong>Attempt {attempt.attempt_number}</strong><Status value={attempt.state}/></div>
+  return <ol className="task-attempt-records">{[...attempts].reverse().map(attempt=>{
+    const history=attemptJournal(attempt,events,audits,evidence);
+    const elapsed=Date.parse(attempt.finished_at)-Date.parse(attempt.started_at);
+    const count=expanded[attempt.id]??8;
+    return <li className="record task-attempt-card" key={attempt.id} id={'task-attempt-'+attempt.id}>
+      <div className="record-title"><h3 tabIndex={-1}>Attempt {attempt.attempt_number}</h3><Status value={attempt.state}/></div>
       <dl className="github-facts">
+        <div><dt>Executor</dt><dd>{[attempt.executor??attempt.provider,attempt.model].filter(Boolean).join(' / ')||'Unavailable from source'}</dd></div>
         <div><dt>Started</dt><dd>{displayTime(attempt.started_at)}</dd></div>
         <div><dt>Finished</dt><dd>{displayTime(attempt.finished_at)}</dd></div>
-        <div><dt>Executor</dt><dd>{[attempt.provider, attempt.model].filter(Boolean).join(' / ') || 'Unavailable from source'}</dd></div>
-        <div><dt>Revision</dt><dd><code>{attempt.revision}</code></dd></div>
-        {attempt.branch && <div><dt>Branch</dt><dd>{attempt.branch}</dd></div>}
+        {Number.isFinite(elapsed)&&elapsed>=0&&<div><dt>Elapsed</dt><dd>{(elapsed/1000).toLocaleString(undefined,{maximumFractionDigits:3})} s</dd></div>}
+        {Number.isFinite(attempt.deadline)&&<div><dt>Attempt deadline</dt><dd>{displayTime(attempt.deadline)}</dd></div>}
+        <div><dt>Base revision</dt><dd><code>{attempt.revision}</code></dd></div>
+        {attempt.candidate_revision&&<div><dt>Candidate revision</dt><dd><code>{attempt.candidate_revision}</code></dd></div>}
+        {attempt.checkpoint_revision&&<div><dt>Checkpoint revision</dt><dd><code>{attempt.checkpoint_revision}</code></dd></div>}
+        {attempt.branch&&<div><dt>Branch</dt><dd><code>{attempt.branch}</code></dd></div>}
       </dl>
-      {attempt.failure_diagnosis && <p>{attempt.failure_diagnosis}</p>}
-      {trace.length ? <details open={attempt === attempts.at(-1)}>
-        <summary>{trace.length} recorded execution events</summary>
-        <ol>{trace.slice(-(expanded[attempt.id] ?? 12)).map((event,index) => <li key={event.event_id ?? index}>
-          <strong>{labels(event.phase ?? event.kind ?? 'event')}</strong>{' · '}{labels(event.state ?? event.kind ?? 'recorded')}{' · '}
-          <time dateTime={event.occurred_at}>{displayTime(event.occurred_at)}</time>
-          {event.measurements?.length > 0 && <ul>{event.measurements.map((metric,i) => <li key={i}>
-            {labels(metric.name)} {metric.value ?? 'Unavailable'} {metric.unit} · {metric.availability}
-          </li>)}</ul>}
-        </li>)}</ol>
-        {trace.length > (expanded[attempt.id] ?? 12) && <button type="button" className="quiet-button" onClick={() => setExpanded(previous => ({ ...previous, [attempt.id]:(previous[attempt.id] ?? 12)+24 }))}>Show earlier events</button>}
-      </details> : <p>No execution events were supplied for this attempt.</p>}
+      {attempt.failure_diagnosis&&<div className="notice error"><strong>Failure</strong><span>{attempt.failure_diagnosis}</span></div>}
+      <details className="task-attempt-log" open={attempt===attempts.at(-1)}>
+        <summary>Execution log · {history.events.length} recorded events</summary>
+        {history.events.length>0?<ol>{history.events.slice(0,count).map(event=>
+          <motion.li key={event.id} initial={reduce?false:{opacity:0,y:3}} animate={{opacity:1,y:0}}>
+            <div><strong>{labels(event.title??'Execution event')}</strong> <small>{event.source}{event.status?' · '+labels(event.status):''}</small></div>
+            <time dateTime={event.at}>{displayTime(event.at)}</time>
+            {event.reason&&<p>{event.reason}</p>}
+            {event.metrics.length>0&&<ul>{event.metrics.map((metric,index)=><li key={index}>
+              {labels(metric.name)} · {metric.availability==='unavailable'?'Unavailable':metric.value??'Unavailable'} {metric.unit} · {metric.availability}
+            </li>)}</ul>}
+          </motion.li>)}</ol>:<p>No lifecycle receipts or trace events are linked to this attempt.</p>}
+        {history.events.length>count&&<button type="button" className="quiet-button" onClick={()=>setExpanded(previous=>({...previous,[attempt.id]:count+16}))}>Show earlier events</button>}
+      </details>
+      <details className="task-attempt-log">
+        <summary>Reported evidence · {history.evidence.length} records</summary>
+        {history.evidence.length>0?<ul className="task-links">{history.evidence.map(item=><li key={item.id}>
+          <strong>{item.criterion_id} · {labels(item.kind)}</strong><Status value={evidenceClaimStatus(item,attempts)}/>
+          <small>Revision <code>{item.revision}</code></small><EvidenceArtifact artifact={item.artifact}/>
+        </li>)}</ul>:<p>No evidence records are linked to this attempt and revision.</p>}
+      </details>
     </li>;
   })}</ol>;
 }
@@ -177,7 +196,7 @@ export function TaskEvidenceLedger({ task, evidence, attempts, reviewed, Status 
       <EvidenceArtifact artifact={{uri:item.uri}}/>
     </li>)}</ul></section>}
     {ordered.map(item=>{
-      const attempt = attempts.find(run=>run.id===item.attempt_id && run.task_id===item.task_id && run.revision===item.revision);
+      const attempt = attempts.find(run=>attemptMatchesEvidence(run,item));
       const stamp = item.observed_at ?? item.created_at;
       return <article className="record task-links" key={item.id}>
         <div className="record-title"><strong>{criteria.get(item.criterion_id) ?? item.criterion_id}</strong><Status value={evidenceClaimStatus(item,attempts)}/></div>

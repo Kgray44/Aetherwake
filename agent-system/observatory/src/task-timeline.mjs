@@ -25,9 +25,9 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
       ...detail('Model',attempt.model),...detail('Branch',attempt.branch),...detail('Base revision',attempt.revision),
       ...detail('Candidate revision',attempt.candidate_revision),
       ...detail('Attempt deadline',Number.isFinite(attempt.deadline)?new Date(attempt.deadline).toISOString():null)];
-    add({id:'start:'+attempt.id,at:attempt.started_at,type:'Attempt',title:'Attempt '+attempt.attempt_number+' started',
+    add({id:'start:'+attempt.id,at:attempt.started_at,type:'Attempt',attemptId:attempt.id,title:'Attempt '+attempt.attempt_number+' started',
       description:[attempt.provider ?? attempt.executor,attempt.model].filter(Boolean).join(' · '),details:common});
-    add({id:'end:'+attempt.id,at:attempt.finished_at,type:'Attempt',title:'Attempt '+attempt.attempt_number+' finished',
+    add({id:'end:'+attempt.id,at:attempt.finished_at,type:'Attempt',attemptId:attempt.id,title:'Attempt '+attempt.attempt_number+' finished',
       description:humanize(attempt.state),details:[...common,...detail('Outcome',humanize(attempt.state)),
         ...detail('Failure',attempt.failure_diagnosis ?? attempt.failure)]});
   }
@@ -35,7 +35,8 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
     if (receipt.target_id && receipt.target_id !== task.id) continue;
     const operation = receipt.kind ?? receipt.type ?? 'operation';
     add({id:'audit:'+receipt.operation_id,at:receipt.at,type:'Audit',title:receiptTitles[operation]??humanize(operation),
-      milestone:operation==='accept', description:humanize(receipt.state),
+      milestone:operation==='accept', attemptId:attemptById.has(receipt.attempt_id)?receipt.attempt_id:null,
+      description:humanize(receipt.state),
       href:receipt.reference?.uri, reviewedEvidence:receipt.evidence??[], details:[
         ...detail('Recorded by',receipt.actor),...detail('Task version',receipt.version),...detail('Reason',receipt.reason),
         ...detail('Owner feedback',receipt.feedback),...detail('Scheduled start',receipt.start_at),
@@ -50,7 +51,7 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
     const attempt=attemptById.get(event.attempt_id);
     const actualAttempt=attempt?.revision===event.revision?attempt:null;
     add({id:'trace:'+event.event_id,at:event.occurred_at,type:'Trace',
-      title:[humanize(event.phase),humanize(event.kind)].filter(Boolean).join(' · '),
+      title:[humanize(event.phase),humanize(event.kind)].filter(Boolean).join(' · '),attemptId:actualAttempt?.id,
       description:[actualAttempt?'Attempt '+actualAttempt.attempt_number:'',humanize(event.state)].filter(Boolean).join(' · '),
       details:[...detail('Attempt ID',event.attempt_id),...detail('Revision',event.revision),...detail('Trace ID',event.trace_id),
         ...detail('Span ID',event.span_id),...detail('Parent span',event.parent_span_id),...detail('Source',event.source)],
