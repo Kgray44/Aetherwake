@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, mkdir, realpath } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { proposedTask } from '../intake.mjs';
 import { taskOperation } from './task-engine.mjs';
+import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
 import { runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
 
 const rev = 'a'.repeat(40);
@@ -119,7 +121,7 @@ test('scheduled execution, cancellation propagation and checkpoint recovery', as
     report: { type, ...extra } }, 'worker');
   assert.equal((await command(await get(c), 'pause')).body.lifecycle.state, 'pausing');
   const session_id = '01a12345-1234-7123-8123-123456789abc';
-  assert.equal((await report('stopped', { session_id })).body.lifecycle.state, 'paused');
+  assert.equal((await report('stopped', { session_id, revision: rev })).body.lifecycle.state, 'paused');
   assert.equal((await command(await get(c), 'resume')).body.lifecycle.state, 'ready');
   assert.equal((await claim()).body.claim.attempt.resume_session_id, session_id);
   assert.equal((await command(await get(a), 'cancel')).body.lifecycle.state, 'cancelled');
@@ -184,7 +186,8 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
   assert.equal((await get(b)).lifecycle.state, 'blocked');
   const candidate = await get(a);
   assert.equal(candidate.lifecycle.state, 'verifying');
-  const revision = candidate.attempts[0].revision;
+  assert.equal(candidate.attempts[0].revision, base);
+  const revision = candidate.attempts[0].candidate_revision;
   assert.equal(await git(workspaces.get(a.task.id), 'show', revision + ':artifact.txt'), a.task.id);
   assert.equal((await command(candidate, 'accept', { evidence: [
     { criterion_id: 'criterion-1', uri: 'https://example.test/reviewed-artifact', revision },
@@ -194,5 +197,22 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
   await run(downstream, false);
   const readback = await get(b);
   assert.equal(readback.lifecycle.state, 'verifying');
-  assert.equal(await git(workspaces.get(b.task.id), 'show', readback.attempts[0].revision + ':artifact.txt'), b.task.id);
+  assert.equal(await git(workspaces.get(b.task.id), 'show', readback.attempts[0].candidate_revision + ':artifact.txt'), b.task.id);
+});
+
+test('one bounded Codex stream delivers session identity and sanitized usage', async () => {
+  const sessionId = '01a12345-1234-7123-8123-123456789abc';
+  const seen = [];
+  const input = [
+    { type: 'thread.started', thread_id: sessionId },
+    { type: 'turn.started' },
+    { type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 4, private: 'do not retain' } },
+  ];
+  await observeCodexStream(Readable.from(input.map(item => JSON.stringify(item) + '\n')), {
+    onSession: id => seen.push(id),
+    onUsage: usage => seen.push(usage),
+  });
+  assert.equal(seen[0], sessionId);
+  assert.equal(seen[1].find(item => item.name === 'provider_input_tokens').value, 10);
+  assert.equal(JSON.stringify(seen).includes('do not retain'), false);
 });

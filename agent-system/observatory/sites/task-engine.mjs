@@ -167,7 +167,7 @@ function commandChange(task, lifecycle, { action, now, rows }) {
   }
   if (type === 'accept' && current === 'verifying') {
     const last = lifecycle.attempts.at(-1);
-    if (!reviewedEvidence(task, action.evidence, last.revision)) return failure(409, 'Reviewed evidence is required for every criterion at the attempt revision');
+    if (!reviewedEvidence(task, action.evidence, last.candidate_revision)) return failure(409, 'Reviewed evidence is required for every criterion at the attempt revision');
     last.state = 'succeeded';
     return { task: { ...task, owner_acceptance: 'accepted' }, lifecycle: { ...lifecycle, state: 'completed',
       evidence: action.evidence.map(({ criterion_id, uri, revision }) => ({ criterion_id, uri, revision })) } };
@@ -182,7 +182,11 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     return { lifecycle: { ...lifecycle, state: current === 'running' ? 'pausing' : 'paused' } };
   }
   if (type === 'resume' && current === 'paused' && lifecycle.attempts.length < maxAttempts) {
-    return { lifecycle: { ...lifecycle, state: 'queued', resume_attempt_id: lifecycle.attempts.at(-1)?.id } };
+    const paused = lifecycle.attempts.at(-1);
+    if (paused?.state === 'paused' && !(paused.session_id && paused.checkpoint_revision)) {
+      return failure(409, 'Paused execution has no recoverable Codex checkpoint');
+    }
+    return { lifecycle: { ...lifecycle, state: 'queued', resume_attempt_id: paused?.state === 'paused' ? paused.id : undefined } };
   }
   if (type === 'cancel' && !terminal.has(current)) {
     const active = ['running', 'pausing', 'cancelling'].includes(current);
@@ -222,13 +226,14 @@ function workerChange(lifecycle, body, now) {
   }
   if (report.type === 'finished' && lifecycle.state === 'running' && report.result === 'candidate') {
     if (typeof report.revision !== 'string' || !revisionPattern.test(report.revision)) return failure(400, 'Candidate revision required');
-    active.revision = report.revision;
+    active.candidate_revision = report.revision;
     active.state = 'verifying';
     active.finished_at = timestamp(now);
     return { lifecycle: { ...lifecycle, state: 'verifying' } };
   }
   if (report.type === 'stopped' && ['pausing', 'cancelling'].includes(lifecycle.state)) {
     const state = lifecycle.state === 'pausing' ? 'paused' : 'cancelled';
+    if (typeof report.revision === 'string' && revisionPattern.test(report.revision)) active.checkpoint_revision = report.revision;
     active.state = state;
     active.finished_at = timestamp(now);
     return { lifecycle: { ...lifecycle, state } };
@@ -387,7 +392,10 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       lease_until: now + leaseMs, deadline: now + attemptTimeoutMs,
     };
     const checkpoint = lifecycle.attempts.find(item => item.id === lifecycle.resume_attempt_id);
-    if (checkpoint?.session_id) attempt.resume_session_id = checkpoint.session_id;
+    if (checkpoint?.session_id && checkpoint.checkpoint_revision) {
+      attempt.resume_session_id = checkpoint.session_id;
+      attempt.revision = checkpoint.checkpoint_revision;
+    }
     delete lifecycle.resume_attempt_id;
     lifecycle.state = 'running';
     lifecycle.attempts.push(attempt);

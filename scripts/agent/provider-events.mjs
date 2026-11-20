@@ -5,6 +5,7 @@ import { Buffer } from 'node:buffer';
 const SOURCE = 'codex_exec_jsonl';
 const MAX_LINE_BYTES = 256 * 1024;
 const MAX_USAGE_RECORDS = 32;
+const threadId = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const tokenFields = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens'];
 
 export function codexUsage(event) {
@@ -33,7 +34,7 @@ function observation(name, value, unit = 'count') {
 }
 
 /** Consume a bounded stream without retaining its contents or upstream identifiers. */
-export async function observeCodexStream(stream, { onUsage, forward, maxLineBytes = MAX_LINE_BYTES } = {}) {
+export async function observeCodexStream(stream, { onUsage, onSession, forward, maxLineBytes = MAX_LINE_BYTES } = {}) {
   if (!Number.isSafeInteger(maxLineBytes) || maxLineBytes < 1 || maxLineBytes > MAX_LINE_BYTES) {
     throw Error('Invalid Codex JSONL line limit');
   }
@@ -54,6 +55,7 @@ export async function observeCodexStream(stream, { onUsage, forward, maxLineByte
   let recorded = 0;
   let writeFailures = 0;
   let forwardingFailed = false;
+  let sessionReported = false;
 
   async function consumeLine() {
     const text = discard ? '' : line.toString('utf8', 0, length).trim();
@@ -72,6 +74,13 @@ export async function observeCodexStream(stream, { onUsage, forward, maxLineByte
       return;
     }
     switch (event.type) {
+      case 'thread.started':
+        if (!sessionReported && typeof event.thread_id === 'string' && threadId.test(event.thread_id)) {
+          sessionReported = true;
+          try { await onSession?.(event.thread_id); }
+          catch { gaps++; }
+        }
+        return;
       case 'turn.started':
         if (open) gaps++;
         open = true;

@@ -5,12 +5,12 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import { observeCodexStream } from './provider-events.mjs';
 import { openObservatoryConnector } from './observatory-connector.mjs';
 
 const runFile = promisify(execFile);
 const taskIdPattern = /^task_[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const repoUrl = /^(?:https:\/\/github\.com\/|git@github\.com:)Kgray44\/Aetherwake(?:\.git)?$/i;
-const sessionPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const tool = 'aetherwake_engineering_observatory.task_engine_v1';
 
 function git(cwd, ...args) {
@@ -42,7 +42,7 @@ function termination(child) {
   try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
 }
 
-export async function executeCodex({ executable, cwd, task, attempt, onSession, signal }) {
+export async function executeCodex({ executable, cwd, task, attempt, onSession, onUsage, signal }) {
   const prompt = [
     'Carry out the approved Aetherwake engineering Task in this dedicated checkout only.',
     'Follow repository governance and the current sandbox. Record changes and tests with an exact candidate revision.',
@@ -69,41 +69,25 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
   signal.addEventListener('abort', abort, { once: true });
   child.stdin.on('error', () => {});
   child.stdin.end(prompt);
-  let pending = '';
   let session;
-  let excessiveOutput = false;
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', chunk => {
-    pending += chunk;
-    const lines = pending.split('\n');
-    pending = lines.pop();
-    if (pending.length > 1024 * 1024) {
-      excessiveOutput = true;
-      pending = '';
-      void termination(child);
-      return;
-    }
-    for (const line of lines) {
-      if (session || line.length > 1024 * 1024) continue;
-      try {
-        const event = JSON.parse(line);
-        if (event.type === 'thread.started' && sessionPattern.test(event.thread_id)) {
-          session = event.thread_id;
-          onSession(session);
-        }
-      } catch { /* Ignore non-protocol output without persisting it. */ }
-    }
+  const observed = observeCodexStream(child.stdout, {
+    onSession(id) {
+      session = id;
+      return onSession(id);
+    },
+    onUsage,
   });
   try {
-    const result = await exited;
-    return { ...result, ok: result.ok && Boolean(session) && !excessiveOutput };
+    const [result, measurements] = await Promise.all([exited, observed]);
+    const completed = measurements.find(item => item.name === 'provider_turn_completed_event_count');
+    return { ...result, ok: result.ok && Boolean(session) && completed?.value > 0 };
   } finally {
     signal.removeEventListener('abort', abort);
   }
 }
 
 export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
-  identify = checkoutIdentity, execute = executeCodex, interval = 12_000 }) {
+  identify = checkoutIdentity, execute = executeCodex, onUsage, interval = 12_000 }) {
   const { task, attempt, lease } = claim;
   const controller = new AbortController();
   const workerSignal = AbortSignal.any([controller.signal, signal, AbortSignal.timeout(Math.max(1, attempt.deadline - Date.now()))]);
@@ -139,9 +123,11 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let outcome;
   try {
     await admitStorage();
-    identity = await identify(workspace, task.revision);
+    identity = await identify(workspace, attempt.revision);
     lock = await open(join(workspace, '.git', 'aads-task-worker.lock'), 'wx');
-    if (!attempt.resume_session_id && identity.dirty) throw Error('New execution requires a clean checkout');
+    if (identity.revision !== attempt.revision || (!attempt.resume_session_id && identity.dirty)) {
+      throw Error('Workspace must match the attempt revision and cleanliness policy');
+    }
     await update();
     monitoring = (async () => {
       while (!workerSignal.aborted && !heartbeats.signal.aborted) {
@@ -153,7 +139,9 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
       }
     })();
     outcome = await execute({ executable, cwd: workspace, task, attempt,
-      onSession: value => { sessionId = value; }, signal: workerSignal });
+      onSession: value => { sessionId = value; },
+      onUsage: onUsage && (measurements => onUsage({ task, attempt, measurements })),
+      signal: workerSignal });
   } catch {
     outcome = { ok: false };
   } finally {
@@ -163,10 +151,12 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   try {
     if (leaseLost) return;
     if (!desired && outcome?.ok) await confirmControl();
-    if (desired && (outcome?.stopped || outcome?.ok)) await report('stopped');
-    else if (outcome?.ok && !workerSignal.aborted) {
+    if (desired && (outcome?.stopped || outcome?.ok)) {
+      const checkpoint = desired === 'pausing' ? await identify(workspace, attempt.revision).catch(() => null) : null;
+      await report('stopped', checkpoint && checkpoint.branch === identity?.branch ? { revision: checkpoint.revision } : {});
+    } else if (outcome?.ok && !workerSignal.aborted) {
       let result;
-      try { result = await identify(workspace, task.revision); }
+      try { result = await identify(workspace, attempt.revision); }
       catch { /* Record a structured failure when candidate readback is unavailable. */ }
       if (result && !result.dirty && result.branch === identity.branch) {
         await report('finished', { result: 'candidate', revision: result.revision });

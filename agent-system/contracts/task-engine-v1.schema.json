@@ -590,7 +590,7 @@
         "attempts": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "#/$defs/attempt"
           }
         },
         "events": {
@@ -619,6 +619,71 @@
       "required": [
         "error"
       ]
+    },
+    "attempt": {
+      "type": "object",
+      "required": [
+        "id",
+        "attempt_number",
+        "executor",
+        "revision",
+        "state",
+        "started_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^attempt_[a-f0-9-]{36}$"
+        },
+        "attempt_number": {
+          "$ref": "#/$defs/positive"
+        },
+        "executor": {
+          "const": "codex"
+        },
+        "revision": {
+          "$ref": "#/$defs/rid",
+          "description": "Immutable execution revision for observations."
+        },
+        "candidate_revision": {
+          "$ref": "#/$defs/rid",
+          "description": "Resulting commit pinned for acceptance review."
+        },
+        "session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "resume_session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "state": {
+          "enum": [
+            "running",
+            "verifying",
+            "succeeded",
+            "failed",
+            "orphaned",
+            "paused",
+            "cancelled"
+          ]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "failure": {
+          "type": "string"
+        },
+        "checkpoint_revision": {
+          "$ref": "#/$defs/rid"
+        }
+      }
     }
   }
 }
