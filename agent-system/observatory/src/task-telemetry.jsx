@@ -45,7 +45,8 @@ export function TaskTelemetry({ task, attempts, telemetry, events, records }) {
   const accounting = useMemo(() => records ? buildEngineeringAnalytics({
     records: records.filter(record => record.id === task.id || record.task_id === task.id), events,
   }).tokenAccounting : null, [task.id, records, events]);
-  const tokens = taskTokenRows(accounting, task.id);
+  const tokens = useMemo(() => taskTokenRows(accounting, task.id, attempts, events, task.repository),
+    [accounting, task.id, attempts, events, task.repository]);
   const desktop = desktopSessionTokens(task.id,events);
   const measurements = useMemo(() => measurementRows(telemetry, events), [telemetry, events]);
   const measurable = measurements.filter(available);
@@ -84,7 +85,7 @@ export function TaskTelemetry({ task, attempts, telemetry, events, records }) {
     </div>
     <p className="low">{desktop.length>0&&'Desktop counters are cumulative session observations and have no worker-attempt assignment. '}An attempt can have timing or resource measurements without producing a model token receipt. Costs require a billing source.</p>
     <h3>Model and token accounting</h3>
-    <TaskTokenAccounting accounting={accounting} taskId={task.id}/>
+    <TaskTokenAccounting rows={tokens}/>
     <h3>Recorded measurements</h3>
     {measurements.length ? <>
       <div className="analytics-table"><table>

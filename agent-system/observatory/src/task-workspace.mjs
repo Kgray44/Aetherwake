@@ -1,10 +1,11 @@
+import { taskTokenRows } from './task-engine-client.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
 
 const idPattern = /^[A-Za-z0-9_.:-]{1,160}$/;
 const priorities = ['urgent', 'high', 'normal', 'low'];
 export const workLabels={
   active:'Executing',waiting:'Queued or paused',review:'Awaiting review',issues:'At risk',accepted:'Accepted',
-  succeeded:'Successful attempts',reportedRunning:'Reported running',unlinked:'No execution linked',archived:'Archived',
+  succeeded:'Reported success',reportedRunning:'Reported running',unlinked:'No execution linked',archived:'Archived',
 };
 
 export function overviewTaskResults(tasks, attempts, events, summaries) {
@@ -16,10 +17,7 @@ export function overviewTaskResults(tasks, attempts, events, summaries) {
     const linked = latest ? events.filter(event =>
       event.task_id === task.id && event.attempt_id === latest.id &&
       event.revision === latest.revision && event.repository === task.repository) : [];
-    const totals = linked.flatMap(event => event.kind === 'measurement' ? event.measurements ?? [] : [])
-      .filter(metric => metric.name === 'provider_total_tokens' && metric.unit === 'tokens' &&
-        metric.source === 'codex_app_server_token_usage_updated' && metric.availability === 'observed' &&
-        Number.isSafeInteger(metric.value) && metric.value >= 0);
+    const tokens = latest ? taskTokenRows(null, task.id, [latest], linked, task.repository)[0] : null;
     const references = [...(lifecycle?.links ?? []), ...(lifecycle?.evidence ?? [])];
     const artifact = references.findLast(ref => (ref.kind === 'artifact' || ref.criterion_id) &&
       typeof ref.uri === 'string' && /^https:\/\/[^\s]+$/.test(ref.uri));
@@ -27,7 +25,7 @@ export function overviewTaskResults(tasks, attempts, events, summaries) {
     result.set(task.id, {
       artifact:artifact ?? null, queued,
       observedMs:linked.length ? traceTimeline(linked).coveredMs : null,
-      observedTokens:totals.length === 1 ? totals[0].value : null,
+      observedTokens:tokens?.observed.totalTokens ?? null,
     });
   }
   return result;

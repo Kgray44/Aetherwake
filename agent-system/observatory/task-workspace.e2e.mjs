@@ -333,6 +333,12 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
     assert.equal(claim.task.id,execution.task.id);
     await page.clock.fastForward(6_000);
     await page.getByText(/Stored state running/).waitFor({timeout:8_000});
+    await executor({op:'report',task_id:execution.task.id,operation_id:crypto.randomUUID(),
+      attempt_id:claim.attempt.id,lease:claim.lease,report:{type:'heartbeat'}});
+    await page.clock.fastForward(6_000);
+    const heartbeat=page.getByRole('group',{name:'Executor heartbeat'});
+    await heartbeat.getByText('Heartbeat received',{exact:true}).waitFor({timeout:8_000});
+    assert.equal(await page.getByRole('region',{name:'Task timeline'}).getByRole('button',{name:/Executor heartbeat/}).count(),0);
     await runClaim({
       claim, workspace, send: executor, verificationNamespace: namespace,
       signal: AbortSignal.timeout(15_000),
