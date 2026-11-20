@@ -20,7 +20,7 @@ export async function changeProposal({ db, owner, namespace, id, action, validat
   }
   const select = () => db.prepare(`
     SELECT record, version, priority, receipts FROM proposals
-    WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS NULL
+    WHERE owner_id = ? AND namespace = ? AND task_id = ? AND github_state IS NULL AND engine IS NULL
   `).bind(owner, namespace, id).first();
   const row = await select();
   if (!row) return failure(404, 'Private proposal not found');
@@ -95,7 +95,7 @@ export async function changeProposal({ db, owner, namespace, id, action, validat
   // Bind the authorization and expected version to the same write as its receipt.
   const result = await db.prepare(`
     UPDATE proposals SET record = ?, version = ?, priority = ?, receipts = ?
-    WHERE owner_id = ? AND namespace = ? AND task_id = ? AND version = ? AND github_state IS NULL
+    WHERE owner_id = ? AND namespace = ? AND task_id = ? AND version = ? AND github_state IS NULL AND engine IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM task_telemetry t
         WHERE t.owner_id = proposals.owner_id AND t.namespace = proposals.namespace AND t.task_id = proposals.task_id

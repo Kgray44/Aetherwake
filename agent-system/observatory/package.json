@@ -9,7 +9,7 @@
     "start": "node server.mjs",
     "test": "node --test test.mjs acceptance.test.mjs engineering-analytics.test.mjs failure-investigation.test.mjs",
     "build:sites": "npm run build && node sites/build.mjs",
-    "test:sites": "node --test sites/worker.test.mjs sites/sync.test.mjs sites/github-detail.test.mjs sites/ci-controls.test.mjs"
+    "test:sites": "node --test sites/worker.test.mjs sites/sync.test.mjs sites/github-detail.test.mjs sites/ci-controls.test.mjs sites/task-engine.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

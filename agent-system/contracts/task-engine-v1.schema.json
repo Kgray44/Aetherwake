@@ -1,0 +1,689 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AADS Task Engine API v1",
+  "description": "Request schema. Response definitions are available under $defs.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "list"
+        },
+        "state": {
+          "$ref": "#/$defs/state"
+        }
+      },
+      "required": [
+        "op"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "get"
+        },
+        "task_id": {
+          "$ref": "#/$defs/taskId"
+        }
+      },
+      "required": [
+        "op",
+        "task_id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "register"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "fields": {
+          "$ref": "#/$defs/fields"
+        }
+      },
+      "required": [
+        "op",
+        "operation_id",
+        "fields"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "command"
+        },
+        "task_id": {
+          "$ref": "#/$defs/taskId"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "expected_version": {
+          "$ref": "#/$defs/positive"
+        },
+        "action": {
+          "$ref": "#/$defs/action"
+        }
+      },
+      "required": [
+        "op",
+        "task_id",
+        "operation_id",
+        "expected_version",
+        "action"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "claim"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "task_ids": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/taskId"
+          }
+        }
+      },
+      "required": [
+        "op",
+        "operation_id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "report"
+        },
+        "task_id": {
+          "$ref": "#/$defs/taskId"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^attempt_[a-f0-9-]{36}$"
+        },
+        "lease": {
+          "$ref": "#/$defs/uuid"
+        },
+        "report": {
+          "$ref": "#/$defs/report"
+        }
+      },
+      "required": [
+        "op",
+        "task_id",
+        "operation_id",
+        "attempt_id",
+        "lease",
+        "report"
+      ]
+    }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "taskId": {
+      "type": "string",
+      "pattern": "^task_[a-f0-9-]{36}$"
+    },
+    "rid": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "str": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "positive": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "list": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "maxLength": 128
+      }
+    },
+    "state": {
+      "enum": [
+        "proposed",
+        "admitted",
+        "queued",
+        "blocked",
+        "scheduled",
+        "ready",
+        "running",
+        "pausing",
+        "paused",
+        "cancelling",
+        "verifying",
+        "completed",
+        "failed",
+        "cancelled",
+        "superseded",
+        "archived"
+      ]
+    },
+    "priority": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ]
+    },
+    "fields": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "objective": {
+          "type": "string",
+          "maxLength": 6000
+        },
+        "primary": {
+          "type": "string"
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "criteria": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "requirements": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "uri": {
+                "type": "string"
+              },
+              "revision": {
+                "$ref": "#/$defs/rid"
+              }
+            },
+            "required": [
+              "kind",
+              "uri"
+            ]
+          }
+        },
+        "priority": {
+          "$ref": "#/$defs/priority"
+        }
+      },
+      "required": [
+        "title",
+        "objective",
+        "primary",
+        "profile_id",
+        "criteria"
+      ]
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "edit"
+            },
+            "fields": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/fields"
+                },
+                {
+                  "required": [
+                    "priority"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "fields"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "associate"
+            },
+            "reference": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "branch",
+                    "commit",
+                    "pull_request",
+                    "review",
+                    "ci_run",
+                    "test",
+                    "artifact",
+                    "investigation"
+                  ]
+                },
+                "uri": {
+                  "type": "string"
+                },
+                "revision": {
+                  "$ref": "#/$defs/rid"
+                }
+              },
+              "required": [
+                "kind",
+                "uri",
+                "revision"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "reference"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "admit"
+            },
+            "executor": {
+              "const": "codex"
+            },
+            "start_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "prerequisites": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "maxLength": 128
+              }
+            },
+            "cancel_with_dependency": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "executor"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "satisfy"
+            },
+            "prerequisite": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            }
+          },
+          "required": [
+            "type",
+            "prerequisite"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "accept"
+            },
+            "evidence": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "criterion_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000
+                  },
+                  "uri": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "revision": {
+                    "$ref": "#/$defs/rid"
+                  }
+                },
+                "required": [
+                  "criterion_id",
+                  "uri",
+                  "revision"
+                ]
+              }
+            }
+          },
+          "required": [
+            "type",
+            "evidence"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "reject"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "retry"
+            },
+            "changed_assumption": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            }
+          },
+          "required": [
+            "type",
+            "changed_assumption"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "supersede"
+            },
+            "successor": {
+              "$ref": "#/$defs/taskId"
+            }
+          },
+          "required": [
+            "type",
+            "successor"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "archive"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "cancel"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "pause"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resume"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "report": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": [
+            "heartbeat",
+            "finished",
+            "failed",
+            "stopped"
+          ]
+        },
+        "session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "result": {
+          "const": "candidate"
+        },
+        "revision": {
+          "$ref": "#/$defs/rid"
+        },
+        "failure": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "detail": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "$ref": "v1.schema.json#/$defs/Task"
+        },
+        "version": {
+          "$ref": "#/$defs/positive"
+        },
+        "priority": {
+          "$ref": "#/$defs/priority"
+        },
+        "lifecycle": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "$ref": "#/$defs/state"
+            },
+            "stored_state": {
+              "$ref": "#/$defs/state"
+            },
+            "blockers": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          },
+          "required": [
+            "state",
+            "stored_state",
+            "blockers"
+          ]
+        },
+        "attempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/attempt"
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "task",
+        "version",
+        "priority",
+        "lifecycle",
+        "attempts",
+        "events"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "error"
+      ]
+    },
+    "attempt": {
+      "type": "object",
+      "required": [
+        "id",
+        "attempt_number",
+        "executor",
+        "revision",
+        "state",
+        "started_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^attempt_[a-f0-9-]{36}$"
+        },
+        "attempt_number": {
+          "$ref": "#/$defs/positive"
+        },
+        "executor": {
+          "const": "codex"
+        },
+        "revision": {
+          "$ref": "#/$defs/rid",
+          "description": "Immutable execution revision for observations."
+        },
+        "candidate_revision": {
+          "$ref": "#/$defs/rid",
+          "description": "Resulting commit pinned for acceptance review."
+        },
+        "session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "resume_session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "state": {
+          "enum": [
+            "running",
+            "verifying",
+            "succeeded",
+            "failed",
+            "orphaned",
+            "paused",
+            "cancelled"
+          ]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "failure": {
+          "type": "string"
+        },
+        "checkpoint_revision": {
+          "$ref": "#/$defs/rid"
+        }
+      }
+    }
+  }
+}

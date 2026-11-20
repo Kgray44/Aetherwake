@@ -29,7 +29,7 @@ const namespace = 'c0cf1399-8a73-4f08-9b10-997063853638';
 const published = proposedTask({ ...input, title: 'Published contract record' }, rev);
 const ownerHeader = { 'oai-authenticated-user-id': 'owner-1' };
 
-function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
+function fixture(t, { missingMain = false, token, writeStatus = 201, taskKey } = {}) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   sql.exec(migration);
@@ -42,6 +42,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
   sql.exec(readFileSync(new URL('./drizzle/0007_proposal_controls.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0008_ci_operations.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('./drizzle/0009_task_telemetry.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('./drizzle/0011_task_engine.sql', import.meta.url), 'utf8'));
   let rateLimited = false;
   const writes = [];
   const DB = {
@@ -93,7 +94,7 @@ function fixture(t, { missingMain = false, token, writeStatus = 201 } = {}) {
   };
   // A new Worker instance for each request exercises shared D1 rather than isolate memory.
   const call = (path, options) => createWorker({ validate, validateEvent, assets: {}, sourceRevision: blob, fetcher })
-    .fetch(new Request(origin + path, options), { DB, GITHUB_PROPOSAL_TOKEN: token });
+    .fetch(new Request(origin + path, options), { DB, GITHUB_PROPOSAL_TOKEN: token, OBSERVATORY_TASK_ENGINE_OWNER_ID: 'owner-1', OBSERVATORY_TASK_WORKER_KEY: taskKey });
   const post = (headers = {}) => call('/api/tasks', {
     method: 'POST', body: JSON.stringify(input),
     headers: { ...ownerHeader, origin, 'content-type': 'application/json', ...headers },
@@ -587,7 +588,7 @@ test('MCP uses authenticated caller identity, narrow tools, private projection r
  const rpc=(method,params,headers={...ownerHeader,'content-type':'application/json'})=>call('/mcp',{method:'POST',headers,body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
  assert.equal((await rpc('tools/list',{}, {'content-type':'application/json'})).status,401);
  assert.equal((await rpc('tools/list',{}, {...ownerHeader,'content-type':'application/json',origin:'https://attacker.example'})).status,403);
- const listed=await(await rpc('tools/list')).json();assert.deepEqual(listed.result.tools.map(t=>t.name),['project_execution_snapshot','read_execution_projection','sync_task_telemetry']);
+ const listed=await(await rpc('tools/list')).json();assert.deepEqual(listed.result.tools.map(t=>t.name),['task_engine_v1','project_execution_snapshot','read_execution_projection','sync_task_telemetry']);
  const envelope={export_version:1,authority:'local-task-records',repository:'Kgray44/Aetherwake',generated_at:'2026-11-16T06:00:00.000Z',records:[proposedTask(input,rev)],events:[],coverage:{}};
  const params={name:'project_execution_snapshot',arguments:{projection:envelope,verification:namespace}};
  const saved=await(await rpc('tools/call',params)).json();assert.equal(saved.result.isError,false);
@@ -693,4 +694,66 @@ test('rate-limited GitHub permits private proposals bound to a known cached revi
   assert.deepEqual(data.proposals.publication, {});
   assert.equal((await post({ 'x-observatory-publish': 'github' })).status, 503);
   assert.equal(writes.length, 0);
+});
+
+test('Codex Task tool and Site API share registration, version, owner scope and audit events', async t => {
+  const key = 'test-only-' + 'k'.repeat(40);
+  const { call } = fixture(t, { taskKey: key });
+  const headers = { ...ownerHeader, origin, 'content-type': 'application/json' };
+  const http = (body, extra = {}) => call('/api/task-engine/v1', {
+    method: 'POST', headers: { ...headers, ...extra }, body: JSON.stringify(body),
+  });
+  const tool = async (request, extras = {}) => {
+    const response = await call('/mcp', { method: 'POST', headers, body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'task_engine_v1', arguments: { request, ...extras } },
+    }) });
+    const value = await response.json();
+    return JSON.parse(value.result.content[0].text);
+  };
+  const registered = await tool({ op: 'register', operation_id: crypto.randomUUID(), fields: input });
+  assert.equal(registered.status, 201);
+  const { task, version } = registered;
+  const get = { op: 'get', task_id: task.id };
+  assert.equal((await http(get, { origin: 'https://foreign.example' })).status, 403);
+  assert.equal((await http(get, { 'oai-authenticated-user-id': 'owner-2' })).status, 404);
+  assert.equal((await http(get, { 'x-observatory-verification': namespace })).status, 404);
+  assert.equal((await (await http(get)).json()).task.id, task.id);
+  assert.equal((await tool(get)).version, version);
+  const command = { op: 'command', task_id: task.id, operation_id: crypto.randomUUID(), expected_version: version,
+    action: { type: 'admit', executor: 'codex' } };
+  assert.equal((await tool(command)).status, 403);
+  assert.equal((await http(command)).status, 200);
+  const claim = { op: 'claim', operation_id: crypto.randomUUID(), task_ids: [task.id] };
+  assert.equal((await tool(claim)).status, 403);
+  assert.equal((await tool(claim, { worker_key: 'x'.repeat(47) })).status, 403);
+  const { claim: leased } = await tool(claim, { worker_key: key });
+  assert.equal(leased.attempt.id, (await tool(claim, { worker_key: key })).claim.attempt.id);
+  const detail = await tool(get);
+  assert.equal(detail.lifecycle.state, 'running');
+  assert.equal(detail.attempts[0].lease, undefined);
+  assert.deepEqual(detail.events.map(event => event.kind), ['register', 'admit', 'claim']);
+  const overview = await (await call('/api/overview', { headers: ownerHeader })).json();
+  assert.equal(overview.records.find(item => item.id === task.id).state, 'running');
+  assert.equal(overview.records.find(item => item.id === leased.attempt.id).task_id, task.id);
+});
+
+test('owner admission activates a published proposal without rewriting its intake document', async t => {
+  const { call, post, writes } = fixture(t, { token: 'proposal-test-token' });
+  const headers = { ...ownerHeader, origin, 'content-type': 'application/json' };
+  const creation = await post({ 'x-observatory-publish': 'github' });
+  const { task, github } = await creation.json();
+  assert.equal(github.state, 'published');
+  assert.equal(writes.length, 1);
+  const response = await call('/api/task-engine/v1', { method: 'POST', headers, body: JSON.stringify({
+    op: 'command', task_id: task.id, expected_version: 1, operation_id: crypto.randomUUID(),
+    action: { type: 'admit', executor: 'codex' },
+  }) });
+  const activated = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(activated.task.id, task.id);
+  assert.equal(activated.lifecycle.state, 'ready');
+  const publish = await call('/api/tasks/' + task.id + '/publish', { method: 'POST', headers, body: '{}' });
+  assert.equal((await publish.json()).github.state, 'published');
+  assert.equal(writes.length, 1);
 });
