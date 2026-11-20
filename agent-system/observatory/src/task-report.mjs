@@ -96,7 +96,7 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       reported_records:reports.length,
       ...(receipt?{accepted_revision:receipt.revision,...(receipt.at?{reviewed_at:receipt.at}:{}),reviewed_artifact:receipt.uri}:{})};
   });
-  const activity=taskEngineeringActivity({task,canonical,attempts:taskAttempts,audits:taskAudits,evidence,github});
+  const activity=taskEngineeringActivity({task,canonical,attempts:taskAttempts,audits:taskAudits,evidence,events:taskEvents,github,telemetrySource});
   const timeline=buildTaskTimeline({task,attempts:taskAttempts,events:taskEvents,audits:taskAudits,evidence,records:taskRecords,
     engineeringEvents:activity.events,telemetrySource});
   const measurements=collectMeasurements([...taskRecords,...taskEvents]);

@@ -71,7 +71,7 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
   }
   const source = telemetrySource?.task_id === task.id ? telemetrySource : null;
   for (const event of events) {
-    if (event.task_id !== task.id) continue;
+    if (event.task_id !== task.id || event.kind === 'engineering_activity') continue;
     const attempt=attemptById.get(event.attempt_id);
     const actualAttempt=attempt?.revision===event.revision?attempt:null;
     const receipts = source?.event_receipts;

@@ -36,7 +36,7 @@ function ExecutorHeartbeat({taskId, attempt, state, audits}) {
 
 export function TaskTimeline({task,canonical,github,telemetrySource,attempts,events,audits,evidence,records,executorAttempt,executorState,onOpenAttempt}) {
   const reduce=useReducedMotion();
-  const known=useMemo(()=>taskEngineeringActivity({task,canonical,attempts,audits,evidence,github}),[task,canonical,attempts,audits,evidence,github]);
+  const known=useMemo(()=>taskEngineeringActivity({task,canonical,attempts,audits,evidence,events,github,telemetrySource}),[task,canonical,attempts,audits,evidence,events,github,telemetrySource]);
   const items=useMemo(()=>buildTaskTimeline({task,attempts,events,audits,evidence,records,engineeringEvents:known.events,telemetrySource}),
     [task,attempts,events,audits,evidence,records,known,telemetrySource]);
   const [filter,setFilter]=useState('All');

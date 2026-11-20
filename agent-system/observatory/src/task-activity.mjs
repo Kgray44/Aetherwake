@@ -149,7 +149,30 @@ function githubEvents(references, github, snapshots) {
   return [...events.values()];
 }
 
-export function taskEngineeringActivity({task,canonical,attempts=[],audits=[],evidence=[],github}) {
+function reportedEvents(task, events, attempts, telemetrySource) {
+  const attemptById = new Map(attempts.filter(attempt=>attempt.task_id===task.id).map(attempt=>[attempt.id,attempt]));
+  const source = telemetrySource?.task_id===task.id ? telemetrySource : null;
+  return events.flatMap(event=>{
+    if (event.kind!=='engineering_activity'||event.task_id!==task.id||event.repository!==task.repository||
+        !event.activity||!Number.isFinite(Date.parse(event.occurred_at))) return [];
+    const {kind,outcome,operation_id,artifact_digest} = event.activity;
+    const attempt = attemptById.get(event.attempt_id);
+    const linkedAttempt = attempt?.revision===event.revision ? attempt : null;
+    const receivedAt = Object.hasOwn(source?.event_receipts??{},event.event_id)?source.event_receipts[event.event_id]:null;
+    return [{id:'activity:'+event.event_id,type:'Engineering',activityType:kind,outcome,at:event.occurred_at,
+      title:'Reported '+kind.replaceAll('_',' ')+' · '+outcome,sourceLabel:'Imported engineering activity',
+      operationId:operation_id,sessionId:event.session_id,attemptId:linkedAttempt?.id,
+      executor:linkedAttempt?.executor??linkedAttempt?.provider??event.activity.source,
+      details:[['Source',event.activity.source],['Provenance','Reported by the source journal'],['Operation',operation_id],
+        ['Revision',event.revision],['Observatory first received',receivedAt??'Unavailable'],
+        ...(event.session_id?[['Executor session',event.session_id]]:[]),
+        ...(linkedAttempt?[['Attempt',linkedAttempt.id]]:event.attempt_id?[['Attempt association','Revision or identity unconfirmed']]:[]),
+        ...(artifact_digest?[['Reported artifact SHA-256',artifact_digest]]:[]),
+        ...(receivedAt&&Date.parse(receivedAt)<Date.parse(event.occurred_at)?[['Clock discrepancy','Source occurrence is later than the Observatory receipt.']]:[])]}];
+  });
+}
+
+export function taskEngineeringActivity({task,canonical,attempts=[],audits=[],evidence=[],events=[],github,telemetrySource}) {
   const authoritative=canonical?.task?.id===task.id?canonical:null;
   const references=linkedReferences(task,authoritative,audits,evidence);
   const operations=references.filter(ref=>!['executor_session','artifact','branch'].includes(ref.kind));
@@ -159,15 +182,18 @@ export function taskEngineeringActivity({task,canonical,attempts=[],audits=[],ev
   }
   const formalIds=new Set((authoritative?.attempts??[]).map(attempt=>attempt.id));
   const verification=evidence.filter(record=>record.task_id===task.id);
-  const events=githubEvents(references,github,authoritative?.engineering_snapshots??[]);
+  const reported=reportedEvents(task,events,attempts,telemetrySource);
+  const engineeringEvents=[...githubEvents(references,github,authoritative?.engineering_snapshots??[]),...reported];
   return {
-    references, events,
+    references, events:engineeringEvents,
     counts:[
       ['Formal Task Engine attempts',authoritative?formalIds.size:null],
       ['Other reported attempts',new Set(attempts.filter(a=>a.task_id===task.id&&!formalIds.has(a.id)).map(a=>a.id)).size],
       ['Known executor sessions',sessions.size],
       ['Linked engineering operations',operations.length],
-      ['Dated engineering events',events.length],
+      ['Dated engineering events',engineeringEvents.length],
+      ['Reported external operations',new Set(reported.map(event=>event.operationId)).size],
+      ['Reported external sessions',new Set(reported.map(event=>event.sessionId).filter(Boolean)).size],
       ['Linked commits',operations.filter(ref=>ref.kind==='commit').length],
       ['Linked pull requests',operations.filter(ref=>ref.kind==='pull_request').length],
       ['Reported verification records',new Set(verification.map(record=>record.id)).size],

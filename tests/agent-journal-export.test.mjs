@@ -11,6 +11,7 @@ import { stageSnapshot } from '../scripts/agent/stage-observatory.mjs';
 import { journalDelivery, startObservatorySync } from '../scripts/agent/observatory-sync.mjs';
 import { applyTelemetryDelta } from '../agent-system/observatory/telemetry-delta.mjs';
 import { appendEvent, traceEvent } from '../scripts/agent/journal.mjs';
+import { recordEngineeringActivity } from '../scripts/agent/record-engineering-activity.mjs';
 import { persistRecord } from '../scripts/agent/record-journal.mjs';
 
 const cli = fileURLToPath(new URL('../scripts/agent/export-journal.mjs', import.meta.url));
@@ -39,6 +40,32 @@ async function fixture(t) {
   const run = () => spawnSync(process.execPath, [cli, '--task', taskFile, '--journal', directory], {encoding:'utf8'});
   return { task, attempt, directory, run, taskFile, root };
 }
+
+test('external activity survives export with stable identities and no source paths', async t=>{
+  const {task,directory,taskFile,root}=await fixture(t);
+  const receipt={kind:'deployment',source:'sites',source_id:'provider_run_42',revision,occurred_at:time,outcome:'succeeded',
+    artifact_digest:'a'.repeat(64)};
+  const first=await recordEngineeringActivity({task,directory,receipt});
+  assert.equal(first.recorded,true);
+  const receiptFile=join(root,'activity.json');
+  await writeFile(receiptFile,JSON.stringify(receipt));
+  const recorder=fileURLToPath(new URL('../scripts/agent/record-engineering-activity.mjs',import.meta.url));
+  const replay=spawnSync(process.execPath,[recorder,'--task',taskFile,'--journal',directory,'--receipt',receiptFile],{encoding:'utf8'});
+  assert.equal(replay.status,0,replay.stderr);
+  assert.deepEqual(JSON.parse(replay.stdout),{...first,recorded:false});
+  await assert.rejects(recordEngineeringActivity({task,directory,receipt:{...receipt,outcome:'failed'}}),/Conflicting event identity/);
+  await assert.rejects(recordEngineeringActivity({task,directory,receipt:{...receipt,source_id:'D:\\private\\working-copy'}}),/Invalid engineering activity receipt/);
+  await assert.rejects(recordEngineeringActivity({task,directory,receipt:{...receipt,outcome:'accepted'}}),/Invalid engineering trace/);
+  const start=await recordEngineeringActivity({task,directory,receipt:{...receipt,occurred_at:'2026-11-16T00:00:00Z',outcome:'started'}});
+  assert.notEqual(start.event_id,first.event_id);
+  const json=await projectJournal({task,directory});
+  const projected=JSON.parse(json);
+  assert.equal(projected.events.length,2);
+  assert.deepEqual(projected.events.map(event=>event.activity.outcome),['started','succeeded']);
+  assert.equal(projected.events[0].activity.operation_id,projected.events[1].activity.operation_id);
+  assert.equal(projected.events[1].activity.artifact_digest,receipt.artifact_digest);
+  assert.doesNotMatch(json,/provider_run_42|working-copy/);
+});
 
 test('staging preserves a retryable snapshot on unchanged input and on corrupt new journal data', async t => {
   const { task, attempt, directory, taskFile, root } = await fixture(t);

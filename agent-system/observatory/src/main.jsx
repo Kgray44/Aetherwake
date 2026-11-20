@@ -406,7 +406,7 @@ return <div className="app-shell"><Ambient/><aside className="sidebar"><div clas
 </Suspense></Panel></Rise>}
 {page==='detail'&&!demo&&current&&hasLiveFeed&&<Rise><Panel title="Execution timing">
   <TaskExecutionTiming key={current.id} task={canonical?.task??current} canonical={canonical} attempts={taskAttempts}
-    events={taskEvents} audits={taskAudits} evidence={related(current.id,'evidence')} github={github}
+    events={taskEvents} audits={taskAudits} evidence={related(current.id,'evidence')} github={github} telemetrySource={taskTelemetrySource}
     onOpenAttempt={id=>jumpToTaskSection('task-attempt-'+id)}/>
   <details><summary>Raw execution trace</summary><TraceWaterfall events={taskEvents} fixedTask={current.id}/></details>
 </Panel></Rise>}

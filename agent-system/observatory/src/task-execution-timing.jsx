@@ -7,19 +7,19 @@ const utc = value => new Date(value).toISOString();
 const duration = value => value == null ? 'Unavailable' : value < 1000 ? value+' ms' : (value/1000).toFixed(2)+' s';
 const labels = {attempt:'Attempt window',trace:'Trace span',engineering:'Linked event'};
 
-export function TaskExecutionTiming({task,canonical,attempts,events,audits,evidence,github,onOpenAttempt}) {
+export function TaskExecutionTiming({task,canonical,attempts,events,audits,evidence,github,telemetrySource,onOpenAttempt}) {
   const [selected,setSelected] = useState(null);
   const [limit,setLimit] = useState(16);
   const [attemptFilter,setAttemptFilter] = useState('');
   const filteredAttempt = attempts.find(attempt=>attempt.id===attemptFilter);
   const timing = useMemo(()=>{
-    const {events:linkedEvents} = taskEngineeringActivity({task,canonical,attempts,audits,evidence,github});
+    const {events:linkedEvents} = taskEngineeringActivity({task,canonical,attempts,audits,evidence,events,github,telemetrySource});
     const spans = traceTimeline(events).spans;
     return executionTiming({taskId:task.id,
       attempts:filteredAttempt?[filteredAttempt]:attempts,
       spans:filteredAttempt?spans.filter(span=>span.attempt===filteredAttempt.id):spans,
-      linkedEvents:filteredAttempt?[]:linkedEvents});
-  },[task,canonical,attempts,events,audits,evidence,github,filteredAttempt]);
+      linkedEvents:filteredAttempt?linkedEvents.filter(event=>event.attemptId===filteredAttempt.id):linkedEvents});
+  },[task,canonical,attempts,events,audits,evidence,github,telemetrySource,filteredAttempt]);
   const item = timing.rows.find(row=>row.id===selected);
   return <section className="trace-view execution-timing" aria-label="Execution timing">
     <p>{timingLegend}</p>

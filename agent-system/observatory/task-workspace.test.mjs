@@ -87,6 +87,31 @@ test('cached review and CI detail stay revision bound across Workspace and PDF',
   assert.doesNotMatch(report,/Unlinked job/);
 });
 
+test('reported external operation chronology and timing stay separate from formal attempts',()=>{
+  const task={id:'activity-fixture',repository:'Kgray44/Aetherwake',title:'External operation',objective:'Collect observed events'};
+  const revision='a'.repeat(40), digest='b'.repeat(64), operation='c'.repeat(64);
+  const make=(outcome,occurred_at)=>({event_id:'activity_'+operation+'_'+outcome,task_id:task.id,repository:task.repository,
+    revision,occurred_at,kind:'engineering_activity',activity:{kind:'verification',source:'verification_runner',
+      operation_id:operation,outcome,artifact_digest:digest}});
+  const start=make('started','2026-01-01T00:00:00Z');
+  const finish=make('succeeded','2026-01-03T00:00:00Z');
+  const telemetrySource={task_id:task.id,event_receipts:{[finish.event_id]:'2026-01-04T00:00:00Z'}};
+  const canonical={task,lifecycle:{state:'verifying'},attempts:[]};
+  const input={task,canonical,telemetrySource,events:[finish,{...finish,task_id:'another'},start]};
+  const activity=taskEngineeringActivity(input);
+  assert.equal(Object.fromEntries(activity.counts)['Formal Task Engine attempts'],0);
+  assert.equal(Object.fromEntries(activity.counts)['Reported external operations'],1);
+  const chronology=buildTaskTimeline({...input,engineeringEvents:activity.events});
+  assert.equal(chronology.length,2);
+  assert.equal(chronology[0].outcome,'succeeded');
+  assert.equal(Object.fromEntries(chronology[0].details)['Observatory first received'],'2026-01-04T00:00:00Z');
+  assert.equal(Object.fromEntries(chronology[0].details)['Reported artifact SHA-256'],digest);
+  const report=JSON.stringify(taskReportDefinition(input).content);
+  assert.match(report,/Reported verification · succeeded/);
+  assert.match(report,/Reported by the source journal/);
+  assert.match(report,/Imported engineering activity/);
+});
+
 test('Task chronology keeps late arrivals ordered by occurrence and reports missing or discrepant receipt clocks', () => {
   const task={id:'task_clock',title:'Inspect clock',objective:'Inspect independent clocks'};
   const makeEvent=(event_id,occurred_at)=>({task_id:task.id,event_id,occurred_at,kind:'measurement',phase:'testing'});

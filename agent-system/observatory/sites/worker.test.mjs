@@ -294,7 +294,12 @@ test('the automatic telemetry client resumes after a lost response, uploads only
   assert.deepEqual(rollbackSource.event_receipts, { [event.event_id]: firstReceipt.received_at });
   // An existing snapshot may predate the receipt migration. Its original arrivals stay unknown.
   sql.prepare("UPDATE task_telemetry SET event_receipt_batches = '[]' WHERE task_id = ?").run(task.id);
-  const event3 = { ...event, event_id: 'received-after-migration' };
+  const operation = 'a'.repeat(64);
+  const event3 = {...event,event_id:'activity_'+operation+'_result',trace_id:operation,span_id:operation,
+    kind:'engineering_activity',measurements:[],activity:{kind:'test',source:'local_runner',outcome:'succeeded',operation_id:operation}};
+  const badActivity = {...event3,activity:{...event3.activity,source_path:'private path'}};
+  assert.equal((await call(path,{method:'POST',headers:{...headers,origin,'content-type':'application/json','x-observatory-sync-scope':scope},
+    body:JSON.stringify({...badChange,events:[badActivity]})})).status,400);
   const { snapshot: upgraded } = await readStagedSnapshot(file(3, [event, event2, event3]));
   assert.equal((await client().synchronize(task.id, upgraded)).changed, true);
   const upgradedSource = (await (await call('/api/overview', { headers })).json()).execution.sources[0];

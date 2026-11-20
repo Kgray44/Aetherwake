@@ -35,7 +35,7 @@ export function executionTiming({taskId, attempts = [], spans = [], linkedEvents
   for (const event of linkedEvents) {
     const start = Date.parse(event.at);
     if (!Number.isFinite(start)) continue;
-    rows.push({id:event.id,kind:'engineering',label:event.title,source:'Linked GitHub snapshot',start,end:null,
+    rows.push({id:event.id,kind:'engineering',label:event.title,source:event.sourceLabel??'Linked GitHub snapshot',attemptId:event.attemptId,start,end:null,
       startedAt:event.at,state:event.outcome,url:event.href});
   }
 

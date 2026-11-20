@@ -409,6 +409,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const overview = await page.request.get(origin + '/api/overview', { headers: telemetryHeaders });
   const { telemetry_scope: scope } = await overview.json();
   const firstAttempt = detail.attempts[0];
+  const operationId = 'e'.repeat(64);
   const timedEvent = (phase, kind, offset) => ({
     trace_version:1,event_id:phase+'-'+kind,task_id:execution.task.id,attempt_id:firstAttempt.id,
     trace_id:'timing-window',span_id:phase,repository:execution.task.repository,revision:firstAttempt.revision,
@@ -418,7 +419,12 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
     headers: { ...telemetryHeaders, origin, 'x-observatory-sync-scope': scope },
     data: {
       base: null, generated_at: new Date().toISOString(), records: [execution.task],
-      events: [timedEvent('implementation','span_start',100),timedEvent('integration','span_start',200),
+      events: [{
+        trace_version:1,event_id:'activity_'+operationId+'_result',task_id:execution.task.id,
+        trace_id:operationId,span_id:operationId,repository:execution.task.repository,revision:candidate,
+        occurred_at:'2026-01-02T00:00:00.000Z',kind:'engineering_activity',phase:'verification',measurements:[],
+        activity:{kind:'deployment_validation',source:'sites',operation_id:operationId,outcome:'succeeded'},
+      },timedEvent('implementation','span_start',100),timedEvent('integration','span_start',200),
         timedEvent('integration','span_end',350),timedEvent('implementation','span_end',300),{
         trace_version: 1, event_id: 'fixture-delayed-trace', task_id: execution.task.id,
         trace_id: 'fixture-receipt-trace', span_id: 'fixture-receipt-span', repository: execution.task.repository,
@@ -488,6 +494,8 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   assert.equal(await run.getAttribute('href'),'#ci-runs/5321');
   await timeline.getByRole('button',{name:'Engineering',exact:true}).click();
   await timeline.getByRole('button',{name:/Review submitted on pull request #319/}).waitFor();
+  await timeline.getByRole('button',{name:/Reported deployment validation · succeeded/}).click();
+  await timeline.getByText('Reported by the source journal',{exact:true}).waitFor();
   await timeline.getByRole('button',{name:/CI job finished.*Observatory browser tests/}).click();
   await timeline.getByText('Job ID',{exact:true}).waitFor();
   await timeline.getByRole('button',{name:'All',exact:true}).click();

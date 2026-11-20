@@ -161,6 +161,8 @@ with a reason, and a blocked proposal may return to proposed. Public proposals a
 local execution projection are outside this editing path. Proposal state cannot grant owner
 acceptance or authorize execution.
 
+External tools can append a bounded receipt to an existing Task journal with `node scripts/agent/record-engineering-activity.mjs --task PATH --journal DIRECTORY --receipt PATH`. A receipt supplies `kind`, `source`, a stable non-secret `source_id`, `revision`, `occurred_at` (UTC), and `outcome`. It may include an artifact SHA-256, a Codex session UUID, or an attempt ID. Use the same operation ID for a start and its final result. The exporter publishes the derived operation hash through the existing private synchronization path. Receipts populate the chronology as reported activity and do not change Task Engine state or owner acceptance.
+
 The shared GitHub D1 cache serializes refreshes and uses authenticated ETag revalidation for main, issues, pull requests and CI. The feed shows the latest reported API budget and reset time alongside data refresh timestamps. The shared cooldown honors GitHub retry and primary-reset headers. Unauthenticated GitHub delivery cannot reach the owner-private Site, so this deployment uses conditional refreshes. An approved authenticated ingress would be needed to use signed webhook delivery.
 
 ## Motion system

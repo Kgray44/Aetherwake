@@ -3,7 +3,34 @@ const hash = v => typeof v==='string' && /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/
 const safeRef = (ref,index=0) => ({kind:'artifact',uri:'private-ref:'+index,...(hash(ref.revision)?{revision:ref.revision}:{})});
 const token = (v) => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,160}$/.test(v);
 const pick = (v, keys) => Object.fromEntries(keys.filter(k=>v[k]!==undefined).map(k=>[k,v[k]]));
-const eventKeys = ['trace_version','event_id','task_id','attempt_id','session_id','trace_id','span_id','parent_span_id','repository','revision','occurred_at','kind','phase','state','measurements'];
+const eventKeys = ['trace_version','event_id','task_id','attempt_id','session_id','trace_id','span_id','parent_span_id','repository','revision','occurred_at','kind','phase','state','measurements','activity'];
+const activityFields = ['kind','source','operation_id','outcome','artifact_digest'];
+const activityKinds = new Set(['commit','review','test','benchmark','verification','deployment','deployment_validation','executor_session']);
+const activitySources = new Set(['github_actions','codex','sites','verification_runner','local_runner','external']);
+const activityOutcomes = new Set(['started','completed','succeeded','failed','cancelled','inconclusive']);
+const digest = value => typeof value==='string' && /^[a-f0-9]{64}$/.test(value);
+
+function validateActivity(event,operations) {
+ const a=event.activity;
+ if(event.kind!=='engineering_activity') {
+  if(a!==undefined) throw Error('Engineering activity requires its own trace kind');
+  return;
+ }
+ if(!a||Object.keys(a).some(key=>!activityFields.includes(key))||
+    !activityKinds.has(a.kind)||!activitySources.has(a.source)||!digest(a.operation_id)||
+    !activityOutcomes.has(a.outcome)||(a.artifact_digest!==undefined&&!digest(a.artifact_digest))||
+    event.state!==undefined||event.parent_span_id!==undefined||event.measurements.length!==0) {
+  throw Error('Invalid reported engineering activity');
+ }
+ const stage=a.outcome==='started'?'started':'result';
+ if(event.event_id!=='activity_'+a.operation_id+'_'+stage||event.trace_id!==a.operation_id||event.span_id!==a.operation_id) {
+  throw Error('Invalid engineering activity identity');
+ }
+ const scope=JSON.stringify([event.task_id,event.revision,event.attempt_id,event.session_id,a.source,a.kind]);
+ const previous=operations.get(a.operation_id);
+ if(previous&&previous!==scope) throw Error('Conflicting engineering activity scope');
+ operations.set(a.operation_id,scope);
+}
 export function sanitizeExport({ repository, records=[], events=[] }) {
  const safeRecords = records.map(r => {
    if(r.record_type==='task'&&r.state==='accepted')throw Error('Accepted Task requires independent owner evidence; not exportable by this adapter');
@@ -34,11 +61,13 @@ function sanitizeMeasurement(m) {
 }
 export function validateExport(e) {
  if(e.export_version!==1||e.authority!=='local-task-records'||!/^[-A-Za-z0-9_.]+\/[-A-Za-z0-9_.]+$/.test(e.repository)||!Array.isArray(e.records)||!Array.isArray(e.events)||e.records.length+e.events.length>10000) throw Error('Invalid export envelope');
+ const operations=new Map();
  for(const event of e.events) {
   if(event.state==='accepted')throw Error('Accepted trace requires independent owner evidence');
-  if(Object.keys(event).some(k=>!eventKeys.includes(k))||event.trace_version!==1||!token(event.event_id)||!token(event.task_id)||!token(event.trace_id)||!token(event.span_id)||event.repository!==e.repository||!hash(event.revision)||!['queue','waiting','context','investigation','implementation','verification','integration','review','recovery','other'].includes(event.phase)||(event.state!==undefined&&!['created','ready','assigned','started','blocked','verifying','integrated','completed','accepted','failed','interrupted','cancelled','restarted','resumed'].includes(event.state))||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(event.occurred_at)||!Number.isFinite(Date.parse(event.occurred_at))||!['lifecycle','span_start','span_end','measurement'].includes(event.kind)) throw Error('Invalid trace');
+  if(Object.keys(event).some(k=>!eventKeys.includes(k))||event.trace_version!==1||!token(event.event_id)||!token(event.task_id)||!token(event.trace_id)||!token(event.span_id)||event.repository!==e.repository||!hash(event.revision)||!['queue','waiting','context','investigation','implementation','verification','integration','review','recovery','other'].includes(event.phase)||(event.state!==undefined&&!['created','ready','assigned','started','blocked','verifying','integrated','completed','accepted','failed','interrupted','cancelled','restarted','resumed'].includes(event.state))||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(event.occurred_at)||!Number.isFinite(Date.parse(event.occurred_at))||!['engineering_activity','lifecycle','span_start','span_end','measurement'].includes(event.kind)) throw Error('Invalid trace');
   if(event.session_id!==undefined&&!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(event.session_id))throw Error('Unsafe executor session identifier');
   for(const key of ['attempt_id','parent_span_id'])if(event[key]!==undefined&&!token(event[key]))throw Error('Unsafe optional trace identifier');
+  validateActivity(event,operations);
   event.measurements.forEach(sanitizeMeasurement);
  }
  for(const r of e.records) {
