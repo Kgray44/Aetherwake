@@ -486,6 +486,7 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   await receiptDetail.getByText('Observatory first received',{exact:true}).waitFor();
   assert.equal(await receiptDetail.getByText(traceReceivedAt,{exact:true}).count(), 1);
   assert.equal(await receiptDetail.locator('time').getAttribute('datetime'), '2026-01-01T08:00:00.000Z');
+  await timeline.getByText(/First-receipt timestamps are available for 6 of 6 journal events/).waitFor();
   page.off('request',rememberRefresh);
   await page.unroute(overviewRoute,staleGitHub);
   assert.ok(lateRefreshes.length>0);

@@ -28,6 +28,22 @@ export function executorHeartbeat({ taskId, attempt, state, audits = [], now = D
   return {status,lastAt,leaseUntil};
 }
 
+export function journalReceiptSummary(timeline) {
+  const receipts = new Map(timeline.filter(item=>Object.hasOwn(item,'journalReceipt'))
+    .map(item=>[item.id,item]));
+  if (!receipts.size) return 'No dated journal events in this snapshot.';
+  let observed=0, discrepancies=0;
+  for (const {at,journalReceipt} of receipts.values()) {
+    const received=Date.parse(journalReceipt);
+    if (!Number.isFinite(received)) continue;
+    observed++;
+    if (received<Date.parse(at)) discrepancies++;
+  }
+  const coverage = 'First-receipt timestamps are available for '+observed+' of '+receipts.size+' journal events.';
+  return discrepancies ? coverage+' Occurrence is later than receipt for '+discrepancies+
+    (discrepancies===1?' event.':' events.')+' Cross-source order is uncertain.' : coverage;
+}
+
 export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evidence=[], records=[], engineeringEvents=[], telemetrySource}) {
   const rows = [];
   const add = item => {
@@ -77,7 +93,7 @@ export function buildTaskTimeline({task, attempts=[], events=[], audits=[], evid
     const receipts = source?.event_receipts;
     const receivedAt = receipts && Object.hasOwn(receipts,event.event_id) ? receipts[event.event_id] : null;
     const clockConflict = receivedAt && Date.parse(receivedAt) < Date.parse(event.occurred_at);
-    add({id:'trace:'+event.event_id,at:event.occurred_at,type:'Trace',
+    add({id:'trace:'+event.event_id,at:event.occurred_at,type:'Trace',journalReceipt:receivedAt,
       title:[humanize(event.phase),humanize(event.kind)].filter(Boolean).join(' · '),attemptId:actualAttempt?.id,
       activityType:event.kind,outcome:event.state,executor:actualAttempt?.executor??actualAttempt?.provider,
       description:[actualAttempt?'Attempt '+actualAttempt.attempt_number:'',humanize(event.state)].filter(Boolean).join(' · '),

@@ -1,5 +1,5 @@
 import { criterionEvidenceStatus,ownerReviewByCriterion } from './evidence-status.mjs';
-import { buildTaskTimeline } from './task-timeline.mjs';
+import { buildTaskTimeline, journalReceiptSummary } from './task-timeline.mjs';
 import { taskUsageAccounting, usageFields } from './task-usage-accounting.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
 import { executionTiming,timingLegend } from './execution-timing.mjs';
@@ -154,7 +154,7 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       section('Acceptance criteria and owner review',criteria.length),
       ...blocks(criteria,item=>item.id+'  ·  '+item.status),
       section('Task Timeline',timeline.length),
-      {text:'Trace events are ordered by journal occurrence. The Observatory records receipt on a separate clock.',style:'muted'},
+      {text:'Trace events are ordered by journal occurrence. '+journalReceiptSummary(timeline),style:'muted'},
       ...blocks(timeline,item=>item.at+'  ·  '+item.title,item=>[
         ['Category',item.type], ...(item.description?[['Summary',item.description]]:[]), ...item.details,
         ...(item.href?[['Reference',item.href]]:[]),

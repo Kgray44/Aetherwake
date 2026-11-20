@@ -1,7 +1,7 @@
 import React, {useEffect,useMemo,useRef,useState} from 'react';
 import {motion,useReducedMotion} from 'motion/react';
 import {Activity, ArrowRight, CheckCircle2, ClipboardCheck, FileCheck2, Flag, GitCommitHorizontal, Search, SlidersHorizontal} from 'lucide-react';
-import {buildTaskTimeline,executorHeartbeat} from './task-timeline.mjs';
+import {buildTaskTimeline,executorHeartbeat,journalReceiptSummary} from './task-timeline.mjs';
 import {taskActivityHref} from './github-activity.mjs';
 import {taskEngineeringActivity,taskLinkedHref} from './task-activity.mjs';
 import {StickySectionAside} from './sticky-section-aside.jsx';
@@ -87,7 +87,7 @@ export function TaskTimeline({task,canonical,github,telemetrySource,attempts,eve
     <dl className="github-facts task-telemetry-coverage">
       {known.counts.map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value??'Unavailable'}</dd></div>)}
     </dl>
-    <p className="low">{known.coverage} Trace events are ordered by journal occurrence. The Observatory records receipt on a separate clock.</p>
+    <p className="low">{known.coverage} Trace events are ordered by journal occurrence. {journalReceiptSummary(items)}</p>
     <div className="task-timeline-toolbar">
       <nav aria-label="Timeline filters" className="task-timeline-filters">
         {categories.filter(kind=>kind==='All'||items.some(item=>item.type===kind)).map(kind=>

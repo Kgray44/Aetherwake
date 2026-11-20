@@ -159,7 +159,7 @@ function reportedEvents(task, events, attempts, telemetrySource) {
     const attempt = attemptById.get(event.attempt_id);
     const linkedAttempt = attempt?.revision===event.revision ? attempt : null;
     const receivedAt = Object.hasOwn(source?.event_receipts??{},event.event_id)?source.event_receipts[event.event_id]:null;
-    return [{id:'activity:'+event.event_id,type:'Engineering',activityType:kind,outcome,at:event.occurred_at,
+    return [{id:'activity:'+event.event_id,type:'Engineering',activityType:kind,outcome,at:event.occurred_at,journalReceipt:receivedAt,
       title:'Reported '+kind.replaceAll('_',' ')+' · '+outcome,sourceLabel:'Imported engineering activity',
       operationId:operation_id,sessionId:event.session_id,attemptId:linkedAttempt?.id,
       executor:linkedAttempt?.executor??linkedAttempt?.provider??event.activity.source,

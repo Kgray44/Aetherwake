@@ -140,6 +140,8 @@ test('Task chronology keeps late arrivals ordered by occurrence and reports miss
   assert.equal(Object.fromEntries(wrongSource[3].details)['Observatory first received'],'Unavailable');
   const report=JSON.stringify(taskReportDefinition(input).content);
   assert.match(report,/Observatory first received/);
+  assert.match(report,/First-receipt timestamps are available for 3 of 4 journal events/);
+  assert.match(report,/Occurrence is later than receipt for 1 event/);
   assert.match(report,/Cross-source order is uncertain/);
   assert.match(report,/2026-01-04T00:00:00.000Z/);
 });
