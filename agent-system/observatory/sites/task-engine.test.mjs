@@ -314,3 +314,27 @@ test('trigger-backed Task writes return success independently of D1 change count
   assert.equal(detail.lifecycle.state, 'verifying');
   assert.deepEqual(detail.events.map(item => item.kind), ['register', 'admit', 'claim', 'finished']);
 });
+
+test('verification route pins exact model and effort only with a matching fresh Codex catalog', async () => {
+  const {buildCodexArgs,validateVerificationRoute} = await import('../../../scripts/agent/observatory-task-worker.mjs');
+  const config = {model:'gpt-6.2-sol',effort:'medium'};
+  const catalog = {
+    client_version:'0.169.1', fetched_at:'2026-11-20T00:00:00.000Z',
+    models:[{slug:config.model,supported_reasoning_levels:[{effort:'medium'}]}],
+  };
+  const now = Date.parse('2026-11-20T01:00:00.000Z');
+  const verification = crypto.randomUUID();
+  const qualify = (changes = {}) => validateVerificationRoute({config,catalog,version:'0.169.1',verification,now,...changes});
+  const route = qualify();
+  assert.deepEqual(route,{...config,clientVersion:'0.169.1',expiresAt:Date.parse('2026-11-21T00:00:00.000Z')});
+  const args = buildCodexArgs('D:/trial',{},route);
+  assert.deepEqual(args.slice(args.indexOf('--model'),args.indexOf('--model')+4),[
+    '--model','gpt-6.2-sol','--config','model_reasoning_effort="medium"',
+  ]);
+  assert.equal(buildCodexArgs('D:/trial',{}).includes('--model'),false);
+  assert.throws(() => qualify({verification:undefined}),/verification namespace/);
+  assert.throws(() => qualify({version:'0.153.3'}),/fresh catalog for this Codex client/);
+  assert.throws(() => qualify({now:now+86400000}),/fresh catalog for this Codex client/);
+  assert.throws(() => qualify({config:{...config,effort:'ultra'}}),/not listed/);
+  assert.throws(() => qualify({config:{...config,model:'gpt-6.2-astra'}}),/not listed/);
+});
