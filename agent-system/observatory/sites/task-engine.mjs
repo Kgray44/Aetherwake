@@ -37,13 +37,15 @@ const stateForV1 = {
   paused: 'blocked', completed: 'accepted', archived: 'cancelled',
 };
 const unique = items => [...new Set(items)];
+const cycleAttempts = lifecycle => lifecycle.attempts.length - (lifecycle.cycle_start ?? 0);
 
 function waitState(task, lifecycle, rows, now) {
   if (!claimStates.has(lifecycle.state)) return { state: lifecycle.state, blockers: [] };
   const blockers = task.prerequisites.task_ids.flatMap(id => {
     const dependency = rows.get(id);
     const state = dependency ? details(dependency).state : 'missing';
-    return state === 'completed' ? [] : [{ type: 'task', id, state }];
+    const acceptedArchive = state === 'archived' && record(dependency).owner_acceptance === 'accepted';
+    return state === 'completed' || acceptedArchive ? [] : [{ type: 'task', id, state }];
   }).concat(task.prerequisites.capabilities.filter(id => !lifecycle.prerequisites.includes(id))
     .map(id => ({ type: 'capability', id, state: 'unsatisfied' })));
   if (blockers.length) return { state: 'blocked', blockers };
@@ -83,8 +85,9 @@ export function taskAttemptRecord(task, attempt) {
 }
 
 function publicLifecycle(row, rows, now) {
-  const { attempts, event, ...lifecycle } = details(row);
-  return { ...lifecycle, stored_state: lifecycle.state, ...waitState(record(row), lifecycle, rows, now) };
+  const stored = details(row);
+  const { attempts, event, cycle_start, ...lifecycle } = stored;
+  return { ...lifecycle, cycle_attempts:cycleAttempts(stored), stored_state: lifecycle.state, ...waitState(record(row), lifecycle, rows, now) };
 }
 
 function requirementReferences(fields) {
@@ -172,7 +175,7 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     return { task: { ...task, owner_acceptance: 'accepted' }, lifecycle: { ...lifecycle, state: 'completed',
       evidence: action.evidence.map(({ criterion_id, uri, revision }) => ({ criterion_id, uri, revision })) } };
   }
-  if (type === 'retry' && current === 'failed' && lifecycle.attempts.length > 0 && lifecycle.attempts.length < maxAttempts) {
+  if (type === 'retry' && current === 'failed' && cycleAttempts(lifecycle) > 0 && cycleAttempts(lifecycle) < maxAttempts) {
     if (typeof action.changed_assumption !== 'string' || !action.changed_assumption.trim() || action.changed_assumption.length > 500) {
       return failure(400, 'A changed assumption is required before retrying');
     }
@@ -181,7 +184,7 @@ function commandChange(task, lifecycle, { action, now, rows }) {
   if (type === 'pause' && ['admitted', 'queued', 'scheduled', 'running'].includes(current)) {
     return { lifecycle: { ...lifecycle, state: current === 'running' ? 'pausing' : 'paused' } };
   }
-  if (type === 'resume' && current === 'paused' && lifecycle.attempts.length < maxAttempts) {
+  if (type === 'resume' && current === 'paused' && cycleAttempts(lifecycle) < maxAttempts) {
     const paused = lifecycle.attempts.at(-1);
     if (paused?.state === 'paused' && !(paused.session_id && paused.checkpoint_revision)) {
       return failure(409, 'Paused execution has no recoverable Codex checkpoint');
@@ -196,7 +199,20 @@ function commandChange(task, lifecycle, { action, now, rows }) {
     if (!taskId(action.successor) || action.successor === task.id || !rows.has(action.successor)) return failure(400, 'Unknown replacement Task');
     return { task: { ...task, superseded_by: action.successor }, lifecycle: { ...lifecycle, state: 'superseded' } };
   }
-  if (type === 'archive' && ['proposed', 'blocked', 'failed', 'cancelled', 'superseded'].includes(current)) {
+  if (type === 'reopen' && ['completed','archived'].includes(current) && task.owner_acceptance === 'accepted') {
+    const accepted = lifecycle.attempts.at(-1);
+    if (!accepted || accepted.state !== 'succeeded' || !revisionPattern.test(accepted.candidate_revision)) {
+      return failure(409, 'An accepted candidate revision is required to reopen this Task');
+    }
+    if (typeof action.feedback !== 'string' || !action.feedback.trim() || action.feedback.length > 2000) {
+      return failure(400, 'Owner feedback must contain 1 to 2000 characters');
+    }
+    return { task:{ ...task, owner_acceptance:'not_reviewed' }, lifecycle:{
+      ...lifecycle, state:'queued', start_at:now, cycle_start:lifecycle.attempts.length,
+      evidence:[], feedback:action.feedback.trim(), followup_revision:accepted.candidate_revision,
+    } };
+  }
+  if (type === 'archive' && ['completed','proposed','blocked','failed','cancelled','superseded'].includes(current)) {
     return { lifecycle: { ...lifecycle, state: 'archived' } };
   }
   return failure(409, 'Invalid Task transition from ' + current);
@@ -278,6 +294,11 @@ export async function readTaskRows({ db, owner, namespace, now = Date.now() }) {
   }));
 }
 
+function taskForExecution(task,lifecycle) {
+  if (!lifecycle.feedback) return task;
+  return {...task, objective: task.objective+'\n\nOwner feedback for this follow-up attempt\n'+lifecycle.feedback};
+}
+
 export async function taskOperation({ db, owner, namespace, body, access, validate, revision, now = Date.now() }) {
   if (!body || !['list', 'get', 'register', 'command', 'claim', 'report'].includes(body.op)) return failure(400, 'Invalid Task operation');
   if (['claim', 'report'].includes(body.op) && access !== 'worker') return failure(403, 'Executor authorization required');
@@ -303,7 +324,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   if (body.op === 'list') {
     const tasks = [...rows.values()].map(summary);
     return success({ tasks: tasks.filter(item => body.state === undefined
-      ? item.lifecycle.state !== 'archived' : item.lifecycle.state === body.state) });
+      ? body.include_archived === true || item.lifecycle.state !== 'archived' : item.lifecycle.state === body.state) });
   }
   if (body.op === 'get') return currentRow ? success(await view(currentRow)) : failure(404, 'Task not found');
 
@@ -320,7 +341,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     if (body.op === 'claim') {
       const attempt = details(row).attempts.at(-1);
       if (attempt?.id !== previous.attempt_id || !activeStates.has(details(row).state) || attempt.lease_until <= now) return success({ claim: null });
-      return success({ claim: { task: record(row), attempt: exposeAttempt(attempt), lease: attempt.lease } });
+      return success({ claim: { task: taskForExecution(record(row), details(row)), attempt: exposeAttempt(attempt), lease: attempt.lease } });
     }
     return success(await view(row));
   }
@@ -339,11 +360,11 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       WHERE p.version IS NOT json_extract(expected.value, '$[1]'))
   `;
   const snapshotArgs = () => [owner, namespace, rows.size, snapshot(), owner, namespace];
-  const save = async (row, task, lifecycle, { priority = row.priority, kind, id = body.operation_id, eventDigest, attemptId, fenceGraph = true } = {}) => {
+  const save = async (row, task, lifecycle, { priority = row.priority, kind, id = body.operation_id, eventDigest, attemptId, receipt = {}, fenceGraph = true } = {}) => {
     task = { ...task, state: stateForV1[lifecycle.state] ?? lifecycle.state };
     if (!validate(task)) return null;
     const version = row.version + 1;
-    const next = { ...lifecycle, event: event(id, kind, version, lifecycle.state, attemptId, eventDigest) };
+    const next = { ...lifecycle, event: { ...event(id, kind, version, lifecycle.state, attemptId, eventDigest), ...receipt } };
     const guard = fenceGraph ? unchangedGraph : 'version = ?';
     const args = fenceGraph ? snapshotArgs() : [row.version];
     const result = await query(`
@@ -391,7 +412,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
       const lifecycle = details(row);
       const task = record(row);
       if (lifecycle.cancel_with_dependency && task.prerequisites.task_ids.some(id => rows.has(id) &&
-          ['cancelled', 'archived', 'superseded'].includes(details(rows.get(id)).state))) {
+          ['cancelled','archived','superseded'].includes(details(rows.get(id)).state) && record(rows.get(id)).owner_acceptance !== 'accepted')) {
         lifecycle.state = 'cancelled';
         if (!await save(row, task, lifecycle, { kind: 'dependency_cancelled', id: crypto.randomUUID(), eventDigest: 'scheduler' })) return conflict();
       }
@@ -406,7 +427,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     const lifecycle = details(candidate);
     const attempt = {
       id: 'attempt_' + crypto.randomUUID(), attempt_number: lifecycle.attempts.length + 1, executor: lifecycle.executor,
-      revision: task.revision, state: 'running', started_at: timestamp(now), lease: crypto.randomUUID(),
+      revision: lifecycle.followup_revision ?? task.revision, state: 'running', started_at: timestamp(now), lease: crypto.randomUUID(),
       lease_until: now + leaseMs, deadline: now + attemptTimeoutMs,
     };
     const checkpoint = lifecycle.attempts.find(item => item.id === lifecycle.resume_attempt_id);
@@ -418,7 +439,7 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
     lifecycle.state = 'running';
     lifecycle.attempts.push(attempt);
     if (!await save(candidate, task, lifecycle, { kind: 'claim', attemptId: attempt.id })) return conflict();
-    return success({ claim: { task: record(rows.get(candidate.task_id)), attempt: exposeAttempt(attempt), lease: attempt.lease } });
+    return success({ claim: { task: taskForExecution(record(rows.get(candidate.task_id)),lifecycle), attempt: exposeAttempt(attempt), lease: attempt.lease } });
   }
 
   if (!currentRow) return failure(404, 'Task not found');
@@ -436,8 +457,25 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   const nextTask = change.task ?? task;
   if (nextTask.prerequisites.task_ids.some(id => !taskId(id))) return failure(400, 'Invalid dependency ID');
   if (['admit', 'edit'].includes(body.action?.type) && hasCycle(task.id, nextTask, rows)) return failure(409, 'Dependency cycle');
+  const action = body.action;
+  const latest = lifecycle.attempts.at(-1);
+  const receipt = {
+    ...(['reject','retry'].includes(action?.type) ? { reason:(action.reason??action.changed_assumption).trim() } : {}),
+    ...(action?.type === 'edit' ? { fields:[
+      ...['title','objective','classification','prerequisites','requirements','acceptance'].filter(key =>
+        JSON.stringify(task[key]) !== JSON.stringify(nextTask[key])),
+      ...(change.priority!==currentRow.priority?['priority']:[]),
+    ] } : {}),
+    ...(action?.type === 'associate' ? { reference:{
+      kind:action.reference.kind, uri:action.reference.uri, revision:action.reference.revision,
+    } } : {}),
+    ...(action?.type === 'reopen' ? { feedback:change.lifecycle.feedback, revision:change.lifecycle.followup_revision,
+      evidence:lifecycle.evidence } : {}),
+    ...(action?.type === 'accept' ? { revision:latest.candidate_revision, evidence:change.lifecycle.evidence } : {}),
+  };
   const updated = await save(currentRow, nextTask, change.lifecycle ?? lifecycle, {
-    priority: change.priority, kind: body.action?.type ?? body.report.type, attemptId: body.attempt_id,
+    priority: change.priority, kind: action?.type ?? body.report.type, receipt,
+    attemptId:body.attempt_id ?? (['accept','reject','reopen'].includes(action?.type)?latest?.id:undefined),
     fenceGraph: body.op !== 'report',
   });
   return updated ? success(await view(updated)) : conflict();

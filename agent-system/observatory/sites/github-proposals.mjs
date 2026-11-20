@@ -49,8 +49,12 @@ export async function publishProposal(db, fetcher, token, owner, taskId, validat
         return { state: 'pending', reason: 'The existing GitHub file differs from this proposal.' };
       }
     }
-    await db.prepare("UPDATE proposals SET github_state = 'published' WHERE owner_id = ? AND namespace = 'live' AND task_id = ?")
-      .bind(owner, taskId).run();
+    const receipt = { operation_id:crypto.randomUUID(), kind:'publish', target_id:taskId,
+      actor:'github-publication', state:'published', at:new Date().toISOString() };
+    await db.prepare(`UPDATE proposals SET github_state = 'published',
+      receipts=json_insert(receipts,'$[#]',json(?))
+      WHERE owner_id = ? AND namespace = 'live' AND task_id = ? AND github_state = 'pending'`)
+      .bind(JSON.stringify(receipt), owner, taskId).run();
     return { state: 'published', url };
   } catch {
     return { state: 'pending', reason: 'GitHub did not confirm publication. You can retry the same proposal.' };

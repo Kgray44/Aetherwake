@@ -111,6 +111,48 @@ test('verified dependency gates, independent claims, leases and retry safety', a
   assert.equal((await report(downstream, 'finished', { result: 'candidate', revision: rev })).status, 409);
 });
 
+test('archive keeps accepted prerequisites and feedback reopens at the accepted revision', async t => {
+  const {call,register,command,get}=setup(t);
+  const task=await register('follow-up');
+  const downstream=await register('dependent',[task.task.id]);
+  assert.equal((await command(task,'reopen',{feedback:'Missing prerequisite'})).status,409);
+  const admit=item=>command(item,'admit',{executor:'codex',cancel_with_dependency:true});
+  await admit(task);
+  await admit(downstream);
+  const claim=()=>call({op:'claim',operation_id:crypto.randomUUID(),task_ids:[task.task.id]},'worker');
+  const first=(await claim()).body.claim;
+  const candidate='b'.repeat(40);
+  const reported=await call({op:'report',task_id:task.task.id,operation_id:crypto.randomUUID(),
+    attempt_id:first.attempt.id,lease:first.lease,report:{type:'finished',result:'candidate',revision:candidate}},'worker');
+  assert.equal(reported.status,200);
+  const evidence=[{criterion_id:'criterion-1',uri:'https://github.com/Kgray44/Aetherwake/actions/runs/1',revision:candidate}];
+  const accepted=(await command(reported.body,'accept',{evidence})).body;
+  assert.equal(accepted.lifecycle.stored_state,'completed');
+  const archived=(await command(accepted,'archive')).body;
+  assert.equal(archived.lifecycle.stored_state,'archived');
+  assert.equal((await get(downstream)).lifecycle.state,'ready');
+  assert.equal((await call({op:'list'})).body.tasks.some(entry=>entry.task.id===task.task.id),false);
+  assert.equal((await call({op:'list',include_archived:true})).body.tasks.find(entry=>entry.task.id===task.task.id).lifecycle.state,'archived');
+  assert.equal((await command(archived,'reopen',{feedback:'  '})).status,400);
+  assert.equal((await command(archived,'reopen',{feedback:'Unapproved'},'agent')).status,403);
+  const feedback='Add a verification receipt for the new behavior.';
+  const reopened=(await command(archived,'reopen',{feedback})).body;
+  assert.equal(reopened.task.id,task.task.id);
+  assert.equal(reopened.task.objective,task.task.objective);
+  assert.equal(reopened.task.owner_acceptance,'not_reviewed');
+  assert.equal(reopened.lifecycle.stored_state,'queued');
+  assert.equal(reopened.lifecycle.cycle_attempts,0);
+  assert.deepEqual(reopened.lifecycle.evidence,[]);
+  assert.equal(reopened.attempts[0].state,'succeeded');
+  assert.deepEqual(reopened.events.find(event=>event.kind==='accept').evidence,evidence);
+  assert.deepEqual(reopened.events.find(event=>event.kind==='reopen').evidence,evidence);
+  assert.equal(reopened.events.find(event=>event.kind==='reopen').feedback,feedback);
+  const next=(await claim()).body.claim;
+  assert.equal(next.attempt.attempt_number,2);
+  assert.equal(next.attempt.revision,candidate);
+  assert.ok(next.task.objective.endsWith(feedback));
+});
+
 test('scheduled execution, cancellation propagation and checkpoint recovery', async t => {
   const { call, register, command, get, advance } = setup(t);
   const a = await register('A');
