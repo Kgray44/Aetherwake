@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { taskExecutionDiagnostics } from './src/task-execution-diagnostics.mjs';
+import { taskReportDefinition } from './src/task-report.mjs';
+import { sanitizeExport } from '../../scripts/agent/telemetry-export.mjs';
 import { attemptTraceCoverage } from './src/trace-timeline.mjs';
 import { attemptEvents, dependencyGraph, organizeTasks, overviewTaskResults, parseTaskHref, taskActivity, taskHref, workspaceActivity } from './src/task-workspace.mjs';
 
@@ -20,6 +23,37 @@ test('attempt coverage clips correlated overlapping spans and excludes other rev
   ]);
   assert.deepEqual(row,{attemptId:'a',attemptNumber:1,elapsedMs:1000,coveredMs:700,
     untracedMs:300,beforeTraceMs:300,afterTraceMs:0});
+});
+
+test('matched receipt evidence yields the same private comparison in diagnostics and PDF', () => {
+  const task={id:'task_evidence',repository:'Kgray44/Aetherwake',title:'Review',objective:'Read reports'};
+  const revision='a'.repeat(40), attempt={id:'attempt_fixture',task_id:task.id,revision};
+  const record={
+    schema_version:1,record_type:'evidence',id:'evidence_pair',repository:task.repository,
+    revision,task_id:task.id,attempt_id:attempt.id,criterion_id:'criterion-5',
+    kind:'benchmark',result:'inconclusive',synthetic:false,artifact:{kind:'artifact',uri:'secret/local/path'},
+    matched_benchmark:{
+      source_revision:'b'.repeat(40),artifact_path:'reports/result.md',artifact_sha256:'a'.repeat(64),
+      provider:'example',model:'model-fixture',
+      standard:{receipt_sha256:'b'.repeat(64),input_tokens:100,cached_input_tokens:20,output_tokens:2,total_tokens:102,commands:2,turn_ms:1000},
+      compact:{receipt_sha256:'c'.repeat(64),input_tokens:120,cached_input_tokens:38,output_tokens:3,total_tokens:123,commands:4,turn_ms:2000},
+    },
+  };
+  const projection=sanitizeExport({repository:task.repository,records:[record]});
+  assert.equal(projection.records[0].artifact.uri,'private-artifact:evidence_pair');
+  assert.deepEqual(projection.records[0].matched_benchmark,record.matched_benchmark);
+  const diagnostics=records=>taskExecutionDiagnostics({task,attempts:[attempt],trace:{spans:[]},tokens:[],records});
+  const [pair]=diagnostics(projection.records).comparisons;
+  assert.deepEqual(pair.rows.find(row=>row[0]==='Uncached input tokens'),['Uncached input tokens','80','82','+2']);
+  assert.deepEqual(pair.rows.at(-1),['Billing','Unknown','Unknown','Unknown']);
+  const report=taskReportDefinition({task,attempts:[attempt],records:projection.records});
+  assert.ok(report.content.some(block=>block.table?.body.slice(1).some(row=>JSON.stringify(row)===JSON.stringify(pair.rows.at(-1)))));
+  const reportText=JSON.stringify(report.content);
+  for(const [,value] of pair.provenance) assert.ok(reportText.includes(value));
+  assert.equal(diagnostics([{...record,revision:'c'.repeat(40)}]).comparisons.length,0);
+  const unsafe={...record,matched_benchmark:{...record.matched_benchmark,artifact_path:'../result.md'}};
+  assert.equal(diagnostics([unsafe]).comparisons.length,0);
+  assert.throws(()=>sanitizeExport({repository:task.repository,records:[unsafe]}),/Invalid matched benchmark/);
 });
 
 test('task links preserve the registry and direct detail routes', () => {
