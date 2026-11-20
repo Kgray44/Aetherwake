@@ -24,6 +24,7 @@ export function executionActions({ lifecycle, attempts = [] }, { publishedIntake
   const attemptsThisCycle = lifecycle.cycle_attempts ?? attempts.length;
   if (publishedIntake) return ['proposed', 'blocked'].includes(state) ? ['admit'] : [];
   const result = [];
+  if (lifecycle.can_configure_execution===true) result.push('configure_execution');
   if (['proposed', 'blocked'].includes(state) && !lifecycle.executor) result.push('admit');
   if (['admitted', 'queued', 'scheduled', 'running'].includes(state)) result.push('pause');
   if (state === 'paused' && attemptsThisCycle < 3) result.push('resume');
