@@ -1,22 +1,26 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { promisify } from 'node:util';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { chromium } from 'playwright';
 import { createWorker } from './sites/worker.mjs';
 
 const read = (path, type = 'utf8') => readFileSync(new URL(path, import.meta.url), type);
-const revision = 'a'.repeat(40);
 const namespace = 'c0cf1399-8a73-4f08-9b10-997063853638';
 const taskTitle = 'Worker-backed workspace verification';
 const editTitle = 'Worker-backed editor verification';
 const owner = 'isolated-browser-test';
 
-async function start(t, { canonical = false } = {}) {
+async function start(t, { canonical = false, revision = 'a'.repeat(40) } = {}) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   for (const name of readdirSync(new URL('./sites/drizzle/', import.meta.url)).filter(name => name.endsWith('.sql')).sort()) {
@@ -179,7 +183,18 @@ test('keyboard, reduced motion, versioned edits, dependency admission and reload
 test('owner schedules an engine Task, observes blockers and controls the queue', {
   timeout: 120_000, skip: !process.env.OBSERVATORY_ENGINE_E2E,
 }, async t => {
-  const { origin, executor } = await start(t, { canonical: true });
+  const { runClaim } = await import('../../scripts/agent/observatory-task-worker.mjs');
+  const workspace = await realpath(await mkdtemp(join(tmpdir(), 'aads-workspace-e2e-')));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const runFile = promisify(execFile);
+  const git = async (...args) => (await runFile('git', args, { cwd: workspace, windowsHide: true })).stdout.trim();
+  await git('init', '--initial-branch=codex/aads-task-browser-test');
+  await git('remote', 'add', 'origin', 'https://github.com/Kgray44/Aetherwake.git');
+  await git('config', 'user.name', 'Workspace test');
+  await git('config', 'user.email', 'workspace@example.test');
+  await git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Verification baseline');
+  const baseline = await git('rev-parse', 'HEAD');
+  const { origin, executor } = await start(t, { canonical: true, revision: baseline });
   const browser = await chromium.launch({
     headless: true,
     ...(process.env.OBSERVATORY_BROWSER_EXECUTABLE ? { executablePath: process.env.OBSERVATORY_BROWSER_EXECUTABLE } : {}),
@@ -312,14 +327,33 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   let unblockFeed;
   const heldFeed=new Promise(resolve=>{unblockFeed=resolve;});
   await page.route(overviewRoute,async route=>{await heldFeed;await route.continue();});
-  const candidate='b'.repeat(40);
+  let candidate;
   try {
     const {claim}=await executor({op:'claim',operation_id:crypto.randomUUID(),task_ids:[execution.task.id]});
     assert.equal(claim.task.id,execution.task.id);
     await page.clock.fastForward(6_000);
     await page.getByText(/Stored state running/).waitFor({timeout:8_000});
-    await executor({op:'report',task_id:execution.task.id,operation_id:crypto.randomUUID(),
-      attempt_id:claim.attempt.id,lease:claim.lease,report:{type:'finished',result:'candidate',revision:candidate}});
+    await runClaim({
+      claim, workspace, send: executor, verificationNamespace: namespace,
+      signal: AbortSignal.timeout(15_000),
+      admitStorage: async () => {},
+      onTelemetryStart: () => {},
+      // Only the provider boundary is replaced. The worker checkpoints and reports the real Git result.
+      execute: async ({ cwd, task, signal }) => {
+        await runFile(process.execPath, ['-e',
+          'require("node:fs").writeFileSync("artifact.txt", process.argv[1])', task.id,
+        ], { cwd, signal, windowsHide: true });
+        return { ok: true };
+      },
+    });
+    const result = await send({ op: 'get', task_id: execution.task.id });
+    assert.equal(result.lifecycle.state, 'verifying');
+    assert.equal(result.attempts[0].revision, baseline);
+    candidate = result.attempts[0].candidate_revision;
+    assert.notEqual(candidate, baseline);
+    assert.equal(await git('rev-parse', candidate + '^'), baseline);
+    assert.equal(await git('show', candidate + ':artifact.txt'), execution.task.id);
+    assert.equal(await git('status', '--porcelain'), '');
     await page.clock.fastForward(6_000);
     await page.getByRole('button',{name:'Record owner acceptance',exact:true}).waitFor({timeout:8_000});
   } finally {
