@@ -383,6 +383,23 @@
         {
           "type": "object",
           "properties": {
+            "type": { "const": "configure_execution" },
+            "start_at": {
+              "anyOf": [{"type":"string","format":"date-time"},{"type":"null"}]
+            },
+            "max_attempt_minutes": {"type":"integer","minimum":1,"maximum":30},
+            "cancel_with_dependency": {"type":"boolean"}
+          },
+          "required": ["type"],
+          "anyOf": [
+            {"required":["start_at"]},
+            {"required":["max_attempt_minutes"]},
+            {"required":["cancel_with_dependency"]}
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "type": {
               "const": "satisfy"
             },
@@ -600,6 +617,7 @@
               "minimum": 1,
               "maximum": 30
             },
+            "can_configure_execution": {"type":"boolean"},
             "blockers": {
               "type": "array",
               "items": {

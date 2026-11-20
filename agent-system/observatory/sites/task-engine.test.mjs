@@ -200,6 +200,35 @@ test('owner time limits constrain the claim deadline and leave a specific receip
   assert.equal(lost.events.at(-1).kind,'lease_expired');
 });
 
+test('owners can reschedule waiting work without changing an active attempt',async t=>{
+  const {call,register,command,get,advance}=setup(t);
+  const proposed=await register('editable runtime settings');
+  const admission=(await command(proposed,'admit',{executor:'codex',max_attempt_minutes:5,
+    start_at:new Date(Date.now()+300_000).toISOString()})).body;
+  assert.equal(admission.lifecycle.can_configure_execution,true);
+  assert.equal((await command(admission,'configure_execution',{max_attempt_minutes:4},'agent')).status,403);
+  const waiting=(await command(admission,'pause')).body;
+  const change={start_at:new Date(Date.now()+900_000).toISOString(),max_attempt_minutes:4,cancel_with_dependency:true};
+  assert.equal((await command(admission,'configure_execution',change)).status,409);
+  const saved=(await command(waiting,'configure_execution',change)).body;
+  assert.equal(saved.lifecycle.state,'paused');
+  assert.equal(saved.lifecycle.start_at,Date.parse(change.start_at));
+  assert.equal(saved.events.at(-1).cancel_with_dependency,true);
+  const resumed=(await command(saved,'resume')).body;
+  assert.equal(resumed.lifecycle.state,'scheduled');
+  const claim=()=>call({op:'claim',operation_id:crypto.randomUUID()},'worker').then(result=>result.body.claim);
+  advance(600_000);
+  assert.equal(await claim(),null);
+  const ready=(await command(resumed,'configure_execution',{start_at:null})).body;
+  assert.equal(ready.lifecycle.state,'ready');
+  const active=await claim();
+  assert.equal(active.attempt.deadline-Date.parse(active.attempt.started_at),240_000);
+  const actual=await get(proposed);
+  assert.equal(actual.lifecycle.can_configure_execution,false);
+  assert.equal((await command(actual,'configure_execution',{max_attempt_minutes:30})).status,409);
+  assert.equal((await get(proposed)).attempts[0].deadline,active.attempt.deadline);
+});
+
 test('scheduled execution, cancellation propagation and checkpoint recovery', async t => {
   const { call, register, command, get, advance } = setup(t);
   const a = await register('A');

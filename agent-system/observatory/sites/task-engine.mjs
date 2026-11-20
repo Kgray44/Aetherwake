@@ -25,6 +25,8 @@ const revisionPattern = /^[a-f0-9]{40}$/;
 const agentCommands = new Set(['edit', 'associate']);
 const claimStates = new Set(['admitted', 'queued', 'scheduled']);
 const activeStates = new Set(['running', 'pausing', 'cancelling']);
+const canConfigureExecution = lifecycle => lifecycle.executor === 'codex' &&
+  (claimStates.has(lifecycle.state) || lifecycle.state === 'paused');
 const failure = (status, error) => ({ status, body: { error } });
 const success = (body, status = 200) => ({ status, body });
 const timestamp = now => new Date(now).toISOString();
@@ -87,7 +89,7 @@ export function taskAttemptRecord(task, attempt) {
 function publicLifecycle(row, rows, now) {
   const stored = details(row);
   const { attempts, event, cycle_start, ...lifecycle } = stored;
-  return { ...lifecycle, cycle_attempts:cycleAttempts(stored), max_attempt_minutes:attemptLimit(stored), stored_state: lifecycle.state, ...waitState(record(row), lifecycle, rows, now) };
+  return { ...lifecycle, cycle_attempts:cycleAttempts(stored), max_attempt_minutes:attemptLimit(stored), can_configure_execution:canConfigureExecution(stored), stored_state: lifecycle.state, ...waitState(record(row), lifecycle, rows, now) };
 }
 
 function validateReferenceRevisions(requirements) {
@@ -120,6 +122,20 @@ function reviewedEvidence(task, evidence, revision) {
       item?.criterion_id === criterion.id && safeReference(item.uri) && item.revision === revision));
 }
 
+function executionSettings(lifecycle,action,now) {
+  const start=action.start_at===undefined ? lifecycle.start_at??now
+    : action.start_at===null ? now
+    : typeof action.start_at==='string' ? Date.parse(action.start_at) : NaN;
+  const minutes=action.max_attempt_minutes===undefined ? attemptLimit(lifecycle) : action.max_attempt_minutes;
+  const cancel=action.cancel_with_dependency===undefined ? !!lifecycle.cancel_with_dependency : action.cancel_with_dependency;
+  if (!Number.isFinite(start)) throw Error('Invalid execution start time');
+  if (!Number.isSafeInteger(minutes) || minutes<1 || minutes>defaultAttemptMinutes) {
+    throw Error('Maximum attempt duration must be a whole number from 1 to 30 minutes');
+  }
+  if (typeof cancel!=='boolean') throw Error('Invalid dependency cancellation policy');
+  return {start_at:start,max_attempt_minutes:minutes,cancel_with_dependency:cancel};
+}
+
 function commandChange(task, lifecycle, { action, now, rows }) {
   const type = action?.type;
   const current = lifecycle.state;
@@ -140,21 +156,23 @@ function commandChange(task, lifecycle, { action, now, rows }) {
   }
   if (type === 'admit' && ['proposed', 'blocked'].includes(current) && !lifecycle.executor) {
     if (action.executor !== 'codex') return failure(400, 'Unsupported executor');
-    const start = action.start_at === undefined ? now : Date.parse(action.start_at);
-    const prereqs = action.prerequisites ?? [];
-    const minutes = action.max_attempt_minutes === undefined ? defaultAttemptMinutes : action.max_attempt_minutes;
-    if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > defaultAttemptMinutes) {
-      return failure(400, 'Maximum attempt duration must be a whole number from 1 to 30 minutes');
+    const prereqs=action.prerequisites??[];
+    if (!Array.isArray(prereqs) || prereqs.length>100 ||
+        !prereqs.every(item=>task.prerequisites.capabilities.includes(item))) {
+      return failure(400,'Invalid capability prerequisites');
     }
-    if (!Number.isFinite(start) || !Array.isArray(prereqs) || prereqs.length > 100 ||
-        !prereqs.every(item => task.prerequisites.capabilities.includes(item))) {
-      return failure(400, 'Invalid schedule or capability prerequisites');
+    if (action.start_at===null) return failure(400,'Invalid execution start time');
+    try {
+      return {lifecycle:{...lifecycle,...executionSettings(lifecycle,action,now),state:'admitted',
+        executor:action.executor,prerequisites:unique(prereqs)}};
+    } catch (error) { return failure(400,error.message); }
+  }
+  if (type==='configure_execution' && canConfigureExecution(lifecycle)) {
+    if (!['start_at','max_attempt_minutes','cancel_with_dependency'].some(key=>Object.hasOwn(action,key))) {
+      return failure(400,'Choose an execution setting to update');
     }
-    if (action.cancel_with_dependency !== undefined && typeof action.cancel_with_dependency !== 'boolean') {
-      return failure(400, 'Invalid dependency cancellation policy');
-    }
-    return { lifecycle: { ...lifecycle, state: 'admitted', executor: action.executor,
-      start_at: start, max_attempt_minutes: minutes, prerequisites: unique(prereqs), cancel_with_dependency: action.cancel_with_dependency === true } };
+    try { return {lifecycle:{...lifecycle,...executionSettings(lifecycle,action,now)}}; }
+    catch (error) { return failure(400,error.message); }
   }
   if (type === 'satisfy' && ['admitted', 'queued', 'scheduled'].includes(current)) {
     if (!task.prerequisites.capabilities.includes(action.prerequisite)) return failure(400, 'Unknown prerequisite');
@@ -463,7 +481,8 @@ export async function taskOperation({ db, owner, namespace, body, access, valida
   const action = body.action;
   const latest = lifecycle.attempts.at(-1);
   const receipt = {
-    ...(action?.type === 'admit' ? { max_attempt_minutes:attemptLimit(change.lifecycle), start_at:timestamp(change.lifecycle.start_at) } : {}),
+    ...(['admit','configure_execution'].includes(action?.type) ? { max_attempt_minutes:attemptLimit(change.lifecycle),
+      start_at:timestamp(change.lifecycle.start_at),cancel_with_dependency:change.lifecycle.cancel_with_dependency } : {}),
     ...(['reject','retry'].includes(action?.type) ? { reason:(action.reason??action.changed_assumption).trim() } : {}),
     ...(action?.type === 'edit' ? { fields:[
       ...['title','objective','classification','prerequisites','requirements','deliverables','acceptance'].filter(key =>
