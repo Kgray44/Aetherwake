@@ -957,6 +957,6 @@ test('owner pricing route refreshes exact OpenAI text rates and sends no Task da
   assert.equal(calls.length,1);
   assert.equal(calls[0][0],'https://developers.openai.com/api/docs/models/gpt-6.2-sol.md');
   assert.deepEqual(calls[0][1].headers,{accept:'text/markdown'});
-  assert.equal(calls[0][1].redirect,'error');
+  assert.equal(calls[0][1].redirect,'manual');
   assert.deepEqual(await (await get('gpt-other',{headers:ownerHeader})).json(),{pricing:null});
 });

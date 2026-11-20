@@ -48,7 +48,7 @@ export function createOpenAIModelPricing(fetcher, clock = Date.now) {
       const timeout = setTimeout(() => controller.abort(), 4000);
       try {
         const response = await fetcher(openAIModelPage(model) + '.md', {
-          headers: {accept: 'text/markdown'}, redirect: 'error', signal: controller.signal,
+          headers: {accept: 'text/markdown'}, redirect: 'manual', signal: controller.signal,
         });
         const mediaType = response.headers.get('content-type')?.split(';')[0];
         if (response.ok && mediaType === 'text/markdown') {
