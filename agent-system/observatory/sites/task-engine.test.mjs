@@ -299,6 +299,113 @@ test('verification workers reject checkouts connected to a different delivery na
   await checkWorkspaceTelemetryScope(root, verification);
 });
 
+test('owner retries carry fresh failure evidence into dispatch and reject repeated assumptions', async t => {
+  const {buildTaskPrompt} = await import('../../../scripts/agent/observatory-task-worker.mjs');
+  const {call,register,command,get} = setup(t);
+  const created = await register('retry evidence');
+  await command(created,'admit',{executor:'codex'});
+  const claim = async operation_id => (await call({op:'claim',operation_id},'worker')).body.claim;
+  const fail = item => call({
+    op:'report',task_id:item.task.id,attempt_id:item.attempt.id,lease:item.lease,
+    operation_id:crypto.randomUUID(),report:{type:'failed',failure:'structured fixture failure'},
+  },'worker');
+  const first = await claim(crypto.randomUUID());
+  assert.doesNotMatch(buildTaskPrompt(first.task,first.attempt),/Prior failed attempt/);
+  assert.equal((await fail(first)).status,200);
+  const assumption = 'Run the focused test after refreshing the fixture';
+  assert.equal((await command(await get(created),'retry',{changed_assumption:assumption},'agent')).status,403);
+  assert.equal((await command(await get(created),'retry',{changed_assumption:assumption})).status,200);
+
+  const operation = crypto.randomUUID();
+  const second = await claim(operation);
+  assert.equal(second.attempt.attempt_number,2);
+  assert.deepEqual(second.attempt.retry,{
+    prior_attempt_id:first.attempt.id,
+    prior_state:'failed',
+    changed_assumption:assumption,
+  });
+  assert.deepEqual((await claim(operation)).attempt.retry, second.attempt.retry);
+  const prompt = buildTaskPrompt(second.task, second.attempt);
+  assert.ok(prompt.includes(assumption));
+  assert.ok(prompt.includes(first.attempt.id));
+  assert.doesNotMatch(prompt,/structured fixture failure/);
+  assert.equal((await fail(second)).status,200);
+  const repeated = '  RUN the focused test  after refreshing the fixture ';
+  assert.equal((await command(await get(created),'retry',{changed_assumption:repeated})).status,409);
+  assert.equal((await claim(crypto.randomUUID())),null);
+
+  assert.equal((await command(await get(created),'retry',{changed_assumption:'Use a fresh fixture and check its schema first'})).status,200);
+  const third = await claim(crypto.randomUUID());
+  assert.equal(third.attempt.retry.prior_attempt_id,second.attempt.id);
+  assert.equal((await fail(third)).status,200);
+  assert.equal((await command(await get(created),'retry',{changed_assumption:'A fourth different attempt'})).status,409);
+});
+
+test('a reviewed rejection retries at the exact candidate and fences later dirty effects', async t => {
+  const {call,register,command,get,pin} = setup(t);
+  const parent = await mkdtemp(join(tmpdir(),'aads-rejected-retry-'));
+  t.after(() => rm(parent,{force:true,recursive:true}));
+  const workspace = await realpath(parent);
+  const exec = promisify(execFile);
+  const git = async (...args) => (await exec('git',args,{cwd:workspace,windowsHide:true})).stdout.trim();
+  await git('init');
+  await git('remote','add','origin','https://github.com/Kgray44/Aetherwake.git');
+  await git('switch','-c','codex/aads-task-rejected-retry');
+  await git('config','user.name','Test worker');
+  await git('config','user.email','test@example.test');
+  await git('commit','--allow-empty','-m','base pin');
+  const base = await git('rev-parse','HEAD');
+  pin(base);
+  const task = await register('reviewed rejection');
+  assert.equal((await command(task,'admit',{executor:'codex'})).status,200);
+  const claim = async () => (await call({op:'claim',operation_id:crypto.randomUUID()},'worker')).body.claim;
+  const send = async request => {
+    const response = await call(request,'worker');
+    if (response.status !== 200) throw Object.assign(Error(response.body.error),{status:response.status});
+    return response.body;
+  };
+  const run = (item,execute) => runClaim({
+    claim:item,send,workspace,signal:AbortSignal.timeout(30_000),admitStorage:async () => {},execute,
+  });
+  const first = await claim();
+  await run(first,async ({cwd,onSession}) => {
+    await writeFile(join(cwd,'candidate.txt'),'first candidate');
+    onSession(crypto.randomUUID());
+    return {ok:true};
+  });
+  const reviewing = await get(task);
+  assert.equal(reviewing.lifecycle.state,'verifying');
+  const candidate = reviewing.attempts[0].candidate_revision;
+  assert.notEqual(candidate,base);
+  assert.equal(await git('rev-parse','HEAD'),candidate);
+  assert.equal((await command(reviewing,'reject',{reason:'Candidate missed the criterion'})).status,200);
+  assert.equal((await command(await get(task),'retry',{changed_assumption:'Recheck the missed criterion'})).status,200);
+
+  const second = await claim();
+  assert.equal(second.attempt.revision,candidate);
+  assert.equal(second.attempt.retry.prior_attempt_id,first.attempt.id);
+  let executed = 0;
+  await run(second,async ({cwd}) => {
+    executed++;
+    assert.equal(await git('rev-parse','HEAD'),candidate);
+    assert.equal(await git('status','--porcelain'),'');
+    await writeFile(join(cwd,'uncertain.txt'),'unresolved work');
+    return {ok:false};
+  });
+  assert.equal(executed,1);
+  const failed = await get(task);
+  assert.equal(failed.attempts[0].revision,base);
+  assert.equal(failed.attempts[0].candidate_revision,candidate);
+  assert.equal(failed.attempts[1].candidate_revision,undefined);
+  assert.equal((await command(failed,'retry',{changed_assumption:'Review possible effects before retrying'})).status,200);
+  const third = await claim();
+  assert.equal(third.attempt.revision,candidate);
+  await run(third,async () => { executed++;return {ok:true}; });
+  assert.equal(executed,1);
+  assert.equal((await get(task)).lifecycle.state,'failed');
+  assert.equal(await git('status','--porcelain'),'?? uncertain.txt');
+});
+
 test('trigger-backed Task writes return success independently of D1 change counts', async t => {
   const { call, register, command, get } = setup(t, { countAuditWrites: true });
   const task = await register('D1 trigger write counts');

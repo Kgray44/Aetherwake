@@ -645,6 +645,17 @@
           "$ref": "#/$defs/rid",
           "description": "Immutable execution revision for observations."
         },
+        "retry": {
+          "type": "object",
+          "description": "Immutable owner-supplied retry context for the claimed attempt.",
+          "required": ["prior_attempt_id", "prior_state", "changed_assumption"],
+          "additionalProperties": false,
+          "properties": {
+            "prior_attempt_id": { "type": "string", "pattern": "^attempt_[a-f0-9-]{36}$" },
+            "prior_state": { "enum": ["failed", "orphaned"] },
+            "changed_assumption": { "type": "string", "minLength": 1, "maxLength": 500 }
+          }
+        },
         "candidate_revision": {
           "$ref": "#/$defs/rid",
           "description": "Resulting commit pinned for acceptance review."
