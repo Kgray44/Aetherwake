@@ -90,6 +90,19 @@ export function TaskTelemetry({ task, canonical, attempts, telemetry, events, re
       <h3>Execution diagnostics</h3>
       <ul>{diagnostics.findings.map(({title,detail,key})=><li key={key??title}><strong>{title}</strong><p>{detail}</p></li>)}</ul>
     </section>}
+    {diagnostics.comparisons.map(comparison=><section key={comparison.id} aria-label={comparison.title}>
+      <h3>{comparison.title}</h3>
+      <p>{comparison.summary}</p>
+      <div className="analytics-table"><table>
+        <thead><tr>{comparison.columns.map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead>
+        <tbody>{comparison.rows.map(([metric,...values])=><tr key={metric}>
+          <th scope="row">{metric}</th>{values.map((value,index)=><td key={comparison.columns[index+1]}>{value}</td>)}
+        </tr>)}</tbody>
+      </table></div>
+      <dl className="task-benchmark-provenance">
+        {comparison.provenance.map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+      </dl>
+    </section>)}
     <p className="low">{desktop.length>0&&'Desktop counters are cumulative session observations and have no worker-attempt assignment. '}An attempt can have timing or resource measurements without producing a model token receipt. Costs require a billing source.</p>
     <h3>Model and token accounting</h3>
     <h4>Observed Task token usage</h4>

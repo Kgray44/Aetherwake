@@ -231,6 +231,9 @@ a.github-activity-row:focus-visible{outline:2px solid var(--accent);outline-offs
 .task-telemetry-chart li { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .3rem .6rem; margin-bottom: .65rem; }
 .task-telemetry-track { grid-column: 1 / -1; display: block; height: .35rem; border-radius: .4rem; background: var(--border); }
 .task-telemetry-track > span { display: block; border-radius: inherit; height: 100%; background: var(--accent); transform-origin: left; }
+.task-benchmark-provenance { display: grid; gap: .5rem 1rem; grid-template-columns: repeat(auto-fit,minmax(min(100%,16rem),1fr)); }
+.task-benchmark-provenance dt { font-weight: 600; }
+.task-benchmark-provenance dd { margin: 0; overflow-wrap: anywhere; }
 .task-command-shell { display: grid; grid-template-columns: minmax(15rem,.78fr) minmax(0,1.45fr); gap: 1.1rem; align-items: start; }
 .task-command-context, .task-command-deck { min-width: 0; }
 .task-command-hero { display: flex; align-items: center; gap: .85rem; padding: 1rem; border: 1px solid var(--border); border-radius: .65rem .65rem 0 0; background: linear-gradient(135deg,#173444,var(--panel2)); }

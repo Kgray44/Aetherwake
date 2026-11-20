@@ -148,6 +148,11 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       {toc:{title:{text:'Report contents',style:'section'}},pageBreak:'before'},
       section('Execution diagnostics',diagnostics.findings.length),
       ...blocks(diagnostics.findings,item=>item.title,item=>[['Observation',item.detail]]),
+      ...diagnostics.comparisons.flatMap(comparison=>[
+        section(comparison.title), {text:comparison.summary,margin:[0,0,0,7]},
+        grid(comparison.columns,comparison.rows,['*','auto','auto','auto']),
+        ...blocks([comparison],()=> 'Benchmark provenance',item=>item.provenance),
+      ]),
       section('Task record and acceptance criteria'),
       ...blocks([task],()=>task.id),
       ...(canonical ? blocks([{version:canonical.version,priority:canonical.priority,...canonical.lifecycle}],()=> 'Canonical lifecycle') : []),
