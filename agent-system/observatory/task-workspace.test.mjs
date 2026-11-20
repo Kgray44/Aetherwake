@@ -4,7 +4,7 @@ import { taskEngineeringActivity } from './src/task-activity.mjs';
 import { buildTaskTimeline, executorHeartbeat } from './src/task-timeline.mjs';
 import { taskReportDefinition } from './src/task-report.mjs';
 import { executionTiming } from './src/execution-timing.mjs';
-import { taskUsageAccounting } from './src/task-usage-accounting.mjs';
+import { loadedSessionUsage, taskUsageAccounting } from './src/task-usage-accounting.mjs';
 
 test('linked work before and after execution is shared by the chronology and report', () => {
   const task={id:'task_activity',created_at:'2026-01-02T00:00:00Z',title:'Review changes',objective:'Review linked activity'};
@@ -447,6 +447,28 @@ test('Task usage deduplicates attempt and session scopes and keeps unknown billi
   assert.deepEqual(fallback.coverage,{attemptTotals:0,attempts:2,sessionTotals:2,sessions:3,conflicts:0});
   assert.match(JSON.stringify(taskReportDefinition(fallbackInput).content),
     /Attempt totals 0 of 2 · Session totals 2 of 3 · Conflicts 0 · Billing Unknown/);
+});
+
+test('loaded session totals keep shared and formal sessions out of session-only accounting', () => {
+  const repository='Kgray44/Aetherwake', revision='a'.repeat(40);
+  const id=n=>'10000000-0000-4000-8000-00000000000'+n;
+  const records=['task-a','task-b'].map(taskId=>({record_type:'task',id:taskId,repository}));
+  const link=n=>({kind:'executor_session',uri:'https://chatgpt.com/c/'+id(n),revision});
+  const bindings=[
+    {task_id:'task-a',links:[link(1),link(2),link(3),link(4)],attempt_sessions:[]},
+    {task_id:'task-b',links:[link(2)],attempt_sessions:[id(3)]},
+  ];
+  const receipt=(n,suffix,value,at,extra={})=>({event_id:n+'-'+suffix,kind:'measurement',task_id:'task-a',
+    revision,repository,session_id:id(n),occurred_at:'2026-01-0'+at+'T00:00:00Z',
+    measurements:[{name:'desktop_total_tokens',source:'codex_desktop_session_usage',method:'task_dedicated_session_total',
+      availability:'observed',unit:'tokens',value}],...extra});
+  const latest=receipt(1,'latest',40,2);
+  const events=[latest,{...latest},receipt(1,'earlier',20,1),receipt(1,'wrong-revision',200,3,{revision:'b'.repeat(40)}),
+    receipt(2,'shared',60,2),receipt(3,'attempt',80,2),receipt(4,'early',30,1),receipt(4,'regression',10,2)];
+  const usage=loadedSessionUsage({records,events,bindings});
+  assert.deepEqual([usage.observed.totalTokens,usage.measured,usage.overlapping,usage.shared,usage.conflicting,usage.linked],
+    [40,1,1,1,1,4]);
+  assert.equal(loadedSessionUsage({records,events}),null);
 });
 
 test('heartbeat receipts update one executor indicator and stay out of the Timeline', () => {

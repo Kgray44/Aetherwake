@@ -158,9 +158,12 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
       ]);
       const projection = combinedTelemetry(projectionRow ? JSON.parse(projectionRow.payload) : null, taskTelemetry.results);
       const projectedIds = new Set((projection?.records ?? []).map(r => r.record_type + ':' + r.id));
-      const authoritative = rows.filter(row => row.engine).flatMap(row => {
-        const task = JSON.parse(row.record);
-        return [task, ...JSON.parse(row.engine).attempts.map(attempt => taskAttemptRecord(task, attempt))];
+      const engineRows = rows.filter(row=>row.engine).map(row=>({task:JSON.parse(row.record),engine:JSON.parse(row.engine)}));
+      const authoritative = engineRows.flatMap(({task,engine})=>[task,...engine.attempts.map(attempt=>taskAttemptRecord(task,attempt))]);
+      const sessionBindings = engineRows.flatMap(({task,engine})=>{
+        const links = (engine.links??[]).filter(link=>link.kind==='executor_session');
+        const attempt_sessions = [...new Set(engine.attempts.map(attempt=>attempt.session_id??attempt.resume_session_id).filter(Boolean))];
+        return links.length||attempt_sessions.length ? [{task_id:task.id,links,attempt_sessions}] : [];
       });
       const authoritativeIds = new Set(authoritative.map(item => item.record_type + ':' + item.id));
       const canProject = item => !authoritativeIds.has(item.record_type + ':' + item.id);
@@ -177,7 +180,7 @@ export function createWorker({ assets, validate, sourceRevision, validateEvent, 
           .concat((projection?.records ?? []).filter(canProject), authoritative),
         telemetry_scope: telemetryScope,
         execution: projection ? { authority: projection.authority, generated_at: projection.generated_at, events: projection.events,
-          sources: projection.sources, coverage: projection.coverage, acceptance: 'imported records are not approval receipts' } : null,
+          sources: projection.sources, session_bindings:sessionBindings, coverage: projection.coverage, acceptance: 'imported records are not approval receipts' } : null,
         github: {
           ...snapshot,
           records: {

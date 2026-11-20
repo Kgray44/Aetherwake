@@ -31,6 +31,54 @@ function dedicatedReading(event) {
     uncachedInputTokens:input !== null && cached !== null ? input - cached : null, outputTokens};
 }
 
+function latestDedicatedReading(readings) {
+  readings.sort((a,b)=>Date.parse(a.at)-Date.parse(b.at)||a.id.localeCompare(b.id));
+  const inconsistent=readings.some((item,index)=>{
+    const prior=readings[index-1];
+    return prior&&(item.observed.totalTokens<prior.observed.totalTokens||
+      Date.parse(item.at)===Date.parse(prior.at)&&JSON.stringify(item.observed)!==JSON.stringify(prior.observed));
+  });
+  return {latest:inconsistent?null:readings.at(-1),inconsistent};
+}
+
+export function loadedSessionUsage({records,events,bindings,now=Date.now()}) {
+  if (!Array.isArray(bindings)) return null;
+  const tasks = new Map((records??[]).filter(record=>record.record_type==='task').map(task=>[task.id,task]));
+  const links = new Map(), attempted = new Set(), readings = new Map();
+  for (const binding of bindings) {
+    const task=tasks.get(binding.task_id);
+    if (!task) continue;
+    for (const id of binding.attempt_sessions) attempted.add(id);
+    for (const link of binding.links) {
+      const id=link.kind==='executor_session'&&linkedCodexSessionId(link.uri);
+      if (!id||!link.revision) continue;
+      if (!links.has(id)) links.set(id,new Map());
+      const associated=links.get(id);
+      if (!associated.has(task.id)) associated.set(task.id,new Set());
+      associated.get(task.id).add(link.revision);
+    }
+  }
+  for (const event of uniqueEngineeringEvents(events??[]).items) {
+    const id=event.session_id, associated=links.get(id);
+    if (attempted.has(id)||associated?.size!==1||!associated.get(event.task_id)?.has(event.revision)||
+        tasks.get(event.task_id)?.repository!==event.repository||event.kind!=='measurement'||event.attempt_id||
+        !(Date.parse(event.occurred_at)<=now)) continue;
+    const observed=dedicatedReading(event);
+    if (!observed) continue;
+    if (!readings.has(id)) readings.set(id,[]);
+    readings.get(id).push({observed,at:event.occurred_at,id:event.event_id});
+  }
+  const selected = [...readings.values()].map(latestDedicatedReading);
+  const measured = selected.flatMap(({latest})=>latest?[latest.observed]:[]);
+  return {
+    observed:addObserved(measured),measured:measured.length,
+    overlapping:[...links.keys()].filter(id=>attempted.has(id)).length,
+    shared:[...links.values()].filter(associated=>associated.size>1).length,
+    conflicting:selected.filter(item=>item.inconsistent).length,
+    linked:links.size,
+  };
+}
+
 export function taskUsageAccounting({ task, canonical, attempts = [], events = [], now = Date.now() }) {
   const taskAttempts = attempts.filter(attempt => attempt.task_id === task.id &&
     (!attempt.repository || attempt.repository === task.repository));
@@ -83,13 +131,7 @@ export function taskUsageAccounting({ task, canonical, attempts = [], events = [
       return {id,attemptIds:[...attemptIds],observed:attemptObserved,
         basis:conflict?'Conflicting cumulative receipts':'Linked attempt receipts'};
     }
-    readings.sort((a,b)=>Date.parse(a.at)-Date.parse(b.at)||a.id.localeCompare(b.id));
-    const inconsistent = readings.some((item,index) => {
-      const prior = readings[index-1];
-      return prior && (item.observed.totalTokens < prior.observed.totalTokens ||
-        Date.parse(item.at)===Date.parse(prior.at) && JSON.stringify(item.observed)!==JSON.stringify(prior.observed));
-    });
-    const latest = inconsistent ? null : readings.at(-1);
+    const {latest,inconsistent} = latestDedicatedReading(readings);
     return {id,attemptIds:[...attemptIds],observed:latest?.observed??attemptObserved, receiptId:latest?.id, observedAt:latest?.at,
       basis:inconsistent?'Conflicting cumulative receipts':latest?'Reported dedicated session snapshot':'Usage unavailable'};
   });

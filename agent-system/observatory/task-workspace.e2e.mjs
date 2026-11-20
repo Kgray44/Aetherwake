@@ -672,4 +672,5 @@ test('owner schedules an engine Task, observes blockers and controls the queue',
   const attemptTotal=page.locator('.analytics-counts > div').filter({hasText:'Input and output total'});
   await attemptTotal.getByText('90',{exact:true}).waitFor();
   await page.locator('.analytics-counts > div').filter({hasText:'App Server receipts'}).getByText('1',{exact:true}).waitFor();
+  await page.locator('.analytics-counts > div').filter({hasText:'Observed session-only tokens'}).getByText('137',{exact:true}).waitFor();
 });

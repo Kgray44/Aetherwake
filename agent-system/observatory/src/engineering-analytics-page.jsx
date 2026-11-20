@@ -1,5 +1,6 @@
 import {StickySectionAside} from './sticky-section-aside.jsx';
 import React, { useMemo, useState } from 'react';
+import { loadedSessionUsage } from './task-usage-accounting.mjs';
 import { Activity, ArrowUpRight, BarChart3, Boxes, CheckCircle2, Clock3, Cpu, FileCheck2, GitPullRequest, Workflow } from 'lucide-react';
 import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
 import { activityHref, activityId, activityState, newestActivity, pullRepositoryTotals, runRepositoryTotal } from './github-activity.mjs';
@@ -172,6 +173,8 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
     github: ready ? github : undefined,
     now: Date.now()
   }), [records, events, github, execution, ready]);
+  const sessions = useMemo(()=>ready?loadedSessionUsage({records,events,bindings:execution?.session_bindings}):null,
+    [records,events,execution,ready]);
   const recent = useMemo(() => newestActivity('runs', ready ? github?.ci?.items ?? noRows : noRows)
     .filter(item => ['failure','timed_out','startup_failure','action_required'].includes(activityState('runs',item))).slice(0,5),
     [github, ready]);
@@ -242,6 +245,16 @@ export function EngineeringAnalyticsPage({ records, events, github, execution, r
       </Panel></Rise></StickySectionAside>
     </div>
     <Rise><Panel title="Codex token accounting"><TokenAccounting accounting={data.tokenAccounting} receipts={data.attemptReceiptAccounting}/></Panel></Rise>
+    <Rise><Panel title="Session-only usage across loaded Tasks">
+      {sessions?<><MetricRows fields={[
+        ['Observed session-only tokens',count(sessions.observed.totalTokens)],
+        ['Linked sessions with session-only totals',sessions.measured+' of '+sessions.linked],
+        ['Linked to formal attempts',count(sessions.overlapping)],
+        ['Linked to multiple Tasks',count(sessions.shared)],
+        ['Disputed session readings',count(sessions.conflicting)],
+      ]}/><p className="low">Totals use revision-matched receipts for sessions linked to one Task and no formal attempts. Coverage can be partial.</p></>
+        :<p className="low">Session linkage is unavailable in this feed.</p>}
+    </Panel></Rise>
     <Rise><Panel title="Provider and resource observations" right={<Cpu size={18} className="muted-icon"/>}><Usage usage={data.usage}/></Panel></Rise>
   </>;
 }
