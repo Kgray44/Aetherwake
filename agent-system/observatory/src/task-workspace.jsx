@@ -1,3 +1,4 @@
+import {codexThreadHref} from './task-engine-client.mjs';
 import React, { useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowDown, ArrowRight, ChevronRight, Filter, GitBranch, Plus, Search } from 'lucide-react';
@@ -166,6 +167,7 @@ export function TaskAttemptHistory({ attempts, events, audits, evidence, Status 
   return <ol className="task-attempt-records">{[...attempts].reverse().map(attempt=>{
     const history=attemptJournal(attempt,events,audits,evidence);
     const elapsed=Date.parse(attempt.finished_at)-Date.parse(attempt.started_at);
+    const conversation=codexThreadHref(attempt);
     const count=expanded[attempt.id]??8;
     return <li className="record task-attempt-card" key={attempt.id} id={'task-attempt-'+attempt.id}>
       <div className="record-title"><h3 tabIndex={-1}>Attempt {attempt.attempt_number}</h3><Status value={attempt.state}/></div>
@@ -179,7 +181,13 @@ export function TaskAttemptHistory({ attempts, events, audits, evidence, Status 
         {attempt.candidate_revision&&<div><dt>Candidate revision</dt><dd><code>{attempt.candidate_revision}</code></dd></div>}
         {attempt.checkpoint_revision&&<div><dt>Checkpoint revision</dt><dd><code>{attempt.checkpoint_revision}</code></dd></div>}
         {attempt.branch&&<div><dt>Branch</dt><dd><code>{attempt.branch}</code></dd></div>}
+        {conversation&&<div><dt>Codex conversation</dt><dd><a href={conversation}><code>{attempt.session_id}</code></a></dd></div>}
       </dl>
+      {conversation&&<details className="task-attempt-log">
+        <summary>Continue from the worker host</summary>
+        <p>Use the same Codex account and session store after the worker has stopped.</p>
+        <code>codex resume --include-non-interactive {attempt.session_id}</code>
+      </details>}
       {attempt.failure_diagnosis&&<div className="notice error"><strong>Failure</strong><span>{attempt.failure_diagnosis}</span></div>}
       <details className="task-attempt-log" open={attempt===attempts.at(-1)}>
         <summary>Execution log · {history.events.length} recorded events</summary>

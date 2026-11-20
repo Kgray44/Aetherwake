@@ -78,15 +78,16 @@ export function openObservatoryConnector({ signal, cwd = process.cwd(), tool = t
     await opening;
     const settings={cwd:workspace,sandbox:'workspace-write',approvalPolicy:'never'};
     const started=await rpc(resumeSessionId?'thread/resume':'thread/start',
-      resumeSessionId?{...settings,threadId:resumeSessionId}:settings,startupTimeoutMs);
+      resumeSessionId?{...settings,threadId:resumeSessionId}:{...settings,ephemeral:false},startupTimeoutMs);
     const id=started?.thread?.id;
-    if (!identifier(id)||started.sandbox?.type!=='workspaceWrite'||started.sandbox.networkAccess!==false||
+    if (!identifier(id)||(resumeSessionId&&id!==resumeSessionId)||started.thread.ephemeral===true||started.sandbox?.type!=='workspaceWrite'||started.sandbox.networkAccess!==false||
         !started.sandbox.writableRoots?.every(root=>relative(workspace,root)==='')) {
       throw Error('App Server workspace policy was not confirmed');
     }
     const identity=identifier(started.model)&&identifier(started.modelProvider)
       ? {model:started.model,provider:started.modelProvider,source:'codex_app_server_thread_start'} : undefined;
-    onSession(id,identity);
+    await onSession(id,identity);
+    runSignal.throwIfAborted();
     let turnId, usage, finish;
     const completion=new Promise(resolve=>{finish=resolve;});
     const abort=()=>{

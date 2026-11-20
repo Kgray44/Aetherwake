@@ -3,13 +3,11 @@ import { MAX_SYNC_BYTES, validateProjection, storeProjection } from './sync.mjs'
 import { isTaskWorkerKey, taskOperation } from './task-engine.mjs';
 import { ingestTaskTelemetry, telemetryBaseline, sha256 } from './task-telemetry.mjs';
 import { telemetryTaskId } from '../telemetry-delta.mjs';
+import { mcpOwnerCommands,taskEngineToolSchema } from './task-engine-tool-schema.mjs';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const tools=[
- {name:'task_engine_v1',description:'Read, register or edit owner-scoped engineering Tasks. Workers may claim and report pre-authorized execution using their configured credential.',
-  inputSchema:{type:'object',additionalProperties:false,required:['request'],properties:{
-   request:{type:'object',required:['op'],properties:{op:{enum:['list','get','register','command','claim','report']}}},
-   verification:{type:'string',format:'uuid'},worker_key:{type:'string',minLength:32,maxLength:256}
-  }}},
+ {name:'task_engine_v1',description:'List, inspect, register and edit canonical engineering Tasks. The authenticated owner can schedule, dispatch, pause, resume and cancel. Executor claim and reporting require a worker credential.',
+  inputSchema:taskEngineToolSchema},
  {name:'project_execution_snapshot',description:'Store a bounded sanitized private execution projection. Does not execute, approve or verify work.',inputSchema:{type:'object',additionalProperties:false,required:['projection'],properties:{projection:{type:'object'},verification:{type:'string',format:'uuid'}}}},
  {name:'read_execution_projection',description:'Read the caller-owned execution projection and its digest. Imported evidence is not independent proof.',inputSchema:{type:'object',additionalProperties:false,properties:{verification:{type:'string',format:'uuid'}}}},
  {name:'sync_task_telemetry',description:'Read a private Task telemetry baseline or append a sanitized incremental update as the authenticated Site visitor. Returns a durable delivery receipt. No execution or approval.',
@@ -48,11 +46,13 @@ export async function mcp(request,env,{validate,validateEvent,taskRevision}){
  if(!args||Array.isArray(args)||typeof args!=='object'||Object.keys(args).some(k=>!['verification',...fields].includes(k)))return fail(-32602,'Invalid arguments');
  if(args.verification!==undefined&&!UUID.test(args.verification))return fail(-32602,'Invalid verification namespace');
  const namespace=args.verification?'verification:'+args.verification:'live';
- const result=(data,isError=false)=>rpc({content:[{type:'text',text:JSON.stringify(data)}],isError});
+ const result=(data,isError=false)=>rpc({content:[{type:'text',text:JSON.stringify(data)}],isError,
+  ...(name==='task_engine_v1'?{structuredContent:data}:{})});
  if(!env.DB)return result({error:'Storage unavailable'},true);
  try{
   if(name==='task_engine_v1'){
-   let access = 'agent';
+   let access = owner===env.OBSERVATORY_TASK_ENGINE_OWNER_ID&&args.request?.op==='command'&&
+    mcpOwnerCommands.has(args.request.action?.type)?'owner':'agent';
    if(args.worker_key !== undefined) {
     if(owner !== env.OBSERVATORY_TASK_ENGINE_OWNER_ID || !isTaskWorkerKey(args.worker_key) ||
       !isTaskWorkerKey(env.OBSERVATORY_TASK_WORKER_KEY) ||
@@ -78,5 +78,6 @@ export async function mcp(request,env,{validate,validateEvent,taskRevision}){
   const row=await env.DB.prepare('SELECT payload FROM private_projection WHERE owner_id = ? AND namespace = ?').bind(owner,namespace).first();
   if(!row)return result({projection:null,acceptance:'not-granted'});
   const projection=JSON.parse(row.payload);return result({projection,receipt:await receipt(projection)});
- }catch{return result({error:'Projection rejected or storage unavailable'},true);}
+ }catch{return name==='task_engine_v1'?result({status:503,error:'Task Engine storage unavailable. Read current state before retrying the same operation ID.'},true)
+  :result({error:'Projection rejected or storage unavailable'},true);}
 }

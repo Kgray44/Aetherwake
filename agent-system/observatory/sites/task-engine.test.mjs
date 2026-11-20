@@ -120,11 +120,12 @@ test('archive keeps accepted prerequisites and feedback reopens at the accepted 
   const admit=item=>command(item,'admit',{executor:'codex',cancel_with_dependency:true});
   await admit(task);
   await admit(downstream);
-  const claim=()=>call({op:'claim',operation_id:crypto.randomUUID(),task_ids:[task.task.id]},'worker');
+  const claim=(continuation=false)=>call({op:'claim',operation_id:crypto.randomUUID(),task_ids:[task.task.id],conversation_continuation:continuation},'worker');
   const first=(await claim()).body.claim;
+  const session=crypto.randomUUID();
   const candidate='b'.repeat(40);
   const reported=await call({op:'report',task_id:task.task.id,operation_id:crypto.randomUUID(),
-    attempt_id:first.attempt.id,lease:first.lease,report:{type:'finished',result:'candidate',revision:candidate}},'worker');
+    attempt_id:first.attempt.id,lease:first.lease,report:{type:'finished',result:'candidate',revision:candidate,session_id:session}},'worker');
   assert.equal(reported.status,200);
   const evidence=[{criterion_id:'criterion-1',uri:'https://github.com/Kgray44/Aetherwake/actions/runs/1',revision:candidate}];
   const accepted=(await command(reported.body,'accept',{evidence})).body;
@@ -148,8 +149,11 @@ test('archive keeps accepted prerequisites and feedback reopens at the accepted 
   assert.deepEqual(reopened.events.find(event=>event.kind==='accept').evidence,evidence);
   assert.deepEqual(reopened.events.find(event=>event.kind==='reopen').evidence,evidence);
   assert.equal(reopened.events.find(event=>event.kind==='reopen').feedback,feedback);
-  const next=(await claim()).body.claim;
+  assert.equal((await claim()).body.claim,null);
+  const next=(await claim(true)).body.claim;
   assert.equal(next.attempt.attempt_number,2);
+  assert.equal(next.attempt.resume_session_id,session);
+  assert.equal(next.attempt.resume_requires_clean,true);
   assert.equal(next.attempt.revision,candidate);
   assert.ok(next.task.objective.endsWith(feedback));
 });
