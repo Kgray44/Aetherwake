@@ -418,7 +418,14 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
   assert.equal(await git(workspaces.get(b.task.id), 'show', readback.attempts[0].candidate_revision + ':artifact.txt'), b.task.id);
   const journal = join(workspaces.get(b.task.id),'.git','agent-harness','claimed-execution.journal');
   const events = await readJournal(journal);
-  assert.equal(events.length, 3);
+  const stages = events.filter(event=>event.kind==='span_end').map(event=>event.measurements
+    .find(metric=>metric.name==='elapsed_wall_ms'));
+  assert.deepEqual(stages.map(metric=>metric.method).sort(), [
+    'candidate_git_verification','candidate_submission','checkout_lock_release',
+    'checkout_validation','worker_capture_interval','worker_initialization',
+  ]);
+  assert.ok(stages.every(metric=>Number.isFinite(metric.value)&&metric.value>=0));
+  assert.ok(events.some(event=>event.phase==='implementation'&&event.kind==='measurement'));
   assert.equal(events.every(event => event.revision === downstream.attempt.revision), true);
   assert.doesNotMatch(JSON.stringify(events), /discard me/);
   const records = [readback.task, taskAttemptRecord(readback.task, readback.attempts[0])];

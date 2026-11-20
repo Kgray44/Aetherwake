@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdtemp, open, readFile, realpath, rename, rm, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { performance } from 'node:perf_hooks';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { createClaimTelemetryHooks } from './claim-telemetry.mjs';
@@ -140,6 +141,7 @@ export function codexTaskPrompt(task, attempt) {
   return [
     'Carry out the approved Aetherwake engineering Task in this dedicated checkout only.',
     'Follow repository governance and the current sandbox. Make scoped changes and run relevant tests.',
+    'Use targeted repository searches and governance sections. Keep command output focused and reuse facts already read unless the source changed or needs independent verification.',
     'Leave changes in the checkout. The Task worker will create the local candidate commit.',
     'External actions, publication, acceptance and changes to execution authorization require explicit separate approval.',
     'Task: ' + task.id + ' (' + attempt.id + ')',
@@ -192,7 +194,7 @@ export async function executeCodex({ executable, cwd, task, attempt, onSession, 
 }
 
 export async function runClaim({ claim, send, workspace, executable, signal, admitStorage,
-  identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd,
+  identify = checkoutIdentity, execute = executeCodex, onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage,
   verificationNamespace, prepareWorkspace, interval = 12_000 }) {
   const { task, attempt, lease } = claim;
   const controller = new AbortController();
@@ -228,15 +230,28 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   let monitoring;
   let lock;
   let outcome;
+  let executionEnd;
   let provisioning = false;
   let telemetryStarted = false;
   let executionState = 'failed';
+  const stages = [];
+  async function measureStage(name, phase, action) {
+    const startAt = new Date().toISOString(), started = performance.now();
+    let state = 'failed';
+    try {
+      const result = await action();
+      state = 'completed';
+      return result;
+    } finally {
+      stages.push({name,phase,startAt,endAt:new Date().toISOString(),durationMs:performance.now()-started,state});
+    }
+  }
   const telemetry = async (callback, payload) => {
     try { await callback?.({ task, attempt, ...payload }); }
     catch { console.error('Task execution telemetry could not be recorded.'); }
   };
   try {
-    await update();
+    await measureStage('worker_initialization','queue',update);
     monitoring = (async () => {
       while (!workerSignal.aborted && !heartbeats.signal.aborted) {
         try {
@@ -248,18 +263,21 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     })();
     if (prepareWorkspace) {
       provisioning = true;
-      workspace = await prepareWorkspace({ task, attempt, signal:workerSignal });
+      workspace = await measureStage('checkout_provisioning','context',
+        () => prepareWorkspace({ task, attempt, signal:workerSignal }));
       provisioning = false;
     }
     workerSignal.throwIfAborted();
-    identity = await identify(workspace, attempt.revision);
-    lock = await open(join(workspace, '.git', 'aads-task-worker.lock'), 'wx');
-    if (identity.revision !== attempt.revision || (!attempt.resume_session_id && identity.dirty)) {
-      throw Error('Workspace must match the attempt revision and cleanliness policy');
-    }
-    await checkWorkspaceTelemetryScope(workspace, verificationNamespace ?? undefined);
+    await measureStage('checkout_validation','context',async () => {
+      identity = await identify(workspace, attempt.revision);
+      lock = await open(join(workspace, '.git', 'aads-task-worker.lock'), 'wx');
+      if (identity.revision !== attempt.revision || (!attempt.resume_session_id && identity.dirty)) {
+        throw Error('Workspace must match the attempt revision and cleanliness policy');
+      }
+      await checkWorkspaceTelemetryScope(workspace, verificationNamespace ?? undefined);
+    });
     if (!onTelemetryStart && !onUsage && !onTelemetryEnd) {
-      ({ onTelemetryStart, onUsage, onTelemetryEnd } = createClaimTelemetryHooks(workspace));
+      ({ onTelemetryStart, onUsage, onTelemetryEnd, onTelemetryStage } = createClaimTelemetryHooks(workspace));
     }
     telemetryStarted = true;
     await telemetry(onTelemetryStart, { verificationNamespace });
@@ -270,6 +288,7 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
   } catch {
     outcome = { ok: false };
   } finally {
+    if (telemetryStarted) executionEnd = {at:new Date().toISOString(),monotonic:performance.now()};
     heartbeats.abort();
     await monitoring;
   }
@@ -286,17 +305,20 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
     } else if (outcome?.ok && !workerSignal.aborted) {
       let result;
       try {
-        result = await identify(workspace, attempt.revision);
-        if (result.dirty && result.branch === identity.branch && result.revision === attempt.revision) {
-          await admitStorage();
-          await checkpointCandidate(workspace, result, task, attempt);
-          result = await identify(workspace, attempt.revision);
-        }
+        result = await measureStage('candidate_git_verification','verification',async () => {
+          let candidate = await identify(workspace, attempt.revision);
+          if (candidate.dirty && candidate.branch === identity.branch && candidate.revision === attempt.revision) {
+            await admitStorage();
+            await checkpointCandidate(workspace, candidate, task, attempt);
+            candidate = await identify(workspace, attempt.revision);
+          }
+          return candidate;
+        });
       } catch {
         result = undefined;
       }
       if (result && !result.dirty && result.branch === identity.branch) {
-        await report('finished', { result: 'candidate', revision: result.revision });
+        await measureStage('candidate_submission','integration',() => report('finished', { result: 'candidate', revision: result.revision }));
         executionState = 'completed';
       } else {
         await report('failed', { failure: 'Candidate workspace did not yield a clean, pinned revision.' });
@@ -309,10 +331,16 @@ export async function runClaim({ claim, send, workspace, executable, signal, adm
           : 'Executor or workspace failed before producing a candidate.' });
     }
   } finally {
-    if (telemetryStarted) await telemetry(onTelemetryEnd, { measurements: outcome?.measurements ?? [], state: executionState });
-    if (lock) {
-      await lock.close();
-      await unlink(join(workspace, '.git', 'aads-task-worker.lock'));
+    try {
+      if (lock) await measureStage('checkout_lock_release','other',async () => {
+        await lock.close();
+        await unlink(join(workspace, '.git', 'aads-task-worker.lock'));
+      });
+    } finally {
+      if (telemetryStarted) {
+        for (const stage of stages) await telemetry(onTelemetryStage,stage);
+        await telemetry(onTelemetryEnd, { measurements: outcome?.measurements ?? [], state: executionState, executionEnd });
+      }
     }
   }
 }

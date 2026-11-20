@@ -4,6 +4,7 @@ import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
 import { desktopSessionTokens, taskTokenRows } from './task-engine-client.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
 import { activityId, taskActivityHref } from './github-activity.mjs';
+import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
 
 const words = value => value.replaceAll('_',' ');
 const display = value => value == null ? 'Unavailable' : String(value);
@@ -23,12 +24,14 @@ function collectMeasurements(records) {
   })));
 }
 
-const section = (title, count) => ({text:count==null ? title : title+'  ·  '+count, style:'section'});
+const section = (title, count) => ({text:count==null ? title : title+'  ·  '+count, style:'section',tocItem:true});
 const subhead = title => ({text:title,style:'subhead'});
 const none = {text:'No linked records in this snapshot.',style:'muted'};
+const linkedValue = value => typeof value === 'string' && /^https:\/\/[^\s]+$/.test(value)
+  ? {text:value,link:value,color:'#0e6077',decoration:'underline'} : value;
 const blocks = (items,title,represent = fields) => items.length ? items.flatMap((item,index) => [
   subhead(title(item,index)), ...represent(item).map(([label,value]) => ({
-    text:[{text:label+'   ',bold:true,color:'#28516a'},value], margin:[0,0,0,3],
+    text:[{text:label+'   ',bold:true,color:'#28516a'},linkedValue(value)], margin:[0,0,0,3],
   })),
 ]) : [none];
 const grid = (headers,rows,widths) => rows.length ? {
@@ -37,6 +40,15 @@ const grid = (headers,rows,widths) => rows.length ? {
     ...rows.map(row=>row.map(display)),
   ]}, fontSize:8,
 } : none;
+
+function allocationBar(part, total) {
+  if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0 || part < 0 || part > total) return [];
+  const width = 300, measured = width * part / total;
+  return [{margin:[0,4,0,2],canvas:[
+    {type:'rect',x:0,y:0,w:width,h:6,color:'#dcebef'},
+    ...(measured ? [{type:'rect',x:0,y:0,w:measured,h:6,color:'#18788b'}] : []),
+  ]}];
+}
 
 export function taskReportDefinition({task, canonical, records=[], events=[], audits=[], attempts=[], github, coverage, generatedAt}) {
   const taskRecords=records.filter(record=>record.task_id===task.id);
@@ -59,6 +71,10 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
   const trace=traceTimeline(taskEvents);
   const tokenAccounting=buildEngineeringAnalytics({records:[task,...taskRecords],events:taskEvents}).tokenAccounting;
   const tokens=taskTokenRows(tokenAccounting,task.id,taskAttempts,taskEvents,task.repository);
+  const diagnostics=taskExecutionDiagnostics({task,canonical,attempts:taskAttempts,trace,tokens,records:taskRecords});
+  const latestCoverage=diagnostics.coverage.at(-1);
+  const latestTokens=tokens.at(-1)?.observed;
+  const objectiveExcerpt=task.objective.length>450 ? task.objective.slice(0,450).replace(/\s+\S*$/,'')+'…' : task.objective;
   const desktop=desktopSessionTokens(task.id,taskEvents);
   const urls=new Set([
     ...(canonical?.lifecycle.links??[]).map(link=>link.uri),
@@ -87,12 +103,26 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
     content:[
       {text:'TASK DATA REPORT',style:'muted',margin:[0,0,0,7]},
       {text:task.title,style:'title'},
-      {text:task.objective,margin:[0,0,0,10]},
+      {text:objectiveExcerpt,margin:[0,0,0,10]},
       grid(['State','Owner decision','Generated (UTC)'],[[canonical?.lifecycle.state??task.state,task.owner_acceptance,generatedAt]],['*','*','*']),
-      section('Report coverage'),
+      {text:'Engineering executive summary',style:'section'},
       {text:coverage??'Snapshot of the Task data available to the Observatory. Times use UTC. Unavailable readings retain their source status.',margin:[0,0,0,7]},
-      grid(['Timeline entries','Attempts','Execution events','Measurement samples','Evidence records'],
-        [[timeline.length,taskAttempts.length,taskEvents.length,measurements.length,evidence.length]],['*','*','*','*','*']),
+      grid(['Attempts','Trace intervals','Verification records','Owner-reviewed criteria'],
+        [[taskAttempts.length,trace.spans.filter(span=>span.complete).length,evidence.length,diagnostics.accepted.size]],['*','*','*','*']),
+      subhead('Attempt coverage in seconds'),
+      grid(['Attempt','Elapsed','Measured','Untraced'],diagnostics.coverage.slice(-3).map(row=>[
+        row.attemptNumber,...[row.elapsedMs,row.coveredMs,row.untracedMs].map(ms=>(ms/1000).toFixed(2)),
+      ]),['*','*','*','*']),
+      ...allocationBar(latestCoverage?.coveredMs,latestCoverage?.elapsedMs),
+      subhead('Token and model coverage'),
+      grid(['Attempt','Model','Uncached input','Cached input','Output'],tokens.slice(-3).map(row=>[
+        row.attemptNumber,row.model,row.observed.uncachedInputTokens,row.observed.cachedInputTokens,row.observed.outputTokens,
+      ]),['*','*','*','*','*']),
+      ...allocationBar(latestTokens?.cachedInputTokens,latestTokens?.inputTokens),
+      {text:'Costs depend on a qualified pricing or billing source.',style:'muted',margin:[0,4,0,0]},
+      {toc:{title:{text:'Report contents',style:'section'}},pageBreak:'before'},
+      section('Execution diagnostics',diagnostics.findings.length),
+      ...blocks(diagnostics.findings,item=>item.title,item=>[['Observation',item.detail]]),
       section('Task record and acceptance criteria'),
       ...blocks([task],()=>task.id),
       ...(canonical ? blocks([{version:canonical.version,priority:canonical.priority,...canonical.lifecycle}],()=> 'Canonical lifecycle') : []),
@@ -121,8 +151,11 @@ export function taskReportDefinition({task, canonical, records=[], events=[], au
       section('Evidence ledger and linked engineering activity'),
       ...blocks(evidence,item=>words(item.kind??'Evidence')+'   '+item.id),
       ...blocks(linkedActivity,item=>item.title??item.name??String(activityId('runs',item))),
-      section('Source records'),
-      ...blocks(taskAudits,item=>(item.at??'Time unavailable')+'  ·  '+words(item.kind??item.type??'Operation')),
+      section('Appendix · Task operations'),
+      ...blocks(taskAudits.filter(item=>item.kind!=='heartbeat'),item=>(item.at??'Time unavailable')+'  ·  '+words(item.kind??item.type??'Operation')),
+      section('Appendix · Heartbeat receipts'),
+      ...blocks(taskAudits.filter(item=>item.kind==='heartbeat'),item=>(item.at??'Time unavailable')+'  ·  Heartbeat'),
+      section('Appendix · Raw trace and contract records'),
       ...blocks(taskEvents,item=>(item.occurred_at??'Time unavailable')+'  ·  '+words(item.kind??'Execution event')),
       ...blocks(taskRecords.filter(item=>item.record_type!=='evidence'),item=>words(item.record_type)+'  ·  '+item.id),
     ],

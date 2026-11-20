@@ -21,8 +21,8 @@ export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory
   const executionTask = { ...task, revision:attempt.revision };
   const spanId = 'codex-' + attempt.id;
   let startedAt, delivery, closing;
-  function event(kind, measurements, { state, eventId } = {}) {
-    const entry = traceEvent({task:executionTask,attemptId:attempt.id,spanId,kind,phase:'implementation',state,eventId,measurements});
+  function event(kind, measurements, { state, eventId, phase='implementation', span=spanId, occurredAt } = {}) {
+    const entry = traceEvent({task:executionTask,attemptId:attempt.id,spanId:span,kind,phase,state,eventId,measurements,occurredAt});
     const sanitized = sanitizeExport({repository:task.repository,events:[entry]}).events[0];
     if (validateTraceEvent(sanitized).length) throw Error('Invalid claim telemetry event');
     return sanitized;
@@ -50,19 +50,28 @@ export function createClaimTelemetry({ journal, task, attempt, deliveryDirectory
           measurements.some(row => !codexTurnSources.has(row?.source))) throw Error('Invalid Codex turn measurements');
       await appendEvent(journal,event('measurement',measurements));
     },
-    finish({ measurements = [], state }) {
+    async recordStage({ name, phase, startAt, endAt, durationMs, state }) {
+      if (startedAt === undefined || closing) throw Error('Claim telemetry is not recording');
+      const span = spanId + '-' + name;
+      await appendEvent(journal,event('span_start',[],{phase,span,occurredAt:startAt,state:'started',eventId:span + '-start'}));
+      await appendEvent(journal,event('span_end',[{
+        name:'elapsed_wall_ms',availability:'observed',unit:'ms',value:durationMs,
+        source:'local_monotonic_clock',method:name,
+      }],{phase,span,occurredAt:endAt,state,eventId:span + '-end'}));
+    },
+    finish({ measurements = [], state, executionEnd }) {
       if (closing) return closing;
       if (startedAt === undefined || !terminalStates.has(state) || !Array.isArray(measurements) ||
           measurements.length > 64 || measurements.some(row => row?.source !== streamSource)) {
         throw Error('Invalid claim telemetry completion');
       }
       const duration = {
-        name:'elapsed_wall_ms',availability:'observed',unit:'ms',value:performance.now() - startedAt,
+        name:'elapsed_wall_ms',availability:'observed',unit:'ms',value:(executionEnd?.monotonic ?? performance.now()) - startedAt,
         source:'local_monotonic_clock',method:'worker_capture_interval',
       };
       closing = (async () => {
         try {
-          await appendEvent(journal,event('span_end',[...measurements,duration],{state,eventId:spanId + '-end'}));
+          await appendEvent(journal,event('span_end',[...measurements,duration],{state,occurredAt:executionEnd?.at,eventId:spanId + '-end'}));
         } finally {
           await delivery?.finish().catch(() => {});
         }
@@ -90,8 +99,11 @@ export function createClaimTelemetryHooks(workspace, delivery = {}) {
       if (!observer) throw Error('Claim telemetry did not start');
       await observer.onUsage(measurements);
     },
-    async onTelemetryEnd({ measurements, state }) {
-      await observer?.finish({measurements,state});
+    async onTelemetryStage(stage) {
+      await observer?.recordStage(stage);
+    },
+    async onTelemetryEnd({ measurements, state, executionEnd }) {
+      await observer?.finish({measurements,state,executionEnd});
     },
   };
 }

@@ -1,10 +1,24 @@
 function unionMs(spans) {
   let total = 0, end = -Infinity;
-  for (const span of spans) {
+  for (const span of [...spans].sort((a, b) => a.start - b.start)) {
     total += Math.max(0, span.end - Math.max(span.start, end));
     end = Math.max(end, span.end);
   }
   return total;
+}
+
+export function attemptTraceCoverage(attempts, spans) {
+  return attempts.flatMap(attempt => {
+    const start = Date.parse(attempt.started_at), end = Date.parse(attempt.finished_at);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
+    const intervals = spans.filter(span => span.complete && span.task === attempt.task_id &&
+      span.attempt === attempt.id && span.revision === attempt.revision && span.end > start && span.start < end)
+      .map(span => ({start:Math.max(span.start,start),end:Math.min(span.end,end)}));
+    const coveredMs = unionMs(intervals);
+    return [{ attemptId:attempt.id, attemptNumber:attempt.attempt_number, elapsedMs:end-start, coveredMs,
+      untracedMs:end-start-coveredMs, beforeTraceMs:intervals.length ? Math.min(...intervals.map(i=>i.start))-start : null,
+      afterTraceMs:intervals.length ? end-Math.max(...intervals.map(i=>i.end)) : null }];
+  });
 }
 
 export function traceTimeline(events) {
@@ -29,7 +43,7 @@ export function traceTimeline(events) {
       metric.availability === 'observed' && metric.unit === 'ms' && Number.isFinite(metric.value) && metric.value >= 0);
     spans.push({
       key, id: first.span_id, parent: first.parent_span_id, task: first.task_id,
-      attempt: first.attempt_id, phase: first.phase, outcome: complete ? last.state : undefined,
+      attempt: first.attempt_id, revision:first.revision, phase: first.phase, outcome: complete ? last.state : undefined,
       at: Date.parse(first.occurred_at), start, end, complete, monotonicMs: complete ? elapsed?.value ?? null : null,
       events: group
     });

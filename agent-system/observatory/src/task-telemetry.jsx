@@ -5,6 +5,7 @@ import { buildEngineeringAnalytics } from './engineering-analytics.mjs';
 import { traceTimeline } from './trace-timeline.mjs';
 import { TaskTokenAccounting } from './task-engine-controls.jsx';
 import { desktopSessionTokens, taskTokenRows } from './task-engine-client.mjs';
+import { taskExecutionDiagnostics } from './task-execution-diagnostics.mjs';
 
 const format = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const words = value => String(value ?? '').replaceAll('_', ' ');
@@ -39,7 +40,7 @@ function available(metric) {
   return metric.availability !== 'unavailable' && typeof metric.value === 'number' && Number.isFinite(metric.value);
 }
 
-export function TaskTelemetry({ task, attempts, telemetry, events, records }) {
+export function TaskTelemetry({ task, canonical, attempts, telemetry, events, records }) {
   const [limit, setLimit] = useState(24);
   const timeline = useMemo(() => traceTimeline(events), [events]);
   const accounting = useMemo(() => records ? buildEngineeringAnalytics({
@@ -48,6 +49,13 @@ export function TaskTelemetry({ task, attempts, telemetry, events, records }) {
   const tokens = useMemo(() => taskTokenRows(accounting, task.id, attempts, events, task.repository),
     [accounting, task.id, attempts, events, task.repository]);
   const desktop = desktopSessionTokens(task.id,events);
+  const diagnostics = useMemo(() => taskExecutionDiagnostics({
+    task, canonical, attempts, trace:timeline, tokens, records:records ?? [],
+  }), [task,canonical,attempts,timeline,tokens,records]);
+  const coverageRows = diagnostics.coverage.slice(-8).flatMap(row => [
+    {label:'Attempt ' + row.attemptNumber + ' · measured',value:row.coveredMs,display:time(row.coveredMs)},
+    {label:'Attempt ' + row.attemptNumber + ' · untraced',value:row.untracedMs,display:time(row.untracedMs)},
+  ]);
   const measurements = useMemo(() => measurementRows(telemetry, events), [telemetry, events]);
   const measurable = measurements.filter(available);
   const linkedTokenAttempts = new Set(tokens.filter(row => row.observed.turns > 0).map(row => row.attemptId));
@@ -79,10 +87,15 @@ export function TaskTelemetry({ task, attempts, telemetry, events, records }) {
     <div className="task-telemetry-grid">
       <MeasurementChart title="Time by phase" rows={timeRows} empty="No matched trace intervals were supplied."/>
       <MeasurementChart title="Attempt duration" rows={durationRows} empty="A completed attempt with start and finish times is needed."/>
+      {coverageRows.length>0&&<MeasurementChart title="Attempt trace coverage" rows={coverageRows}/>}
       <MeasurementChart title="Observed tokens by attempt" rows={tokenRows} empty="No linked receipts supply total token counts for this Task."/>
       {desktop.length>0&&<MeasurementChart title="Desktop-session token counters" rows={desktop.map(metric=>({label:words(metric.name.replace(/^desktop_/,'')),value:metric.value,display:format.format(metric.value)+' tokens'}))}/>}
       {[...resourceGroups].map(([unit, rows]) => <MeasurementChart key={unit} title={'Latest resource readings ('+unit+')'} rows={rows}/>)}
     </div>
+    {diagnostics.findings.length>0&&<section aria-label="Execution diagnostics">
+      <h3>Execution diagnostics</h3>
+      <ul>{diagnostics.findings.map(({title,detail,key})=><li key={key??title}><strong>{title}</strong><p>{detail}</p></li>)}</ul>
+    </section>}
     <p className="low">{desktop.length>0&&'Desktop counters are cumulative session observations and have no worker-attempt assignment. '}An attempt can have timing or resource measurements without producing a model token receipt. Costs require a billing source.</p>
     <h3>Model and token accounting</h3>
     <TaskTokenAccounting rows={tokens}/>
