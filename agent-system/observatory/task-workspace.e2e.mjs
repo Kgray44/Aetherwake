@@ -87,10 +87,13 @@ test('keyboard, reduced motion, versioned edits, dependency admission and reload
   const page = await browser.newPage({ reducedMotion: 'reduce', viewport: { width: 1280, height: 850 } });
   await page.clock.install();
   const pageErrors = [];
+  const loadedScripts = [];
+  page.on('request', request => { if (request.resourceType() === 'script') loadedScripts.push(request.url()); });
   page.on('pageerror', error => pageErrors.push(error.message));
   const url = origin + '/?verification=' + namespace;
   await page.goto(url + '#tasks');
   await page.getByRole('heading', { name: 'Task explorer' }).waitFor();
+  assert.equal(loadedScripts.some(url => /engineering-analytics-page|github-activity-pages/.test(url)), false);
   assert.equal(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches), true);
   assert.equal(await page.locator('canvas.ambient-canvas').evaluate(node => node.width), 300);
 
@@ -152,6 +155,15 @@ test('keyboard, reduced motion, versioned edits, dependency admission and reload
   assert.equal(await editor.getByRole('button', { name: 'Save proposal' }).isDisabled(), true);
   await page.getByRole('button', { name: 'Load latest version' }).click();
   await editor.waitFor({ state: 'hidden' });
+  await Promise.all([
+    page.waitForResponse(response => response.url().includes('engineering-analytics-page') && response.ok()),
+    page.getByRole('button', { name: 'Engineering analytics', exact:true }).click(),
+  ]);
+  await page.getByRole('heading',{name:'Engineering activity',exact:true}).waitFor();
+  await Promise.all([
+    page.waitForResponse(response => response.url().includes('github-activity-pages') && response.ok()),
+    page.getByRole('navigation').getByRole('button', { name: 'Pull requests', exact:true }).click(),
+  ]);
   assert.deepEqual(pageErrors, []);
 });
 
