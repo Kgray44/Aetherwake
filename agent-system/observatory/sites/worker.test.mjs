@@ -757,3 +757,34 @@ test('owner admission activates a published proposal without rewriting its intak
   assert.equal((await publish.json()).github.state, 'published');
   assert.equal(writes.length, 1);
 });
+
+test('a scoped executor can claim the verification Task without activating its live twin', async t => {
+  const key = 'test-only-' + 'k'.repeat(40);
+  const { call } = fixture(t, { taskKey: key });
+  const headers = { ...ownerHeader, origin, 'content-type': 'application/json' };
+  const rpc = async (request, args = {}) => {
+    const response = await call('/mcp', { method: 'POST', headers, body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'task_engine_v1', arguments: { request, ...args } },
+    }) });
+    return JSON.parse((await response.json()).result.content[0].text);
+  };
+  const operation_id = crypto.randomUUID();
+  const register = { op: 'register', operation_id, fields: input };
+  const both = await Promise.all([rpc(register), rpc(register, { verification: namespace })]);
+  assert.deepEqual(both.map(reply => reply.status), [201, 201]);
+  const task_id = both[0].task.id;
+  assert.equal(both[1].task.id, task_id);
+  const receipt = await call('/api/task-engine/v1', {
+    method: 'POST', headers: { ...headers, 'x-observatory-verification': namespace }, body: JSON.stringify({
+      op: 'command', task_id, expected_version: 1, operation_id: crypto.randomUUID(),
+      action: { type: 'admit', executor: 'codex' },
+    }),
+  });
+  assert.equal(receipt.status, 200);
+  const claim = { op: 'claim', operation_id: crypto.randomUUID(), task_ids: [task_id] };
+  assert.equal((await rpc(claim, { worker_key: key })).claim, null);
+  assert.equal((await rpc(claim, { worker_key: key, verification: namespace })).claim.task.id, task_id);
+  const states = await Promise.all([rpc({ op: 'get', task_id }), rpc({ op: 'get', task_id }, { verification: namespace })]);
+  assert.deepEqual(states.map(item => item.lifecycle.state), ['proposed', 'running']);
+});

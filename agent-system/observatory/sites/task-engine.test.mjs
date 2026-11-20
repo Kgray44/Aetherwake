@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm, mkdir, realpath } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -11,7 +11,7 @@ import test from 'node:test';
 import { proposedTask } from '../intake.mjs';
 import { taskOperation } from './task-engine.mjs';
 import { observeCodexStream } from '../../../scripts/agent/provider-events.mjs';
-import { runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
+import { checkWorkspaceTelemetryScope, runClaim } from '../../../scripts/agent/observatory-task-worker.mjs';
 
 const rev = 'a'.repeat(40);
 const fields = name => ({
@@ -169,10 +169,12 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
   let release;
   const overlap = new Promise(resolve => { release = resolve; });
   const observed = [];
+  const verificationNamespace = crypto.randomUUID();
   const run = (claim, parallel) => runClaim({
+    verificationNamespace,
     claim, send, workspace: workspaces.get(claim.task.id), signal: AbortSignal.timeout(15_000),
     admitStorage: async () => {},
-    onTelemetryStart: ({ attempt }) => observed.push({ type: 'start', id: attempt.id }),
+    onTelemetryStart: ({ attempt, verificationNamespace }) => observed.push({ type: 'start', id: attempt.id, verificationNamespace }),
     onUsage: ({ attempt, measurements }) => observed.push({ type: 'usage', id: attempt.id, measurements }),
     onTelemetryEnd: ({ attempt, measurements, state }) => observed.push({ type: 'end', id: attempt.id, measurements, state }),
     execute: async ({ cwd, task, onSession, onUsage }) => {
@@ -189,6 +191,7 @@ test('real subprocess demo persists two artifacts before verified A admits B', a
   });
   await Promise.all([run(first, true), run(second, true)]);
   assert.deepEqual(observed.filter(item => item.id === first.attempt.id).map(item => item.type), ['start', 'usage', 'end']);
+  assert.equal(observed.find(item => item.id === first.attempt.id && item.type === 'start').verificationNamespace, verificationNamespace);
   const end = observed.find(item => item.id === first.attempt.id && item.type === 'end');
   assert.equal(end.state, 'completed');
   assert.equal(end.measurements[0].name, 'test_summary');
@@ -271,4 +274,22 @@ test('revision-pinned PR and CI references survive replay and stay owner scoped'
   const detail = await get(created);
   assert.deepEqual(detail.lifecycle.links, [pull, ci]);
   assert.equal(detail.events.filter(event => event.kind === 'associate').length, 2);
+});
+
+test('verification workers reject checkouts connected to a different delivery namespace', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'aads-verification-scope-'));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const verification = crypto.randomUUID();
+  const connection = join(root, '.git', 'agent-harness', 'observatory-sync');
+  await checkWorkspaceTelemetryScope(root, verification);
+  await mkdir(connection, { recursive: true });
+  const config = namespace => writeFile(join(connection, 'connection.json'), JSON.stringify({
+    version: 1, ...(namespace ? { verification: namespace } : {}),
+  }));
+  await config();
+  await checkWorkspaceTelemetryScope(root, undefined);
+  await assert.rejects(checkWorkspaceTelemetryScope(root, verification), /telemetry namespace/);
+  await config(verification);
+  await assert.rejects(checkWorkspaceTelemetryScope(root, undefined), /telemetry namespace/);
+  await checkWorkspaceTelemetryScope(root, verification);
 });
